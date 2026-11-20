@@ -239,6 +239,9 @@ pub(super) struct Writer {
     refs_open: std::collections::BTreeSet<String>,
     /// The file's own package paths, kept as read: names WordCraft's own pictures don't take.
     pub(super) reserved: std::sync::Arc<std::collections::BTreeSet<String>>,
+    /// The file's names for styles WordCraft would otherwise name as one of the file's other
+    /// styles (see `kept::read_names`), by WordCraft's name and family key suffix.
+    pub(super) read_names: std::sync::Arc<HashMap<String, String>>,
     pub(super) kept_used: super::kept::Needed,
     /// The file's own master pages are written (its page setup is as read): kept markup may
     /// start one.
@@ -304,7 +307,8 @@ impl Writer {
         if let Some(id) = f.extra.as_ref().and_then(|x| x.style.as_deref()) {
             self.named_text.insert(id.to_string());
             props.push('\u{1}');
-            props.push_str(&odf_name(id));
+            let name = odf_name(id);
+            props.push_str(&self.read_names.get(&format!("{name}|text")).map_or(name, |n| x(n)));
         }
         if props.is_empty() {
             return None;
@@ -329,7 +333,8 @@ impl Writer {
             // A custom style: written as a common style of the same name (see `custom_styles`).
             (_, _, Some(id)) => {
                 self.named.insert(id.to_string());
-                odf_name(id)
+                let name = odf_name(id);
+                self.read_names.get(&name).map_or(name, |n| x(n))
             }
             (Kind::Normal, Some(n), None) => n.to_string(),
             _ => parent_style(p.kind).to_string(),
