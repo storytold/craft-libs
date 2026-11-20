@@ -115,6 +115,13 @@ impl ItemSource<usize> for CardList<'_> {}
 /// The columns of preset cards the grid holds: the dialog's left side is as wide as they are.
 const CARD_COLUMNS: usize = 3;
 
+/// The columns of Recent's cards with `recent_items`.
+const RECENT_COLUMNS: usize = 4;
+
+/// The picture size of Recent's cards with `recent_items`, against a preset card's: four of them take about the room
+/// three preset cards do.
+const RECENT_ZOOM: f32 = 0.7;
+
 /// Shows the tabs and what the open tab lists, and reports the tab and the card the user picked.
 pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
     let (setup, words) = (read.setup, read.words);
@@ -166,14 +173,19 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
         }
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
-        Text::new(words.presets_heading.fill(&[("n", &count)])).role(TypeRole::Label).shade(Shade::Muted).show(ui);
-        let shown = TileGrid::<usize>::new(words.cards.clone())
-            .card_columns(CARD_COLUMNS)
-            .select(SelectMode::Single)
-            .detail_line()
-            .rows_stamp(stamp)
-            .selection(Bind::given(selection))
-            .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index]));
+        let items = tab == TabId::Recent && setup.recent_items;
+        let heading = if items { &words.recent_heading } else { &words.presets_heading };
+        Text::new(heading.fill(&[("n", &count)])).role(TypeRole::Label).shade(Shade::Muted).show(ui);
+        let mut grid = TileGrid::<usize>::new(words.cards.clone()).card_columns(CARD_COLUMNS);
+        if items {
+            // Four smaller cards to a row, about the room three preset cards take.
+            grid = grid.card_columns(RECENT_COLUMNS).zoom(RECENT_ZOOM).fill_row();
+        }
+        let shown = grid.select(SelectMode::Single).detail_line().rows_stamp(stamp).selection(Bind::given(selection)).show_items(
+            ui,
+            &list,
+            &mut |index, _| tile_of(&cards[*index]),
+        );
         route(shown.response.events, &cards, left);
     }
 }
@@ -327,7 +339,9 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
                     saved: None,
                 });
             }
-            for preset in &setup.recent_defaults {
+            // With `recent_items` the defaults stand in for recent documents until there are some.
+            let defaults = if setup.recent_items && !recents.is_empty() { &[][..] } else { &setup.recent_defaults[..] };
+            for preset in defaults {
                 let card = Card { artboard: None, ..preset_card(preset) };
                 let listed =
                     recents.iter().any(|recent| recent.size == card.settings.size && recent.pixels_per_inch == card.settings.pixels_per_inch);

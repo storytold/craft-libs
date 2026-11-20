@@ -115,6 +115,8 @@ craft_ui::words! {
         dvcpro_hd_1080: "newDocument.pixelAspectDvcproHd1080" = "DVCPRO HD 1080 (1.5)";
         /// `{n}` is how many cards the open tab lists.
         presets_heading: template "newDocument.presetsHeading" = "Blank Document Presets ({n})";
+        /// Recent's heading with [`NewDocumentDialog::recent_items`]: `{n}` is how many cards it lists.
+        recent_heading: template "newDocument.recentHeading" = "Your Recent Items ({n})";
         preset_details: "newDocument.presetDetails" = "Preset Details";
         default_size: "newDocument.defaultSizePlain" = "Default Size";
         /// `{app}` is the application's name.
@@ -140,6 +142,7 @@ struct Setup {
     profiles: Vec<ColorProfiles>,
     app_name: Option<Label>,
     custom_pixel_aspects: Vec<(String, String)>,
+    recent_items: bool,
 }
 
 /// What the columns read besides the session: the setup, the remembered lists, the words and the units.
@@ -491,7 +494,9 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
 /// File > New: category tabs over a grid of preset cards, a details column and Create and Close.
 ///
 /// - Tabs: Recent, the categories and Saved. Recent lists the clipboard's image size first when the app gives one,
-///   then the recent documents kept under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet among them. Saved lists the user's presets in a list
+///   then the recent documents kept under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet among them
+///   ([`recent_items`](NewDocumentDialog::recent_items): only while there are no recent documents, under "Your Recent
+///   Items (n)", four cards to a row). Saved lists the user's presets in a list
 ///   whose Delete key removes the picked ones, with "No saved presets yet." when there are none.
 /// - Cards: a click or an arrow fills the details; Enter on a card or a double click creates. A built-in card turns with
 ///   the orientation control. Saved and recent cards restore every setting but the name. A Web or Mobile card turns
@@ -562,6 +567,10 @@ pub struct NewDocumentDialog<'a> {
     /// The application's name, for the "Default {app} Size" card.
     #[prop(into)]
     app_name: Option<Label>,
+    /// Recent is headed "Your Recent Items (n)" over four cards to a row, and lists `recent_defaults` only while there
+    /// are no recent documents.
+    #[prop]
+    recent_items: bool,
     /// Keeps the dialog's place and size across runs under `key`.
     #[prop]
     remember: Option<SaveKey>,
@@ -595,6 +604,7 @@ impl<'a> NewDocumentDialog<'a> {
             recent: None,
             tab: None,
             app_name: None,
+            recent_items: false,
             remember: None,
             answers: Vec::new(),
             opening: None,
@@ -619,6 +629,7 @@ impl<'a> NewDocumentDialog<'a> {
             recent: mut recent_bound,
             mut tab,
             app_name,
+            recent_items,
             remember,
             answers,
             opening,
@@ -647,6 +658,7 @@ impl<'a> NewDocumentDialog<'a> {
             profiles,
             app_name,
             custom_pixel_aspects,
+            recent_items,
         };
         let untitled = words.untitled.as_str().to_owned();
         let shared = Shared {
