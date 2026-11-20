@@ -264,6 +264,17 @@ impl LinkedSize {
         }
     }
 
+    /// Turns Resample on or off as Image Size's checkbox does: as [`resampling`](Self::resampling), and on the way off
+    /// sides shown in pixels or percent switch to `physical`, so they still take a print size. Back on, the unit
+    /// stays. A width in Columns leaves the shared unit as it is, and so does a `physical` that is not a physical
+    /// length.
+    pub fn check_resampling(&mut self, on: bool, physical: UnitKind) {
+        self.resampling(on);
+        if !on && !self.width_in_columns && is_pixel_unit(self.unit) && !is_pixel_unit(physical) {
+            self.set_unit(physical);
+        }
+    }
+
     /// Whether the pixel count may change.
     pub fn is_resampling(&self) -> bool {
         self.resampling

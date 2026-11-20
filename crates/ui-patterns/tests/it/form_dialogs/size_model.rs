@@ -156,3 +156,36 @@ fn resample_off() {
     assert!(close(fixed.pixels_per_inch(), 72.0 * 1200.0 / 372.0), "the resolution follows the width");
     assert!(fixed.resolution_changed());
 }
+
+/// PhotoCraft #14797: Image Size's checkbox turned off switches pixels and percent to the physical unit it is given, the
+/// pixels stay and the sides take input; a physical unit already shown, a Columns width or a kind that is not a
+/// physical length keep the unit; back on keeps it; `resampling(false)` alone keeps Pixels.
+#[trial]
+fn the_resample_checkbox_switches_pixels_and_percent_to_a_physical_unit() {
+    let off = |mut size: LinkedSize, physical: UnitKind| {
+        size.check_resampling(false, physical);
+        (size.unit(), size.width_unit(), size.is_editable(), pixels(&size))
+    };
+    let mut percent = document();
+    assert!(percent.set_unit(UnitKind::Percent));
+    assert_eq!(off(document(), UnitKind::Inches), (UnitKind::Inches, UnitKind::Inches, true, (1200, 800)), "Pixels to Inches");
+    assert_eq!(off(percent, UnitKind::Points), (UnitKind::Points, UnitKind::Points, true, (1200, 800)), "Percent to Points");
+    for kind in [UnitKind::Pixels, UnitKind::Percent, UnitKind::PixelsPerInch, UnitKind::Columns] {
+        assert_eq!(off(document(), kind).0, UnitKind::Pixels, "{kind:?} is not a physical length");
+    }
+    let mut shown = document();
+    assert!(shown.set_unit(UnitKind::Millimetres));
+    assert_eq!(off(shown, UnitKind::Inches).0, UnitKind::Millimetres, "a physical unit already shown stays");
+    let mut columns = document().column_size(COLUMNS);
+    assert!(columns.set_width_unit(UnitKind::Columns));
+    assert_eq!(off(columns, UnitKind::Inches), (UnitKind::Pixels, UnitKind::Columns, false, (1200, 800)), "Columns keeps the shared unit");
+
+    let mut back = document();
+    back.check_resampling(false, UnitKind::Centimetres);
+    back.check_resampling(true, UnitKind::Inches);
+    assert_eq!((back.unit(), back.is_resampling()), (UnitKind::Centimetres, true), "back on keeps the physical unit");
+
+    let mut plain = document();
+    plain.resampling(false);
+    assert_eq!((plain.unit(), plain.is_editable()), (UnitKind::Pixels, false), "resampling(false) alone keeps Pixels");
+}
