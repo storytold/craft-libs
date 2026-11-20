@@ -29,6 +29,8 @@ content = ["cos", "dep:hayro-syntax"]
 crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 # `testing`: a builder of small synthetic PDF files, for the tests of crates that read them.
 test-support = ["cos"]
+# Standard-14 font metrics and ISO 32000-2 Annex D single-byte encodings.
+fonts = []
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }

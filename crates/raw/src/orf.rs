@@ -306,13 +306,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         bits
     };
 
-    let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
-        // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
-        Some([Some(x), Some(y), Some(cw), Some(ch)])
-            if cw > 0 && ch > 0 && x.checked_add(cw).is_some_and(|end| end <= w) && y.checked_add(ch).is_some_and(|end| end <= h) =>
-        {
-            Rect::new(x, y, cw, ch)
-        }
+    // Crop coordinates are file data: reject narrowing and out-of-bounds rectangles.
+    let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).and_then(|v| usize::try_from(v).ok()))) {
+        Some([Some(x), Some(y), Some(cw), Some(ch)]) if cw > 0 && ch > 0 && x <= w && y <= h && cw <= w - x && ch <= h - y => Rect::new(x, y, cw, ch),
         _ => Rect::new(0, 0, w, h),
     };
     let assumed_cfa = stated.is_none();
@@ -618,6 +614,38 @@ mod tests {
         // ImageProcessing present (without BlackLevel2): the main note isn't read
         let e = [bare_image_processing(), (MN_BLACK, 3, shorts(&[32; 4])), (MN_VALID_BITS, 3, shorts(&[10, 0]))];
         assert_eq!(decode_noted(&e).black.values, vec![0.0]);
+    }
+
+    /// LONG8 crop values must not become valid small coordinates on 32-bit targets.
+    #[test]
+    fn maker_note_crop_does_not_narrow_on_32_bit_targets() {
+        let file = |crop: [u64; 4]| {
+            let mut note = b"OLYMPUS\0II\x03\0".to_vec();
+            note.extend_from_slice(&1u16.to_le_bytes());
+            note.extend_from_slice(&IMAGE_PROCESSING.to_le_bytes());
+            note.extend_from_slice(&4u16.to_le_bytes());
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&30u32.to_le_bytes());
+            note.extend_from_slice(&0u32.to_le_bytes());
+            note.extend_from_slice(&4u16.to_le_bytes());
+            for (i, tag) in CROP.iter().enumerate() {
+                note.extend_from_slice(&tag.to_le_bytes());
+                note.extend_from_slice(&16u16.to_le_bytes()); // LONG8
+                note.extend_from_slice(&1u32.to_le_bytes());
+                note.extend_from_slice(&(84u32 + i as u32 * 8).to_le_bytes());
+            }
+            note.extend_from_slice(&0u32.to_le_bytes());
+            note.extend(crop.into_iter().flat_map(u64::to_le_bytes));
+            // A stated CFA and block layout let header probing inspect the crop without decoding pixels.
+            orf_with_note(20, 4, 12, vec![0; 128], Some(RGGB), Some(note))
+        };
+        let crop = [1, 1, 18, 2];
+        assert_eq!(crate::probe_info(&file(crop)).unwrap().active_area, Rect::new(1, 1, 18, 2));
+        for i in 0..4 {
+            let mut hostile = crop;
+            hostile[i] += 1u64 << 32;
+            assert_eq!(crate::probe_info(&file(hostile)).unwrap().active_area, Rect::new(0, 0, 20, 4), "crop field {i} narrowed");
+        }
     }
 
     /// A 12-bit mosaic stored as 16-bit words: `site(cx, cy)` gives the four values of the 2×2 cell at (cx, cy).
