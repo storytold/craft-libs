@@ -7,3 +7,8 @@ fn view() {}
 fn changes() {}
 #[path = "other.rs"]
 mod other;
+
+#[path = "."]
+mod inline_alias {
+    mod nested;
+}

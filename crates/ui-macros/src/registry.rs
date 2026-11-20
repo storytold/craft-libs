@@ -88,7 +88,7 @@ fn contains_suite_item(items: &[Item]) -> bool {
     })
 }
 
-fn module_file(dir: &Path, path_dir: &Path, module: &ItemMod) -> Option<PathBuf> {
+fn explicit_path(path_dir: &Path, module: &ItemMod) -> Option<PathBuf> {
     for attr in &module.attrs {
         if attr.path().is_ident("path")
             && let Meta::NameValue(value) = &attr.meta
@@ -98,11 +98,15 @@ fn module_file(dir: &Path, path_dir: &Path, module: &ItemMod) -> Option<PathBuf>
             return Some(path_dir.join(path.value()));
         }
     }
-    let plain = dir.join(format!("{}.rs", module.ident));
+    None
+}
+
+fn module_file(module_dir: &Path) -> Option<PathBuf> {
+    let plain = module_dir.with_extension("rs");
     if plain.is_file() {
         Some(plain)
     } else {
-        let nested = dir.join(module.ident.to_string()).join("mod.rs");
+        let nested = module_dir.join("mod.rs");
         nested.is_file().then_some(nested)
     }
 }
@@ -129,21 +133,21 @@ fn walk(
                 cfg.extend(attrs_cfg(&module.attrs));
                 let mut child_path = path.to_vec();
                 child_path.push(module.ident.clone());
+                let module_dir = dir.join(module.ident.to_string());
+                let explicit = explicit_path(path_dir, module);
                 if let Some((_, content)) = &module.content {
-                    let inline_dir = dir.join(module.ident.to_string());
-                    walk(content, file, &inline_dir, &inline_dir, &child_path, &cfg, calls)?;
-                } else if let Some(file) = module_file(dir, path_dir, module) {
+                    let inline_dir = explicit.as_deref().unwrap_or(&module_dir);
+                    walk(content, file, inline_dir, inline_dir, &child_path, &cfg, calls)?;
+                } else if let Some(file) = explicit.clone().or_else(|| module_file(&module_dir)) {
                     let text = std::fs::read_to_string(&file)
                         .map_err(|e| syn::Error::new_spanned(module, format!("cannot read {}: {e}", file.display())))?;
                     let parsed =
                         syn::parse_file(&text).map_err(|e| syn::Error::new_spanned(module, format!("cannot parse {}: {e}", file.display())))?;
                     cfg.extend(attrs_cfg(&parsed.attrs));
-                    let child_dir = if file.file_name().is_some_and(|n| n == "mod.rs" || n == "main.rs" || n == "lib.rs") {
-                        file.parent().unwrap_or(dir).to_path_buf()
-                    } else {
-                        file.parent().unwrap_or(dir).join(file.file_stem().unwrap_or_default())
-                    };
-                    walk(&parsed.items, &file, &child_dir, file.parent().unwrap_or(dir), &child_path, &cfg, calls)?;
+                    let file_dir = file.parent().unwrap_or(dir);
+                    // Rust looks beside a file selected by #[path] for that file's own modules.
+                    let child_dir = if explicit.is_some() { file_dir } else { &module_dir };
+                    walk(&parsed.items, &file, child_dir, file_dir, &child_path, &cfg, calls)?;
                 }
             }
             Item::Struct(item)
@@ -257,6 +261,8 @@ mod tests {
             assert!(generated.contains("__registry_story_view"));
             assert!(generated.contains("__registry_trial_changes"));
             assert!(generated.contains("__registry_trial_path_trial"));
+            assert!(generated.contains("crate :: child :: other :: nested :: __registry_trial_nested_path_trial"));
+            assert!(generated.contains("crate :: child :: inline_alias :: nested :: __registry_trial_nested_path_trial"));
             assert!(generated.contains("cfg (not (target_arch = \"wasm32\"))"));
             assert!(!generated.contains("# !"));
         }
