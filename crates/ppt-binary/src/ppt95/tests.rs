@@ -48,10 +48,11 @@ fn background_shape(fill: [u8; 4], filled: bool) -> Vec<u8> {
     container(rt::SHAPE, 0x1C, &[geometry, rec(rt::FORMAT, 1, 0, &format)])
 }
 
-/// The slide box: the slide rectangle, then whether it follows the master background.
-fn slide_box(follow_background: bool) -> Vec<u8> {
+/// The slide box: the slide rectangle, then whether it follows the master's objects, scheme and
+/// background.
+fn slide_box(objects: bool, scheme: bool, background: bool) -> Vec<u8> {
     let mut b = le32(&[(-2880i32) as u32, (-2160i32) as u32, 2880, 2160]);
-    b.extend_from_slice(&[1, 1, 0, 0, u8::from(follow_background), 0, 0, 0]);
+    b.extend_from_slice(&[u8::from(objects), u8::from(scheme), 0, 0, u8::from(background), 0, 0, 0]);
     rec(rt::SLIDE_BOX, 1, 0, &b)
 }
 
@@ -59,6 +60,8 @@ struct SlideSpec {
     id: u32,
     master: u32,
     layout: u32,
+    follow_objects: bool,
+    follow_scheme: bool,
     follow_background: bool,
     fill: [u8; 4],
     filled: bool,
@@ -67,7 +70,17 @@ struct SlideSpec {
 
 impl SlideSpec {
     fn new(id: u32, layout: u32) -> SlideSpec {
-        SlideSpec { id, master: MASTER, layout, follow_background: true, fill: [0, 0, 0, 0], filled: true, scheme: DEFAULT }
+        SlideSpec {
+            id,
+            master: MASTER,
+            layout,
+            follow_objects: true,
+            follow_scheme: true,
+            follow_background: true,
+            fill: [0, 0, 0, 0],
+            filled: true,
+            scheme: DEFAULT,
+        }
     }
 }
 
@@ -77,7 +90,7 @@ fn slide(s: &SlideSpec) -> Vec<u8> {
         0x10,
         &[
             rec(rt::SLIDE_ATOM, 0, 0, &le32(&[s.id, s.master])),
-            slide_box(s.follow_background),
+            slide_box(s.follow_objects, s.follow_scheme, s.follow_background),
             rec(rt::LAYOUT, 1, 0, &le32(&[s.layout, 0, 0])),
             container(rt::SCHEME, 0x78, &[scheme_atom(0, s.scheme)]),
             background_shape(s.fill, s.filled),
@@ -92,7 +105,7 @@ fn master(id: u32, scheme: [u32; 8], fill: [u8; 4]) -> Vec<u8> {
         0x10,
         &[
             rec(rt::SLIDE_ATOM, 0, 0, &le32(&[id, 0])),
-            slide_box(true),
+            slide_box(true, true, true),
             // A scheme preset, which isn't the master's scheme.
             scheme_atom(0x37, [0x0000FF, 0xFFFFFF, 0, 0xFFFF00, 0xFF9900, 0x00FFFF, 0xFF0033, 0x969696]),
             rec(rt::LAYOUT, 1, 0, &[1, 0, 0, 0, 1, 2, 6, 8, 7, 0, 0, 0]),
@@ -247,6 +260,7 @@ fn a_slide_that_doesnt_follow_the_master_keeps_its_background() {
     // A scheme slot (4, fills) of the slide's own scheme.
     let mut slot = SlideSpec::new(0x101, 16);
     slot.follow_background = false;
+    slot.follow_scheme = false;
     slot.fill = [0, 0, 0, 4];
     slot.scheme[4] = 0x123456;
     // Following the master, its own background shape is not used.
@@ -260,6 +274,26 @@ fn a_slide_that_doesnt_follow_the_master_keeps_its_background() {
     assert_eq!(p.slides[1].background, solid(0x12, 0x34, 0x56));
     assert_eq!(p.slides[2].background, None);
     assert_eq!(p.slides[3].background, Some(Background::Fill { fill: Fill::None }));
+}
+
+/// The slide box's flags at +16 and +17 (seen in PowerPoint 95's files: turning the master's
+/// objects off on a slide clears +16; giving one slide its own colour scheme clears +17): a slide
+/// that follows the master's scheme takes the master's colours, not the copy it holds.
+#[test]
+fn slides_follow_the_masters_objects_and_scheme() {
+    let mut own = SlideSpec::new(0x100, 16);
+    (own.follow_objects, own.follow_scheme, own.follow_background) = (false, false, false);
+    own.fill = [0, 0, 0, 0];
+    own.scheme[0] = 0x112233;
+    let mut follows = SlideSpec::new(0x101, 16);
+    follows.follow_background = false;
+    follows.fill = [0, 0, 0, 0];
+    follows.scheme[0] = 0x445566;
+    let p = deck(&[own, follows]);
+    assert!(!p.slides[0].show_master_shapes);
+    assert!(p.slides[1].show_master_shapes);
+    assert_eq!(p.slides[0].background, solid(0x11, 0x22, 0x33), "its own scheme");
+    assert_eq!(p.slides[1].background, solid(0xFF, 0xFF, 0xFF), "the master's scheme, not its copy");
 }
 
 /// Damaged input never panics or grows without bound: every word set to hostile values,
@@ -335,6 +369,11 @@ fn powerpoint_95_samples() {
             "title" => assert_eq!(layout_kind(&p, 1), LayoutType::Title),
             "layout3" => assert_eq!(layout_kind(&p, 1), LayoutType::TwoContent),
             "background" => assert_eq!(p.slides[0].background, solid(0xFF, 0, 0)),
+            // FollowMasterObjects turned off on the slide.
+            "nomasterobj" => assert!(!p.slides[0].show_master_shapes),
+            // The Slide Color Scheme dialog's Apply (this slide only): the slide keeps its own scheme.
+            "schemeapply" => assert!(p.slides[0].show_master_shapes),
+            "base" => assert!(p.slides[0].show_master_shapes),
             _ => {}
         }
         seen += 1;
