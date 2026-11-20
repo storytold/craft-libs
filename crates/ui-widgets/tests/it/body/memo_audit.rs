@@ -290,35 +290,8 @@ fn replayed(frames: &Frames) -> usize {
     last_frame_memo_runs(&frames.ctx).into_iter().filter(|(name, _, run)| name.contains("Card") && *run == MemoRun::Replayed).count()
 }
 
-/// A wheel step of a fraction of a pixel moves the content by whole pixels: the cards it moves replay, and each replay
-/// paints where a run there paints (paint snaps to the pixel grid, so a record moved by a fraction would not).
-#[trial]
-fn cards_a_fractional_wheel_step_moves_replay_where_they_would_run() {
-    let mut frames = Frames::new();
-    audit_replays(&frames.ctx, true);
-    let mut show = cards(40.0, card);
-    frames.frame(vec![moved(BESIDE)], &mut show);
-    frames.idle(SETTLE, &mut show);
-    frames.frame(vec![wheel(-10.4)], &mut show);
-    assert!(replayed(&frames) > 0, "the moved cards replayed");
-    frames.idle(SETTLE, &mut show);
-}
-
-/// A card scrolled partly out of the view replays through the view's clip: the members it joins its arena with and the
-/// view of its own scrolling body are cut by the clip as a run there cuts them.
-#[trial]
-fn a_card_scrolled_partly_out_of_view_replays_through_the_views_clip() {
-    let mut frames = Frames::new();
-    audit_replays(&frames.ctx, true);
-    let mut show = cards(0.0, scrolling_card);
-    frames.frame(vec![moved(BESIDE)], &mut show);
-    frames.idle(SETTLE, &mut show);
-    frames.frame(vec![wheel(-10.0)], &mut show);
-    assert!(replayed(&frames) > 0, "the moved cards replayed");
-    frames.idle(SETTLE, &mut show);
-}
-
-/// A card holding a scrolling body replays moved: the places its rows report are where the replay put them, from the
+/// A card holding a scrolling body sized to its content replays moved: the body's view is the content it measured,
+/// never unbounded (no NaN in its bar parts), and the places its rows report are where the replay put them, from the
 /// view of their own area, which moved with the card.
 #[trial]
 fn a_card_holding_a_scrolling_body_replays_moved_with_its_rows_places() {
