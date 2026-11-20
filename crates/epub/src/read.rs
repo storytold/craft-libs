@@ -63,11 +63,24 @@ pub struct SpineItem {
     pub path: Option<String>,
 }
 
+/// One Dublin Core value in package order, with its local property name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DublinCoreValue {
+    pub name: String,
+    pub value: String,
+}
+
 /// The package document (OPF).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Package {
     /// The `version` attribute (`2.0`, `3.0`).
     pub version: String,
+    /// Dublin Core values in document order, including repeated properties.
+    /// Values beyond `Limits::max_manifest` are omitted and reported by
+    /// `dc_metadata_truncated`.
+    pub dc_metadata: Vec<DublinCoreValue>,
+    /// At least one Dublin Core value was omitted by the metadata count limit.
+    pub dc_metadata_truncated: bool,
     /// The first `dc:title`.
     pub title: String,
     /// Every `dc:creator`, in order.
@@ -170,32 +183,71 @@ pub fn parse_container(xml: &[u8]) -> Result<Option<String>, Error> {
 /// The package document `xml`, its hrefs resolved against `opf_dir` (the directory of the
 /// package document in the archive).
 pub fn parse_package(xml: &[u8], opf_dir: &str, limits: &Limits) -> Result<Package, Error> {
-    let root = parse_xml("package document", xml, limits)?;
-    let mut pkg = Package { version: root.attr("version").unwrap_or_default().to_string(), ..Package::default() };
-    let unique = root.attr("unique-identifier");
-    if let Some(meta) = root.child("metadata") {
+    // Keep local-name lookups for existing convenience fields while retaining the
+    // namespace identity needed by the lossless Dublin Core list.
+    let namespaces = [("dc", "http://purl.org/dc/elements/1.1/")];
+    let canonical = craft_xml::Canonical::new(&namespaces);
+    let xml_limits = craft_xml::Limits { max_input: usize::try_from(limits.max_entry_bytes).unwrap_or(usize::MAX), ..craft_xml::Limits::DEFAULT };
+    let root = Options::canonical(&canonical)
+        .strict()
+        .with_limits(xml_limits)
+        .parse(xml)
+        .map_err(|e| Error::Part { part: "package document".to_string(), msg: e.to_string() })?;
+    // Local mode used the first attribute with this local name, in source order.
+    fn local_attr<'a>(element: &'a El, name: &str) -> Option<&'a str> {
+        element.attrs.iter().find(|(key, _)| key.rsplit_once(':').map_or(key.as_str(), |(_, local)| local) == name).map(|(_, value)| value.as_str())
+    }
+    let mut pkg = Package { version: local_attr(&root, "version").unwrap_or_default().to_string(), ..Package::default() };
+    let unique = local_attr(&root, "unique-identifier");
+    if let Some(meta) = root.child(Local("metadata")) {
         // EPUB 2 packages may wrap the Dublin Core elements in `dc-metadata`.
-        let all = || meta.elements().flat_map(|e| if e.is("dc-metadata") { e.elements().collect::<Vec<_>>() } else { vec![e] });
-        let texts = |name: &'static str| all().filter(move |e| e.is(name)).map(|e| e.deep_text().trim().to_string());
+        let all = || meta.elements().flat_map(|e| if e.is(Local("dc-metadata")) { e.elements().collect::<Vec<_>>() } else { vec![e] });
+        const DC: &[&str] = &[
+            "title",
+            "creator",
+            "subject",
+            "description",
+            "publisher",
+            "contributor",
+            "date",
+            "type",
+            "format",
+            "identifier",
+            "source",
+            "language",
+            "relation",
+            "coverage",
+            "rights",
+        ];
+        for element in all() {
+            if let Some(name) = DC.iter().find(|name| element.name.strip_prefix("dc:") == Some(**name)) {
+                if pkg.dc_metadata.len() == limits.max_manifest {
+                    pkg.dc_metadata_truncated = true;
+                    break;
+                }
+                pkg.dc_metadata.push(DublinCoreValue { name: (*name).to_string(), value: element.deep_text() });
+            }
+        }
+        let texts = |name: &'static str| all().filter(move |e| e.is(Local(name))).map(|e| e.deep_text().trim().to_string());
         pkg.title = texts("title").next().unwrap_or_default();
         pkg.creators = texts("creator").filter(|c| !c.is_empty()).take(limits.max_manifest).collect();
         pkg.language = texts("language").find(|l| !l.is_empty());
-        let ids = || all().filter(|e| e.is("identifier"));
-        let chosen = ids().find(|e| unique.is_some() && e.attr("id") == unique).or_else(|| ids().next());
+        let ids = || all().filter(|e| e.is(Local("identifier")));
+        let chosen = ids().find(|e| unique.is_some() && local_attr(e, "id") == unique).or_else(|| ids().next());
         pkg.identifier = chosen.map(|e| e.deep_text().trim().to_string()).filter(|i| !i.is_empty());
-        for m in all().filter(|e| e.is("meta")) {
+        for m in all().filter(|e| e.is(Local("meta"))) {
             let text = || m.deep_text().trim().to_string();
-            match (m.attr("property"), m.attr("name")) {
+            match (local_attr(m, "property"), local_attr(m, "name")) {
                 (Some("dcterms:modified"), _) if pkg.modified.is_none() => pkg.modified = Some(text()),
                 (Some("rendition:layout"), _) => pkg.pre_paginated = text() == "pre-paginated",
-                (_, Some("cover")) if pkg.cover_id.is_none() => pkg.cover_id = m.attr("content").map(str::to_string),
+                (_, Some("cover")) if pkg.cover_id.is_none() => pkg.cover_id = local_attr(m, "content").map(str::to_string),
                 _ => {}
             }
         }
     }
-    let attr = |e: &El, name: &str| e.attr(name).unwrap_or_default().to_string();
-    for item in root.child("manifest").into_iter().flat_map(|m| m.children("item")).take(limits.max_manifest) {
-        let (Some(id), Some(href)) = (item.attr("id"), item.attr("href")) else { continue };
+    let attr = |e: &El, name: &str| local_attr(e, name).unwrap_or_default().to_string();
+    for item in root.child(Local("manifest")).into_iter().flat_map(|m| m.children(Local("item"))).take(limits.max_manifest) {
+        let (Some(id), Some(href)) = (local_attr(item, "id"), local_attr(item, "href")) else { continue };
         pkg.manifest.push(Item {
             id: id.to_string(),
             href: href.to_string(),
@@ -209,12 +261,12 @@ pub fn parse_package(xml: &[u8], opf_dir: &str, limits: &Limits) -> Result<Packa
     for item in &pkg.manifest {
         by_id.entry(&item.id).or_insert(&item.path);
     }
-    if let Some(spine) = root.child("spine") {
-        pkg.ncx = spine.attr("toc").and_then(|id| by_id.get(id)).map(ToString::to_string);
-        for itemref in spine.children("itemref").take(limits.max_spine) {
-            let Some(idref) = itemref.attr("idref") else { continue };
+    if let Some(spine) = root.child(Local("spine")) {
+        pkg.ncx = local_attr(spine, "toc").and_then(|id| by_id.get(id)).map(ToString::to_string);
+        for itemref in spine.children(Local("itemref")).take(limits.max_spine) {
+            let Some(idref) = local_attr(itemref, "idref") else { continue };
             let path = by_id.get(idref).map(ToString::to_string);
-            pkg.spine.push(SpineItem { idref: idref.to_string(), linear: itemref.attr("linear") != Some("no"), path });
+            pkg.spine.push(SpineItem { idref: idref.to_string(), linear: local_attr(itemref, "linear") != Some("no"), path });
         }
     }
     Ok(pkg)
