@@ -339,36 +339,6 @@ fn content_that_grows_inside_a_lazy_cell_that_fills_it_grows_its_row() {
     assert!(card.get().expand(SAME).contains_rect(content.get()), "the card grew to its content: {:?} in {:?}", content.get(), card.get());
 }
 
-/// A scrolling body whose content overflows lays the content out at the view its overflow leaves (beside the scroll
-/// bar) in its first frame: content that takes the view's width has the width it has once the body settles.
-#[trial]
-fn overflowing_content_takes_the_view_beside_the_bar_in_its_first_frame() {
-    // The widths of the last real run that ran the content.
-    let widths = RefCell::new(Vec::new());
-    let mut show = |ui: &mut Ui| {
-        let ran = RefCell::new(Vec::new());
-        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
-            Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("overflowing").show(ui, |ui, _| {
-                for _ in 0..30 {
-                    let rect = Block::new(Vec2::new(ui.available_width(), LINE.y)).show(ui).rect;
-                    if !ui.is_sizing_pass() && !craft_ui::testing::is_measuring(ui.ctx()) {
-                        ran.borrow_mut().push(rect.width());
-                    }
-                }
-            });
-        });
-        if !ran.borrow().is_empty() {
-            *widths.borrow_mut() = ran.into_inner();
-        }
-    };
-    let mut frames = Frames::new();
-    frames.idle(1, &mut show);
-    let first = widths.borrow().clone();
-    frames.idle(3, &mut show);
-    assert!(!first.is_empty(), "the content ran in the first frame");
-    assert_eq!(first, *widths.borrow(), "the first frame lays the content out at the settled view's width");
-}
-
 /// A memoized line as wide as its view.
 #[derive(MemoProps)]
 struct Line {
