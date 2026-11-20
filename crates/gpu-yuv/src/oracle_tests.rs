@@ -53,9 +53,10 @@ fn exact(rgb: [f64; 3], c: Conversion) -> [f64; 3] {
     }
 }
 
-/// `Round(x) = Sign(x) Floor(|x| + 0.5)`, clamped to the codes of `bits`.
+/// `Round(x) = Sign(x) Floor(|x| + 0.5)`, clamped to the codes of `bits`. `f64::round` is that
+/// function; adding 0.5 in `f64` would take the largest value below a half up to 1.
 fn round(x: f64, bits: u32) -> u16 {
-    (x.signum() * (x.abs() + 0.5).floor()).clamp(0.0, f64::from((1u32 << bits) - 1)) as u16
+    x.round().clamp(0.0, f64::from((1u32 << bits) - 1)) as u16
 }
 
 /// Whether `got` is the rounded `exact` value. A value within 0.001 of a half may round either
@@ -76,6 +77,8 @@ fn a_value_near_a_half_passes_only_as_its_floor_or_ceiling() {
     assert!(!rounds_to(254, 254.9, 8));
     assert!(rounds_to(0, -0.5, 8));
     assert!(!rounds_to(1, -0.5, 8));
+    assert_eq!(round(0.5 - f64::EPSILON / 4.0, 8), 0);
+    assert_eq!(round(2.5, 8), 3);
 }
 
 /// Every sample of a frame as its value (P010 words shifted down by 6).

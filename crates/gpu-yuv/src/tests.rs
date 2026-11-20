@@ -351,6 +351,85 @@ fn the_gpu_matches_the_cpu_when_scaling() {
 }
 
 #[test]
+fn the_gpu_rounds_a_value_just_below_a_half_down() {
+    let Some((device, queue)) = device() else { return };
+    // The shader's own code(), driven by one extra entry point. The values are built from the
+    // texel position so that no compiler folds them: k is 0 at the only texel's center.
+    // 0x3effffff is 0.49999997, the largest f32 below 0.5, and 0x3f7fffff is 0.99999994.
+    let probe = "@fragment fn fs_probe(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<u32> {
+    let k = u32(pos.x);
+    let z = f32(k);
+    return vec4<u32>(code(bitcast<f32>(0x3effffffu + k)), code(0.5 + z), code(2.5 + z), code(bitcast<f32>(0x3f7fffffu + k)));
+}";
+    let wgsl = gpu::shader(Conversion::new(Format::Nv12, Matrix::Bt709, Range::Full)) + probe;
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: None,
+        vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_probe"),
+            targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Uint, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Uint,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 256,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.draw(0..3, 0..1);
+    }
+    enc.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+        },
+        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    buffer.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let got = buffer.get_mapped_range(..4).unwrap().to_vec();
+    assert_eq!(got, [0, 1, 3, 1], "code() of 0.49999997, 0.5, 2.5 and 0.99999994");
+}
+
+#[test]
 fn planes_larger_than_the_device_allows_are_errors() {
     // The queue stays alive: a device whose queue was dropped cannot make an encoder.
     let Some((device, _queue)) = device() else { return };
