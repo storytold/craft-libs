@@ -155,6 +155,70 @@ fn a_child_a_dialog_asks_for_opens_over_it_once() {
     assert!(host.is_empty(), "a dialog that finished does not leave its child open");
 }
 
+/// A dialog that shows in a window of its own (`StackDialog::windowed`): it records its shows and
+/// finishes with `finish` once set.
+struct Windowed {
+    key: &'static str,
+    shows: usize,
+    finish: Option<DialogResult<u32>>,
+}
+
+impl StackDialog for Windowed {
+    type Result = u32;
+
+    fn id(&self) -> DialogId {
+        dialog_id(self.key)
+    }
+
+    fn windowed(&self) -> bool {
+        true
+    }
+
+    fn window_title(&self) -> Option<String> {
+        Some("Panel".into())
+    }
+
+    fn show(&mut self, _: &mut Ui, _: &DialogStack) -> Option<DialogResult<u32>> {
+        self.shows += 1;
+        self.finish.take()
+    }
+}
+
+/// A windowed dialog is left alone by `run`, shown by `run_windowed`, and a result it finishes with
+/// in its own window is stored as an in-window dialog's is.
+#[trial]
+fn a_windowed_dialog_runs_in_its_own_window_and_stores_its_result() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    host.open(Windowed { key: "panel", shows: 0, finish: None });
+    run(&mut host, &mut frames);
+    assert_eq!(host.get::<Windowed>().unwrap().shows, 0, "run leaves a windowed dialog alone");
+    let ctx = frames.ctx.clone();
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    assert_eq!(host.get::<Windowed>().unwrap().shows, 1, "run_windowed shows it in its window");
+    assert!(host.is_open::<Windowed>());
+    host.get_mut::<Windowed>().unwrap().finish = Some(DialogResult::Ok(7));
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    assert!(!host.is_open::<Windowed>(), "finished in its window, it closes");
+    assert_eq!(host.take::<Windowed>(), Some(DialogResult::Ok(7)));
+}
+
+/// A windowed dialog asked to close without a `Context` (`close_by_id`, as closing its window would
+/// arrive) is cancelled at the next `run_windowed`.
+#[trial]
+fn closing_a_windowed_dialog_cancels_it() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Windowed { key: "panel", shows: 0, finish: None });
+    let ctx = frames.ctx.clone();
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    assert!(host.is_open::<Windowed>());
+    host.close_by_id(id);
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    assert!(!host.is_open::<Windowed>(), "the close took the dialog with it");
+    assert_eq!(host.take::<Windowed>(), Some(DialogResult::Cancel));
+}
+
 /// A story of a hosted alert whose title is the story's `title` knob.
 fn titled_alert(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let title = *data.value("title", "Could not open");
