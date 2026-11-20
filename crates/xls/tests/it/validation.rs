@@ -2,7 +2,7 @@
 //! spec's structures; no Excel-produced file is used. The expected rules are what a
 //! SpreadsheetML reader gives for the same rule. Ported from storytold/gridcraft#3636.
 
-mod common;
+use super::common;
 
 use common::*;
 use craft_xls::{CellRef, DataValidation, ErrorStyle, Operator, Range, ValidationType, Workbook};

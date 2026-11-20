@@ -1,7 +1,7 @@
 //! Comment threads through PPTX: the modern part keeps replies and resolved state, the legacy
 //! part stays readable, and a package with both imports every thread once.
 
-mod common;
+use super::common;
 
 use std::sync::Arc;
 
