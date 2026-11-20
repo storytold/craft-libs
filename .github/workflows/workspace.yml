@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
       - id: select
-        uses: storytold/craft-common-actions/actions/select-platforms@d65d611f0ef67eaa94039351be5afce61102dbb0
+        uses: storytold/craft-common-actions/actions/select-platforms@f5141455aac7b2eb4708aa259d8ffcdf10fde939
         with:
           os: '["ubuntu-latest","windows-latest","macos-latest"]'
           select-os: '["windows-latest","macos-latest"]'
