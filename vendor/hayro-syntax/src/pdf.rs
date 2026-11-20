@@ -187,13 +187,13 @@ impl Pdf {
         if let Err(XRefError::Encryption(e)) = root {
             return Err(LoadPdfError::Decryption(e));
         }
-        let root_encrypted = root.as_ref().ok().map(|(x, _)| x.is_encrypted());
+        let root_encrypted = root.as_ref().ok().map(|(x, _)| x.has_decryptor());
         // PdfCraft patch: (hayro-syntax (45)) said of the file whichever table is kept, as
         // `pdfcraft-cos` says it under the same conditions.
         let rebuilt_unlinked_update = root.as_ref().is_ok_and(|(_, rebuilt)| *rebuilt);
         if cut_off_update_follows(data.as_ref())
             && let Some(xref) = fallback_controlled(data.clone(), password, limits, control.clone())
-                .filter(|x| root_encrypted.is_none_or(|e| e == x.is_encrypted()))
+                .filter(|x| root_encrypted.is_none_or(|e| e == x.has_decryptor()))
         {
             let xref = Arc::new(xref);
             crate::cancel::check(control.as_ref()).ok_or(LoadPdfError::Invalid)?;

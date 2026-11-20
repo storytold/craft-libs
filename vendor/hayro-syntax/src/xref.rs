@@ -688,7 +688,7 @@ impl XRef {
 
     /// PdfCraft patch: (hayro-syntax (43)) whether objects read through this table are
     /// decrypted.
-    pub(crate) fn is_encrypted(&self) -> bool {
+    pub(crate) fn has_decryptor(&self) -> bool {
         match &self.0 {
             Inner::Dummy => false,
             Inner::Some(r) => !matches!(r.decryptor.as_ref(), Decryptor::None),
@@ -816,7 +816,7 @@ impl XRef {
                     // make the object unreadable through the reference that names it (#5580). A
                     // table read from the file's own xref keeps the exact match.
                     if object.id() == &id || (repaired && object.id().obj_number == id.obj_number) {
-                        return Some(object.get());
+                        return Some(Fetched::Object(object.get()));
                     }
                 } else {
                     // PdfCraft patch: the strict read of the header failed. In a table rebuilt by
@@ -828,7 +828,7 @@ impl XRef {
                         && let Some(object) =
                             read_repaired_body::<T>(repr.data.get().as_ref(), offset, id, &ctx)
                     {
-                        return Some(object);
+                        return Some(Fetched::Object(object));
                     }
                     // There is a valid object at the offset, it's just not of the type the caller
                     // expected, which is fine.
@@ -876,11 +876,11 @@ impl XRef {
                 let data = repr.data.get_with(obj_stream_id, &ctx)?;
                 // PdfCraft patch: the offset table is parsed once per stream (see Data).
                 let offsets = repr.data.object_offsets(obj_stream_id, || {
-                    let stream = self.get_with::<Stream<'_>>(obj_stream_id, &ctx)?;
+                    let stream = self.object_stream(obj_stream_id, &ctx)?;
                     ObjectStream::offsets(stream, data)
                 })?;
                 let object_stream = ObjectStream::with_offsets(offsets, data, &ctx);
-                object_stream.get(index)
+                object_stream.get(index).map(Fetched::Object)
             }
         }
     }
@@ -932,6 +932,8 @@ fn find_last_xref_pos_controlled(data: &[u8], control: Option<&crate::cancel::Co
     finder.skip_white_spaces_and_comments();
     finder.read_without_context::<i32>()?.try_into().ok()
 }
+
+const STARTXREF_TAIL: usize = 4096;
 
 /// PdfCraft patch: (hayro-syntax (43)) whether the last update of the file was cut off before its
 /// own cross-reference section and trailer: the last `startxref` is not near the end of the file
@@ -1178,34 +1180,6 @@ fn prev_offset(data: &[u8], trailer: &Dict<'_>, own: &XrefMap) -> Option<usize> 
             reader.jump(*at);
             reader
                 .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy_with_control(trailer.ctx().decode_limits(), trailer.ctx().control().cloned()))
-                .filter(|o| o.id() == &id)
-                .map(|o| o.get())
-                .filter(|p| *p >= 0)
-        }
-        _ => None,
-    };
-
-    usize::try_from(held.unwrap_or(r.obj_number)).ok()
-}
-
-/// The offset of the previous xref section (`Prev`).
-// PdfCraft patch: (#2366) some writers give `Prev` as a reference `N G R`. When this section's
-// own entries (`own`) place that object and it holds an offset (iText's `indirectPrev.pdf`), that
-// is the offset; otherwise its object number is (tiff2pdf, in JHOVE's PDF-HUL-157 files), as
-// `pdfcraft-cos` and other readers take it.
-fn prev_offset(data: &[u8], trailer: &Dict<'_>, own: &XrefMap) -> Option<usize> {
-    if let Some(prev) = trailer.get::<i32>(PREV) {
-        return usize::try_from(prev).ok();
-    }
-
-    let r = trailer.get_ref(PREV)?;
-    let id = ObjectIdentifier::new(r.obj_number, r.gen_number);
-    let held = match own.get(&id) {
-        Some(EntryType::Normal(at)) => {
-            let mut reader = Reader::new(data);
-            reader.jump(*at);
-            reader
-                .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy())
                 .filter(|o| o.id() == &id)
                 .map(|o| o.get())
                 .filter(|p| *p >= 0)
@@ -1888,70 +1862,6 @@ mod tests {
     // PdfCraft patch tests (ported from craft-libs): xref stream entries are bounded by the
     // decoded data, and the type field is read at its full width.
     #[test]
-    fn xref_stream_entries_need_backing_bytes() {
-        let mut map = XrefMap::default();
-        // All widths zero: an entry reads nothing, so none may be declared.
-        let mut empty = Reader::new(&[]);
-        assert!(xref_stream_subsection(&mut empty, 0, u32::MAX, 0, 0, 0, &mut map).is_none());
-        assert!(map.is_empty());
-        // Three entries of width 3 need nine bytes; eight are refused before any insert.
-        let data = [1, 0, 9, 1, 0, 9, 1, 0];
-        let mut short = Reader::new(&data);
-        assert!(xref_stream_subsection(&mut short, 0, 3, 1, 1, 1, &mut map).is_none());
-        assert!(map.is_empty());
-        let mut whole = Reader::new(&data[..6]);
-        assert!(xref_stream_subsection(&mut whole, 0, 2, 1, 1, 1, &mut map).is_some());
-        assert_eq!(map.len(), 2);
-        // A subsection running past object number i32::MAX is refused.
-        for start in [i32::MAX as u32, u32::MAX] {
-            let mut past_end = XrefMap::default();
-            let mut wrap = Reader::new(&data[..6]);
-            assert!(xref_stream_subsection(&mut wrap, start, 2, 1, 1, 1, &mut past_end).is_none());
-            assert!(past_end.keys().all(|id| id.obj_number >= 0));
-        }
-    }
-
-    #[test]
-    fn xref_stream_type_field_uses_the_full_w0_width() {
-        // /W [2 1 1]: two-byte type 0x0001 (normal), offset 7, gen 0.
-        let mut map = XrefMap::default();
-        let mut reader = Reader::new(&[0u8, 1, 7, 0]);
-        assert!(xref_stream_subsection(&mut reader, 5, 1, 2, 1, 1, &mut map).is_some());
-        assert!(matches!(
-            map.get(&ObjectIdentifier::new(5, 0)),
-            Some(EntryType::Normal(7))
-        ));
-    }
-
-    #[test]
-    fn xref_stream_loader_rejects_oversized_w0() {
-        // One normal entry (offset 7, gen 0) whose type field is `type_len` bytes wide, so only
-        // the width of /W[0] differs between the two streams.
-        let load = |type_len: usize| {
-            let mut entry = vec![0u8; type_len];
-            entry[type_len - 1] = 1;
-            entry.extend_from_slice(&[7, 0]);
-            let mut data = format!(
-                "1 0 obj\n<< /Type /XRef /Size 6 /Index [5 1] /W [{type_len} 1 1] /Length {} >>\nstream\n",
-                entry.len()
-            )
-            .into_bytes();
-            data.extend_from_slice(&entry);
-            data.extend_from_slice(b"\nendstream\nendobj\n");
-            let mut map = XrefMap::default();
-            let got = populate_from_xref_stream(
-                &data,
-                &mut Reader::new(&data),
-                &mut map,
-                &mut BTreeSet::new(),
-            );
-            got.is_some()
-        };
-        assert!(load(8));
-        assert!(!load(9));
-    }
-
-    #[test]
     fn cancellation_stops_before_a_whole_xref_subsection_is_read() {
         let data = vec![1; 512 * 1024];
         let (control, polls) = crate::cancel::stop_at(3);
@@ -2374,78 +2284,6 @@ mod tests {
             DecodeLimits::default(),
         )
         .unwrap();
-        assert!(xref_map.contains_key(&ObjectIdentifier::new(1, 0)));
-        assert!(xref_map.contains_key(&ObjectIdentifier::new(3, 0)));
-    }
-
-    #[test]
-    fn prev_as_reference_reaches_the_earlier_section() {
-        let mut pdf = b"%PDF-1.0\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec();
-        let first_xref_pos = pdf.len();
-        pdf.extend_from_slice(
-            format!(
-                "xref\n\
-                 0 2\n\
-                 0000000000 65535 f \n\
-                 0000000009 00000 n \n\
-                 trailer\n<< /Size 2 /Root 1 0 R >>\n\
-                 startxref\n{first_xref_pos}\n%%EOF\n"
-            )
-            .as_bytes(),
-        );
-        let second_xref_pos = pdf.len();
-        pdf.extend_from_slice(
-            format!(
-                "xref\n\
-                 0 1\n\
-                 0000000000 65535 f \n\
-                 trailer\n<< /Size 2 /Root 1 0 R /Prev {first_xref_pos} 0 R >>\n\
-                 startxref\n{second_xref_pos}\n%%EOF"
-            )
-            .as_bytes(),
-        );
-
-        let mut xref_map = FxHashMap::default();
-        let xref_pos = find_last_xref_pos(pdf.as_ref()).unwrap();
-        assert_eq!(xref_pos, second_xref_pos);
-        populate_xref_impl(pdf.as_ref(), xref_pos, &mut xref_map).unwrap();
-        assert!(xref_map.contains_key(&ObjectIdentifier::new(1, 0)));
-    }
-
-    #[test]
-    fn prev_as_reference_to_an_object_holding_the_offset_reads_that_offset() {
-        let mut pdf = b"%PDF-1.0\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec();
-        let first_xref_pos = pdf.len();
-        pdf.extend_from_slice(
-            format!(
-                "xref\n\
-                 0 2\n\
-                 0000000000 65535 f \n\
-                 0000000009 00000 n \n\
-                 trailer\n<< /Size 2 /Root 1 0 R >>\n\
-                 startxref\n{first_xref_pos}\n%%EOF\n"
-            )
-            .as_bytes(),
-        );
-        // Object 3 holds the offset; read as offset 3, `Prev` would point inside the header.
-        let held_pos = pdf.len();
-        pdf.extend_from_slice(format!("3 0 obj\n{first_xref_pos}\nendobj\n").as_bytes());
-        let second_xref_pos = pdf.len();
-        pdf.extend_from_slice(
-            format!(
-                "xref\n\
-                 3 1\n\
-                 {held_pos:010} 00000 n \n\
-                 trailer\n<< /Size 4 /Root 1 0 R /Prev 3 0 R >>\n\
-                 startxref\n{second_xref_pos}\n%%EOF"
-            )
-            .as_bytes(),
-        );
-
-        let mut xref_map = FxHashMap::default();
-        let xref_pos = find_last_xref_pos(pdf.as_ref()).unwrap();
-        assert_eq!(xref_pos, second_xref_pos);
-        populate_xref_impl(pdf.as_ref(), xref_pos, &mut xref_map).unwrap();
         assert!(xref_map.contains_key(&ObjectIdentifier::new(1, 0)));
         assert!(xref_map.contains_key(&ObjectIdentifier::new(3, 0)));
     }

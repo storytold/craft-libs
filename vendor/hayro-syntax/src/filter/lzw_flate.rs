@@ -1696,6 +1696,7 @@ mod pdfcraft_png_predictor_tests {
             bits_per_component: 8,
             columns: 3,
             early_change: false,
+            control: None,
         };
         assert!(
             untagged_png_rows(&params, 36, Some(4)),
@@ -1734,6 +1735,7 @@ mod pdfcraft_png_predictor_tests {
             bits_per_component: 8,
             columns: 3,
             early_change: false,
+            control: None,
         };
         // Short of the untagged length, past it, or between it and the tagged one.
         for len in [0, 1, 9, 27, 35, 37, 39, 41, 72] {
@@ -1774,7 +1776,8 @@ mod pdfcraft_png_predictor_tests {
                 bits_per_component,
                 columns,
                 early_change: false,
-            };
+                control: None,
+        };
             for rows in [None, Some(0), Some(1), Some(4), Some(usize::MAX)] {
                 for len in [0, 1, 36, usize::MAX] {
                     let _ = untagged_png_rows(&params, len, rows);
@@ -1864,7 +1867,8 @@ mod pdfcraft_png_predictor_tests {
                 bits_per_component,
                 columns,
                 early_change: false,
-            };
+                control: None,
+        };
             let got = apply_predictor(data.clone(), &params).unwrap();
             assert_eq!(
                 got,
@@ -1889,6 +1893,7 @@ mod pdfcraft_png_predictor_tests {
             bits_per_component: 4,
             columns: 3,
             early_change: false,
+            control: None,
         };
         assert_eq!(
             apply_predictor(data.to_vec(), &params).unwrap(),
@@ -1910,6 +1915,7 @@ mod pdfcraft_png_predictor_tests {
             bits_per_component: 16,
             columns: 3,
             early_change: false,
+            control: None,
         };
         assert_eq!(
             apply_predictor(data.clone(), &params).unwrap(),
@@ -1932,6 +1938,7 @@ mod pdfcraft_tiff_predictor_tests {
             bits_per_component,
             columns,
             early_change: false,
+            control: None,
         }
     }
 

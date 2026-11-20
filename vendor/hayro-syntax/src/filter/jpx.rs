@@ -620,7 +620,7 @@ mod tests {
                 target_dimension: Some((2, 2)),
                 ..ImageDecodeParams::default()
             };
-            let result = decode(&one_level_codestream(x, y), &params).unwrap();
+            let result = decode(&one_level_codestream(x, y), &params, usize::MAX).unwrap();
             let image = result.image_data.unwrap();
             assert_eq!((image.width, image.height), (expected, expected), "offset ({x}, {y})");
             assert_eq!(result.data.as_ref(), alloc::vec![128; (expected * expected) as usize], "offset ({x}, {y})");
@@ -680,10 +680,10 @@ mod tests {
     #[test]
     fn a_codestream_over_the_pixel_cap_is_refused() {
         let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
-        assert!(decode(&jp2_with_size(1, 1, 0), &params).is_some());
-        assert!(decode(&jp2_with_size(65536, 65536, 0), &params).is_none());
+        assert!(decode(&jp2_with_size(1, 1, 0), &params, usize::MAX).is_some());
+        assert!(decode(&jp2_with_size(65536, 65536, 0), &params, usize::MAX).is_none());
         let small_target = ImageDecodeParams { target_dimension: Some((1, 1)), ..params };
-        assert!(decode(&jp2_with_size(65536, 65536, 4), &small_target).is_none());
+        assert!(decode(&jp2_with_size(65536, 65536, 4), &small_target, usize::MAX).is_none());
     }
 
     /// The size check uses the full-resolution size, not the target's. With four decomposition
@@ -702,12 +702,12 @@ mod tests {
             target_dimension: Some((1, 1)),
             ..ImageDecodeParams::default()
         };
-        let reduced = decode(&image, &small_target).expect("a 64x64 image decodes at a 1x1 target");
+        let reduced = decode(&image, &small_target, usize::MAX).expect("a 64x64 image decodes at a 1x1 target");
         let size = reduced.image_data.as_ref().map(|d| (d.width, d.height));
         assert!(
             size.is_some_and(|(w, h)| u64::from(w) * u64::from(h) <= 1024),
             "the target shrinks the image under the limit: {size:?}"
         );
-        assert!(decode_with_pixel_limit(&image, &small_target, 1024).is_none());
+        assert!(decode_with_pixel_limit(&image, &small_target, usize::MAX, 1024).is_none());
     }
 }

@@ -293,7 +293,7 @@ impl<'a> UntypedIter<'a> {
                         UnfilteredEnd::Found(end_data, end_after_ei) => {
                             let image_data = stream_data.get(..end_data)?;
                             let stream = Stream::new(image_data, dict.clone());
-                            self.stack.push(Object::Stream(stream))?;
+                            self.stack.push(Object::Stream(stream));
                             self.reader.read_bytes(end_after_ei)?;
                             self.reader.skip_white_spaces();
                             accepted = true;
@@ -1178,67 +1178,6 @@ mod tests {
 
         assert_eq!(operators(data), [b"TJ".to_vec(), b"BI".to_vec(), b"q".to_vec(), b"Q".to_vec()]);
     }
-
-    /// PdfCraft patch: bytes above 0x7F after an `EI` candidate don't reject it.
-    #[test]
-    fn an_inline_image_ends_at_its_own_ei_when_later_text_holds_a_non_ascii_byte() {
-        // `(Grüße)` in WinAnsi, then a word holding a capital "EI": both are everyday content,
-        // and the look-ahead used to read the non-ASCII bytes of the string as image data.
-        let data = b"BI /W 1 /H 1 /BPC 8 /CS /DeviceGray ID \x00 EI BT /F1 12 Tf (Gr\xFC\xDFe) Tj (EINGANG) Tj ET";
-
-        assert_eq!(
-            operators(data),
-            [
-                b"BI".to_vec(),
-                b"BT".to_vec(),
-                b"Tf".to_vec(),
-                b"Tj".to_vec(),
-                b"Tj".to_vec(),
-                b"ET".to_vec()
-            ]
-        );
-    }
-
-    /// PdfCraft patch: `EI` followed by a delimiter ends the image.
-    #[test]
-    fn inline_image_ei_may_be_followed_by_a_delimiter() {
-        let mut image = b"BI /W 16 /H 4 /BPC 8 /CS /G ID ".to_vec();
-        image.extend([0x80; 64]);
-        image.extend(b"\nEI");
-        let tail = b" Q BT /F1 24 Tf 72 200 Td (AFTER) Tj ET";
-        let ops = |suffix: &[u8]| {
-            let mut data = image.clone();
-            data.extend(suffix);
-            data.extend(tail);
-            operators(&data)
-        };
-        let control = ops(b"");
-        assert_eq!(control.len(), 7);
-        assert_eq!(ops(b"%c\n"), control);
-        assert_eq!(ops(b"[] 0 d"), [&control[..1], &[b"d".to_vec()], &control[1..]].concat());
-    }
-
-    #[test]
-    fn inline_image_ei_followed_by_a_regular_character_is_not_the_end() {
-        let data = b"BI /W 1 /H 1 /BPC 8 /CS /G ID \x80 EIQ \x81 EI Q BT (a) Tj ET";
-        // `EIQ` is one token and stays part of the image data.
-        let expected: Vec<Vec<u8>> =
-            ["BI", "Q", "BT", "Tj", "ET"].iter().map(|s| s.as_bytes().to_vec()).collect();
-        assert_eq!(operators(data), expected);
-    }
-
-    #[test]
-    fn ascii85_inline_image_data_may_contain_ei_before_a_delimiter() {
-        for glue in [&b"EI["[..], b"EI/", b"EI%", b"EI(", b"EI<"] {
-            let mut data = b"BI /W 4 /H 4 /BPC 8 /CS /G /F /A85 ID 9jqo^".to_vec();
-            data.extend(glue);
-            data.extend(b"87cURD]i,\"Ebo80~>EI Q BT /F1 12 Tf (AFTER) Tj ET");
-            let expected: Vec<Vec<u8>> =
-                ["BI", "Q", "BT", "Tf", "Tj", "ET"].iter().map(|s| s.as_bytes().to_vec()).collect();
-            assert_eq!(operators(&data), expected, "{}", String::from_utf8_lossy(glue));
-        }
-    }
-
 
     #[test]
     fn an_inline_image_ends_at_its_own_ei_when_later_text_holds_a_non_ascii_byte() {

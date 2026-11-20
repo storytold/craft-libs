@@ -6,6 +6,8 @@ use crate::object::dict::keys::JBIG2_GLOBALS;
 use crate::object::stream::{FilterResult, ImageColorSpace, ImageData, ImageDecodeParams};
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
+
+const MAX_PIXELS: u64 = 1 << 28;
 use core::iter;
 
 /// PdfCraft patch (31): the steps of decoding a page's JBIG2 images may take between them, as many
