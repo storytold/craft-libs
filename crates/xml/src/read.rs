@@ -140,6 +140,14 @@ pub struct Scope<'s> {
 }
 
 impl<'s> Scope<'s> {
+    /// Namespace declarations on the open element path, outermost first. A later declaration
+    /// for the same prefix shadows an earlier one; an empty URI undeclares it. The implicit
+    /// `xml` binding is available from [`Self::uri`] and is not included unless declared. Use
+    /// `uri` for the effective binding, including for the reserved `xml` prefix.
+    pub fn declarations(&self) -> impl DoubleEndedIterator<Item = (&str, &str)> + '_ {
+        self.bindings.iter().map(|(prefix, uri)| (prefix.as_str(), uri.as_str()))
+    }
+
     /// The namespace URI `prefix` is bound to; `""` is the default namespace.
     pub fn uri(&self, prefix: &str) -> Option<&'s str> {
         if prefix == "xml" {
@@ -516,6 +524,13 @@ impl<'o, 'i> Events<'o, 'i> {
     /// have the whole element.
     pub fn span(&self) -> Range<usize> {
         self.span.clone()
+    }
+
+    /// Namespace declarations in scope after the last event. A start event includes that
+    /// element's declarations; an end event has returned to its parent's scope. A reference to
+    /// this view cannot outlive the next mutable read of the event stream.
+    pub fn scope(&self) -> Scope<'_> {
+        Scope { bindings: &self.scope }
     }
 
     fn syntax<T>(&self, msg: impl Into<String>) -> Result<T, Error> {

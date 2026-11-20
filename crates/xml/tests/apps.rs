@@ -678,3 +678,25 @@ fn odt_events_with_byte_ranges() {
     assert_eq!(count, 4);
     assert!(matches!(err, Some(Error::Syntax { .. })), "{err:?}");
 }
+
+#[test]
+fn pull_reader_exposes_scoped_namespace_declarations() {
+    let xml = br#"<root xmlns='urn:outer' xmlns:s='urn:svg' xmlns:p='urn:old'><s:svg xmlns:p='urn:new'><p:x/></s:svg><reset xmlns=''/></root>"#;
+    let mut events = Options::local().strict().events(xml);
+    assert!(matches!(events.next().unwrap(), Some(Event::Start { .. })));
+    assert_eq!(events.scope().uri(""), Some("urn:outer"));
+    assert!(matches!(events.next().unwrap(), Some(Event::Start { .. })));
+    let scope = events.scope();
+    assert_eq!(scope.uri("s"), Some("urn:svg"));
+    assert_eq!(scope.uri("p"), Some("urn:new"));
+    assert_eq!(scope.uri("xml"), Some(craft_xml::XML_NS));
+    assert_eq!(scope.declarations().filter(|(prefix, _)| *prefix == "p").collect::<Vec<_>>(), [("p", "urn:old"), ("p", "urn:new")]);
+    assert!(matches!(events.next().unwrap(), Some(Event::Start { .. })));
+    assert!(matches!(events.next().unwrap(), Some(Event::End { .. })));
+    assert_eq!(events.scope().uri("p"), Some("urn:new"));
+    assert!(matches!(events.next().unwrap(), Some(Event::End { .. })));
+    assert_eq!(events.scope().uri("p"), Some("urn:old"));
+    assert!(matches!(events.next().unwrap(), Some(Event::Start { .. })));
+    assert_eq!(events.scope().uri(""), None);
+    assert_eq!(events.scope().declarations().next_back(), Some(("", "")));
+}
