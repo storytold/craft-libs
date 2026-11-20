@@ -22,7 +22,7 @@ The shared adapter adds an aggregate 64 MiB stylesheet-text limit and idempotent
 `doc_style` preserves EffectCraft's presentation-attribute + stylesheet + inline-`style`
 cascade, unit/percentage length resolution, `PaintRef`/`resolve_paint`, and
 `viewBox`/`preserveAspectRatio` transform helpers while leaving scene-graph mapping
-with the importer.
+with the importer. Note that `doc_style::length()` treats unknown units as `px` (`_ => v`).
 
 
 ### Opt-in validated embedded images
