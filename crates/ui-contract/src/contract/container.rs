@@ -743,6 +743,8 @@ pub struct ContainerProps {
     /// page and end moves and the reveals its children leave go to it (`Focus::take_scroll_moves`,
     /// `Focus::take_reveal`). A container with a `scroll` region is one already.
     pub scroll_owner: bool,
+    /// A collection that receives moves the focused control in this region leaves unused.
+    pub fallback_collection: Option<egui::Id>,
     /// The container's value is a gate that disables its content while off.
     #[doc(hidden)]
     pub gates: bool,
@@ -838,6 +840,7 @@ impl ContainerProps {
             child_glyphs: None,
             arena: false,
             scroll_owner: false,
+            fallback_collection: None,
             gates: false,
             transform: None,
             theme: None,
@@ -1012,6 +1015,12 @@ impl ContainerProps {
     /// Makes the container its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`).
     pub const fn scroll_owner(mut self, on: bool) -> Self {
         self.scroll_owner = on;
+        self
+    }
+
+    /// Sends unused moves from this region's focused control to the named collection.
+    pub fn fallback_collection(mut self, collection: egui::Id) -> Self {
+        self.fallback_collection = Some(collection);
         self
     }
 

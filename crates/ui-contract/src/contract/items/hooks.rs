@@ -413,6 +413,10 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         self.drag_step(comp, cx, &layout, (rect, offset, rtl), &props);
         self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
+        let quiet = cx.core.memory.is_peek() || crate::runtime::measure::active(&cx.core.ctx);
+        for (mv, mods) in crate::contract::steps::scroll_moves(&cx.core.ctx, cx.core.id, quiet) {
+            cx.core.intents.push(craft_behavior::Intent::Move(mv, mods));
+        }
         self.navigate(comp, cx, &layout, view, header_held);
         self.switch_page(comp, cx, &props, &layout);
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key)).or(lead_at);

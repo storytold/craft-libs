@@ -457,6 +457,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let window_shortcuts = commands::window_shortcuts(ctx);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = &input.latin_layout_chars;
+    let requested_paste = commands::board::has_pending_paste(ctx, viewport);
+    let mut requested_content = None::<commands::ClipContent>;
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let mut claims = focused_claims(&record, stage);
         claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
@@ -491,6 +493,12 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
                 later.push(arrived.clone());
                 return false;
             }
+            if requested_paste && let KeyEvent::Clip { command: EditCommand::Paste, pasted: Some(content) } = &read {
+                let combined = requested_content.get_or_insert_default();
+                combined.text = content.text.clone().or(combined.text.take());
+                combined.image = content.image.clone().or(combined.image.take());
+                return false;
+            }
             note_down(&mut stage.down, &read);
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
             visible = match &read {
@@ -505,6 +513,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         }
         (batch, visible, later)
     });
+    if let Some(content) = requested_content {
+        commands::board::deliver_requested_paste(ctx, viewport, content);
+    }
     if let Some(visible) = visible {
         focus::set_visible(ctx, viewport, visible);
     }

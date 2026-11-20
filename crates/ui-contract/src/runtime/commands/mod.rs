@@ -147,13 +147,15 @@ pub struct Fired {
     /// pastes what the event held in the pass it runs the command. `None` for every other command, and for a paste
     /// whose content the app reads from the clipboard itself.
     pub pasted: Option<ClipContent>,
+    /// The screen point supplied when requesting this paste, if any.
+    pub paste_at: Option<egui::Pos2>,
 }
 
 impl Fired {
     /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
     /// cycle, the Alt variant or paste content.
     pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time, pasted: None }
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time, pasted: None, paste_at: None }
     }
 }
 
@@ -478,6 +480,14 @@ pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -
         return false;
     }
     board::fire_from(ctx, &command.into(), source)
+}
+
+/// Requests a paste at a screen point; the delivered command carries the point with its content. The next clipboard
+/// delivery in this viewport completes the request. A new request replaces any previous pending point there.
+pub fn request_paste_at(ctx: &Context, at: egui::Pos2) {
+    if crate::runtime::measure::effect(ctx, "commands::request_paste_at") {
+        board::request_paste_at(ctx, at);
+    }
 }
 
 /// `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state

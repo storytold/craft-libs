@@ -5,6 +5,25 @@ use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::{Frames, trial};
 use egui::{Event, Ui};
 
+#[trial]
+fn requested_paste_keeps_its_point_until_clipboard_delivery() {
+    let mut frames = Frames::new();
+    let mut show = |_: &mut Ui| {};
+    frames.idle(2, &mut show);
+    take_output(&frames.ctx);
+    let point = egui::pos2(120.0, 180.0);
+    craft_ui::runtime::commands::request_paste_at(&frames.ctx, point);
+    frames.idle(1, &mut show);
+    frames.frame(vec![Event::Paste("content".into())], &mut show);
+    let mut delivered = Vec::new();
+    for _ in 0..3 {
+        delivered.extend(take_output(&frames.ctx).fired.into_iter().filter(|fired| fired.pasted.is_some()));
+        frames.idle(1, &mut show);
+    }
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].paste_at, Some(point));
+}
+
 /// The content used to be dropped with the event, and the platform's offer of it lapsed a pass before the command ran,
 /// so the app's paste found nothing.
 #[trial]

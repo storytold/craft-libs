@@ -58,6 +58,9 @@ impl BodyHooks<'_> {
         }
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
         scoped.enabled &= cx.core.resolved.enabled;
+        if let Some(collection) = props.fallback_collection {
+            scoped.fallback_collection = Some(collection);
+        }
         if let Some(window) = window {
             scoped.inherited_mut().commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
         }

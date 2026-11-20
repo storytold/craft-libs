@@ -80,6 +80,8 @@ pub(crate) struct Board {
     queue: Vec<Fired>,
     /// App-scope commands for the next `FrameOutput`.
     out: Vec<Fired>,
+    /// The latest point-bearing clipboard request in each viewport.
+    pending_pastes: HashMap<ViewportId, Fired>,
     /// App-scope commands a key pressed while only their own state disabled them, for the next `FrameOutput`.
     declined: Vec<Fired>,
     /// The commands instances took since the last `FrameOutput`, in order.
@@ -1018,6 +1020,42 @@ pub(crate) fn fire_from(ctx: &Context, command: &CommandRef, source: FireSource)
     fire_in(ctx, command, source, None)
 }
 
+pub(crate) fn request_paste_at(ctx: &Context, at: egui::Pos2) {
+    let command = CommandRef::from(EditCommands::Paste);
+    let (app, instance) = with(ctx, |board| board.target_of(ctx, &command, &board.here));
+    if !app && instance.is_none() {
+        return;
+    }
+    let (resolved, _) = resolve_in(ctx, &command, instance, Reach::Focus, None);
+    if !resolved.enabled {
+        return;
+    }
+    let target = if app { resolved.instance } else { instance };
+    let fired = Fired { target, paste_at: Some(at), ..Fired::new(command, FireSource::Pointer, FirePhase::Press, pass::now(ctx)) };
+    with(ctx, |board| {
+        board.pending_pastes.insert(pass::current_viewport(ctx), fired);
+    });
+    crate::runtime::egui::clipboard::request_paste(ctx);
+}
+
+pub(crate) fn has_pending_paste(ctx: &Context, viewport: ViewportId) -> bool {
+    with(ctx, |board| board.pending_pastes.contains_key(&viewport))
+}
+
+pub(crate) fn deliver_requested_paste(ctx: &Context, viewport: ViewportId, content: super::ClipContent) {
+    with(ctx, |board| {
+        if let Some(mut fired) = board.pending_pastes.remove(&viewport) {
+            fired.pasted = Some(content);
+            if fired.target.is_some() {
+                board.queue.push(fired);
+            } else {
+                board.out.push(fired);
+            }
+        }
+    });
+    repaint::request_of(ctx, ViewportId::ROOT);
+}
+
 /// `fire_from` for a surface that closes before its command runs, from the window under the modal layer `layer`
 /// (`beneath`).
 pub(crate) fn fire_beneath(ctx: &Context, layer: Id, command: &CommandRef, source: FireSource) -> bool {
@@ -1282,6 +1320,7 @@ pub(crate) fn begin(ctx: &Context) {
                         alt_variant: false,
                         time,
                         pasted: None,
+                        paste_at: None,
                     });
                 }
             }
@@ -1306,6 +1345,7 @@ pub(crate) fn begin(ctx: &Context) {
                             alt_variant: hit.alt_variant,
                             time,
                             pasted: None,
+                            paste_at: None,
                         };
                         with(ctx, |board| board.declined.push(declined));
                     }
@@ -1332,6 +1372,7 @@ pub(crate) fn begin(ctx: &Context) {
                     alt_variant: hit.alt_variant,
                     time,
                     pasted: shortcuts.pasted.clone().filter(|_| pasted),
+                    paste_at: None,
                 });
             }
         }
