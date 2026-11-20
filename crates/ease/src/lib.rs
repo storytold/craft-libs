@@ -8,7 +8,8 @@
 //!   exactly 0 at the start and exactly 1 at the end.
 //! * [`Track`] holds keys of any [`Animatable`] value (`f32`, `f64`, [`Vec2`], `[f32; N]`,
 //!   `[f64; N]`) at times in seconds, each easing into the next. Sampling is a binary search and
-//!   does not allocate.
+//!   does not allocate for these value types; for another [`Animatable`] type it allocates
+//!   whatever that type's `Clone` and `Animatable` implementations allocate.
 //! * [`MotionPath`] is a chain of cubic Bezier segments with arc-length tables built once, for
 //!   constant-speed motion along a curve.
 //! * [`Spring`] and [`SpringState`] move a value toward a target as a damped spring. Each step
@@ -83,8 +84,15 @@ pub(crate) fn within(v: f64, min: f64, max: f64, what: &'static str) -> Result<f
 
 /// The value `t` of the way from `a` to `b`. When a step on the way is too large to represent
 /// (`a` and `b` near opposite ends of the `f64` range, or an overshooting `t`), it is worked
-/// out at half scale, so only a result too large to represent is infinite.
+/// out at half scale, so only a result too large to represent is infinite. `t` of exactly 0 or
+/// 1 returns `a` or `b` itself.
 pub(crate) fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    if t == 0.0 {
+        return a;
+    }
+    if t == 1.0 {
+        return b;
+    }
     let r = a + (b - a) * t;
     if r.is_finite() { r } else { 2.0 * (0.5 * a + (0.5 * b - 0.5 * a) * t) }
 }
@@ -158,9 +166,10 @@ pub(crate) const SOLVE_TOLERANCE: f64 = 1e-12;
 
 /// The parameter where the Bezier `p` (non-decreasing, as it is when its inner points lie
 /// between its ends) reaches `x`: Newton steps kept inside a shrinking bracket, halving when a step leaves it, to
-/// within [`SOLVE_TOLERANCE`] of the span in at most [`SOLVE_STEPS`] steps. The curve with both
-/// handles at full reach (`p1 = p3`, `p2 = p0`), whose slope is zero halfway, is inverted in
-/// closed form.
+/// within [`SOLVE_TOLERANCE`] of the span in at most [`SOLVE_STEPS`] steps. The curve is solved
+/// shifted to start at 0 and scaled to a span of 1, so a narrow segment far from 0 is solved as
+/// precisely as a wide one. The curve with both handles at full reach (`p1 = p3`, `p2 = p0`),
+/// whose slope is zero halfway, is inverted in closed form.
 pub(crate) fn solve_monotonic(x: f64, p: [f64; 4]) -> f64 {
     solve_counted(x, p).0
 }
@@ -182,12 +191,12 @@ pub(crate) fn solve_counted(x: f64, p: [f64; 4]) -> (f64, u32) {
         // x(s) = 0.5 + 4 (s − 0.5)³ on the unit span.
         return ((0.5 + ((u - 0.5) * 0.25).cbrt()).clamp(0.0, 1.0), 0);
     }
+    let q = [0.0, (p[1] - p[0]) / span, (p[2] - p[0]) / span, 1.0];
     let (mut lo, mut hi) = (0.0f64, 1.0f64);
     let mut s = u.clamp(0.0, 1.0);
-    let tol = SOLVE_TOLERANCE * span;
     for step in 1..=SOLVE_STEPS {
-        let err = bez(s, p) - x;
-        if err.abs() <= tol {
+        let err = bez(s, q) - u;
+        if err.abs() <= SOLVE_TOLERANCE {
             return (s, step);
         }
         if err < 0.0 {
@@ -195,7 +204,7 @@ pub(crate) fn solve_counted(x: f64, p: [f64; 4]) -> (f64, u32) {
         } else {
             hi = s;
         }
-        let d = dbez(s, p);
+        let d = dbez(s, q);
         let next = if d.abs() > 1e-300 { s - err / d } else { f64::NAN };
         s = if next > lo && next < hi { next } else { 0.5 * (lo + hi) };
     }

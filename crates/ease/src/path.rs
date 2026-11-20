@@ -26,6 +26,10 @@ struct Segment {
     table: [f64; ARC_N + 1],
     /// Both handles on the chord: the segment is the straight line between its ends.
     straight: bool,
+    /// The parameters inside `0..1` where the x or y derivative is zero, in order, with the
+    /// unused entries set to 1. Arc lengths are integrated in pieces split there, since the
+    /// speed has a kink where the curve stops and turns back.
+    stops: [f64; 4],
     /// Arc length from the path's start to this segment's start.
     start: f64,
 }
@@ -33,6 +37,7 @@ struct Segment {
 impl Segment {
     fn new(p: [Vec2; 4], start: f64) -> Segment {
         let straight = on_chord(p[0], p[1], p[3]) && on_chord(p[0], p[2], p[3]);
+        let stops = stationary(&p);
         let mut table = [0.0; ARC_N + 1];
         if straight {
             let len = p[0].distance(p[3]);
@@ -42,13 +47,13 @@ impl Segment {
         } else {
             let mut acc = 0.0;
             for i in 1..=ARC_N {
-                acc += arc(&p, (i - 1) as f64 / ARC_N as f64, i as f64 / ARC_N as f64);
+                acc += arc(&p, &stops, (i - 1) as f64 / ARC_N as f64, i as f64 / ARC_N as f64);
                 if let Some(v) = table.get_mut(i) {
                     *v = acc;
                 }
             }
         }
-        Segment { p, table, straight, start }
+        Segment { p, table, straight, stops, start }
     }
 
     fn length(&self) -> f64 {
@@ -80,7 +85,7 @@ impl Segment {
         let mut u = u0 + if b > a { (s - a) / (b - a) } else { 0.0 } * (u1 - u0);
         let (mut lo, mut hi) = (u0, u1);
         for _ in 0..PARAM_STEPS {
-            let e = a + arc(&self.p, u0, u) - s;
+            let e = a + arc(&self.p, &self.stops, u0, u) - s;
             if e.abs() <= 1e-12 * len {
                 break;
             }
@@ -118,12 +123,64 @@ fn speed(p: &[Vec2; 4], u: f64) -> f64 {
     Vec2::new(dbez(u, [p[0].x, p[1].x, p[2].x, p[3].x]), dbez(u, [p[0].y, p[1].y, p[2].y, p[3].y])).length()
 }
 
-/// Arc length between parameters `a` and `b` (Gauss-Legendre; exact enough on one table cell).
-/// Each term is scaled by the interval before they are added, so a length near the largest
-/// `f64` does not overflow on the way.
-fn arc(p: &[Vec2; 4], a: f64, b: f64) -> f64 {
+/// Arc length between parameters `a` and `b` (Gauss-Legendre; exact enough on one table cell),
+/// in pieces split at the parameters `stops` that lie between them.
+fn arc(p: &[Vec2; 4], stops: &[f64; 4], a: f64, b: f64) -> f64 {
+    let mut from = a;
+    let mut total = 0.0;
+    for &r in stops.iter().filter(|&&r| r > a && r < b) {
+        total += gauss(p, from, r);
+        from = r;
+    }
+    total + gauss(p, from, b)
+}
+
+/// [`arc`] over one piece. Each term is scaled by the interval before they are added, so a
+/// length near the largest `f64` does not overflow on the way.
+fn gauss(p: &[Vec2; 4], a: f64, b: f64) -> f64 {
     let (m, h) = ((a + b) * 0.5, (b - a) * 0.5);
     GAUSS.iter().map(|(x, w)| w * h * speed(p, m + h * x)).sum::<f64>()
+}
+
+/// The parameters inside `0..1` where the x or y derivative of the segment `p` is zero, sorted
+/// and padded with 1 (see `Segment::stops`).
+fn stationary(p: &[Vec2; 4]) -> [f64; 4] {
+    let mut out = [1.0; 4];
+    let mut n = 0;
+    for k in [[p[0].x, p[1].x, p[2].x, p[3].x], [p[0].y, p[1].y, p[2].y, p[3].y]] {
+        for r in quadratic_roots(k[1] - k[0], k[2] - k[1], k[3] - k[2]) {
+            if let Some(slot) = out.get_mut(n) {
+                *slot = r;
+                n += 1;
+            }
+        }
+    }
+    out.sort_by(f64::total_cmp);
+    out
+}
+
+/// The roots inside `0..1` of the quadratic with Bernstein coefficients `k0`, `k1` and `k2`
+/// (a cubic's derivative, up to a factor of 3). The coefficients are scaled to the largest
+/// first, so coordinates near the ends of the `f64` range do not overflow when squared.
+fn quadratic_roots(k0: f64, k1: f64, k2: f64) -> impl Iterator<Item = f64> {
+    let m = k0.abs().max(k1.abs()).max(k2.abs());
+    let (k0, k1, k2) = if m.is_finite() && m > 0.0 { (k0 / m, k1 / m, k2 / m) } else { (0.0, 0.0, 0.0) };
+    // a u² + b u + c in powers of u.
+    let (a, b, c) = (k0 - 2.0 * k1 + k2, 2.0 * (k1 - k0), k0);
+    let roots = if a.abs() < 1e-12 {
+        [if b != 0.0 { -c / b } else { f64::NAN }, f64::NAN]
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            [f64::NAN, f64::NAN]
+        } else {
+            // The root of larger size first, then the other from their product, without
+            // cancellation.
+            let q = -0.5 * (b + disc.sqrt().copysign(b));
+            [q / a, if q != 0.0 { c / q } else { f64::NAN }]
+        }
+    };
+    roots.into_iter().filter(|r| *r > 0.0 && *r < 1.0)
 }
 
 /// Whether control point `c` lies on the segment `a`–`b` (within rounding).

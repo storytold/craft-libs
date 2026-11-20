@@ -21,7 +21,9 @@ impl Vec2 {
         self.x * o.x + self.y * o.y
     }
 
-    /// The length, without overflow for large components.
+    /// The length. Large components do not overflow on the way, so the length is finite whenever
+    /// it is at most `f64::MAX`; a longer vector, such as `(f64::MAX, f64::MAX)`, has an infinite
+    /// length. [`Vec2::normalized`] still gives such a vector's direction.
     pub fn length(self) -> f64 {
         self.x.hypot(self.y)
     }

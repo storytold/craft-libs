@@ -159,8 +159,23 @@ impl CustomEase {
             p.at = Vec2::new(1.0, 1.0);
         }
         let mut c = CustomEase { points: pts };
+        // A point marked smooth whose handles are not in line is a corner: it loses the mark
+        // before the handles are brought within reach, so they are clipped as a corner's, and
+        // again if bringing them within reach put them out of line.
+        c.clear_broken_smooth();
         c.clamp_handles();
+        c.clear_broken_smooth();
         c
+    }
+
+    /// Clears the smooth mark of every end and of every point whose handles are not in line.
+    fn clear_broken_smooth(&mut self) {
+        let n = self.points.len();
+        for (i, p) in self.points.iter_mut().enumerate() {
+            if p.smooth && (i == 0 || i + 1 == n || !handles_in_line(p.h_in, p.out)) {
+                p.smooth = false;
+            }
+        }
     }
 
     /// [`CustomEase::linear`] built directly (so [`CustomEase::new`] does not recurse).
@@ -235,14 +250,10 @@ impl CustomEase {
 
     /// Adds a point on the curve at time `t`, leaving its shape as it was (the segment is split
     /// in two): the new curve and the point's index. `None` at the ends, on an existing point,
-    /// or when the curve is full.
+    /// where the split cannot be placed at `t` (on a curve so flat there that its time cannot be
+    /// solved closely enough), or when the curve is full.
     pub fn insert_at(&self, t: f64) -> Option<(CustomEase, usize)> {
-        if !t.is_finite()
-            || t <= 1e-4
-            || t >= 1.0 - 1e-4
-            || self.points.len() >= MAX_EASE_POINTS
-            || self.points.iter().any(|p| (p.at.x - t).abs() < 1e-4)
-        {
+        if !(t > 0.0 && t < 1.0) || self.points.len() >= MAX_EASE_POINTS || self.points.iter().any(|p| p.at.x == t) {
             return None;
         }
         let i = self.segment_at(t);
@@ -252,6 +263,11 @@ impl CustomEase {
         let (a, b, c) = (p0.lerp(p1, s), p1.lerp(p2, s), p2.lerp(p3, s));
         let (d, e) = (a.lerp(b, s), b.lerp(c, s));
         let m = d.lerp(e, s);
+        // Refused when the split cannot be placed at `t`: it lands on an anchor, or farther from
+        // `t` than a millionth of the way to the nearer anchor.
+        if !(m.x > p0.x && m.x < p3.x && (m.x - t).abs() <= 1e-6 * (t - p0.x).min(p3.x - t)) {
+            return None;
+        }
         let mut pts = self.points.clone();
         if let Some(q) = pts.get_mut(i) {
             q.out = a - p0;
@@ -306,7 +322,11 @@ impl CustomEase {
                 if dir != Vec2::ZERO {
                     // Shortened to stay within reach along `dir`, so the clamp below does not
                     // turn it out of line.
-                    let mut len = other.length().max(1e-3);
+                    // A handle with no length is given one, so the point stays smooth.
+                    let mut len = other.length();
+                    if len <= 0.0 {
+                        len = 1e-3;
+                    }
                     if dir.x != 0.0 {
                         len = len.min((x_reach / dir.x).max(0.0));
                     }
@@ -379,7 +399,8 @@ impl CustomEase {
 /// reaches `c` backwards (both at least 0) runs forwards in x. Its x′ is the quadratic with
 /// Bernstein coefficients `a`, `span − a − c` and `c`, which is never negative when the middle
 /// one is at least −√(ac); that always holds while neither handle reaches past the other end,
-/// and never holds when one reaches past 4/3 of the span.
+/// and never holds when one reaches past 4/3 of the span. The test is made on reaches divided by
+/// the span, so squaring them does not underflow on a very narrow segment.
 fn runs_forwards(span: f64, a: f64, c: f64) -> bool {
     if a <= span && c <= span {
         return true;
@@ -387,8 +408,16 @@ fn runs_forwards(span: f64, a: f64, c: f64) -> bool {
     if a > 2.0 * span || c > 2.0 * span {
         return false;
     }
-    let b = span - a - c;
+    // Here span > 0: a handle reaches past it, and no more than twice it.
+    let (a, c) = (a / span, c / span);
+    let b = 1.0 - a - c;
     b >= 0.0 || b * b <= a * c * (1.0 + 1e-12)
+}
+
+/// Whether handles `a` and `b` point opposite ways along one line (as a smooth point's do), or
+/// one of them has no length.
+fn handles_in_line(a: Vec2, b: Vec2) -> bool {
+    a.length() <= 1e-9 || b.length() <= 1e-9 || (a.normalized().dot(b.normalized()) + 1.0).abs() < 1e-3
 }
 
 /// Handle `h` (an offset) with its y within `lo..=hi`: a smooth point's shortened along its line,

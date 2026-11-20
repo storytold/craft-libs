@@ -24,8 +24,6 @@ const STIFFNESS: (f64, f64) = (0.01, 1e6);
 const DAMPING: (f64, f64) = (0.0, 1e6);
 /// Longest motion a spring ease plays, in seconds of the spring's own time.
 const MAX_SETTLE: f64 = 10.0;
-/// Damping ratios this close to 1 use the critically damped solution.
-const CRITICAL_BAND: f64 = 1e-4;
 
 /// A damped spring's constants.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -137,19 +135,24 @@ impl Spring {
         }
         // Past this much decay e^(−decay) is below the smallest f64: the spring has settled.
         const SETTLED: f64 = 800.0;
-        if (z - 1.0).abs() < CRITICAL_BAND {
+        // Damping ratios near 1 use the under- and over-damped solutions below, which stay
+        // precise there, so every ratio is solved as given; only exactly 1 is critical.
+        if z == 1.0 {
             if w * t > SETTLED {
                 return (0.0, 0.0);
             }
             let b = v0 + w * y0;
             let e = (-w * t).exp();
-            return (e * (y0 + b * t), e * (b - w * (y0 + b * t)));
+            // The velocity is e^−ωt (v0 − ω b t), written so v0 is not recovered by subtracting
+            // the rounded position terms.
+            return (e * (y0 + b * t), e * (v0 - w * (b * t)));
         }
         if z < 1.0 {
             if z * w * t > SETTLED {
                 return (0.0, 0.0);
             }
-            let wd = w * (1.0 - z * z).sqrt();
+            // 1 − ζ² as (1 − ζ)(1 + ζ), precise for ζ near 1.
+            let wd = w * ((1.0 - z) * (1.0 + z)).sqrt();
             let q = v0 + z * w * y0;
             let e = (-z * w * t).exp();
             // A step so long that the phase overflows (a spring with little or no damping) is
@@ -157,11 +160,12 @@ impl Spring {
             let phase = if (wd * t).is_finite() { wd * t } else { wd * (t % (std::f64::consts::TAU / wd)) };
             let (s, c) = phase.sin_cos();
             // sin(phase) / ωd is at most t, so it stays finite for a spring of any low frequency,
-            // where q / ωd alone would overflow.
-            let sw = s / wd;
+            // where q / ωd alone would overflow. When ωd rounds to 0 it is its limit, t.
+            let sw = if wd > 0.0 { s / wd } else { t };
             return (e * (y0 * c + q * sw), e * (v0 * c - (y0 * wd * s + z * w * q * sw)));
         }
-        let root = (z * z - 1.0).sqrt();
+        // ζ² − 1 as (ζ − 1)(ζ + 1), precise for ζ near 1.
+        let root = ((z - 1.0) * (z + 1.0)).sqrt();
         // r1 = −ω(ζ − √(ζ² − 1)), written without the cancellation for large ζ.
         let (r1, r2) = (-w / (z + root), -w * (z + root));
         if -r1 * t > SETTLED {
@@ -197,11 +201,16 @@ impl SpringState {
 
     /// Moves the value `dt` seconds toward `target` (which holds still over the step) and
     /// returns the new value. An error, with the state unchanged, for a `target` or `dt` that is
-    /// not finite, a negative `dt`, or a result too large to represent.
+    /// not finite, a negative `dt`, or a result too large to represent. A state whose value or
+    /// velocity is not finite is refused with [`EaseError::Overflow`] at every step length, and
+    /// stays as it is.
     pub fn step(&mut self, spring: &Spring, target: f64, dt: f64) -> Result<f64, EaseError> {
         let target = crate::finite(target, "target")?;
         let dt = within(dt, 0.0, f64::MAX, "step")?;
-        if dt == 0.0 && self.value.is_finite() && self.velocity.is_finite() {
+        if !(self.value.is_finite() && self.velocity.is_finite()) {
+            return Err(EaseError::Overflow);
+        }
+        if dt == 0.0 {
             return Ok(self.value);
         }
         let (y, v) = spring.response(self.value - target, self.velocity, dt);

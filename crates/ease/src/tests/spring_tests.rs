@@ -135,8 +135,81 @@ fn stepping_from_rest_traces_the_spring_ease() {
     }
 }
 
+/// The spring equation integrated with small fourth-order Runge-Kutta steps, from 0 at rest
+/// toward 1: value and velocity after `t` seconds.
+fn integrated(w: f64, z: f64, t: f64) -> (f64, f64) {
+    let n = 100_000;
+    let h = t / n as f64;
+    let f = |x: f64, v: f64| (v, -w * w * (x - 1.0) - 2.0 * z * w * v);
+    let (mut x, mut v) = (0.0, 0.0);
+    for _ in 0..n {
+        let (a1, b1) = f(x, v);
+        let (a2, b2) = f(x + 0.5 * h * a1, v + 0.5 * h * b1);
+        let (a3, b3) = f(x + 0.5 * h * a2, v + 0.5 * h * b2);
+        let (a4, b4) = f(x + h * a3, v + h * b3);
+        x += h / 6.0 * (a1 + 2.0 * a2 + 2.0 * a3 + a4);
+        v += h / 6.0 * (b1 + 2.0 * b2 + 2.0 * b3 + b4);
+    }
+    (x, v)
+}
+
+/// Damping ratios just off 1 are solved with the ratio given, not the critical one.
 #[test]
-fn the_three_damping_regimes_and_the_critical_band_agree() {
+fn a_nearly_critical_spring_steps_with_its_own_damping_ratio() {
+    let w = 10.0;
+    for t in [0.1, 0.3, 1.0] {
+        let crit = released(w, 1.0, t);
+        for z in [1.0 - 5e-5, 1.0 + 5e-5, 1.0 - 1e-9, 1.0 + 1e-9] {
+            let s = Spring::new(w / std::f64::consts::TAU, z).unwrap();
+            let mut st = SpringState::at(0.0);
+            st.step(&s, 1.0, t).unwrap();
+            let (x, v) = integrated(w, z, t);
+            assert!((st.value - x).abs() < 1e-10 && (st.velocity - v).abs() < 1e-9, "ζ {z} at {t}: {st:?} vs {x}, {v}");
+            if (z - 1.0).abs() > 1e-6 {
+                // The two differ by far more than the tolerance above.
+                assert!((x - crit).abs() > 1e-7, "ζ {z} at {t}: {x} vs {crit}");
+            }
+        }
+    }
+}
+
+/// A critically damped step keeps the velocity a tiny step leaves, beside a huge offset.
+#[test]
+fn a_critical_step_keeps_its_velocity_beside_a_huge_offset() {
+    let s = Spring::from_physical(1.0, 1.0, 2.0).unwrap();
+    assert_eq!(s.damping(), 1.0);
+    let mut st = SpringState { value: 1e20, velocity: 1.0 };
+    st.step(&s, 0.0, 1e-22).unwrap();
+    assert!((st.velocity - 0.99).abs() < 1e-12, "{st:?}");
+}
+
+/// A spring whose damped frequency rounds to 0 moves at its velocity over a step.
+#[test]
+fn a_spring_whose_damped_frequency_rounds_to_zero_still_steps() {
+    let s = Spring::new(f64::from_bits(1), 0.9998).unwrap();
+    let mut st = SpringState { value: 0.0, velocity: 1.0 };
+    let v = st.step(&s, 0.0, 1.0).unwrap();
+    assert!((v - 1.0).abs() < 1e-12 && (st.velocity - 1.0).abs() < 1e-12, "{st:?}");
+}
+
+/// A state that is not finite is refused at every step length and in every damping regime,
+/// and stays as it is.
+#[test]
+fn a_state_that_is_not_finite_is_refused_at_any_step_length() {
+    for z in [0.5, 1.0, 2.0] {
+        let s = Spring::new(1.0, z).unwrap();
+        for start in [SpringState::at(f64::NAN), SpringState { value: 0.0, velocity: f64::INFINITY }] {
+            for dt in [0.0, 0.1, 200.0, 1e300] {
+                let mut st = start;
+                assert_eq!(st.step(&s, 1.0, dt), Err(EaseError::Overflow), "ζ {z}, {dt}");
+                assert_eq!((st.value.to_bits(), st.velocity.to_bits()), (start.value.to_bits(), start.velocity.to_bits()));
+            }
+        }
+    }
+}
+
+#[test]
+fn the_three_damping_regimes_agree_near_critical_damping() {
     // Either side of critical damping, the solutions meet the critically damped one.
     let w = 10.0;
     for t in [0.01, 0.1, 0.3, 1.0] {

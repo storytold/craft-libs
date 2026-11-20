@@ -267,12 +267,16 @@ impl Easing {
     }
 
     /// The two sides of an ease that one cubic Bezier draws (see [`Easing::from_temporal`] and
-    /// [`Easing::as_bezier`]). A handle with no reach has speed 0.
+    /// [`Easing::as_bezier`]). A handle with no reach has speed 0. `None` when a handle's reach
+    /// is so short that its speed is too large to represent.
     pub fn temporal(&self) -> Option<(TemporalEase, TemporalEase)> {
         let (x1, y1, x2, y2) = self.as_bezier()?;
         let (i0, i1) = (x1.clamp(0.0, 1.0), (1.0 - x2).clamp(0.0, 1.0));
         let s0 = if i0 > 0.0 { y1 / i0 } else { 0.0 };
         let s1 = if i1 > 0.0 { (1.0 - y2) / i1 } else { 0.0 };
+        if !(s0.is_finite() && s1.is_finite()) {
+            return None;
+        }
         Some((TemporalEase { speed: s0, influence: i0 }, TemporalEase { speed: s1, influence: i1 }))
     }
 
@@ -377,7 +381,13 @@ impl Easing {
     /// The preset named `name`, ignoring case, spaces, `-` and `_` (`"back in out"`), with the
     /// aliases `none`, `easein`, `easeout`, `easeinout` and `smooth`.
     pub fn from_name(name: &str) -> Option<Easing> {
-        let key: String = name.chars().filter(|c| !matches!(c, '-' | '_' | ' ')).flat_map(char::to_lowercase).collect();
+        // No preset or alias is longer than this, so a longer name is unknown and is not copied
+        // past it.
+        const LONGEST: usize = 12;
+        let key: String = name.chars().filter(|c| !matches!(c, '-' | '_' | ' ')).flat_map(char::to_lowercase).take(LONGEST + 1).collect();
+        if key.chars().count() > LONGEST {
+            return None;
+        }
         match key.as_str() {
             "none" | "noease" => return Some(Easing::Linear),
             "hold" => return Some(Easing::Hold),

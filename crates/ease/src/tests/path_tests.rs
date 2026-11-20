@@ -193,6 +193,30 @@ fn a_vector_of_any_finite_size_has_a_unit_direction() {
     assert_eq!(Vec2::new(1.0, f64::NAN).normalized(), Vec2::ZERO);
 }
 
+/// The ends of an interpolation are the end values themselves, even where the difference
+/// between them rounds.
+#[test]
+fn interpolating_returns_the_exact_ends() {
+    let (a, b) = (Vec2::new(1e20, -3.0), Vec2::new(1.0, 1e-30));
+    assert_eq!(a.lerp(b, 0.0), a);
+    assert_eq!(a.lerp(b, 1.0), b);
+    assert_eq!(Vec2::new(-f64::MAX, 0.0).lerp(Vec2::new(f64::MAX, 0.0), 1.0), Vec2::new(f64::MAX, 0.0));
+}
+
+/// A curve that stops and turns back inside one table cell is measured to its true length: x
+/// runs out to 4/9 at u = 1/3 and back to 0, so the length is 8/9.
+#[test]
+fn a_curve_that_turns_back_is_measured_exactly() {
+    let p = MotionPath::new(&[Vec2::ZERO, Vec2::new(1.0, 0.0), Vec2::ZERO, Vec2::ZERO]).unwrap();
+    assert!((p.length() - 8.0 / 9.0).abs() < 1e-12, "{}", p.length());
+    let turn = p.point_at_length(4.0 / 9.0);
+    assert!((turn.x - 4.0 / 9.0).abs() < 1e-9 && turn.y == 0.0, "{turn:?}");
+    for (s, x) in [(0.2, 0.2), (0.6, 4.0 / 9.0 - (0.6 - 4.0 / 9.0)), (0.8, 4.0 / 9.0 - (0.8 - 4.0 / 9.0))] {
+        let q = p.point_at_length(s);
+        assert!((q.x - x).abs() < 1e-9, "{s}: {q:?} vs {x}");
+    }
+}
+
 #[test]
 fn a_long_path_finds_its_segment_by_binary_search() {
     let anchors: Vec<Vec2> = (0..=MAX_PATH_SEGMENTS).map(|i| Vec2::new(i as f64, ((i as f64) * 0.1).sin())).collect();

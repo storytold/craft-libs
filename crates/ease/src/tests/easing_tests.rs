@@ -321,6 +321,19 @@ fn the_bezier_solver_converges_within_its_bound() {
         }
     }
     assert!(worst <= 20, "{worst} steps");
+    // A narrow segment far from 0, where the curve's x values differ only in their last bits:
+    // x(s) = a + span s³, so the query halfway across the span is at s = 0.5^(1/3).
+    let (a, span) = (0.5, 2f64.powi(-52));
+    let p = [a, a, a, a + span];
+    let s = crate::solve_monotonic(a + span / 2.0, p);
+    assert!((s - 0.5f64.cbrt()).abs() < 1e-9, "{s}");
+}
+
+/// A handle so short that its speed overflows has no speed and influence form.
+#[test]
+fn a_handle_too_short_for_a_finite_speed_has_no_temporal_form() {
+    assert_eq!(Easing::CubicBezier(f64::from_bits(1), 1.0, 0.5, 0.5).temporal(), None);
+    assert!(Easing::CubicBezier(0.0, 0.0, 1.0, 1.0).temporal().is_some());
 }
 
 /// A Bezier with a handle past ±MAX_EASE_Y plays the same curve the graph editor shows for it.
@@ -468,6 +481,10 @@ fn names_round_trip_and_older_aliases_still_read() {
     assert_eq!(Easing::from_name("ease_in"), Some(Easing::QuadIn));
     assert_eq!(Easing::from_name("Smooth"), Some(Easing::CubicBezier(0.25, 0.1, 0.25, 1.0)));
     assert_eq!(Easing::from_name("wobble"), None);
+    // Separators do not count toward the longest name; a name longer than any preset is unknown.
+    assert_eq!(Easing::from_name(&format!("{}elastic in out{}", " ".repeat(10_000), "-".repeat(10_000))), Some(Easing::ElasticInOut));
+    assert_eq!(Easing::from_name(&"x".repeat(100_000)), None);
+    assert_eq!(Easing::from_name("ElasticInOutX"), None);
     assert_eq!(Easing::named().count(), 28);
     assert_eq!(Easing::BounceInOut.label(), "Bounce In Out");
     // Files written with the variant names read back.
@@ -611,7 +628,7 @@ fn in_line(p: &EasePoint) -> bool {
 fn a_smooth_point_keeps_its_handles_in_line_near_a_neighbor() {
     let c = CustomEase::new(vec![
         EasePoint { at: Vec2::ZERO, h_in: Vec2::ZERO, out: Vec2::new(0.3, 0.0), smooth: false },
-        EasePoint { at: Vec2::new(0.9, 0.5), h_in: Vec2::new(-0.3, 0.0), out: Vec2::new(0.1, 0.3), smooth: true },
+        EasePoint { at: Vec2::new(0.9, 0.5), h_in: Vec2::new(-0.1, -0.3), out: Vec2::new(0.1, 0.3), smooth: true },
         EasePoint { at: Vec2::new(1.0, 1.0), h_in: Vec2::new(-0.05, 0.0), out: Vec2::ZERO, smooth: false },
     ]);
     let d = c.move_handle(1, Handle::In, Vec2::new(0.5, 0.1)).unwrap();
@@ -630,6 +647,112 @@ fn a_smooth_point_keeps_its_handles_in_line_near_a_neighbor() {
     assert!(q.h_in.length() > 0.05 && in_line(&q) && q.at.y + q.h_in.y <= MAX_EASE_Y + 1e-12, "{q:?}");
 }
 
+/// Turning a smooth point's other handle keeps that handle's length when it fits, however short.
+#[test]
+fn turning_a_smooth_point_keeps_a_short_other_handle_short() {
+    let c = CustomEase::new(vec![
+        EasePoint { at: Vec2::ZERO, ..Default::default() },
+        EasePoint { at: Vec2::new(0.5, 0.5), h_in: Vec2::new(-0.0005, 0.0), out: Vec2::new(0.2, 0.0), smooth: true },
+        EasePoint { at: Vec2::new(1.0, 1.0), ..Default::default() },
+    ]);
+    let d = c.move_handle(1, Handle::Out, Vec2::new(0.7, 0.6)).unwrap();
+    let p = d.points()[1];
+    assert!(p.smooth && in_line(&p) && (p.h_in.length() - 0.0005).abs() < 1e-15, "{p:?}");
+    // A handle with no length is given one.
+    let z = CustomEase::new(vec![
+        EasePoint { at: Vec2::ZERO, ..Default::default() },
+        EasePoint { at: Vec2::new(0.5, 0.5), out: Vec2::new(0.2, 0.0), smooth: true, ..Default::default() },
+        EasePoint { at: Vec2::new(1.0, 1.0), ..Default::default() },
+    ]);
+    let q = z.move_handle(1, Handle::Out, Vec2::new(0.7, 0.6)).unwrap().points()[1];
+    assert!(q.smooth && in_line(&q) && (q.h_in.length() - 1e-3).abs() < 1e-15, "{q:?}");
+}
+
+/// A point marked smooth whose handles are not in line is read as a corner, its handles kept.
+#[test]
+fn a_smooth_mark_on_a_corner_is_cleared() {
+    let pts = |out: Vec2| {
+        vec![
+            EasePoint { at: Vec2::ZERO, out: Vec2::new(0.1, 0.0), smooth: true, ..Default::default() },
+            EasePoint { at: Vec2::new(0.5, 0.5), h_in: Vec2::new(-0.1, 0.0), out, smooth: true },
+            EasePoint { at: Vec2::new(1.0, 1.0), h_in: Vec2::new(-0.1, 0.0), smooth: true, ..Default::default() },
+        ]
+    };
+    let corner = CustomEase::new(pts(Vec2::new(0.1, 0.1)));
+    let p = corner.points()[1];
+    assert!(!p.smooth && p.h_in == Vec2::new(-0.1, 0.0) && p.out == Vec2::new(0.1, 0.1), "{p:?}");
+    let smooth = CustomEase::new(pts(Vec2::new(0.2, 0.0)));
+    assert!(smooth.points()[1].smooth);
+    // The ends have one handle each and are never smooth.
+    assert!(!smooth.points()[0].smooth && !smooth.points()[2].smooth);
+    // Past the value limit, such a point's handle is clipped as a corner's: its x is kept.
+    let high = CustomEase::new(vec![
+        EasePoint { at: Vec2::ZERO, ..Default::default() },
+        EasePoint { at: Vec2::new(0.5, 9.5), h_in: Vec2::new(-0.2, 2.0), out: Vec2::new(0.1, 0.0), smooth: true },
+        EasePoint { at: Vec2::new(1.0, 1.0), ..Default::default() },
+    ]);
+    let q = high.points()[1];
+    assert!(!q.smooth && q.h_in == Vec2::new(-0.2, 0.5), "{q:?}");
+    #[cfg(feature = "serde")]
+    {
+        let f: CustomEase = serde_json::from_str(
+            r#"{"points": [
+                {"at": {"x": 0.0, "y": 0.0}, "out": {"x": 0.1, "y": 0.0}, "smooth": true},
+                {"at": {"x": 0.5, "y": 0.5}, "in": {"x": -0.1, "y": 0.0}, "out": {"x": 0.1, "y": 0.1}, "smooth": true},
+                {"at": {"x": 1.0, "y": 1.0}, "in": {"x": -0.1, "y": 0.0}, "smooth": true}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(f, corner);
+    }
+}
+
+/// A point can be added at any time strictly inside the curve that is not already a point's.
+#[test]
+fn a_point_can_be_added_close_to_an_end_or_a_point() {
+    let line = CustomEase::linear();
+    let (d, i) = line.insert_at(0.00005).unwrap();
+    assert_eq!((d.points().len(), i), (3, 1));
+    assert!((d.points()[1].at.x - 0.00005).abs() < 1e-15, "{:?}", d.points()[1]);
+    assert_forwards(&d);
+    let (e, _) = d.insert_at(0.00006).unwrap();
+    assert_eq!(e.points().len(), 4);
+    assert_forwards(&e);
+    for k in 0..=200 {
+        let t = k as f64 / 200.0;
+        assert!((e.apply(t) - t).abs() < 1e-9, "at {t}");
+    }
+    assert!(d.insert_at(d.points()[1].at.x).is_none());
+    // Where the curve is too flat in x to solve for the time, no point is added rather than one
+    // at another time.
+    let flat = CustomEase::from_bezier(0.0, 0.0, 0.0, 0.0);
+    assert!(flat.insert_at(1e-13).is_none());
+    let (g, _) = flat.insert_at(0.3).unwrap();
+    assert!((g.points()[1].at.x - 0.3).abs() < 1e-9, "{:?}", g.points()[1]);
+}
+
+/// On a segment far narrower than its handle's reach can underflow when squared, a handle that
+/// would make x run backwards is still brought back.
+#[test]
+fn a_very_narrow_segment_does_not_run_backwards() {
+    let c = CustomEase::new(vec![
+        EasePoint { at: Vec2::ZERO, out: Vec2::new(1.5e-180, 0.0), ..Default::default() },
+        EasePoint { at: Vec2::new(1e-180, 0.5), ..Default::default() },
+        EasePoint { at: Vec2::new(1.0, 1.0), ..Default::default() },
+    ]);
+    let [a, b, cc, d] = c.segment(0).unwrap();
+    // x on the span 0..1, sampled: it never decreases.
+    let span = d.x - a.x;
+    let xs = [0.0, (b.x - a.x) / span, (cc.x - a.x) / span, 1.0];
+    let mut prev = 0.0;
+    for k in 0..=1000 {
+        let x = crate::bez(k as f64 / 1000.0, xs);
+        assert!(x >= prev - 1e-15, "{xs:?} at {k}: {x} after {prev}");
+        prev = x;
+    }
+    assert_forwards(&c);
+}
+
 /// Every segment's x never decreases: its handles reach toward their neighbors, and x′ (a
 /// quadratic with Bernstein coefficients b − a, cc − b and d − cc) is never negative.
 fn assert_forwards(c: &CustomEase) {
@@ -638,7 +761,9 @@ fn assert_forwards(c: &CustomEase) {
     assert_eq!((pts[0].at, pts[pts.len() - 1].at), (Vec2::ZERO, Vec2::new(1.0, 1.0)));
     for i in 0..pts.len() - 1 {
         let [a, b, cc, d] = c.segment(i).unwrap();
-        let (k0, k1, k2) = (b.x - a.x, cc.x - b.x, d.x - cc.x);
+        // Divided by the span, so squaring does not underflow on a narrow segment.
+        let unit = if d.x > a.x { d.x - a.x } else { 1.0 };
+        let (k0, k1, k2) = ((b.x - a.x) / unit, (cc.x - b.x) / unit, (d.x - cc.x) / unit);
         let forwards = a.x <= d.x && k0 >= 0.0 && k2 >= 0.0 && (k1 >= 0.0 || k1 * k1 <= k0 * k2 * (1.0 + 1e-9));
         assert!(forwards, "segment {i}: {a:?} {b:?} {cc:?} {d:?}");
         for v in [a, b, cc, d] {
