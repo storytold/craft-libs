@@ -3148,7 +3148,7 @@ mod nesting_tests {
 
     #[test]
     fn nested_color_spaces_stop_at_the_depth_limit() {
-        let deepest = usize::from(MAX_COLOR_SPACE_DEPTH) - 1;
+        let deepest = (MAX_COLOR_SPACE_DEPTH as usize) - 1;
         assert!(chain_space(1).is_some());
         assert!(chain_space(deepest).is_some(), "the base at the deepest allowed level resolves");
         assert!(chain_space(deepest + 1).is_none());
