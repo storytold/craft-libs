@@ -99,7 +99,10 @@ below), and `Embed::documents(&["Noto Sans", …])` only the families it names (
 `write` returns the embedded `ManifestEntry`s, for build-time checks such as "the interface face
 is present". The generated file is a slice expression of `EmbeddedFace { family, style, scripts,
 index, bytes }` literals; any struct with those fields and that name in scope works too.
-`EmbeddedFace` itself has `name()`, `has_script(tag)`, `is_cjk()` and `weight()`.
+`EmbeddedFace` itself has `name()`, `has_script(tag)`, `is_cjk()` and `weight()`. Tests and
+tables written by hand build a face with `EmbeddedFace::new(family, style, scripts, bytes)`,
+plus `.with_index(n)` for a face in a collection; both are `const fn`. Code that uses `new`
+keeps compiling when a field with a default is added; a struct literal does not.
 
 ## Document fonts
 

@@ -172,6 +172,16 @@ fn embedded_face_helpers() {
 }
 
 #[test]
+fn embedded_face_new_starts_at_index_zero() {
+    const SCRIPTS: &[&str] = &["Jpan", "Latn"];
+    const FACE: EmbeddedFace = EmbeddedFace::new("Sans JP", "Bold", SCRIPTS, b"font");
+    assert_eq!((FACE.family, FACE.style, FACE.scripts, FACE.index, FACE.bytes), ("Sans JP", "Bold", SCRIPTS, 0, &b"font"[..]));
+    let in_collection = FACE.with_index(3);
+    assert_eq!(in_collection.index, 3);
+    assert_eq!((in_collection.family, in_collection.style, in_collection.bytes), (FACE.family, FACE.style, FACE.bytes));
+}
+
+#[test]
 fn documents_embeds_only_the_named_families() {
     let r = run(Embed::documents(&["Sans JP", "Sans Thai"]), Some(&fixture()), Some("1"));
     assert_eq!(r.result.unwrap(), ["Sans JP Regular", "Sans JP Bold", "Sans Thai Regular"]);
