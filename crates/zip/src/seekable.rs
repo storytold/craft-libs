@@ -452,11 +452,15 @@ mod tests {
 
     #[test]
     fn seekable_archive_reports_duplicate_names_for_matching() {
-        let mut writer = crate::Writer::new();
-        writer.add("notes.txt", b"first", crate::Compression::Stored).unwrap();
-        writer.add("notes.txt", b"second", crate::Compression::Stored).unwrap();
-        writer.add("Cat.lrcat", b"catalog", crate::Compression::Stored).unwrap();
-        let bytes = writer.finish().unwrap();
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("notes.txt", options).unwrap();
+        writer.write_all(b"first").unwrap();
+        writer.start_file("notes.txt", options).unwrap();
+        writer.write_all(b"second").unwrap();
+        writer.start_file("Cat.lrcat", options).unwrap();
+        writer.write_all(b"catalog").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
 
         let limits = SeekableLimits { max_entries: 10, max_metadata_bytes: 16_384, max_total_bytes: 4096 };
         let mut archive = SeekableArchive::open(Cursor::new(bytes), limits).unwrap();
