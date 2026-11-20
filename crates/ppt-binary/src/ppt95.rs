@@ -162,10 +162,10 @@ pub fn document(stream: &[u8]) -> Option<Rec<'_>> {
 }
 
 /// Whether a slide record holds what PowerPoint 95 writes first in every slide, its SlideAtom
-/// (1007). One without it kept nothing (a file cut short just after the slide's header): it is left
-/// out and named as lost.
+/// (1007), whole enough to give the slide's id and its master's. One without it kept nothing (a
+/// file cut short just after the slide's header, or the atom's): it is left out and named as lost.
 fn kept(slide: &Rec) -> bool {
-    slide.child(rt::SLIDE_ATOM).is_some()
+    slide.child(rt::SLIDE_ATOM).and_then(|a| a.u32(4)).is_some()
 }
 
 /// The slides a truncated or damaged file lost, by position ("slide 3"): those listed without their

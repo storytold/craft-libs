@@ -1189,6 +1189,11 @@ fn slides_the_count_says_are_missing_are_named() {
     let second = two.windows(one.len()).rposition(|w| w == one).unwrap();
     let (p, lost) = crate::import_checked(&file_of(&two[..second + 16]), &AppDefaults).unwrap();
     assert_eq!((p.slides.len(), lost), (1, vec!["slide 2".to_string()]));
+    // Cut just after its SlideAtom's header, or partway into the atom: still lost.
+    for cut in [32, 36] {
+        let (p, lost) = crate::import_checked(&file_of(&two[..second + cut]), &AppDefaults).unwrap();
+        assert_eq!((p.slides.len(), lost), (1, vec!["slide 2".to_string()]), "cut at {cut}");
+    }
 }
 
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in
