@@ -421,7 +421,8 @@ fn a_hidden_reference_point_still_follows_alt_and_the_centre_moves_a_small_box()
     });
     drag(&mut h, Point::new(150.0, 120.0), Point::new(170.0, 130.0));
     let pivot = h.state().pivot;
-    assert!((pivot.x - 170.0).abs() < 0.5 && (pivot.y - 130.0).abs() < 0.5, "the pivot follows the Alt drag: {pivot:?}");
+    // Half a unit up and left of the pointer, where the reference application puts it.
+    assert!(pivot.distance(Point::new(169.5, 129.5)) < 1e-6, "the pivot follows the Alt drag: {pivot:?}");
     assert_eq!(h.state().quad, BoxState::from_rect(RECT).quad, "the box itself did not move");
 
     // A box smaller than two handle reaches: its middle is the whole box's.
@@ -1274,4 +1275,17 @@ fn an_edge_handle_snaps_only_along_its_drag() {
     };
     let (off, on) = (run(false), run(true));
     assert!(off.iter().zip(on).all(|(a, b)| a.distance(b) < 1e-6), "snapping off {off:?}, on {on:?}");
+}
+
+/// An ⌥ click inside the box puts the reference point half a unit up and left of the click (measured on the
+/// reference: a click at (250, 200) puts it at (249.5, 199.5), where its ⌥ drags then scale about).
+#[trial]
+fn an_alt_click_puts_the_reference_point_half_a_unit_up_and_left() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.mods = Some(Mods::ALT));
+    let at = h.screen(Point::new(150.0, 120.0));
+    frame(&mut h, vec![pointer::moved(at)]);
+    frame(&mut h, vec![pointer::press(at)]);
+    frame(&mut h, vec![pointer::release(at)]);
+    let pivot = h.state().pivot;
+    assert!(pivot.distance(Point::new(149.5, 119.5)) < 1e-6, "{pivot:?}");
 }

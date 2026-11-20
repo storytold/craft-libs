@@ -614,7 +614,9 @@ impl<'a> TransformBox<'a> {
         let (to, mut lines) = match (grip.part, snap, grabbed) {
             (BoxPart::Pivot, _, Some(grabbed)) if !distort_mode => {
                 let off = grip.from - grabbed;
-                (box_point_pull(&grip.start, to - off, space.view.doc_len(SNAP_PX as f32)) + off, Vec::new())
+                let pulled = box_point_pull(&grip.start, to - off, space.view.doc_len(SNAP_PX as f32));
+                // An ⌥ press keeps the point half a unit up and left of the pointer through its drag.
+                (if grip.moves_pivot { pulled } else { pulled + off }, Vec::new())
             }
             (BoxPart::Corner(_), Some(snap), Some(grabbed)) | (BoxPart::Edge(_), Some(snap), Some(grabbed))
                 if !distort_mode || matches!(grip.part, BoxPart::Corner(_)) =>
@@ -799,7 +801,9 @@ impl<'a> TransformBox<'a> {
                     let away_from_handles = part == BoxPart::Inside || (part == BoxPart::Outside && self.rotate_zone != RotateZone::Handle);
                     let moves_pivot = acting.alt && self.move_only().is_none() && away_from_handles;
                     let follows = follows_in_slop(part);
-                    let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
+                    // The reference application puts the point half a document pixel up and left of the press.
+                    let (part, begin) =
+                        if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from + ALT_PRESS_PIVOT)) } else { (part, *shown) };
                     held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, pressed: *shown, last: *shown });
                 }
                 // Inside the slop a part that follows there moves the box from the first move; the outside starts at
@@ -1432,6 +1436,10 @@ fn handle_point(state: &BoxState, part: BoxPart) -> Option<Point> {
         _ => None,
     }
 }
+
+/// Where an ⌥ press puts the reference point, from the press: half a document pixel up and left, as the reference
+/// application does (an ⌥ click at (250, 200) puts it at (249.5, 199.5)).
+const ALT_PRESS_PIVOT: DocVec = DocVec::new(-0.5, -0.5);
 
 /// The direction an edge of `quad` is dragged along: the top edge's direction for a side, its normal for the top or
 /// bottom edge; `None` for another part or a collapsed top edge.
