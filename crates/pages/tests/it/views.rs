@@ -147,8 +147,15 @@ fn rig_with(
         let mut now = kept.borrow().clone();
         let offset = now.offset;
         let keep = held.borrow().clone();
-        let shown =
-            PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show_with(ui, &mut body, |ui, page, body| { body(ui, page); None }, |_, _, _| ());
+        let shown = PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show_with(
+            ui,
+            &mut body,
+            |ui, page, body| {
+                body(ui, page);
+                None
+            },
+            |_, _, _| (),
+        );
         let scrolled = seen.borrow().scrolled || shown.scrolled;
         *seen.borrow_mut() =
             Out { offset, rects: shown.layout.rects.clone(), pages: shown.pages, visible: shown.visible, view: shown.canvas.response.rect, scrolled };
@@ -1015,18 +1022,23 @@ fn hand_drag_places_pages_at_the_tools_view_in_the_same_pass() {
     let (before_count, after_count) = (Rc::clone(&before_runs), Rc::clone(&after_runs));
     let mut fixture = Fixture::new(move |ui| {
         let mut target = None;
-        PageView::new("Pages", &source, &mut state, PAPER).show_with(ui, &mut target, |ui, body, target| {
-            before_count.set(before_count.get() + 1);
-            let reply = body.pass.map(|pass| ToolHost::new().run(ui, pass, &mut hand));
-            let view = reply.and_then(|reply| reply.view);
-            *target = view.and_then(|view| body.pages.first().map(|page| (view, body.view.to_doc(page.rect.min))));
-            view
-        }, |_, body, target| {
-            after_count.set(after_count.get() + 1);
-            if let (Some((view, point)), Some(page)) = (*target, body.pages.first()) {
-                *seen.borrow_mut() = Some((body.view, view, page.rect.min, point));
-            }
-        });
+        PageView::new("Pages", &source, &mut state, PAPER).show_with(
+            ui,
+            &mut target,
+            |ui, body, target| {
+                before_count.set(before_count.get() + 1);
+                let reply = body.pass.map(|pass| ToolHost::new().run(ui, pass, &mut hand));
+                let view = reply.and_then(|reply| reply.view);
+                *target = view.and_then(|view| body.pages.first().map(|page| (view, body.view.to_doc(page.rect.min))));
+                view
+            },
+            |_, body, target| {
+                after_count.set(after_count.get() + 1);
+                if let (Some((view, point)), Some(page)) = (*target, body.pages.first()) {
+                    *seen.borrow_mut() = Some((body.view, view, page.rect.min, point));
+                }
+            },
+        );
     });
     fixture.room(vec2(900.0, 600.0));
     fixture.settle();

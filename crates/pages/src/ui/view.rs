@@ -425,17 +425,38 @@ impl<'a> PageView<'a> {
     /// Shows the view at `rect`, registering controls and running tools in `before` before drawing.
     /// Return the view reported by the tool host; `body` receives the resulting placement for overlays.
     /// Both callbacks borrow `session` in sequence and run on measuring and real passes.
-    pub fn show_at_with<T>(self, ui: &mut Ui, rect: Rect, session: &mut T, before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>, body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T)) -> PageViewOutput {
+    pub fn show_at_with<T>(
+        self,
+        ui: &mut Ui,
+        rect: Rect,
+        session: &mut T,
+        before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>,
+        body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T),
+    ) -> PageViewOutput {
         self.run(ui, rect, false, session, before, body)
     }
 
     /// Shows the view in the available room with a pre-draw tool callback and an overlay callback.
-    pub fn show_with<T>(self, ui: &mut Ui, session: &mut T, before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>, body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T)) -> PageViewOutput {
+    pub fn show_with<T>(
+        self,
+        ui: &mut Ui,
+        session: &mut T,
+        before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>,
+        body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T),
+    ) -> PageViewOutput {
         let rect = ui.available_rect_before_wrap();
         self.run(ui, rect, true, session, before, body)
     }
 
-    fn run<T>(self, ui: &mut Ui, rect: Rect, take_room: bool, session: &mut T, mut before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>, mut body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T)) -> PageViewOutput {
+    fn run<T>(
+        self,
+        ui: &mut Ui,
+        rect: Rect,
+        take_room: bool,
+        session: &mut T,
+        mut before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>,
+        mut body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T),
+    ) -> PageViewOutput {
         let PageView { label, source, state, options, navigation, bodies, describer, paper, border, keep } = self;
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
@@ -464,7 +485,9 @@ impl<'a> PageView<'a> {
             let inputs = Inputs { source, describer, build: &build, rect, given, paper, navigation, border, keep };
             let (mut next, pending) = run_pass(ui, cx, &mut held, &inputs, |ui, page| before(ui, page, session))?;
             let pass = tool_pass(&cx.env);
-            with_canvas_space(ui, pending.space, |ui| body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() }, session));
+            with_canvas_space(ui, pending.space, |ui| {
+                body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() }, session)
+            });
             // The body's tool host took the arrows a tool claims; the view moves with the keys it left.
             pending.finish(ui.ctx(), &mut next, &inputs);
             let decided = next.next.clone();
@@ -624,7 +647,13 @@ impl Frame {
 /// One pass of the canvas body up to the app's body: layout, the wheel, a pinch and a pan folded into the state; the
 /// pasteboard, the pictures and the scroll bars drawn. The keys, the turns and the go-to wait for [`Pending::finish`],
 /// after the app's body.
-fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>, inputs: &Inputs<'_>, mut before: impl FnMut(&mut Ui, &PageBody<'_>) -> Option<CanvasView>) -> Option<(Seen, Pending)> {
+fn run_pass(
+    ui: &mut Ui,
+    cx: &mut BodyCx<'_>,
+    held: &mut Held<'_, PageViewState>,
+    inputs: &Inputs<'_>,
+    mut before: impl FnMut(&mut Ui, &PageBody<'_>) -> Option<CanvasView>,
+) -> Option<(Seen, Pending)> {
     let Inputs { source, describer, build, rect, given, paper, navigation, border, keep } = *inputs;
     let mut state = held.read(cx)?;
     let started = state.clone();
@@ -700,17 +729,25 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
 
     let preliminary_view = shown.visible();
     let preliminary_view = DocRect::new(
-        preliminary_view.x0 * drawn_frame.zoom + drawn_frame.origin.x, preliminary_view.y0 * drawn_frame.zoom + drawn_frame.origin.y,
-        preliminary_view.x1 * drawn_frame.zoom + drawn_frame.origin.x, preliminary_view.y1 * drawn_frame.zoom + drawn_frame.origin.y,
+        preliminary_view.x0 * drawn_frame.zoom + drawn_frame.origin.x,
+        preliminary_view.y0 * drawn_frame.zoom + drawn_frame.origin.y,
+        preliminary_view.x1 * drawn_frame.zoom + drawn_frame.origin.x,
+        preliminary_view.y1 * drawn_frame.zoom + drawn_frame.origin.y,
     );
-    let preliminary: Vec<PlacedPage> = drawn.row.clone().filter_map(|page| {
-        if !overlaps(band_rect(&drawn.layout, page), preliminary_view) { return None; }
-        let r = drawn_frame.document_rect(&drawn.layout.rects[page]);
-        let rect = Rect::from_min_max(shown.to_screen(Point::new(r.x0, r.y0)), shown.to_screen(Point::new(r.x1, r.y1)));
-        let ratio = shown.zoom / drawn_frame.zoom;
-        let band = (drawn.layout.bands[page].0 as f32 * ratio as f32, drawn.layout.bands[page].1 as f32 * ratio as f32);
-        Some(PlacedPage::new(page, rect, drawn.scale * ratio, band, TextureState::Missing))
-    }).collect();
+    let preliminary: Vec<PlacedPage> = drawn
+        .row
+        .clone()
+        .filter_map(|page| {
+            if !overlaps(band_rect(&drawn.layout, page), preliminary_view) {
+                return None;
+            }
+            let r = drawn_frame.document_rect(&drawn.layout.rects[page]);
+            let rect = Rect::from_min_max(shown.to_screen(Point::new(r.x0, r.y0)), shown.to_screen(Point::new(r.x1, r.y1)));
+            let ratio = shown.zoom / drawn_frame.zoom;
+            let band = (drawn.layout.bands[page].0 as f32 * ratio as f32, drawn.layout.bands[page].1 as f32 * ratio as f32);
+            Some(PlacedPage::new(page, rect, drawn.scale * ratio, band, TextureState::Missing))
+        })
+        .collect();
     let slot = PaintSlot::reserve(&ui.painter_at(cx.rect));
     let pass = tool_pass(&cx.env);
     let tool_view = before(ui, &PageBody { rect: cx.rect, pages: &preliminary, view: shown, pass: pass.as_ref() });
@@ -727,100 +764,101 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     }
 
     with_canvas_space(ui, space, |ui| {
+        // The pasteboard and the pictures are drawn through the view the canvas shows; a zoom still
+        // under way draws the layout the view was made for, scaled. A pointer zoom runs while the canvas zooms this pass
+        // or its eased zoom is still arriving on screen.
+        let ratio = shown.zoom / drawn_frame.zoom;
+        let pointer_zoom = zooming || ratio != 1.0;
+        let travel = travel_of(mem.offset, want, wheel.as_ref());
 
-    // The pasteboard and the pictures are drawn through the view the canvas shows; a zoom still
-    // under way draws the layout the view was made for, scaled. A pointer zoom runs while the canvas zooms this pass
-    // or its eased zoom is still arriving on screen.
-    let ratio = shown.zoom / drawn_frame.zoom;
-    let pointer_zoom = zooming || ratio != 1.0;
-    let travel = travel_of(mem.offset, want, wheel.as_ref());
+        let seen = shown.visible();
+        let in_view = DocRect::new(
+            seen.x0 * drawn_frame.zoom + drawn_frame.origin.x,
+            seen.y0 * drawn_frame.zoom + drawn_frame.origin.y,
+            seen.x1 * drawn_frame.zoom + drawn_frame.origin.x,
+            seen.y1 * drawn_frame.zoom + drawn_frame.origin.y,
+        );
+        let rows: Vec<usize> = drawn.row.clone().filter(|&p| overlaps(band_rect(&drawn.layout, p), in_view)).collect();
+        let visible = match (rows.first(), rows.last()) {
+            (Some(&first), Some(&last)) => first..last + 1,
+            _ => 0..0,
+        };
+        let to_screen = |r: &DocRect| {
+            let r = drawn_frame.document_rect(r);
+            Rect::from_min_max(shown.to_screen(Point::new(r.x0, r.y0)), shown.to_screen(Point::new(r.x1, r.y1)))
+        };
+        // Each page's picture state is asked of the page store before the pages are listed, once per page per pass,
+        // then the pages near what shows (ahead of the travel) and the pages the app keeps, at their side in this
+        // layout. Sharp renders of the page store wait while a pointer zoom runs.
+        let ctx = ui.ctx().clone();
+        let (thumbs, details) = page_stores(&ctx, cx.id, picture_options(&ctx));
+        thumbs.hold(pointer_zoom);
+        let ppp = ctx.pixels_per_point();
+        let ask = |page: usize, side: f32, priority: Priority| thumbs.state(&ctx, source, &page, &ThumbRequest::for_cell(side, ppp), priority);
+        let pages: Vec<PlacedPage> = rows
+            .iter()
+            .map(|&page| {
+                let rect = to_screen(&drawn.layout.rects[page]);
+                let band = (drawn.layout.bands[page].0 as f32 * ratio as f32, drawn.layout.bands[page].1 as f32 * ratio as f32);
+                let picture = ask(page, rect.width().max(rect.height()), Priority::VISIBLE);
+                let picture_revision = matches!(picture, TextureState::Ready(_)).then(|| source.page_revision(page)).flatten();
+                let mut placed = PlacedPage::new(page, rect, drawn.scale * ratio, band, picture);
+                placed.picture_revision = picture_revision;
+                placed
+            })
+            .collect();
+        let near = near_pages(&drawn, state.continuous, &visible, count, &build.layout_options(&state), travel);
+        let kept = keep.iter().copied().filter(|page| *page < count && !rows.contains(page) && !near.contains(page));
+        for page in near.iter().copied().chain(kept) {
+            let size = drawn.layout.rects[page].size();
+            ask(page, size.width.max(size.height) as f32, Priority::NEAR);
+        }
 
-    let seen = shown.visible();
-    let in_view = DocRect::new(
-        seen.x0 * drawn_frame.zoom + drawn_frame.origin.x,
-        seen.y0 * drawn_frame.zoom + drawn_frame.origin.y,
-        seen.x1 * drawn_frame.zoom + drawn_frame.origin.x,
-        seen.y1 * drawn_frame.zoom + drawn_frame.origin.y,
-    );
-    let rows: Vec<usize> = drawn.row.clone().filter(|&p| overlaps(band_rect(&drawn.layout, p), in_view)).collect();
-    let visible = match (rows.first(), rows.last()) {
-        (Some(&first), Some(&last)) => first..last + 1,
-        _ => 0..0,
-    };
-    let to_screen = |r: &DocRect| {
-        let r = drawn_frame.document_rect(r);
-        Rect::from_min_max(shown.to_screen(Point::new(r.x0, r.y0)), shown.to_screen(Point::new(r.x1, r.y1)))
-    };
-    // Each page's picture state is asked of the page store before the pages are listed, once per page per pass,
-    // then the pages near what shows (ahead of the travel) and the pages the app keeps, at their side in this
-    // layout. Sharp renders of the page store wait while a pointer zoom runs.
-    let ctx = ui.ctx().clone();
-    let (thumbs, details) = page_stores(&ctx, cx.id, picture_options(&ctx));
-    thumbs.hold(pointer_zoom);
-    let ppp = ctx.pixels_per_point();
-    let ask = |page: usize, side: f32, priority: Priority| thumbs.state(&ctx, source, &page, &ThumbRequest::for_cell(side, ppp), priority);
-    let pages: Vec<PlacedPage> = rows
-        .iter()
-        .map(|&page| {
-            let rect = to_screen(&drawn.layout.rects[page]);
-            let band = (drawn.layout.bands[page].0 as f32 * ratio as f32, drawn.layout.bands[page].1 as f32 * ratio as f32);
-            let picture = ask(page, rect.width().max(rect.height()), Priority::VISIBLE);
-            let picture_revision = matches!(picture, TextureState::Ready(_)).then(|| source.page_revision(page)).flatten();
-            let mut placed = PlacedPage::new(page, rect, drawn.scale * ratio, band, picture);
-            placed.picture_revision = picture_revision;
-            placed
-        })
-        .collect();
-    let near = near_pages(&drawn, state.continuous, &visible, count, &build.layout_options(&state), travel);
-    let kept = keep.iter().copied().filter(|page| *page < count && !rows.contains(page) && !near.contains(page));
-    for page in near.iter().copied().chain(kept) {
-        let size = drawn.layout.rects[page].size();
-        ask(page, size.width.max(size.height) as f32, Priority::NEAR);
-    }
+        let frames: Vec<PageFrame> =
+            rows.iter().map(|&p| PageFrame::new(drawn_frame.document_rect(&band_rect(&drawn.layout, p))).fill(paper)).collect();
+        let border = if state.page_gaps { border } else { PageBorder::None };
+        let pasteboard = Pasteboard::new(words.pasteboard.clone(), &frames).border(border).show_at(ui, cx.rect);
+        // The scroll bars read their drag before the pictures show, so a drag holds the part in view in its own pass; they
+        // paint where they always did, over the pictures: their shapes are lifted out of the paint list here and put back
+        // in a slot reserved after the pictures.
+        let slot = PaintSlot::reserve(&ui.painter_at(cx.rect));
+        // The bars edit the view the state keeps, the canvas's settled one: the view on screen is pixel aligned, and a
+        // drag handed it back would differ from the drag's own value and cancel it.
+        let document = drawn_frame.document(&drawn);
+        let bars = CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(target), DocRect::from_origin_size(Point::ZERO, document))
+            .show_at(ui, cx.rect);
+        let bar_drag = bars.view.value().is_some();
+        scrolled |= bar_drag;
+        let bar_want = bars.view.value().map(|moved| drawn_frame.offset_of(moved.center, vw, vh));
+        let bar_shapes = slot.take_after(&ctx);
 
-    let frames: Vec<PageFrame> = rows.iter().map(|&p| PageFrame::new(drawn_frame.document_rect(&band_rect(&drawn.layout, p))).fill(paper)).collect();
-    let border = if state.page_gaps { border } else { PageBorder::None };
-    let pasteboard = Pasteboard::new(words.pasteboard.clone(), &frames).border(border).show_at(ui, cx.rect);
-    // The scroll bars read their drag before the pictures show, so a drag holds the part in view in its own pass; they
-    // paint where they always did, over the pictures: their shapes are lifted out of the paint list here and put back
-    // in a slot reserved after the pictures.
-    let slot = PaintSlot::reserve(&ui.painter_at(cx.rect));
-    // The bars edit the view the state keeps, the canvas's settled one: the view on screen is pixel aligned, and a
-    // drag handed it back would differ from the drag's own value and cancel it.
-    let document = drawn_frame.document(&drawn);
-    let bars =
-        CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(target), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
-    let bar_drag = bars.view.value().is_some();
-    scrolled |= bar_drag;
-    let bar_want = bars.view.value().map(|moved| drawn_frame.offset_of(moved.center, vw, vh));
-    let bar_shapes = slot.take_after(&ctx);
+        // The part in view waits while the view zooms or moves.
+        let pictures =
+            PagePictures::new(source, &pages, cx.id, paper).label(words.text.clone()).hold_detail(pointer_zoom || travel != 0.0 || bar_drag);
+        match describer {
+            Some(describer) => pictures.describer(describer).show_at(ui, cx.rect),
+            None => pictures.show_at(ui, cx.rect),
+        };
+        // PLAN: assumed impl Add for TextureStatistics (pdf-canvas-w7)
+        let textures = thumbs.cache().statistics(&ctx) + details.cache().statistics(&ctx);
+        PaintSlot::reserve(&ui.painter_at(cx.rect)).extend(&ctx, bar_shapes);
 
-    // The part in view waits while the view zooms or moves.
-    let pictures = PagePictures::new(source, &pages, cx.id, paper).label(words.text.clone()).hold_detail(pointer_zoom || travel != 0.0 || bar_drag);
-    match describer {
-        Some(describer) => pictures.describer(describer).show_at(ui, cx.rect),
-        None => pictures.show_at(ui, cx.rect),
-    };
-    // PLAN: assumed impl Add for TextureStatistics (pdf-canvas-w7)
-    let textures = thumbs.cache().statistics(&ctx) + details.cache().statistics(&ctx);
-    PaintSlot::reserve(&ui.painter_at(cx.rect)).extend(&ctx, bar_shapes);
-
-    let seen = Seen {
-        geo: drawn,
-        frame: drawn_frame,
-        view: shown,
-        pages,
-        visible,
-        current_changed: false,
-        scrolled,
-        pasteboard: Some(pasteboard),
-        textures,
-        next: None,
-    };
-    let pending =
-        Pending { started, state, mem, geo, want, bar_want, wheel_turned, pointer_zoom, started_on, space, edit: words.edit.as_str().to_owned() };
-    PaintSlot::reserve(&ui.painter_at(cx.rect)).extend(&ctx, pre_shapes);
-    Some((seen, pending))
+        let seen = Seen {
+            geo: drawn,
+            frame: drawn_frame,
+            view: shown,
+            pages,
+            visible,
+            current_changed: false,
+            scrolled,
+            pasteboard: Some(pasteboard),
+            textures,
+            next: None,
+        };
+        let pending =
+            Pending { started, state, mem, geo, want, bar_want, wheel_turned, pointer_zoom, started_on, space, edit: words.edit.as_str().to_owned() };
+        PaintSlot::reserve(&ui.painter_at(cx.rect)).extend(&ctx, pre_shapes);
+        Some((seen, pending))
     })
 }
 

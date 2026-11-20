@@ -14,8 +14,7 @@ const BACKGROUND: PartKey = PartKey::new("background");
 #[trial]
 fn active_part_survives_a_drag_outside_its_shape() {
     let area = rect(100.0, 100.0, 80.0, 80.0);
-    let root = ProbeRoot::new("active-part", area, Sense::empty())
-        .part(ProbePart::new(BACKGROUND, area, Sense::DRAG));
+    let root = ProbeRoot::new("active-part", area, Sense::empty()).part(ProbePart::new(BACKGROUND, area, Sense::DRAG));
     let (mut show_frame, _) = scene(vec![root]);
     let mut frames = Frames::new();
     frames.idle(2, &mut show_frame);

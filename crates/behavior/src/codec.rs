@@ -181,8 +181,12 @@ impl PartialEq for NumberCodec {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
         };
-        self.reader == other.reader && self.decimals == other.decimals && self.fixed == other.fixed && self.zoom == other.zoom
-            && self.signed_zoom == other.signed_zoom && same_custom
+        self.reader == other.reader
+            && self.decimals == other.decimals
+            && self.fixed == other.fixed
+            && self.zoom == other.zoom
+            && self.signed_zoom == other.signed_zoom
+            && same_custom
     }
 }
 
