@@ -4,6 +4,7 @@ mod code_page_write;
 mod conformance;
 mod hardening;
 mod hex_chunks;
+mod lin_pat;
 mod model;
 mod model_entities;
 mod model_mleader;
