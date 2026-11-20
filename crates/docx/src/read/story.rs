@@ -162,12 +162,22 @@ fn clean_text(s: &str) -> String {
         .collect()
 }
 
-pub(crate) fn children_of_choice(ac: &El) -> Option<&El> {
-    // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
+fn requires_known(c: &El) -> bool {
     // `m`: Office Math (a producer may guard an equation with a picture fallback, #1273).
     const KNOWN: &[&str] = &["wps", "wpg", "wpc", "wpi", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v", "m"];
-    let ok = |c: &El| c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r));
-    ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
+    c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r))
+}
+
+/// True when some `mc:Choice` matches us, which is what makes `mc:Fallback` inactive even if the
+/// matched Choice turns out to carry nothing (OOXML Part 3 §15.3.5.13: the Fallback is ignored
+/// once a Choice's requirements are met).
+pub(crate) fn matched_choice_exists(ac: &El) -> bool {
+    ac.children("mc:Choice").any(requires_known)
+}
+
+pub(crate) fn children_of_choice(ac: &El) -> Option<&El> {
+    // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
+    ac.children("mc:Choice").find(|c| requires_known(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
 }
 
 /// Gather `name` children (rows, cells), looking through content controls, custom XML and the

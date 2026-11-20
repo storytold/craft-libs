@@ -447,7 +447,11 @@ impl Reader<'_> {
                 }
                 Some(val) => lv.format = NumFormat::from_ooxml(val),
                 None => {
-                    if let Some(fb) = ac.child("mc:Fallback").and_then(|x| x.child_val("w:numFmt")) {
+                    // No w:numFmt in the selected branch: read the Fallback only when no Choice
+                    // matched; a matched-but-empty Choice keeps the Fallback inactive.
+                    if !super::story::matched_choice_exists(ac)
+                        && let Some(fb) = ac.child("mc:Fallback").and_then(|x| x.child_val("w:numFmt"))
+                    {
                         lv.format = NumFormat::from_ooxml(fb);
                     }
                 }
