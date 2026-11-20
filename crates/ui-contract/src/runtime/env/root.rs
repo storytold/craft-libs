@@ -1,7 +1,7 @@
 //! RootEnv, the app's root values each frame, and their resolved form.
 
 use super::app_values::AppValues;
-use super::values::Scale;
+use super::values::{AltCodePages, Scale, WheelSpeed};
 use crate::runtime::egui::memory::Service;
 use crate::runtime::focus::TabReach;
 use craft_behavior::MotionMode;
@@ -51,6 +51,10 @@ pub struct RootEnv {
     pub values: AppValues,
     /// Today's date in the host's time zone; the runtime reads no wall clock.
     pub today: Option<CalendarDate>,
+    /// This frame's wheel speed.
+    pub wheel: WheelSpeed,
+    /// The code pages that decode Alt+numpad codes.
+    pub alt_codes: AltCodePages,
 }
 
 impl Default for RootEnv {
@@ -72,6 +76,8 @@ impl Default for RootEnv {
             theme_def: None,
             values: AppValues::default(),
             today: None,
+            wheel: WheelSpeed::default(),
+            alt_codes: AltCodePages::default(),
         }
     }
 }
@@ -195,6 +201,18 @@ impl RootEnv {
     /// Sets today's date, as the host's clock and time zone give it.
     pub fn today(mut self, date: CalendarDate) -> Self {
         self.today = Some(date);
+        self
+    }
+
+    /// Sets this frame's wheel speed.
+    pub fn wheel_speed(mut self, speed: WheelSpeed) -> Self {
+        self.wheel = speed;
+        self
+    }
+
+    /// Sets the code pages that decode Alt+numpad codes.
+    pub fn alt_code_pages(mut self, pages: AltCodePages) -> Self {
+        self.alt_codes = pages;
         self
     }
 }

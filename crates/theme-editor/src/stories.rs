@@ -2,7 +2,7 @@
 
 use super::{AppLayerEditor, Pick, Problems, ThemeSubject, ThemeWorkspace, TokenBrowser, TokenDetail};
 use craft_theme::report::ContrastReport;
-use craft_theme::{AppSizes, Appearance, Contrast, Explained, Mode, Size, TextSize, builtins};
+use craft_theme::{AppId, AppSizes, Appearance, Contrast, Explained, Mode, Size, TextSize, builtins};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -26,6 +26,25 @@ fn explained() -> (&'static Explained, &'static ContrastReport) {
 #[story(TokenBrowser<'static>, covers = [])]
 fn token_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     TokenBrowser::new(explained().0, Bind::bound(data.value("pick", None::<Pick>))).show(ui);
+    StoryOutput::default()
+}
+
+/// The explanation of `craft.artcraft` with WordCraft's pins applied; the built-in theme and its app id always resolve.
+fn wordcraft_explained() -> &'static Explained {
+    static WORKSPACE: LazyLock<ThemeWorkspace> = LazyLock::new(|| {
+        let theme = builtins().iter().find(|theme| theme.id.as_str() == "craft.artcraft").expect("craft.artcraft is built in");
+        let app = AppId::parse("wordcraft").expect("wordcraft is an app id");
+        let mut workspace = ThemeWorkspace::new();
+        workspace.refresh(&ThemeSubject::new(theme, appearance()).app(&app));
+        workspace
+    });
+    WORKSPACE.explained().expect("a built-in theme explains")
+}
+
+// The browser over the app layer: WordCraft's accent and chrome pins show as the roles' values.
+#[story(TokenBrowser<'static>, covers = [])]
+fn token_browser_with_wordcraft_pins(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    TokenBrowser::new(wordcraft_explained(), Bind::bound(data.value("pins_pick", None::<Pick>))).show(ui);
     StoryOutput::default()
 }
 

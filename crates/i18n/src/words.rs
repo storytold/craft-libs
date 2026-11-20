@@ -63,7 +63,10 @@ impl Counted {
     }
 }
 
-type Lookup = Arc<dyn Fn(Word) -> Option<String> + Send + Sync>;
+struct Lookup {
+    translate: Box<dyn Fn(Word) -> Option<String> + Send + Sync>,
+    labels: Mutex<HashMap<Word, Option<Arc<str>>>>,
+}
 type Plural = Arc<dyn Fn(&'static str, u64, &'static str, &'static str) -> Option<String> + Send + Sync>;
 
 /// The rows a `Words` scope adds over the words it inherits: a word and the text shown for it.
@@ -97,7 +100,7 @@ impl WordRows {
 /// The lookup of an app: its catalog in its language, or English.
 #[derive(Clone, Default)]
 pub struct Words {
-    lookup: Option<Lookup>,
+    lookup: Option<Arc<Lookup>>,
     plural: Option<Plural>,
     sets: SetCache,
     /// Unique per translator: equal words have equal generations (`generation`).
@@ -135,7 +138,11 @@ impl Words {
 
     /// Words translated by `lookup`, which returns `None` where it has no text.
     pub fn new(lookup: impl Fn(Word) -> Option<String> + Send + Sync + 'static) -> Words {
-        Words { lookup: Some(Arc::new(lookup)), plural: None, sets: SetCache::default(), generation: next_generation() }
+        Words {
+            lookup: Some(Arc::new(Lookup { translate: Box::new(lookup), labels: Mutex::default() })),
+            generation: next_generation(),
+            ..Self::default()
+        }
     }
 
     /// Which translator these words are: words with the same generation read every word the same (a clone keeps it),
@@ -176,7 +183,7 @@ impl Words {
         let rows = rows.clone();
         let mut over = Words::new(move |word| match rows.text(word) {
             Some(text) => Some(text.to_owned()),
-            None => inner.lookup.as_ref().and_then(|lookup| lookup(word)),
+            None => inner.lookup.as_ref().and_then(|lookup| (lookup.translate)(word)),
         });
         over.plural = self.plural.clone();
         over
@@ -189,7 +196,7 @@ impl Words {
         let Some(lookup) = &self.lookup else {
             return Cow::Borrowed(word.english);
         };
-        match lookup(word) {
+        match (lookup.translate)(word) {
             Some(text) if text.is_empty() => Cow::Borrowed(word.english),
             Some(text) if !keeps_placeholders(word.english, &text) => {
                 warn_once(word, &text);
@@ -198,6 +205,21 @@ impl Words {
             Some(text) => Cow::Owned(text),
             None => Cow::Borrowed(word.english),
         }
+    }
+
+    /// The shared translation of a label, or `None` when it displays its static English text.
+    /// Clones of this translator share translations. An overlay has its own lookup and cache.
+    pub fn translated_label(&self, word: Word) -> Option<Arc<str>> {
+        let cache = &self.lookup.as_ref()?.labels;
+        if let Some(label) = cache.lock().unwrap_or_else(PoisonError::into_inner).get(&word) {
+            return label.clone();
+        }
+        // The lookup is supplied by the app. Run it outside the cache lock.
+        let label = match self.get(word) {
+            Cow::Owned(text) => Some(Arc::from(text)),
+            Cow::Borrowed(_) => None,
+        };
+        cache.lock().unwrap_or_else(PoisonError::into_inner).entry(word).or_insert(label).clone()
     }
 
     /// The English set `L` translated by these words, built on the first call and shared after it.

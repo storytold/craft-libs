@@ -8,7 +8,7 @@ mod units;
 pub use label::{Label, Message, Word};
 #[doc(hidden)]
 pub use shell::ShellEntry;
-pub use shell::{BodyMode, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
+pub use shell::{BodyMode, PageBandRoom, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
 pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units};
 
 use crate::runtime::commands::CommandChain;
@@ -51,7 +51,7 @@ pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
 use tokens::tokens_for;
-pub use values::{ArenaId, ColumnAlign, InBar, MotionPolicy, PaneEdge, RowPressed, Scale};
+pub use values::{AltCodePages, ArenaId, ColumnAlign, InBar, MotionPolicy, PaneEdge, RowPressed, Scale, WheelSpeed};
 pub use view::EnvView;
 
 /// The inherited context of a `Ui`: one `Arc` clone per read.
@@ -249,12 +249,14 @@ impl Deref for Scoped {
 /// each leaf, and each body that does not fill the row, is a unit the row narrows to fit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Shrink {
-    /// The first sweep of a measuring run of the row: each unit reports its widths to the row (`layout::report_shrink`).
+    /// The first sweep of a measuring run of the row: each unit reports its widths to the row (`layout::report_shrink`),
+    /// a levelled unit its width at each level (`layout::levelled_unit`).
     Count(Id),
     /// The sweep of a short row that asks each body unit for its least width (`layout::report_least`): it measures its
     /// content unbounded along x, every leaf at its least, and leaves no record.
     Least(Id),
-    /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`).
+    /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`), a levelled unit
+    /// at the level the row gave it.
     Apply(Id),
     /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
     Fit,
@@ -315,6 +317,7 @@ pub struct ItemFacts {
 }
 
 /// The innermost body that owns the scroll of a scope (`Scoped::scroll_owner`).
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScrollOwner {
     pub(crate) id: Id,
@@ -449,7 +452,9 @@ impl Env {
     /// The root env of a frame: the app's values with the pixels per point read back from egui.
     pub(crate) fn from_root(ctx: &Context, root: &RootEnv, host: Option<Arc<Host>>, pixels_per_point: f32) -> Env {
         let resolved = root.resolved(ctx);
-        let inputs = TokenInputs::of(root, resolved);
+        // An id that is not a valid `AppId` names no theme pins, so it resolves as no app.
+        let app = host.as_ref().and_then(|host| craft_theme::AppId::parse(host.app().id).ok());
+        let inputs = TokenInputs::of(root, resolved, app);
         let tokens = tokens_for(ctx, &inputs);
         let motion = MotionPolicy::new(motion_mode(ctx, resolved.motion), tokens.tokens().motion);
         let os = windows::os_of(ctx);
@@ -603,6 +608,11 @@ impl Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
         Env { scoped: Arc::new(scoped) }
+    }
+
+    /// Reuse a sweep's scope while it is uniquely held. A captured child env keeps its snapshot.
+    pub(crate) fn local_mut(&mut self) -> &mut Scoped {
+        Arc::make_mut(&mut self.scoped)
     }
 
     /// This env's container scope on top of `root`, the root env of the viewport the scope now runs in: the scale,

@@ -1,6 +1,6 @@
 //! Stories of `Swatch`.
 
-use super::Swatch;
+use super::{Swatch, SwatchShape};
 use crate::choice::RadioGroup;
 use crate::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::{Row, Stack};
@@ -73,6 +73,12 @@ fn swatch_table_cells(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         }
     });
     StoryOutput::default()
+}
+
+/// A hexagon well, the cell of a honeycomb.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_hexagon(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Swatch::new("Hexagon", BLUE).shape(SwatchShape::Hexagon).show(ui).into()
 }
 
 /// A well and a line that counts its clicks.

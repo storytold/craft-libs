@@ -2,9 +2,9 @@
 
 use super::geometry::glyph;
 use super::items::Item;
-use super::run::{Held, rule, ruler_text};
+use super::run::{Held, ruler_text};
 use super::{TextRuler, TextRulerStyle};
-use craft_ui::canvas::{RulerTick, Rulers};
+use craft_ui::canvas::{RulerTick, Rulers, TickRule};
 use craft_ui::contract::{Cx, Edit as _, PaintUi, Remember as _, Styled as _};
 use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use craft_ui::style::StyleColor;
@@ -20,8 +20,16 @@ impl TextRuler<'_> {
         let draw = ui.draw();
         let rect = |rect: Rect| PaintShape::Rect(rect, CornerRadius::ZERO);
         let path = |a: Pos2, b: Pos2| PaintShape::Path(vec![a, b]);
-        draw.fill(&rect(g.strip), style.margin);
-        draw.fill(&rect(g.column()), style.fill);
+        let visible = g.visible();
+        draw.fill(&rect(visible), style.margin);
+        draw.fill(&rect(g.column().intersect(visible)), style.fill);
+        for (start, end) in self.gaps {
+            let (a, b) = (g.x(*start), g.x(*end));
+            let gap = Rect::from_x_y_ranges(a.min(b)..=a.max(b), g.strip.y_range()).intersect(visible);
+            if gap.is_positive() {
+                draw.fill(&rect(gap), style.margin);
+            }
+        }
 
         let items = Item::all(&values);
         let column_boxes: Vec<Rect> = self.columns.iter().map(|at| shapes.column_marker(g.strip, g.x(*at))).collect();
@@ -103,14 +111,27 @@ impl TextRuler<'_> {
         let numbers = cx.env.units();
         let text = ruler_text(self.unit, &numbers);
         let per_doc = text.units.per_doc;
-        let (lo, hi) = g.span();
+        let (lo, hi) = g.shown_span();
         let ticks: Vec<RulerTick> =
-            Rulers::ticks(&text.units, rule(self.unit), f64::from(g.scale), (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc));
-        let marks: Vec<Tick> = ticks.iter().map(|tick| Tick::new(g.x((tick.value / per_doc) as f32) - g.strip.min.x, tick.rank)).collect();
+            Rulers::ticks(&text.units, TickRule::of_unit(self.unit.kind), f64::from(g.scale), (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc));
+        // The tick rule adds a labelled step beyond each end; a ruler cut to its extent (a page's) shows none past it.
+        let covered = g.visible().x_range();
+        let marks: Vec<Tick> = ticks
+            .iter()
+            .map(|tick| g.x((tick.value / per_doc) as f32))
+            .zip(&ticks)
+            .filter(|(x, _)| covered.contains(*x))
+            .map(|(x, tick)| Tick::new(x - g.strip.min.x, tick.rank))
+            .collect();
         ui.content_painter(cx).ticks(g.strip, TickEdge::Bottom, &marks);
         let draw = ui.draw();
         let color: StyleColor = cx.resolve(&style.label.color);
-        for tick in ticks.iter().filter(|tick| matches!(tick.rank, TickRank::Major)) {
+        // Numbers count from the column's start edge, so none stand in the margins.
+        let in_column = |tick: &&RulerTick| {
+            let at = (tick.value / per_doc) as f32;
+            (0.0..=g.width).contains(&at)
+        };
+        for tick in ticks.iter().filter(|tick| matches!(tick.rank, TickRank::Major)).filter(in_column) {
             let x = g.x((tick.value / per_doc) as f32);
             let label = text.tick_label(&numbers, tick.value, tick.step);
             let run = TextRun::new(label).role(style.label.role).color(color);
@@ -118,7 +139,7 @@ impl TextRuler<'_> {
             let size = vec2(width, g.strip.height());
             let at = if g.right_to_left { pos2(x - style.pad - width, g.strip.top()) } else { pos2(x + style.pad, g.strip.top()) };
             let boxed = Rect::from_min_size(at, size);
-            if g.strip.contains_rect(boxed) && !keep_clear.iter().any(|clear| clear.intersects(boxed)) {
+            if g.visible().contains_rect(boxed) && !keep_clear.iter().any(|clear| clear.intersects(boxed)) {
                 draw.text(boxed, &run);
             }
         }

@@ -32,12 +32,13 @@ pub struct ZoomField {
     stepper: bool,
     scrub: bool,
     enabled: bool,
+    status_bar: bool,
 }
 
 impl ZoomField {
     /// A zoom field named `label` over `view` (`None` when no view is known) of a document of `document` units.
     pub fn new(label: impl Into<Label>, view: Option<CanvasView>, document: Size) -> Self {
-        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true }
+        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true, status_bar: false }
     }
 
     /// The arrow keys and the wheel step along the zoom ladder.
@@ -58,6 +59,13 @@ impl ZoomField {
     #[must_use]
     pub fn enabled(mut self, on: bool) -> Self {
         self.enabled = on;
+        self
+    }
+
+    /// Uses the status bar's space and field appearance.
+    #[must_use]
+    pub(crate) fn status_bar(mut self) -> Self {
+        self.status_bar = true;
         self
     }
 
@@ -82,6 +90,9 @@ impl ZoomField {
         }
         if self.scrub {
             field = field.scrub_by_label();
+        }
+        if self.status_bar {
+            field = field.status_zoom();
         }
         let shown = field.show(ui);
         let invalid_zoom = range.filter(|_| shown.cut).map(|range| InvalidZoom { low: *range.start(), high: *range.end() });

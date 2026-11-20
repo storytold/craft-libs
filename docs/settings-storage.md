@@ -67,8 +67,15 @@ mount), the store opens read-only and says so at startup.
   broken: only that `[section]` falls back to defaults and the app is told which one.
 - A file written by a newer build is shown but never overwritten.
 - Comments, key order and keys the app does not know survive saves. If two instances of an app
-  are open, each re-reads the file before writing so those survive; known keys are
-  last-writer-wins.
+  are open, each re-reads the file before writing and merges in only its own changes, so the
+  other's survive. The app names how each item merges with `Settings::merge_rule`: key by key
+  (the default), whole (a window's place and size come from one instance), a recent list (what
+  this instance opened or used again leads, cut to its limit) or a list of user entries
+  (additions and removals from both are kept, an added entry stays after the entry before it).
+- Each save holds an advisory lock, `.config.toml.lock` beside the file, from re-reading the file
+  to writing it, so two instances saving at the same moment take turns instead of one writing
+  over the other's merge. A save waits at most 2 seconds for it, then saves anyway and logs a
+  warning, so a stuck process never stops another from saving.
 
 ## Migration
 
@@ -98,8 +105,17 @@ files there too.
 Adoption order: PhotoCraft and DesignCraft first (closest to and furthest from the target
 behaviour), then the rest.
 
+## Settings on the web
+
+A browser build (`wasm32`) opens the same `SettingsStore`. Its files are localStorage items
+(`LocalStorageFiles`, the default there), keyed by path, so `Location::Dir(dir)` names the key
+prefix; `Location::Auto` keeps settings in memory. Storage holds about 5 MB per site, so the
+store caps an item at 4 MB: a stored item over the cap reads as absent and the next save replaces
+it, and a save over the cap fails and keeps the old item. An app's older hand-written item is a
+`LegacyFile` read through the same storage. Browser storage takes no lock; tabs of one site share
+the items, and each save still merges in what another tab wrote since.
+
 ## Not yet
 
 - Reloading settings when the file changes on disk while the app runs
 - Removing imported legacy files
-- Settings on the web (`wasm32`), where only the trait, document helpers and error types exist

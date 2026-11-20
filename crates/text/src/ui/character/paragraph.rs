@@ -77,7 +77,7 @@ impl TextAlign {
 }
 
 /// A paragraph's direction.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ParagraphDirection {
     /// From the paragraph's first strong character.

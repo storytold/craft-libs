@@ -158,6 +158,13 @@ fn update_shape(shape: &mut Map<String, Value>, s: &ShapeSeed) {
 fn update_app(app: &mut Map<String, Value>, o: &AppOverrides) {
     mode_maps(app, &o.pins);
     section(app, "high_contrast", |hc| mode_maps(hc, &o.high_contrast));
+    // An app without its own shape writes none: the theme's applies.
+    match &o.shape {
+        None => {
+            app.remove("shape");
+        }
+        Some(shape) => with_object(app, "shape", |s| update_shape(s, shape)),
+    }
 }
 
 /// Writes each mode's seed overrides as `seeds` inside its pin map, after `mode_maps`.

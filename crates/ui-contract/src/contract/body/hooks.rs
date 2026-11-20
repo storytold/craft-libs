@@ -15,6 +15,7 @@ use super::scroll::{
 use super::size::MeasureKey;
 use super::window::{WindowMode, os_window, window_instance};
 use super::{BodyHooks, BodyView};
+use crate::contract::cx::CxCore;
 use crate::contract::cx::{BodyCx, BodyOwner, RegionShare};
 use crate::contract::label::{self, LabelIn};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
@@ -313,7 +314,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             Err(extent) => return extent,
         };
         let plan = self.measure_plan(at, cx.core.id, scrolled_share);
-        let vertical = plan.vertical;
+        let (vertical, pad) = (plan.vertical, plan.pad);
         let took = match plan.reused {
             Some(reused) => self.take_reused(at, plan, reused),
             // A share of a scrolling view is laid out as given while the content fits it, so the children that fill
@@ -326,7 +327,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             None if self.capped(&self.props, at.env, at.at) => self.measure_capped(comp, at, cx, plan),
             None => self.measure_run(comp, at, cx, plan.key, None),
         };
-        self.measured_took(took, vertical)
+        self.measured_took(took, pad, vertical)
     }
 
     /// A real pass places the container by what its measuring run in this pass found: the record a measuring run of
@@ -387,12 +388,17 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 };
                 Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), height)
             }
+            // Its content's width, and the height as `Fill` takes it.
+            Sizing::FillHeight => {
+                let room = crate::layout::flow_room(ui);
+                Vec2::new(size.x, crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, room.y, self.given.1))
+            }
             Sizing::Content => size,
         }
     }
 
     fn fills_width(&self, comp: &C) -> bool {
-        self.sizing(comp.props(Internal::new())) != Sizing::Content
+        !self.sizing(comp.props(Internal::new())).content_width()
     }
 
     fn fills_width_only(&self, comp: &C) -> bool {
@@ -502,7 +508,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     }
 
     fn sensed(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
-        self.reorder_keys(comp.props(Internal::new()), cx);
+        self.reorder_keys(comp.props(Internal::new()), cx.core);
     }
 
     fn updated(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
@@ -544,21 +550,21 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if props.collapse.is_some() && cx.activation().is_some_and(|activation| activation.by_key) {
             self.open = !self.open;
         }
-        self.band_double(cx);
-        self.surface_press(comp.sense().contains(craft_behavior::Sense::SURFACE), cx);
+        self.band_double(cx.core);
+        self.surface_press(comp.sense().contains(craft_behavior::Sense::SURFACE), cx.core);
         let band = props.header.is_some_and(|header| header.band == DragBand::Move);
         if (band || matches!(props.mount, Mount::Viewport { .. } | Mount::Window { .. }))
             && let Some(viewport) = os_window(props, cx.core.memory.ctx(), cx.core.id, &cx.core.env)
         {
             self.window_os(viewport, props, cx);
-            self.window_movable(viewport, cx);
+            self.window_movable(viewport, cx.core);
         }
-        self.pane_drag(props, cx);
+        self.pane_drag(props, cx.core);
         if layer && !(matches!(props.mount, Mount::Viewport { .. }) && windows::mount_window(cx.core.memory.ctx(), cx.core.id)) {
             self.window_keys(props, cx);
             self.window_drag(props, cx);
         }
-        self.window_placed(props, cx);
+        self.window_placed(props, cx.core);
         // The body moves and resizes the layer in screen space; the caller places it in its parent's layer space.
         let from_screen = crate::runtime::overlay::parent_space(&cx.core.ctx, cx.core.id).inverse();
         for mut change in std::mem::take(&mut self.reports) {
@@ -588,10 +594,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.footer_slot_step(comp, ui, cx, &mut plan);
         }
         // B2 label: the control gets the rect the label leaves; the label column adds to the container's extent.
-        self.label_step(ui, env, cx, &mut plan);
+        self.label_step(ui, env, cx.core, &mut plan);
         // B3 body, if open, under the body env; the gate is read after the header changed it.
         if plan.is_open {
-            self.body_step(ui, env, cx, &mut plan);
+            self.body_step(comp, ui, env, cx.core, &mut plan);
             self.after_body(ui, env, &mut plan);
             if plan.real && props.end.is_some() {
                 self.end_step(comp, ui, cx, &mut plan);
@@ -737,7 +743,7 @@ impl BodyHooks<'_> {
         key: MeasureKey,
         content: Option<Vec2>,
     ) -> Vec2 {
-        let (layer, rect) = self.begin_measure_run(at, cx);
+        let (layer, rect) = self.begin_measure_run(at, cx.core, cx.style.metrics().padding);
         let mut values = AppValues::default();
         comp.content_env(cx, &mut values);
         // A label group settles its columns before a measure inside stands: when a row of a body that shows at its
@@ -766,8 +772,8 @@ impl BodyHooks<'_> {
 
     /// Opens the measuring run of `cx`'s container: its rect at the room's start edge, which `cx` takes, and the layer
     /// the run lays the regions out on.
-    fn begin_measure_run<C: Container>(&mut self, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> (areas::LayerKey, Rect) {
-        let (id, ctx) = (cx.core.id, at.ui.ctx());
+    fn begin_measure_run(&mut self, at: &Measuring<'_, '_>, core: &mut CxCore<'_>, padding: craft_behavior::Insets) -> (areas::LayerKey, Rect) {
+        let (id, ctx) = (core.id, at.ui.ctx());
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_body(ctx, id);
         layout_memory::begin_measure(ctx, id);
@@ -787,9 +793,9 @@ impl BodyHooks<'_> {
         } else {
             Rect::from_min_size(origin, self.room)
         };
-        cx.core.rect = rect;
-        cx.core.flow = craft_behavior::Flow::new(rect, at.env.direction.is_rtl());
-        cx.core.content_rect = cx.core.flow.inset(cx.style.metrics().padding);
+        core.rect = rect;
+        core.flow = craft_behavior::Flow::new(rect, at.env.direction.is_rtl());
+        core.content_rect = core.flow.inset(padding);
         (measure_layer(&self.props, id, at.ui), rect)
     }
 
@@ -968,6 +974,14 @@ fn body_ui(run: &BodyRun<'_>, parent: &mut Ui, at: Rect) -> Ui {
     body_ui
 }
 
+struct BodyFacts<'p> {
+    node: bool,
+    owner: BodyOwner<'p>,
+    surface: Option<SurfaceKind>,
+    gap: Vec2,
+    gate_mixed: bool,
+}
+
 impl BodyHooks<'_> {
     /// The regions and the envs the body step runs them under; registers the container's command instances.
     // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
@@ -980,19 +994,6 @@ impl BodyHooks<'_> {
         cx: &mut Cx<'a, C>,
         values: &AppValues,
     ) -> BodyPlan<'p> {
-        let (id, ctx, rect) = (cx.core.id, cx.core.ctx.clone(), cx.core.rect);
-        let rtl = env.direction.is_rtl();
-        let node = matches!(C::ROLE, Role::Node(_));
-        let scroll = scroll_of(props);
-        let pad = self.pads(props, &env.tokens);
-        let inner = cx.core.content_rect.shrink2(pad);
-        let room = self.room_size(rect, inner);
-        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes());
-        let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
-        let band_slot = ui.painter().add(Shape::Noop);
-        // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
-        // and claims no room in a parent flow.
-        let real = !ui.is_sizing_pass();
         // Only a container that declares its value a gate (a group box) gates its content; a radio group whose value
         // is a bool does not.
         // A mixed gate reads as off, and its check box shows the mixed face.
@@ -1000,11 +1001,48 @@ impl BodyHooks<'_> {
         let gate_mixed = props.gates && cx.mixed;
         self.gate = self.gate.or(gate_mixed.then_some(false));
         self.gate_at_read = self.gate;
+        let gap = Vec2::splat(gap_of(&env.tokens, props.body_gap));
+        let facts = BodyFacts {
+            node: matches!(C::ROLE, Role::Node(_)),
+            owner: BodyOwner::new(cx.style, gap.y),
+            surface: super::inherit::own_surface(props, cx),
+            gap,
+            gate_mixed,
+        };
+        self.plan_regions(props, ui, env, cx.core, values, facts)
+    }
+
+    #[inline(never)]
+    fn plan_regions<'p, 'a: 'p>(
+        &mut self,
+        props: &'p ContainerProps,
+        ui: &mut Ui,
+        env: &Env,
+        core: &CxCore<'a>,
+        values: &AppValues,
+        facts: BodyFacts<'p>,
+    ) -> BodyPlan<'p> {
+        let BodyFacts { node, owner, surface, gap, gate_mixed } = facts;
+        let (id, ctx, rect) = (core.id, core.ctx.clone(), core.rect);
+        let rtl = env.direction.is_rtl();
+        let scroll = scroll_of(props);
+        let pad = self.pads(props, &env.tokens);
+        let inner = core.content_rect.shrink2(pad);
+        let room = self.room_size(rect, inner);
+        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes());
+        let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
+        let band_slot = ui.painter().add(Shape::Noop);
+        // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
+        // and claims no room in a parent flow.
+        let real = !ui.is_sizing_pass();
         let window = window_instance(props, id).filter(|window| *window != id);
         if real {
             register_instances(&ctx, props, id, window);
         }
-        let region_env = env.derive(|scoped| self.scope_regions(scoped, props, cx, window, values, real));
+        let region_env = env.derive(|scoped| {
+            self.scope_regions(scoped, props, core, window, values, real);
+            scoped.surface = SurfaceKind::under(surface, scoped.surface);
+        });
         // The size and glyph role the container gives its children reach every region: header, body, end region and
         // footer.
         let region_env = if props.child_size.is_none() && props.child_glyphs.is_none() {
@@ -1019,7 +1057,6 @@ impl BodyHooks<'_> {
                 }
             })
         };
-        let gap = Vec2::splat(gap_of(&env.tokens, props.body_gap));
         let field_message = if props.label.is_some() { scope::last_message(&ctx, id) } else { None };
         // A measuring run finds the container's first line: the first child its header or body places in flow reports
         // it (`layout::FirstLines`).
@@ -1029,8 +1066,8 @@ impl BodyHooks<'_> {
         }
         BodyPlan {
             props,
-            resolved: cx.core.resolved,
-            owner: BodyOwner::new(cx.style, gap.y),
+            resolved: core.resolved,
+            owner,
             id,
             body_id: sub(id, "body"),
             layout_id: sub(id, "layout"),
@@ -1145,7 +1182,8 @@ impl BodyHooks<'_> {
             &mut plan.open,
             plan.gate.as_mut(),
             Some(share),
-        );
+        )
+        .with_exiting(self.exiting);
         // The end region shares the body's line, above a scroll bar under the body: its children sit on the
         // members' line, from the body's top (a label may stand above the body).
         let mut end = plan.regions.end;
@@ -1167,7 +1205,7 @@ impl BodyHooks<'_> {
     /// B2: the body's place beside the regions measured so far, the label step and the body's env.
     // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
     #[inline(never)]
-    fn label_step<C: Container>(&mut self, ui: &mut Ui, env: &Env, cx: &Cx<'_, C>, plan: &mut BodyPlan<'_>) {
+    fn label_step(&mut self, ui: &mut Ui, env: &Env, core: &CxCore<'_>, plan: &mut BodyPlan<'_>) {
         let props = plan.props;
         let (ctx, id, real) = (&plan.ctx, plan.id, plan.real);
         let beside =
@@ -1187,7 +1225,7 @@ impl BodyHooks<'_> {
                 owner: id,
                 parent: plan.node.then_some(id),
                 row: plan.regions.body,
-                room: if self.sizing(props) == Sizing::Content {
+                room: if self.sizing(props).content_width() {
                     layout::ambient_room(ctx).map_or(plan.room.x, |offered| plan.room.x.max(offered))
                 } else {
                     plan.regions.body.width()
@@ -1212,7 +1250,7 @@ impl BodyHooks<'_> {
         plan.ran_top = plan.body_rect.min.y;
         plan.label_extra = label_extra_of(plan.regions.body, plan.body_rect, plan.label_rect, plan.rtl);
         // The body's control shows an inside label in its slot, in the measuring run and the real run alike.
-        let inside = props.label.as_ref().and_then(|side| label::inside(env.view(), side, cx.core.resolved.enabled));
+        let inside = props.label.as_ref().and_then(|side| label::inside(env.view(), side, core.resolved.enabled));
         // In an inspector the control beside its label fills the width the label leaves.
         let cell_fills = props.label.as_ref().is_some_and(|side| side.layout == label::FieldLayout::Beside)
             && env.values.get::<label::LabelScheme>() == label::LabelScheme::Inspector;
@@ -1236,7 +1274,7 @@ impl BodyHooks<'_> {
 
     /// B3: the body region, on the body layer when the container transforms its body.
     #[expect(clippy::expect_used, reason = "the label step sets the body env before the body step")]
-    fn body_step<C: Container>(&mut self, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, plan: &mut BodyPlan<'_>) {
+    fn body_step<C: Container>(&mut self, comp: &mut C, ui: &mut Ui, env: &Env, core: &mut CxCore<'_>, plan: &mut BodyPlan<'_>) {
         let props = plan.props;
         let body_env = plan.body_env.as_ref().expect("the label step ran");
         let reveal_clip = (plan.animated && self.presence.t < 1.0).then(|| {
@@ -1266,20 +1304,13 @@ impl BodyHooks<'_> {
         };
         let body_rect = plan.body_rect;
         let share = plan.share(false);
-        let mut bcx = BodyCx::new(
-            plan.body_id,
-            body_env.view(),
-            plan.resolved,
-            body_rect,
-            &mut *cx.core.memory,
-            &mut plan.open,
-            plan.gate.as_mut(),
-            Some(share),
-        );
+        let mut bcx =
+            BodyCx::new(plan.body_id, body_env.view(), plan.resolved, body_rect, &mut *core.memory, &mut plan.open, plan.gate.as_mut(), Some(share));
         let mut bars = Vec2::ZERO;
+        let mut end = |ui: &mut Ui, bcx: &mut BodyCx<'_>| comp.body_end(ui, bcx);
         self.body_size = match props.transform {
-            Some(transform) => self.run_transformed(&run, ui, (transform, cx.core.root_sense, plan.rect, body_rect), &mut bcx, &mut bars),
-            None => self.run_body(&run, ui, body_rect, &mut bcx, &mut bars),
+            Some(transform) => self.run_transformed(&run, ui, (transform, core.root_sense, plan.rect, body_rect), &mut bcx, &mut bars, &mut end),
+            None => self.run_body(&run, ui, body_rect, &mut bcx, &mut bars, &mut end),
         };
         plan.close = plan.close.or(bcx.close_requested());
         plan.bars_inset = bars;
@@ -1294,9 +1325,10 @@ impl BodyHooks<'_> {
         (transform, root_sense, rect, body_rect): (craft_behavior::CanvasTransform, craft_behavior::Sense, Rect, Rect),
         bcx: &mut BodyCx<'_>,
         bars: &mut Vec2,
+        end: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>),
     ) -> Option<Vec2> {
         if !run.real {
-            return self.run_body(run, &mut measure_layer_ui(ui, run.id, body_rect), body_rect, bcx, bars);
+            return self.run_body(run, &mut measure_layer_ui(ui, run.id, body_rect), body_rect, bcx, bars, end);
         }
         let parent = ui.layer_id();
         let layer = areas::body_layer(parent, run.id);
@@ -1307,12 +1339,20 @@ impl BodyHooks<'_> {
         let forward = areas::Forward { root: run.id, sense: response::to_egui(root_sense), rect: rect.intersect(ui.clip_rect()) };
         let body_layer =
             areas::BodyLayer { parent, layer, transform: tf, at: body_rect.min, clip: body_rect.intersect(ui.clip_rect()), forward: Some(forward) };
-        areas::show_body_layer(run.ctx, body_layer, |area_ui| self.run_body(run, area_ui, body_rect, bcx, bars))
+        areas::show_body_layer(run.ctx, body_layer, |area_ui| self.run_body(run, area_ui, body_rect, bcx, bars, end))
     }
 
-    /// The body region's run at `at` in `parent`: its `Ui`, its layout and the label columns its rows share. Returns
-    /// the size the body took.
-    fn run_body(&mut self, run: &BodyRun<'_>, parent: &mut Ui, at: Rect, bcx: &mut BodyCx<'_>, bars: &mut Vec2) -> Option<Vec2> {
+    /// The body region's run at `at` in `parent`: its `Ui`, its layout and the label columns its rows share, then the
+    /// body-end hook `end`. Returns the size the body took.
+    fn run_body(
+        &mut self,
+        run: &BodyRun<'_>,
+        parent: &mut Ui,
+        at: Rect,
+        bcx: &mut BodyCx<'_>,
+        bars: &mut Vec2,
+        end: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>),
+    ) -> Option<Vec2> {
         let mut body_ui = body_ui(run, parent, at);
         let installed = Env::install_for(&body_ui, run.env.clone());
         let mut labels = LabelsFound::default();
@@ -1329,6 +1369,17 @@ impl BodyHooks<'_> {
                 natural.map(|width| Vec2::new(width, body_ui.min_rect().height()))
             }
         };
+        // The body-end hook runs in the body's own column below its layout and scroll region, outside the shared label
+        // columns, so it lies under the body and above the footer in every footer place: beside an `EndTop` footer
+        // column too. A scrolling body's region allocates nothing in `body_ui`, so the hook starts below the part it
+        // shows.
+        if run.scroll.is_some() {
+            crate::runtime::egui::alloc::space(&mut body_ui, Vec2::new(0.0, took.map_or(0.0, |size| size.y)));
+        }
+        let before = body_ui.min_rect().height();
+        end(&mut body_ui, bcx);
+        let ended = body_ui.min_rect().height() - before;
+        let took = took.map(|size| Vec2::new(size.x, size.y + ended));
         Env::restore(run.ctx, installed);
         let took = took.unwrap_or_else(|| body_ui.min_rect().size());
         self.body_took(run, took, labels)
@@ -1643,6 +1694,8 @@ struct MeasurePlan {
     /// The inputs the run's record is kept under.
     key: MeasureKey,
     tolerance: f32,
+    /// The container's padding on both sides, along each axis.
+    pad: Vec2,
     /// The body scrolls vertically: it takes at most the room's height.
     vertical: bool,
     /// The body shares a scrolling view along y.
@@ -1655,7 +1708,7 @@ impl BodyHooks<'_> {
     /// The room of a measuring run, and whether the body shares a scrolling view; `Err` with the extent when no run is
     /// needed.
     fn measure_room<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Result<bool, Vec2> {
-        let props = Arc::clone(&self.props);
+        let props = &self.props;
         // A mount outside the flow takes no room in a parent's sizing pass, so its regions run only when it is
         // measured itself. A pane as tall as its content takes its height in the flow.
         let flows = match &props.mount {
@@ -1667,7 +1720,13 @@ impl BodyHooks<'_> {
             return Err(self.extent(comp, at.ui, at.at, cx.core.id, at.scx));
         }
         let id = cx.core.id;
-        let open = if self.open_given { self.open } else { open_now(comp, &mut *cx.core.memory, id, &props) };
+        let open = if self.open_given { self.open } else { open_now(comp, &mut *cx.core.memory, id, props) };
+        let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
+        self.measure_open_room(at, id, open, flows)
+    }
+
+    fn measure_open_room(&mut self, at: &Measuring<'_, '_>, id: Id, open: bool, flows: bool) -> Result<bool, Vec2> {
+        let props = Arc::clone(&self.props);
         self.open = open || self.shown_closed;
         self.open_at_read = self.open;
         // An animated collapse shows a share of the full body height, so the body is measured while any of it shows.
@@ -1704,9 +1763,6 @@ impl BodyHooks<'_> {
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
-        // A container placed at an explicit rect, or mounted on a layer or in a window, is no flow child of that body:
-        // it takes its own room, not a share.
-        let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
         // Along an axis the flow does not bound it fills nothing (`sized`): it measures its content there. In a `Stack`
         // body that scrolls along y it shares what the view shows.
         let bounded = crate::layout::flow_room(at.ui);
@@ -1754,7 +1810,7 @@ impl BodyHooks<'_> {
                 serves.then(|| self.reusable(&props, &ctx, id, pad, tolerance)).flatten().map(|took| (took, found))
             })
             .flatten();
-        MeasurePlan { ctx, id, key, tolerance, vertical, scrolled_share, reused }
+        MeasurePlan { ctx, id, key, tolerance, pad, vertical, scrolled_share, reused }
     }
 
     /// A record that serves: it stands for the run, and a kept one is noted under this run's inputs too.
@@ -1793,10 +1849,14 @@ impl BodyHooks<'_> {
     }
 
     /// The extent a measuring run reports from what its regions `took`.
-    fn measured_took(&mut self, took: Vec2, vertical: bool) -> Vec2 {
+    fn measured_took(&mut self, took: Vec2, pad: Vec2, vertical: bool) -> Vec2 {
         // A layer hung from an opener or a rect is at least as wide as its overlay asks for, in the measuring run too,
         // so the rows of a content-sized list inside it are placed at that width.
         let took = Vec2::new(overlay_of(&self.props).map_or(took.x, |overlay| took.x.max(crate::contract::overlay::anchor_floor(overlay))), took.y);
+        // The least width holds in the measure a parent places it by, as in its own extent (`wanted_width`): a row
+        // measuring a side menu among its children gave it only its content's width, so the menu shrank to its widest
+        // row's name.
+        let took = Vec2::new(took.x.max(self.least_width + pad.x), took.y);
         self.overflow = (took.x - self.room.x).max(0.0);
         // A body wider than the room overflows it, or scrolls along it; either way the container keeps to the room.
         Vec2::new(took.x.min(self.room.x), if vertical { took.y.min(self.room.y) } else { took.y })

@@ -1,4 +1,4 @@
-//! `FolderCache`: roots and subfolder listings made in jobs, kept until they go stale.
+//! `FolderCache`: roots, subfolder and entries listings made in jobs, kept until they go stale.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use craft_host::queue::{JobQueue, Priority, QueueOptions};
 use craft_host::{Jobs, Wake};
 
-use super::{Directories, Folder, StandardFolder, Volume};
+use super::{Directories, Entry, Folder, FolderEntries, StandardFolder, Volume};
 
 /// The standard folders and volumes, from one job.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -29,11 +29,28 @@ pub enum Listing<'a> {
     Failed(&'a str),
 }
 
+/// One folder's files and folders as the cache has them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entries<'a> {
+    /// Not listed yet; a job is queued.
+    Loading,
+    /// The entries, and whether the listing stopped at its limit.
+    Ready {
+        /// The files and folders.
+        entries: &'a [Entry],
+        /// The listing stopped at the limit before the folder ended.
+        truncated: bool,
+    },
+    /// The folder couldn't be listed; the system's message.
+    Failed(&'a str),
+}
+
 /// What a listing job returns.
 enum Found {
     Roots(Roots),
     Subfolders(Result<Vec<Folder>, String>),
     Unlisted(Vec<PathBuf>),
+    Entries(Result<FolderEntries, String>),
 }
 
 /// Which listing a job makes.
@@ -42,6 +59,8 @@ enum Job {
     Roots,
     Subfolders(PathBuf),
     Unlisted(PathBuf),
+    /// A folder's files and folders, up to a limit of entries read.
+    Entries(PathBuf, usize),
 }
 
 /// Folder listings for a places tree, made in jobs on a [`JobQueue`] (lanes from
@@ -62,6 +81,8 @@ pub struct FolderCache {
     roots: Option<Roots>,
     listings: HashMap<PathBuf, (Result<Vec<Folder>, String>, bool)>,
     unlisted: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Files and folders by (folder, limit), each with its stale flag like `listings`.
+    entries: HashMap<(PathBuf, usize), (Result<FolderEntries, String>, bool)>,
     stale_roots: bool,
     /// What this pass asked for, for [`finish_pass`](Self::finish_pass).
     asked: HashSet<Job>,
@@ -82,6 +103,7 @@ impl FolderCache {
             roots: None,
             listings: HashMap::new(),
             unlisted: HashMap::new(),
+            entries: HashMap::new(),
             stale_roots: false,
             asked: HashSet::new(),
             generations: HashMap::new(),
@@ -118,6 +140,31 @@ impl FolderCache {
         }
     }
 
+    /// `folder`'s files and folders up to `limit` entries, listed in a job like
+    /// [`subfolders`](Self::subfolders); the cache keys a listing by folder and limit.
+    pub fn entries(&mut self, folder: &Path, limit: usize) -> Entries<'_> {
+        // ui-egui: crates/ui-egui/src/file_browser.rs:58 (`list_dir`, read in the pass there; in a job here).
+        self.drain();
+        let key = (folder.to_path_buf(), limit);
+        let job = Job::Entries(key.0.clone(), limit);
+        self.asked.insert(job.clone());
+        match self.entries.get(&key).map(|(_, stale)| *stale) {
+            None => self.submit(job, Priority::VISIBLE),
+            Some(true) => self.submit(job, Priority::NEAR),
+            Some(false) => {}
+        }
+        self.held_entries(folder, limit).unwrap_or(Entries::Loading)
+    }
+
+    /// The listing of `folder` at `limit` the cache holds now, without taking in finished jobs or queueing one: for a
+    /// reader that cannot borrow the cache mutably (automation). `None` when none is held.
+    pub fn held_entries(&self, folder: &Path, limit: usize) -> Option<Entries<'_>> {
+        self.entries.get(&(folder.to_path_buf(), limit)).map(|(result, _)| match result {
+            Ok(found) => Entries::Ready { entries: &found.entries, truncated: found.truncated },
+            Err(message) => Entries::Failed(message),
+        })
+    }
+
     /// The hidden folders on the way to `path` ([`Directories::unlisted_ancestors`]); `None` until
     /// listed.
     pub fn unlisted(&mut self, path: &Path) -> Option<&[PathBuf]> {
@@ -141,16 +188,30 @@ impl FolderCache {
         for (_, stale) in self.listings.values_mut() {
             *stale = true;
         }
+        for (_, stale) in self.entries.values_mut() {
+            *stale = true;
+        }
     }
 
-    /// Marks one folder's listing stale.
+    /// Marks one folder's listings stale: its subfolders and its entries at every limit.
     pub fn refresh_folder(&mut self, folder: &Path) {
         // new: the tree calls it when a row opens.
-        if let Some(generation) = self.generations.get_mut(&Job::Subfolders(folder.to_path_buf())) {
-            *generation += 1;
+        for (job, generation) in &mut self.generations {
+            let of_folder = match job {
+                Job::Subfolders(path) | Job::Entries(path, _) => path == folder,
+                Job::Roots | Job::Unlisted(_) => false,
+            };
+            if of_folder {
+                *generation += 1;
+            }
         }
         if let Some((_, stale)) = self.listings.get_mut(folder) {
             *stale = true;
+        }
+        for ((path, _), (_, stale)) in &mut self.entries {
+            if path == folder {
+                *stale = true;
+            }
         }
     }
 
@@ -161,6 +222,7 @@ impl FolderCache {
         let asked = std::mem::take(&mut self.asked);
         self.listings.retain(|path, _| asked.contains(&Job::Subfolders(path.clone())));
         self.unlisted.retain(|path, _| asked.contains(&Job::Unlisted(path.clone())));
+        self.entries.retain(|(path, limit), _| asked.contains(&Job::Entries(path.clone(), *limit)));
         self.queue.reprioritize(|job, priority| asked.contains(job).then_some(priority));
         self.generations.retain(|job, _| *job == Job::Roots || asked.contains(job));
     }
@@ -178,6 +240,7 @@ impl FolderCache {
                 Job::Roots => Found::Roots(Roots { standard: directories.standard(), volumes: directories.volumes() }),
                 Job::Subfolders(folder) => Found::Subfolders(directories.subfolders(&folder, cancel).map_err(|e| e.to_string())),
                 Job::Unlisted(path) => Found::Unlisted(directories.unlisted_ancestors(&path)),
+                Job::Entries(folder, limit) => Found::Entries(directories.entries(&folder, limit, cancel).map_err(|e| e.to_string())),
             };
             (generation, found)
         });
@@ -202,6 +265,9 @@ impl FolderCache {
                 }
                 (Job::Unlisted(path), Found::Unlisted(found)) => {
                     self.unlisted.insert(path, found);
+                }
+                (Job::Entries(folder, limit), Found::Entries(result)) => {
+                    self.entries.insert((folder, limit), (result, !current));
                 }
                 _ => {}
             }

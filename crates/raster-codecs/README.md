@@ -55,7 +55,7 @@ formats (plain PNM, XPM) reserve from the bytes present, not from the header.
 
 ## Tests
 
-`cargo test -p craft-raster-codecs`. `tests/roundtrip.rs` writes every layout and depth each
+`cargo test -p craft-raster-codecs`. `tests/it/roundtrip.rs` writes every layout and depth each
 writer stores and reads it back exactly, then truncates, bit-flips and overwrites header bytes of
 a valid file of every format: a reader may refuse, never panic. Two tests are ignored by default:
 a DDS encode timing, and a PNM peak-memory check that reads the process's RSS.

@@ -1,4 +1,5 @@
 mod access;
+mod alt_text;
 mod chips;
 mod edit_menu;
 mod fields;
@@ -8,6 +9,7 @@ mod linked;
 mod mixed_blank;
 mod number;
 mod number_length;
+mod number_scrub_step;
 mod selectable;
 mod text_field;
 mod widths;

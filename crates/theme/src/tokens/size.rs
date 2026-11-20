@@ -273,7 +273,9 @@ pub struct RulerTickSizes {
 /// The sizes of the panes of a dock's split, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PaneSizes {
-    /// The least extent of a pane along a split, and of a dock, before its panels' own limits.
+    /// The least extent of a pane along a split, of a dock, and of an edge pane its grip is dragged to: a floor
+    /// beneath the panels' own limits, not a width their content is laid out to fit. A task pane's least body width
+    /// is its own (`PaneSpec::limits`), from its content.
     pub least: f32,
 }
 

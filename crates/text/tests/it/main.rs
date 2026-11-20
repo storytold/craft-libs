@@ -3,10 +3,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod editor;
+#[cfg(feature = "find")]
+mod find;
+mod hyperlink;
 mod notes;
+mod paragraph;
 mod path_text;
 
 mod ruler;
 mod style_options;
 mod style_panel;
 mod tabs;
+
+mod character;
