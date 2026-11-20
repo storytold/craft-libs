@@ -382,3 +382,17 @@ fn an_alt_corner_drag_scales_a_box_in_perspective_evenly_about_the_reference_poi
         assert!(within(&got, want, 0.01), "corner {corner} of {quad:?}: {:?}", got.quad);
     }
 }
+
+/// Drags far past the usual range (measured on the reference): a side tripled keeps the dragged corners within 1 px
+/// of the reference, and a side shrunk to a sliver, where the second-order rule does not hold, stays near the first
+/// step instead of running off.
+#[test]
+fn far_edge_drags_in_perspective_stay_near_the_reference() {
+    let narrow_top = [p(210.0, 125.0), p(392.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
+    let tripled = edge_dragged(narrow_top, 1, p(422.0, 226.0), p(622.0, 226.0));
+    assert!(within(&tripled, [(210.0, 14.01), (480.49, 46.41), (817.96, 474.68), (150.0, 437.99)], 1.0), "{:?}", tripled.quad);
+    let sliver = edge_dragged(narrow_top, 3, p(180.0, 226.0), p(310.0, 226.0));
+    let reference = [(310.6, 238.38), (392.0, 197.14), (452.0, 254.86), (310.6, 267.83)];
+    let worst = sliver.quad.iter().zip(reference).map(|(a, (x, y))| a.distance(p(x, y))).fold(0.0, f64::max);
+    assert!(worst < 45.0, "{worst} px off: {:?}", sliver.quad);
+}

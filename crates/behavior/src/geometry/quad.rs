@@ -783,9 +783,12 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
 /// In the start box's unit square, `s` runs across the drag from the anchored edge (0) to the dragged one (1) and `t`
 /// along them from the side the drag's factor is measured on (the top for a left or right edge, the left side for a
 /// top or bottom one). `rho` is how much nearer the vanishing point that side is than the other (the ratio of the
-/// map's weights). The centre lies on the row `t = rho² / (1 + rho²)` of the box from the first step (`first`), at
-/// `1 / s = (1 + rho³) / (1 + rho²) · (1 - s_m)`, where `s_m` is the dragged edge's middle across the start box: with
-/// no drag it is the far point of that row and leaves the corners where they are.
+/// map's weights). The centre lies on the row `t = rho² / (1 + rho²)`, where `s_m` is the dragged edge's middle across
+/// the start box: for a left or right edge in the start box's square, at `1 / s = 2 (1 + rho²)² / (1 + rho)³ ·
+/// (1 / s_m - 1)`; for a top or bottom edge in the square of the box from the first step (`first`), at
+/// `1 / s = (1 + rho³) / (1 + rho²) · (1 - s_m)`. With no drag the centre is the far point of that row and leaves the
+/// corners where they are. A push that would carry a corner further than half the dragged edge (a drag shrinking the
+/// box to a sliver, which these rules do not follow) keeps the first step.
 fn perspective_push(
     start: [Point; 4],
     offset: [Point; 4],
@@ -815,9 +818,17 @@ fn perspective_push(
         2 => at.y,
         _ => 1.0 - at.y,
     };
+    if !(across.is_finite() && across.abs() > 1e-9) {
+        return None;
+    }
     let r2 = rho * rho;
-    let (row, inv_s) = (r2 / (1.0 + r2), (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across));
-    let centre = apply(&Homography::unit_to_quad(first)?, unit(1.0, row * inv_s, inv_s));
+    let row = r2 / (1.0 + r2);
+    let (frame, inv_s) = if edge % 2 == 1 {
+        (h, 2.0 * (1.0 + r2) * (1.0 + r2) / ((1.0 + rho) * (1.0 + rho) * (1.0 + rho)) * (1.0 / across - 1.0))
+    } else {
+        (Homography::unit_to_quad(first)?, (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across))
+    };
+    let centre = apply(&frame, unit(1.0, row * inv_s, inv_s));
     let homog = |p: Point| [p.x, p.y, 1.0];
     let along = cross3(homog(v), homog(mid));
     let mut out = first;
@@ -828,7 +839,8 @@ fn perspective_push(
         }
         out[i] = Point::new(p[0] / p[2], p[1] / p[2]);
     }
-    out.iter().all(|c| c.is_finite()).then_some(out)
+    let reach = first[dragged[0]].distance(first[dragged[1]]) / 2.0;
+    (out.iter().all(|c| c.is_finite()) && dragged.iter().all(|&i| out[i].distance(first[i]) <= reach)).then_some(out)
 }
 
 /// The reference levels a side beside the dragged edge that a drag in perspective leaves less than 1 px from level (or
