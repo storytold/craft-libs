@@ -112,6 +112,13 @@ impl Stop {
         self
     }
 
+    /// Activates on Space as well as Enter, as a button does: the runtime presses it on the Space press and
+    /// activates it on the release, which is what a click does.
+    pub fn space(mut self) -> Self {
+        self.keys = self.keys.with_space_activation();
+        self
+    }
+
     /// Marks the stop as the app's own egui widget.
     pub fn host(mut self) -> Self {
         self.host = true;

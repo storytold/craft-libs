@@ -149,6 +149,11 @@ struct Batch {
     tabs: Vec<TabPress>,
     /// A lone Alt in a field that holds drafts was refused: the input hook calls `frame::refuse`.
     refused: bool,
+    /// A bare Space release of the pass: it ends a held Space activation (`route::space_held`).
+    space_released: bool,
+    /// A Space release the pass skipped because its press had not come yet: the hook reads it once, so it waits for
+    /// a press in a later pass (`route::space_held`).
+    space_release_pending: bool,
 }
 
 /// One text event of the pass.

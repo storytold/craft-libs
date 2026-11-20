@@ -262,7 +262,7 @@ fn space_activates_only_a_stop_that_asks_for_it() {
     let plain = Rc::new(Cell::new(0_u32));
     let (asked_seen, plain_seen) = (Rc::clone(&asked), Rc::clone(&plain));
     let mut show = move |ui: &mut Ui| {
-        stop(ui, "both", KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Both));
+        stop(ui, "both", KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Both).with_space());
         stop(ui, "plain", KeyUse::of(Input::Pointer));
         stop(ui, "canvas", KeyUse::CANVAS);
         if intents_of(ui.ctx(), Some(id("both")), false).untaken(&Intent::Activate) {
@@ -277,6 +277,7 @@ fn space_activates_only_a_stop_that_asks_for_it() {
     asked.set(0);
     plain.set(0);
     frames.frame(vec![key_press(Key::Space, Modifiers::NONE)], &mut show);
+    frames.frame(vec![], &mut show);
     assert!(asked.get() > 0, "Space activates the stop that asked for it");
     assert_eq!(plain.get(), 0, "and nothing else");
 

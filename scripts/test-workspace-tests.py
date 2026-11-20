@@ -2,7 +2,9 @@
 """Exercise the native workflow's command selection without compiling Rust."""
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tomllib
 import unittest
 from unittest.mock import patch
@@ -78,12 +80,38 @@ esac
 """
 
 
+def shell():
+    """The bash the workflow runs under, never the Windows launcher of WSL.
+
+    On Windows `bash` on PATH is C:\\Windows\\System32\\bash.exe, which starts a WSL distribution instead of
+    running the script, so the harness would test another machine. Git for Windows ships the bash the Linux
+    runner uses; without it the tests stop with a message rather than reporting a pass from the wrong shell.
+    """
+    if sys.platform != "win32":
+        found = shutil.which("bash")
+    else:
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        candidates = (
+            program_files / "Git" / "bin" / "bash.exe",
+            program_files / "Git" / "usr" / "bin" / "bash.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Git" / "bin" / "bash.exe",
+        )
+        found = next((str(path) for path in candidates if path.is_file()), None)
+    if found is None:
+        raise AssertionError("no bash to run the workflow steps: install Git for Windows, whose bin/bash.exe is the shell the Linux runner uses")
+    return found
+
+
 def commands(os_name, fail="", name="command", source=None):
     validate_source(WORKFLOW.read_text() if source is None else source, name)
     return subprocess.run(
-        ["bash", "-euo", "pipefail", "-c", HARNESS],
+        [shell(), "-euo", "pipefail", "-c", HARNESS],
         env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail, "BLOCK": name},
-        text=True, capture_output=True, check=False,
+        # The harness prints the arguments it was handed, and bash writes them as UTF-8 on every
+        # platform. Decoding with the local default (cp936 on a Chinese Windows, cp1252 on an English
+        # one) raises UnicodeDecodeError inside the reader thread and hides the real exit status, so the
+        # encoding is named here rather than taken from the machine running the test.
+        encoding="utf-8", errors="replace", capture_output=True, check=False,
     )
 
 

@@ -6,6 +6,7 @@ use crate::display::Spinner;
 use crate::primitives::{HAlign, IconSpec, PaintShape};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
+use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::{Metrics, PartKey, PressPhase, Sense};
 use craft_keymap::Mods;
@@ -191,6 +192,9 @@ impl<'a> Button<'a> {
 
 impl Component for Button<'_> {
     const ROLE: Role = Role::BUTTON;
+    /// Space presses it as a click does: the runtime holds the press until the key comes up and activates on the
+    /// release, so one tap runs the button once.
+    const KEYS: KeyUse = KeyUse::of(crate::contract::Input::Pointer).with_space_activation();
     const OVERLAYS: bool = false;
     type Style = ButtonStyle;
     type Output = ButtonOutput;
