@@ -862,7 +862,9 @@ impl Component for Tile<'_> {
                 ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
             }
         }
-        let framed = style.sizes.card && (self.first.is_some() || self.picture.is_some());
+        // Only over the sunken well: a flat thumbnail (a page outline on the card, as the New Document presets draw)
+        // has no well and takes no frame.
+        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some());
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
         }
