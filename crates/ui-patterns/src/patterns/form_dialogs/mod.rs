@@ -18,7 +18,8 @@ mod path_row;
 mod preview;
 
 pub use dialog::{
-    BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ResetFooter, ResetPick, set_param_field,
+    BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, PreviewOverlay, ResetFooter, ResetPick,
+    set_param_field,
 };
 pub use form::{FormButtons, FormCx, FormDialog, FormDialogWords, FormOutput};
 pub use host_requests::{HostRequests, PreviewRequest};

@@ -230,6 +230,9 @@ pub struct PreviewOutput {
     /// on the press and on each pass the held pointer moves, not when it ends as a click. `None` for a view that is not
     /// `fixed` (a drag pans there), off the picture, or in a pass that carries no press or move.
     pub pressed: Option<Pos2>,
+    /// The part of the picture the pane showed this pass, in the same units as `clicked`: a host that renders a large
+    /// picture can build only this part. `None` when the pane drew no picture.
+    pub visible: Option<Rect>,
 }
 
 impl Outcome for PreviewOutput {
@@ -276,6 +279,8 @@ pub struct PreviewPane<'a> {
     clicked: Option<Pos2>,
     /// The picture point a primary press of a fixed view landed on or moved over this pass.
     pressed: Option<Pos2>,
+    /// The part of the picture the pane showed this pass, in the picture's units.
+    visible: Option<Rect>,
     /// The host's drawing over the picture of a `Ready` pane.
     #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
     overlay: Option<PaneOverlay<'a>>,
@@ -306,6 +311,7 @@ impl PreviewPane<'_> {
             double_clicked: false,
             clicked: None,
             pressed: None,
+            visible: None,
             overlay: None,
             overflow: (false, false),
             fixed: view.fixed,
@@ -573,6 +579,8 @@ impl Component for PreviewPane<'_> {
                             pos2((visible.max.x - picture.min.x) / size.x, (visible.max.y - picture.min.y) / size.y),
                         );
                         painter.picture(texture.id, visible, uv, 0.0);
+                        let unit = |p: Pos2| pos2((p.x - picture.min.x) / view.scale, (p.y - picture.min.y) / view.scale);
+                        self.visible = Some(Rect::from_min_max(unit(visible.min), unit(visible.max)));
                     }
                     if let Some(PaneOverlay(overlay)) = self.overlay.take() {
                         overlay(&painter, view, picture);
@@ -610,6 +618,7 @@ impl Component for PreviewPane<'_> {
             double_clicked: self.double_clicked,
             clicked: self.clicked,
             pressed: self.pressed,
+            visible: self.visible,
         }
     }
 }
