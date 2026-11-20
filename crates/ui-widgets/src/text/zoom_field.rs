@@ -19,8 +19,8 @@ const MESSAGE_DECIMALS: usize = 2;
 /// with the zoom codec and the zoom ladder's range. With no view it shows a disabled empty field. An edit writes the zoom about the view's centre; an empty
 /// commit keeps the view.
 ///
-/// - Typing takes digits, `/` and the decimal separator: `a/b` is the zoom `a ÷ b × 100` %, and a second separator
-///   applies the number before it and reports [`InvalidZoom`].
+/// - Typing takes digits, `-`, `/` and the decimal separator: `a/b` is the zoom `a ÷ b × 100` %. Non-positive
+///   entries are rejected; a second separator applies the number before it and reports [`InvalidZoom`].
 /// - Tab writes the typed number in the field's own form and selects it; focus stays and nothing applies.
 /// - A press on a part declared `holds_drafts` (the pasteboard, the title bar) keeps the typed zoom unapplied; the
 ///   next Enter applies it.
@@ -100,7 +100,7 @@ impl ZoomField {
         // The document's zoom range widened to the current zoom, so the field never pulls the zoom back.
         let range = device.map(|device| ZoomLadder::percent_range(device, document));
         let mut field = NumberField::new(self.label, Bind::given(device.map(|device| device * 100.0)))
-            .codec(env.units().zoom_codec())
+            .codec(env.units().zoom_codec().signed_zoom())
             .unit_kind(UnitKind::Percent)
             .zoom_typing()
             .enabled(self.enabled && self.view.is_some());

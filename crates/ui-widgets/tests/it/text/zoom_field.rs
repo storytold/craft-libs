@@ -165,6 +165,26 @@ fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
 }
 
+#[trial]
+fn zero_zoom_keeps_the_previous_view() {
+    let (mut fixture, kept) = focused(false, false);
+    let before = kept.zoom();
+    fixture.type_text("0");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(close(kept.zoom(), before), "zero must not change the zoom: {}", kept.zoom());
+}
+
+#[trial]
+fn negative_zoom_keeps_the_previous_view() {
+    let (mut fixture, kept) = focused(false, false);
+    let before = kept.zoom();
+    fixture.type_text("-5");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(close(kept.zoom(), before), "a negative zoom must not change the view: {}", kept.zoom());
+}
+
 /// The field reads digits, `/` as a ratio and one decimal separator of the locale; it drops every other character
 /// and alerts. Tab writes the number in the field's own form, selects it and alerts; a second separator applies the
 /// number before it and reports the range. Each row: (decimal comma, the entry, the text after Tab (no Tab: Enter

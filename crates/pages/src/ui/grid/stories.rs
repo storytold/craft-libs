@@ -23,6 +23,7 @@ fn margins_and_columns_with_a_baseline_grid(ui: &mut Ui, _: &mut StoryData) -> S
         scale: SCALE,
         band: (0.0, page.height() as f32 * SCALE as f32),
         picture: TextureState::Missing,
+        picture_revision: None,
     }];
     let grids = [PageGrid {
         index: 0,

@@ -56,6 +56,12 @@ fn free_transform(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, data, |state| free_box(state).reference_point(true))
 }
 
+/// Proportional corners follow the axis with the larger relative change.
+#[story(TransformBox<'static>, covers = [Default], drive = Drive::Drag(Grip::part(BOX.at(BoxPart::Corner(2).index())).toward(vec2(1.0, 0.5))))]
+fn larger_axis_scale(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| free_box(state).rules(BoxRules::default().with_scale(ScaleRule::LargerAxis)))
+}
+
 #[story(TransformBox<'static>, covers = [Default])]
 fn move_tool_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, data, |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false))

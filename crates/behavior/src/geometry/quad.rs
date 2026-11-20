@@ -97,6 +97,8 @@ pub enum ScaleRule {
     /// PhotoCraft's Use Legacy Free Transform, DesignCraft and VectorCraft: corners stretch freely
     /// and ⇧ keeps the proportions; edges stretch their one axis.
     Free,
+    /// Corners keep their proportions using the larger relative axis change; ⇧ frees them.
+    LargerAxis,
     /// A shape or path bounds box: a corner scales by the projection of the drag on the anchor-corner diagonal,
     /// keeping the proportions; an edge stretches its one axis.
     Shape,
@@ -534,16 +536,18 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
             }
             BoxState { quad, pivot: carry_pivot(q0, quad, c) }
         }
-        BoxPart::Corner(_) | BoxPart::Edge(_) => scale_drag(g, p, mods, rules.min_side).unwrap_or(BoxState { quad: q0, pivot: c }),
+        BoxPart::Corner(_) | BoxPart::Edge(_) => {
+            scale_drag(g, p, mods, rules.min_side, rules.scale == ScaleRule::LargerAxis).unwrap_or(BoxState { quad: q0, pivot: c })
+        }
     }
 }
 
 /// A plain corner or edge drag: scaling in the box's own frame (the unit square through the
 /// homography), so rotated and skewed boxes scale along their axes. A proportional corner follows
-/// the pointer's projection on the line from the anchor to the corner, so a distorted box scales
-/// along its own diagonal; past the anchor the factor turns negative and the box flips. Each
-/// scaled side keeps at least `min_side` ([`scale_floor`]). `None` for a collapsed box.
-fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxState> {
+/// the pointer's projection on the diagonal, or the larger relative axis change when selected. Past the anchor
+/// the factor turns negative and the box flips. Each scaled side keeps at least `min_side`
+/// ([`scale_floor`]). `None` for a collapsed box.
+fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64, larger_axis: bool) -> Option<BoxState> {
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);
@@ -586,16 +590,14 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
             kv = kv.max(lo_v);
         }
     } else if corner {
-        // The corner follows the pointer's projection on the line from the anchor to the dragged
-        // corner in document space. That line maps back onto the unit square's line through the
-        // same two points, so the factor read on one unit axis holds for both, also on a
-        // distorted box. One factor scales both axes, so it is clamped once, to the stricter
-        // axis' floor, and the box keeps its proportions.
+        // One factor holds both axes to the stricter floor, including on inward drags.
         let (hu, hv) = (if mu.0 { 0.0 } else { 1.0 }, if mv.0 { 0.0 } else { 1.0 });
         let a = h.apply(Point::new(au, av));
         let d = h.apply(Point::new(hu, hv)) - a;
         let len2 = d.hypot2();
-        let k = if len2 > 1e-12 {
+        let k = if larger_axis {
+            if (ku - 1.0).abs() > (kv - 1.0).abs() { ku } else { kv }
+        } else if len2 > 1e-12 {
             let q = inv.apply(a + d * ((p - a).dot(d) / len2));
             if (hu - au).abs() >= (hv - av).abs() { (q.x - au) / (hu - au) } else { (q.y - av) / (hv - av) }
         } else {

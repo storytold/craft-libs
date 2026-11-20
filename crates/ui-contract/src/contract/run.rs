@@ -908,6 +908,8 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let keys = e.keys();
     let (holder_widget, text_keys) = text_holder(&ctx, id, &parts, keys, &mut *e.core().memory);
     let own = own_sense(e, resolved, inert);
+    // The collection handles a row's click, but its access node must still offer the redirected action.
+    let report_sense = own;
     // An item never senses the whole row for a press: the collection's root takes the click and the focus (17.2). It
     // does sense the pointer over it, so `PartsCx::hovered` and the state step read the row's hover from the same
     // arena outcome whether the item stands alone or in a collection.
@@ -1163,7 +1165,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         &steps::ReportIn {
             node,
             decls: &parts.decls,
-            sense: own,
+            sense: own | (report_sense & Sense::CLICK),
             live: e.live(),
             scrolls: e.scrolls(),
             expanded: e.expanded(),

@@ -191,6 +191,8 @@ struct Session {
     os: bool,
     /// The root frame in which the OS dropped the files.
     dropped: Option<u64>,
+    /// A file drop has arrived but no pointer position is available yet.
+    waiting_for_pointer: bool,
     /// The root frame the session started in, the only one in which [`amend`] changes its payload.
     began: u64,
 }
@@ -230,6 +232,7 @@ struct Registration {
 pub(crate) struct Targets {
     this: Vec<Registration>,
     winner: Option<(Id, u32)>,
+    winner_window: bool,
 }
 
 fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
@@ -263,6 +266,7 @@ pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, als
                 taken: false,
                 os: false,
                 dropped: None,
+                waiting_for_pointer: false,
                 began,
             });
             board.ended = None;
@@ -366,21 +370,31 @@ fn os_files(ctx: &Context) {
     let frame = pass::root_frame_nr(ctx);
     let viewport = pass::current_viewport(ctx);
     let hovering = !seen.hovered.is_empty();
+    let host = WindowHost::of(ctx);
+    let positioned = if host.desktop_pointer().is_some() { host.pointer_in(viewport).is_some() } else { pointer::frame(ctx).pos.is_some() };
+    // A window target does not need a position and can already have won while files hovered.
+    let window_winner = PerViewport::<Targets>::with(ctx, viewport, |targets| targets.winner_window);
+    let mut repaint = false;
     board(ctx, |board| match &mut board.session {
-        None if hovering => {
+        None if hovering || !seen.dropped.is_empty() => {
+            let has_drop = !seen.dropped.is_empty();
+            if has_drop {
+                repaint = true;
+            }
             board.session = Some(Session {
                 source: Id::NULL.with("craft_ui::os_files"),
                 moving: Moving::default(),
                 viewport,
                 button: PointerButton::Primary,
-                payload: Arc::new(OsFiles { files: seen.hovered }),
+                payload: Arc::new(OsFiles { files: if has_drop { seen.dropped } else { seen.hovered } }),
                 also: None,
                 preview: DragPreview::None,
                 mark: None,
                 released: None,
                 taken: false,
                 os: true,
-                dropped: None,
+                dropped: (has_drop && positioned).then_some(frame.saturating_add(1)),
+                waiting_for_pointer: has_drop && !positioned,
                 began: frame,
             });
             board.ended = None;
@@ -391,8 +405,17 @@ fn os_files(ctx: &Context) {
                 let hovered = session.payload.downcast_ref::<OsFiles>();
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
-                session.dropped = Some(frame);
-            } else if !hovering && !seen.reading && session.dropped != Some(frame) {
+                if positioned || window_winner {
+                    session.dropped = Some(frame);
+                } else {
+                    session.waiting_for_pointer = true;
+                }
+            } else if session.waiting_for_pointer && (positioned || window_winner) {
+                // Targets register this pass and take the drop in the next, after their winner is resolved.
+                session.waiting_for_pointer = false;
+                session.dropped = Some(frame.saturating_add(1));
+                repaint = true;
+            } else if !hovering && !seen.reading && !session.waiting_for_pointer && session.dropped.is_none_or(|drop| drop < frame) {
                 board.session = None;
             }
         }
@@ -400,7 +423,7 @@ fn os_files(ctx: &Context) {
     });
     // The OS sends the window no pointer events while it drags files over it (winit 0.30), so nothing else asks for
     // the passes that follow the pointer to the target under it.
-    if hovering {
+    if hovering || repaint {
         crate::runtime::egui::repaint::request(ctx);
     }
 }
@@ -630,6 +653,7 @@ pub(crate) fn end_pass(ctx: &Context) {
             .filter(|(at, _)| open[*at])
             .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
+        targets.winner_window = best.is_some_and(|registration| registration.window);
         let best = best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op)));
         targets.winner = best.map(|(key, _)| key);
         targets.this.clear();

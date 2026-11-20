@@ -48,6 +48,15 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::sync::Arc;
 
+/// The document and page revisions represented by a page picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PageRevision {
+    /// The revision of the document containing the page.
+    pub document: u64,
+    /// The revision of the individual page.
+    pub page: u64,
+}
+
 /// The document's pages as a page view, thumbnails and previews read them. The app implements it over its document;
 /// the view never owns pages.
 ///
@@ -61,6 +70,12 @@ pub trait PageSource: ThumbSource<usize> {
 
     /// Page `page`'s size in points as shown (its rotation applied).
     fn page_size(&self, page: usize) -> Size;
+
+    /// The document and page revision of `page`, when the source tracks them. The source's texture revision must
+    /// change whenever this revision changes, so a ready picture corresponds to this stamp.
+    fn page_revision(&self, _page: usize) -> Option<PageRevision> {
+        None
+    }
 
     /// The page's label ("iv", "A-3"; PDF page labels, section numbering): what the page box, thumbnails and the
     /// accessibility tree call it. 1-based number by default.
@@ -240,13 +255,15 @@ pub struct PlacedPage {
     pub band: (f32, f32),
     /// What the page's picture shows this pass.
     pub picture: TextureState,
+    /// The source's document and page revision when `picture` is ready; `None` for a stand-in or an unknown stamp.
+    pub picture_revision: Option<PageRevision>,
 }
 
 impl PlacedPage {
     /// Page `page` at `rect` on screen, `scale` screen points to a page point, with `band` the visible part of its height in
     /// screen points and `picture` what its picture shows.
     pub fn new(page: usize, rect: Rect, scale: f64, band: (f32, f32), picture: TextureState) -> Self {
-        PlacedPage { page, rect, scale, band, picture }
+        PlacedPage { page, rect, scale, band, picture, picture_revision: None }
     }
 
     /// Page point (origin top-left, y down) to screen.
@@ -733,7 +750,11 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         .map(|&page| {
             let rect = to_screen(&drawn.layout.rects[page]);
             let band = (drawn.layout.bands[page].0 as f32 * ratio as f32, drawn.layout.bands[page].1 as f32 * ratio as f32);
-            PlacedPage::new(page, rect, drawn.scale * ratio, band, ask(page, rect.width().max(rect.height()), Priority::VISIBLE))
+            let picture = ask(page, rect.width().max(rect.height()), Priority::VISIBLE);
+            let picture_revision = matches!(picture, TextureState::Ready(_)).then(|| source.page_revision(page)).flatten();
+            let mut placed = PlacedPage::new(page, rect, drawn.scale * ratio, band, picture);
+            placed.picture_revision = picture_revision;
+            placed
         })
         .collect();
     let near = near_pages(&drawn, state.continuous, &visible, count, &build.layout_options(&state), travel);

@@ -32,6 +32,15 @@ fn turns(q: &[Point; 4]) -> [f64; 4] {
 }
 
 #[test]
+fn proportional_corner_uses_the_larger_relative_drag_even_when_shrinking() {
+    let rules = BoxRules::default().with_scale(ScaleRule::LargerAxis);
+    let wider = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::NONE, &rules);
+    assert!(corners_are(&wider, 0.0, 0.0, 200.0, 100.0));
+    let smaller = dragged(p(100.0, 50.0), p(75.0, 50.0), Mods::NONE, &rules);
+    assert!(corners_are(&smaller, 0.0, 0.0, 75.0, 37.5));
+}
+
+#[test]
 fn a_proportional_corner_follows_the_diagonal_and_flips_past_the_anchor() {
     let rules = BoxRules::default();
     // (200, 60) projects on the diagonal from (0, 0) through (100, 50) at 1.84 of it.
