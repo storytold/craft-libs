@@ -149,7 +149,8 @@ impl Default for PageRange {
 impl PageRange {
     /// The pages (0-based) the range selects in a document of `count` pages, with `current` the current page and
     /// `selection` the selected pages (all 0-based). The scope picks the pages, then the subset keeps the even or odd
-    /// page numbers among them; a page past the document is never returned.
+    /// page numbers among them; a page past the document is never returned. An end below the start selects the start
+    /// page, as the range fields do when an edit is committed.
     // pdfcraft: crates/ui-egui/src/dialogs/marks_ui.rs:46 `PageRange::pages`.
     pub fn pages(&self, count: usize, current: usize, selection: &[usize]) -> Vec<usize> {
         let picked: Vec<usize> = match self.scope {
@@ -161,7 +162,10 @@ impl PageRange {
                 selection.iter().copied().filter(|page| seen.insert(*page)).collect()
             }
             // `from` and `to` are 1-based and inclusive: pages `from - 1` up to, not including, `to`.
-            PageScope::Range => (self.from.max(1) - 1..self.to.map_or(count, |to| to.min(count))).collect(),
+            PageScope::Range => {
+                let from = self.from.max(1);
+                (from - 1..self.to.map_or(count, |to| to.max(from).min(count))).collect()
+            }
         };
         picked
             .into_iter()

@@ -95,4 +95,5 @@ fn editing_to_preserves_from() {
     let range = PageRangeOptions::value(&values.borrow(), "pages").expect("the range");
     assert_eq!(range.from, 8, "changing To must preserve From");
     assert_eq!(range.to, Some(5));
+    assert_eq!(range.pages(12, 2, &[]), vec![7], "a committed end below From still selects the starting page");
 }
