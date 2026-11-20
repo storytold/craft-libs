@@ -169,6 +169,50 @@ fn a_save_without_edits_loses_nothing() {
     }
 }
 
+/// The same gate after an edit: a save must lose nothing the edit didn't touch. Our loss checks
+/// once only saved without edits, and missed that one style change rewrote every definition.
+#[test]
+fn a_style_or_list_change_loses_nothing_else() {
+    let edits: [(&str, fn(&mut craft_wordmodel::Document)); 2] = [
+        ("an unused style", |d| {
+            if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).get_mut("Quote") {
+                st.chr.size = Some(13.0);
+            }
+        }),
+        ("a new list", |d| {
+            std::sync::Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::numbering::ListKind::Bullet);
+        }),
+    ];
+    for s in SAMPLES {
+        for (what, edit) in &edits {
+            let orig = package(&s);
+            let mut d = import(&orig).unwrap();
+            edit(&mut d);
+            let lost = losses(&orig, &export(&d).unwrap());
+            assert!(lost.is_empty(), "{}: lost after changing {what}:\n  {}", s.name, lost.join("\n  "));
+        }
+    }
+}
+
+/// The same gate after a page setup change: nothing goes but what the change replaces.
+#[test]
+fn a_page_setup_change_loses_nothing_else() {
+    for s in SAMPLES {
+        let orig = package(&s);
+        let mut d = import(&orig).unwrap();
+        d.last_section.margin_left += 3.0;
+        for b in &mut d.body {
+            if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b)
+                && let Some(sec) = &mut p.section
+            {
+                sec.margin_left += 3.0;
+            }
+        }
+        let lost: Vec<String> = losses(&orig, &export(&d).unwrap()).into_iter().filter(|l| !l.contains("fo:margin-left=")).collect();
+        assert!(lost.is_empty(), "{}: lost after changing a margin:\n  {}", s.name, lost.join("\n  "));
+    }
+}
+
 #[test]
 fn the_gate_sees_a_loss() {
     let with = Sample {

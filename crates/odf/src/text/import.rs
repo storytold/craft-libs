@@ -1166,11 +1166,17 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
             k.keep_file(path, bytes);
         }
         k.section_masters = section_masters;
+        // Which of the file's styles became which of the document's (by kept key): a save names
+        // an edited style's definition, parent and next style by the file's names for them.
+        let paras = named_odt.iter().map(|n| (format!("common:{n}"), super::styles::style_id(n)));
+        let texts = char_styles.iter().map(|(n, id)| (format!("common:{n}|text"), id.clone()));
+        k.style_ids = paras.chain(texts).collect();
     }
     doc.seal_kept();
-    let (fp, pages) = (craft_wordmodel::kept::styles_fingerprint(&doc), craft_wordmodel::kept::pages_fingerprint(&doc));
+    let (prints, pages) = (super::package::style_prints(&doc), craft_wordmodel::kept::pages_fingerprint(&doc));
+    let (shape, layouts) = (craft_wordmodel::kept::pages_shape_fingerprint(&doc), super::package::page_layouts(&doc));
     if let Some(k) = doc.kept.get_mut() {
-        (k.styles_fp, k.pages_fp) = (Some(fp), Some(pages));
+        (k.style_prints, k.pages_fp, k.pages_shape_fp, k.page_layouts) = (prints, Some(pages), Some(shape), layouts);
     }
     Ok(doc)
 }

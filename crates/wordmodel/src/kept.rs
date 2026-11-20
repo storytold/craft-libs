@@ -74,12 +74,22 @@ pub struct KeptXml {
     pub order: Vec<String>,
     /// Files of the package kept definitions refer to (a style's fill picture), by path.
     pub files: BTreeMap<String, Arc<Vec<u8>>>,
-    /// The document's style definitions' [`styles_fingerprint`] when read: while it is the
-    /// same, the file's own style definitions can be written as they were.
-    pub styles_fp: Option<u64>,
+    /// What the format would write for each style definition when read, by [`KeptXml::defs`]'
+    /// key, as a hash: while a definition's is the same, the file's own is written as it was.
+    pub style_prints: BTreeMap<String, u64>,
+    /// The style id the reader read each of the file's styles into, by [`KeptXml::defs`]' key:
+    /// only those it read (its text's styles and what they derive from), not every style the
+    /// file defines.
+    pub style_ids: BTreeMap<String, String>,
     /// The document's page setup's [`pages_fingerprint`] when read: while it is the same, the
     /// file's own page layouts and master pages can be written as they were.
     pub pages_fp: Option<u64>,
+    /// The same with each section's measurements left out ([`pages_shape_fingerprint`]): while
+    /// it is the same, only measurements have changed since the file was read.
+    pub pages_shape_fp: Option<u64>,
+    /// What the format would write for each section's page layout when read, in order: compared
+    /// with what it would write now to tell which measurements changed.
+    pub page_layouts: Vec<String>,
     /// Each section's master page, as the file named it where its section starts (`None`: the
     /// file's default), for a writer naming the file's own master pages.
     pub section_masters: Vec<Option<String>>,
@@ -160,9 +170,10 @@ impl KeptXml {
     /// Whether the stories paragraph `p` shows (its text boxes' and shapes' text, its notes') are
     /// as read.
     pub fn stories_as_read(&self, doc: &crate::Document, p: &Paragraph) -> bool {
-        // A note's citation is its number in the document's numbering, which is the page setup's.
+        // A note's citation is its number in the document's numbering, which is the page setup's
+        // (though not the page's measurements).
         let notes = p.objects.iter().any(|o| matches!(o, crate::para::InlineObject::NoteRef { .. }));
-        if notes && !self.pages_as_read(doc) {
+        if notes && !self.pages_as_read(doc) && !self.pages_shape_as_read(doc) {
             return false;
         }
         p.objects
@@ -267,20 +278,13 @@ impl KeptXml {
         let now = in_scope(doc, |sc| *sc.pages.get_or_insert_with(|| pages_fingerprint(doc))).unwrap_or_else(|| pages_fingerprint(doc));
         fp == now
     }
-    /// Whether `doc`'s style definitions are still as they were read.
-    pub fn styles_as_read(&self, doc: &crate::Document) -> bool {
-        self.styles_fp.is_some_and(|fp| fp == styles_fingerprint(doc))
+    /// Whether all that has changed in `doc`'s page setup since it was read is its sections'
+    /// measurements (size, margins, columns, page borders, page number format).
+    pub fn pages_shape_as_read(&self, doc: &crate::Document) -> bool {
+        let Some(fp) = self.pages_shape_fp else { return false };
+        let now = in_scope(doc, |sc| *sc.shape.get_or_insert_with(|| pages_shape_fingerprint(doc))).unwrap_or_else(|| pages_shape_fingerprint(doc));
+        fp == now
     }
-}
-
-/// What `doc`'s style definitions are: its styles, lists and default tab interval.
-pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    match serde_json::to_vec(&(&doc.styles, &doc.numbering, doc.settings.default_tab)) {
-        Ok(v) => v.hash(&mut h),
-        Err(_) => u64::MAX.hash(&mut h),
-    }
-    h.finish()
 }
 
 /// What a block is, as the kept markup knows it: its paragraphs' fingerprints and
@@ -397,6 +401,7 @@ struct Scope {
     doc: usize,
     replies: Option<std::rc::Rc<HashMap<u32, Vec<u32>>>>,
     pages: Option<u64>,
+    shape: Option<u64>,
 }
 
 thread_local! {
@@ -422,7 +427,7 @@ impl Drop for Restore {
 /// Run `f`, which writes `doc`, with what the kept markup asks of `doc` worked out at most once.
 pub fn while_writing<R>(doc: &crate::Document, f: impl FnOnce() -> R) -> R {
     let key = std::ptr::from_ref(doc) as usize;
-    let prev = SCOPE.with(|s| s.replace(Some(Scope { doc: key, replies: None, pages: None })));
+    let prev = SCOPE.with(|s| s.replace(Some(Scope { doc: key, replies: None, pages: None, shape: None })));
     let _restore = Restore(prev);
     f()
 }
@@ -482,8 +487,46 @@ fn family_fingerprint(doc: &crate::Document, root: u32, replies: &HashMap<u32, V
 /// differ, the page colour and picture, the watermark (one with no text isn't written), and the
 /// notes' numbering.
 pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
+    pages_print(doc, &doc_sections(doc))
+}
+
+/// `doc`'s sections, in order.
+pub fn doc_sections(doc: &crate::Document) -> Vec<&crate::SectionProps> {
     let mut sections: Vec<&crate::SectionProps> = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_deref()).collect();
     sections.push(&doc.last_section);
+    sections
+}
+
+/// [`pages_fingerprint`] with each section's measurements left out.
+pub fn pages_shape_fingerprint(doc: &crate::Document) -> u64 {
+    let shapes: Vec<crate::SectionProps> = doc_sections(doc).into_iter().map(section_shape).collect();
+    pages_print(doc, &shapes.iter().collect::<Vec<_>>())
+}
+
+/// `s` without what a change of page setup changes: its size, margins, header and footer
+/// distances, columns, page borders and page number format.
+fn section_shape(s: &crate::SectionProps) -> crate::SectionProps {
+    let d = crate::SectionProps::default();
+    crate::SectionProps {
+        page_w: d.page_w,
+        page_h: d.page_h,
+        landscape: d.landscape,
+        margin_top: d.margin_top,
+        margin_bottom: d.margin_bottom,
+        margin_left: d.margin_left,
+        margin_right: d.margin_right,
+        header: d.header,
+        footer: d.footer,
+        header_gap: d.header_gap,
+        footer_gap: d.footer_gap,
+        columns: d.columns,
+        page_borders: d.page_borders,
+        page_num_format: d.page_num_format,
+        ..s.clone()
+    }
+}
+
+fn pages_print(doc: &crate::Document, sections: &[&crate::SectionProps]) -> u64 {
     let parts: Vec<(&u32, &crate::Part)> =
         doc.parts.iter().filter(|(_, p)| matches!(p.kind, crate::PartKind::Header | crate::PartKind::Footer)).collect();
     let s = &doc.settings;
