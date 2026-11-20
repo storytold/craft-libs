@@ -119,7 +119,7 @@ impl Component for Block {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.core.response
+        cx.response.clone()
     }
 }
 

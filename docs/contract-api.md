@@ -2134,7 +2134,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::MeasureCx`: `pub struct MeasureCx<'a, C: Component> { pub env: EnvView<'a>, pub style: &'a C::Style, pub resolved: &'a Resolved<'a>, pub proposal: Proposal, pub room: Option<f32>, pub ui: &'a Ui, pub tokens: &'a UiTokens, pub id: Id }`. What `measure` reads: step 5's view of the environment, the style, the resolved props and the shown value.
   - `pub fn value(&self) -> Option<&'a ValueOf<C>>`. The shown value; it has the stage's lifetime, so a borrow of `cx` is not held.
   - `pub fn command(&self) -> Option<&ResolvedCommand>`. The bound command as step 1 resolved it, with the scoped bindings of the scopes above the component.
-  - `pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<ResolvedCommand>`. `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
+  - `pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<Arc<ResolvedCommand>>`. `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
   - `pub fn column_room(&self) -> Option<f32>`. The width a component whose height follows its width (wrapped text, a square plot) sizes at: the room the
   - `pub fn picture_width(&self, least: f32, most: f32) -> f32`. The width a picture sizes at (a plot, a wheel, a well): it takes the room it is offered, down to `least` and up
   - `pub fn label(&self) -> Label`. The label as given.
@@ -2171,7 +2171,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn unshown(response: Response) -> Option<Self> where Self: Sized,`. The output of a layer-like container that shows nothing this pass (closed, past its exit fade): `response` is
   - `fn value_text(&self) -> Option<&str>`. The shown value as the component words it to assistive technology; `None` for a component that gives none.
   - `fn story_facts(&self) -> crate::testing::StoryOutput`. The facts a story reports about this output: its id, click, edit kinds, collection kinds and visible range.
-- `craft_ui::contract::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
+- `craft_ui::contract::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool, pub moved_by_app: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
@@ -2198,6 +2198,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn min_width(mut self, min_width: MinWidth) -> Overlay`. Sets the narrowest width.
   - `pub fn movable(mut self, on: bool) -> Overlay`. Sets whether the user may move it.
   - `pub fn moves_window(mut self, on: bool) -> Overlay`. Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
+  - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
@@ -2446,7 +2447,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::OpenFilter`: re-export of `craft_ui::runtime::overlay::OpenFilter`.
 - `craft_ui::contract::overlay::Opener`: `pub struct Opener { pub id: Id, pub rect: Rect, pub layer: areas::Layer, pub trigger: Trigger, pub enabled: bool, pub anchor: Option<Anchor>, pub others: Vec<Opener> }`. A component that opens a free-standing popup, and how. A layer with several openers keeps the first as its
 - `craft_ui::contract::overlay::Outside`: `pub enum Outside { Close, Keep, Absorb }`. What a press outside the layer and its anchor does.
-- `craft_ui::contract::overlay::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
+- `craft_ui::contract::overlay::Overlay`: `pub struct Overlay { pub place: Place, pub fit: OverlayFit, pub min_width: MinWidth, pub movable: bool, pub resize: Resize, pub rank: Rank, pub keys: OwnerClass, pub focus: FocusPolicy, pub dismiss: Dismiss, pub motion: MotionSpec, pub opener: Option<Opener>, pub popup: PopupKind, pub size: Option<Vec2>, pub size_limits: SizeLimits, pub placed: Option<Rect>, pub placed_at: Option<Pos2>, pub bounds: Option<Rect>, pub opacity: f32, pub body_scroll: bool, pub moves_window: bool, pub moved_by_app: bool }`. Data describing an egui layer. Presets fill focus and dismissal; builders change single fields.
   - `pub fn popover() -> Overlay`. A popover: a popup anchored below, from its content, at least as wide as its anchor and capped by the window,
   - `pub fn dropdown() -> Overlay`. A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
   - `pub fn menu() -> Overlay`. A menu: a popup the arrow keys move through. A press outside closes it and goes no further.
@@ -2473,6 +2474,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub fn min_width(mut self, min_width: MinWidth) -> Overlay`. Sets the narrowest width.
   - `pub fn movable(mut self, on: bool) -> Overlay`. Sets whether the user may move it.
   - `pub fn moves_window(mut self, on: bool) -> Overlay`. Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
+  - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
@@ -3105,10 +3107,12 @@ Per-pass and per-frame services and the one egui adapter.
 The command board: the registry and typed sets, per-frame state, the queue, firing and the gate (spec 11).
 
 - `craft_ui::runtime::commands::CommandGate`: `pub struct CommandGate`. The app's one gate over commands: a dialog is open, a workspace is not ready, a recorder has the keys or an
-  - `pub fn new(allows: impl Fn(&CommandRef) -> bool + Send + Sync + 'static) -> Self`. A gate that lets `allows` commands through.
+  - `pub fn new<P: MemoProps + Send + Sync + 'static>(props: P, allows: fn(&P, &CommandRef) -> bool) -> Self`. A gate that lets through the commands `allows` accepts under `props`; the runtime asks it once per command while the props' key stays the same.
+- `craft_ui::runtime::commands::CommandStates`: `pub struct CommandStates`. The app-scope command states an app holds, in a `Tracked` it hands to `CommandInput::states`.
+  - `pub fn new() -> Self`, `pub fn set(&mut self, command: impl Into<CommandRef>, state: CommandState)`, `pub fn remove(&mut self, command: &CommandRef) -> Option<CommandState>`, `pub fn get(&self, command: &CommandRef) -> Option<&CommandState>`.
 - `craft_ui::runtime::commands::CommandInput`: `pub struct CommandInput`. App-scope command state for this frame, set from app state before the pass.
   - `pub fn new() -> Self`. No state, no overrides and no gate.
-  - `pub fn state(mut self, command: impl Into<CommandRef>, state: CommandState) -> Self`. The state of an app-scope command.
+  - `pub fn states(mut self, states: &Tracked<CommandStates>) -> Self`. The app-scope command states the app holds; the runtime reads them again only when the revision moves.
   - `pub fn overrides(mut self, overrides: Arc<Overrides>) -> Self`. The user's binding overrides; the keymap is rebuilt when the `Arc` changes.
   - `pub fn gate(mut self, gate: CommandGate) -> Self`. The one gate over commands.
 - `craft_ui::runtime::commands::CommandSet`: `pub trait CommandSet: Copy + Send + Sync + 'static`. A typed set of commands, written by `#[derive(CommandSet)]`.
@@ -3131,13 +3135,13 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `fn publish(&mut self, command: impl Into<CommandRef>, state: CommandState)`. This frame's state of a scoped command, for this instance. Publishing an app-scope command here is a
   - `fn take_command<S: CommandSet>(&mut self) -> Option<(S, Fired)>`. The next command of set `S` routed to this instance this pass; each is taken once, so a discard pass does
   - `fn take_step(&mut self, can_undo: bool, can_redo: bool) -> Option<Step>`. Declares Undo and Redo on the innermost instance around this context, enabled as `can_undo` and `can_redo`
-  - `fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<ResolvedCommand>`. `command` as this context shows it: the label, icon and chord with the scoped bindings of the scopes above
+  - `fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<Arc<ResolvedCommand>>`. `command` as this context shows it: the label, icon and chord with the scoped bindings of the scopes above
 - `craft_ui::runtime::commands::FirePhase`: `pub enum FirePhase { Press, Repeat, Release }`. The phase of the key press that fired a command.
 - `craft_ui::runtime::commands::FireSource`: `pub enum FireSource { Key, Menu, Palette, Pointer, Automation, Access }`. Where a fired command came from.
 - `craft_ui::runtime::commands::Fired`: `pub struct Fired { pub command: CommandRef, pub target: Option<Id>, pub source: FireSource, pub phase: FirePhase, pub cycle: bool, pub alt_variant: bool }`. A command a surface or a key fired, as the instance or the app takes it.
 - `craft_ui::runtime::commands::ResolvedCommand`: `pub struct ResolvedCommand { pub label: Arc<str>, pub icon: Option<Cow<'static, str>>, pub chord: Option<Chord>, pub enabled: bool, pub checked: Option<bool>, pub marked: bool, pub hint: Option<Arc<str>>, pub kind: CommandKind, pub instance: Option<Id> }`. A command as a surface shows and fires it.
 - `craft_ui::runtime::commands::fire`: `pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -> bool`. Fires `command` from a surface that has no component of its own: a menu, the palette or automation. Scoped
-- `craft_ui::runtime::commands::resolve`: `pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand`. `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
+- `craft_ui::runtime::commands::resolve`: `pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> Arc<ResolvedCommand>`. `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
 - `craft_ui::runtime::commands::Binding`: re-export of `craft_keymap::Binding` (outside these crates).
 - `craft_ui::runtime::commands::ChromeCommand`: `pub enum ChromeCommand { TogglePanels, TogglePanelsKeepTools }`. The `window` commands that hide the panels of the window they run in.
   - `pub const ALL: [ChromeCommand; 2]`. Both commands.
@@ -4552,7 +4556,7 @@ The window host's fixtures: install inputs that open no OS windows, and the scri
 - `craft_ui::testing::windows::applied_actions`: `pub fn applied_actions(ctx: &egui::Context) -> Vec<(egui::ViewportId, crate::runtime::windows::WindowAction)>`. The window actions the platform applies out of reach of egui's commands (`SetOpacity`) since the last call.
 - `craft_ui::testing::windows::begin_window_drag`: `pub fn begin_window_drag(ctx: &egui::Context, source: egui::Id)`. Starts the drag of the window container `source` (what the title row of a dock window does), with the pointer
 - `craft_ui::testing::windows::install_spec`: `pub fn install_spec() -> InstallSpec`. An install spec for the running build's shell and a system with no OS services.
-- `craft_ui::testing::windows::keeps_app_drag`: `pub fn keeps_app_drag(ctx: &egui::Context, viewport: egui::ViewportId) -> bool`. Whether the window of `viewport` has a component that runs its own drag from the window's move band.
+- `craft_ui::testing::windows::moved_by_app`: `pub fn moved_by_app(ctx: &egui::Context, viewport: egui::ViewportId) -> bool`. Whether the app runs the move of `viewport`'s window from its move band (`Overlay::moved_by_app`), as the window host knows it in the running pass.
 - `craft_ui::testing::windows::show_drop_mark`: `pub fn show_drop_mark(ctx: &egui::Context, over: Option<egui::Rect>)`. Shows (or removes) the mark of a drop target in another window over the running drag.
 - `craft_ui::testing::windows::FakeSystem`: re-export of `craft_window::system::FakeSystem` (outside these crates).
 - `craft_ui::testing::windows::FullOutput`: re-export of `craft_ui::runtime::egui::fixture::FullOutput` (defined outside these crates).

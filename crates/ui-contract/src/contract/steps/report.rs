@@ -6,7 +6,7 @@ use crate::contract::cx::{CxCore, Decls};
 use crate::contract::run::{ErasedPass, TypeFacts};
 use crate::primitives::FaceRecord;
 use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, SetPosition, SubDecl, SubNode, scope};
-use crate::runtime::commands::{self, ResolvedCommand};
+use crate::runtime::commands::ResolvedCommand;
 use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
 use crate::runtime::keys;
@@ -33,8 +33,15 @@ pub(crate) struct ReportIn<'a> {
 }
 
 /// The bound command's hint and shortcut text, which describe and key its node.
-fn command_facts(command: &ResolvedCommand, platform: craft_keymap::Platform) -> (Option<&str>, Option<String>) {
-    (command.hint.as_deref(), command.chord.as_ref().map(|chord| chord.display(platform)))
+fn command_facts<'a>(ctx: &egui::Context, command: &'a ResolvedCommand) -> (Option<&'a str>, Option<&'a str>) {
+    let text = command.chord_text.as_deref();
+    #[cfg(feature = "testing")]
+    if text.is_some() {
+        crate::runtime::measure::count_chord_text(ctx);
+    }
+    #[cfg(not(feature = "testing"))]
+    let _ = ctx;
+    (command.hint.as_deref(), text)
 }
 
 /// The message of a validity that warns, refuses or errs, and whether it warns.
@@ -78,22 +85,41 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         }
     }
     *core.value_text.borrow_mut() = value_text;
+    let role = access.role.unwrap_or(facts.role);
+    debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
+    let flags = core.state.flags;
+    let resolved = core.resolved;
+    let paint = core.paint.borrow();
+    if role == Role::Merged {
+        let facts = scope::Merged {
+            name: resolved.label.to_owned(),
+            description: access.description.clone().or_else(|| resolved.description.map(str::to_owned)).or_else(|| validity.clone()),
+            flags,
+            enabled: resolved.enabled,
+        };
+        scope::finish(ctx, id, Some(facts));
+        return;
+    }
+    scope::finish(ctx, id, None);
+    let carried = scope::carried_name(ctx, id);
+    let Role::Node(role) = role else {
+        scope::leave(ctx, id);
+        return;
+    };
+    if !input.node {
+        return;
+    }
+    // Facts that only a node shows are built after the node check.
     for node in &mut access.nodes {
         if let Some(toggle) = core.toggles.iter().find(|toggle| toggle.part == node.part) {
             node.expanded = Some(toggle.open);
         }
     }
-    let role = access.role.unwrap_or(facts.role);
     access.access_key = access.access_key.or(core.resolved.access_key);
     if access.grid == access::GridPlace::default() {
         access.grid = core.grid;
     }
-    debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
-    let flags = core.state.flags;
-    let resolved = core.resolved;
-    let platform = commands::platform(ctx);
-    let (hint, shortcut) = core.command.as_deref().map_or((None, None), |command| command_facts(command, platform));
-    let shortcut = shortcut.as_deref();
+    let (hint, shortcut) = core.command.as_deref().map_or((None, None), |command| command_facts(ctx, command));
     for (_, label) in &mut access.custom_actions {
         *label = core.env.resolve(label);
     }
@@ -111,23 +137,6 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if access.position.is_none() {
         access.position =
             input.group.and_then(|group| focus::group_position(ctx, id, group)).or_else(|| core.env.facts_of(id).map(|facts| facts.position));
-    }
-    let paint = core.paint.borrow();
-    if role == Role::Merged {
-        let facts = scope::Merged {
-            name: resolved.label.to_owned(),
-            description: access.description.clone().or_else(|| resolved.description.map(str::to_owned)).or_else(|| validity.clone()),
-            flags,
-            enabled: resolved.enabled,
-        };
-        scope::finish(ctx, id, Some(facts));
-        return;
-    }
-    scope::finish(ctx, id, None);
-    let carried = scope::carried_name(ctx, id);
-    let Role::Node(role) = role else { return };
-    if !input.node {
-        return;
     }
     let inner_of = access::fold::owner_of(ctx, id);
     let folded = access::fold::take(ctx, id);
@@ -164,6 +173,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if let Some(owner) = inner_of {
         // Shown as the owner's control: the owner's node is the one node, and stands for this root's key focus.
         access::hide(ctx, id);
+        scope::leave(ctx, id);
         access::fold::offer(ctx, owner, access::fold::Folded { inner: id, value: access.value.clone() });
         if flags.contains(Flags::FOCUSED) {
             access::set_focus(ctx, owner);

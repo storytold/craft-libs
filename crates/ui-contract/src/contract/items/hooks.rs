@@ -18,7 +18,7 @@ use crate::primitives::{HiddenContent, ScrollBar, SurfaceSlot};
 use crate::runtime::access::{self, Role, SetPosition};
 use crate::runtime::egui::{alloc, areas, child, response};
 use crate::runtime::env::WheelScope;
-use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts};
+use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts, ThemeScope};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
 use crate::style::{ComponentStyle as _, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
@@ -71,6 +71,10 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn instance_scope(&self, comp: &C) -> Option<crate::runtime::commands::CommandScope> {
         comp.props(Internal::new()).command_scope
+    }
+
+    fn theme_scope(&self, comp: &C) -> Option<ThemeScope> {
+        comp.props(Internal::new()).theme.clone()
     }
 
     fn read(&mut self, comp: &mut C, stage: &mut MemoryStage, id: Id, env: &Env) {
@@ -177,7 +181,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.room = room;
         self.indent_step = scx.control().icon;
         let env = Env::of(ui);
-        let room = Self::inner_room(comp, &env.tokens, room);
+        let room = Self::inner_room(comp, scx.tokens, room);
         // Where the enclosing body does not give the width, the collection takes its width from its content, whether
         // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
         // across the width the column settles on.
@@ -752,7 +756,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             let mut empty_ui = alloc::child(ui, builder);
             let installed = Env::install_for(&empty_ui, env.derive(|scoped| scoped.extend_values(values)));
             let (resolved, view) = (cx.core.resolved, cx.core.env);
-            let mut bcx = BodyCx::new(sub(id, "body"), view, resolved, rect, &mut *cx.core.memory, &mut open, None);
+            let mut bcx = BodyCx::new(sub(id, "body"), view, resolved, rect, &mut *cx.core.memory, &mut open, None, None);
             comp.empty(&mut empty_ui, &mut bcx);
             Env::restore(&ctx, installed);
         }

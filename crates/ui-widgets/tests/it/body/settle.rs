@@ -1,18 +1,19 @@
 //! Settling children (`Lazy::settles`): a settled child adds its last run to the pass in place of running, and runs
 //! when something it shows may have changed: the pointer over it, a bound value, inspection record or command state it
-//! read, its room, its content version, an animation or a repaint asked inside it.
+//! read, its room, its content version, its environment (theme, density), an animation or a repaint asked inside it.
 
 use crate::values::kit::{AT, INITIAL, Scrub, Seen};
+use craft_theme::{Contrast, Mode, Size};
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Radio, RadioGroup};
-use craft_ui::contract::{Bind, CommandSet, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, CommandSet, Lazy, Props as _, Show as _, ShowContainer as _, Sizing, Tracked};
 use craft_ui::display::Spinner;
 use craft_ui::layout_components::Stack;
-use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, Commands as _};
+use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, CommandStates, Commands as _};
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Frames, last_pass_measuring_runs, trial};
+use craft_ui::testing::{Fixture, Frames, Settle, last_pass_measuring_runs, last_pass_runs, last_pass_settles, last_pass_text_layouts, trial};
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
@@ -35,6 +36,8 @@ struct Scene {
     versions: [Cell<Option<u64>>; 2],
     repaints: Cell<bool>,
     app_repaints: Cell<bool>,
+    /// Whether the scene shows only what is outside the settling children.
+    bare: Cell<bool>,
     runs: [Cell<usize>; 2],
     buttons: [Cell<(Id, Rect)>; 2],
     seen: Seen,
@@ -50,6 +53,7 @@ impl Scene {
             versions: Default::default(),
             repaints: Cell::new(false),
             app_repaints: Cell::new(false),
+            bare: Cell::new(false),
             runs: Default::default(),
             buttons: [Cell::new((Id::NULL, Rect::NOTHING)), Cell::new((Id::NULL, Rect::NOTHING))],
             seen: Seen::default(),
@@ -72,28 +76,30 @@ impl Scene {
         if self.editor_first {
             self.editor(ui);
         }
-        in_region(ui, Rect::from_min_size(ORIGIN, self.room.get()), |ui| {
-            self.child("reader", 0).show(ui, |ui| {
-                self.runs[0].set(self.runs[0].get() + 1);
-                let response = Button::new("Alpha").show(ui).response;
-                self.buttons[0].set((response.id, response.rect));
-                Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("reader").seen(&self.seen).show_at(ui, READER);
-            });
-            self.child("other", 1).show(ui, |ui| {
-                self.runs[1].set(self.runs[1].get() + 1);
-                if self.repaints.get() {
-                    frame::request_repaint(ui.ctx());
-                }
-                // In a body, whose measure a run that is not settled takes from what its last run kept.
-                Stack::new().show(ui, |ui, _| {
-                    let response = Button::new("Beta").show(ui).response;
-                    self.buttons[1].set((response.id, response.rect));
+        if !self.bare.get() {
+            in_region(ui, Rect::from_min_size(ORIGIN, self.room.get()), |ui| {
+                self.child("reader", 0).show(ui, |ui| {
+                    self.runs[0].set(self.runs[0].get() + 1);
+                    let response = Button::new("Alpha").show(ui).response;
+                    self.buttons[0].set((response.id, response.rect));
+                    Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("reader").seen(&self.seen).show_at(ui, READER);
                 });
-                if self.spinner {
-                    Spinner::new().show(ui);
-                }
+                self.child("other", 1).show(ui, |ui| {
+                    self.runs[1].set(self.runs[1].get() + 1);
+                    if self.repaints.get() {
+                        frame::request_repaint(ui.ctx());
+                    }
+                    // In a body, whose measure a run that is not settled takes from what its last run kept.
+                    Stack::new().show(ui, |ui, _| {
+                        let response = Button::new("Beta").show(ui).response;
+                        self.buttons[1].set((response.id, response.rect));
+                    });
+                    if self.spinner {
+                        Spinner::new().show(ui);
+                    }
+                });
             });
-        });
+        }
         if !self.editor_first {
             self.editor(ui);
         }
@@ -143,6 +149,31 @@ fn a_settled_child_does_not_run_and_still_paints() {
         );
         assert_eq!(ids.map(|id| tree.parent_of(id)), parents, "settled frame {frame} keeps the nodes' parents");
     }
+}
+
+/// After two warm-up frames, an idle frame with no input runs nothing that settles: every keyed child replays, the
+/// components that run are those outside every settling child, the frame takes one pass and lays out no text.
+#[trial]
+fn an_idle_frame_runs_nothing_that_settles() {
+    let scene = Scene::new(false, false);
+    scene.versions.iter().for_each(|version| version.set(Some(1)));
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    let reference = Scene::new(false, false);
+    reference.bare.set(true);
+    let mut bare = Frames::new();
+    reference.settle(&mut bare);
+    let outside = {
+        reference.frame(&mut bare, vec![]);
+        last_pass_runs(&bare.ctx).iter().map(|(_, runs)| runs).sum::<u32>()
+    };
+    let passes = frames.frame(vec![], |ui| scene.show(ui));
+    let ran = last_pass_settles(&frames.ctx).into_iter().filter(|(_, what)| *what == Settle::Ran).count();
+    let runs = last_pass_runs(&frames.ctx);
+    assert_eq!(ran, 0, "an idle frame ran keyed children: {:?}", last_pass_settles(&frames.ctx));
+    assert_eq!(runs.iter().map(|(_, runs)| runs).sum::<u32>(), outside, "components ran inside settling children: {runs:?}");
+    assert_eq!(passes, 1, "an idle frame takes one pass");
+    assert_eq!(last_pass_text_layouts(&frames.ctx), 0, "an idle frame laid out text");
 }
 
 /// The pointer over a settled child runs it, and only it, in the frame it arrives, from the measures its last run
@@ -350,7 +381,11 @@ fn an_app_command_state_runs_the_settled_child_that_shows_it() {
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     assert!(!scene.disabled(&mut frames, 0), "Shown starts enabled");
-    let disable = |enabled: bool| CommandInput::new().state(Shown::Visible, CommandState::new().enabled(enabled));
+    let mut states = Tracked::new(CommandStates::new());
+    let mut disable = |enabled: bool| {
+        states.set(Shown::Visible, CommandState::new().enabled(enabled));
+        CommandInput::new().states(&states)
+    };
     frames.commands(disable(false));
     let (_, [reader, beside]) = scene.frame(&mut frames);
     assert!(reader > 0 && beside == 0, "only the child that shows Shown runs: {reader}, {beside}");
@@ -394,7 +429,9 @@ fn a_command_read_in_a_measured_body_settles_and_runs_when_its_state_changes() {
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     assert_eq!(scene.frame(&mut frames).1, [0, 0], "the child holding the measured body settles");
-    frames.commands(CommandInput::new().state(Shown::Measured, CommandState::new().enabled(false)));
+    let mut states = Tracked::new(CommandStates::new());
+    states.set(Shown::Measured, CommandState::new().enabled(false));
+    frames.commands(CommandInput::new().states(&states));
     let (_, [reader, beside]) = scene.frame(&mut frames);
     assert!(reader > 0 && beside == 0, "only the child that shows Measured runs: {reader}, {beside}");
     assert!(scene.disabled(&mut frames, 3), "it shows Measured disabled in the frame the app disables it");
@@ -430,4 +467,56 @@ fn a_press_with_the_pointer_arriving_reaches_a_member_of_a_settled_child() {
     frames.frame(vec![moved(medium), press(medium)], &mut show);
     frames.frame(vec![release(medium)], &mut show);
     assert_eq!(picked.get(), 2, "the press that came with the pointer picks Medium");
+}
+
+/// A child with a content version runs when the theme changes, whose tokens it painted with, and when the density
+/// does; it settles again after each.
+#[trial]
+fn a_settled_child_runs_when_the_theme_or_density_changes() {
+    let runs = std::rc::Rc::new(Cell::new(0));
+    let counted = std::rc::Rc::clone(&runs);
+    let mut fixture = Fixture::new(move |ui| {
+        Lazy::new("themed", 0.0).settles(true).content(1).show(ui, |ui| {
+            counted.set(counted.get() + 1);
+            Button::new("Themed").show(ui);
+        });
+    });
+    fixture.settle();
+    let frame = |fixture: &mut Fixture| {
+        runs.set(0);
+        fixture.frame(Vec::new());
+        runs.get()
+    };
+    assert_eq!(frame(&mut fixture), 0, "the child settles");
+    fixture.theme(Mode::Light, Contrast::High);
+    assert!(frame(&mut fixture) > 0, "a theme change runs it");
+    assert_eq!(frame(&mut fixture), 0, "and it settles in the new theme");
+    fixture.density(Size::Comfortable);
+    assert!(frame(&mut fixture) > 0, "a density change runs it");
+}
+
+/// A child with a content version runs when the host switches the language, and settles again in it.
+#[trial]
+fn a_settled_child_runs_when_the_language_changes() {
+    let runs = std::rc::Rc::new(Cell::new(0));
+    let counted = std::rc::Rc::clone(&runs);
+    let mut fixture = Fixture::new(move |ui| {
+        Lazy::new("worded", 0.0).settles(true).content(1).show(ui, |ui| {
+            counted.set(counted.get() + 1);
+            Button::new("Save").show(ui);
+        });
+    });
+    fixture.settle();
+    let frame = |fixture: &mut Fixture| {
+        runs.set(0);
+        fixture.frame(Vec::new());
+        runs.get()
+    };
+    assert_eq!(frame(&mut fixture), 0, "the child settles");
+    let (i18n, problems) = craft_i18n::I18n::from_owned([("de".to_owned(), String::new(), "@id\ttrial.save\tSpeichern\n".to_owned())], &["de"]);
+    assert!(problems.is_empty(), "{problems:?}");
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(std::sync::Arc::new(i18n)).build();
+    fixture.host(std::sync::Arc::new(host));
+    assert!(frame(&mut fixture) > 0, "a new language runs it");
+    assert_eq!(frame(&mut fixture), 0, "and it settles in that language, the host kept");
 }

@@ -4,12 +4,12 @@
 use super::describe;
 use super::inspect::{self, Inspect};
 use super::overview;
-use crate::theme::{AppLayerEditor, Problems, ThemeSubject, ThemeWorkspace, TokenBrowser, TokenDetail};
 use crate::viewer::{self, CardState, Catalog, Cells, ComponentInfo, PanelId, TreeKey, TreeRow, TreeRows};
 use craft_behavior::IconId;
 use craft_behavior::{Selection, keyed};
 use craft_theme::Explained;
 use craft_theme::report::ContrastReport;
+use craft_theme_editor::{AppLayerEditor, Problems, ThemeSubject, ThemeWorkspace, TokenBrowser, TokenDetail};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{Bind, CollectionEvent, Props as _, RowAlign, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
@@ -60,7 +60,7 @@ pub struct Panels<'a> {
     /// The root values; a Variants card that is used sets its value.
     pub env: &'a mut craft_ui::runtime::env::RootEnv,
     /// The row the Problems view picked in this pass, which the token browser brings into view.
-    pub revealed: Option<crate::theme::Pick>,
+    pub revealed: Option<craft_theme_editor::Pick>,
     /// What the inspector shows.
     pub inspect: Inspect<'a>,
 }

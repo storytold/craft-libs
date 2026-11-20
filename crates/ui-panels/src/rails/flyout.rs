@@ -90,9 +90,9 @@ struct Held(bool);
 
 /// What the parts step resolved for the tools this pass.
 struct Laid {
-    resolved: Vec<Option<ResolvedCommand>>,
+    resolved: Vec<Option<std::sync::Arc<ResolvedCommand>>>,
     /// The click command as resolved, when the button has one.
-    click: Option<ResolvedCommand>,
+    click: Option<std::sync::Arc<ResolvedCommand>>,
     shown: usize,
 }
 
@@ -185,7 +185,7 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
 
     /// The command the face stands for: the click command when there is one, else the shown tool's.
     fn lead<'l>(&self, laid: &'l Laid) -> Option<&'l ResolvedCommand> {
-        if self.click.is_some() { laid.click.as_ref() } else { laid.resolved.get(laid.shown).and_then(Option::as_ref) }
+        if self.click.is_some() { laid.click.as_deref() } else { laid.resolved.get(laid.shown).and_then(Option::as_deref) }
     }
 }
 
@@ -219,11 +219,10 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let laid = self.resolve(cx);
-        let os = cx.env.shell().os;
         let face = cx.part(FACE, rect).priority(HitPriority::new(HitLevel::Body, 0));
         if let Some(resolved) = self.lead(&laid) {
-            face.tooltip(match &resolved.chord {
-                Some(chord) => Label::from(format!("{} ({})", resolved.label, chord.display(os))),
+            face.tooltip(match &resolved.chord_text {
+                Some(chord) => Label::from(format!("{} ({chord})", resolved.label)),
                 None => Label::Shared(resolved.label.clone()),
             });
         }

@@ -22,6 +22,7 @@ use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keye
 use craft_theme::{ControlSize, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 /// The style of a group grip: its size comes from the tokens.
@@ -62,7 +63,7 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     common: Common,
     unit: DragUnit<P>,
     active: PanelKey,
-    /// The ghost the drag shows: its extent and its label.
+    /// The unit's extent where the drag starts and the name its drop region shows.
     #[prop]
     ghost: Option<(Vec2, Label)>,
     /// A drag on the grip drags the unit.
@@ -109,7 +110,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
             match self.ghost.clone() {
                 Some((strip, label)) if self.icons => start_icon_drag(cx, self.unit.clone(), self.active, strip, label),
                 // The ghost's extent is the group's own.
-                ghost => start_group_drag(cx, self.unit.clone(), self.active, ghost.as_ref().map(|(size, _)| *size), ghost),
+                ghost => start_group_drag(cx, self.unit.clone(), self.active, ghost.as_ref().map(|(size, _)| *size), ghost.map(|(_, label)| label)),
             }
             self.started = true;
         }
@@ -260,12 +261,12 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The host's items before the tab strip.
     #[prop(func = "FnMut(&mut egui::Ui, &mut BodyCx<'_>)")]
     extra: Option<HeaderHook<'a>>,
-    /// The size of the group this pass, for the drag ghost.
+    /// The size of the group this pass, where its drag starts.
     size: Vec2,
     reported: Reported,
 }
 
-impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
+impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<'a, P> {
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
     pub fn new(anchor: P, panels: &'a [PanelTitle], active: PanelKey) -> Self {
@@ -306,15 +307,14 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
         IconButton::new(IconId::new("more")).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
     }
 
-    /// Starts a drag of the whole group: its ghost is the group's frame with its name.
+    /// Starts a drag of the whole group: its drop region shows the group's name.
     fn start_drag(&mut self, cx: &mut Cx<'_, Self>) {
-        let ghost = (self.size, cx.label());
-        start_group_drag(cx, DragUnit::Group(self.anchor.clone()), self.active, Some(self.size), Some(ghost));
+        start_group_drag(cx, DragUnit::Group(self.anchor.clone()), self.active, Some(self.size), Some(cx.label()));
         self.reported.drag_started = true;
     }
 }
 
-impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
+impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
     const ROLE: Role = Role::TAB_PANEL;
     type Style = DockGroupStyle;
     type Output = DockGroupOutput;
@@ -428,7 +428,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
     }
 }
 
-impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
+impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for DockGroup<'_, P> {
     /// Closed while minimized: the body step runs the header alone, and the body leaves no node, shape or stop.
     fn open(&mut self) -> Option<BindMut<'_, bool>> {
         self.open = Bind::given(!self.minimized);
@@ -528,7 +528,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before
 /// it, the other half after it, and each spot's mark is the line at the boundary it inserts at.
-fn register_insertions<P: Clone + Hash + Send + Sync + 'static>(
+fn register_insertions<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(
     ctx: &egui::Context,
     dock: Id,
     anchor: &P,

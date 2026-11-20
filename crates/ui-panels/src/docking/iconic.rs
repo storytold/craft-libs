@@ -2,7 +2,8 @@
 
 use super::divider::{self, Divider, Drag};
 use super::dock_column::{
-    BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
+    BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, settled_bar,
+    show_bar,
 };
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::IconButton;
@@ -23,6 +24,7 @@ use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
 use craft_theme::ControlSize;
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
+use std::fmt::Debug;
 use std::hash::Hash;
 
 #[cfg(feature = "testing")]
@@ -190,6 +192,10 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
+    /// The version of what the column's bar shows of the host's panels and the arrangement: with one, the bar settles
+    /// (`Lazy::content`).
+    #[prop]
+    content: Option<u64>,
     open: Bind<'a, Option<P>>,
     view: Option<FlyoutView<'a, P>>,
     /// The bar's rect this pass.
@@ -230,7 +236,7 @@ struct Plan {
     body: Rect,
 }
 
-impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
+impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
     /// A column named `label` of the dock `dock`, over `column`, whose open flyout is the panel in `open`; `spec`
     /// reads each panel's label, icon and limits.
     pub fn new(label: impl Into<Label>, dock: Id, column: &'a Column<P>, open: Bind<'a, Option<P>>, spec: &'a dyn Fn(&P) -> PanelSpec) -> Self {
@@ -246,6 +252,7 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
             bar: ColumnBar::Own,
             auto_collapse: false,
             within: Rect::NOTHING,
+            content: None,
             open,
             view: None,
             bar_rect: Rect::NOTHING,
@@ -382,7 +389,7 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
 /// What measures and shows the group of an open flyout.
 type FlyoutView<'a, P> = Box<dyn FnMut(&Group<P>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a>;
 
-impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
+impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
     const ROLE: Role = Role::GROUP;
     const KEYS: KeyUse = KeyUse::SPLITTER;
     type Style = IconicColumnStyle;
@@ -629,7 +636,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
     }
 }
 
-impl<P: Value + Hash + 'static> IconicColumn<'_, P> {
+impl<P: Value + Debug + Hash + 'static> IconicColumn<'_, P> {
     /// Registers the drop spots of the column the way an expanded column registers them: the bands of a dock
     /// column's two edges (a new column beside it), the seam on the separator between two icon groups (a new group
     /// between them), the top of the first group and the bottom of the last down to the column's foot (a new group
@@ -686,7 +693,7 @@ fn chevron_edge(edge: DockEdge) -> HeaderEdge {
     if edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start }
 }
 
-impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
+impl<P: Value + Hash + Debug + 'static> Container for IconicColumn<'_, P> {
     /// The chevron's square at the bar's outer end; nothing in a floating window, whose title row is the bar.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         if self.bar == ColumnBar::Window {
@@ -701,9 +708,12 @@ impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
         if self.bar == ColumnBar::Window {
             return;
         }
-        if let Some(grip) = column_grip(self.column, self.spec, cx) {
-            let band = bar_band(ui, self.bar_rect, self.edge);
-            self.record = show_bar(ui, cx, band, false, self.auto_collapse, ColumnArrow::Collapse, grip.icons(true));
-        }
+        let (column, spec, auto_collapse) = (self.column, self.spec, self.auto_collapse);
+        let band = bar_band(ui, self.bar_rect, self.edge);
+        self.record = settled_bar(ui, band, self.content, |ui| {
+            column_grip(column, spec, cx)
+                .map(|grip| show_bar(ui, cx, band, false, auto_collapse, ColumnArrow::Collapse, grip.icons(true)))
+                .unwrap_or_default()
+        });
     }
 }

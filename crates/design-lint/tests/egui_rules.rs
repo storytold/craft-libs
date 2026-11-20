@@ -35,7 +35,7 @@ fn rules_at(src: &str, path: &str, scope: &StaticScope) -> Vec<&'static str> {
 }
 
 /// Reject fixtures: file, the rule it must trigger, the path it is checked at.
-const REJECT: [(&str, &str, &str); 21] = [
+const REJECT: [(&str, &str, &str); 22] = [
     ("contract-egui-import.rs", "contract/egui-import", "src/ui/a.rs"),
     ("contract-allocate.rs", "contract/allocate", "src/ui/a.rs"),
     ("contract-egui-widget.rs", "contract/egui-widget", "src/ui/a.rs"),
@@ -47,6 +47,7 @@ const REJECT: [(&str, &str, &str); 21] = [
     ("contract-pointer.rs", "contract/pointer", "src/ui/a.rs"),
     ("contract-motion.rs", "contract/motion", "src/ui/a.rs"),
     ("contract-motion-clock.rs", "contract/motion", "src/ui/a.rs"),
+    ("contract-motion-clock-fn.rs", "contract/motion", "src/ui/a.rs"),
     ("contract-containers.rs", "contract/containers", "src/ui/a.rs"),
     ("contract-containers-scroll.rs", "contract/containers", "src/ui/a.rs"),
     ("contract-platform.rs", "contract/platform", "src/ui/a.rs"),
@@ -110,4 +111,12 @@ fn a_salt_inside_a_scope_closure_is_not_the_scope_builders() {
     assert!(!rules_at(inner, "src/ui/a.rs", &scope()).contains(&"contract/memory"));
     let salted = "fn f(ui: &mut Ui) {\n    ui.scope_builder(UiBuilder::new().id_salt(\"b\"), |ui| ());\n}\n";
     assert!(rules_at(salted, "src/ui/a.rs", &scope()).contains(&"contract/memory"));
+}
+
+#[test]
+fn a_tuple_field_in_an_assert_is_not_a_literal_size() {
+    let field = "#[test]\nfn t() {\n    let fixture = Fixture::new(show);\n    assert_eq!(run(&fixture).1.0, Some(1));\n}\n";
+    assert!(!rules_at(field, "crates/x/tests/it/main.rs", &scope()).contains(&"test/literal-size"));
+    let size = "#[test]\nfn t() {\n    let fixture = Fixture::new(show);\n    assert_eq!(fixture.size().x, 1.5);\n}\n";
+    assert!(rules_at(size, "crates/x/tests/it/main.rs", &scope()).contains(&"test/literal-size"));
 }

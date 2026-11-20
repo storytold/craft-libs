@@ -19,6 +19,9 @@ pub struct KelvinPresets {
     /// Multipliers (green = 1) for Illuminant A and D65, when that pair is all the file records.
     #[serde(default)]
     pair: Option<[[f32; 3]; 2]>,
+    /// The pair's two lights as CIE 1931 (x, y), warmer first, when they are not Illuminant A and D65.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lights: Option<[[f64; 2]; 2]>,
 }
 
 fn usable(m: [f32; 3]) -> bool {
@@ -40,7 +43,11 @@ impl KelvinPresets {
                 let (a, b) = (log_point(w[0].1), log_point(w[1].1));
                 w[0].0 < w[1].0 && b[0] > a[0] && b[1] < a[1]
             });
-        ok.then(|| KelvinPresets { points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect(), pair: None })
+        ok.then(|| KelvinPresets {
+            points: points.into_iter().map(|(k, m)| (k, [m[0] / m[1], 1.0, m[2] / m[1]])).collect(),
+            pair: None,
+            lights: None,
+        })
     }
 
     /// A curve from presets in any order, as a camera lists them by name (Canon's Daylight, Shade, Cloudy, …):
@@ -72,7 +79,20 @@ impl KelvinPresets {
         }
         let (pa, pd) = (log_point(a), log_point(d65));
         let unit = |m: [f32; 3]| [m[0] / m[1], 1.0, m[2] / m[1]];
-        (pd[0] > pa[0] && pd[1] < pa[1]).then(|| KelvinPresets { points: Vec::new(), pair: Some([unit(a), unit(d65)]) })
+        (pd[0] > pa[0] && pd[1] < pa[1]).then(|| KelvinPresets { points: Vec::new(), pair: Some([unit(a), unit(d65)]), lights: None })
+    }
+
+    /// [`Self::from_neutral_pair`] for two other lights, given by their CIE 1931 chromaticities, the warmer first
+    /// (Panasonic stores its multipliers for D55 and the ISO studio tungsten lamp). `None` unless the multipliers make
+    /// a curve as for a pair and the chromaticities are distinct points inside (0, 1).
+    pub fn from_neutral_lights(lights: [[f64; 2]; 2], warm: [f32; 3], cool: [f32; 3]) -> Option<KelvinPresets> {
+        let inside = |p: [f64; 2]| p.iter().all(|v| *v > 0.0 && *v < 1.0);
+        if !inside(lights[0]) || !inside(lights[1]) || lights[0] == lights[1] {
+            return None;
+        }
+        let mut out = Self::from_neutral_pair(warm, cool)?;
+        out.lights = Some(lights);
+        Some(out)
     }
 
     /// The presets as (Kelvin, multipliers with green = 1), ascending in Kelvin. Empty for a neutral pair.
@@ -83,6 +103,11 @@ impl KelvinPresets {
     /// The Illuminant A and D65 multipliers (green = 1) of [`Self::from_neutral_pair`].
     pub fn neutral_pair(&self) -> Option<[[f32; 3]; 2]> {
         self.pair
+    }
+
+    /// The chromaticities of the pair's lights from [`Self::from_neutral_lights`]; `None` for Illuminant A and D65.
+    pub fn neutral_lights(&self) -> Option<[[f64; 2]; 2]> {
+        self.lights
     }
 }
 
@@ -147,5 +172,18 @@ mod tests {
             KelvinPresets::new([(2500.0, [1.0, 1.0, 3.2]), (4500.0, [1.8, 1.0, 1.9]), (8500.0, [2.8, 1.0, 1.2])]).unwrap().neutral_pair(),
             None
         );
+    }
+
+    #[test]
+    fn neutral_lights_keep_their_chromaticities() {
+        let (warm, cool) = ([1.0, 1.0, 2.8], [1.5, 1.0, 1.9]);
+        let lights = [[0.4232, 0.3991], [0.3324, 0.3474]];
+        let k = KelvinPresets::from_neutral_lights(lights, warm, cool).unwrap();
+        assert_eq!((k.neutral_pair(), k.neutral_lights()), (Some([warm, cool]), Some(lights)));
+        assert_eq!(KelvinPresets::from_neutral_pair(warm, cool).unwrap().neutral_lights(), None);
+        assert!(KelvinPresets::from_neutral_lights(lights, cool, warm).is_none());
+        assert!(KelvinPresets::from_neutral_lights([lights[0], lights[0]], warm, cool).is_none());
+        assert!(KelvinPresets::from_neutral_lights([[0.0, 0.4], lights[1]], warm, cool).is_none());
+        assert!(KelvinPresets::from_neutral_lights([[f64::NAN, 0.4], lights[1]], warm, cool).is_none());
     }
 }

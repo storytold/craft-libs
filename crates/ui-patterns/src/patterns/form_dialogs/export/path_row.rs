@@ -111,7 +111,8 @@ impl<'a> OutputPathRow<'a> {
                 editing = match std::mem::take(&mut editing) {
                     Editing::Off => {
                         let shown = if current.is_empty() { words.browse.clone() } else { Label::from(current.clone()) };
-                        let link = Link::new(shown).wrap(Wrap::ElidePath).tooltip(words.edit_template.clone()).id_salt("file").show(ui);
+                        let link =
+                            Link::new(shown).wrap(Wrap::ElidePath).tooltip(words.edit_template.clone()).keeps_name(true).id_salt("file").show(ui);
                         if !clicked(&link) {
                             Editing::Off
                         } else if link.mods.alt {
