@@ -676,3 +676,38 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "text that is no number leaves the value");
     assert!(!alert(), "and raises no alert");
 }
+
+/// Range rows from 0.1 to 4 at 1: Strength shows exactly two decimals, Gamma at most two, and Exposure, set both ways,
+/// as the last call says (at most two).
+fn toning(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let range = || ParamKind::range(0.1, 4.0, 1.0, craft_ui::value_drag::SliderScale::Linear);
+    let params = vec![
+        Param::new("strength", "Strength", range()).fixed_decimals(2),
+        Param::new("gamma", "Gamma", range()).decimals(2),
+        Param::new("exposure", "Exposure", range()).fixed_decimals(3).decimals(2),
+    ];
+    ParamDialog::new("toning", "Toning", params).values(Bind::bound(fields))
+}
+
+// A range row with fixed decimals (storytold/craft-libs#2251) shows them, zeros included, and stores its value
+// rounded to them as `Param::decimals` does; a row with `Param::decimals` alone still trims trailing zeros.
+#[trial]
+fn a_range_row_with_fixed_decimals_shows_them_and_rounds_to_them() {
+    let fields = Rc::new(RefCell::new(DialogFields::new()));
+    let held = Rc::clone(&fields);
+    let mut fixture = Fixture::new(move |ui| {
+        toning(&mut held.borrow_mut()).show(ui);
+    });
+    fixture.settle();
+    let shown = |fixture: &Fixture| -> Vec<String> {
+        fixture.by_role(Role::SPIN_BUTTON).iter().map(|field| fixture.tree().value_of(field.node).unwrap_or_default().to_owned()).collect()
+    };
+    assert_eq!(shown(&fixture), ["1.00", "1", "1"], "the last of decimals and fixed_decimals applies");
+
+    let strength = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the Strength field");
+    fixture.click(&strength).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("0.567");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fields.borrow().number("strength"), Some(0.57), "the typed value is stored at two decimals");
+    assert_eq!(shown(&fixture), ["0.57", "1", "1"]);
+}

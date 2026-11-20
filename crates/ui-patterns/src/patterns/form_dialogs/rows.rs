@@ -434,11 +434,15 @@ impl<'p> Pass<'p> {
     fn range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, scale: SliderScale) {
         let value = self.work.number(line.key).unwrap_or(*range.start());
         let places = line.param.option().range_places();
+        let fixed = line.param.option().range_fixed_places();
         let layout = self.sliders;
         let mut show = |ui: &mut Ui| {
             let mut slider = SliderField::new(line.name.clone(), Bind::given(value), range.clone()).scale(scale).layout(layout);
             if let Some(places) = places {
                 slider = slider.step(10f64.powi(-(places as i32)));
+            }
+            if let Some(places) = fixed {
+                slider = slider.fixed_decimals(places as usize);
             }
             if let Some(kind) = line.param.unit {
                 slider = slider.unit_kind(kind);
