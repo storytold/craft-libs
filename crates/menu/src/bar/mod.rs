@@ -209,21 +209,10 @@ impl<'a> MenuBarUi<'a> {
         } else {
             keys.off();
         }
-        let mut draw = Draw {
-            gate: self.gate,
-            platform,
-            style: &style,
-            label: self.label,
-            mnemonics,
-            english: self.english,
-            preferred: self.preferred,
-            press: self.id.with("press"),
-            clicked: None,
-        };
+        let mut draw = self.draw(&style, platform);
         let room = self.fit.map_or(ui.available_width(), |max| max.min(ui.available_width())).max(0.0);
         let width = match self.fit {
-            // The half point keeps rounding from pushing the last title into "⋯".
-            Some(_) => (self.title_widths(ui, &draw, style.title_padding.x).iter().sum::<f32>() + 0.5).min(room),
+            Some(_) => self.fitted_width(ui, &draw, &style).min(room),
             None => room,
         };
         ui.allocate_ui(egui::vec2(width, ui.available_height()), |ui| {
@@ -312,6 +301,37 @@ impl<'a> MenuBarUi<'a> {
                 _ => true,
             })
             .collect()
+    }
+
+    /// The width the titles need: the width [`MenuBarUi::shrink_to_fit`] takes when the row has
+    /// room for every title. Each title is measured as shown, with any "(F)" it takes
+    /// ([`MenuBarUi::english`]) and the style's title padding, so an app that shares the row can
+    /// divide it before [`MenuBarUi::show`] runs.
+    pub fn natural_width(&self, ui: &Ui) -> f32 {
+        let style = self.style.clone().unwrap_or_else(|| BarStyle::from_style(ui.style()));
+        let draw = self.draw(&style, keymap_platform(self.target, ui.ctx().os()));
+        self.fitted_width(ui, &draw, &style)
+    }
+
+    /// The drawing state for one frame on `platform`.
+    fn draw<'s>(&'s self, style: &'s BarStyle, platform: Platform) -> Draw<'s> {
+        Draw {
+            gate: self.gate,
+            platform,
+            style,
+            label: self.label,
+            mnemonics: platform != Platform::Mac,
+            english: self.english,
+            preferred: self.preferred,
+            press: self.id.with("press"),
+            clicked: None,
+        }
+    }
+
+    /// The width a bar shrunk to fit takes when every title fits.
+    fn fitted_width(&self, ui: &Ui, draw: &Draw<'_>, style: &BarStyle) -> f32 {
+        // The half point keeps rounding from pushing the last title into "⋯".
+        self.title_widths(ui, draw, style.title_padding.x).iter().sum::<f32>() + 0.5
     }
 
     /// Each title's width as shown, with any "(F)" it takes, and `pad` on either side.
