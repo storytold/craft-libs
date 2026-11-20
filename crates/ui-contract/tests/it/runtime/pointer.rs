@@ -11,6 +11,35 @@ use std::rc::Rc;
 const BACKGROUND: PartKey = PartKey::new("background");
 
 #[trial]
+fn a_context_only_part_receives_a_secondary_click_in_one_frame() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let field = rect(150.0, 150.0, 60.0, 50.0);
+    let root = ProbeRoot::new("page", page, Sense::CLICK | Sense::DRAG)
+        .part(ProbePart::new(BACKGROUND, field, Sense::CONTEXT_CLICK).level(HitLevel::Body, 0));
+    let (mut show, log) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let at = field.center();
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    log.borrow_mut().clear();
+    frames.frame(vec![pointer::secondary(at, true), pointer::secondary(at, false)], &mut show);
+    frames.idle(2, &mut show);
+    let phases = log.borrow().root_phases(0, Some(BACKGROUND));
+    assert!(
+        phases.iter().any(|phase| matches!(phase, PressPhase::Release { start, click: true, .. } if start.button == PointerButton::Secondary)),
+        "the context part receives the click: {phases:?}"
+    );
+    log.borrow_mut().clear();
+    pointer::click(&mut frames, at, &mut show);
+    let log = log.borrow();
+    assert!(log.root_phases(0, Some(BACKGROUND)).is_empty(), "a primary click passes the context-only part");
+    assert!(
+        log.root_phases(0, None).iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })),
+        "the surface receives the primary click"
+    );
+}
+
+#[trial]
 fn quick_presses_count_clicks_with_their_own_modifiers() {
     let mut frames = Frames::new();
     let at = Pos2::new(100.0, 100.0);

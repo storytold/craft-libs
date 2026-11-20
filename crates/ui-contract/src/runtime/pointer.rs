@@ -758,7 +758,16 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
             }
             // The winner among the shapes at `indices` by `kind`, with its rank.
             let pick = |indices: &[usize], kind: ResolveFor| {
-                let shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                let mut shapes: Vec<Shape<Id>> = indices.iter().map(|&index| entry.shapes[index].clone()).collect();
+                if context && kind == ResolveFor::Press {
+                    // A context-only part is a click candidate for this secondary press, while
+                    // its unmodified sense must still let primary presses reach what is below.
+                    for shape in &mut shapes {
+                        if shape.sense.contains(craft_behavior::Sense::CONTEXT_CLICK) {
+                            shape.sense.insert(craft_behavior::Sense::CLICK);
+                        }
+                    }
+                }
                 resolve(&shapes, point, kind).map(|mut winner| {
                     winner.index = indices[winner.index];
                     ((tier, entry.placed[winner.index].order), winner)
