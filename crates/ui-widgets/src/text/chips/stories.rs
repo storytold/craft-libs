@@ -2,7 +2,7 @@
 
 use super::ChipField;
 use crate::contract::Role;
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -59,7 +59,7 @@ fn chip_field_more(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ChipField<'static>, covers = [Mixed], drive = Drive::Never)]
 fn chip_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ChipField::new("Keywords", Bind::bound_mixed(data.value("mixed", Mixed::<Vec<String>>::Mixed))).show(ui).into()
+    ChipField::new("Keywords", data.bind_mixed("mixed", Mixed::<Vec<String>>::Mixed)).show(ui).into()
 }
 
 #[story(ChipField<'static>, covers = [Invalid], drive = Drive::Never)]

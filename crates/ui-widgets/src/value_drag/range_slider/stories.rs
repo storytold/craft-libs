@@ -1,7 +1,7 @@
 //! Stories of `RangeSlider`.
 
 use super::{LOWER, RangeSlider};
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::display::Progress;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
@@ -23,7 +23,7 @@ fn range_slider(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(RangeSlider<'static>, covers = [Mixed], drive = Drive::Never)]
 fn range_slider_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    RangeSlider::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), RANGE).label("Level").show(ui).into()
+    RangeSlider::new(data.bind_mixed("mixed", Mixed::Mixed), RANGE).label("Level").show(ui).into()
 }
 
 #[story(RangeSlider<'static>, covers = [], drive = Drive::Never)]

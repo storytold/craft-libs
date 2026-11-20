@@ -1,7 +1,7 @@
 //! Stories of `DatePicker` and `Calendar`.
 
 use super::{Calendar, CalendarView, DatePicker, DatePrecision, PickedDate};
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -29,7 +29,7 @@ fn date_picker_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(DatePicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn date_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    DatePicker::new("From", Bind::bound_mixed(data.value("mixed", Mixed::<Option<PickedDate>>::Mixed))).show(ui).into()
+    DatePicker::new("From", data.bind_mixed("mixed", Mixed::<Option<PickedDate>>::Mixed)).show(ui).into()
 }
 
 #[story(DatePicker<'static>, covers = [Invalid], drive = Drive::Never)]

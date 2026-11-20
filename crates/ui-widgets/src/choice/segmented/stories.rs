@@ -65,7 +65,7 @@ fn segmented_small(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Segmented<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn segmented_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Segmented::new("Size", Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), &sizes()).show(ui).into()
+    Segmented::new("Size", data.bind_mixed("mixed", Mixed::Mixed), &sizes()).show(ui).into()
 }
 
 #[story(Segmented<'static, u8>, covers = [Invalid], drive = Drive::Never)]

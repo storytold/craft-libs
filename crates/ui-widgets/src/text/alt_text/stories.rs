@@ -1,7 +1,7 @@
 //! Stories of `AltTextField`.
 
 use super::{AltText, AltTextField};
-use crate::contract::{Bind, Show as _, Validity};
+use crate::contract::{Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::pointer::{moved, secondary};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -44,7 +44,7 @@ fn alt_text_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(AltTextField<'static>, covers = [Mixed], drive = Drive::Never)]
 fn alt_text_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AltTextField::new(PROMPT, Bind::bound_mixed(data.value("mixed", Mixed::<AltText>::Mixed))).show(ui).into()
+    AltTextField::new(PROMPT, data.bind_mixed("mixed", Mixed::<AltText>::Mixed)).show(ui).into()
 }
 
 #[story(AltTextField<'static>, covers = [], drive = Drive::Never)]

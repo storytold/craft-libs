@@ -1,7 +1,7 @@
 //! Stories of `Rating`.
 
 use super::Rating;
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -34,7 +34,7 @@ fn rating_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Rating<'static>, covers = [Mixed], drive = Drive::Never)]
 fn rating_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Rating::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), 5).label("Rating").show(ui).into()
+    Rating::new(data.bind_mixed("mixed", Mixed::Mixed), 5).label("Rating").show(ui).into()
 }
 
 #[story(Rating<'static>, covers = [Invalid], drive = Drive::Never)]

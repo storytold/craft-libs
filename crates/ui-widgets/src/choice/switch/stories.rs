@@ -1,7 +1,7 @@
 //! Stories of `Switch`.
 
 use super::Switch;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::contract::{Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Divider;
 use crate::layout_components::Stack;
 use crate::runtime::env::Message;
@@ -37,7 +37,7 @@ fn switch_long_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Switch<'static>, covers = [Mixed], drive = Drive::Never)]
 fn switch_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Switch::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).label("Show rulers").show(ui).into()
+    Switch::new(data.bind_mixed("mixed", Mixed::Mixed)).label("Show rulers").show(ui).into()
 }
 
 #[story(Switch<'static>, covers = [Invalid], drive = Drive::Never)]

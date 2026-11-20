@@ -1,7 +1,7 @@
 //! Stories of `SliderField`.
 
 use super::SliderField;
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::runtime::env::{Message, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use crate::value_drag::SliderScale;
@@ -24,7 +24,7 @@ fn slider_field_log(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(SliderField<'static>, covers = [Mixed], drive = Drive::Never)]
 fn slider_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    SliderField::new("Opacity", Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), PERCENT).show(ui).into()
+    SliderField::new("Opacity", data.bind_mixed("mixed", Mixed::Mixed), PERCENT).show(ui).into()
 }
 
 #[story(SliderField<'static>, covers = [Invalid], drive = Drive::Never)]

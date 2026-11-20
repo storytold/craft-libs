@@ -33,7 +33,7 @@ fn group_box_gate_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(GroupBox<'static>, covers = [Mixed], drive = Drive::Never)]
 fn group_box_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    GroupBox::new("Grid", Some(Bind::bound_mixed(data.value("mixed", Mixed::Mixed)))).show(ui, |ui, _| body(ui)).into()
+    GroupBox::new("Grid", Some(data.bind_mixed("mixed", Mixed::Mixed))).show(ui, |ui, _| body(ui)).into()
 }
 
 #[story(GroupBox<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -69,7 +69,7 @@ fn group_box_apply_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(GroupBox<'static>, covers = [], drive = Drive::Never)]
 fn group_box_apply_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    GroupBox::apply("Opacity", Bind::bound_mixed(data.value("mixed", Mixed::<bool>::Mixed))).show(ui, |_, _| {}).into()
+    GroupBox::apply("Opacity", data.bind_mixed("mixed", Mixed::<bool>::Mixed)).show(ui, |_, _| {}).into()
 }
 
 #[story(GroupBox<'static>, covers = [], drive = Drive::Never)]

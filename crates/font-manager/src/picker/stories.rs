@@ -144,7 +144,7 @@ fn font_picker_arabic_sample(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(FontPicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn font_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let catalog = catalog();
-    FontPicker::new("Font family", Bind::bound_mixed(data.value("family", Mixed::<String>::Mixed)), &catalog).show(ui).into()
+    FontPicker::new("Font family", data.bind_mixed("family", Mixed::<String>::Mixed), &catalog).show(ui).into()
 }
 
 /// A family the catalog does not hold, which the check refuses.

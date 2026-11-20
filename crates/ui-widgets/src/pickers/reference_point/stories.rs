@@ -1,7 +1,7 @@
 //! Stories of `ReferencePoint`.
 
 use super::ReferencePoint;
-use crate::contract::{Bind, Show as _, Validity};
+use crate::contract::{Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{Anchor9, Mixed};
@@ -22,7 +22,7 @@ fn reference_point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ReferencePoint<'static>, covers = [Mixed], drive = Drive::Never)]
 fn reference_point_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ReferencePoint::new("Reference point", Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).into()
+    ReferencePoint::new("Reference point", data.bind_mixed("mixed", Mixed::Mixed)).show(ui).into()
 }
 
 #[story(ReferencePoint<'static>, covers = [Invalid], drive = Drive::Never)]

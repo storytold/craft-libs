@@ -71,7 +71,7 @@ fn thumb_row_hue_range(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ThumbRow<'static, 4>, covers = [Mixed], drive = Drive::Never)]
 fn thumb_row_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    levels(Bind::bound_mixed(data.value("mixed", Mixed::<[Mixed<f64>; 4]>::Mixed))).label("Levels").show(ui).into()
+    levels(data.bind_mixed("mixed", Mixed::<[Mixed<f64>; 4]>::Mixed)).label("Levels").show(ui).into()
 }
 
 #[story(ThumbRow<'static, 4>, covers = [], drive = Drive::Never)]

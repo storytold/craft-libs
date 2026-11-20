@@ -1,7 +1,7 @@
 //! Stories of `ComboBox`.
 
 use super::ComboBox;
-use crate::contract::{Bind, Entry, Show as _, Validity};
+use crate::contract::{Entry, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -29,7 +29,7 @@ fn combo_box_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ComboBox<'static>, covers = [Mixed], drive = Drive::Never)]
 fn combo_box_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
-    ComboBox::new("Font", Bind::bound_mixed(data.value("mixed", Mixed::<String>::Mixed)), &options).show(ui).into()
+    ComboBox::new("Font", data.bind_mixed("mixed", Mixed::<String>::Mixed), &options).show(ui).into()
 }
 
 #[story(ComboBox<'static>, covers = [Invalid], drive = Drive::Never)]

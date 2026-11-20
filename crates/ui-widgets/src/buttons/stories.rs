@@ -1,7 +1,7 @@
 //! Stories of the buttons.
 
 use super::{Button, IconButton, Link, SplitButton, ToggleButton};
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::contract::{Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Grid, Row};
 use crate::primitives::IconSpec;
@@ -127,7 +127,7 @@ fn toggle_button(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ToggleButton<'static>, covers = [Mixed], drive = Drive::Never)]
 fn toggle_button_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ToggleButton::new("Snap to grid", Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).into()
+    ToggleButton::new("Snap to grid", data.bind_mixed("mixed", Mixed::Mixed)).show(ui).into()
 }
 
 #[story(ToggleButton<'static>, covers = [Invalid], drive = Drive::Never)]

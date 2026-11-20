@@ -1,7 +1,7 @@
 //! Stories of `RadioGroup` and `Radio`.
 
 use super::{Radio, RadioGroup};
-use crate::contract::{Bind, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, Validity};
+use crate::contract::{FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
 use crate::runtime::env::Message;
@@ -88,7 +88,7 @@ fn radio_group_nested(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(RadioGroup<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn radio_group_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    column(ui, RadioGroup::new("Size", Bind::bound_mixed(data.value("mixed", Mixed::Mixed))))
+    column(ui, RadioGroup::new("Size", data.bind_mixed("mixed", Mixed::Mixed)))
 }
 
 #[story(RadioGroup<'static, u8>, covers = [Invalid], drive = Drive::Never)]

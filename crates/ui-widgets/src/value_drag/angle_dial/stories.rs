@@ -1,7 +1,7 @@
 //! Stories of `AngleDial`.
 
 use super::{AngleDial, AngleOrientation, FACE};
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -39,7 +39,7 @@ fn angle_dial_drag(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(AngleDial<'static>, covers = [Mixed], drive = Drive::Never)]
 fn angle_dial_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AngleDial::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).label("Angle").show(ui).into()
+    AngleDial::new(data.bind_mixed("mixed", Mixed::Mixed)).label("Angle").show(ui).into()
 }
 
 #[story(AngleDial<'static>, covers = [Invalid], drive = Drive::Never)]

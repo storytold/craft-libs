@@ -91,7 +91,7 @@ fn select_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Select<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn select_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
-    Select::new("Blend mode", Bind::bound_mixed(data.value("mixed", Mixed::<u8>::Mixed)), &entries).show(ui).into()
+    Select::new("Blend mode", data.bind_mixed("mixed", Mixed::<u8>::Mixed), &entries).show(ui).into()
 }
 
 #[story(Select<'static, u8>, covers = [Invalid], drive = Drive::Never)]

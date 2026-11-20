@@ -35,7 +35,7 @@ fn linked_fields_equal_columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 
 #[story(LinkedFields<'static, 2>, covers = [Mixed], drive = Drive::Never)]
 fn linked_fields_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    LinkedFields::new("Size", Bind::bound_mixed(data.value("mixed", Mixed::<[Mixed<Option<f64>>; 2]>::Mixed)), Bind::given(false)).show(ui).into()
+    LinkedFields::new("Size", data.bind_mixed("mixed", Mixed::<[Mixed<Option<f64>>; 2]>::Mixed), Bind::given(false)).show(ui).into()
 }
 
 #[story(LinkedFields<'static, 2>, covers = [], drive = Drive::Never)]

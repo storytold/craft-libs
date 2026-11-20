@@ -69,7 +69,7 @@ fn text_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TextField<'static, PlainText>, covers = [Mixed], drive = Drive::Never)]
 fn text_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::new("Name", Bind::bound_mixed(data.value("mixed", Mixed::<String>::Mixed))).placeholder("Mixed").show(ui).into()
+    TextField::new("Name", data.bind_mixed("mixed", Mixed::<String>::Mixed)).placeholder("Mixed").show(ui).into()
 }
 
 #[story(TextField<'static, PlainText>, covers = [Invalid], drive = Drive::Never)]

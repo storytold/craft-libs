@@ -43,7 +43,7 @@ fn levels_editor_stale(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(LevelsEditor<'static>, covers = [Mixed], drive = Drive::Never)]
 fn levels_editor_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    LevelsEditor::new("Levels", Bind::bound_mixed(data.value("mixed", Mixed::<Levels>::Mixed))).show(ui).into()
+    LevelsEditor::new("Levels", data.bind_mixed("mixed", Mixed::<Levels>::Mixed)).show(ui).into()
 }
 
 #[story(LevelsEditor<'static>, covers = [Invalid], drive = Drive::Never)]

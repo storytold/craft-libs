@@ -33,7 +33,7 @@ fn timecode_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TimecodeField<'static>, covers = [Mixed], drive = Drive::Never)]
 fn timecode_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TimecodeField::new("Current time", Bind::bound_mixed(data.value("mixed", Mixed::<Tick>::Mixed)), drop_frame()).show(ui).edit.into()
+    TimecodeField::new("Current time", data.bind_mixed("mixed", Mixed::<Tick>::Mixed), drop_frame()).show(ui).edit.into()
 }
 
 #[story(TimecodeField<'static>, covers = [Invalid], drive = Drive::Never)]

@@ -60,7 +60,7 @@ fn edge_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(EdgePicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn edge_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    EdgePicker::new("Borders", Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).into()
+    EdgePicker::new("Borders", data.bind_mixed("mixed", Mixed::Mixed)).show(ui).into()
 }
 
 #[story(EdgePicker<'static>, covers = [Invalid], drive = Drive::Never)]

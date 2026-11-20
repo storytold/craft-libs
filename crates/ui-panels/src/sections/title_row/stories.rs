@@ -1,7 +1,7 @@
 //! Stories of `TitleRow`.
 
 use super::{HeaderAction, HeaderStrength, TitleRow};
-use crate::contract::{Bind, Pad, Show as _, ShowContainer as _, Validity};
+use crate::contract::{Pad, Show as _, ShowContainer as _, Validity};
 use crate::display::{Divider, Text};
 use crate::layout_components::Stack;
 use crate::primitives::IconSpec;
@@ -38,7 +38,7 @@ fn title_row_with_disclosure(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TitleRow<'static>, covers = [Mixed], drive = Drive::Never)]
 fn title_row_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TitleRow::new("Grid").gate(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).edit.into()
+    TitleRow::new("Grid").gate(data.bind_mixed("mixed", Mixed::Mixed)).show(ui).edit.into()
 }
 
 #[story(TitleRow<'static>, covers = [Invalid], drive = Drive::Never)]

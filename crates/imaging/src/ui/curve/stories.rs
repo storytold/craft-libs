@@ -87,7 +87,7 @@ fn curve_graph(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(CurveGraph<'static>, covers = [Mixed], drive = Drive::Never)]
 fn curve_graph_that_differs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    CurveGraph::new("Curve", Bind::bound_mixed(data.value("mixed", Mixed::<Curve>::Mixed))).show(ui).into()
+    CurveGraph::new("Curve", data.bind_mixed("mixed", Mixed::<Curve>::Mixed)).show(ui).into()
 }
 
 /// A graph that refuses a curve of more than two points.

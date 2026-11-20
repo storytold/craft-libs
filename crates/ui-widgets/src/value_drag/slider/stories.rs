@@ -2,7 +2,7 @@
 //! groups the old gallery did not have.
 
 use super::{Slider, SliderScale, SliderThumb};
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::contract::{Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Progress;
 use crate::form::Field;
 use crate::runtime::env::Message;
@@ -107,7 +107,7 @@ fn slider(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Slider<'static>, covers = [Mixed], drive = Drive::Never, group = "States", title = "Mixed")]
 fn slider_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Slider::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), RANGE).label("Opacity").show(ui).into()
+    Slider::new(data.bind_mixed("mixed", Mixed::Mixed), RANGE).label("Opacity").show(ui).into()
 }
 
 #[story(Slider<'static>, covers = [Invalid], drive = Drive::Never, group = "States", title = "Above the limit")]

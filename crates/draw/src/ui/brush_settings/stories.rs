@@ -247,7 +247,7 @@ fn tip_ellipse(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TipEllipse<'static>, covers = [Mixed], drive = Drive::Never)]
 fn tip_ellipse_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TipEllipse::new("Tip angle and roundness", Bind::bound_mixed(data.value("mixed", Mixed::<TipAngle>::Mixed))).show(ui).into()
+    TipEllipse::new("Tip angle and roundness", data.bind_mixed("mixed", Mixed::<TipAngle>::Mixed)).show(ui).into()
 }
 
 #[story(TipEllipse<'static>, covers = [Invalid], drive = Drive::Never)]

@@ -43,7 +43,7 @@ fn point_picker_drag(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(PointPicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn point_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PointPicker::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), RANGE, RANGE).label("Blur center").show(ui).into()
+    PointPicker::new(data.bind_mixed("mixed", Mixed::Mixed), RANGE, RANGE).label("Blur center").show(ui).into()
 }
 
 #[story(PointPicker<'static>, covers = [Invalid], drive = Drive::Never)]

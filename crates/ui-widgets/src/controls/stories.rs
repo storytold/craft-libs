@@ -16,7 +16,7 @@ fn disclosure(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Disclosure<'static>, covers = [Mixed], drive = Drive::Never)]
 fn disclosure_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Disclosure::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).label("Details").show(ui).into()
+    Disclosure::new(data.bind_mixed("mixed", Mixed::Mixed)).label("Details").show(ui).into()
 }
 
 #[story(Disclosure<'static>, covers = [Invalid], drive = Drive::Never)]

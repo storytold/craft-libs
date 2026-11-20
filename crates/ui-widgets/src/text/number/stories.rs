@@ -67,7 +67,7 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Text::new(units.symbol(UnitKind::Degrees)).show(ui);
         });
         row("Mixed").show(ui, |ui, _| {
-            NumberField::new("Mixed size", Bind::bound_mixed(data.value("mixed", Mixed::<Option<f64>>::Mixed)))
+            NumberField::new("Mixed size", data.bind_mixed("mixed", Mixed::<Option<f64>>::Mixed))
                 .unit(units.symbol(UnitKind::Points))
                 .size(size)
                 .show(ui);
@@ -106,7 +106,7 @@ fn number_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(NumberField<'static>, covers = [Mixed], drive = Drive::Never)]
 fn number_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    NumberField::new("Size", Bind::bound_mixed(data.value("mixed", Mixed::<Option<f64>>::Mixed))).show(ui).edit.into()
+    NumberField::new("Size", data.bind_mixed("mixed", Mixed::<Option<f64>>::Mixed)).show(ui).edit.into()
 }
 
 #[story(NumberField<'static>, covers = [Invalid], drive = Drive::Never)]

@@ -1,7 +1,7 @@
 //! Stories of `Checkbox`.
 
 use super::Checkbox;
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -25,7 +25,7 @@ fn checkbox_checked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Checkbox<'static>, covers = [Mixed], drive = Drive::Never, group = "States", title = "Mixed")]
 fn checkbox_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Checkbox::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).label("Snap to grid").show(ui).into()
+    Checkbox::new(data.bind_mixed("mixed", Mixed::Mixed)).label("Snap to grid").show(ui).into()
 }
 
 #[story(Checkbox<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -52,7 +52,7 @@ fn checkbox_disabled_checked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Checkbox<'static>, covers = [], drive = Drive::Never, group = "States", title = "Disabled mixed")]
 fn checkbox_disabled_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Checkbox::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).label("Disabled (mixed)").enabled(false).show(ui).into()
+    Checkbox::new(data.bind_mixed("mixed", Mixed::Mixed)).label("Disabled (mixed)").enabled(false).show(ui).into()
 }
 
 #[story(Checkbox<'static>, covers = [], group = "States", title = "Long label")]
