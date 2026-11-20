@@ -136,8 +136,8 @@ struct Group {
 
 /// What an item's part wears.
 enum Face {
-    Action(IconButton<'static>),
-    // Boxed: the two button faces are several hundred bytes each.
+    // Boxed: each button face is several hundred bytes.
+    Action(Box<IconButton<'static>>),
     Toggle(Box<ToggleButton<'static>>),
     Text(Box<Button<'static>>),
 }
@@ -145,7 +145,7 @@ enum Face {
 impl Face {
     fn size<C: Component>(self, cx: &MeasureCx<'_, C>) -> Vec2 {
         match self {
-            Face::Action(face) => cx.face(face),
+            Face::Action(face) => cx.face(*face),
             Face::Toggle(face) => cx.face(*face),
             Face::Text(face) => cx.face(*face),
         }
@@ -153,7 +153,7 @@ impl Face {
 
     fn paint(self, ui: &mut PaintUi<'_>, part: PartRef) {
         match self {
-            Face::Action(face) => ui.face(part, face),
+            Face::Action(face) => ui.face(part, *face),
             Face::Toggle(face) => ui.face(part, *face),
             Face::Text(face) => ui.face(part, *face),
         }
@@ -180,7 +180,7 @@ fn face_of(present: &Present, glyphs: GlyphRole) -> Face {
         (ItemDisplay::Icon, Some(icon)) if toggle => {
             Face::Toggle(Box::new(ToggleButton::command(item.command.clone()).icon(icon).icon_only().glyphs(glyphs)))
         }
-        (ItemDisplay::Icon, Some(icon)) => Face::Action(IconButton::command(icon, item.command.clone()).glyphs(glyphs)),
+        (ItemDisplay::Icon, Some(icon)) => Face::Action(Box::new(IconButton::command(icon, item.command.clone()).glyphs(glyphs))),
         (ItemDisplay::IconText, Some(icon)) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()).icon(icon))),
         (ItemDisplay::IconText, Some(icon)) => Face::Text(Box::new(Button::command(item.command.clone()).variant(Variant::GHOST).icon(icon))),
         (_, _) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()))),
