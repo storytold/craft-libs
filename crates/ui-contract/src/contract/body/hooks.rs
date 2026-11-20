@@ -434,7 +434,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let tokens = cx.tokens;
         let pad = self.pads(&props, tokens);
         let inner = content.shrink2(pad);
-        let regions = self.regions(&props, inner, pad, self.room_size(rect, inner), rtl, self.measured_sizes());
+        let regions = self.regions(&props, inner, pad, self.room_size(rect, inner), rtl, self.measured_sizes(), !cx.ui.is_sizing_pass());
         let (_, slots) = self.header_line(regions.header, pad_of(tokens, header.inset), parts, rtl);
         Some(std::rc::Rc::new(slots))
     }
@@ -447,7 +447,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let pad = self.pads(&props, tokens);
         let inner = pcx.content_rect.shrink2(pad);
         let room = self.room_size(rect, inner);
-        let regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes());
+        let regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes(), !pcx.ui.is_sizing_pass());
         let scroll = scroll_of(&props);
         if self.open && scroll.is_some() {
             let at = regions.body;
@@ -1030,12 +1030,12 @@ impl BodyHooks<'_> {
         let pad = self.pads(props, &env.tokens);
         let inner = cx.core.content_rect.shrink2(pad);
         let room = self.room_size(rect, inner);
-        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes());
-        let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
-        let band_slot = ui.painter().add(Shape::Noop);
         // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
         // and claims no room in a parent flow.
         let real = !ui.is_sizing_pass();
+        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes(), real);
+        let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
+        let band_slot = ui.painter().add(Shape::Noop);
         // Only a container that declares its value a gate (a group box) gates its content; a radio group whose value
         // is a bool does not.
         // A mixed gate reads as off, and its check box shows the mixed face.
@@ -1216,7 +1216,7 @@ impl BodyHooks<'_> {
         let beside =
             if real { self.measured_sizes() } else { RegionSizes { header: self.header_size, footer: self.measured_footer, end: self.end_size } };
         if !real {
-            let placed = self.regions(props, plan.inner, plan.pad, plan.room, plan.rtl, beside);
+            let placed = self.regions(props, plan.inner, plan.pad, plan.room, plan.rtl, beside, real);
             (plan.regions.body, plan.regions.beside) = (placed.body, placed.beside);
         }
         let line = shared_line(props, beside);
