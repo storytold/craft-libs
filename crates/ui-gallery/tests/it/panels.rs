@@ -133,8 +133,8 @@ fn a_selection_change_runs_only_the_panels_that_read_it() {
     assert_eq!(ran, names(&["Components", "Stories", "Properties", "Inspect", "Overview"]));
 }
 
-/// A value edit in Properties runs Properties, the Overview that hosts the story's card, and that one card: the
-/// Overview's other cards replay, and no other panel body runs.
+/// A value edit in Properties runs Properties, the Overview that hosts the story's card, and that one card, in the
+/// frame of the edit: the Overview's other cards replay, and no other panel body runs.
 #[trial]
 fn a_story_value_edit_runs_properties_and_its_card() {
     let mut fixture = fixture("Checkbox", "Checkbox", &default_components());
@@ -143,17 +143,27 @@ fn a_story_value_edit_runs_properties_and_its_card() {
         fixture.by_role(Role::CHECK_BOX).into_iter().max_by(|a, b| a.center().x.total_cmp(&b.center().x)).expect("a checkbox in Properties").center();
     let mut panels = BTreeSet::new();
     let mut cards = BTreeSet::new();
-    for events in
+    // The frames in which a card ran: the release that toggles the editor is frame 2.
+    let mut card_frames = Vec::new();
+    for (at, events) in
         [vec![pointer::moved(editor)], vec![pointer::press(editor)], vec![pointer::release(editor)], vec![pointer::moved(egui::pos2(1.0, 1.0))]]
+            .into_iter()
+            .enumerate()
     {
         fixture.frame(events);
         panels.extend(ran(&fixture));
+        if !cards_ran(&fixture).is_empty() {
+            card_frames.push(at);
+        }
         cards.extend(cards_ran(&fixture));
     }
-    for _ in 0..64 {
+    for at in 4..68 {
         fixture.frame(Vec::new());
         let now = ran(&fixture);
         panels.extend(now.iter().copied());
+        if !cards_ran(&fixture).is_empty() {
+            card_frames.push(at);
+        }
         cards.extend(cards_ran(&fixture));
         if now.is_empty() && !fixture.repaint_requested() {
             break;
@@ -161,6 +171,8 @@ fn a_story_value_edit_runs_properties_and_its_card() {
     }
     assert_eq!(panels, names(&["Properties", "Overview"]));
     assert_eq!(cards.len(), 1, "one card ran: {cards:?}");
+    // The story's checkbox animates its new state after that, which runs the card in the next frames.
+    assert_eq!(card_frames.first(), Some(&2), "the card shows the edit in the frame of the edit: {card_frames:?}");
     fixture.idle(1);
     assert!(ran(&fixture).is_empty() && cards_ran(&fixture).is_empty(), "then everything replays: {:?}", ran(&fixture));
 }
