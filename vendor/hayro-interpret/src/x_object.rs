@@ -1250,7 +1250,7 @@ fn decode_raster(
                 width: ctx.width,
                 height,
                 interpolate: obj.interpolate,
-                one_bit: false,
+                one_bit,
                 scale_factors: ctx.scale_factors,
             }))
         } else {
@@ -1263,7 +1263,7 @@ fn decode_raster(
                 width: ctx.width,
                 height,
                 interpolate: obj.interpolate,
-                one_bit: false,
+                one_bit,
                 scale_factors: ctx.scale_factors,
             }))
         }
