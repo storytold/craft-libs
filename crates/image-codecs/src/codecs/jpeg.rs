@@ -34,6 +34,12 @@ const PHOTOSHOP_HEADER: &[u8] = b"Photoshop 3.0\0";
 /// bug #533). The size also keeps every segment inside `add_app_segment`'s 65533-byte cap even
 /// with the identifier in front.
 const PHOTOSHOP_APP13_CHUNK: usize = 2048;
+/// The largest resource block the encoder writes. [`scan_metadata`] stops appending APP13
+/// payloads at 16 MiB (its `photoshop.len() < 1 << 24` guard), so a larger block would be
+/// read back silently truncated. Like the "metadata too large for its one segment is left
+/// out" rule for EXIF/XMP, the writer leaves such a block out whole rather than writing
+/// something the reader cannot return intact.
+const PHOTOSHOP_APP13_MAX: usize = 1 << 24;
 
 #[derive(Default, Debug)]
 pub(crate) struct JpegMeta {
@@ -740,8 +746,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     // `8BIM` block, split over segments with the identifier on each one — not Photoshop's own
     // continuation format, whose follow-up segments repeat neither identifier nor `8BIM`
     // (exiv2 bug #533). Like the TIFF writer (`tiff/encode.rs`), the block is document content,
-    // not metadata: written whenever non-empty, never when empty.
-    if let Some(resources) = img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty()) {
+    // not metadata: written whenever non-empty, never when empty, and never past the bound
+    // `scan_metadata` could not read back whole (see `PHOTOSHOP_APP13_MAX`).
+    if let Some(resources) = img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty() && r.len() <= PHOTOSHOP_APP13_MAX) {
         for chunk in resources.chunks(PHOTOSHOP_APP13_CHUNK) {
             let mut seg = Vec::with_capacity(PHOTOSHOP_HEADER.len() + chunk.len());
             seg.extend_from_slice(PHOTOSHOP_HEADER);
