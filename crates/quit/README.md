@@ -82,7 +82,18 @@ close button, and `on_close_request` then quits. It returns `false` for other id
 to the caller. It can be called between frames; egui keeps the command for the next frame.
 
 An app without a menu of its own uses `craft_menu::mac::install_app_menu`, which builds a minimal
-app menu with that Quit item. `craft_quit::install_app_menu` is deprecated in its favor.
+app menu with that Quit item. `craft_menu::mac` exists only on macOS, so the call needs
+`#[cfg(target_os = "macos")]`; other platforms need no call. Call it once, from the eframe app
+creator: winit builds its default menu before that and replaces a menu installed earlier. The call
+returns a `Result`. On error winit's menu stays, and ⌘Q quits without the unsaved-changes prompt;
+the app decides whether that is fatal, and `?` passes the error out of the app creator:
+
+```rust,ignore
+#[cfg(target_os = "macos")]
+craft_menu::mac::install_app_menu(&cc.egui_ctx, "WordCraft")?;
+```
+
+`craft_quit::install_app_menu` is deprecated in its favor.
 
 ## Notes
 
