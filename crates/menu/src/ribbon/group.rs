@@ -81,7 +81,10 @@ impl<'a> RibbonGroup<'a> {
         let mut took_width = f32::NAN;
         let mut title = Rect::NOTHING;
         let shown = Stack::new().gap(Gap::None).show(ui, |ui, _| {
-            let content = Row::new().show(ui, |ui, _| add(ui)).output.rect;
+            // A look that sets the row height (`RibbonLook::row`) packs its columns as close as its rows: a tight gap
+            // apart, as the old ribbon packed them.
+            let columns = if room.icons.row > 0 { Gap::Tight } else { Gap::Row };
+            let content = Row::new().gap(columns).show(ui, |ui, _| add(ui)).output.rect;
             took = content.height();
             took_width = content.width();
             // Every group places this spacer, an empty one too, so each has the same gaps above its title.
