@@ -330,7 +330,7 @@ fn gcr(p: &CmykParams, g: f64) -> f64 {
             break;
         }
     }
-    k.clamp(0.0, 1.0).min(p.tac)
+    k.clamp(0.0, 1.0).min(p.tac.max(0.0))
 }
 
 /// Colorimetric separation of a relative Lab target: GCR black generation then a CMY solve.
@@ -707,6 +707,9 @@ fn check_grids(p: &CmykParams) -> Result<(), CmsError> {
     if p.white_on_node && p.grid_b2a.is_multiple_of(2) {
         return Err(invalid_arg(format!("white on a node needs an odd BToA grid, not {}", p.grid_b2a)));
     }
+    if !(p.tac.is_finite() && p.tac >= 0.0) {
+        return Err(invalid_arg(format!("total ink limit {} must be finite and not negative", p.tac)));
+    }
     let valid = |v: &[f64; 2]| v.iter().all(|x| (0.0..=1.0).contains(x));
     if !p.gcr_curve.iter().all(valid) || p.gcr_curve.windows(2).any(|w| w[1][0] <= w[0][0]) {
         return Err(invalid_arg(format!("black generation curve {:?} needs points in [0, 1] with increasing gray components", p.gcr_curve)));
@@ -862,6 +865,17 @@ mod tests {
             let p = CmykParams { grid_a2b: 2, grid_b2a: 2, gcr_curve: curve.clone(), ..CmykParams::default() };
             assert!(cmyk_profile(&p).is_err(), "{curve:?}");
         }
+    }
+
+    #[test]
+    fn total_ink_limit_must_be_finite_and_not_negative() {
+        for tac in [-0.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let p = CmykParams { grid_a2b: 2, grid_b2a: 2, tac, ..CmykParams::default() };
+            assert!(cmyk_profile(&p).is_err(), "tac {tac}");
+        }
+        // `separate` is public and does not validate: black is still never negative.
+        let p = CmykParams { tac: -0.5, gcr_curve: vec![[0.0, 0.75]], ..CmykParams::default() };
+        assert_eq!(gcr(&p, 0.5), 0.0);
     }
 
     #[test]
