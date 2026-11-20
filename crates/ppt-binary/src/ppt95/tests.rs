@@ -1101,6 +1101,7 @@ fn shapes_keep_their_fill_line_and_shadow() {
     // A slot of the slide's own scheme.
     let mut spec = SlideSpec::new(0x100, 16);
     spec.scheme[4] = 0x123456;
+    spec.follow_scheme = false;
     spec.objects = vec![autoshape(-1, 0, bx, 0, PLAIN)];
     let p = deck(&[spec]);
     assert_eq!(p.slides[0].shapes[0].fill, Some(Fill::solid(rgb(0x12, 0x34, 0x56))));
@@ -1450,6 +1451,7 @@ fn shadows_keep_their_colour() {
     let bx = [0, 0, 576, 576];
     let mut spec = SlideSpec::new(0x100, 16);
     spec.scheme[2] = 0x445566;
+    spec.follow_scheme = false;
     spec.objects = vec![
         autoshape(-3, 0, bx, 0, Format { shadow: Some([0xFF, 0, 0, 0xFE]), ..PLAIN }),
         autoshape(-3, 0, bx, 0, Format { shadow: Some([0, 0, 0, 2]), ..PLAIN }),
