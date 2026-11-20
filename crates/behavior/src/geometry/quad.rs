@@ -728,7 +728,7 @@ fn turned_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, k
     let mut out = q.map(|x| c + (x - c) * k);
     let ([a0, a1], (run, other)) = if edge == 1 { ([0, 3], (al, ar)) } else { ([1, 2], (ar, al)) };
     let (middle, across) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(nh));
-    let half = (uh * (run + (k - 1.0) * (run - other) / 2.0) + nh * across) / 2.0;
+    let half = (uh * (run + (k - 1.0) * (run - other) / 2.0 + side_turn_lean(q, edge, uh) * (k * k - 1.0)) + nh * across) / 2.0;
     (out[a0], out[a1]) = (middle - half, middle + half);
     let plain = side_run_scale(g, p, min_side)?.quad;
     for i in if edge == 1 { [1, 2] } else { [0, 3] } {
@@ -801,7 +801,8 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
     let (top_run, bottom_run) = (v[1] - v[0], v[2] - v[3]);
     let ([a0, a1], (run, other)) = if edge == 2 { ([0, 1], (top_run, bottom_run)) } else { ([3, 2], (bottom_run, top_run)) };
     let (middle, along) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(uh));
-    let half = (uh * along + nh * (run + (k - 1.0) * (run - other) / 2.0)) / 2.0;
+    let share = 0.5 + if edge == 2 { -1.0 } else { 1.0 } * top_turn_lean(g.quad0) * (k + 1.0);
+    let half = (uh * along + nh * (run + (k - 1.0) * (run - other) * share)) / 2.0;
     (out[a0], out[a1]) = (middle - half, middle + half);
     let plain = side_run_scale(g, p, min_side)?.quad;
     for i in if edge == 2 { [2, 3] } else { [0, 1] } {
@@ -813,6 +814,48 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
         out[i] = c + uh * (column + centre) + nh * (out[i] - c).dot(nh);
     }
     out.iter().all(|x| x.is_finite()).then_some(BoxState { quad: out, pivot: c })
+}
+
+/// The projective weight of the unit square's point `(u, v)` in `q`, `None` for a degenerate box.
+fn unit_weight(q: [Point; 4], u: f64, v: f64) -> Option<f64> {
+    let [a, b, c] = Homography::unit_to_quad(q)?.row(2);
+    let w = a * u + b * v + c;
+    w.is_finite().then_some(w)
+}
+
+/// How far an ⌥ top or bottom drag on a box converging both ways moves the opposite edge's share of the turn off a
+/// half, per unit of `k + 1`: `(1 - w_b / w_t) / 4`, `w_t` and `w_b` the projective weights of the top's and the
+/// bottom's middles. The share is `1/2 + lean (k + 1)` for a top drag and `1/2 - lean (k + 1)` for a bottom one
+/// (measured on the reference, eight boxes, within 0.5 px). Zero where the sides are parallel, and for a degenerate box.
+fn top_turn_lean(q: [Point; 4]) -> f64 {
+    let lean = match (unit_weight(q, 0.5, 0.0), unit_weight(q, 0.5, 1.0)) {
+        (Some(top), Some(bottom)) => (1.0 - bottom / top) / 4.0,
+        _ => 0.0,
+    };
+    if lean.is_finite() { lean } else { 0.0 }
+}
+
+/// What an ⌥ side drag on a box converging both ways adds to the opposite side's run along `uh`, per unit of `k² - 1`:
+/// `± ln(w_r / w_l) / 4` times the two sides' difference of runs across their mean direction (`w_l`, `w_r` the
+/// projective weights of the left and right sides' middles; `+` for a right drag). Measured on the reference, eight
+/// boxes. Zero where the sides are parallel or the top and bottom are, and for a degenerate box.
+fn side_turn_lean(q: [Point; 4], edge: u8, uh: Vec2) -> f64 {
+    let [tl, tr, br, bl] = q;
+    let (left, right) = (bl - tl, br - tr);
+    let (ll, rl) = (left.hypot(), right.hypot());
+    let (Some(wl), Some(wr)) = (unit_weight(q, 0.0, 0.5), unit_weight(q, 1.0, 0.5)) else { return 0.0 };
+    if !(ll > 1e-9 && rl > 1e-9) {
+        return 0.0;
+    }
+    let d = left / ll + right / rl;
+    let mut n = Vec2::new(d.y, -d.x) / d.hypot();
+    if n.dot(uh) < 0.0 {
+        n = -n;
+    }
+    // The opposite side's run less the dragged one's, across the sides' mean direction.
+    let runs = if edge == 1 { left.dot(n) - right.dot(n) } else { right.dot(n) - left.dot(n) };
+    let lean = if edge == 1 { 1.0 } else { -1.0 } * (wr / wl).ln() / 4.0 * runs;
+    if lean.is_finite() { lean } else { 0.0 }
 }
 
 /// How much an ⌥ top or bottom drag eases its factor: `2 (W / H)² s_t (s_t - s_b)`, `s_t` and `s_b` the top's and the

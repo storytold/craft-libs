@@ -927,3 +927,55 @@ fn a_bottom_drag_on_a_box_converging_both_ways_follows_the_reference() {
         assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ edge drags on boxes whose edges converge both ways (Distort after Perspective), measured on the reference: the
+/// opposite edge turns by a share of the two edges' difference that leans off a half with the box's weights.
+#[test]
+fn an_alt_drag_on_a_box_converging_both_ways_turns_the_opposite_edge_like_the_reference() {
+    let cases = [
+        // Was 7.8 px off.
+        (
+            [(240.0, 125.0), (362.0, 125.0), (452.0, 287.0), (150.0, 327.0)],
+            2,
+            (301.0, 307.0),
+            (301.0, 387.0),
+            [(186.3736, 43.5611), (415.6264, 45.9961), (415.6264, 354.7081), (186.3736, 421.5181)],
+            0.5,
+        ),
+        // Was 8.9 px off.
+        (
+            [(240.0, 125.0), (362.0, 125.0), (502.0, 287.0), (100.0, 327.0)],
+            2,
+            (301.0, 307.0),
+            (301.0, 387.0),
+            [(186.3736, 44.6972), (415.6264, 44.6972), (415.6264, 355.8334), (186.3736, 420.3662)],
+            0.5,
+        ),
+        // Was 1.6 px off.
+        (
+            [(210.0, 125.0), (392.0, 125.0), (452.0, 307.0), (130.0, 337.0)],
+            0,
+            (301.0, 125.0),
+            (301.0, 85.0),
+            [(161.0528, 82.9537), (430.9472, 87.0636), (430.9472, 342.4022), (161.0528, 381.646)],
+            0.5,
+        ),
+        // Was 3.1 px off.
+        (
+            [(200.0, 125.0), (402.0, 125.0), (452.0, 297.0), (150.0, 327.0)],
+            2,
+            (301.0, 312.0),
+            (301.0, 392.0),
+            [(113.5829, 41.5852), (488.4171, 48.3453), (488.4171, 365.4924), (113.5829, 419.6638)],
+            0.5,
+        ),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, edge, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let mean = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, mean);
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
