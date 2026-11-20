@@ -7,6 +7,7 @@ use crate::ui::length::DocUnit;
 use craft_behavior::Mixed;
 use craft_ui::canvas::Rulers;
 use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::primitives::RulerFace;
 use craft_ui::runtime::env::{Message, UnitKind};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -85,8 +86,8 @@ const TWO_GAPS: [(f32, f32); 2] = [(144.0, 162.0), (306.0, 324.0)];
 /// Three gaps in the text width, between four columns.
 const THREE_GAPS: [(f32, f32); 3] = [(108.0, 126.0), (225.0, 243.0), (342.0, 360.0)];
 
-#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
-fn page_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+/// Word's ruler over a page, its zero at the left margin, in `face` (unset: the component set's).
+fn over_a_page(ui: &mut Ui, data: &mut StoryData, face: Option<RulerFace>) -> StoryOutput {
     let values = data.value("values", word());
     let stage = craft_ui::testing::stage(ui);
     let (strip, _) = Rulers::strips(ui, stage);
@@ -96,7 +97,29 @@ fn page_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     } else {
         (strip.min.x + PAGE_MARGIN, egui::Rangef::new(strip.min.x, strip.min.x + PAGE))
     };
-    TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).origin(origin).extent(extent).scale(1.0).show_at(ui, strip).into()
+    let mut ruler = TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).origin(origin).extent(extent).scale(1.0);
+    if let Some(face) = face {
+        ruler = ruler.face(face);
+    }
+    ruler.show_at(ui, strip).into()
+}
+
+#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
+fn page_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    over_a_page(ui, data, None)
+}
+
+/// The edge face: ticks rise from the strip's bottom, each number beside its whole-unit tick.
+#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
+fn edge_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    over_a_page(ui, data, Some(RulerFace::Edge))
+}
+
+/// The centred face (the office set's): a bar inset in the strip, ticks centred on it, numbers in place of the
+/// whole-unit ticks over the column only.
+#[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
+fn centred_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    over_a_page(ui, data, Some(RulerFace::Centred))
 }
 
 #[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
