@@ -31,7 +31,7 @@ use craft_behavior::geometry::{SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{Axis, CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, Snap, ToolPass,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, Rulers, Snap, ToolPass,
     ToolRegion, canvas_space, pixel_aligned, tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
@@ -186,7 +186,7 @@ impl PlacedPage {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct PageBody<'b> {
-    /// The canvas body's rect.
+    /// The canvas body's rect; with [`PageView::rulers`] it also covers the strips along the top and left.
     pub rect: Rect,
     /// The pages on screen this pass.
     pub pages: &'b [PlacedPage],
@@ -421,7 +421,8 @@ impl<'a> PageView<'a> {
         self
     }
 
-    /// Shows the rulers along the top and left edges: the inner canvas's `show_rulers`, which insets the view.
+    /// Leaves room for rulers along the top and left edges, which insets the view: the canvas shows inside the strips
+    /// and the app shows its rulers (`PageRulers`) over [`PageBody::rect`], which still covers the strips.
     pub fn rulers(mut self, on: bool) -> Self {
         self.rulers = on;
         self
@@ -469,7 +470,17 @@ impl<'a> PageView<'a> {
         navigation.overscroll = !start.continuous;
         // The app's page geometry, in page points, placed where its page shows in this pass's layout.
         let regions: Vec<ToolRegion> = tool_regions.iter().filter_map(|region| placed_region(region, &geo, &frame)).collect();
-        let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).tool_regions(regions).show_rulers(rulers);
+        let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).tool_regions(regions);
+        // With rulers the canvas shows inside the strips, so its view lies inside them. Its body is clipped to its view
+        // (`ContainerProps::scroll_owner`), so the app's body runs with the clip opened over the strips again, where
+        // its `PageRulers` show. The canvas's own `with_rulers` would show the general rulers there instead.
+        let (canvas_rect, strips_clip) = if rulers {
+            let (top, left) = Rulers::strips(ui, rect);
+            let inner = Rect::from_min_max(pos2(left.max.x.min(rect.max.x), top.max.y.min(rect.max.y)), rect.max);
+            (inner, Some(ui.clip_rect().intersect(rect)))
+        } else {
+            (rect, None)
+        };
         if let Some(purpose) = editor {
             canvas = canvas.editor(purpose);
         }
@@ -484,12 +495,20 @@ impl<'a> PageView<'a> {
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             let next = run_pass(ui, cx, &mut held, &Inputs { source, describer, build: &build, rect, given, paper, reach })?;
             let pass = tool_pass(&cx.env);
-            body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() });
+            let body_rect = match strips_clip {
+                Some(clip) => {
+                    ui.set_clip_rect(clip);
+                    Rect::from_min_max(rect.min, cx.rect.max)
+                }
+                None => cx.rect,
+            };
+            body(ui, &PageBody { rect: body_rect, pages: &next.pages, view: next.view, pass: pass.as_ref() });
             let decided = next.next.clone();
             seen = Some(next);
             decided
         };
-        let mut shown = if take_room { canvas.show_at_taking_room(ui, rect, &mut canvas_body) } else { canvas.show_at(ui, rect, &mut canvas_body) };
+        let mut shown =
+            if take_room { canvas.show_at_taking_room(ui, canvas_rect, &mut canvas_body) } else { canvas.show_at(ui, canvas_rect, &mut canvas_body) };
         // Once per pass, after the real run: the memory and the state the pass decided are stored.
         shown.settle(|cx, decided| {
             if let Some(Next { started, state, mem, edit }) = decided.take() {
