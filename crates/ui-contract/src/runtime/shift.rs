@@ -16,13 +16,26 @@ pub trait Shift {
 }
 
 /// A clip rect a record holds: the clip of the code around the record becomes the replay's clip, a clip set inside it
-/// moves with it (`RecordShift::clip`).
+/// moves with it (`RecordShift::clip`). A clip with no area is `Rect::NOTHING`, however it came about: one clip passes
+/// nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Clip(pub Rect);
+pub struct Clip(Rect);
+
+impl Clip {
+    /// The record's clip for the clip rect `clip`.
+    pub fn new(clip: Rect) -> Self {
+        Clip(if clip.is_positive() { clip } else { Rect::NOTHING })
+    }
+
+    /// The clip rect.
+    pub fn rect(self) -> Rect {
+        self.0
+    }
+}
 
 impl Shift for Clip {
     fn shifted(&self, by: &RecordShift) -> Self {
-        Clip(by.clip(self.0))
+        Clip::new(by.clip(self.0))
     }
 }
 
