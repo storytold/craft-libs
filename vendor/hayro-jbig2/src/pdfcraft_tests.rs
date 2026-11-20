@@ -213,10 +213,18 @@ fn empty_class_jbig2_dictionary(classes: u32, height: u32) -> Vec<u8> {
 /// A Huffman-coded symbol dictionary of `symbols` white symbols of width 1 and `height` rows, none
 /// exported, for `height` from 76 up.
 fn narrow_jbig2_dictionary(symbols: u32, height: u32) -> Vec<u8> {
+    narrow_jbig2_dictionary_of(symbols, 1, height)
+}
+
+/// [`narrow_jbig2_dictionary`], its symbols `width` columns wide, from 1 to 2.
+fn narrow_jbig2_dictionary_of(symbols: u32, width: u32, height: u32) -> Vec<u8> {
     let mut bits = Bits::default();
     bits.put(0b11111, 5); // height class delta, the upper line of table B.4
     bits.put(height - 76, 32);
-    bits.put(0b10, 2); // width delta 1 (B.2)
+    match width {
+        1 => bits.put(0b10, 2),  // width delta 1 (B.2)
+        _ => bits.put(0b110, 3), // width delta 2 (B.2)
+    }
     for _ in 1..symbols {
         bits.put(0, 1); // width delta 0 (B.2)
     }
@@ -328,7 +336,8 @@ fn square_jbig2_dictionary(side: u32, exported: bool) -> Vec<u8> {
     dictionary
 }
 
-/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` of 0 or 1.
+/// A text region of `width` × `height` placing symbol 0 of one, Huffman-coded, `instances` times,
+/// each in a strip of its own one row below the last.
 fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     let mut text = jbig2_region_info(width, height);
     text.extend_from_slice(&[0x00, 0x11, 0, 0]); // Huffman, top left; tables B.6, B.8, B.11
@@ -340,7 +349,7 @@ fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     bits.put(0, 1); // symbol 0 is one bit long
     bits.align();
     bits.put(0, 1); // the first strip's T (B.11)
-    if instances > 0 {
+    for _ in 0..instances {
         bits.put(0, 1); // delta T 1 (B.11)
         bits.put(0, 9); // first S 0 (B.6)
         bits.put(0, 1); // symbol 0
@@ -803,3 +812,74 @@ fn jbig2_placements_at_the_end_of_an_i32_draw_nothing() {
     assert_eq!(ink(hex(LOWER_LINE), 16, 12), 0, "a lower range line past an i32");
 }
 
+
+/// The error decoding an embedded stream ends with, if any.
+fn decode_error(stream: &[u8]) -> Option<crate::DecodeError> {
+    let mut count = Count::default();
+    Image::new_embedded(stream, None).and_then(|image| image.decode(&mut count)).err()
+}
+
+/// PdfCraft patch (#7316): a symbol dictionary's pixels have no bound of their own; the decoding
+/// work and the words a page retains bound them. Held to 2^26 pixels, the soft mask of a scanned
+/// drawing, one dictionary of 7,559 symbols, passed it (#6722); held to 2^28, a book's shared
+/// dictionary of 173,132 symbols passed that, and every page drew white.
+#[test]
+fn jbig2_a_symbol_dictionary_holds_as_many_pixels_as_its_work_and_words_allow() {
+    let stream = |heights: &[u32]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &wide_jbig2_dictionary(65535, heights));
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&[1100])), "72,088,500 pixels, past 2^26");
+    assert!(jbig2_image_draws(&stream(&[2047, 2048])), "268,365,825 pixels, within 2^28");
+    assert!(jbig2_image_draws(&stream(&[2048, 2049])), "268,496,895 pixels, past 2^28");
+}
+
+/// PdfCraft patch (#7316): a symbol dictionary may hold more than 65,535 symbols: T.88 gives its
+/// counts 32 bits (7.4.2.1.4, 7.4.2.1.5), and a Huffman-coded dictionary of 262,144 symbols
+/// (PDFBOX-6263) and a book's shared one of 173,132 were refused. These are 70,000 symbols without
+/// pixels, all exported, which the page's words still hold.
+#[test]
+fn jbig2_a_symbol_dictionary_holds_more_than_65535_symbols() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(70_000, true));
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// PdfCraft patch (#7316): a height class's collective bitmap (6.5.9) is as wide as its symbols
+/// together, which T.88 gives 32 bits: it is bounded by its pixels, not by the bound on a bitmap's
+/// side. PDFBOX-6263's dictionary has one class of 262,144 symbols 9 × 2, a collective bitmap of
+/// 2,359,296 × 2. These are 40,000 symbols 2 wide, 80,000 columns together.
+#[test]
+fn jbig2_a_collective_bitmap_is_as_wide_as_its_symbols_together() {
+    let mut stream = black_jbig2_page();
+    jbig2_segment(&mut stream, 1, 0, &[], &narrow_jbig2_dictionary_of(40_000, 2, 76));
+    assert!(jbig2_image_draws(&stream));
+}
+
+/// PdfCraft patch (#7316): a text region may place more than 10,000 instances: its instances are
+/// bounded by the decoding work they take, and a scanned page of 10,508 characters (PDFBOX-1439)
+/// was refused. A count that work could never pay for is refused before anything is read, as a
+/// decoder limit; one within it that the data doesn't hold is damage.
+#[test]
+fn jbig2_a_text_region_places_as_many_instances_as_its_work_allows() {
+    let stream = |text: &[u8]| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(1, true));
+        jbig2_segment(&mut stream, 2, 6, &[1], text);
+        stream
+    };
+    assert!(jbig2_image_draws(&stream(&jbig2_text_region(16, 2, 12_000))), "12,000 instances");
+    // A region that says it has `count` instances and holds none of them.
+    let error = |count: u32| {
+        let mut text = jbig2_text_region(16, 2, 0);
+        text.splice(21..25, count.to_be_bytes());
+        decode_error(&stream(&text))
+    };
+    // At 152 each, 7,064,091 instances are past 2^30; 7,064,090 aren't, and run out of data.
+    let past = error(7_064_091);
+    assert_eq!(past, Some(crate::SymbolError::TooManyInstances.into()), "past what work pays for");
+    assert!(past.is_some_and(|e| e.is_limit()));
+    let within = error(7_064_090);
+    assert!(within.is_some_and(|e| !e.is_limit()), "within it: the data ends, damage: {within:?}");
+}
