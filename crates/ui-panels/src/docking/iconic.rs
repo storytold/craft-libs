@@ -14,16 +14,15 @@ use crate::contract::{
     WordSetCx as _,
 };
 use crate::menu::GroupItem;
-use crate::primitives::IconSpec;
-use crate::primitives::TextRun;
+use crate::primitives::{IconSpec, PaintShape, TextRun};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, GlyphRole, StyleColor, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, GlyphRole, StyleColor, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
 use craft_theme::ControlSize;
-use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
+use egui::{CornerRadius, Id, Pos2, Rect, Response, Ui, Vec2};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -45,7 +44,7 @@ pub struct IconicSizes {
     pub column: DockSizes,
     /// The height of an icon cell (the rail button).
     pub cell: f32,
-    /// How far an icon group's drag band reaches into its first icon.
+    /// The height of the grip strip at the top of each icon group, above its first icon.
     pub grip: f32,
     /// The room between two icon groups.
     pub separator: f32,
@@ -56,6 +55,12 @@ pub struct IconicSizes {
 /// The column width, in rail widths, from which the cells show their panels' names: 96 points at the Compact size.
 const LABELS_IN_RAIL_WIDTHS: f32 = 2.4;
 
+/// The length of a group's grip bar, in icon cell heights: half a cell, 15 points at the Compact size (18 at
+/// Comfortable). That is several times the bar's thickness, so it reads as a handle and not as a dot, and in a
+/// rail-wide column (40 points at Compact) it leaves more than a quarter of the width free on each side, so it does
+/// not read as a rule between the groups.
+const GRIP_BAR_IN_CELLS: f32 = 0.5;
+
 impl IconicSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
@@ -63,7 +68,7 @@ impl IconicSizes {
         IconicSizes {
             column: DockSizes::style(cx),
             cell: size.rail.button,
-            grip: size.handle.sm,
+            grip: size.hit.target,
             separator: cx.tokens.space.gap.tight,
             labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
         }
@@ -75,10 +80,12 @@ impl IconicSizes {
         StyleCx::with_root(ctx, IconicSizes::style)
     }
 
-    /// The height of the icons of `column` under its bar: a cell per panel and the room between every two groups.
+    /// The height of the icons of `column` under its bar: a grip strip per group, a cell per panel and the room between
+    /// every two groups.
     pub fn icons_height<P>(&self, column: &Column<P>) -> f32 {
         let cells: usize = column.groups.iter().map(|group| group.panels.len()).sum();
-        cells as f32 * self.cell + column.groups.len().saturating_sub(1) as f32 * self.separator
+        let groups = column.groups.len();
+        groups as f32 * self.grip + cells as f32 * self.cell + groups.saturating_sub(1) as f32 * self.separator
     }
 }
 
@@ -142,13 +149,22 @@ pub struct IconicColumnStyle {
     name_open: StyleColor,
     /// The room between an icon and its name.
     name_gap: f32,
+    /// The ink of a group's grip bar.
+    grip: StyleColor,
+    /// The ink of a group's grip bar while the pointer is over it or drags it.
+    grip_active: StyleColor,
+    /// The grip bar's length across the group and its thickness.
+    grip_length: f32,
+    grip_thickness: f32,
+    /// The grip bar's corners: the theme's pill rounding.
+    grip_radius: CornerRadius,
 }
 
 /// A column collapsed to icons: the column bar over icon groups, one cell per panel. A panel without an icon shows the
 /// first letter of its name in a box. A column widened past `IconicSizes::labels` shows each panel's name beside its
 /// icon, cut with an ellipsis to the cell; a click or drag on the name acts as one on the icon. A click or Enter on an icon
 /// opens the flyout of its panel beside the column, switches it to that panel or closes it; one flyout is open at a
-/// time. A drag of an icon starts a move of its panel, a drag of the band on top of a group a move of the group, a
+/// time. A drag of an icon starts a move of its panel, a drag of the grip bar on top of a group a move of the group, a
 /// drag of the bar beside its button a move of the column; each starts through the drag session, and a press outside
 /// the flyout closes it. Escape and a press
 /// outside close the flyout; with `auto_collapse` the focus leaving it does too.
@@ -229,9 +245,9 @@ struct Plan {
     cells: Vec<(usize, usize, Rect)>,
     /// The rest of each row in a wide column, where the panel's name shows; empty in a narrow column.
     names: Vec<Rect>,
-    /// `(group, rect)` of each group's drag band.
+    /// `(group, rect)` of each group's grip strip, above its first icon.
     grips: Vec<(usize, Rect)>,
-    /// `(group, rect)` of the cells of each group.
+    /// `(group, rect)` of the whole of each group: its grip strip and its cells.
     groups: Vec<(usize, Rect)>,
     body: Rect,
 }
@@ -324,6 +340,8 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
                 y += sizes.separator;
             }
             let top = y;
+            let grip = Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), top + sizes.grip));
+            y = grip.bottom();
             for panel in 0..group.panels.len() {
                 let row = Rect::from_min_size(Pos2::new(body.left(), y), Vec2::new(body.width(), sizes.cell));
                 if wide {
@@ -335,7 +353,7 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
                 }
                 y += sizes.cell;
             }
-            grips.push((at, Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), (top + sizes.grip).min(y)))));
+            grips.push((at, grip));
             groups.push((at, Rect::from_min_max(Pos2::new(body.left(), top), Pos2::new(body.right(), y))));
         }
         Plan { bar, cells, names, grips, groups, body }
@@ -374,15 +392,15 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
         sizes: &DockSizes,
     ) -> Option<FlyoutPlan<P>> {
         let (group_at, _) = *self.flat().get(at)?;
-        let icons = self.laid.as_ref()?.groups.iter().find(|(group, _)| *group == group_at)?.1;
+        let icons = self.laid.as_ref()?.cells.iter().find(|(group, _, _)| *group == group_at)?.2.top();
         let group = self.flyout_group(at)?;
         let width = group.flyout_width.filter(|width| width.is_finite() && *width > 0.0).unwrap_or(expanded).max(least.x).min(bounds.width());
         let fixed = group.height.is_some_and(|height| height.is_finite() && height > 0.0);
         let height = self.flyout_height(&group, sizes).max(least.y).min(bounds.height());
         let offset = group.flyout_offset.filter(|offset| offset.is_finite()).unwrap_or(0.0);
-        let top = (icons.top() + offset).min(bounds.bottom() - height).max(bounds.top());
+        let top = (icons + offset).min(bounds.bottom() - height).max(bounds.top());
         let left = if right { column.right() } else { column.left() - width };
-        Some(FlyoutPlan { group, top_left: Pos2::new(left, top), size: Vec2::new(width, height), fixed, icons_top: icons.top() })
+        Some(FlyoutPlan { group, top_left: Pos2::new(left, top), size: Vec2::new(width, height), fixed, icons_top: icons })
     }
 }
 
@@ -408,6 +426,11 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),
             name_gap: cx.tokens.space.gap.item,
+            grip: cx.color(colors.text.muted),
+            grip_active: cx.color(colors.text.normal),
+            grip_length: cx.tokens.size.rail.button * GRIP_BAR_IN_CELLS,
+            grip_thickness: cx.tokens.stroke.thick,
+            grip_radius: UiTokens::corner(cx.tokens.shape.radius.pill),
         }
     }
 
@@ -419,8 +442,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         Some(self.open.reborrow())
     }
 
-    /// The icon cells, each toggling the flyout of its panel, and the drag band of every group. The cells win the
-    /// top of the first icon over the band, which is declared first.
+    /// The icon cells, each toggling the flyout of its panel, and the grip strip of every group, which takes exactly its
+    /// rect so that it never reaches into the group's first icon.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sizes = cx.style.sizes;
         let plan = self.plan(rect, &sizes, cx.flow.is_rtl());
@@ -446,6 +469,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         for (group, grip) in &plan.grips {
             cx.part(GRIP.at(*group as u64), *grip)
                 .sense(Sense::DRAG)
+                .exact_hit()
                 .cursor(CursorIcon::Grab)
                 .drag_cursor(CursorIcon::Grabbing)
                 .pointer_only("Move Panel To in the panel menu moves the group's panels");
@@ -550,6 +574,13 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             // A cell is a rail button: the tool rail's size and glyphs, so a collapsed column's icons match the tools'.
             let cell = IconButton::new(icon).label(spec.label).selected(selected).size(ControlSize::Md).glyphs(GlyphRole::ToolRail);
             ui.face(CELL.at(at as u64), cell);
+        }
+        let style = &cx.style;
+        for (group, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
+            let part = cx.part(GRIP.at(*group as u64));
+            let ink = if part.hovered || part.pressed() { style.grip_active } else { style.grip };
+            let bar = Rect::from_center_size(strip.center(), Vec2::new(style.grip_length.min(strip.width()), style.grip_thickness));
+            ui.draw().fill(&PaintShape::Rect(bar, style.grip_radius), ink);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column.
         let (rect, edge) = (cx.rect, self.edge_divider(cx.rect, &cx.style.sizes.column));
