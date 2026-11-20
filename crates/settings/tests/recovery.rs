@@ -68,6 +68,39 @@ fn file_grown_past_the_limit_while_running_is_not_overwritten() {
 }
 
 #[test]
+fn settings_too_large_to_read_back_are_not_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut store, _) = open_in(tmp.path());
+    store.flush().unwrap();
+    let before = read_config(tmp.path());
+
+    let huge = "a".repeat(craft_settings::store::MAX_CONFIG_BYTES as usize);
+    store.update(|p| p.general.language = huge);
+    assert!(matches!(store.flush(), Err(SettingsError::Io(e)) if e.kind() == std::io::ErrorKind::FileTooLarge));
+    assert_eq!(read_config(tmp.path()), before, "the file is untouched");
+    assert!(!store.is_read_only());
+    assert!(store.is_dirty(), "the change is kept for a later save");
+
+    store.update(|p| p.general.language = "fr".into());
+    store.flush().unwrap();
+    assert!(read_config(tmp.path()).contains("language = \"fr\""));
+}
+
+#[test]
+fn settings_too_large_to_save_leave_a_broken_file_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut store, _) = open_in(tmp.path());
+    store.flush().unwrap();
+    write_config(tmp.path(), "not = [toml");
+
+    let huge = "a".repeat(craft_settings::store::MAX_CONFIG_BYTES as usize);
+    store.update(|p| p.general.language = huge);
+    assert!(matches!(store.flush(), Err(SettingsError::Io(e)) if e.kind() == std::io::ErrorKind::FileTooLarge));
+    assert_eq!(read_config(tmp.path()), "not = [toml", "the file is untouched");
+    assert!(store.take_moved_aside().is_empty());
+}
+
+#[test]
 fn bad_value_only_resets_its_section() {
     let tmp = tempfile::tempdir().unwrap();
     write_config(tmp.path(), "schema_version = 2\n[general]\nlanguage = \"de\"\n\n[appearance]\ntheme = \"sepia\"\nui_scale = 2.0\n");

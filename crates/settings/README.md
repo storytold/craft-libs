@@ -158,6 +158,10 @@ which can stay the same on FAT, HFS+ or network shares) with what it last read o
 | Blank | Leaves the previous backup alone, then writes. |
 | From a newer build, its migration fails, or larger than `store::MAX_CONFIG_BYTES` | Writes nothing; the store becomes read-only and the save returns `SettingsError::ReadOnly`, the same as at startup. |
 
+When the settings would render to more than `store::MAX_CONFIG_BYTES`, the save writes nothing
+and returns `SettingsError::Io` with `ErrorKind::FileTooLarge`. The file on disk stays as it was,
+and the store keeps the changes and tries again after the retry delay.
+
 ### Concurrency contract
 
 Saving is **best effort, last writer wins**, not multi-process locking. Hand edits and a
