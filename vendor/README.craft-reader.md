@@ -236,6 +236,14 @@ OCR text (mode 3) keeps a heading drawn through its clip. The unit tests
 glyph_names_resolve_to_the_first_glyph_with_that_name}` come with (49) and (50); the #3116
 contract is in `tests/upstream_text.rs`.
 
+Font fixes, ported from PdfCraft pull requests by mtlcl410 that were open when they were ported
+(craft-libs #2674). Code comments keep each pull request's `PdfCraft patch` label and number,
+where it has one. The tests are in the files they name.
+
+| PdfCraft PR | Files | Change | Tests |
+|---|---|---|---|
+| [#3076](https://github.com/storytold/pdfcraft/pull/3076) | hayro-interpret `font/standard_font.rs`; `crates/pdf/src/fonts/latin.rs`, `fonts/std14_metrics.rs` | Extension of (26): in the stand-ins for the standard fonts, Đ is drawn as Ð, đ with a bar across its ascender, and ď ľ Ľ ť with an apostrophe-shaped caron after the letter or L's stem (ISO 32000-2 §9.6.2.2, §9.6.5). The writing side moves to `craft-pdf`'s `fonts` module with PdfCraft's standard-14 tables: `LatinEncoding` gives the Latin Extended-A letters of the twelve text faces codes of their own in a WinAnsi `/Differences` encoding, with their Core14 `/Widths` and a `/ToUnicode` CMap (`EXTRA_LETTERS`) | `letters_with_a_bar_or_an_apostrophe_caron_are_built_from_their_parts` in `tests/upstream_raster.rs`; `fonts::latin::tests` |
+
 Fixes from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
 by its item ids, each marked `PdfCraft patch` in the source. hayro-syntax (24), PdfCraft
 #2400: `xref::prev_offset` reads a trailer `/Prev` written as a reference `N G R` as the
