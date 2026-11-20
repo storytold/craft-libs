@@ -14,11 +14,16 @@ fn a_jp2_file_is_detected_without_the_feature() {
 #[test]
 fn a_jp2_file_is_refused_with_the_feature_named() {
     let err = decode_with(JP2_HEAD, &DecodeOptions::default()).expect_err("no image in a bare header");
-    // With the feature, the bare header is a decode error, never "unsupported".
-    if !cfg!(feature = "jp2")
-        && let CodecError::Unsupported { format, reason } = err
-    {
-        assert_eq!(format, Format::Jp2);
-        assert!(reason.contains("jp2 feature"), "reason names the feature: {reason}");
+    if cfg!(feature = "jp2") {
+        // With the feature the bare header reaches the decoder and fails as undecodable.
+        assert!(matches!(err, CodecError::Malformed { .. } | CodecError::InvalidImage(_)), "decodes as far as the decoder: {err:?}");
+    } else {
+        match err {
+            CodecError::Unsupported { format, reason } => {
+                assert_eq!(format, Format::Jp2);
+                assert!(reason.contains("jp2 feature"), "reason names the feature: {reason}");
+            }
+            other => panic!("expected an unsupported format error, got {other:?}"),
+        }
     }
 }
