@@ -1593,14 +1593,34 @@ pub mod linux {
 /// Retries only the disk-image helper's known busy replies. The injected wait keeps the policy's
 /// tests independent of macOS and wall-clock delays; the real caller uses `thread::sleep`.
 #[cfg(any(target_os = "macos", test))]
-fn retry_busy_detach(mut detach: impl FnMut() -> Result<(), String>, mut wait: impl FnMut(std::time::Duration)) -> Result<(), String> {
+fn retry_busy_detach(detach: impl FnMut() -> Result<(), String>, wait: impl FnMut(std::time::Duration)) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    retry_busy_detach_with_elapsed(detach, wait, || started.elapsed())
+}
+
+/// Counts time spent in the helper as well as backoff, so a slow failure cannot multiply the
+/// ordinary/force helper timeouts. An already started detach keeps its original limits.
+#[cfg(any(target_os = "macos", test))]
+fn retry_busy_detach_with_elapsed(
+    mut detach: impl FnMut() -> Result<(), String>,
+    mut wait: impl FnMut(std::time::Duration),
+    mut elapsed: impl FnMut() -> std::time::Duration,
+) -> Result<(), String> {
+    let window = std::time::Duration::from_secs(8);
     let mut result = detach();
     for millis in [500, 1000, 2000, 4000] {
         let Err(reason) = &result else { return result };
         if !reason.contains("Resource busy") && !reason.contains("Resource temporarily unavailable") {
             return result;
         }
-        wait(std::time::Duration::from_millis(millis));
+        let delay = std::time::Duration::from_millis(millis);
+        if elapsed().saturating_add(delay) > window {
+            break;
+        }
+        wait(delay);
+        if elapsed() >= window {
+            break;
+        }
         result = detach();
     }
     result
@@ -4313,6 +4333,24 @@ exit 0
         assert!(waits.iter().all(|delay| !delay.is_zero()));
         assert!(waits.iter().sum::<std::time::Duration>() <= std::time::Duration::from_secs(8));
         assert_eq!(result, Err(format!("Resource busy, attempt {attempts}")));
+    }
+
+    #[test]
+    fn a_slow_busy_detach_spends_the_retry_window_without_another_attempt() {
+        let attempts = std::cell::Cell::new(0);
+        let elapsed = std::cell::Cell::new(std::time::Duration::ZERO);
+        let reason = "hdiutil: detach failed - Resource busy";
+        let result = retry_busy_detach_with_elapsed(
+            || {
+                attempts.set(attempts.get() + 1);
+                elapsed.set(std::time::Duration::from_secs(9));
+                Err(reason.to_string())
+            },
+            |_| panic!("a slow detach has already spent the retry window"),
+            || elapsed.get(),
+        );
+        assert_eq!(result, Err(reason.to_string()));
+        assert_eq!(attempts.get(), 1, "operation time counts against retries, not just sleep time");
     }
 
     #[test]
