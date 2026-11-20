@@ -463,17 +463,8 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
     });
     let container = r.child(rt::TEXT);
     let mut text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
-    // PowerPoint 95 lays a shape's text out in the box the geometry holds, turned by the text's own
-    // angle (4003 +16, the geometry's own angle in every probe): quarter-turns folded into that box
-    // don't turn the text. When the shape's box was turned back, the text is upright on the slide,
-    // at that angle, with its insets on the held box's edges by name, as PowerPoint lays out
-    // `upright` text (checked in PowerPoint 16 against PowerPoint 95's renderings).
+    // The quarter-turns between the box the geometry holds and the shape's own.
     let quarters = shape::quarter_turns(&xfrm, drawn);
-    if let Some(t) = text.as_mut().filter(|_| quarters != 0) {
-        let angle = container.and_then(|c| text::angle(&c)).unwrap_or(drawn);
-        t.body.upright = Some(true);
-        t.body.rot = Some(shape::clockwise(i64::from(angle))).filter(|r| *r != 0.0);
-    }
     let ruler = container.and_then(|c| text::ruler_slot(&c));
     let (mut geom, mut look) = (None, Look::none());
     if !placeholder {
@@ -490,6 +481,17 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         if let Some(f) = format {
             look = shape::look(&f, scheme);
         }
+    }
+    // PowerPoint 95 lays a shape's text out in the box the geometry holds, turned by the text's own
+    // angle (4003 +16, the geometry's own angle in every probe): quarter-turns folded into that box
+    // don't turn the text. When the shape ends up at another angle (its box turned back, or the
+    // half-turn a mirrored trapezoid takes), the text is upright on the slide, at its own angle,
+    // with its insets on the held box's edges by name, as PowerPoint lays out `upright` text
+    // (checked in PowerPoint 16 against PowerPoint 95's renderings).
+    let angle = shape::clockwise(i64::from(container.and_then(|c| text::angle(&c)).unwrap_or(drawn)));
+    if let Some(t) = text.as_mut().filter(|_| (xfrm.rot - angle).rem_euclid(360.0) != 0.0) {
+        t.body.upright = Some(true);
+        t.body.rot = Some(angle).filter(|r| *r != 0.0);
     }
     Some(Object { placeholder, ph, xfrm, text, ruler, geom, look, kind: Kind::Shape })
 }
