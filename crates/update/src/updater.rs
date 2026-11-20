@@ -12,7 +12,7 @@
 //! reports what came of it: [`Status::Updated`] or [`Status::InstallFailed`].
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -89,6 +89,16 @@ type Found = Result<Option<(Release, bool)>, String>;
 /// Says whether this copy can install a release itself (tests stand in for the files with one).
 type InstallProbe = Arc<dyn Fn(&'static App, &Release) -> bool + Send + Sync>;
 
+/// Runs on the check's thread just before it starts its request (tests).
+type BeforeAsk = Arc<dyn Fn() + Send + Sync>;
+
+/// The check's thread has not started its request.
+const CHECK_WAITING: u8 = 0;
+/// The check's thread has started its request.
+const CHECK_ASKING: u8 = 1;
+/// Checks were turned off before the check's thread started its request: it asks nothing.
+const CHECK_DROPPED: u8 = 2;
+
 /// Whether this copy can install `release` itself. It reads the installed files, which can take
 /// long on slow storage, so the check's thread and the offer's thread call it, never a frame.
 fn can_install_itself(app: &'static App, release: &Release) -> bool {
@@ -155,8 +165,13 @@ pub struct Updater {
     /// Checks may ask the network ([`Self::set_checks_enabled`]).
     checks_enabled: bool,
     check: Option<Receiver<Found>>,
-    /// Set when checks are turned off while `check` runs: its thread then asks nothing more.
-    check_dropped: Arc<AtomicBool>,
+    /// Whether `check`'s thread has started its request ([`CHECK_ASKING`]), or checks were turned
+    /// off before it did ([`CHECK_DROPPED`]). The thread moves it from [`CHECK_WAITING`] to
+    /// [`CHECK_ASKING`] in one step as it begins its request, so it either begins the request
+    /// before checks are turned off or asks nothing.
+    check_state: Arc<AtomicU8>,
+    /// Runs on the check's thread just before it starts its request (tests).
+    before_ask: Option<BeforeAsk>,
     /// A release the app offered ([`Self::offer`]) while its thread reads whether this copy can
     /// install it itself; `tick` opens the prompt with the answer.
     offered: Option<Receiver<(Release, bool)>>,
@@ -216,7 +231,8 @@ impl Updater {
             started: false,
             checks_enabled: true,
             check: None,
-            check_dropped: Arc::new(AtomicBool::new(false)),
+            check_state: Arc::new(AtomicU8::new(CHECK_WAITING)),
+            before_ask: None,
             offered: None,
             next_offer: None,
             offer_outdated: false,
@@ -289,7 +305,7 @@ impl Updater {
     pub fn set_checks_enabled(&mut self, enabled: bool) {
         self.checks_enabled = enabled;
         if !enabled && self.check.take().is_some() {
-            self.check_dropped.store(true, Ordering::SeqCst);
+            self.check_state.store(CHECK_DROPPED, Ordering::SeqCst);
             // A requested check answers as `finish_check` would while an update installs or is ready.
             if std::mem::take(&mut self.requested) {
                 self.status = if self.install.is_some() || self.installed { self.pending_status() } else { Status::Off };
@@ -313,6 +329,13 @@ impl Updater {
     #[cfg(test)]
     fn with_probe(mut self, probe: InstallProbe) -> Self {
         self.probe = Some(probe);
+        self
+    }
+
+    /// Runs `hook` on the check's thread just before it starts its request (tests).
+    #[cfg(test)]
+    fn with_before_ask(mut self, hook: BeforeAsk) -> Self {
+        self.before_ask = Some(hook);
         self
     }
 
@@ -520,13 +543,19 @@ impl Updater {
             return;
         }
         let (tx, rx) = channel();
-        self.check_dropped = Arc::new(AtomicBool::new(false));
-        let dropped = self.check_dropped.clone();
-        let (source, probe, app, version, ctx) = (self.source.clone(), self.probe.clone(), self.app, self.version.clone(), ctx.clone());
+        self.check_state = Arc::new(AtomicU8::new(CHECK_WAITING));
+        let state = self.check_state.clone();
+        let (source, probe, before_ask, app, version, ctx) =
+            (self.source.clone(), self.probe.clone(), self.before_ask.clone(), self.app, self.version.clone(), ctx.clone());
         let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
             let ask = || -> Found {
-                // Checks were turned off before this thread got to ask: nothing reads the answer.
-                if dropped.load(Ordering::SeqCst) {
+                if let Some(hook) = &before_ask {
+                    hook();
+                }
+                // This exchange is where the request begins. Once `set_checks_enabled(false)` has
+                // stored `CHECK_DROPPED`, it fails and the thread asks nothing; a thread that
+                // passed it first has begun its request, which finishes unread.
+                if state.compare_exchange(CHECK_WAITING, CHECK_ASKING, Ordering::SeqCst, Ordering::SeqCst).is_err() {
                     return Ok(None);
                 }
                 let checked: Checked = match source {
@@ -1247,13 +1276,13 @@ mod tests {
         // The dropped check's thread is told to ask nothing more; the next check gets its own flag.
         let mut u = updater(Ok(None));
         u.check_now(&ctx);
-        let dropped = u.check_dropped.clone();
-        assert!(!dropped.load(Ordering::SeqCst));
+        let state = u.check_state.clone();
+        assert_ne!(state.load(Ordering::SeqCst), CHECK_DROPPED);
         u.set_checks_enabled(false);
-        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(state.load(Ordering::SeqCst), CHECK_DROPPED);
         u.set_checks_enabled(true);
         u.check_now(&ctx);
-        assert!(!u.check_dropped.load(Ordering::SeqCst));
+        assert_ne!(u.check_state.load(Ordering::SeqCst), CHECK_DROPPED);
         settle(&mut u, &ctx);
         assert_eq!(u.status(), &Status::UpToDate);
 
@@ -1273,6 +1302,41 @@ mod tests {
         u.install = Some((rx, newer()));
         u.set_checks_enabled(false);
         assert_eq!(u.status(), &Status::Installing);
+    }
+
+    /// The check's thread stops just before its request while the test turns checks off; once it
+    /// goes on, it does not start the request.
+    #[test]
+    fn checks_turned_off_before_the_request_starts_skip_it() {
+        let ctx = egui::Context::default();
+        // The thread asks for a frame as its last step: that says it has finished.
+        let (done_tx, done) = channel();
+        let done_tx = Mutex::new(done_tx);
+        ctx.set_request_repaint_callback(move |_| {
+            let _ = done_tx.lock().unwrap_or_else(PoisonError::into_inner).send(());
+        });
+        let (reached_tx, reached) = channel();
+        let (go, go_rx) = channel::<()>();
+        let (reached_tx, go_rx) = (Mutex::new(reached_tx), Mutex::new(go_rx));
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = asked.clone();
+        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0")
+            .with_source(Arc::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(newer()))
+            }))
+            .with_pins_path(no_pins())
+            .with_before_ask(Arc::new(move || {
+                let _ = reached_tx.lock().unwrap_or_else(PoisonError::into_inner).send(());
+                let _ = go_rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
+            }));
+        u.check_now(&ctx);
+        reached.recv().expect("the check's thread reaches its request");
+        u.set_checks_enabled(false);
+        go.send(()).expect("the check's thread waits");
+        done.recv().expect("the check's thread finishes");
+        assert_eq!(asked.load(Ordering::SeqCst), 0);
+        assert_eq!(u.status(), &Status::Off);
     }
 
     #[test]
