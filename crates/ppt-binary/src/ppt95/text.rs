@@ -382,7 +382,9 @@ fn paragraphs(chars: &[char], char_runs: &[CharRun], para_runs: &[ParaRun], rule
             para.runs.push(Run::with(text, props));
             i = j;
         }
-        para.end_props = props_at(start);
+        // The paragraph mark's own formatting: the character run at the CR (PowerPoint 95 gives
+        // it one of its own when it differs), or the last run for the last paragraph.
+        para.end_props = props_at(end);
         para.normalize();
         out.push(para);
         if end >= total {
