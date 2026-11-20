@@ -900,8 +900,9 @@ mod tests {
         use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
-        // a verified body with distortion and CA tables and a 3:2 crop: linear data still gets no warp and no map
+        // A supported body, lens and 3:2 crop would produce a CA map for Bayer data.
         raw.set(t::MODEL, Value::Ascii("ILCE-7RM6".into()));
+        raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::LENS_MODEL, Value::Ascii("FE 24-70mm F2.8 GM II".into())));
         raw.set(crate::arw_lens_rm6::DISTORTION_PARAMS, Value::SShort(vec![16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479]));
         raw.set(
             crate::arw_lens_rm6::CA_PARAMS,
