@@ -25,8 +25,12 @@ impl PreferencesModel for Model {
             self.draft = value;
         }
     }
-    fn custom_row(&mut self, _: &mut Ui, _: &str) {}
-    fn custom_page(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
     fn differs(&self) -> bool {
         self.draft != self.saved
     }
@@ -59,4 +63,59 @@ fn an_edit_applies_before_ok() {
     let ok = fixture.by_label("OK").expect("the close button");
     fixture.click(&ok).settle();
     assert_eq!(model.borrow().applies, 1, "OK only closes");
+}
+
+#[derive(Default)]
+struct CustomModel {
+    draft: u8,
+    saved: u8,
+}
+
+impl PreferencesModel for CustomModel {
+    fn pages(&self) -> Vec<PageSpec<'_>> {
+        vec![PageSpec::new("general", "General", vec![RowSpec::new("custom", "", RowKind::Custom)])]
+    }
+    fn set(&mut self, _: &str, _: PrefValue) {}
+    fn custom_row(&mut self, ui: &mut Ui, _: &str) -> bool {
+        let before = self.draft;
+        if ui.button("Invalid").clicked() {
+            self.draft = 1;
+        }
+        if ui.button("Correct").clicked() {
+            self.draft = 2;
+        }
+        self.draft != before
+    }
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
+    fn differs(&self) -> bool {
+        self.draft != self.saved
+    }
+    fn apply(&mut self) -> Result<(), String> {
+        if self.draft == 1 {
+            return Err("Invalid value".into());
+        }
+        self.saved = self.draft;
+        Ok(())
+    }
+    fn cancel(&mut self) {}
+    fn reset_page(&mut self, _: &str) {}
+}
+
+#[trial]
+fn corrected_custom_row_applies_after_an_error() {
+    let model = Rc::new(RefCell::new(CustomModel::default()));
+    let shown = model.clone();
+    let mut state = PreferencesState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = PreferencesWindow::new(Bind::bound(&mut state)).mode(PreferencesMode::Live).embedded().show(ui, &mut *shown.borrow_mut());
+    });
+    fixture.settle();
+    let invalid = fixture.by_label("Invalid").expect("invalid choice");
+    fixture.click(&invalid).settle();
+    assert_eq!(model.borrow().saved, 0);
+    let correct = fixture.by_label("Correct").expect("correct choice");
+    fixture.click(&correct).settle();
+    assert_eq!(model.borrow().saved, 2, "a correction applies without closing the window");
 }

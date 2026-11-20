@@ -75,6 +75,7 @@ impl ShownRow {
 #[derive(Default)]
 pub(super) struct RowsOut {
     pub edits: Vec<(String, PrefValue)>,
+    pub custom_changed: bool,
     /// The request of the swatch pressed this pass, keyed by the row.
     pub pick_color: Option<ColorRequest>,
 }
@@ -177,11 +178,11 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
             }
         }
         Kind::Custom if label.as_str().is_empty() => {
-            Stack::new().id_salt(key).show(ui, |ui, _| host.custom_row(ui, key));
+            Stack::new().id_salt(key).show(ui, |ui, _| out.custom_changed |= host.custom_row(ui, key));
         }
         Kind::Custom => {
             field().show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| host.custom_row(ui, key));
+                Stack::new().show(ui, |ui, _| out.custom_changed |= host.custom_row(ui, key));
             });
         }
     }

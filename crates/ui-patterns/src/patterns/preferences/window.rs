@@ -225,7 +225,7 @@ impl<'a> PreferencesWindow<'a> {
                     pick_color = Some(request);
                 }
                 let edits = out.edits();
-                if !edits.is_empty() || out.reset {
+                if !edits.is_empty() || out.reset || out.custom_changed || out.rows.custom_changed {
                     session.work.error = None;
                 }
                 for (key, value) in edits {

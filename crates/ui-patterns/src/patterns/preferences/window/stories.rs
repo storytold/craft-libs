@@ -94,9 +94,13 @@ impl PreferencesModel for Demo {
         }
     }
 
-    fn custom_row(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
-    fn custom_page(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
     fn differs(&self) -> bool {
         self.draft != self.saved

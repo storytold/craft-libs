@@ -303,10 +303,10 @@ pub trait PreferencesModel {
     fn set_color(&mut self, key: &str, color: Srgba) {
         self.set(key, PrefValue::Color(color.into()));
     }
-    /// Draws a [`RowKind::Custom`] row's control.
-    fn custom_row(&mut self, ui: &mut Ui, key: &str);
-    /// Draws a [`PageSpec::custom`] page.
-    fn custom_page(&mut self, ui: &mut Ui, page: &str);
+    /// Draws a [`RowKind::Custom`] row's control, returning whether its draft changed this pass.
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool;
+    /// Draws a [`PageSpec::custom`] page, returning whether its draft changed this pass.
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool;
     /// Whether the draft differs from the saved settings: enables Apply.
     fn differs(&self) -> bool;
     /// Whether OK may close the window.

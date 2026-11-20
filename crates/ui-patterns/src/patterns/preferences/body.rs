@@ -87,6 +87,7 @@ fn shown_page(matcher: &Matcher, listed: &Listed, page: &PageSpec<'_>) -> ShownP
 pub(super) struct BodyOut {
     pub rows: RowsOut,
     pub reset: bool,
+    pub custom_changed: bool,
 }
 
 impl BodyOut {
@@ -178,7 +179,7 @@ fn show_page<H: PreferencesModel + ?Sized>(
 ) {
     Text::new(page.title.clone()).role(TypeRole::Title).show(ui);
     if page.custom {
-        Stack::new().show(ui, |ui, _| host.custom_page(ui, &page.id));
+        Stack::new().show(ui, |ui, _| out.custom_changed |= host.custom_page(ui, &page.id));
     } else if page.groups.is_empty() && !searching {
         Notice::new(Tone::Info, words.empty_page.clone()).layout(NoticeLayout::Centred).show(ui);
     }
