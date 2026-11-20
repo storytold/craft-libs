@@ -13,13 +13,13 @@ workspace = true
 [dependencies]
 craft-cfb = { workspace = true }
 craft-codepage = { workspace = true }
+craft-offcrypto = { workspace = true }
 craft-wordmodel = { workspace = true }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
 log = "0.4"
 md4 = "0.11"
 miniz_oxide = "0.9"
-sha1 = "0.11"
 thiserror = { workspace = true }
 
 [dev-dependencies]
@@ -28,4 +28,7 @@ thiserror = { workspace = true }
 cfb = "0.15"
 craft-wordmodel = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
+# The RC4 CryptoAPI key derivation of the encrypted test files, written independently of
+# craft-offcrypto's.
+sha1 = "0.11"
 serde_json = "1"
