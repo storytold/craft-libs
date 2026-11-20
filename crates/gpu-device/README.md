@@ -41,7 +41,9 @@ Licensed under MIT OR Apache-2.0.
   browser's adapter, with `Notice::NoSoftwareAdapter` unless that adapter is a software one, and
   `Recovery` cannot move drawing to software there. `Capabilities` and
   `Recovery` otherwise work there as they do on native, and so does `DeviceHealth` apart from `wait`,
-  `wait_timeout` and `wait_timeout_cancelable`, which are native only.
+  `wait_timeout` and `wait_timeout_cancelable`, which are native only. On the browser backend,
+  wgpu 30 panics on an uncaptured `GPUInternalError` before the handler `DeviceHealth::watch`
+  installs runs, so such an error is not recorded. Validation and out-of-memory errors are.
 - An adapter that lacks `Request::required_features`, or whose `request_device` fails, adds a
   `Notice::DeviceFailed`, and `open` tries the next one. When every adapter fails, the error lists
   each failure.
@@ -75,9 +77,11 @@ Licensed under MIT OR Apache-2.0.
 
 ## After a device loss
 
-`DeviceHealth::device_lost` turns true, and `DeviceHealth::device_status` returns
-`GpuFault::DeviceLost`, once the device is lost. Nothing made with the lost device can be used
-again, and wgpu keeps none of its contents. The caller then:
+`DeviceHealth::device_status` returns `GpuFault::DeviceLost` once a loss is recorded, and the
+caller starts recovery then. `DeviceHealth::device_lost` turns true only when wgpu itself reported
+the loss; it stays false for a loss the health layer recorded on its own, such as a bounded wait
+that reached its deadline. Nothing made with the lost device can be used again, and wgpu keeps
+none of its contents. The caller then:
 
 1. Drops the old `Opened` and everything made with its device: buffers, textures and their
    views, samplers, bind group layouts and bind groups, shader modules, pipeline layouts and
@@ -86,14 +90,19 @@ again, and wgpu keeps none of its contents. The caller then:
    waits on it return `false`.
 2. Calls `Recovery::lost` with the time and opens a new device with `open` or `open_async`,
    using the returned preference and the same `Request`. When the step has a notice
-   (`Notice::SoftwareAfterLosses`), the app shows it.
+   (`Notice::SoftwareAfterLosses`), the app shows it only if the new `Opened::caps.software()` is
+   true. Otherwise no software adapter opened (in a browser, or with none listed), and the new
+   `Opened::notices` say what was opened instead.
 3. Reads the new `Opened::caps` before choosing pipelines again. The new device can be another
    adapter, or a software one, with other features and limits: for example, without NV12 the
    planes are drawn into `R8Unorm` and `Rg8Unorm` textures instead.
 4. Configures each window surface again with the new device (`Surface::configure`). The surface
    itself is kept when it was passed to `open`, which then opens only an adapter that can draw
-   to it.
-5. Builds the pipelines, bind groups and renderers again, and uploads the textures and buffers
+   to it. The new adapter may not support the old configuration (an HDR format, for example), so
+   the caller reads `Surface::get_capabilities` with the new adapter and picks a format, present
+   mode and alpha mode from it.
+5. Builds the pipelines for the surface format picked in step 4, the bind groups and renderers
+   again, bind groups and renderers again, and uploads the textures and buffers
    again from the app's own copies of their data.
 6. Makes any `craft-gpu` context again on the new device, with the new `Opened::device_caps`, and
    submits again the jobs and frames that did not complete.

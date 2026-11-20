@@ -19,7 +19,8 @@ use std::time::{Duration, Instant};
 /// Outcome of a bounded wait for submitted GPU work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaitOutcome {
-    /// The submitted work finished before the deadline.
+    /// The submitted work finished before the deadline, or just after it, when wgpu read the
+    /// fence again at the end of the last poll.
     Finished,
     /// The deadline passed (or the device faulted) before the work finished.
     TimedOut,
@@ -121,7 +122,9 @@ impl DeviceHealth {
     }
 
     /// Watch `device`: its device-lost callback and uncaptured errors mark the returned flag
-    /// instead of panicking. Replaces any handler set before (wgpu keeps one of each).
+    /// instead of panicking. Replaces any handler set before (wgpu keeps one of each). On the
+    /// browser backend, wgpu 30 panics on an uncaptured `GPUInternalError` before this handler
+    /// runs, so such an error is not recorded; validation and out-of-memory errors are.
     pub fn watch(device: &wgpu::Device) -> Self {
         let health = Self::new();
         let lost = health.clone();
@@ -133,8 +136,9 @@ impl DeviceHealth {
                 (_, false) => message,
             };
             log::error!("wgpu device lost ({reason:?}): {detail}");
-            lost.0.device_lost.store(true, Ordering::Release);
+            // The loss first: a caller that sees `device_lost` then also sees the fault.
             lost.mark(Fault::Lost(detail));
+            lost.0.device_lost.store(true, Ordering::Release);
         });
         let errors = health.clone();
         device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| errors.uncaptured(&e)));
@@ -270,8 +274,8 @@ impl DeviceHealth {
 
     /// `Device::poll` panicked: wgpu found the device lost.
     fn lost_by_poll(&self) {
-        self.0.device_lost.store(true, Ordering::Release);
         self.mark(Fault::Lost("the device stopped responding".into()));
+        self.0.device_lost.store(true, Ordering::Release);
     }
 
     /// Block until `index` (or all submitted work) finished, unless the device was lost or
@@ -327,7 +331,10 @@ impl DeviceHealth {
     /// [`Self::wait_timeout`] that polls in slices of at most 100 ms and checks `canceled` between
     /// them, keeping the same overall deadline. Every slice waits for the same `index`. A slice
     /// that times out means the work has not finished yet; only the overall deadline (or a poll
-    /// that panics) marks the device faulted.
+    /// that panics) marks the device faulted. A loss or an error other than out of memory that
+    /// another clone records during the wait ends it after the current slice, with
+    /// [`WaitOutcome::TimedOut`]. wgpu reads the fence again after a slice's own timeout, so work
+    /// that finishes in that gap, just after the deadline, is [`WaitOutcome::Finished`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_timeout_cancelable(
         &self,
@@ -349,14 +356,8 @@ impl DeviceHealth {
                 device.poll(wgpu::PollType::Wait { submission_index: Some(index.clone()), timeout: Some(slice) })
             }));
             match poll {
-                Ok(Ok(_)) => {
-                    if self.pollable() {
-                        SlicePoll::Done
-                    } else {
-                        SlicePoll::Failed
-                    }
-                }
-                Ok(Err(wgpu::PollError::Timeout)) => SlicePoll::Pending,
+                Ok(Ok(_)) => self.after_slice(true),
+                Ok(Err(wgpu::PollError::Timeout)) => self.after_slice(false),
                 // A submission index the device never issued: the caller's mistake, not the GPU's.
                 Ok(Err(e)) => {
                     log::warn!("wgpu poll: {e}");
@@ -374,6 +375,20 @@ impl DeviceHealth {
             self.mark(Fault::Lost(format!("GPU wait timed out after {:.1} s", timeout.as_secs_f64())));
         }
         outcome
+    }
+
+    /// What a slice that returned reports, `finished` or not: failed once a clone of this flag
+    /// recorded a loss or an error other than out of memory, so the next slice does not poll a
+    /// device that is not to be used.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn after_slice(&self, finished: bool) -> SlicePoll {
+        if !self.pollable() {
+            SlicePoll::Failed
+        } else if finished {
+            SlicePoll::Done
+        } else {
+            SlicePoll::Pending
+        }
     }
 }
 
@@ -562,6 +577,24 @@ mod tests {
         });
         assert_eq!(outcome, WaitOutcome::Canceled);
         assert_eq!(polls, 1, "a cancel set during a pending poll ends the wait");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_fault_recorded_during_a_wait_stops_the_next_slice() {
+        let h = DeviceHealth::new();
+        assert_eq!(h.after_slice(false), SlicePoll::Pending);
+        assert_eq!(h.after_slice(true), SlicePoll::Done);
+        // out of memory alone: polls keep reclaiming memory
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        assert_eq!(h.after_slice(false), SlicePoll::Pending);
+        // another clone records a validation error while a slice is pending
+        h.clone().mark(Fault::Error("Validation Error".into()));
+        assert_eq!(h.after_slice(false), SlicePoll::Failed, "the next slice must not poll");
+        assert_eq!(h.after_slice(true), SlicePoll::Failed);
+        let lost = DeviceHealth::new();
+        lost.clone().mark(Fault::Lost("reset".into()));
+        assert_eq!(lost.after_slice(false), SlicePoll::Failed);
     }
 
     #[test]
