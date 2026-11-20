@@ -445,3 +445,23 @@ fn alt_drags_scale_about_a_moved_reference_point() {
         assert_eq!(got.pivot, p(249.5, 199.5), "the reference point stays put");
     }
 }
+
+/// An edge dragged past the opposite one (measured on the reference): the box flips along both axes, a rectangle as a
+/// skewed box or a box in perspective, the skew's run kept.
+#[test]
+fn an_edge_dragged_past_the_opposite_one_flips_the_box_both_ways() {
+    let rect = [(150.0, 125.0), (452.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let skewed = [(190.0, 125.0), (492.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let narrow_top = [(210.0, 125.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let cases = [
+        (rect, 2, (301.0, 327.0), (301.0, 67.0), [(344.36, 125.0), (257.64, 125.0), (257.64, 67.0), (344.36, 67.0)]),
+        (rect, 1, (452.0, 226.0), (102.0, 226.0), [(150.0, 242.05), (102.0, 242.05), (102.0, 209.95), (150.0, 209.95)]),
+        (skewed, 2, (301.0, 327.0), (301.0, 67.0), [(384.36, 125.0), (297.64, 125.0), (257.64, 67.0), (344.36, 67.0)]),
+        (skewed, 1, (472.0, 226.0), (122.0, 226.0), [(190.0, 242.05), (142.0, 242.05), (102.0, 209.95), (150.0, 209.95)]),
+        (narrow_top, 0, (301.0, 125.0), (301.0, 385.0), [(327.13, 385.0), (274.87, 385.0), (334.87, 327.0), (267.13, 327.0)]),
+    ];
+    for (quad, edge, from, to, want) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), edge, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, 0.02), "edge {edge} of {quad:?}: {:?}", got.quad);
+    }
+}

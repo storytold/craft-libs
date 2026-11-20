@@ -636,8 +636,8 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
 /// (a box in perspective) the dragged edge turns about its middle onto the line through that point, its corners on the
 /// edges beside it, then slide along it to second order ([`perspective_push`]); a side beside it left within 1 px of
 /// level is levelled ([`level_snap`]). On a plain or turned rectangle the sides have no run along `u` and this is the frame
-/// scaling below. `None` where the frame scaling applies instead: a factor at or past zero (the box flips there,
-/// as the frame scaling flips it), or a collapsed box.
+/// scaling below. Past the opposite edge the factor turns negative and the box flips along both axes, as on the
+/// reference (its top read backwards, its height upside down). `None` for a factor of zero or a collapsed box.
 fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     let BoxPart::Edge(edge) = g.part else { return None };
     let [tl, tr, br, bl] = g.quad0;
@@ -663,7 +663,7 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
         2 => 1.0 + d.dot(nh) / height,
         _ => 1.0 - d.dot(uh) / len,
     };
-    if !(k.is_finite() && k > 0.0) {
+    if !(k.is_finite() && k.abs() > 1e-9) {
         return None;
     }
     let k = k.max(scale_floor(&g.quad0, 0, min_side).max(scale_floor(&g.quad0, 1, min_side)));
