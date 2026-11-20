@@ -135,34 +135,31 @@ fn a_chip_with_a_caption_range_keeps_its_width_as_the_caption_grows() {
     }
 }
 
-/// The list views and component runs of the last frame: the views of `props` that ran, and the list rows that ran.
+/// The views of `props` that ran in the last frame, and the list rows that ran in its last pass.
 fn list_runs(fixture: &Fixture, props: &str) -> (usize, u32) {
     let views = last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(name, _, run)| name.contains(props) && *run == MemoRun::Ran).count();
-    let rows = last_pass_runs(fixture.ctx()).into_iter().filter(|(name, _)| *name == "ListRow").map(|(_, runs)| runs).sum();
+    let rows = last_pass_runs(fixture.ctx()).into_iter().filter(|(name, _)| name.contains("ListRow")).map(|(_, runs)| runs).sum();
     (views, rows)
 }
 
-/// An open picker's list runs its rows when it opens, then, while nothing changes, replays: no list row runs.
+/// While nothing changes an open picker's list replays: no list row runs. The popover's first stop, the search field,
+/// takes the focus on open, as in the Brush Preset picker: a list that holds the focus runs in every pass.
 #[trial]
 fn an_open_picker_with_nothing_changing_runs_no_list_row() {
     let mut value = Some(CORAL);
     let mut state = PresetState::<u32>::new();
     let rows = PresetSource::new((), PresetFns::new(|_, _| (0..12).map(|key| PresetRow::item(CORAL + key, format!("Preset {key}"), 0)).collect()));
     let mut fixture = Fixture::new(move |ui| {
-        let _ = PresetPicker::new("Swatch", Bind::bound(&mut value), &rows, Bind::bound(&mut state)).view(PresetView::List).show(ui);
+        let _ = PresetPicker::new("Swatch", Bind::bound(&mut value), &rows, Bind::bound(&mut state)).view(PresetView::List).toolbar(true).show(ui);
     });
     fixture.room(Vec2::new(800.0, 800.0));
     fixture.settle();
     let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the field shows");
     fixture.click(&field);
-    let mut opened = list_runs(&fixture, "ListProps").0;
-    for _ in 0..4 {
-        fixture.idle(1);
-        opened += list_runs(&fixture, "ListProps").0;
-    }
-    assert!(opened > 0, "the list view runs when the popover opens");
     fixture.settle();
     fixture.frame(vec![]);
-    assert!(fixture.by_label("Preset 3").is_some(), "the popover stays open");
+    assert!(fixture.by_label("Preset 3").is_some(), "the open popover lists the presets");
     assert_eq!(list_runs(&fixture, "ListProps"), (0, 0), "an idle frame runs neither the list view nor a row");
+    let replayed = last_frame_memo_runs(fixture.ctx()).into_iter().any(|(name, _, run)| name.contains("ListProps") && run == MemoRun::Replayed);
+    assert!(replayed, "the list view replays");
 }
