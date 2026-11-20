@@ -1147,7 +1147,7 @@ fn a_drag_on_a_popover_over_a_view_replays_the_view() {
     assert!(runs.iter().all(Vec::is_empty), "the board replays in every drag frame: {runs:?}");
 }
 
-/// A view inside an open popover: the popover's body is on its own layer.
+/// A view inside an open popover, after a button: the popover's body is on its own layer.
 struct InPopover {
     /// Where the view's button was shown in the last frame.
     button: Option<Rect>,
@@ -1158,6 +1158,9 @@ impl InPopover {
         let button = &mut self.button;
         frames.frame(events, |ui| {
             Popover::new("Presets", Bind::given(true)).at_point(Pos2::new(80.0, 80.0)).show(ui, |ui, _| {
+                // The popover's first stop, outside the view, takes the focus on open: a view that holds the focus
+                // runs in every pass.
+                Button::new("Search").show(ui);
                 *button = MemoView::new("presets", Title { title: "Inside".to_owned() }, title).show(ui);
             });
         });
