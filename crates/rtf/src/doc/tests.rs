@@ -1846,6 +1846,29 @@ fn assert_section_page_defaults() {
 }
 
 #[test]
+fn export_writes_an_exact_margin_at_its_size() {
+    use craft_wordmodel::{Block, SectionProps};
+    // Exact (negative) top and bottom margins, in the first section and in a later one.
+    let mut d = craft_wordmodel::Document::from_text("one\ntwo");
+    let first = SectionProps { margin_top: -39.9, margin_bottom: -60.0, ..Default::default() };
+    if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.section = Some(Box::new(first));
+    }
+    d.last_section = SectionProps { margin_top: -60.0, margin_bottom: -39.9, ..Default::default() };
+    let rtf = export(&d);
+    // The document-level words come from the last section.
+    assert!(rtf.contains("\\margt1200\\margb798"), "{rtf}");
+    assert!(rtf.contains("\\margtsxn798\\margbsxn1200"), "{rtf}");
+    assert!(rtf.contains("\\margtsxn1200\\margbsxn798"), "{rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let secs = back.sections();
+    assert_eq!(secs.len(), 2, "{rtf}");
+    for ((_, g), (top, bottom)) in secs.iter().zip([(39.9, 60.0), (60.0, 39.9)]) {
+        assert!((g.margin_top - top).abs() < 0.1 && (g.margin_bottom - bottom).abs() < 0.1, "{g:?}");
+    }
+}
+
+#[test]
 fn export_writes_every_section() {
     use craft_wordmodel::section::{NumFormat, SectionStart};
     use craft_wordmodel::{Block, SectionProps};
