@@ -588,6 +588,44 @@ fn end_items_drop_their_labels_before_a_tab_overflows() {
     assert!(kept, "a room keeps the contextual tab while a plain tab overflows");
 }
 
+/// A ribbon strip leaves the room after its last end item that it leaves before its first tab, so an end item does not
+/// touch the strip's end edge, in a wide room and a narrow one (storytold/wordcraft#7164).
+#[trial]
+fn the_last_end_item_keeps_an_inset_from_the_strip_end() {
+    use craft_behavior::IconId;
+    use craft_ui::runtime::commands::EditCommands;
+    use craft_ui::tabs::StripEnd;
+    for room in [2000.0, 600.0, 300.0] {
+        let items = [StripEnd::command("Share", IconId::new("link").into(), EditCommands::Copy)];
+        let edges = Cell::new((0.0, 0.0));
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            ui.set_max_width(room);
+            edges.set((ui.max_rect().left(), ui.max_rect().right()));
+            let keys: Vec<usize> = (0..RIBBON.len()).collect();
+            let source = keyed(&keys, |key: &usize| *key);
+            let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(1).roles(ribbon_role).trailing(&items);
+            let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
+        };
+        frames.idle(3, &mut show);
+        let tree = frames.tree();
+        let (left, right) = edges.get();
+        let share = tree
+            .with_role(Role::BUTTON)
+            .iter()
+            .find(|key| tree.name_of(**key) == Some("Share"))
+            .and_then(|key| tree.bounds_of(*key))
+            .expect("the Share item is on the strip");
+        let lead = tab_rects(&tree, RIBBON[0]).first().expect("the first tab is on the strip").left() - left;
+        assert!(lead > 0.5, "the strip leads in {room}: {lead}");
+        assert!(
+            right - share.right() >= lead - 0.5,
+            "the end item keeps the lead's inset at the end in {room}: {} against {lead}",
+            right - share.right()
+        );
+    }
+}
+
 /// The width of the one end item, named "Comments", of a ribbon strip in a wide room: a menu item when `menu`, else a
 /// command item with the same label and icon.
 fn comments_width(menu: bool) -> f32 {
