@@ -265,6 +265,7 @@ pub struct AsianTypography {
 
 /// The page of Word's Paragraph dialog the dialog opens on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ParagraphTab {
     /// Indents and Spacing.
     #[default]

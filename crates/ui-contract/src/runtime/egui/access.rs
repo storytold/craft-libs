@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use super::{memory, pass};
 
+pub use accesskit::TreeUpdate;
 pub(crate) use node::{NodeAction, NodeSpec, Toggle, write_node};
 pub(crate) use patch::{write_label_patch, write_merge_patch, write_status};
 pub(crate) use text::{

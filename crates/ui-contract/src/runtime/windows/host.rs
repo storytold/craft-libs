@@ -119,7 +119,7 @@ impl WindowHost {
 
     /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
     /// while AccessKit is off.
-    pub fn access_tree(&self, viewport: ViewportId) -> Option<accesskit::TreeUpdate> {
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<crate::runtime::egui::access::TreeUpdate> {
         crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
     }
 

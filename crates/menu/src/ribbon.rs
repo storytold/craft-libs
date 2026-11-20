@@ -456,11 +456,19 @@ pub struct RibbonOutput<T> {
 
 /// A request for the ribbon's context menu, on a control, a tab or the row's background.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct RibbonMenuRequest {
     /// The command of the control the request is for, when it has one; none on a tab or the row's background.
     pub command: Option<CommandRef>,
     /// Where the menu opens.
     pub at: Pos2,
+}
+
+impl RibbonMenuRequest {
+    /// A request for the menu of the control of `command`, if any, opening at `at`.
+    pub const fn new(command: Option<CommandRef>, at: Pos2) -> Self {
+        RibbonMenuRequest { command, at }
+    }
 }
 
 /// The style of the row's regions: the slide distance and the edge chevrons' width.

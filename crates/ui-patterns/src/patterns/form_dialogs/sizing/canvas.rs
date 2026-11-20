@@ -163,6 +163,8 @@ pub struct CanvasSize<'a> {
     /// The bytes one pixel takes, for the file size readouts.
     #[prop(quantity = "bytes per pixel")]
     bytes_per_pixel: f64,
+    /// Files OK's answer in `held` for the host instead of closing; the host answers it.
+    #[prop(vis = "pub(crate)")]
     held: Option<&'a mut HeldAnswer<CanvasSizeValues>>,
 }
 
@@ -170,12 +172,6 @@ impl<'a> CanvasSize<'a> {
     /// The dialog over `values`.
     pub fn new(values: Bind<'a, CanvasSizeValues>) -> Self {
         CanvasSize { values, open: None, bytes_per_pixel: 4.0, held: None }
-    }
-
-    /// Files OK's answer in `held` for the host instead of closing; the host answers it.
-    pub(crate) fn held(mut self, held: &'a mut HeldAnswer<CanvasSizeValues>) -> Self {
-        self.held = Some(held);
-        self
     }
 
     /// Shows the dialog.

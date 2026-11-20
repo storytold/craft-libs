@@ -366,7 +366,7 @@ pub struct TextRuler<'a> {
     /// The screen x where the ruler's zero sits: a page-wide ruler is measured from the page's text origin. Unset, zero
     /// is the strip's start edge. Given against the screen so the corner square, which only the ruler places, does not
     /// enter the caller's arithmetic.
-    #[prop]
+    #[prop(quantity = "screen x of the ruler's zero, a position")]
     origin: Option<f32>,
     /// The screen x range the ruler covers (the page's); the ruler is cut to it. Unset, the whole strip.
     #[prop]

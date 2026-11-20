@@ -259,6 +259,7 @@ impl ItemLayout for HoneycombLayout {
 
 /// The geometry of a [`SwatchTable`], by its [`SwatchArrangement`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum SwatchLayout {
     /// Square cells in rows and columns.
     Grid(TileLayout),

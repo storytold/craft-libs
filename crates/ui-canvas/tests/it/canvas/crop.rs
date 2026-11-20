@@ -160,7 +160,7 @@ impl Rig {
                     overlay = overlay.hidden();
                 }
                 if let Some(source) = s.object {
-                    overlay = overlay.scope(CropScope::Object { source });
+                    overlay = overlay.scope(CropScope::object(source));
                 }
                 let out = overlay.show_at(ui, body.rect);
                 // A measuring run of the canvas body (a sizing ui) senses nothing: only the real run of a pass reports.

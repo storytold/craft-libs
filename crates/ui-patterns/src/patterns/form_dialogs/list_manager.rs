@@ -301,7 +301,9 @@ pub struct ListManager<'a> {
     /// [`name_box`](ListManager::name_box)).
     #[prop(into)]
     name: Option<String>,
-    /// The caller's binding of the name box's text.
+    /// Binds the name box's text to `bind`: the caller reads what the user typed and sets the text, which the box
+    /// shows on the next pass. The `name` prop does not apply then.
+    #[prop]
     name_box: Option<Bind<'a, String>>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
@@ -312,24 +314,12 @@ pub struct ListManager<'a> {
     /// The second button's label when it is not Cancel.
     #[prop(into)]
     cancel_label: Option<Label>,
-    /// Draws a section under the list.
+    /// Draws `content` under the list.
+    #[prop(boxed = "FnMut(&mut Ui) + 'a", name = "under_list")]
     under: Option<UnderList<'a>>,
 }
 
 impl<'a> ListManager<'a> {
-    /// Draws `content` under the list.
-    pub fn under_list(mut self, content: impl FnMut(&mut Ui) + 'a) -> Self {
-        self.under = Some(Box::new(content));
-        self
-    }
-
-    /// Binds the name box's text to `bind`: the caller reads what the user typed and sets the text, which the box
-    /// shows on the next pass. The `name` prop does not apply then.
-    pub fn name_box(mut self, bind: Bind<'a, String>) -> Self {
-        self.name_box = Some(bind);
-        self
-    }
-
     /// A list manager titled `title` whose name box is labelled `name_label` ("Macro name:").
     pub fn new(
         title: impl Into<Label>,

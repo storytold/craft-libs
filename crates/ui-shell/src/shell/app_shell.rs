@@ -94,7 +94,9 @@ pub struct ShellRegion {
     #[container]
     props: ContainerProps,
     shell: Option<ShellCx>,
-    /// The screen modes of the shell, published to everything inside a scope region with the shell itself.
+    /// Sets the shell's screen modes for everything inside the region, beside its shell: a `ScreenModeButton` in a
+    /// slot reads them with `Env::get`.
+    #[prop(name = "with_mode_set", vis = "")]
     mode_set: Option<ScreenModeSet>,
     /// Whether the region senses a press on its own surface, where no child or part takes it (`Sense::SURFACE`).
     #[prop(flag)]
@@ -123,13 +125,6 @@ impl ShellRegion {
     pub fn scope(shell: ShellCx) -> Self {
         let props = ContainerProps::new().sizing(crate::contract::Sizing::Fill).command_scope(crate::runtime::commands::CommandScope::APP);
         ShellRegion { common: Common::new(), props, shell: Some(shell), mode_set: None, senses_surface: false }
-    }
-
-    /// Sets the shell's screen modes for everything inside the region, beside its shell: a `ScreenModeButton` in a
-    /// slot reads them with `Env::get`.
-    fn with_mode_set(mut self, set: ScreenModeSet) -> Self {
-        self.mode_set = Some(set);
-        self
     }
 
     /// A pane of the window; it fills the room its edge gives it. A top or bottom pane lays its content along its edge

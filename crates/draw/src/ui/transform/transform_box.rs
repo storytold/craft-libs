@@ -175,6 +175,7 @@ pub enum LineEnds {
 
 /// Which end of a line is dragged ([`LineEndDrag::end`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LineEnd {
     /// The line's start.
     From,

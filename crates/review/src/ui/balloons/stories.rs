@@ -49,6 +49,7 @@ fn beside_page(
     read_only: bool,
 ) -> StoryOutput {
     let state = data.value("state", CommentsPanelState { selected: selected.map(ThreadId), ..CommentsPanelState::default() });
+    // design: allow[raw-colour/const](the demo page is white paper, document data and not a theme colour)
     let (fill, line) = (Color32::WHITE, accent(ui, 1.0));
     let shapes = [StoryShape::filled(&DocRect::new(0.0, 0.0, PAGE.0, PAGE.1), fill).outlined(OUTLINE, line)];
     let picture = StoryPicture::new(PAGE.0 as u32, PAGE.1 as u32, move |p: Point| paint_shapes(&shapes, Color32::TRANSPARENT, p));

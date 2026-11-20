@@ -127,6 +127,7 @@ impl GoToKind {
 pub enum GoToTarget {
     /// A text field with `hint` as its help line; with `steps`, an empty field turns the accept button into Next and
     /// adds Previous.
+    #[non_exhaustive]
     Typed {
         /// The help line.
         hint: Label,
@@ -134,6 +135,7 @@ pub enum GoToTarget {
         steps: bool,
     },
     /// A `Select` over `names`; with none, `empty` shows as the help line and Go To is disabled.
+    #[non_exhaustive]
     Named {
         /// The names to pick from.
         names: Vec<String>,
@@ -634,7 +636,7 @@ impl StackDialog for FindReplaceDialog {
 type Code = (fn(&FindLabels) -> &str, &'static str);
 
 /// Find what without wildcards.
-static FIND_CODES: [Code; 19] = [
+const FIND_CODES: [Code; 19] = [
     (|w| w.paragraph_mark.as_str(), "^p"),
     (|w| w.tab_character.as_str(), "^t"),
     (|w| w.any_character.as_str(), "^?"),
@@ -657,7 +659,7 @@ static FIND_CODES: [Code; 19] = [
 ];
 
 /// Find what with wildcards: the wildcard expressions and the codes that still apply.
-static FIND_WILDCARD_CODES: [Code; 23] = [
+const FIND_WILDCARD_CODES: [Code; 23] = [
     (|w| w.paragraph_mark.as_str(), "^p"),
     (|w| w.tab_character.as_str(), "^t"),
     (|w| w.any_single_character.as_str(), "?"),
@@ -684,7 +686,7 @@ static FIND_WILDCARD_CODES: [Code; 23] = [
 ];
 
 /// Replace with.
-static REPLACE_CODES: [Code; 15] = [
+const REPLACE_CODES: [Code; 15] = [
     (|w| w.paragraph_mark.as_str(), "^p"),
     (|w| w.tab_character.as_str(), "^t"),
     (|w| w.caret_character.as_str(), "^^"),
@@ -703,7 +705,7 @@ static REPLACE_CODES: [Code; 15] = [
 ];
 
 /// With wildcards on, Replace with starts with the back-reference to the Find what expression.
-static FIND_EXPRESSION: Code = (|w| w.find_expression.as_str(), "\\1");
+const FIND_EXPRESSION: Code = (|w| w.find_expression.as_str(), "\\1");
 
 /// The Special menu: the `^` codes of Find what, or of Replace with, by whether wildcards are on.
 fn special_entries(words: &FindLabels, replacing: bool, wildcards: bool) -> Vec<Entry<&'static str>> {

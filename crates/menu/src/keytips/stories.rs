@@ -68,12 +68,9 @@ fn region(ui: &mut Ui, size: ControlSize) -> Option<Arc<Recorded>> {
 fn shown(ui: &mut Ui, size: ControlSize, letters: [Option<&'static str>; 5]) -> StoryOutput {
     let places: Vec<Arc<Recorded>> = region(ui, size).into_iter().collect();
     let tabs = [(Label::from("Home"), "H", tab_id("Home")), (Label::from("Insert"), "N", tab_id("Insert"))];
-    let controls: Vec<KeytipControl<'static>> = CONTROLS
-        .iter()
-        .zip(letters)
-        .map(|((command, label), letters)| KeytipControl { command: CommandRef::from(*command), label, letters })
-        .collect();
-    let output = Keytips::new(true).tabs(&tabs).controls(&controls).places(&places).show(ui);
+    let controls: Vec<KeytipControl<'static>> =
+        CONTROLS.iter().zip(letters).map(|((command, label), letters)| KeytipControl::new(CommandRef::from(*command), label, letters)).collect();
+    let output = Keytips::new(true).tabs(&tabs).controls(&controls).places(&places).show_over(ui);
     output.response.into()
 }
 

@@ -104,7 +104,10 @@ pub struct Dialog<'a> {
     /// The body ran in this pass: the header region marks it.
     body_shown: bool,
     alert: bool,
-    /// The refusal's reason, read by the body-end hook in every run that shows it.
+    /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
+    /// display of a held answer's refusal. The closure is called in that hook in every run that shows it, after the
+    /// body ran, so a notice never trails an edit by a pass; `None` shows no notice.
+    #[prop(boxed = "FnMut() -> Option<Label> + 'a")]
     refusal: Option<RefusalFn<'a>>,
 }
 
@@ -207,15 +210,6 @@ impl<'a> Dialog<'a> {
     #[must_use]
     pub fn first_place(self, at: Pos2, corner: Align2) -> Self {
         self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::corner_at(at, corner))))
-    }
-
-    /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
-    /// display of a held answer's refusal. The closure is called in that hook in every run that shows it, after the
-    /// body ran, so a notice never trails an edit by a pass; `None` shows no notice.
-    #[must_use]
-    pub fn refusal(mut self, reason: impl FnMut() -> Option<Label> + 'a) -> Self {
-        self.refusal = Some(Box::new(reason));
-        self
     }
 
     /// Saves the placement and size under `key`, so a reopened dialog sits where the user left it.

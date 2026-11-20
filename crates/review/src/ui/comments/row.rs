@@ -188,9 +188,11 @@ pub(crate) struct CommentRow<'r> {
     /// The inline editor opened this pass (it did not show the pass before): its field takes the keyboard, so the
     /// first click that opens an edit is enough to type.
     focus_edit: bool,
-    /// What the card's buttons are.
+    /// Picks the card's buttons: [`CardActions::Buttons`] shows production's balloon buttons on the selected card.
+    #[prop(vis = "pub(crate)")]
     actions: CardActions,
-    /// The most rows of a message's text the card shows, if limited.
+    /// Limits each message's text to `rows` rows.
+    #[prop(vis = "pub(crate)")]
     body_rows: Option<usize>,
     words: Option<Arc<CommentsWords>>,
     /// The heights the editor field and the reply field measured, for the paint of the same pass.
@@ -251,18 +253,6 @@ impl<'r> CommentRow<'r> {
         self.selected = selected;
         self.editable = editable;
         self.now = now;
-        self
-    }
-
-    /// Picks the card's buttons: [`CardActions::Buttons`] shows production's balloon buttons on the selected card.
-    pub(crate) fn actions(mut self, actions: CardActions) -> Self {
-        self.actions = actions;
-        self
-    }
-
-    /// Limits each message's text to `rows` rows.
-    pub(crate) fn body_rows(mut self, rows: usize) -> Self {
-        self.body_rows = Some(rows);
         self
     }
 

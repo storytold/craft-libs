@@ -171,7 +171,7 @@ pub struct HitArea {
 #[non_exhaustive]
 pub struct Recorded {
     /// The region's layer, which the rects of its elements and hit areas are in.
-    pub layer: egui::LayerId,
+    pub layer: areas::LayerKey,
     /// The elements in tree order: a component before what it shows, its parts right after it.
     pub elements: Vec<Element>,
     /// The hit areas, in the tree order of their components, a component's from the top start.
@@ -190,7 +190,7 @@ impl Recorded {
     ///
     /// A region on another layer than its reader (a title bar's toolbar read from the ribbon's layer) has rects in
     /// its own layer's points; this maps them through the screen, so the reader never composes transforms itself.
-    pub fn rect_in(&self, ctx: &Context, index: usize, target: egui::LayerId) -> Option<Rect> {
+    pub fn rect_in(&self, ctx: &Context, index: usize, target: areas::LayerKey) -> Option<Rect> {
         let rect = self.stop_rect(index)?;
         if target == self.layer {
             return Some(rect);

@@ -287,7 +287,7 @@ impl<'a> ConditionBuilder<'a> {
 const MAX_DEPTH: usize = 3;
 
 /// The joined list's columns: the join, the rule, the remove button.
-static JOINED_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content];
+const JOINED_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content];
 
 /// What every row of a pass reads.
 struct Rows<'a> {

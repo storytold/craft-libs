@@ -266,7 +266,8 @@ pub struct ParamDialog<'a> {
     /// The colours the colour rows show in place of their values in this pass, by row key.
     #[prop(vis = "pub(crate)")]
     preview_colors: Vec<(String, Srgba)>,
-    /// Where OK files the values instead of closing: the one state of a held OK, with its refusal ([`FormDialog::held`]).
+    /// OK files the values in `held` and the dialog stays open; a refusal shows until the values change.
+    #[prop(vis = "pub(crate)")]
     held: Option<&'a mut HeldAnswer<DialogFields>>,
 }
 
@@ -323,12 +324,6 @@ impl<'a> ParamDialog<'a> {
             preview_colors: Vec::new(),
             held: None,
         }
-    }
-
-    /// OK files the values in `held` and the dialog stays open; a refusal shows until the values change.
-    pub(crate) fn held(mut self, held: &'a mut HeldAnswer<DialogFields>) -> Self {
-        self.held = Some(held);
-        self
     }
 
     /// Changes the built [`Dialog`] before it shows, for the `Dialog` settings a form track needs and `ParamDialog`

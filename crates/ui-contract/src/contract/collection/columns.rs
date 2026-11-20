@@ -101,6 +101,7 @@ pub struct ColumnSpec {
 
 /// The remove control of a column's header.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ColumnRemove {
     /// The control's accessible name.
     pub name: Label,

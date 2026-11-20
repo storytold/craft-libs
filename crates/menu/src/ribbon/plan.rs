@@ -5,6 +5,7 @@ use super::group::LEVELS;
 
 /// The widths of one group at each of its levels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct GroupWidths {
     /// The group at `GroupLevel::Full`.
     pub full: f32,
@@ -12,6 +13,13 @@ pub struct GroupWidths {
     pub compact: f32,
     /// The group at `GroupLevel::Collapsed`.
     pub collapsed: f32,
+}
+
+impl GroupWidths {
+    /// The widths of a group at its full, compact and collapsed levels.
+    pub const fn new(full: f32, compact: f32, collapsed: f32) -> Self {
+        GroupWidths { full, compact, collapsed }
+    }
 }
 
 /// The level of each group for `available` width, by the rule of a row's levelled units

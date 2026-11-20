@@ -125,12 +125,10 @@ impl Rig {
             }
             let places: Vec<Arc<Recorded>> = recorded.iter().cloned().collect();
             let tabs = [(Label::from("Home"), "H", tab_id("Home")), (Label::from("Insert"), "N", tab_id("Insert"))];
-            let controls: Vec<KeytipControl<'_>> = CONTROLS
-                .iter()
-                .map(|(command, label, letters)| KeytipControl { command: CommandRef::from(*command), label, letters: *letters })
-                .collect();
+            let controls: Vec<KeytipControl<'_>> =
+                CONTROLS.iter().map(|(command, label, letters)| KeytipControl::new(CommandRef::from(*command), label, *letters)).collect();
             let sequences = [("VZ", CommandRef::from(Trial::Zoom)), ("TW", CommandRef::from(Trial::WordCount))];
-            let output = Keytips::new(true).tabs(&tabs).controls(&controls).sequences(&sequences).places(&places).show(ui);
+            let output = Keytips::new(true).tabs(&tabs).controls(&controls).sequences(&sequences).places(&places).show_over(ui);
             if shown_rerun.take() {
                 ui.ctx().request_discard("trial: a second pass in the frame");
             }
@@ -380,7 +378,7 @@ fn the_tab_badges_sit_on_the_ribbons_tabs_by_the_ids_it_reports() {
             .filter_map(|(key, name, badge)| ribbon.tab_ids.iter().find(|(tab, _)| tab == key).map(|(_, id)| (Label::from(*name), *badge, *id)))
             .collect();
         let places: Vec<Arc<Recorded>> = ribbon.controls.iter().cloned().collect();
-        let output = Keytips::new(true).tabs(&badges).places(&places).show(ui);
+        let output = Keytips::new(true).tabs(&badges).places(&places).show_over(ui);
         seen.borrow_mut().push((output, ribbon.controls.clone(), ribbon.tab_ids.clone()));
     });
     // The framework arms the menu key from a lone Alt only off macOS; the trial does not depend on its runner.

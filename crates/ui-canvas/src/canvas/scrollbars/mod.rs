@@ -168,7 +168,7 @@ fn doc_corners(doc: DocRect) -> [Point; 4] {
 /// same press. Show them at the view's rect inside the `Canvas` body. The bars are AccessKit scroll bars and no Tab
 /// stops: the canvas scrolls from the keyboard as it does without bars.
 #[derive(crate::contract::Component, crate::contract::Props)]
-#[component(canvas_control)]
+#[component(canvas_control, overlay)]
 pub struct CanvasScrollbars<'a> {
     #[common]
     common: Common,

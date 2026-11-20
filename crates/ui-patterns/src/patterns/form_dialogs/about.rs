@@ -252,7 +252,11 @@ pub struct AboutDialog<'a> {
     /// Binds the shown tab to `tab`; the dialog opens on it.
     #[prop]
     tab: Option<Bind<'a, AboutTab>>,
+    /// The app's own tabs, shown after Models.
+    #[prop]
     app_tabs: Option<&'a mut [AboutAppTab]>,
+    /// How the About tab lays out the info, and the footer button that goes with it.
+    #[prop]
     layout: AboutLayout,
 }
 
@@ -260,18 +264,6 @@ impl<'a> AboutDialog<'a> {
     /// The dialog over `info` and `credits`, opening on the About tab.
     pub fn new(info: &'a AboutInfo, credits: &'a Credits) -> Self {
         AboutDialog { info, credits, open: None, tab: None, app_tabs: None, layout: AboutLayout::default() }
-    }
-
-    /// How the About tab lays out the info, and the footer button that goes with it.
-    pub fn layout(mut self, layout: AboutLayout) -> Self {
-        self.layout = layout;
-        self
-    }
-
-    /// The app's own tabs, shown after Models.
-    pub fn app_tabs(mut self, tabs: &'a mut [AboutAppTab]) -> Self {
-        self.app_tabs = Some(tabs);
-        self
     }
 
     /// Shows the dialog.

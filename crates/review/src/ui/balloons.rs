@@ -34,8 +34,10 @@ craft_ui::words! {
 
 /// One card of the balloons: a comment thread or a revision, on a page at an anchor.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum BalloonItem<'a> {
     /// A comment thread.
+    #[non_exhaustive]
     Thread {
         /// The thread.
         thread: &'a CommentThread,
@@ -45,6 +47,7 @@ pub enum BalloonItem<'a> {
         anchor: Pos2,
     },
     /// A tracked change.
+    #[non_exhaustive]
     Revision {
         /// The change.
         revision: &'a Revision,
@@ -53,6 +56,18 @@ pub enum BalloonItem<'a> {
         /// The point it is anchored at, in the page's own points (the page's origin top left, y down).
         anchor: Pos2,
     },
+}
+
+impl<'a> BalloonItem<'a> {
+    /// A comment `thread` on `page`, anchored at `anchor`.
+    pub const fn thread(thread: &'a CommentThread, page: usize, anchor: Pos2) -> Self {
+        BalloonItem::Thread { thread, page, anchor }
+    }
+
+    /// A tracked change `revision` on `page`, anchored at `anchor`.
+    pub const fn revision(revision: &'a Revision, page: usize, anchor: Pos2) -> Self {
+        BalloonItem::Revision { revision, page, anchor }
+    }
 }
 
 impl BalloonItem<'_> {
@@ -178,6 +193,7 @@ impl<'a> CommentBalloons<'a> {
         };
 
         let count = order.len();
+        // design: allow[contract/memory](the balloons are a function, not a component: the label salts the ids of its cards so two balloon columns never meet, and no contract call scopes ids by hand)
         let shown = ui.push_id(label.as_str(), |ui| {
             let mut stacked: Option<(usize, f32)> = None;
             let mut rows = Vec::with_capacity(count);

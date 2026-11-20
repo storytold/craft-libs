@@ -51,7 +51,7 @@ fn wider(group: &GroupWidths, level: GroupLevel) -> f32 {
 /// fits, and then gives a level back from the start while the row still fits.
 #[trial]
 fn the_plan_compacts_then_collapses_from_the_end_and_gives_back_from_the_start() {
-    let even = [GroupWidths { full: 100.0, compact: 80.0, collapsed: 40.0 }; 4];
+    let even = [GroupWidths::new(100.0, 80.0, 40.0); 4];
     let mut last_collapsed = 0;
     for available in (0..=40).rev().map(|step| step as f32 * 10.0) {
         let levels = plan(&even, available);
@@ -76,10 +76,10 @@ fn the_plan_compacts_then_collapses_from_the_end_and_gives_back_from_the_start()
 
     // A wide group that shrinks frees room: the groups the shrinking passed over give back what they gave up.
     let uneven = [
-        GroupWidths { full: 300.0, compact: 250.0, collapsed: 60.0 },
-        GroupWidths { full: 500.0, compact: 500.0, collapsed: 60.0 },
-        GroupWidths { full: 60.0, compact: 60.0, collapsed: 60.0 },
-        GroupWidths { full: 60.0, compact: 60.0, collapsed: 60.0 },
+        GroupWidths::new(300.0, 250.0, 60.0),
+        GroupWidths::new(500.0, 500.0, 60.0),
+        GroupWidths::new(60.0, 60.0, 60.0),
+        GroupWidths::new(60.0, 60.0, 60.0),
     ];
     let levels = plan(&uneven, 800.0);
     assert!(total(&uneven, &levels) <= 800.0, "the row fits");

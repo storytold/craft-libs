@@ -24,7 +24,7 @@ use crate::shortcuts::state::{DialogState, Env};
 const LISTS_SHARE: f32 = 0.5;
 /// The detail column's share of the width beside the lists.
 const DETAIL_SHARE: f32 = 0.5;
-static PANES: [ColumnWidth; 2] = [ColumnWidth::fill(LISTS_SHARE), ColumnWidth::fill(DETAIL_SHARE)];
+const PANES: [ColumnWidth; 2] = [ColumnWidth::fill(LISTS_SHARE), ColumnWidth::fill(DETAIL_SHARE)];
 
 /// One frame of the command-lists body: a search field, the Categories list beside the Commands
 /// list, then the command's keys, the New Shortcut recorder, the holder line and the Assign and

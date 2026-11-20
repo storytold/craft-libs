@@ -41,6 +41,7 @@ fn inches() -> DocUnit {
 fn vertical(ui: &mut Ui, rows: &[f32], text: Option<Rangef>) -> StoryOutput {
     let full = craft_ui::testing::stage(ui);
     let page = demo_placed(1, pos2(full.min.x + STRIP, full.min.y + PAGE_TOP)).remove(0);
+    // design: allow[literal-size/vec2](the strip is the demo page margin in document points, story data)
     let strip = Rect::from_min_size(full.min, vec2(STRIP, full.height()));
     let mut ruler = VerticalRuler::new("Vertical ruler", &page).unit(inches()).rows(rows);
     if let Some(range) = text {

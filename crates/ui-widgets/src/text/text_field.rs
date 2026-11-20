@@ -72,7 +72,10 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// the id the collection is built with (`Props::id`), so a pattern can name a collection it shows after the field.
     #[prop]
     drives: Option<Id>,
-    /// The caret the caller binds, as a byte offset into the text.
+    /// Binds the caret, as a byte offset into the text: a value the app writes places the caret at the character
+    /// boundary at or before it, collapses the selection and scrolls the caret into view; the user moving the caret
+    /// writes its offset back.
+    #[prop]
     caret: Option<Bind<'a, usize>>,
     /// The most lines a multi-line field grows to before its text scrolls inside it.
     max_lines: Option<usize>,
@@ -198,15 +201,6 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     #[must_use]
     pub fn width_chars(mut self, chars: u16) -> Self {
         self.width_chars = (chars > 0).then_some(chars);
-        self
-    }
-
-    /// Binds the caret, as a byte offset into the text: a value the app writes places the caret at the character
-    /// boundary at or before it, collapses the selection and scrolls the caret into view; the user moving the caret
-    /// writes its offset back.
-    #[must_use]
-    pub fn caret(mut self, caret: Bind<'a, usize>) -> Self {
-        self.caret = Some(caret);
         self
     }
 

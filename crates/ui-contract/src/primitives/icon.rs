@@ -107,6 +107,7 @@ pub enum IconMark {
     /// A dot at the icon's bottom-trailing corner, ringed in the icon's colour.
     Dot(DataColor),
     /// A bar across the bottom of the icon square, inside it; `weight` is its thickness in points, else `StrokeWidth::Thick`.
+    #[non_exhaustive]
     Bar {
         /// The bar's colour.
         color: DataColor,
@@ -324,6 +325,7 @@ impl SvgIcon {
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         let fixed = match inks.fixed {
             Some(color) => (svg_set::Layer::FixedMask, color),
+            // design: allow[raw-colour/const](a fixed layer keeps the colours it is drawn in: a white tint leaves them unchanged)
             None => (svg_set::Layer::Fixed, Color32::WHITE),
         };
         let layers = [(svg_set::Layer::Ink, inks.ink), (svg_set::Layer::Accent, inks.accent), fixed];

@@ -5,7 +5,7 @@ mod completion;
 
 use crate::primitives::{TabKey, TextLayout, TextOptions};
 use crate::runtime::access::text::{Line, Run};
-use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, repaint, text_edit};
+use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, memory as egui_memory, repaint, text_edit};
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
 use crate::runtime::keys::{self, Intents};
 use crate::runtime::{commands, ime, wheel};
@@ -261,7 +261,7 @@ fn scroll_key(widget: Id) -> Id {
 /// inside the text. The share comes only with a frame's first pass (`wheel::begin` splits only the input that pass
 /// carries), so a second pass of the frame moves nothing.
 fn scroll_before(ctx: &Context, widget: Id) -> f32 {
-    let (offset, max) = ctx.data(|data| data.get_temp::<(f32, f32)>(scroll_key(widget))).unwrap_or((0.0, 0.0));
+    let (offset, max) = egui_memory::peek_copy::<(f32, f32)>(ctx, scroll_key(widget)).unwrap_or((0.0, 0.0));
     // A positive wheel moves the offset back, as a scroll region's does.
     let moved = wheel::take(ctx, widget).map_or(0.0, |share| share.scroll.y);
     (offset - moved).clamp(0.0, max)
@@ -284,7 +284,7 @@ fn scroll_after(ui: &Ui, widget: Id, view: Rect, shown: &text_edit::Shown, ran: 
         }
     }
     let next = next.clamp(0.0, max);
-    ctx.data_mut(|data| data.insert_temp(scroll_key(widget), (next, max)));
+    egui_memory::put(ctx, scroll_key(widget), (next, max));
     if next != ran {
         repaint::request(ctx);
     }

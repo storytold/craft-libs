@@ -57,8 +57,7 @@ impl Shown {
         let (shown_state, shown_edits, shown_cards) = (state.clone(), edits.clone(), cards.clone());
         let pages = [page()];
         let mut fixture = Fixture::new(move |ui| {
-            let items: Vec<BalloonItem<'_>> =
-                threads.iter().map(|(thread, y)| BalloonItem::Thread { thread, page: 0, anchor: Pos2::new(30.0, *y) }).collect();
+            let items: Vec<BalloonItem<'_>> = threads.iter().map(|(thread, y)| BalloonItem::thread(thread, 0, Pos2::new(30.0, *y))).collect();
             let mut state = shown_state.borrow_mut();
             let out = CommentBalloons::new("Comments", &pages, &items, &mut state).place(place).now(Some(3_600)).read_only(read_only).show(ui);
             shown_edits.borrow_mut().extend(out.edits);

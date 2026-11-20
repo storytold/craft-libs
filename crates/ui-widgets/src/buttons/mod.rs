@@ -77,6 +77,7 @@ pub(crate) fn placed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleC
 /// (`Ribbon::icons`); outside a ribbon it changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
 #[env(style)]
+#[non_exhaustive]
 pub struct RibbonLook {
     /// A stacked button's leading icon.
     pub large: u8,

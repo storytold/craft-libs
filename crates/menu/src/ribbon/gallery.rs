@@ -66,16 +66,22 @@ pub struct Gallery<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     current: Option<&'a K>,
     full: u8,
     compact: u8,
+    /// What the More button opens.
+    #[prop]
     more: GalleryMore<'a>,
     /// Whether one rounded frame holds the tiles and the buttons.
     framed: bool,
     /// Whether the buttons give way while every item shows.
     spare_buttons: bool,
-    /// The width of each tile's picture as a multiple of its height.
+    /// The width of each tile's picture as a multiple of its height, the medium thumbnail's (`size.thumb.md`): a wide
+    /// sample (a paragraph style's first letters) fills a wide tile instead of shrinking into a square one.
+    #[prop]
     aspect: ThumbAspect,
     /// The height of each tile's picture: a thumbnail size.
     thumb_size: ThumbSize,
-    /// Where a tile shows its item's name: `Below` the picture, else nowhere.
+    /// Where each tile shows its item's name: `CaptionPlace::Below` names it under the picture, in the caption role;
+    /// `None` (the default) and `Start` show no name. The name stays each tile's accessible name either way.
+    #[prop]
     caption: CaptionPlace,
     /// Each shown tile's rect.
     laid: Vec<Rect>,
@@ -138,31 +144,11 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
         self
     }
 
-    /// What the More button opens.
-    pub fn more(mut self, more: GalleryMore<'a>) -> Self {
-        self.more = more;
-        self
-    }
-
-    /// The width of each tile's picture as a multiple of its height, the medium thumbnail's (`size.thumb.md`): a wide
-    /// sample (a paragraph style's first letters) fills a wide tile instead of shrinking into a square one.
-    pub fn aspect(mut self, aspect: ThumbAspect) -> Self {
-        self.aspect = aspect;
-        self
-    }
-
     /// The height of each tile's picture, a thumbnail size (`size.thumb.*`; medium unless set): a gallery whose
     /// previews are small pages (a style set's title, heading and paragraph) takes the large size, so the pages read.
     /// `ThumbSize::None` keeps the medium size: a gallery tile always shows its picture.
     pub fn thumb(mut self, size: ThumbSize) -> Self {
         self.thumb_size = if size == ThumbSize::None { ThumbSize::Medium } else { size };
-        self
-    }
-
-    /// Where each tile shows its item's name: `CaptionPlace::Below` names it under the picture, in the caption role;
-    /// `None` (the default) and `Start` show no name. The name stays each tile's accessible name either way.
-    pub fn caption(mut self, caption: CaptionPlace) -> Self {
-        self.caption = caption;
         self
     }
 
@@ -216,8 +202,10 @@ pub struct GalleryItem<'a, K> {
 }
 
 /// How a gallery tile is drawn. Each tile builds a `Picture` from its face when it shows.
+#[non_exhaustive]
 pub enum GalleryFace<'a> {
     /// An image from `Picture`'s store, made again when `revision` changes.
+    #[non_exhaustive]
     Image {
         /// The store key.
         key: u64,
@@ -227,6 +215,7 @@ pub enum GalleryFace<'a> {
         image: &'a dyn Fn() -> ColorImage,
     },
     /// A rendered thumbnail.
+    #[non_exhaustive]
     Rendered {
         /// The thumbnail key.
         key: u64,
@@ -251,6 +240,16 @@ fn blank_picture(aspect: ThumbAspect, size: ThumbSize) -> Picture<'static> {
 }
 
 impl<'a> GalleryFace<'a> {
+    /// An image from `Picture`'s store under `key`, made by `image` again when `revision` changes.
+    pub fn image(key: u64, revision: Revision, image: &'a dyn Fn() -> ColorImage) -> Self {
+        GalleryFace::Image { key, revision, image }
+    }
+
+    /// A thumbnail under `key`, rendered by `source` into `thumbnails`.
+    pub fn rendered(key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64>) -> Self {
+        GalleryFace::Rendered { key, thumbnails, source }
+    }
+
     /// The picture this face shows, `size` high and `aspect` times as wide. It is decoration: the tile that holds it
     /// carries the name.
     fn picture(&self, aspect: ThumbAspect, size: ThumbSize) -> Picture<'a> {
@@ -267,6 +266,7 @@ impl<'a> GalleryFace<'a> {
 }
 
 /// What the More button of a gallery opens.
+#[non_exhaustive]
 pub enum GalleryMore<'a> {
     /// A grid of every tile.
     Grid,
@@ -277,6 +277,7 @@ pub enum GalleryMore<'a> {
 }
 
 /// What a gallery reports for a pass.
+#[non_exhaustive]
 pub struct GalleryOutput<K> {
     /// The tile picked this pass.
     pub picked: Option<K>,

@@ -185,10 +185,18 @@ pub enum CropScope {
     #[default]
     Document,
     /// One placed picture, bounded by its source.
+    #[non_exhaustive]
     Object {
         /// The picture's source rectangle, in document units; it bounds the drag rules.
         source: DocRect,
     },
+}
+
+impl CropScope {
+    /// One placed picture bounded by `source`.
+    pub const fn object(source: DocRect) -> Self {
+        CropScope::Object { source }
+    }
 }
 
 impl<'a> CropOverlay<'a> {

@@ -28,7 +28,7 @@ pub(crate) fn room(cx: &BodyCx<'_>, tokens: &UiTokens, window: Rect, acts: bool)
     }
     let height = crate::shell::SlotSize::TitleBar.resolve(tokens).min(window.height());
     let rect = Rect::from_min_size(window.min, vec2(window.width(), height));
-    Some(PageBandRoom { rect, start: taken(&facts.ends.start), end: taken(&facts.ends.end) })
+    Some(PageBandRoom::new(rect, taken(&facts.ends.start), taken(&facts.ends.end)))
 }
 
 /// The width one end takes: the lights' inset, then its caption buttons.

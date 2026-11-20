@@ -495,7 +495,10 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// dragged tabs would go.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
-    /// The items at the reading end, beside the tabs.
+    /// Sets the items at the reading end of the strip, beside the tabs: each runs its command or opens its menu. When
+    /// the room runs short they drop their labels, the last item first, before any tab overflows; they keep their
+    /// icons whatever the room.
+    #[prop]
     trailing: &'a [StripEnd<'a>],
     /// The contextual tabs fading out this pass, each as opaque as its presence.
     ghosts: Vec<Fading>,
@@ -569,15 +572,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
     #[must_use]
     pub fn takes_drop(mut self, kind: DropKind<'a, K>) -> Self {
         self.drops.push(kind);
-        self
-    }
-
-    /// Sets the items at the reading end of the strip, beside the tabs: each runs its command or opens its menu. When
-    /// the room runs short they drop their labels, the last item first, before any tab overflows; they keep their
-    /// icons whatever the room.
-    #[must_use]
-    pub fn trailing(mut self, items: &'a [StripEnd<'a>]) -> Self {
-        self.trailing = items;
         self
     }
 

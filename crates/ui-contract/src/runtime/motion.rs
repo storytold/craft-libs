@@ -635,7 +635,7 @@ pub(crate) fn key_id(key: &impl Hash) -> Id {
     use std::hash::Hasher as _;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut hasher);
-    Id::unique(hasher.finish())
+    store::unique(hasher.finish())
 }
 
 /// The types that reach the motion service.

@@ -162,7 +162,8 @@ pub struct ImageSize<'a> {
     /// document's depth, no alpha (1/8 for Bitmap, 1 for Indexed).
     #[prop(quantity = "bytes per pixel")]
     bytes_per_pixel: f64,
-    /// Where OK files the values of a hosted dialog instead of closing ([`FormDialog::held`](super::FormDialog::held)).
+    /// OK files the values in `held` and the dialog stays open until the host answers.
+    #[prop(vis = "pub(crate)")]
     held: Option<&'a mut HeldAnswer<ImageSizeValues>>,
 }
 
@@ -170,12 +171,6 @@ impl<'a> ImageSize<'a> {
     /// The dialog over `values`.
     pub fn new(values: Bind<'a, ImageSizeValues>) -> Self {
         ImageSize { values, open: None, methods: Vec::new(), bytes_per_pixel: 4.0, held: None }
-    }
-
-    /// OK files the values in `held` and the dialog stays open until the host answers.
-    pub(crate) fn held(mut self, held: &'a mut HeldAnswer<ImageSizeValues>) -> Self {
-        self.held = Some(held);
-        self
     }
 
     /// Shows the dialog.

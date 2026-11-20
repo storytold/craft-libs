@@ -138,6 +138,7 @@ fn an_accent_part_paints_in_the_accent_ink_a_fixed_part_as_drawn_and_both_take_t
     assert_eq!(ink_tint, ink, "the plain parts read in the icon's colour");
     assert_eq!(accent_tint, rgba_color(tokens.color.accent.solid), "the accent parts read in the accent ink");
     assert_ne!(accent_tint, ink_tint);
+    // design: allow[raw-colour/const](a fixed layer keeps the colours it is drawn in: the trial expects the white tint that leaves them unchanged)
     assert_eq!(fixed_tint, Color32::WHITE, "the fixed parts keep the colours they are drawn in");
     assert!(ink_layer != accent_layer && accent_layer != fixed_layer && ink_layer != fixed_layer, "each layer is its own texture");
 
@@ -148,6 +149,7 @@ fn an_accent_part_paints_in_the_accent_ink_a_fixed_part_as_drawn_and_both_take_t
     assert_ne!(off_fixed, fixed_layer, "a disabled fixed part is drawn as a silhouette, not in its own colours");
 
     let tints: Vec<Color32> = enabled_in_the_disabled_colour.iter().map(|(_, tint)| *tint).collect();
+    // design: allow[raw-colour/const](a fixed layer keeps the colours it is drawn in: the trial expects the white tint that leaves them unchanged)
     assert_eq!(tints, [off, rgba_color(tokens.color.accent.solid), Color32::WHITE], "an enabled icon in the disabled colour keeps its layers");
 
     // What each layer holds: the class split is the SVG engine's, so a sheet it ignored would give every layer the whole drawing.

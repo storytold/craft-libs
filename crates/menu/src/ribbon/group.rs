@@ -27,7 +27,7 @@ craft_ui::words! {
 }
 
 /// The arrow of a collapsed group's button where the look sets menu arrows: the small filled triangle.
-static COLLAPSED_ARROW: craft_ui::controls::disclosure::DisclosureGlyph = craft_ui::controls::disclosure::DisclosureGlyph::new(1.0);
+const COLLAPSED_ARROW: craft_ui::controls::disclosure::DisclosureGlyph = craft_ui::controls::disclosure::DisclosureGlyph::new(1.0);
 
 /// The levels a group shows at, widest first: the order the row's levelled units report their widths in.
 pub(super) const LEVELS: [GroupLevel; 3] = [GroupLevel::Full, GroupLevel::Compact, GroupLevel::Collapsed];

@@ -195,7 +195,7 @@ fn typed(text: &str) -> Typed {
 /// codes: Option with a digit types the platform's own character.
 #[trial]
 fn an_alt_numpad_code_types_its_character_once() {
-    let western = AltCodePages { ansi: 1252, oem: 437 };
+    let western = AltCodePages::new(1252, 437);
     for os in [Os::Windows, Os::Linux] {
         let mut session = Session::new(os, western);
         let lone = session.send(vec![vec![alt(true)], vec![alt(false)]]);
@@ -238,7 +238,7 @@ fn an_alt_numpad_code_types_its_character_once() {
         let lone = session.send(vec![vec![alt(true)], vec![alt(false)]]);
         assert_eq!(lone, Typed { text: String::new(), lone_alt: true }, "{os:?}: a code whose release went elsewhere leaves no mark");
 
-        let mut cyrillic = Session::new(os, AltCodePages { ansi: 1251, oem: 866 });
+        let mut cyrillic = Session::new(os, AltCodePages::new(1251, 866));
         assert_eq!(cyrillic.send(code("0233")), typed("й"), "{os:?}: the app's ANSI page decodes the code");
         assert_eq!(cyrillic.send(code("233")), typed("щ"), "{os:?}: the app's OEM page decodes the code");
     }

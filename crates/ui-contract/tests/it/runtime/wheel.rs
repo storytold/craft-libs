@@ -264,7 +264,7 @@ fn speed_steps(os: Os, speed: WheelSpeed) -> [Took; 4] {
 /// device's notch: its distance does not follow the speed.
 #[trial]
 fn the_users_wheel_speed_scales_each_delta_once_and_leaves_zoom_alone() {
-    let speed = WheelSpeed { line: 3.0, point: 2.0 };
+    let speed = WheelSpeed::new(3.0, 2.0);
     let close = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
     for os in [Os::Windows, Os::Linux, Os::Mac] {
         let [line, point, zoom, secondary] = speed_steps(os, WheelSpeed::default());

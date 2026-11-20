@@ -55,7 +55,7 @@ fn drag_vertical_thumb(fixture: &mut Fixture) {
 }
 
 /// The tip beside a dragged vertical thumb: the bars show it on the reading-start side while the thumb drags.
-#[story(CanvasScrollbars<'static>, covers = [Default], drive = Drive::Custom(drag_vertical_thumb))]
+#[story(CanvasScrollbars<'static>, covers = [Default, Open], drive = Drive::Custom(drag_vertical_thumb))]
 fn tip_while_dragging(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let full = stage(ui);
     let shown = view_over(ui, full);

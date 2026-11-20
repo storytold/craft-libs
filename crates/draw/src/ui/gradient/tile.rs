@@ -25,6 +25,7 @@ pub enum GradientTile {
     #[default]
     Ramp,
     /// A square tile of `style` at `angle`.
+    #[non_exhaustive]
     Style {
         /// How the gradient runs.
         style: GradientStyle,
@@ -33,6 +34,7 @@ pub enum GradientTile {
         angle: f32,
     },
     /// A square tile whose gradient runs out from `focus`.
+    #[non_exhaustive]
     Focus {
         /// The shape of the outline the gradient follows.
         outline: FocusOutline,
@@ -41,8 +43,21 @@ pub enum GradientTile {
     },
 }
 
+impl GradientTile {
+    /// A square tile of `style` at `angle`.
+    pub const fn style(style: GradientStyle, angle: f32) -> Self {
+        GradientTile::Style { style, angle }
+    }
+
+    /// A square tile whose gradient runs out from `focus`, in the shape of `outline`.
+    pub const fn focus(outline: FocusOutline, focus: egui::Rect) -> Self {
+        GradientTile::Focus { outline, focus }
+    }
+}
+
 /// The outline a [`GradientTile::Focus`] gradient follows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FocusOutline {
     /// A circle.
     Circle,
@@ -61,6 +76,7 @@ impl GradientTile {
     ///
     /// `Ramp` has no second dimension: its position is `p.x`.
     pub fn t_at(&self, p: Vec2) -> f32 {
+        // design: allow[literal-size/vec2](the centre of the tile unit square, a gradient coordinate and not a size)
         let c = vec2(0.5, 0.5);
         let t = match *self {
             GradientTile::Ramp => p.x,

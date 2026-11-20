@@ -208,6 +208,7 @@ pub enum EdgeLook {
     #[default]
     Proxy,
     /// The borders drawn as a sample.
+    #[non_exhaustive]
     Sample {
         /// What the sample's borders surround.
         area: SampleArea,
@@ -216,8 +217,16 @@ pub enum EdgeLook {
     },
 }
 
+impl EdgeLook {
+    /// The borders drawn as a sample around `area`, filled with `fill` if given.
+    pub const fn sample(area: SampleArea, fill: Option<craft_theme::Srgba>) -> Self {
+        EdgeLook::Sample { area, fill }
+    }
+}
+
 /// What a sample of borders surrounds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SampleArea {
     /// A run of text.
     Text,

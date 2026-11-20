@@ -58,6 +58,7 @@ impl Divider {
     /// The line is `points` long, along its axis, whatever the room: it fills nothing. A separator whose owner knows its
     /// own extent (a ribbon group, as tall as its content and title) takes that, so the line never sets the extent of
     /// the row it sits in. A length that is not a finite positive number is ignored, and the line fills as before.
+    // design: allow[props/point-size](the length is the measured extent of the owner's content (a group as tall as its content and title), not a chosen size)
     pub fn length(mut self, points: f32) -> Self {
         self.length = (points.is_finite() && points > 0.0).then_some(points);
         self

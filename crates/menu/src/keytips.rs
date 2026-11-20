@@ -16,7 +16,7 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::{self, OpenFilter};
 use craft_ui::runtime::{focus, inspect};
 use craft_ui::style::{ComponentStyle, StateSet, Stateful, StyleCx, SurfaceLook, TextLook, TypeRole, UiTokens};
-use egui::{Context, Id, LayerId, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
 
 /// Escape ends the keytips while they show.
 const ESCAPE: Chord = Chord::plain(Key::Escape);
@@ -136,7 +136,6 @@ struct Reported {
 pub struct Keytips<'a> {
     #[common]
     common: Common,
-    enabled: bool,
     /// The ribbon's tabs, each with its name, its badge letters and the id of its access node (a ribbon reports them in
     /// `RibbonOutput::tab_ids`). A tab's badge shows on the element of the records that stands for that node
     /// (`Element::node`), and [`KeytipsOutput::tab`] reports the badge.
@@ -172,9 +171,8 @@ impl<'a> Keytips<'a> {
     /// Keytips that react to the keys when `enabled`. An app that shows an in-window menu bar passes `false`: that
     /// bar takes Alt and F10.
     pub fn new(enabled: bool) -> Self {
-        Keytips {
+        let keytips = Keytips {
             common: Common::new(),
-            enabled,
             tabs: &[],
             controls: &[],
             sequences: &[],
@@ -184,12 +182,13 @@ impl<'a> Keytips<'a> {
             state: State::default(),
             badges: Vec::new(),
             reported: Reported::default(),
-        }
+        };
+        craft_ui::contract::Props::enabled(keytips, enabled)
     }
 
     /// Shows the badges and reads the keys. Show it after the regions it places badges on, in a `Ui` that covers
     /// them.
-    pub fn show(self, ui: &mut Ui) -> KeytipsOutput {
+    pub fn show_over(self, ui: &mut Ui) -> KeytipsOutput {
         let area = ui.clip_rect().intersect(ui.ctx().content_rect());
         craft_ui::contract::Show::show_at(self, ui, area)
     }
@@ -294,7 +293,7 @@ impl<'a> Keytips<'a> {
     }
 
     /// The badges `state` shows, each at the rect of its element in the layer `layer`. An element takes one badge.
-    fn placed(&self, state: &State, controls: &[String], layer: LayerId, cx: &Cx<'_, Self>) -> Vec<(Rect, String)> {
+    fn placed(&self, state: &State, controls: &[String], cx: &Cx<'_, Self>) -> Vec<(Rect, String)> {
         let ctx = &cx.response.ctx;
         let mut taken: Vec<(usize, usize)> = Vec::new();
         let mut placed = Vec::new();
@@ -309,7 +308,7 @@ impl<'a> Keytips<'a> {
             };
             let Some((region, index)) = found else { continue };
             taken.push((region, index));
-            if let Some(rect) = self.places[region].rect_in(ctx, index, layer) {
+            if let Some(rect) = self.places[region].rect_in(ctx, index, cx.response.layer_id) {
                 placed.push((rect, entry.badge));
             }
         }
@@ -397,7 +396,7 @@ impl Component for Keytips<'_> {
     /// a second pass of the frame keeps the state the first one wrote and reports nothing new.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let ctx = cx.response.ctx.clone();
-        if !self.enabled || suppressed(&ctx) {
+        if !cx.resolved.enabled || suppressed(&ctx) {
             *cx.memory::<State>() = State::default();
             return;
         }
@@ -448,7 +447,7 @@ impl Component for Keytips<'_> {
             }
             cx.claim(ESCAPE);
         }
-        self.badges = if state.phase == Phase::Sequence { Vec::new() } else { self.placed(&state, &controls, cx.response.layer_id, cx) };
+        self.badges = if state.phase == Phase::Sequence { Vec::new() } else { self.placed(&state, &controls, cx) };
         *cx.memory::<State>() = state.clone();
         self.state = state;
     }
@@ -476,6 +475,7 @@ impl Component for Keytips<'_> {
 
 /// A control that gets a keytip.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct KeytipControl<'a> {
     /// The control's command: its badge shows on the element of the records bound to it.
     pub command: CommandRef,
@@ -485,8 +485,16 @@ pub struct KeytipControl<'a> {
     pub letters: Option<&'a str>,
 }
 
+impl<'a> KeytipControl<'a> {
+    /// A control firing `command`, its badge letters taken from `label` unless `letters` fixes them.
+    pub const fn new(command: CommandRef, label: &'a str, letters: Option<&'a str>) -> Self {
+        KeytipControl { command, label, letters }
+    }
+}
+
 /// What the keytips report for a pass. `tab` and `fired` come from the pass that received the key only.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct KeytipsOutput {
     /// The tab the keys chose, by its badge as the app gave it.
     pub tab: Option<String>,

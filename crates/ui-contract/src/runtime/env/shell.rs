@@ -131,6 +131,7 @@ struct Inner {
 /// The room of the page band while a full-window page shows: the title-bar-high strip at the window's top and the room
 /// the window's ends take in it.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PageBandRoom {
     /// The band's rect.
     pub rect: Rect,
@@ -139,6 +140,13 @@ pub struct PageBandRoom {
     pub start: f32,
     /// The width the window's end end takes, from the band's reading end.
     pub end: f32,
+}
+
+impl PageBandRoom {
+    /// The band at `rect`, the window's start end taking `start` of it and its end end `end`.
+    pub const fn new(rect: Rect, start: f32, end: f32) -> Self {
+        PageBandRoom { rect, start, end }
+    }
 }
 
 /// The rects that body content registered this pass for the edge it was revealed from. The registry is shared by the

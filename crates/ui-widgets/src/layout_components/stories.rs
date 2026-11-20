@@ -41,6 +41,7 @@ fn stack_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Stack<'static>, covers = [])]
 fn stack_fill_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     outlined(ui, |ui| {
+        // design: allow[contract/allocate, literal-size/vec2](the story gives the stack a fixed stage box to show fill-height sizing)
         ui.allocate_ui(egui::vec2(360.0, 200.0), |ui| {
             Row::new().fill().show(ui, |ui, _| {
                 Stack::new()

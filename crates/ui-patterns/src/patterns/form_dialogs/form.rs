@@ -44,6 +44,7 @@ craft_ui::words! {
 
 /// The buttons a form dialog's footer starts with, before its [extra buttons](FormDialog::extra_buttons).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FormButtons {
     /// OK and Cancel (Reset while Alt is held).
     #[default]

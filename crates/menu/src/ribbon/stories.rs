@@ -80,6 +80,7 @@ fn show(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         ribbon = ribbon.minimised(Bind::given(true));
     }
     if setup.menu {
+        // design: allow[contract/layers](Ribbon::context_menu is the ribbon's own builder for its menu rows, not egui's layer-opening method)
         ribbon = ribbon.context_menu(&mut rows);
     }
     if setup.app_icons {

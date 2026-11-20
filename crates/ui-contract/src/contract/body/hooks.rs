@@ -1350,7 +1350,7 @@ impl BodyHooks<'_> {
         // column too. A scrolling body's region allocates nothing in `body_ui`, so the hook starts below the part it
         // shows.
         if run.scroll.is_some() {
-            body_ui.allocate_space(Vec2::new(0.0, took.map_or(0.0, |size| size.y)));
+            crate::runtime::egui::alloc::space(&mut body_ui, Vec2::new(0.0, took.map_or(0.0, |size| size.y)));
         }
         let before = body_ui.min_rect().height();
         end(&mut body_ui, bcx);
