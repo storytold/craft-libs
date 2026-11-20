@@ -104,7 +104,13 @@ impl<'a> Mapper<'a> {
             }
             let data = row.get("symbolData");
             targets.extend(row.get("overriddenSymbolID").and_then(swap_guid));
-            targets.extend(data.and_then(|d| d.get("symbolID")).and_then(guid));
+            let main = data.and_then(|d| d.get("symbolID")).and_then(guid);
+            // A variant property bound to a variable can pick any variant of the main's set (a
+            // kit's Dark variants, which no instance names): the whole set is needed.
+            if let Some(m) = main.as_deref().filter(|_| binds_variant(row)) {
+                targets.extend(self.variant_siblings(m));
+            }
+            targets.extend(main);
             for assignment in row.get("componentPropAssignments").map(Kv::list).unwrap_or_default() {
                 if assignment.get("defID").is_some_and(|def| self.is_instance_swap(def).is_some()) {
                     targets.extend(assigned(assignment).and_then(prop_guid));
@@ -115,6 +121,13 @@ impl<'a> Mapper<'a> {
             pending.extend(overrides.iter().chain(derived).map(|row| (row, depth + 1)));
         }
         targets
+    }
+
+    /// The other variants in the set holding main `id` (the components beside it), at most 256.
+    fn variant_siblings(&self, id: &str) -> Vec<String> {
+        let Some(parent) = self.nodes.get(id).and_then(|n| n.get("parentIndex")?.get("guid")).and_then(guid) else { return Vec::new() };
+        let symbol = |c: &String| self.nodes.get(c).and_then(|n| n.get("type")).and_then(Kv::str) == Some("SYMBOL");
+        self.children(&parent).into_iter().filter(|c| c != id && symbol(c)).take(256).collect()
     }
 
     /// The branches of the internal canvas `id` that hold the `required_mains` (with the frames
@@ -330,4 +343,17 @@ fn sorted_modes(n: &Kv) -> Vec<(String, Value)> {
         .collect();
     modes.sort_by(|a, b| a.0.cmp(&b.0));
     modes
+}
+
+/// Whether layer or override row `row` binds a variant property to a variable
+/// (`VARIANT_PROPERTIES` in its variable or parameter consumption map).
+fn binds_variant(row: &Kv) -> bool {
+    ["variableConsumptionMap", "parameterConsumptionMap"].iter().any(|m| {
+        row.get(m)
+            .and_then(|m| m.get("entries"))
+            .map(Kv::list)
+            .unwrap_or_default()
+            .iter()
+            .any(|e| e.get("variableField").and_then(Kv::str) == Some("VARIANT_PROPERTIES"))
+    })
 }

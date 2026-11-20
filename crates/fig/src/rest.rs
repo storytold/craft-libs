@@ -182,6 +182,8 @@ mod image_filter_tests;
 mod swap_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod variant_binding_tests;
 
 // ---- small readers ----
 
