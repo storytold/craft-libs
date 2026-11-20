@@ -170,16 +170,20 @@ pub fn is_connector(shape_type: u16) -> bool {
 pub fn geometry(shape_type: u16, props: &Props) -> Geom {
     if let Some(name) = preset_name(shape_type).filter(|n| craft_drawingml::preset::build(n, 100.0, 100.0, &[]).is_some()) {
         let mut adj = vec![];
-        // A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the
-        // shorter side in DrawingML.
         if shape_type == 2
             && let Some(v) = props.get(prop::ADJUST_VALUE)
         {
-            adj.push(f64::from(v as i32).clamp(0.0, 10800.0) / 21600.0 * 100_000.0);
+            adj.push(round_rect_adjust(v as i32));
         }
         return Geom::Preset { name: name.into(), adj };
     }
     custom_path(props).map(|paths| Geom::Custom { paths }).unwrap_or_default()
+}
+
+/// A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the shorter
+/// side in DrawingML.
+pub(crate) fn round_rect_adjust(v: i32) -> f64 {
+    f64::from(v).clamp(0.0, 10800.0) / 21600.0 * 100_000.0
 }
 
 /// Segments followed at most in one path.

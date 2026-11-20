@@ -6,34 +6,42 @@
 //! (a type-3 root holding the Document, 1000), with no edit chain or persist directory.
 //!
 //! Read so far: the slide size, the masters with their colour schemes and backgrounds, and the
-//! slides in order with their master, layout type and background, holding their placeholders and
-//! text boxes with the text and its character and paragraph formatting ([`text`]).
+//! slides in order with their master, layout type and background, holding their placeholders, text
+//! boxes, shapes and lines, with the text and its character and paragraph formatting ([`text`]).
 //!
-//! A page's object list (3000) holds shapes (3008) and placeholders (3010, which add a 3011 atom:
-//! the type, the size, then the index). Each has its geometry (3009): the box as left, top, right
-//! and bottom in master units (576 per inch) measured from the slide's centre, then the angle in
-//! sixteenths of a degree. PowerPoint 95 numbers placeholders its own way: on the master 1 title,
-//! 2 body, 6 date, 7 slide number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred
-//! title and 0x10 subtitle. A placeholder of any other type keeps its text as a text box. The
-//! master's placeholders place the caller's default master's, and the footer row places every
-//! layout's, as the PowerPoint 97 path does.
+//! A page's object list (3000) holds shapes (3008), placeholders (3010, which add a 3011 atom: the
+//! type, the size, then the index) and lines (3014). A shape or placeholder has its geometry
+//! (3009): the shape code and its adjust value, the box as left, top, right and bottom in master
+//! units (576 per inch) measured from the slide's centre, then the angle in sixteenths of a degree.
+//! A turned shape keeps its unturned box. A line holds 3015: its start and end points, in the same
+//! units. Shapes and lines have a format (3005) with their fill, line, shadow and horizontal flip
+//! ([`shape`]). A shape that draws nothing but its text is a text box.
 //!
-//! Not read yet: shapes without text, and shapes' own fill, line and shadow; pictures; notes; and
-//! the master's text styles, so the levels of the default master's styles stay as they are (the
-//! slide text carries its own formatting in full).
+//! PowerPoint 95 numbers placeholders its own way: on the master 1 title, 2 body, 6 date, 7 slide
+//! number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred title and 0x10 subtitle. A
+//! placeholder of any other type keeps its text as a text box. The master's placeholders place the
+//! caller's default master's, and the footer row places every layout's, as the PowerPoint 97 path
+//! does.
+//!
+//! Not read yet: line widths and styles, vertical flips and shadow offsets (no probe changed them);
+//! groups and freeforms, which are skipped; pictures; notes; and the master's text styles, so the
+//! levels of the default master's styles stay as they are (the slide text carries its own
+//! formatting in full).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft_pptx::{
-    Background, ColorRef, Defaults, Fill, LayoutType, Line, Master, PhType, Placeholder, Presentation, Rgba, Shape, ShapeId, Size, Slide, SlideId,
-    TextBody, Xfrm,
+    Background, ColorRef, Defaults, Effects, Fill, Geom, LayoutType, Line, Master, PhType, Placeholder, Presentation, Rgba, Shape, ShapeId, Size,
+    Slide, SlideId, TextBody, Xfrm,
 };
 
 use crate::convert::{Scheme, layout_kind, layout_table, page_side, place_placeholder, same_family, scheme_theme};
 use crate::record::u32_at;
+use shape::Look;
 use text::Env;
 
+mod shape;
 mod text;
 
 /// Record types.
@@ -55,6 +63,8 @@ mod rt {
     pub const GEOMETRY: u32 = 3009;
     pub const PLACEHOLDER: u32 = 3010;
     pub const PLACEHOLDER_ATOM: u32 = 3011;
+    pub const LINE: u32 = 3014;
+    pub const LINE_ATOM: u32 = 3015;
     pub const TEXT: u32 = 4001;
 }
 
@@ -70,7 +80,7 @@ const MAX_MASTERS: usize = 256;
 const MAX_OBJECTS: usize = 1 << 14;
 /// Master units (576 per inch) per point.
 const MU: f64 = 8.0;
-/// The fill colour's fourth byte when the colour is the RGB given, not a scheme slot.
+/// A colour's fourth byte when the colour is the RGB given, not a scheme slot.
 const RGB_GIVEN: u8 = 0xFE;
 
 /// PowerPoint 95's default colour scheme, for a slide or master without one.
@@ -196,9 +206,7 @@ fn background(rec: &Rec, scheme: &Scheme) -> Option<Fill> {
     if format.u8(12)? == 0xFF {
         return Some(Fill::None);
     }
-    let (r, g, b, index) = (format.u8(20)?, format.u8(21)?, format.u8(22)?, format.u8(23)?);
-    let color = if index == RGB_GIVEN { Rgba::rgb(r, g, b) } else { *scheme.get(usize::from(index))? };
-    Some(Fill::solid(ColorRef::rgb(color)))
+    Some(Fill::solid(ColorRef::rgb(shape::color(&format, 20, scheme)?)))
 }
 
 /// A PowerPoint 95 placeholder number as a placeholder type. PowerPoint 95 numbers them its own
@@ -224,25 +232,59 @@ struct Object {
     ph: Option<Placeholder>,
     xfrm: Xfrm,
     text: Option<TextBody>,
+    /// A shape's preset: `None` for a placeholder, or a shape code no probe showed.
+    geom: Option<Geom>,
+    /// How a shape or line is drawn (a placeholder's is left to its layout).
+    look: Look,
+    /// A line (3014), not a shape.
+    line: bool,
 }
 
-/// The shapes and placeholders of a page's object list.
+/// The shapes, placeholders and lines of a page's object list.
 fn objects<'a>(page: &Rec<'a>) -> impl Iterator<Item = Rec<'a>> {
-    page.child(rt::OBJECTS).into_iter().flat_map(|l| l.children()).filter(|r| matches!(r.kind, rt::SHAPE | rt::PLACEHOLDER)).take(MAX_OBJECTS)
+    page.child(rt::OBJECTS)
+        .into_iter()
+        .flat_map(|l| l.children())
+        .filter(|r| matches!(r.kind, rt::SHAPE | rt::PLACEHOLDER | rt::LINE))
+        .take(MAX_OBJECTS)
 }
 
-/// A shape or placeholder: its box, from master units about the slide's centre to points from
-/// its top left corner, its placeholder atom and its text.
-fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
-    let g = r.child(rt::GEOMETRY)?;
-    let sides = [g.i32(12)?, g.i32(16)?, g.i32(20)?, g.i32(24)?];
-    let [l, t, right, b] = sides;
+/// A box from master units about the slide's centre (left, top, right, bottom, either way round)
+/// to points from its top left corner.
+fn xfrm_of([l, t, right, b]: [i32; 4], size: Size) -> Xfrm {
     let x = |v: i32| f64::from(v) / MU + size.width / 2.0;
     let y = |v: i32| f64::from(v) / MU + size.height / 2.0;
+    Xfrm { x: x(l).min(x(right)), y: y(t).min(y(b)), w: (x(right) - x(l)).abs(), h: (y(b) - y(t)).abs(), rot: 0.0, flip_h: false, flip_v: false }
+}
+
+/// A line: the box its ends span, flipped so that it runs from its start to its end, drawn as its
+/// format says (in the scheme's text and lines colour without one).
+fn line(r: &Rec, scheme: &Scheme, size: Size) -> Option<Object> {
+    let a = r.child(rt::LINE_ATOM)?;
+    let (x1, y1, x2, y2) = (a.i32(0)?, a.i32(4)?, a.i32(8)?, a.i32(12)?);
+    let mut xfrm = xfrm_of([x1, y1, x2, y2], size);
+    (xfrm.flip_h, xfrm.flip_v) = (x2 < x1, y2 < y1);
+    let mut look = match r.child(rt::FORMAT) {
+        Some(f) => shape::look(&f, scheme),
+        None => Look { line: shape::line_of(scheme[1]), ..Look::none() },
+    };
+    // A line has no inside to fill, and its direction is in its ends.
+    (look.fill, look.flip_h) = (Fill::None, false);
+    let geom = Some(Geom::Preset { name: "line".into(), adj: vec![] });
+    Some(Object { placeholder: false, ph: None, xfrm, text: None, geom, look, line: true })
+}
+
+/// A shape, placeholder or line: its box, its placeholder atom, its text, and a shape's preset and
+/// look.
+fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
+    if r.kind == rt::LINE {
+        return line(r, scheme, size);
+    }
+    let g = r.child(rt::GEOMETRY)?;
+    let sides = [g.i32(12)?, g.i32(16)?, g.i32(20)?, g.i32(24)?];
+    let mut xfrm = xfrm_of(sides, size);
     // The box is the unturned one; the angle is in sixteenths of a degree.
-    let rot = g.i32(28).map_or(0.0, |v| (f64::from(v) / 16.0).rem_euclid(360.0));
-    let xfrm =
-        Xfrm { x: x(l).min(x(right)), y: y(t).min(y(b)), w: (x(right) - x(l)).abs(), h: (y(b) - y(t)).abs(), rot, flip_h: false, flip_v: false };
+    xfrm.rot = g.i32(28).map_or(0.0, |v| (f64::from(v) / 16.0).rem_euclid(360.0));
     let placeholder = r.kind == rt::PLACEHOLDER;
     let ph = r.child(rt::PLACEHOLDER_ATOM).filter(|_| placeholder).and_then(|a| {
         let size = match a.u8(1) {
@@ -253,22 +295,55 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         Some(Placeholder { kind: ph_type(a.u8(0)?)?, idx: a.u32(4).unwrap_or(0), size, ..Default::default() })
     });
     let text = r.child(rt::TEXT).and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
-    Some(Object { placeholder, ph, xfrm, text })
+    let (mut geom, mut look) = (None, Look::none());
+    if !placeholder {
+        // The shape code is the low byte: PowerPoint 95 sets bits above it on some shapes (0x60 on
+        // the trapezoid).
+        if let Some((preset, upside_down)) = g.u8(0).and_then(|c| shape::preset(c as i8, g.i32(4), xfrm.w, xfrm.h)) {
+            geom = Some(preset);
+            xfrm.flip_v = upside_down;
+        }
+        if let Some(f) = r.child(rt::FORMAT) {
+            look = shape::look(&f, scheme);
+        }
+        xfrm.flip_h = look.flip_h;
+    }
+    Some(Object { placeholder, ph, xfrm, text, geom, look, line: false })
 }
 
-/// An object as a shape: a placeholder of a known type, else a text box when it has text (a shape
-/// with no text is not read yet). A placeholder of an unknown type keeps its text as a text box.
+/// An object as a shape: a placeholder of a known type; a text box when it draws nothing but its
+/// text, or has text and a shape code no probe showed; else a shape or line that draws something.
+/// One that draws nothing, or has an unknown code and no text, is left out. A placeholder of an
+/// unknown type keeps its text as a text box.
 fn shape(p: &mut Presentation, o: Object) -> Option<Shape> {
     let Some(ph) = o.ph else {
-        let text = o.text.filter(|t| !t.is_empty())?;
+        let text = o.text.filter(|t| !t.is_empty());
+        if text.is_some() && (!o.look.drawn() || o.geom.is_none()) {
+            let mut xfrm = o.xfrm;
+            (xfrm.flip_h, xfrm.flip_v) = (false, false);
+            return Some(Shape {
+                id: ShapeId(p.alloc_id()?),
+                name: "Text Box".into(),
+                xfrm: Some(xfrm),
+                text_box: true,
+                fill: Some(Fill::None),
+                line: Some(Line::none()),
+                text,
+                ..Default::default()
+            });
+        }
+        let geom = o.geom.filter(|_| o.look.drawn())?;
+        let id = p.alloc_id()?;
+        let Look { fill, line, shadow, .. } = o.look;
         return Some(Shape {
-            id: ShapeId(p.alloc_id()?),
-            name: "Text Box".into(),
+            id: ShapeId(id),
+            name: if o.line { format!("Line {id}") } else { format!("Shape {id}") },
             xfrm: Some(o.xfrm),
-            text_box: true,
-            fill: Some(Fill::None),
-            line: Some(Line::none()),
-            text: Some(text),
+            geom,
+            fill: Some(fill),
+            line: Some(line),
+            effects: shadow.map(|s| Effects { outer_shadow: Some(s), ..Default::default() }),
+            text,
             ..Default::default()
         });
     };

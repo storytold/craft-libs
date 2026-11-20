@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used)]
 
 use craft_pptx::text::{Align, Bullet};
-use craft_pptx::{Background, ColorRef, Fill, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, TextBody};
+use craft_pptx::{Background, ColorRef, Fill, Geom, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, TextBody};
 
 use super::rt;
 use crate::tests::{AppDefaults, build};
@@ -470,7 +470,7 @@ fn title_and_subtitle_placeholders_keep_their_text() {
     let title = placeholder_95(0x0F, 0, 0, [-2448, -720, 2448, 0], Some(simple_text(b"Title text", [-2448, -720, 2448, 0], BODY)));
     let sub = placeholder_95(0x10, 1, 1, [-2016, 288, 2016, 1392], Some(simple_text(b"Sub text", [-2016, 288, 2016, 1392], BODY)));
     let p = deck_of(vec![title, sub], &[]);
-    let shapes = &p.slides[0].shapes;
+    let Some(shapes) = p.slides.first().map(|s| &s.shapes) else { return };
     assert_eq!(texts(&p), ["Title text", "Sub text"]);
     let ph: Vec<_> = shapes.iter().map(|s| s.ph.clone().unwrap()).collect();
     assert_eq!((ph[0].kind, ph[0].idx, ph[0].size.as_deref()), (PhType::CtrTitle, 0, None));
@@ -566,9 +566,9 @@ fn paragraphs_keep_their_alignment() {
     assert_eq!(aligns, [Some(Align::Left), Some(Align::Center), Some(Align::Right), None]);
 }
 
-/// A shape with text is a text box with no fill or line of its own; a shape without text isn't
-/// read yet; a placeholder of a type PowerPoint 95 isn't known to write keeps its text as a text
-/// box.
+/// A shape with text and no format of its own is a text box with no fill or line; one without text
+/// draws nothing and is left out; a placeholder of a type PowerPoint 95 isn't known to write keeps
+/// its text as a text box.
 #[test]
 fn a_shape_with_text_is_a_text_box() {
     let bx = [-2362, -1613, -518, -1325];
@@ -705,6 +705,249 @@ fn hostile_text_never_panics() {
     }
 }
 
+/// A geometry record with its shape code word, adjust value, box and angle.
+fn coded_geometry(code: u32, adjust: i32, bx: [i32; 4], rot: i32) -> Vec<u8> {
+    let mut b = le32(&[code, adjust as u32, 0]);
+    b.extend(bx.iter().chain(&[rot]).flat_map(|v| v.to_le_bytes()));
+    b.extend_from_slice(&le32(&[code, 0]));
+    rec(3009, 0, 0, &b)
+}
+
+/// How a test shape is drawn: line and fill colours (R, G, B, then 0xFE or a scheme slot; `None`
+/// for none), the shadow's colour when it has one, and the horizontal flip.
+#[derive(Clone, Copy)]
+struct Format {
+    line: Option<[u8; 4]>,
+    fill: Option<[u8; 4]>,
+    shadow: Option<[u8; 4]>,
+    flip_h: bool,
+}
+
+/// PowerPoint 95's defaults: lines in slot 1, fills in slot 4, no shadow.
+const PLAIN: Format = Format { line: Some([0, 0, 0, 1]), fill: Some([0, 0, 0, 4]), shadow: None, flip_h: false };
+
+fn format(f: Format) -> Vec<u8> {
+    let mut b = vec![0u8; 56];
+    b[0] = if f.line.is_some() { 0 } else { 0xFF };
+    b[4..8].copy_from_slice(&f.line.unwrap_or([0, 0, 0, 1]));
+    b[12] = if f.fill.is_some() { 0 } else { 0xFF };
+    b[13] = 1;
+    b[20..24].copy_from_slice(&f.fill.unwrap_or([0, 0, 0, 4]));
+    b[24..28].copy_from_slice(&f.shadow.unwrap_or([0, 0, 0, 1]));
+    b[28] = if f.shadow.is_some() { 0 } else { 0xFF };
+    b[29] = 1;
+    b[36] = 48;
+    b[40] = 48;
+    b[52] = u8::from(f.flip_h);
+    rec(rt::FORMAT, 1, 0, &b)
+}
+
+/// A shape of `code` with its adjust value, box, angle and format.
+fn autoshape(code: i32, adjust: i32, bx: [i32; 4], rot: i32, f: Format) -> Vec<u8> {
+    container(rt::SHAPE, 0x13, &[coded_geometry(code as u32, adjust, bx, rot), format(f)])
+}
+
+/// A line from (x1, y1) to (x2, y2), with its format when given.
+fn line_95(ends: [i32; 4], f: Option<Format>) -> Vec<u8> {
+    let mut kids = vec![rec(rt::LINE_ATOM, 0, 0, &ends.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()), rec(3007, 0, 0, &[0, 0])];
+    kids.extend(f.map(format));
+    container(rt::LINE, 0x13, &kids)
+}
+
+fn preset_of(s: &Shape) -> (&str, &[f64]) {
+    match &s.geom {
+        Geom::Preset { name, adj } => (name, adj),
+        Geom::Custom { .. } => ("custom", &[]),
+    }
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> ColorRef {
+    ColorRef::rgb(Rgba::rgb(r, g, b))
+}
+
+/// Each shape code PowerPoint 95 wrote is its preset, with its adjust value in DrawingML terms (the
+/// probes' adjust values are DrawingML's defaults on a square). The trapezoid, wide at the top in
+/// PowerPoint 95, is DrawingML's turned upside down; the bits above its code's low byte don't
+/// change the code.
+#[test]
+fn shape_codes_are_presets_with_their_adjust_values() {
+    let sq = [0, 0, 1152, 1152];
+    let cases: [(i32, i32, &str, &[f64]); 12] = [
+        (-3, 0, "rect", &[]),
+        (-2, 2700, "roundRect", &[12_500.0]),
+        (-1, 0, "ellipse", &[]),
+        (0, 0, "diamond", &[]),
+        (1, 10800, "triangle", &[50_000.0]),
+        (2, 0, "rtTriangle", &[]),
+        (3, 5400, "parallelogram", &[25_000.0]),
+        (0x6004, 5400, "trapezoid", &[25_000.0]),
+        (5, 5400, "hexagon", &[25_000.0]),
+        (6, 6326, "octagon", &[6326.0 / 21600.0 * 100_000.0]),
+        (7, 5400, "plus", &[25_000.0]),
+        (8, 0, "star5", &[]),
+    ];
+    let p = deck_of(cases.iter().map(|(code, adj, ..)| autoshape(*code, *adj, sq, 0, PLAIN)).collect(), &[]);
+    let Some(shapes) = p.slides.first().map(|s| &s.shapes) else { return };
+    assert_eq!(shapes.len(), 12);
+    for (s, (code, _, name, adj)) in shapes.iter().zip(cases) {
+        assert_eq!(preset_of(s), (name, adj), "code {code}");
+        assert_eq!(boxed(s), (360.0, 270.0, 144.0, 144.0));
+        assert_eq!(s.xfrm.unwrap().flip_v, name == "trapezoid", "{name}");
+        assert!(!s.text_box && s.ph.is_none());
+        assert!(craft_drawingml::preset::build(name, 144.0, 144.0, adj).is_some());
+    }
+    // An inset across a box twice as wide as it is tall is twice the share of its shorter side.
+    let p = deck_of(vec![autoshape(3, 5400, [0, 0, 1152, 576], 0, PLAIN), autoshape(-2, 99_999, sq, 0, PLAIN)], &[]);
+    assert_eq!(preset_of(&p.slides[0].shapes[0]), ("parallelogram", &[50_000.0][..]));
+    assert_eq!(preset_of(&p.slides[0].shapes[1]), ("roundRect", &[50_000.0][..]), "a corner past half the side is half");
+}
+
+/// A shape's fill (an RGB or a slot of the slide's scheme, or none), its line colour (or none) at
+/// PowerPoint 95's 1 pt, and its shadow when on.
+#[test]
+fn shapes_keep_their_fill_line_and_shadow() {
+    let bx = [0, 0, 1152, 576];
+    let red = Format { fill: Some([0xFF, 0, 0, 0xFE]), ..PLAIN };
+    let blue_line = Format { line: Some([0, 0, 0xFF, 0xFE]), ..PLAIN };
+    let no_fill = Format { fill: None, ..PLAIN };
+    let no_line = Format { line: None, ..PLAIN };
+    let shadow = Format { shadow: Some([0x80, 0x80, 0x80, 0xFE]), ..PLAIN };
+    let p = deck_of([PLAIN, red, blue_line, no_fill, no_line, shadow].into_iter().map(|f| autoshape(-3, 0, bx, 0, f)).collect(), &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 6);
+    // The default: slot 4 (fills) and slot 1 (text and lines) of the slide's scheme.
+    assert_eq!(s[0].fill, Some(Fill::solid(rgb(0, 0xCC, 0x99))));
+    assert_eq!(s[0].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0)));
+    assert_eq!(s[0].effects, None);
+    assert_eq!(s[1].fill, Some(Fill::solid(rgb(0xFF, 0, 0))));
+    assert_eq!(s[2].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0xFF), 1.0)));
+    assert_eq!(s[3].fill, Some(Fill::None));
+    assert_eq!(s[3].line, s[0].line);
+    assert_eq!(s[4].line, Some(craft_pptx::Line::none()));
+    let sh = s[5].effects.as_ref().and_then(|e| e.outer_shadow.clone()).unwrap();
+    assert_eq!((sh.color, sh.dir, sh.blur), (rgb(0x80, 0x80, 0x80), 45.0, 0.0));
+    assert!((sh.dist - 6.0 * 2f64.sqrt()).abs() < 1e-9);
+
+    // A slot of the slide's own scheme.
+    let mut spec = SlideSpec::new(0x100, 16);
+    spec.scheme[4] = 0x123456;
+    spec.objects = vec![autoshape(-1, 0, bx, 0, PLAIN)];
+    let p = deck(&[spec]);
+    assert_eq!(p.slides[0].shapes[0].fill, Some(Fill::solid(rgb(0x12, 0x34, 0x56))));
+
+    // A shape with no fill, line or shadow draws nothing and is left out; with text it is a text
+    // box. A filled one with text keeps the text.
+    let none = Format { fill: None, line: None, ..PLAIN };
+    let with_text = |f: Format| container(rt::SHAPE, 0x13, &[coded_geometry(-1i32 as u32, 0, bx, 0), format(f), simple_text(b"Hi", bx, BODY)]);
+    let p = deck_of(vec![autoshape(-1, 0, bx, 0, none), with_text(none), with_text(red)], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 2);
+    assert!(s[0].text_box && s[0].fill == Some(Fill::None));
+    assert!(!s[1].text_box);
+    assert_eq!((preset_of(&s[1]).0, body_of(&s[1]).text(), s[1].fill.clone()), ("ellipse", "Hi".into(), Some(Fill::solid(rgb(0xFF, 0, 0)))));
+}
+
+/// A turned shape keeps its unturned box and its angle; a flipped one is flipped across.
+#[test]
+fn shapes_keep_their_angle_and_flip() {
+    let bx = [-2304, -1584, -1152, -1008];
+    let p = deck_of(vec![autoshape(-3, 0, bx, 480, PLAIN), autoshape(2, 0, bx, 0, Format { flip_h: true, ..PLAIN })], &[]);
+    let x: Vec<_> = p.slides[0].shapes.iter().map(|s| s.xfrm.unwrap()).collect();
+    assert_eq!((x[0].x, x[0].y, x[0].w, x[0].h, x[0].rot, x[0].flip_h), (72.0, 72.0, 144.0, 72.0, 30.0, false));
+    assert_eq!((x[1].rot, x[1].flip_h, x[1].flip_v), (0.0, true, false));
+}
+
+/// A line spans the box of its ends and is flipped to run from its start to its end, in its
+/// format's colour (the scheme's text and lines colour without one), never filled.
+#[test]
+fn lines_keep_their_ends_and_direction() {
+    let blue = Format { line: Some([0, 0, 0xFF, 0xFE]), ..PLAIN };
+    let p = deck_of(
+        vec![
+            line_95([-2304, -1584, -576, -432], Some(PLAIN)),
+            line_95([-576, -1584, -2304, -432], Some(blue)),
+            line_95([-576, -432, -2304, -1584], None),
+            line_95([0, 0, 576, 0], Some(Format { line: None, ..PLAIN })),
+        ],
+        &[],
+    );
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 3, "a line with no line draws nothing");
+    for l in s {
+        assert_eq!(preset_of(l).0, "line");
+        assert_eq!(boxed(l), (72.0, 72.0, 216.0, 144.0));
+        assert_eq!(l.fill, Some(Fill::None));
+    }
+    let flips: Vec<_> = s.iter().map(|l| (l.xfrm.unwrap().flip_h, l.xfrm.unwrap().flip_v)).collect();
+    assert_eq!(flips, [(false, false), (true, false), (true, true)]);
+    assert_eq!(s[0].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0)));
+    assert_eq!(s[1].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0xFF), 1.0)));
+    assert_eq!(s[2].line, s[0].line);
+}
+
+/// A shape code no probe showed is left out, or kept as a text box when it has text.
+#[test]
+fn unknown_shape_codes_are_skipped() {
+    let bx = [0, 0, 576, 576];
+    let mut objects: Vec<_> = [-4, 9, 0x7F, -128, 0x6009, -100].iter().map(|&c| autoshape(c, 0, bx, 0, PLAIN)).collect();
+    objects.push(container(rt::SHAPE, 0x13, &[coded_geometry(42, 0, bx, 0), format(PLAIN), simple_text(b"Kept", bx, BODY)]));
+    let p = deck_of(objects, &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 1);
+    assert!(s[0].text_box);
+    assert_eq!(body_of(&s[0]).text(), "Kept");
+}
+
+/// Damaged shapes and lines never panic: truncated geometry, format and line records, huge
+/// values, and every word of a page of them set to hostile values or cut.
+#[test]
+fn hostile_shapes_never_panic() {
+    let bx = [0, 0, 576, 576];
+    let cut = |r: Vec<u8>, keep: usize| {
+        let mut r = r;
+        r.truncate(16 + keep);
+        r[8..12].copy_from_slice(&(keep as u32).to_le_bytes());
+        r
+    };
+    let mut objects = vec![];
+    for keep in [0, 3, 8, 13, 21, 25, 29, 53] {
+        objects.push(container(rt::SHAPE, 0x13, &[coded_geometry(1, 10800, bx, 0), cut(format(PLAIN), keep)]));
+        objects.push(container(rt::SHAPE, 0x13, &[cut(coded_geometry(1, 10800, bx, 0), keep), format(PLAIN)]));
+        objects.push(container(rt::LINE, 0x13, &[cut(rec(rt::LINE_ATOM, 0, 0, &le32(&[0, 0, 8, 8])), keep.min(16))]));
+    }
+    let huge = Format { line: Some([0, 0, 0, 0xFD]), fill: Some([9, 9, 9, 200]), shadow: Some([1, 1, 1, 8]), flip_h: true };
+    objects.push(autoshape(5, i32::MAX, [i32::MIN, i32::MIN, i32::MAX, i32::MAX], i32::MIN, huge));
+    objects.push(autoshape(3, i32::MIN, [0, 0, 0, 0], i32::MAX, PLAIN));
+    objects.push(line_95([i32::MIN, i32::MAX, i32::MAX, i32::MIN], Some(huge)));
+    let p = deck_of(objects.clone(), &[]);
+    for s in &p.slides[0].shapes {
+        let x = s.xfrm.unwrap();
+        assert!(x.w.is_finite() && x.h.is_finite() && x.rot.is_finite());
+        if let Geom::Preset { adj, .. } = &s.geom {
+            assert!(adj.iter().all(|a| a.is_finite()));
+        }
+    }
+
+    let mut s = SlideSpec::new(0x100, 0);
+    s.objects =
+        vec![autoshape(4, 5400, bx, 480, Format { shadow: Some([0, 0, 0, 2]), flip_h: true, ..PLAIN }), line_95([0, 0, 576, 288], Some(PLAIN))];
+    let stream = stream_of(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &[autoshape(-1, 0, bx, 0, PLAIN)])]);
+    for at in (0..stream.len() - 4).step_by(4) {
+        for v in [0u32, 1, 0xFE, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            let mut d = stream.clone();
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            let _ = import(&d);
+        }
+    }
+    for cut in 0..stream.len() {
+        let _ = import(&stream[..cut]);
+    }
+}
+
+/// The presets of the object model's shape types 1 to 12, as PowerPoint 95 rendered them.
+const SHAPE_PRESETS: [&str; 12] =
+    ["rect", "roundRect", "ellipse", "diamond", "triangle", "rtTriangle", "parallelogram", "trapezoid", "hexagon", "octagon", "plus", "star5"];
+
 /// What one PowerPoint 95 sample shows, by its case name ([`powerpoint_95_samples`]).
 fn check_sample(name: &str, p: &Presentation) {
     // Every master places the defaults' title and body, and the footer row on every layout.
@@ -765,6 +1008,53 @@ fn check_sample(name: &str, p: &Presentation) {
             assert_eq!((body_of(s).text(), s.text_box, s.ph.is_none()), ("Box".into(), true, true));
             // The automation reported 1295, 1367.5, 4610 × 720 twips.
             assert_eq!(boxed(s), (64.75, 68.375, 230.5, 36.0));
+        }
+        _ => check_shape_sample(name, p),
+    }
+}
+
+/// What one PowerPoint 95 shape sample shows, by its case name.
+fn check_shape_sample(name: &str, p: &Presentation) {
+    let Some(shapes) = p.slides.first().map(|s| &s.shapes) else { return };
+    match name {
+        "base" => assert!(shapes.is_empty()),
+        "shapes" => {
+            let names: Vec<_> = shapes.iter().map(|s| preset_of(s).0).collect();
+            assert_eq!(names, SHAPE_PRESETS);
+        }
+        _ if name.strip_prefix("shape").and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| (1..=12).contains(&n)) => {
+            let n: usize = name[5..].parse().unwrap();
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0), (1, SHAPE_PRESETS[n - 1]), "{name}");
+            assert_eq!(s.xfrm.unwrap().flip_v, n == 8, "{name}");
+            // AddShape(n, 5760, 3960, 2880, 2880) in twips: 2 in square at 4 in, 2.75 in.
+            assert_eq!(boxed(s), (288.0, 198.0, 144.0, 144.0), "{name}");
+        }
+        "rect" | "fill" | "fill2" | "linecolor" | "nofill" | "shadow" | "rotate" | "flip" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0), (1, "rect"), "{name}");
+            // AddShape(1, 1440, 1440, 2880, 1440) in twips.
+            assert_eq!(boxed(s), (72.0, 72.0, 144.0, 72.0), "{name}");
+            let fill = match name {
+                "fill" => Fill::solid(rgb(0xFF, 0, 0)),
+                "fill2" => Fill::solid(rgb(0, 0xFF, 0)),
+                "nofill" => Fill::None,
+                _ => Fill::solid(rgb(0, 0xCC, 0x99)),
+            };
+            assert_eq!(s.fill, Some(fill), "{name}");
+            let line = if name == "linecolor" { rgb(0, 0, 0xFF) } else { rgb(0, 0, 0) };
+            assert_eq!(s.line, Some(craft_pptx::Line::solid(line, 1.0)), "{name}");
+            assert_eq!(s.effects.is_some(), name == "shadow", "{name}");
+            let x = s.xfrm.unwrap();
+            assert_eq!((x.rot, x.flip_h, x.flip_v), (if name == "rotate" { 30.0 } else { 0.0 }, name == "flip", false), "{name}");
+        }
+        "line" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0), (1, "line"));
+            // AddLine(1440, 1440, 4320, 2880): from 1 in, 1 in to 4 in, 3 in.
+            assert_eq!(boxed(s), (72.0, 72.0, 216.0, 144.0));
+            assert_eq!((s.xfrm.unwrap().flip_h, s.xfrm.unwrap().flip_v), (false, false));
+            assert_eq!(s.line, Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0)));
         }
         _ => {}
     }

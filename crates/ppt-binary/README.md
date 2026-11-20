@@ -47,8 +47,13 @@ and text boxes, each with its box and its text: paragraphs with their level, ali
 character and the indents of the text's ruler, and runs with their font, size, bold, italic,
 underline and colour (an RGB or a colour scheme slot). The text is Windows-1252. The master's
 placeholders set where the default master's placeholders go, and its date, footer and slide number
-those of every layout. Shapes without text, the shapes' own fill and line, pictures, notes and the
-master's text styles come later.
+those of every layout. Shapes and lines read too: PowerPoint 95's twelve shapes (rectangle,
+rounded rectangle, ellipse, diamond, the two triangles, parallelogram, trapezoid, hexagon,
+octagon, plus and five-point star) as DrawingML presets with their adjust values, each with its
+fill and line colour (or none), its shadow, its angle and a horizontal flip, and lines from their
+start to their end. A shape that draws nothing but text is a text box. Line widths and styles,
+vertical flips and shadow offsets are not read yet (lines draw 1 pt wide, as PowerPoint 95 drew
+them, and shadows fall 6 pt right and down); groups and freeforms are skipped. Pictures, notes and the master's text styles come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
