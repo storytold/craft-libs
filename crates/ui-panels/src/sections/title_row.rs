@@ -160,7 +160,7 @@ pub struct TitleRowStyle {
 /// An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional
 /// subtitle at the band's end (faint caption text: the target's kind), a lead (a disclosure bound to the container's
 /// open state, or a check box bound to its gate) and action parts. A row too narrow for all its texts drops the
-/// subtitle, then the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
+/// subtitle, then cuts the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
 /// band toggles a disclosure lead, as a click on the lead does.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct TitleRow<'a> {
@@ -283,7 +283,7 @@ impl<'a> TitleRow<'a> {
     }
 
     /// Divides the room left between the lead and the actions: the icon, the title, the note after it and the subtitle
-    /// at the end. The subtitle shows when every text fits whole, the note when the title and the note do.
+    /// at the end. The subtitle shows when every text fits whole; the note uses the room after the title.
     fn place(&self, mut band: Flow, cx: &PartsCx<'_, Self>) -> Placed {
         // A disclosure's glyph sits a gap before the title, as a title's own icon does; the gap is part of the title band,
         // so a click beside the glyph toggles too.
@@ -317,7 +317,7 @@ impl<'a> TitleRow<'a> {
                 band = rest.take_end(cx.gap()).1;
             }
         }
-        if self.note.is_some() && title + note <= band.rect().width() {
+        if self.note.is_some() && title + cx.gap() < band.rect().width() {
             let (title, rest) = band.take_start(title);
             let (_, rest) = rest.take_start(cx.gap());
             return Placed { icon, handle, title, note: Some(rest.rect()), subtitle };
@@ -497,7 +497,7 @@ impl Component for TitleRow<'_> {
         }
         ui.draw().text_on_centre_line(placed.title, &title);
         if let (Some(rect), Some(note)) = (placed.note, &self.note) {
-            ui.draw().text_on_centre_line(rect, &note_run(note.as_str()));
+            ui.draw().text_on_centre_line(rect, &note_run(note.as_str()).elide());
         }
         if let (Some(rect), Some(subtitle)) = (placed.subtitle, &self.subtitle) {
             let run = subtitle_run(subtitle.as_str(), cx.style.subtitle.role).color(cx.resolve(&cx.style.subtitle.color));
@@ -507,6 +507,9 @@ impl Component for TitleRow<'_> {
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
         access.level(self.level);
+        if let Some(note) = &self.note {
+            access.description(format!("\u{b7} {}", note.as_str()));
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleOutput {

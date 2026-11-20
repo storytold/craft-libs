@@ -5,6 +5,20 @@ use craft_ui::contract::{Role, ShowContainer as _};
 use craft_ui::sections::Panel;
 use craft_ui::testing::{Fixture, trial};
 
+#[trial]
+fn title_note_remains_accessible_when_the_row_is_narrow() {
+    use craft_ui::contract::Show as _;
+    use craft_ui::sections::TitleRow;
+    let mut fixture = Fixture::new(|ui| {
+        ui.set_max_width(100.0);
+        TitleRow::new("Properties").note("A long description of the selection").show(ui);
+    });
+    fixture.settle();
+    let heading = fixture.by_label("Properties").expect("title node");
+    assert!(fixture.tree().description_of(heading.node).is_some_and(|description| description.contains("A long description of the selection")));
+    assert!(fixture.texts().iter().any(|run| run.text.contains('·')), "the note is painted even when it is cut");
+}
+
 fn panel(titled: bool) -> Fixture {
     let mut fixture = Fixture::new(move |ui| {
         let panel = Panel::new("Brush settings");

@@ -275,6 +275,8 @@ pub(crate) struct PointerRead {
     pub primary_pressed: bool,
     /// The modifiers held.
     pub mods: Mods,
+    /// Modifiers carried by this pass's press, if any.
+    pub press_mods: Option<Mods>,
     /// The pass's time in seconds.
     pub time: f64,
     pub kind: PointerKind,
@@ -338,7 +340,11 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         let mut rotation = 0.0;
         let mut barrel_press = tablet.as_ref().is_some_and(|tablet| tablet.barrel_press);
         let mut barrel_pressed = false;
+        let mut press_mods = None;
         for event in &input.raw.events {
+            if let Event::PointerButton { pressed: true, modifiers, .. } = event {
+                press_mods = Some(Mods::from_egui(modifiers, os));
+            }
             match event {
                 Event::PointerButton { pos, button, pressed, .. } if *button != egui::PointerButton::Primary => {
                     let button = button_of(*button);
@@ -429,6 +435,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             other_press,
             primary_pressed: input.pointer.primary_pressed() && !barrel_pressed,
             mods: Mods::from_egui(&input.modifiers, os),
+            press_mods,
             time: input.time,
             kind,
             sample,
