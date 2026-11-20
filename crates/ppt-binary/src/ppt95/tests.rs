@@ -583,8 +583,7 @@ fn hostile_powerpoint_95_streams_never_panic() {
     assert_eq!(p.slides.len(), 1);
     assert_eq!((p.slide_size.width, p.slide_size.height), (720.0, 540.0), "an out-of-range size falls back");
     // Many slides stop at the limit.
-    let empty = rec(rt::SLIDE, NONE, 0x10, &[]);
-    let many = vec![empty; super::MAX_SLIDES + 5];
+    let many = vec![slide(&SlideSpec::new(0x100, 0)); super::MAX_SLIDES + 5];
     let p = import(&stream_of(document_atom(5760, 4320, 0), &many, &[])).unwrap();
     assert_eq!(p.slides.len(), super::MAX_SLIDES);
     // Many masters stop at their own, lower limit: each is a copy of the default master.
@@ -1158,8 +1157,9 @@ fn check_text_extras(name: &str, p: &Presentation) {
     }
 }
 
-/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position;
-/// a whole file names none.
+/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position,
+/// and so does one cut just after a slide's header, which leaves that slide out; a whole file
+/// names none.
 #[test]
 fn slides_the_count_says_are_missing_are_named() {
     let one = slide(&SlideSpec::new(0x100, 16));
@@ -1170,6 +1170,11 @@ fn slides_the_count_says_are_missing_are_named() {
     assert!(checked(1).1.is_empty());
     // A huge count names no more slides than the reader could have read.
     assert_eq!(checked(u32::MAX).1.len(), super::MAX_SLIDES);
+    // Two slides, the stream cut just after the second one's header (its stated length kept).
+    let two = stream_of(document_atom(5760, 4320, 2), &[one.clone(), one.clone()], &[]);
+    let second = two.windows(one.len()).rposition(|w| w == one).unwrap();
+    let (p, lost) = crate::import_checked(&file_of(&two[..second + 16]), &AppDefaults).unwrap();
+    assert_eq!((p.slides.len(), lost), (1, vec!["slide 2".to_string()]));
 }
 
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in
