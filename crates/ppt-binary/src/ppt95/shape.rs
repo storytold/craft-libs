@@ -145,6 +145,15 @@ fn turn_back(xfrm: &mut Xfrm) {
     (xfrm.x, xfrm.y) = (cx - xfrm.w / 2.0, cy - xfrm.h / 2.0);
 }
 
+/// The quarter-turns clockwise, 0 to 3, that take the unturned box `xfrm` gives (after [`orient`] or
+/// [`orient_drawn`]) to the box the geometry record holds: `xfrm`'s angle less the geometry's own,
+/// `drawn`, which the record's box doesn't include.
+pub(super) fn quarter_turns(xfrm: &Xfrm, drawn: i32) -> usize {
+    let cw = (xfrm.rot - clockwise(i64::from(drawn))).rem_euclid(360.0);
+    // 0 to 4 quarters, 4 being a whole turn.
+    [0, 1, 2, 3, 0][((cw / 90.0).round() as usize).min(4)]
+}
+
 /// A counter-clockwise angle in sixteenths of a degree as DrawingML's clockwise degrees, 0 to 360.
 fn clockwise(ccw: i64) -> f64 {
     ((-ccw).rem_euclid(TURN) as f64) / 16.0

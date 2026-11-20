@@ -447,16 +447,37 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         Some(Placeholder { kind: ph_type(a.u8(0)?)?, idx: a.u32(4).unwrap_or(0), size, ..Default::default() })
     });
     let container = r.child(rt::TEXT);
-    let text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
+    let mut text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
+    // The text rectangle is measured from the edges of the box as the geometry holds it; the
+    // shape's are those of the unturned box.
+    if let Some(t) = text.as_mut() {
+        unturn_insets(&mut t.body, shape::quarter_turns(&xfrm, drawn));
+    }
     let ruler = container.and_then(|c| text::ruler_slot(&c));
     let (mut geom, mut look) = (None, Look::none());
     if !placeholder {
+        let height = xfrm.h;
         geom = code.map(|c| shape::geometry(c, g.i32(4), &mut xfrm));
+        // A balloon's box is its body, above its tail: the text's bottom edge stays where it was.
+        if let Some(b) = text.as_mut().map(|t| &mut t.body)
+            && let Some(inset) = b.inset_b
+        {
+            b.inset_b = Some((inset - (height - xfrm.h)).max(0.0));
+        }
         if let Some(f) = format {
             look = shape::look(&f, scheme);
         }
     }
     Some(Object { placeholder, ph, xfrm, text, ruler, geom, look, kind: Kind::Shape })
+}
+
+/// Insets measured from the edges of a box `quarters` quarter-turns clockwise from the shape's
+/// unturned one, as insets from the unturned box's edges. Left, top, right and bottom are in
+/// clockwise order, so the unturned box's edge `i` is the turned box's edge `i + quarters`.
+fn unturn_insets(b: &mut craft_pptx::text::BodyProps, quarters: usize) {
+    let turned = [b.inset_l, b.inset_t, b.inset_r, b.inset_b];
+    let edge = |i: usize| turned[(i + quarters) % 4];
+    [b.inset_l, b.inset_t, b.inset_r, b.inset_b] = [edge(0), edge(1), edge(2), edge(3)];
 }
 
 /// An object as a shape: a placeholder of a known type; a text box when it draws nothing but its
