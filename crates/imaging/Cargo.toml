@@ -39,6 +39,8 @@ serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 craft-ui = { workspace = true, features = ["suite"] }
+craft-ui-test-kit = { workspace = true }
+craft-window = { workspace = true }
 egui = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
