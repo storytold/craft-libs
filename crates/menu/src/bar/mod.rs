@@ -336,7 +336,7 @@ impl<'a> MenuBarUi<'a> {
 
     /// Each title's width as shown, with any "(F)" it takes, and `pad` on either side.
     fn title_widths(&self, ui: &Ui, draw: &Draw<'_>, pad: f32) -> Vec<f32> {
-        let font = TextStyle::Button.resolve(ui.style());
+        let font = keys::title_font(ui);
         let names: Vec<(&str, Name<'_>)> = self.bar.menus.iter().map(|m| (m.title.as_str(), Name::App(Labeled::Title(&m.title)))).collect();
         draw.mnemonics(&names)
             .0
@@ -349,7 +349,7 @@ impl<'a> MenuBarUi<'a> {
     /// room for a "⋯" menu holding the rest; else one "Menu" holding them all.
     fn tops(&self, ui: &Ui, draw: &Draw<'_>) -> Vec<Top<'a>> {
         let menus = &self.bar.menus;
-        let font = TextStyle::Button.resolve(ui.style());
+        let font = keys::title_font(ui);
         let pad = 2.0 * ui.spacing().button_padding.x;
         let width = |t: &str| ui.painter().layout_no_wrap(t.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x + pad;
         let room = ui.available_width();

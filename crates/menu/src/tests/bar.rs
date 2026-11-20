@@ -538,6 +538,29 @@ fn natural_width_is_the_room_the_titles_need_as_shown() {
     assert!(b.natural < natural, "the \"(F)\" suffixes take room: {} vs {natural}", b.natural);
 }
 
+/// With the style's `override_font_id` set, the titles draw in that font, underlined or not, and
+/// `natural_width` measures them in it.
+#[test]
+fn titles_are_measured_and_drawn_in_the_override_font() {
+    let mut b = wide();
+    b.run(1);
+    let plain = b.natural;
+    b.ctx.all_styles_mut(|s| s.override_font_id = Some(egui::FontId::proportional(24.0)));
+    b.run(1);
+    let natural = b.natural;
+    assert!(natural > plain, "the larger font takes more room: {natural} vs {plain}");
+    b.fit = Some(natural);
+    b.run(2);
+    assert!(b.title("Help").is_some() && b.title("⋯").is_none(), "every title fits in {natural}");
+    let drawn = b.rect("File").width();
+    b.events.push(Event::Key { key: Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    b.run(2);
+    assert!(b.nav().underline, "Alt held shows the mnemonics");
+    let underlined = b.rect("File").width();
+    assert!((underlined - drawn).abs() < 0.5, "an underlined title draws in the same font: {underlined} vs {drawn}");
+    assert!(b.title("Help").is_some() && b.title("⋯").is_none(), "every underlined title fits in {natural}");
+}
+
 /// A menu far taller than the window.
 fn tall() -> Bar {
     let rows = (0..60).map(|i| item(&format!("cmd.{i}"), &format!("Item {i}")).into()).collect();
