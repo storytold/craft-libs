@@ -90,6 +90,32 @@ fn gallery_large(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Gallery::new("Style Sets", &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).show(ui).into()
 }
 
+/// A framed gallery that holds every item: one rounded frame around the tiles, and no buttons while nothing is left
+/// to step to.
+#[story(Gallery<'static, usize>, covers = [], drive = Drive::Never, title = "Framed, every item shown")]
+fn gallery_framed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let images: Vec<Box<dyn Fn() -> egui::ColorImage>> =
+        (0..4).map(|at| Box::new(move || sample_picture(at as u64, [96, 48])) as Box<dyn Fn() -> egui::ColorImage>).collect();
+    let items: Vec<GalleryItem<'_, usize>> = images
+        .iter()
+        .enumerate()
+        .map(|(at, image)| GalleryItem {
+            key: at,
+            label: name(at),
+            face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image },
+        })
+        .collect();
+    let current = 1;
+    Gallery::new("Styles", &items, Some(&current))
+        .tiles(6, 3)
+        .aspect(ThumbAspect::new(2, 1))
+        .caption(CaptionPlace::Below)
+        .framed()
+        .spare_buttons()
+        .show(ui)
+        .into()
+}
+
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
 fn gallery_compact(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     with_env(

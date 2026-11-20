@@ -67,6 +67,10 @@ pub struct Gallery<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     full: u8,
     compact: u8,
     more: GalleryMore<'a>,
+    /// Whether one rounded frame holds the tiles and the buttons.
+    framed: bool,
+    /// Whether the buttons give way while every item shows.
+    spare_buttons: bool,
     /// The width of each tile's picture as a multiple of its height.
     aspect: ThumbAspect,
     /// The height of each tile's picture: a thumbnail size.
@@ -102,6 +106,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
             full: 1,
             compact: 1,
             more: GalleryMore::Grid,
+            framed: false,
+            spare_buttons: false,
             aspect: ThumbAspect::SQUARE,
             thumb_size: ThumbSize::Medium,
             caption: CaptionPlace::None,
@@ -116,6 +122,19 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
     pub fn tiles(mut self, full: u8, compact: u8) -> Self {
         self.full = full.max(1);
         self.compact = compact.max(1);
+        self
+    }
+
+    /// One rounded frame on the raised surface around the tiles and the buttons, as the old Word-style ribbon drew
+    /// its Styles gallery.
+    pub fn framed(mut self) -> Self {
+        self.framed = true;
+        self
+    }
+
+    /// No up, down and More buttons while every item shows at the level: nothing is left to step to.
+    pub fn spare_buttons(mut self) -> Self {
+        self.spare_buttons = true;
         self
     }
 
@@ -155,6 +174,16 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
     /// The tiles the level shows at most.
     fn visible(&self, level: GroupLevel) -> usize {
         usize::from(if level == GroupLevel::Compact { self.compact } else { self.full }).max(1)
+    }
+
+    /// Whether the level shows the column of buttons.
+    fn buttons(&self, level: GroupLevel) -> bool {
+        !(self.spare_buttons && self.items.len() <= self.visible(level))
+    }
+
+    /// The room between a framed gallery's edge and its tiles; none without a frame.
+    fn inset(&self, style: &GalleryStyle) -> f32 {
+        if self.framed { style.inset } else { 0.0 }
     }
 
     /// The position of the current item.
@@ -470,11 +499,15 @@ impl Component for GalleryTile<'_> {
 // The gallery's component.
 
 /// The style of the gallery: the gap between its tiles.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct GalleryStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// A framed gallery's fill, edge and corner radius.
+    frame: (StyleColor, StyleColor, f32),
+    /// The room inside a frame.
+    inset: f32,
 }
 
 /// The sizes the gallery's faces measure.
@@ -490,7 +523,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
     type Output = GalleryOutput<K>;
 
     fn style(cx: &StyleCx<'_>, _: GalleryStyleKey<K>) -> GalleryStyle {
-        GalleryStyle { metrics: Metrics::new().gap(cx.tokens.space.gap.inline) }
+        let colors = &cx.tokens.color;
+        GalleryStyle {
+            metrics: Metrics::new().gap(cx.tokens.space.gap.inline),
+            frame: (cx.color(colors.surface.raised), cx.color(colors.line.control_edge), cx.tokens.shape.radius.control),
+            inset: cx.tokens.space.gap.inline,
+        }
     }
 
     fn keys(&self) -> KeyUse {
@@ -501,9 +539,16 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
     /// column of three buttons.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let sizes = self.sizes(cx);
-        let slots = self.visible(cx.env.get::<GroupLevel>()) as f32;
-        let width = slots * sizes.tile.x + (slots - 1.0).max(0.0) * sizes.gap + sizes.gap + sizes.button.x;
-        Vec2::new(width, sizes.tile.y.max(3.0 * sizes.button.y))
+        let level = cx.env.get::<GroupLevel>();
+        let slots = self.visible(level) as f32;
+        let tiles = slots * sizes.tile.x + (slots - 1.0).max(0.0) * sizes.gap;
+        let inner = if self.buttons(level) {
+            Vec2::new(tiles + sizes.gap + sizes.button.x, sizes.tile.y.max(3.0 * sizes.button.y))
+        } else {
+            Vec2::new(tiles, sizes.tile.y)
+        };
+        // The frame takes room at the sides only: the tiles and buttons already keep their own room above and below.
+        inner + Vec2::new(2.0 * self.inset(cx.style), 0.0)
     }
 
     fn sense(&self) -> Sense {
@@ -515,8 +560,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
     /// and `access` read; the part set depends only on the count.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sizes = self.sizes(cx);
-        let shown = self.visible(cx.env.get::<GroupLevel>()).min(self.items.len());
-        let (column, rest) = Flow::new(rect, cx.flow.is_rtl()).take_end(sizes.button.x);
+        let level = cx.env.get::<GroupLevel>();
+        let shown = self.visible(level).min(self.items.len());
+        let buttons = self.buttons(level);
+        let rect = rect.shrink2(Vec2::new(self.inset(cx.style), 0.0));
+        let (column, rest) = Flow::new(rect, cx.flow.is_rtl()).take_end(if buttons { sizes.button.x } else { 0.0 });
         self.laid.clear();
         for at in 0..shown {
             let cell = rest.span(at as f32 * (sizes.tile.x + sizes.gap), sizes.tile.x);
@@ -525,7 +573,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         }
         let height = column.height() / 3.0;
         let cell = |at: usize| Rect::from_min_size(column.min + Vec2::new(0.0, at as f32 * height), Vec2::new(column.width(), height));
-        for (at, key) in [UP, DOWN, MORE].into_iter().enumerate() {
+        for (at, key) in [UP, DOWN, MORE].into_iter().enumerate().filter(|_| buttons) {
             let part = cx.part(key, cell(at)).sense(Sense::CLICK | Sense::FOCUS).focusable();
             if key == MORE && !matches!(self.more, GalleryMore::Command(_)) {
                 part.toggles("more");
@@ -571,7 +619,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
 
     /// The whole list as a grid of the same faces, an app's own body, or nothing for a command.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
-        if matches!(self.more, GalleryMore::Command(_)) {
+        // The More part registers the popup (`toggles`); a gallery whose buttons gave way has none to show.
+        if matches!(self.more, GalleryMore::Command(_)) || !self.buttons(cx.env.get::<GroupLevel>()) {
             return;
         }
         let popup = cx.popup("more");
@@ -613,6 +662,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
                 node.flags |= Flags::CHECKED;
             }
         }
+        if !self.buttons(level) {
+            return;
+        }
         access.node(UP, Role::BUTTON).name = Name::Text(words.up.as_str().to_owned());
         access.node(DOWN, Role::BUTTON).name = Name::Text(words.down.as_str().to_owned());
         access.node(MORE, Role::BUTTON).name = Name::Text(words.more.as_str().to_owned());
@@ -626,6 +678,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         let last = last_start(len, visible);
         let start = self.start_of(&cx.recall::<State>(), level);
         let current = self.current_at();
+        if self.framed {
+            let (fill, edge, radius) = cx.style.frame;
+            let shape = PaintShape::Rect(cx.rect, CornerRadius::same(radius.round().clamp(0.0, 255.0) as u8));
+            let draw = ui.draw();
+            draw.fill(&shape, fill);
+            draw.stroke(&shape, craft_ui::primitives::StrokeWidth::Thin, edge);
+        }
         for at in 0..visible.min(len) {
             if let Some(item) = self.items.get(start + at) {
                 let caption = self.captioned().then(|| item.label.clone());
@@ -638,6 +697,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
                 );
                 ui.face(TILE.at(at as u64), tile);
             }
+        }
+        if !self.buttons(level) {
+            return;
         }
         ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0));
         ui.face(DOWN, IconButton::new(IconId::new("chevron_down")).label(words.down.clone()).enabled(start < last));
