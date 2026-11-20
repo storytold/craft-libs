@@ -557,3 +557,32 @@ fn relative_media_locator_round_trips_escaped_characters() {
     let got = read_clean(&bytes);
     assert!(got.sources.iter().any(|s| s.path.as_deref() == Some("Audio Files/100%20 #1.wav")));
 }
+
+#[test]
+fn compatibility_options_keep_relative_paths_and_parent_rate() {
+    let mut doc = crate::testdoc::sound_only(None);
+    doc.compositions[0].sample_rate = 44_100;
+    doc.sources[0].path = Some("Audio Files/100%20 #1.wav".into());
+    let mut report = Report::default();
+    let references = ReferenceOptions { source_slot_rate: false, encode_relative_locator: false };
+    let bytes = write_with_references(&doc, &WriteOptions { identity: IDENTITY, small_sectors: false }, &references, &mut report).unwrap();
+    let root = store::read(&bytes).unwrap();
+    let mut all = Vec::new();
+    walk(&root, &mut all);
+    assert!(
+        all.iter().filter(|o| o.class == cls::NETWORK_LOCATOR).any(|o| o.string(pid::URL_STRING).as_deref() == Some("Audio Files/100%20 #1.wav"))
+    );
+    let starts: Vec<i64> = all.iter().filter(|o| o.class == cls::SOURCE_CLIP).filter_map(|o| o.i64(pid::START_TIME)).collect();
+    assert!(starts.contains(&17_640), "parent rate start: {starts:?}");
+    let opts = ReadOptions {
+        source_slot_rate: false,
+        infer_clip_name: false,
+        decode_relative_locator: false,
+        report_flattening: false,
+        permissive_pcm: true,
+    };
+    let back = read_with_options(&bytes, &opts, &mut report).unwrap();
+    assert!(back.sources.iter().any(|s| s.path.as_deref() == Some("Audio Files/100%20 #1.wav")));
+    let clip = back.compositions[0].tracks[0].items.iter().find_map(|i| if let CItem::Clip(c) = i { Some(c) } else { None }).unwrap();
+    assert_eq!(clip.start, FrameRate::FPS_25.tick_of(10));
+}

@@ -35,15 +35,19 @@ struct RawLvl {
     xst: Vec<u16>,
 }
 
-/// A bullet level's character, with the 0xF000 flag bits stripped and the common
-/// Symbol/Wingdings glyphs mapped to their Unicode equivalents so every font renders them.
+/// A bullet level's character: a symbol-font character (0xF000 to 0xF0FF, the font's own code
+/// in the low byte) with the common Symbol/Wingdings glyphs mapped to their Unicode equivalents
+/// so every font renders them; any other character is itself.
 pub(crate) fn bullet_char(c: u16) -> char {
-    match c & 0x0FFF {
+    if !(0xF000..=0xF0FF).contains(&c) {
+        return char::from_u32(u32::from(c)).unwrap_or('\u{2022}');
+    }
+    match c & 0x00FF {
         0xB7 => '\u{2022}',        // Symbol bullet
         0xA7 => '\u{25AA}',        // Wingdings small square
         0x6F => '\u{25CB}',        // Symbol open circle
         0x77 | 0x78 => '\u{25CF}', // Wingdings filled circles
-        other => char::from_u32(other as u32).unwrap_or('\u{2022}'),
+        other => char::from_u32(u32::from(other)).unwrap_or('\u{2022}'),
     }
 }
 
