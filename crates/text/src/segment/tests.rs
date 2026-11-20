@@ -533,3 +533,127 @@ fn grapheme_offsets_bounds_enclosing_cluster() {
     }
     assert_eq!(grapheme_bounds(family, flen), (0, flen));
 }
+
+/// Cluster starts of `text`, plus `text.len()`, ascending: `0` alone for empty text.
+fn oracle_boundaries(text: &str) -> Vec<usize> {
+    let mut bounds: Vec<usize> = text.grapheme_indices(true).map(|(offset, _)| offset).collect();
+    bounds.push(text.len());
+    bounds
+}
+
+/// Asserts that [`prev_grapheme_offset`], [`next_grapheme_offset`] and [`grapheme_bounds`] agree
+/// with the reference segmenter on `text` at every byte index in `0..=len + 2`, and that `prev`
+/// and `next` are inverses on every adjacent pair of cluster boundaries.
+fn assert_navigation_matches_oracle(text: &str, label: &str) {
+    let bounds = oracle_boundaries(text);
+    assert_eq!(bounds[0], 0, "{label}: first boundary");
+    assert_eq!(*bounds.last().unwrap(), text.len(), "{label}: last boundary");
+
+    // Duality: every adjacent pair is reached by `next` forwards and `prev` backwards.
+    for pair in bounds.windows(2) {
+        let (left, right) = (pair[0], pair[1]);
+        assert_eq!(next_grapheme_offset(text, left), right, "{label}: next({left})");
+        assert_eq!(prev_grapheme_offset(text, right), left, "{label}: prev({right})");
+    }
+    // End points return themselves rather than running off either end.
+    assert_eq!(prev_grapheme_offset(text, 0), 0, "{label}: prev(0)");
+    assert_eq!(next_grapheme_offset(text, text.len()), text.len(), "{label}: next(len)");
+
+    for offset in 0..=text.len() + 2 {
+        // An offset inside a codepoint snaps back to that codepoint's start first.
+        let mut snapped = offset.min(text.len());
+        while !text.is_char_boundary(snapped) {
+            snapped -= 1;
+        }
+        let before = *bounds.iter().rev().find(|&&b| b < snapped).unwrap_or(&0);
+        let after = *bounds.iter().find(|&&b| b > snapped).unwrap_or(&text.len());
+        // At a boundary the enclosing cluster is the one that starts there; at the end of the text
+        // it is the last cluster, and inside a cluster it is the one around the cursor.
+        let start = if bounds.contains(&snapped) && snapped < text.len() { snapped } else { before };
+        // A byte index inside a codepoint is inside the cluster holding it, so `prev` there is that
+        // cluster's start; everywhere else it is the preceding boundary.
+        let inside_codepoint = offset <= text.len() && !text.is_char_boundary(offset);
+        let prev = if inside_codepoint { start } else { before };
+
+        let got_prev = prev_grapheme_offset(text, offset);
+        let got_next = next_grapheme_offset(text, offset);
+        assert_eq!(got_prev, prev, "{label}: prev({offset})");
+        assert_eq!(got_next, after, "{label}: next({offset})");
+        assert_eq!(grapheme_bounds(text, offset), (start, after), "{label}: bounds({offset})");
+        assert!(text.is_char_boundary(got_prev), "{label}: prev({offset}) not a boundary");
+        assert!(text.is_char_boundary(got_next), "{label}: next({offset}) not a boundary");
+    }
+}
+
+/// Why: UAX #29 is a closed specification, so navigation must agree with an independent
+/// implementation at *every* byte index, not only at well-formed char boundaries and not only on
+/// hand-picked samples. Comparing against `UnicodeSegmentation::grapheme_indices` catches a model
+/// that segments `&text[offset..]` (losing left context) or that steps by `char` on an ASCII
+/// shortcut. DANGER: hostile or damaged documents hand editors arbitrary `usize`s: any offset in
+/// `0..=len + 2`, including bytes inside a UTF-8 codepoint and offsets past the end, must clamp
+/// instead of slicing. CONTRACT, with `snapped` the char boundary at or before `offset.min(len)`:
+/// - `prev` is the preceding cluster boundary, except inside a codepoint, where it is the start of
+///   the enclosing cluster (the same cluster `next` and `grapheme_bounds` report),
+/// - `next` is the least cluster boundary above `snapped` (len at the end),
+/// - `grapheme_bounds` is `(snapped, next)` at a boundary before the end, `(prev, next)`
+///   everywhere else (inside a cluster, at `0` of an empty text, or at the end),
+/// - `next(left)` and `prev(right)` are inverses on every adjacent boundary pair.
+#[test]
+fn uax29_exhaustive_boundary_oracle_across_all_byte_offsets() {
+    let samples = [
+        // Empty and single ASCII: the two endpoints of the domain.
+        ("", ""),
+        ("a", ""),
+        // GB3: CRLF is one cluster although both bytes are ASCII.
+        ("a\r\nb\r\n", "CRLF inside text"),
+        ("\r\n", "CRLF alone"),
+        // GB9: Vietnamese NFD `ệ` = e + dot below + circumflex, five bytes in one cluster.
+        ("vie\u{0323}\u{0302}n", "NFD Vietnamese"),
+        // GB1/GB9: a mark with no base before it is its own cluster and must not join `a`.
+        ("\u{0301}a", "orphan leading mark"),
+        // GB12/GB13: six regional indicators pair up by parity into three flags.
+        ("\u{1F1FB}\u{1F1F3}\u{1F1FA}\u{1F1F8}\u{1F1EF}\u{1F1F5}", "three flags"),
+        // GB11: one 25-byte ZWJ family, then its own `!`.
+        ("👨\u{200D}👩\u{200D}👧\u{200D}👦!", "ZWJ family"),
+        // Emoji keycap: `1` + VS16 + enclosing keycap, then `a`.
+        ("1\u{FE0F}\u{20E3}a", "keycap"),
+    ];
+    for (text, label) in samples {
+        assert_navigation_matches_oracle(text, label);
+    }
+
+    // The rules above, spelled out so a future rewrite of the sample list cannot drop them silently.
+
+    // Why: GB3 — between the CR and the LF is not a boundary, and one `next` spans both.
+    let crlf = "a\r\nb";
+    assert_eq!(next_grapheme_offset(crlf, 1), 3);
+    assert_eq!(prev_grapheme_offset(crlf, 3), 1);
+    assert_eq!(grapheme_bounds(crlf, 2), (1, 3));
+
+    // Why: GB12/GB13 — flags are pairs by parity, so offset 4 (between the two indicators of the
+    // first flag) is inside `🇻🇳`, while offsets 8 and 16 are real boundaries between flags.
+    let flags = "\u{1F1FB}\u{1F1F3}\u{1F1FA}\u{1F1F8}\u{1F1EF}\u{1F1F5}";
+    assert_eq!(flags.len(), 24);
+    assert_eq!(next_grapheme_offset(flags, 0), 8);
+    assert_eq!(grapheme_bounds(flags, 4), (0, 8));
+    assert_eq!(grapheme_bounds(flags, 8), (8, 16));
+    assert_eq!(grapheme_bounds(flags, 20), (16, 24));
+    assert_eq!(prev_grapheme_offset(flags, 24), 16);
+
+    // Why: GB1/GB9 — the leading mark is its own cluster; it must not merge forwards into `a`.
+    assert_eq!(grapheme_bounds("\u{0301}a", 0), (0, 2));
+    assert_eq!(grapheme_bounds("\u{0301}a", 2), (2, 3));
+
+    // Why: GB9 — the whole NFD `ệ` (five bytes) is atomic, including cursors inside its marks.
+    let nfd = "vie\u{0323}\u{0302}n";
+    for offset in 2..7 {
+        assert_eq!(grapheme_bounds(nfd, offset), (2, 7), "NFD offset {offset}");
+    }
+
+    // Why: a byte index inside a multi-byte codepoint is not a char boundary; navigation clamps to
+    // the containing cluster instead of slicing `'ệ'` apart, and `prev` does not skip that cluster.
+    let nfc = "viện";
+    assert_eq!(next_grapheme_offset(nfc, 3), 5);
+    assert_eq!(prev_grapheme_offset(nfc, 3), 2);
+    assert_eq!(grapheme_bounds(nfc, 3), (2, 5));
+}

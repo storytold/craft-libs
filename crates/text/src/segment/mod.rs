@@ -143,6 +143,8 @@ pub fn emergency_breaks(text: &str, range: Range<usize>) -> Vec<usize> {
 /// of the preceding cluster (or `0` if `cursor == 0`). If `cursor` falls strictly
 /// inside a cluster (for example, between a base vowel and a combining mark, or between
 /// components of an emoji sequence), it snaps back to the start of that enclosing cluster.
+/// A byte index inside a multi-byte codepoint counts as inside the cluster that holds it, so
+/// `prev_grapheme_offset("viện", 3)` is `2`, the start of `'ệ'`, not `1`.
 ///
 /// # Architecture Contract (Tier 2: Text Core)
 /// - **WHY:** Cursor navigation (`Arrow Left`, `Backspace`) in document editors must operate on
@@ -152,12 +154,16 @@ pub fn emergency_breaks(text: &str, range: Range<usize>) -> Vec<usize> {
 /// - **DANGER:** Unaligned cursor offsets (e.g. from mouse clicks inside multi-byte codepoints
 ///   or between marks) can panic downstream string slicing or break document invariants.
 /// - **CONTRACT:**
-///   1. `cursor <= text.len() && text.is_char_boundary(cursor)` is expected; out-of-bounds inputs
-///      are clamped defensively to `text.len()`.
-///   2. Always returns a valid UTF-8 char boundary in range `0..=cursor`.
-///   3. Zero panics; zero allocations.
+///   1. Empty `text` returns `0`.
+///   2. `cursor >= text.len()` is clamped to `text.len()` and navigates from there; the result is
+///      still the start of the last cluster, not `text.len()`.
+///   3. `!text.is_char_boundary(cursor)` is safe: the cursor is first floored to the start of its
+///      codepoint, which belongs to the enclosing cluster, so the result is that cluster's start.
+///   4. Always returns a valid UTF-8 char boundary in range `0..=cursor.min(text.len())`.
+///   5. Zero panics; `O(1)` auxiliary memory, no heap allocation.
 pub fn prev_grapheme_offset(text: &str, cursor: usize) -> usize {
-    let mut c = cursor.min(text.len());
+    let clamped = cursor.min(text.len());
+    let mut c = clamped;
     while !text.is_char_boundary(c) {
         c = c.saturating_sub(1);
     }
@@ -165,10 +171,20 @@ pub fn prev_grapheme_offset(text: &str, cursor: usize) -> usize {
         return 0;
     }
     let mut gc = GraphemeCursor::new(c, text.len(), true);
-    match gc.prev_boundary(text, 0) {
+    let boundary = match gc.prev_boundary(text, 0) {
         Ok(Some(boundary)) => boundary,
         _ => 0,
+    };
+    // The cursor was inside a codepoint (`c < clamped`): it lies inside the cluster holding that
+    // codepoint, so when `c` starts a cluster the answer is `c`, not the boundary before it.
+    // Without this, `prev` would skip the very cluster the other two primitives report.
+    if c != clamped {
+        let mut probe = GraphemeCursor::new(c, text.len(), true);
+        if matches!(probe.is_boundary(text, 0), Ok(true)) {
+            return c;
+        }
     }
+    boundary
 }
 
 /// Returns the end byte offset of the extended grapheme cluster following `cursor`.
@@ -186,10 +202,12 @@ pub fn prev_grapheme_offset(text: &str, cursor: usize) -> usize {
 /// - **DANGER:** Stepping forward by single codepoints splits emoji ZWJ chains, flag pairs, or
 ///   base letters from their diacritics.
 /// - **CONTRACT:**
-///   1. `cursor <= text.len() && text.is_char_boundary(cursor)` is expected; out-of-bounds inputs
-///      return `text.len()`.
-///   2. Always returns a valid UTF-8 char boundary in range `cursor.min(text.len())..=text.len()`.
-///   3. Zero panics; zero allocations.
+///   1. Empty `text` returns `0`.
+///   2. `cursor >= text.len()` returns `text.len()`: there is no next cluster.
+///   3. `!text.is_char_boundary(cursor)` is safe: the cursor is first floored to the start of its
+///      codepoint, which belongs to the enclosing cluster, so the result is that cluster's end.
+///   4. Always returns a valid UTF-8 char boundary in range `cursor.min(text.len())..=text.len()`.
+///   5. Zero panics; `O(1)` auxiliary memory, no heap allocation.
 pub fn next_grapheme_offset(text: &str, cursor: usize) -> usize {
     let mut c = cursor.min(text.len());
     while !text.is_char_boundary(c) {
@@ -208,7 +226,9 @@ pub fn next_grapheme_offset(text: &str, cursor: usize) -> usize {
 /// Returns the `(start, end)` byte offsets of the extended grapheme cluster enclosing `cursor`.
 ///
 /// For any `cursor` within `0..text.len()`, returns the boundaries `(start, end)` of the
-/// cluster containing `cursor` (where `start <= cursor < end`). If `cursor >= text.len()`,
+/// cluster containing `cursor` (where `start <= cursor < end`). At a cluster boundary that
+/// cluster is the one starting there; a cursor inside a multi-byte codepoint is floored to the
+/// start of that codepoint, which belongs to the enclosing cluster. If `cursor >= text.len()`,
 /// returns the boundaries of the last cluster in `text` (or `(0, 0)` if `text` is empty).
 ///
 /// # Architecture Contract (Tier 2: Text Core)
@@ -219,9 +239,11 @@ pub fn next_grapheme_offset(text: &str, cursor: usize) -> usize {
 /// - **DANGER:** In multi-byte or decomposed clusters (e.g. Vietnamese NFD or emoji ZWJ),
 ///   imprecise cursor placement within combining marks must never return partial slices.
 /// - **CONTRACT:**
-///   1. Returns `(0, 0)` for empty text.
-///   2. Always returns valid UTF-8 char boundaries with `0 <= start <= cursor.min(text.len()) <= end <= text.len()`.
-///   3. Zero panics; zero allocations.
+///   1. Returns `(0, 0)` for empty text; `cursor >= text.len()` returns the last cluster.
+///   2. `!text.is_char_boundary(cursor)` is safe: the cursor is floored to its codepoint start,
+///      which belongs to the enclosing cluster.
+///   3. Always returns valid UTF-8 char boundaries with `0 <= start <= cursor.min(text.len()) <= end <= text.len()`.
+///   4. Zero panics; `O(1)` auxiliary memory, no heap allocation.
 pub fn grapheme_bounds(text: &str, cursor: usize) -> (usize, usize) {
     if text.is_empty() {
         return (0, 0);
