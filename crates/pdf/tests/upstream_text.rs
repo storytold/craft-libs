@@ -148,3 +148,19 @@ fn clipping_only_text_reaches_the_device_apart_from_invisible_text() {
         assert_eq!(drawn.modes, [expected; 2], "{mode} Tr");
     }
 }
+
+/// PdfCraft patch 54 (storytold/pdfcraft#7465): an octal escape above `\377` in a shown string
+/// keeps its low eight bits (ISO 32000-2 §7.3.4.2, Table 3: "high-order overflow shall be
+/// ignored"). PDFBOX-142's form buttons write `(Abschlie\737en)`, `(L\766schen)` and
+/// `(Pr\774fsumme)`; the escapes were dropped, so they read "Abschlieen", "Lschen" and
+/// "Prfsumme". In WinAnsi 0o737 & 0xFF is ß, 0o766 & 0xFF ö and 0o774 & 0xFF ü.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn an_octal_escape_past_0o377_reads_its_low_eight_bits() {
+    let text = |string: &str| helvetica_texts("/WinAnsiEncoding", format!("BT /F1 20 Tf 20 150 Td {string} Tj ET").as_bytes()).concat();
+    assert_eq!(text(r"(Abschlie\737en)"), "Abschließen");
+    assert_eq!(text(r"(L\766schen)"), "Löschen");
+    assert_eq!(text(r"(Pr\774fsumme)"), "Prüfsumme");
+    assert_eq!(text(r"(Abschlie\337en)"), "Abschließen", "control: the escape in range");
+    assert_eq!(text(r"(\7377)"), "ß7", "three digits at most");
+}
