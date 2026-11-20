@@ -1867,7 +1867,7 @@ dependencies = [
  "craft-pcap",
  "craft-pcraft-bundle",
  "craft-pcraft-format",
- "craft-pdf",
+ "craft-pdf 0.1.0",
  "craft-pdn",
  "craft-pe",
  "craft-penpot",
@@ -2652,7 +2652,7 @@ dependencies = [
  "craft-eps",
  "craft-file-formats",
  "craft-image-codecs",
- "craft-pdf",
+ "craft-pdf 0.1.0",
  "craft-raster-codecs",
  "craft-svg",
  "kurbo",
@@ -3503,6 +3503,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pdf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
+dependencies = [
+ "hayro-interpret",
+ "hayro-syntax",
+ "krilla",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pdn"
 version = "0.1.0"
 dependencies = [
@@ -3567,7 +3578,7 @@ name = "craft-plate-test"
 version = "0.1.0"
 dependencies = [
  "craft-cms",
- "craft-pdf",
+ "craft-pdf 0.1.0",
  "hayro-syntax",
  "serde",
  "serde_json",
@@ -3666,7 +3677,7 @@ name = "craft-prepress"
 version = "0.1.0"
 dependencies = [
  "craft-cms",
- "craft-pdf",
+ "craft-pdf 0.1.0",
  "craft-plate-test",
  "kurbo",
  "linesweeper",
@@ -4376,7 +4387,7 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-keymap",
- "craft-pdf",
+ "craft-pdf 0.1.0",
  "craft-theme",
  "craft-ui-macros",
  "craft-ui-panels",
@@ -13315,7 +13326,7 @@ source = "git+https://github.com/storytold/vectorcraft.git?rev=6b3a6b8788ebcb420
 dependencies = [
  "aes 0.8.4",
  "chrono",
- "craft-pdf",
+ "craft-pdf 0.1.0 (git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0)",
  "flate2",
  "getrandom 0.4.3",
  "image",
