@@ -1,6 +1,6 @@
 //! The tile grid's own keys and gestures: Bridge's rating and zoom keys, and the slow click that renames.
 
-use craft_behavior::{EditEvent, keyed};
+use craft_behavior::{EditEvent, Selection, keyed};
 use craft_ui::contract::{Bind, CollectionEvent, ShowCollection as _};
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::tile_grid::{GridEvent, GridZoom, RatingKeys, Tile, TileGrid, TileGroup, TileZoom};
@@ -9,6 +9,31 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 const NAMES: [&str; 4] = ["Tile 1", "Tile 2", "Tile 3", "Tile 4"];
+
+#[trial]
+fn keyboard_selects_a_selectable_group_header() {
+    let selected = Rc::new(RefCell::new(Selection::single(1_usize)));
+    let held = selected.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [1_usize, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let groups = [TileGroup::new(0, 0, 2, "Folder").selectable()];
+        let mut selection = held.borrow_mut();
+        let _ =
+            TileGrid::new("Library")
+                .groups(&groups)
+                .collapsible()
+                .selection(Bind::bound(&mut *selection))
+                .show_items(ui, &source, &mut |_, _| Tile::new("Tile"));
+    });
+    fixture.room(Vec2::new(600.0, 400.0)).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).idle(2);
+    fixture.key(Key::Home, Modifiers::NONE).idle(2);
+    fixture.key(Key::ArrowUp, Modifiers::NONE).idle(2);
+    assert_eq!(selected.borrow().items, [0], "the header is selected when the lead reaches it");
+    fixture.key(Key::ArrowDown, Modifiers::SHIFT).idle(2);
+    assert_eq!(selected.borrow().items, [0, 1], "a range includes the selectable header");
+}
 
 #[trial]
 fn keyboard_lead_on_a_group_header_is_reported() {

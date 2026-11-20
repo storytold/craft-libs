@@ -23,7 +23,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     }
 
     pub(super) fn range(&self, from: usize, to: usize) -> Vec<C::Key> {
-        let keys = (from.min(to)..=from.max(to)).filter(|&at| self.source.enabled(at) && !self.source.is_section(at)).map(|at| self.source.key(at));
+        let keys = (from.min(to)..=from.max(to))
+            .filter(|&at| self.source.enabled(at) && (!self.source.is_section(at) || self.source.selectable_section(at)))
+            .map(|at| self.source.key(at));
         if from <= to { keys.collect() } else { keys.rev().collect() }
     }
 
@@ -81,7 +83,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
 
     /// A press or key that selects row `at` the way the modifiers say.
     pub(super) fn pick(&mut self, comp: &C, at: usize, extend: bool, toggle: bool) {
-        if self.source.section_stop(at) {
+        if self.source.section_stop(at) && !self.source.selectable_section(at) {
             return;
         }
         let key = self.source.key(at);

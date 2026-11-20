@@ -59,10 +59,15 @@ pub trait DisplayOrder<K> {
     }
 
     /// Whether section `at` is a stop of navigation: it holds the lead, takes Enter, the context-menu key and a
-    /// press, and opens or closes with Forward and Back when it has children. A move stops on it, and it is never
-    /// selected, extended over, toggled, marqueed, dragged, renamed or reached by type-ahead. Only meaningful for a
-    /// section.
+    /// press, and opens or closes with Forward and Back when it has children. A move stops on it. By default it is
+    /// not selected or extended over; see `selectable_section`. It is not toggled, marqueed, dragged, renamed or
+    /// reached by type-ahead. Only meaningful for a section.
     fn section_stop(&self, _at: usize) -> bool {
+        false
+    }
+
+    /// Whether a section stop also represents an item that keyboard selection can pick or extend over.
+    fn selectable_section(&self, _at: usize) -> bool {
         false
     }
 

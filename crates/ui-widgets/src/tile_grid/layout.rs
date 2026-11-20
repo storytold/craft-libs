@@ -13,7 +13,8 @@ use std::sync::Arc;
 /// given.
 ///
 /// The header is a row of the grid's outline, as a tree's group row is: it holds the keyboard lead, opens and closes
-/// with Left and Right, reports Enter and the context-menu key, and is never selected. Its `key` names that row, so
+/// with Left and Right and reports Enter and the context-menu key. It is selected by keyboard only when opted in with
+/// `selectable`. Its `key` names that row, so
 /// it differs from the key of every tile. Positions in the grid's events (`CollectionEvent::Reorder`,
 /// `Dropped`, the `accepts` test) count the headers as rows: the header of a group sits just before its first
 /// tile.
@@ -36,12 +37,21 @@ pub struct TileGroup<K> {
     pub depth: usize,
     /// The glyph before the header's title (a folder).
     pub icon: Option<IconId>,
+    /// Whether the header represents a selectable item.
+    pub selectable: bool,
 }
 
 impl<K> TileGroup<K> {
     /// An open group of `count` tiles from tile position `start`, titled `title`, whose header row is keyed `key`.
     pub fn new(key: K, start: usize, count: usize, title: impl Into<String>) -> Self {
-        TileGroup { key, start, count, title: title.into(), detail: String::new(), open: true, depth: 0, icon: None }
+        TileGroup { key, start, count, title: title.into(), detail: String::new(), open: true, depth: 0, icon: None, selectable: false }
+    }
+
+    /// Lets the header be selected when it represents an item as well as a group.
+    #[must_use]
+    pub fn selectable(mut self) -> Self {
+        self.selectable = true;
+        self
     }
 
     /// The detail at the header's trailing end.

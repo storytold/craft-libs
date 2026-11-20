@@ -41,7 +41,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let outline = Outline::new(&*self.source).columns(layout.column_count()).layout(layout);
             let step = match nav::step(layout.nav(), &outline, &mut state, mv, mods) {
                 // The ends of the outline, and the first move into it, land on an item, not on a section stop.
-                NavStep::Moved(to) if self.source.section_stop(to) && (lead.is_none() || matches!(mv, NavMove::Start | NavMove::End)) => {
+                NavStep::Moved(to)
+                    if self.source.section_stop(to)
+                        && !self.source.selectable_section(to)
+                        && (lead.is_none() || matches!(mv, NavMove::Start | NavMove::End)) =>
+                {
                     let forward = !matches!(mv, NavMove::End | NavMove::Back | NavMove::Up | NavMove::PageUp);
                     NavStep::Moved(self.off_section(layout, to, forward))
                 }
