@@ -550,6 +550,8 @@ fn a_notes_pages_outline_text_goes_to_one_slide() {
 /// Text with very many formatting runs is laid into runs in about linear time. Each lookup used to
 /// scan the run starts from the beginning, so the cost grew with runs²: in a debug build these 640k
 /// one-character runs (about 6 MB of file) took 75 s that way, and take about 2 s with binary search.
+/// The presentation's text makes at most [`crate::text::MAX_TEXT_ITEMS`] paragraphs and runs
+/// together (each is kilobytes in memory), so the runs past that are left out.
 #[test]
 fn many_character_runs_are_not_quadratic() {
     const N: usize = 640_000;
@@ -573,8 +575,26 @@ fn many_character_runs_are_not_quadratic() {
     let t = std::time::Instant::now();
     let p = import(&bytes).unwrap();
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
-    let runs = &p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs[0].runs;
-    assert_eq!(runs.iter().filter(|r| r.kind == RunKind::Break).count(), N / 2);
+    let paragraphs = &p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs;
+    // One paragraph, and runs (letters and line breaks) up to the budget.
+    assert_eq!((paragraphs.len(), paragraphs[0].runs.len()), (1, crate::text::MAX_TEXT_ITEMS - 1));
+    assert!(paragraphs[0].runs.iter().any(|r| r.kind == RunKind::Break));
+}
+
+/// A presentation's text makes at most [`crate::text::MAX_TEXT_ITEMS`] paragraphs and runs
+/// together, across all its shapes (each is kilobytes in memory, from a character or two of file):
+/// a text of 40,000 one-letter paragraphs stops there, and a later shape's text gets nothing.
+#[test]
+fn text_makes_a_bounded_number_of_paragraphs_and_runs() {
+    let box_of = |id: u32, text: &str| container(rt::SP_CONTAINER, 0, &[fsp(202, id, 0xA00), anchor(0, 0, 1000, 1000), text_box(4, text, &[])]);
+    let many = "a\r".repeat(40_000);
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[box_of(2060, &many), box_of(2061, "after")])]);
+    let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, None);
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+    let texts: Vec<_> = p.slides[0].shapes.iter().filter_map(|s| s.text.as_ref()).collect();
+    let items: usize = texts.iter().flat_map(|t| &t.paragraphs).map(|para| 1 + para.runs.len()).sum();
+    assert_eq!(items, crate::text::MAX_TEXT_ITEMS);
+    assert!(!texts.iter().any(|t| t.text() == "after"), "the budget is the presentation's, not each shape's");
 }
 
 /// A slide naming a master that doesn't exist falls back to the first main master, every time. The

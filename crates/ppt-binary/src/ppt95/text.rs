@@ -73,10 +73,6 @@ pub(super) const OTHER: usize = 4;
 /// Characters read from one text at most: far beyond what PowerPoint 95 puts in a shape, so a
 /// huge character atom can't make a huge text body.
 pub(super) const MAX_CHARS: usize = 1 << 20;
-/// Paragraphs and runs made from the whole document's text at most. Each is about 2 to 4 KB, so
-/// a text of nothing but paragraph or line breaks would otherwise make gigabytes from a megabyte
-/// of file. That is far more than any PowerPoint 95 file probed holds.
-pub(super) const MAX_TEXT_ITEMS: usize = 1 << 16;
 /// Font and ruler slots read at most.
 const MAX_SLOTS: usize = 4096;
 /// Indent levels: PowerPoint 95 has five.
@@ -92,20 +88,15 @@ pub(super) struct Env {
     rulers: Vec<Option<Ruler>>,
     /// The master's text styles by text type: each level's character and paragraph formatting.
     styles: Vec<Option<[(CharRun, ParaRun); LEVELS]>>,
-    /// Paragraphs and runs made so far, against [`MAX_TEXT_ITEMS`].
+    /// Paragraphs and runs made so far, against [`crate::text::MAX_TEXT_ITEMS`].
     items: Cell<usize>,
 }
 
 impl Env {
     /// Counts one more paragraph or run; `false` once the document's text has made
-    /// [`MAX_TEXT_ITEMS`], when the rest of its text is left out.
+    /// [`crate::text::MAX_TEXT_ITEMS`], when the rest of its text is left out.
     fn take_item(&self) -> bool {
-        let n = self.items.get();
-        if n == MAX_TEXT_ITEMS {
-            log::warn!("ppt: PowerPoint 95 text passes {MAX_TEXT_ITEMS} paragraphs and runs; the rest is left out");
-        }
-        self.items.set(n.saturating_add(1));
-        n < MAX_TEXT_ITEMS
+        crate::text::take_text_item(&self.items)
     }
 
     pub(super) fn new(document: &Rec) -> Env {
