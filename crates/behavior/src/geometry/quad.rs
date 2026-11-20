@@ -716,6 +716,39 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
 }
 
+/// An ⌥ side drag on a box whose top and bottom converge, fitted to the reference's results within 3 px where its
+/// sides are parallel (a box in perspective along its sides comes out within 31 px; the frame scaling was hundreds
+/// off). In the top edge's frame about the reference point, the top and bottom turn parallel to the top edge, `k H0`
+/// apart about the reference point's row, `H0` the dragged side's height plus the top and bottom's mean run across
+/// the frame; the top keeps its middle and scales by `k = 1 + 2 d·uh / |top|`; the sides keep their runs along it.
+/// `None` for a top or bottom edge, or a box this leaves without height.
+fn converging_side_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    if edge % 2 == 0 {
+        return None;
+    }
+    let c = g.pivot0;
+    let f = g.quad0.map(|x| (x - c).dot(uh));
+    let v = g.quad0.map(|x| (x - c).dot(nh));
+    let sign = if edge == 1 { 1.0 } else { -1.0 };
+    let k = 1.0 + 2.0 * sign * (p - g.start).dot(uh) / len;
+    let dragged = if edge == 1 { v[2] - v[1] } else { v[3] - v[0] };
+    let height = k * (dragged + ((v[1] - v[0]) + (v[2] - v[3])) / 2.0);
+    if !(k.is_finite() && k > 0.0 && height.is_finite() && height > 1e-9) {
+        return None;
+    }
+    let (middle, half) = ((f[0] + f[1]) / 2.0, k * len / 2.0);
+    let (run_left, run_right) = (f[3] - f[0], f[2] - f[1]);
+    let at = |a: f64, b: f64| c + uh * a + nh * b;
+    let quad = [
+        at(middle - half, -height / 2.0),
+        at(middle + half, -height / 2.0),
+        at(middle + half + run_right, height / 2.0),
+        at(middle - half + run_left, height / 2.0),
+    ];
+    quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
+}
+
 /// An ⌥⇧ drag (free stretch about the reference point) as the reference does it, also on a box in perspective:
 /// - a corner scales the box about the reference point along the top edge's direction and across it, each by where
 ///   the pointer is against where the corner was;
@@ -796,8 +829,11 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
         nh = -nh;
     }
     let (al, ar, h) = (left.dot(uh), right.dot(uh), left.dot(nh));
-    if !(h.is_finite() && h > 1e-9) || uh.cross(bottom).abs() > 1e-9 * bottom.hypot() {
+    if !(h.is_finite() && h > 1e-9) {
         return None;
+    }
+    if uh.cross(bottom).abs() > 1e-9 * bottom.hypot() {
+        return converging_side_scale(g, p, uh, nh, len);
     }
     let c = g.pivot0;
     let mean = Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0);

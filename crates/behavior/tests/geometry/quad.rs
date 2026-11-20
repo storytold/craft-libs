@@ -495,3 +495,21 @@ fn an_alt_shift_drag_stretches_about_the_reference_point() {
         assert!(within(&got, want, tol), "{part:?} of {quad:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ side drags on a box whose top and bottom converge and whose sides are parallel (measured on the reference): the
+/// top and bottom come out parallel, the box's height set by the dragged side; within 3 px of the reference.
+#[test]
+fn an_alt_side_drag_on_converging_top_and_bottom_levels_them() {
+    let parallel_sides = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
+    let cases = [
+        (1, (452.0, 226.0), (502.0, 226.0), [(97.22, 144.62), (497.67, 197.66), (499.39, 306.67), (111.05, 255.23)]),
+        (3, (150.0, 226.0), (110.0, 226.0), [(113.29, 99.03), (494.14, 149.45), (482.07, 352.11), (113.29, 303.25)]),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (edge, from, to, want) in cases {
+        let quad = parallel_sides.map(|(x, y)| p(x, y));
+        let start = BoxState::new(quad, p(301.0, 226.0));
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, 3.0), "edge {edge}: {:?}", got.quad);
+    }
+}
