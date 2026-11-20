@@ -27,6 +27,17 @@ pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0); // design: allow[literal-siz
 /// The least size the window may be resized to.
 pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0); // design: allow[literal-size/vec2](the window's own least size in points)
 
+/// When preferences changes are applied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PreferencesMode {
+    /// Keep a draft until OK or Apply.
+    #[default]
+    Staged,
+    /// Apply changes as they happen; OK closes the window.
+    Live,
+}
+
 /// What the window keeps between passes; the host owns it and binds it with [`PreferencesWindow::new`].
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -53,6 +64,8 @@ pub struct PreferencesState {
 /// - **Buttons.** OK applies and closes, Apply applies and stays (enabled while the draft differs), Cancel drops the
 ///   draft. A failed apply keeps the window open and shows its message in the footer. Enter activates OK and Escape
 ///   cancels, once the search text, a field's own gesture and a popup have had them.
+/// - **Live mode.** [`PreferencesMode::Live`] applies changes as they occur and shows only OK, which closes without
+///   applying again. Closing the window does not cancel changes. A failed apply shows its message until another edit.
 /// - **Nested dialogs.** While [`PreferencesModel::nested_open`] is true the window takes no input and refuses to
 ///   close; [`PreferencesModel::nested`] draws the nested dialogs inside the window's own viewport.
 /// - **App-modal.** While the window is open the app's other windows take no input, show the blocked cursor and
@@ -73,6 +86,7 @@ pub struct PreferencesWindow<'a> {
     /// Keeps the window's place and size across runs under `key`.
     #[prop]
     remember: Option<SaveKey>,
+    mode: PreferencesMode,
 }
 
 /// What the body, the footer and the buttons' guard share during one pass: the host, the window's state as the pass
@@ -130,12 +144,19 @@ impl<H: PreferencesModel + ?Sized> Session<'_, '_, H> {
 impl<'a> PreferencesWindow<'a> {
     /// A window over the host's `state`.
     pub fn new(state: Bind<'a, PreferencesState>) -> Self {
-        PreferencesWindow { state, title: None, embedded: false, remember: None }
+        PreferencesWindow { state, title: None, embedded: false, remember: None, mode: PreferencesMode::Staged }
+    }
+
+    /// Selects whether changes are staged or applied while the window is open.
+    #[must_use]
+    pub fn mode(mut self, mode: PreferencesMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
     pub fn show<H: PreferencesModel + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember } = self;
+        let PreferencesWindow { state, title, embedded, remember, mode } = self;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
@@ -150,7 +171,7 @@ impl<'a> PreferencesWindow<'a> {
             ok = ok.disabled_reason(words.cannot_ok.clone());
         }
         let apply = FooterButton::new(words.apply.clone(), DialogRole::Other).enabled(differs).stays_open(true);
-        let buttons = [ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
+        let buttons = if mode == PreferencesMode::Live { vec![ok] } else { vec![ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)] };
 
         let mut open = true;
         // Filed by a swatch press in this pass.
@@ -174,7 +195,7 @@ impl<'a> PreferencesWindow<'a> {
                     session.borrow_mut().apply(cx);
                 }
             })
-            .close_guard(|button, cx| button.role() != DialogRole::Accept || session.borrow_mut().apply(cx));
+            .close_guard(|button, cx| mode == PreferencesMode::Live || button.role() != DialogRole::Accept || session.borrow_mut().apply(cx));
         if !embedded {
             dialog = dialog.viewport();
         }
@@ -215,6 +236,9 @@ impl<'a> PreferencesWindow<'a> {
                     session.host.reset_page(&page.id);
                 }
                 session.host.nested(ui);
+                if mode == PreferencesMode::Live && session.work.error.is_none() && session.host.differs() {
+                    session.apply(cx);
+                }
                 session.page = snap.shown.map(|page| page.id);
                 session.commit(cx);
             });
@@ -228,7 +252,9 @@ impl<'a> PreferencesWindow<'a> {
         match closed.filter(|_| !nested) {
             Some(CloseReason::Activated) => result.closed = Some(Closed::Ok),
             Some(_) => {
-                host.cancel();
+                if mode == PreferencesMode::Staged {
+                    host.cancel();
+                }
                 result.closed = Some(Closed::Cancel);
             }
             None => {}

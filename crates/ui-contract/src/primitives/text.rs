@@ -222,7 +222,18 @@ impl TextRun<'_> {
         // readable characters.
         let galley = match self.wrap {
             Wrap::Elide | Wrap::ElideStart | Wrap::ElideMiddle | Wrap::ElidePath => self.layout_cut(ctx, env, &full, max_width),
-            _ => text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width)),
+            _ => {
+                let job = self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width);
+                let galley = text_layout::layout(ctx, job.clone());
+                if matches!(self.wrap, Wrap::Wrap | Wrap::Clamp(_)) && galley.size().x > max_width {
+                    // A single unbroken word can be wider than the room even after word wrapping.
+                    let mut job = job;
+                    job.wrap.break_anywhere = true;
+                    text_layout::layout(ctx, job)
+                } else {
+                    galley
+                }
+            }
         };
         let elided = galley.elided || self.wrap.cuts() && galley.job.text != full;
         let mut layout = TextLayout::new(aligned_rows(galley, self.align, self.is_rtl(env), ctx.pixels_per_point()), elided, full);

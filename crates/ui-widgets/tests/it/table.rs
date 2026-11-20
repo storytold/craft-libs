@@ -12,6 +12,35 @@ use egui::{Key, Modifiers, Pos2, Rect};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// A text field in a table cell receives typing and reports its edit to the row's owner.
+#[trial]
+fn a_table_cell_text_field_reports_edits() {
+    use craft_behavior::{EditEvent, Selection};
+    use craft_ui::contract::{ReorderRule, SpaceAction};
+    use craft_ui::text::TextField;
+    let edited = Rc::new(RefCell::new(None::<String>));
+    let seen = edited.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::fill(1.0))];
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns).selection(Bind::given(Selection::single(0))).reorder(ReorderRule::new()).deletable(true).space(SpaceAction::Preview).show_items(ui, &source, &mut |_, icx| {
+            let seen = seen.clone();
+            ListRow::new("File").cells(icx.cells()).cell_field(SIZE, TextField::new("Page range", Bind::given(String::new())), move |out| {
+                for event in out.events {
+                    if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event {
+                        *seen.borrow_mut() = Some(value);
+                    }
+                }
+            })
+        });
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let field = fixture.by_label("Page range").expect("the cell field");
+    fixture.click(&field).type_text("1").settle();
+    assert_eq!(edited.borrow().as_deref(), Some("1"), "typing reports an edit before Enter");
+}
+
 const NAME: ColumnKey = ColumnKey::new("name");
 const SIZE: ColumnKey = ColumnKey::new("size");
 const DATE: ColumnKey = ColumnKey::new("date");

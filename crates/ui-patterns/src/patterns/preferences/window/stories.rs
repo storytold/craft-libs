@@ -1,7 +1,8 @@
 //! Stories of `PreferencesWindow`.
 
-use super::{PreferencesState, PreferencesWindow};
-use crate::contract::{Bind, Entry};
+use super::{PreferencesMode, PreferencesState, PreferencesWindow};
+use crate::buttons::Button;
+use crate::contract::{Bind, Entry, Show as _, clicked};
 use crate::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
 use crate::runtime::env::UnitKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -157,4 +158,24 @@ fn preferences_window_with_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     let state =
         PreferencesState { selected: "canvas".to_owned(), error: Some("The brush size can't be applied.".to_owned()), ..PreferencesState::default() };
     window(ui, data, state, Demo { refuse: true, ..Demo::default() })
+}
+
+/// Preferences that apply each edit immediately.
+#[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
+fn preferences_window_live(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("live_open", false);
+    if clicked(&Button::new("Open preferences").show(ui)) {
+        open = true;
+    }
+    let mut demo = data.value("live_demo", Demo::default()).clone();
+    let mut result = StoryOutput::default();
+    if open {
+        let state = data.value("live_state", PreferencesState::default());
+        let shown = PreferencesWindow::new(Bind::bound(state)).mode(PreferencesMode::Live).embedded().show(ui, &mut demo);
+        open = shown.closed.is_none();
+        result = shown.into();
+    }
+    *data.value("live_open", false) = open;
+    *data.value("live_demo", Demo::default()) = demo;
+    result
 }

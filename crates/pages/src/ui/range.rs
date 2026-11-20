@@ -373,7 +373,6 @@ impl PageRangeOptions {
         }
         if let Some(value) = to {
             next.to = Some(value);
-            next.from = next.from.min(value);
         }
         if choices.subset() {
             let entries = [

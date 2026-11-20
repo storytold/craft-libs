@@ -250,6 +250,19 @@ fn the_run_shows_each_dialog_once_per_pass() {
     assert!(over.top && !below.top, "the child over its parent is on top");
 }
 
+/// A real child dialog must be visible and accessible over its hosted parent.
+#[trial]
+fn a_hosted_child_dialog_is_visible() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    let parent = host.borrow_mut().open(SelfClosing);
+    fixture.idle(6);
+    host.borrow_mut().open_child(HostedAlert::new(Alert::new("Child notice", "Child message")), parent);
+    fixture.idle(6);
+    assert!(fixture.by_label("Child notice").is_some(), "the child is accessible");
+    assert!(fixture.texts().iter().any(|text| text.text == "Child message"), "the child is painted");
+}
+
 /// The startup queue opens its modals one at a time, in stage order, each once nothing else is open.
 #[trial]
 fn a_startup_modal_waits_for_the_open_dialogs_and_opens_in_stage_order() {
@@ -313,6 +326,21 @@ fn the_platform_chords_answer_dont_save() {
             assert!(result.is_none() && host.borrow().is_open::<UnsavedChangesDialog>(), "{os:?}: {mods:?}+{key:?} leaves the question open");
         }
     }
+}
+
+/// A long document name must remain within the unsaved question's dialog.
+#[trial]
+fn unsaved_question_keeps_long_text_inside_its_dialog() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    fixture.room(vec2(820.0, 520.0));
+    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.pdf"));
+    fixture.idle(6);
+    let dialog = fixture.by_role(Role::DIALOG).first().expect("the question").rect;
+    assert!(dialog.left() >= 0.0 && dialog.right() <= 820.0, "the question stays on screen: {dialog:?}");
+    let runs = fixture.texts();
+    let message = runs.iter().find(|run| run.text.contains("WWWWWWWW")).expect("the document name is painted");
+    assert!(message.rect.left() >= dialog.left() && message.rect.right() <= dialog.right(), "message {:?} exceeds dialog {dialog:?}", message.rect);
 }
 
 /// Each open of a dialog has its own serial, kept while it stays open, though its id is the same at every open: a
