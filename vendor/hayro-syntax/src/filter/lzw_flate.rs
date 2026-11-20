@@ -1757,6 +1757,7 @@ mod pdfcraft_png_predictor_tests {
                 bits_per_component,
                 colors: params.colors,
                 columns: params.columns,
+                early_change: params.early_change,
                 control: None,
             };
             assert!(!untagged_png_rows(&params, 36, Some(4)));
