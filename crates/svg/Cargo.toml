@@ -14,7 +14,7 @@ workspace = true
 # when one of them changes (craft-common-actions' select-platforms).
 [package.metadata.craft]
 reads = [
-    "crates/ui/tests/fonts/NotoSans-test.ttf",
+    "crates/ui-contract/tests/fonts/NotoSans-test.ttf",
 ]
 
 [dependencies]
