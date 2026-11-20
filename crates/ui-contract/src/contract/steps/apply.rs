@@ -160,7 +160,7 @@ pub(crate) fn rerun_after_edit(
 ) {
     if edit.given {
         let ctx = &p.core_ref().ctx;
-        crate::runtime::lazy::unsettle(ctx);
+        crate::runtime::lazy::note_given_edit(ctx);
         ctx.request_repaint();
         return;
     }

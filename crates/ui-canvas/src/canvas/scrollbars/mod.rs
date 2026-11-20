@@ -32,6 +32,7 @@ use egui::{CornerRadius, Rect, Response, Vec2, pos2, vec2};
 use std::ops::{Deref, Range};
 
 const HORIZONTAL: PartKey = PartKey::new("horizontal");
+const CORNER: PartKey = PartKey::new("corner");
 const VERTICAL: PartKey = PartKey::new("vertical");
 const START_ARROW: u64 = 1;
 const END_ARROW: u64 = 2;
@@ -378,8 +379,11 @@ impl Component for CanvasScrollbars<'_> {
         for (key, axis, bar) in bars.each() {
             cx.scroll(key, bar.track, axis, bar.span.clone());
             for (part, rect, _) in bar.arrows(key, axis) {
-                cx.part(part, rect).sense(Sense::CLICK);
+                cx.part(part, rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
             }
+        }
+        if let Some(corner) = bars.corner {
+            cx.part(CORNER, corner).sense(Sense::CLICK).pointer_only("the corner only reserves space between the two scroll bars");
         }
     }
 
@@ -467,13 +471,12 @@ impl Component for CanvasScrollbars<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasScrollbarsOutput {
-        let over = [HORIZONTAL, VERTICAL].into_iter().any(|key| {
-            let arrows = self.document_chrome.then_some([key.at(START_ARROW), key.at(END_ARROW)]);
-            [PartRef::from(key), thumb_of(key)]
-                .into_iter()
-                .chain(arrows.into_iter().flatten())
-                .any(|part| cx.part_if_declared(part).is_some_and(|result| result.hovered || result.press.phase.is_press()))
-        });
+        let is_over = |part| cx.part_if_declared(part).is_some_and(|result| result.hovered || result.press.phase.is_press());
+        let over = is_over(PartRef::from(CORNER))
+            || [HORIZONTAL, VERTICAL].into_iter().any(|key| {
+                let arrows = self.document_chrome.then_some([key.at(START_ARROW), key.at(END_ARROW)]);
+                [PartRef::from(key), thumb_of(key)].into_iter().chain(arrows.into_iter().flatten()).any(is_over)
+            });
         CanvasScrollbarsOutput { view: cx.edit_response(), over }
     }
 }

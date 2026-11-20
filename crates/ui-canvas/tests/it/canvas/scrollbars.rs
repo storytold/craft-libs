@@ -4,7 +4,7 @@ use std::{cell::Cell, rc::Rc};
 
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
-use craft_ui::canvas::{Canvas, CanvasScrollbars, NavigationOptions, canvas_space};
+use craft_ui::canvas::{Canvas, CanvasScrollbars, NavigationOptions, Rulers, canvas_space};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Rect, Shape, Vec2, pos2, vec2};
@@ -55,32 +55,39 @@ fn overscroll_off_below_fit_keeps_the_image_centred() {
 const FITTING_DOCUMENT: Size = Size::new(400.0, 300.0);
 const DOCUMENT_WINDOW: Rect = Rect::from_min_max(Pos2::new(12.0, 12.0), Pos2::new(732.0, 512.0));
 
-fn document_scrollbars() -> (Fixture, Rc<Cell<CanvasView>>) {
+fn document_scrollbars() -> (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<bool>>) {
+    let over = Rc::new(Cell::new(false));
+    let observed_over = Rc::clone(&over);
     let view = Rc::new(Cell::new(CanvasView::new(DOCUMENT_WINDOW, Point::new(200.0, 150.0), 1.0)));
     let observed = Rc::clone(&view);
     let mut fixture = Fixture::new(move |ui| {
         let mut navigation = NavigationOptions::default();
         navigation.overscroll = true;
-        Canvas::new("Document").document(FITTING_DOCUMENT).view(observed.get()).navigation(navigation).show_rulers(true).show_at(
+        let mut zero = Point::ZERO;
+        let rulers = Rulers::new("Rulers", Bind::bound(&mut zero));
+        let mut next = observed.get();
+        Canvas::new("Document").document(FITTING_DOCUMENT).view(next).navigation(navigation).with_rulers(Some(rulers)).show_at(
             ui,
             DOCUMENT_WINDOW,
-            |ui, body| {
-                let Some(space) = canvas_space(&body.env) else { return };
-                let mut next = space.view;
-                let doc = DocRect::from_origin_size(Point::ZERO, FITTING_DOCUMENT);
-                CanvasScrollbars::new("Scroll bars", Bind::bound(&mut next), doc).overscroll(true).document_chrome().show_at(ui, body.rect);
-                observed.set(next);
+            |_, body| {
+                if let Some(space) = canvas_space(&body.env) {
+                    next = space.view;
+                }
             },
         );
+        let doc = DocRect::from_origin_size(Point::ZERO, FITTING_DOCUMENT);
+        let bars = CanvasScrollbars::new("Scroll bars", Bind::bound(&mut next), doc).overscroll(true).document_chrome().show_at(ui, DOCUMENT_WINDOW);
+        observed_over.set(bars.over);
+        observed.set(next);
     });
     fixture.room(vec2(760.0, 560.0)).settle();
-    (fixture, view)
+    (fixture, view, over)
 }
 
 /// #15529: the document bars leave room for arrows and a corner, and put a thinner thumb inside each track.
 #[trial]
 fn document_bars_show_arrows_and_an_inset_thumb_for_a_fitting_image() {
-    let (mut fixture, view) = document_scrollbars();
+    let (mut fixture, view, _) = document_scrollbars();
     let horizontal = fixture.by_label("Horizontal scroll bar").expect("the horizontal bar").rect;
     let vertical = fixture.by_label("Vertical scroll bar").expect("the vertical bar").rect;
     assert!((horizontal.height() - 16.0).abs() < TOLERANCE, "horizontal track: {horizontal:?}");
@@ -112,7 +119,7 @@ fn document_bars_show_arrows_and_an_inset_thumb_for_a_fitting_image() {
 /// #15529: a press is one small step, a held press repeats, and the rest of the track still pages.
 #[trial]
 fn a_document_scroll_arrow_steps_and_repeats_while_its_track_pages() {
-    let (mut fixture, view) = document_scrollbars();
+    let (mut fixture, view, _) = document_scrollbars();
     let start = view.get().center;
     let arrow = fixture.by_label("Scroll right").expect("the right arrow").center();
     fixture.frame(vec![pointer::moved(arrow)]).frame(vec![pointer::press(arrow)]);
@@ -131,4 +138,20 @@ fn a_document_scroll_arrow_steps_and_repeats_while_its_track_pages() {
     fixture.click_at(pos2(track.right() - 8.0, track.center().y));
     fixture.settle();
     assert!(view.get().center.x > repeated.x + 16.0, "the track still pages instead of stepping");
+}
+
+#[trial]
+fn the_scrollbar_corner_keeps_pointer_presses_off_the_canvas() {
+    let (mut fixture, view, over) = document_scrollbars();
+    let right = fixture.by_label("Scroll right").expect("the right arrow").rect;
+    let down = fixture.by_label("Scroll down").expect("the down arrow").rect;
+    let corner = pos2(right.right() + 4.0, down.bottom() + 4.0);
+    fixture.frame(vec![pointer::moved(corner)]);
+    assert!(over.get(), "the corner belongs to the scrollbars");
+    let center = view.get().center;
+    fixture.frame(vec![pointer::press(corner)]);
+    assert!(over.get(), "a press on the corner must not reach the document");
+    assert_eq!(view.get().center, center, "the corner never scrolls");
+    fixture.frame(vec![pointer::release(corner)]).frame(vec![pointer::moved(DOCUMENT_WINDOW.center())]);
+    assert!(!over.get(), "the document area still receives pointer input");
 }

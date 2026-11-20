@@ -161,7 +161,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Table<'_, K> {
                     Divider::horizontal().show(ui);
                 }
                 for (command, enabled) in &commands {
-                    let label = crate::runtime::commands::resolve(&ctx, *command).label;
+                    let label = crate::runtime::commands::resolve(&ctx, *command).label.clone();
                     if MenuItem::new(label.to_string()).enabled(*enabled).show(ui).ran {
                         picks.push(ColumnRequest::Command(*command));
                     }

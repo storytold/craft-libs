@@ -11,8 +11,14 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-color-transform = { workspace = true }
 craft-develop-model = { workspace = true }
 serde = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
 [dev-dependencies]
+craft-render-parity = { workspace = true }
 proptest = { workspace = true }
+serde_json = { workspace = true }
