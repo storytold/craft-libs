@@ -86,8 +86,8 @@ pub use ramp::{Mode, Ramp, RampKind};
 pub use resolve::{Resolved, resolve, resolve_sized};
 pub use scale::{Duration, Easing, Elevation, Opacity, Radius, Space, Stroke};
 pub use selection::{
-    AppChoice, AppDefaults, ContrastChoice, Fallback, ModeChoice, MotionChoice, Selection, Shown, SuiteChoice, SystemAppearance, ThemePair,
-    resolve_selection,
+    AppChoice, AppDefaults, ComponentSet, ContrastChoice, Fallback, ModeChoice, MotionChoice, Selection, Shown, SuiteChoice, SystemAppearance,
+    ThemePair, resolve_selection,
 };
 pub use stateful::{FlagMask, Flags, Mix, Resolve, StateMix, Stateful};
 pub use theme::{
