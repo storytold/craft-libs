@@ -123,11 +123,16 @@ pub trait DropTarget<P: ?Sized> {
     }
 }
 
-/// What a component registers with `Pointer::window_drop_target`: a target over the whole window, which needs no
-/// pointer position.
+/// What a component registers with `Pointer::window_drop_target`: a target over the whole window, optionally waiting
+/// for a pointer position before it accepts.
 pub trait WindowDropTarget<P> {
     /// What a drop on this target carries to the component's caller.
     type Drop;
+
+    /// Whether this target waits for a pointer position before taking a drop.
+    fn requires_pointer(&self) -> bool {
+        false
+    }
 
     /// `None` rejects. `op` is the operation the held modifiers pick, which a target may refuse.
     fn accept(&self, payload: &P, op: DropOperation) -> Option<Self::Drop>;

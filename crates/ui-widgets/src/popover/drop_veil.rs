@@ -117,17 +117,29 @@ impl Outcome for DropVeilOutput {
 /// the files nothing else in their window took use it too.
 pub struct WholeWindow {
     rect: Rect,
+    positional: bool,
 }
 
 impl WholeWindow {
     /// A target over the window, marked with `rect` while files hover.
     pub fn new(rect: Rect) -> Self {
-        WholeWindow { rect }
+        WholeWindow { rect, positional: false }
+    }
+
+    /// Waits for the pointer so a more specific target can take the drop at that position.
+    #[must_use]
+    pub fn positional(mut self) -> Self {
+        self.positional = true;
+        self
     }
 }
 
 impl WindowDropTarget<OsFiles> for WholeWindow {
     type Drop = OsFiles;
+
+    fn requires_pointer(&self) -> bool {
+        self.positional
+    }
 
     fn accept(&self, payload: &OsFiles, _op: DropOperation) -> Option<OsFiles> {
         (!payload.files.is_empty()).then(|| payload.clone())
@@ -152,6 +164,7 @@ pub struct DropVeil {
     #[container]
     props: ContainerProps,
     hovering: bool,
+    positional: bool,
     /// The files dropped this pass: `update` writes them before the body runs, the body and `finish` read them. A veil
     /// is built anew every pass, so nothing outlives it.
     dropped: Arc<Mutex<Option<OsFiles>>>,
@@ -163,7 +176,14 @@ impl DropVeil {
     /// A veil saying `label` ("Import 3 photos") while files hover.
     pub fn new(label: impl Into<Label>) -> Self {
         let props = ContainerProps::new().sizing(Sizing::Fill).pad(Pad::None);
-        DropVeil { common: Common::new(), props, hovering: false, dropped: Arc::default(), card: None }.label(label)
+        DropVeil { common: Common::new(), props, hovering: false, positional: false, dropped: Arc::default(), card: None }.label(label)
+    }
+
+    /// Waits for the pointer before accepting a drop, allowing a target under it to take the files first.
+    #[must_use]
+    pub fn positional(mut self) -> Self {
+        self.positional = true;
+        self
     }
 
     /// Shows the veil over `body`, which gets the files dropped on the window in this pass, if any.
@@ -206,6 +226,7 @@ impl Component for DropVeil {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let held = drag::active::<OsFiles>(&cx.ctx).is_some_and(|files| !files.files.is_empty());
         let target = WholeWindow::new(cx.rect);
+        let target = if self.positional { target.positional() } else { target };
         let (id, ordinal) = (cx.id, drag::next_ordinal(&cx.ctx, cx.id));
         let dropped = cx.window_drop_target::<OsFiles, _>(&target);
         // The veil shows only while it is the target that would take the drop.

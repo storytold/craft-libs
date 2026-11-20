@@ -207,6 +207,18 @@ impl DropTarget<OsFiles> for OnRow {
 /// A drop of files anywhere in the window.
 struct OnWindow;
 
+struct OnPositionalWindow;
+
+impl WindowDropTarget<OsFiles> for OnPositionalWindow {
+    type Drop = Vec<String>;
+
+    fn requires_pointer(&self) -> bool { true }
+
+    fn accept(&self, files: &OsFiles, _: DropOperation) -> Option<Self::Drop> { Some(names(files)) }
+
+    fn mark(&self, _: &Self::Drop) -> DropMark { DropMark::Into(WINDOW) }
+}
+
 impl WindowDropTarget<OsFiles> for OnWindow {
     type Drop = Vec<String>;
 
@@ -239,6 +251,50 @@ struct WindowOnly<'a> {
     #[common]
     common: Common,
     landed: &'a RefCell<Landed>,
+}
+
+#[derive(Component)]
+struct PositionalWindow<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Landed>,
+}
+
+impl Component for PositionalWindow<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: PositionalWindowStyleKey) -> PlainStyle { PlainStyle::default() }
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 { WINDOW.size() }
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(files) = cx.window_drop_target(&OnPositionalWindow) {
+            self.landed.borrow_mut().window.push(files);
+        }
+    }
+    fn finish(self, cx: Cx<'_, Self>) -> Response { cx.response.clone() }
+}
+
+#[trial]
+fn positional_window_waits_for_pointer_to_choose_a_row() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        PositionalWindow { common: Common::new(), landed: &landed }.id_salt("window").show_at(ui, WINDOW);
+        RowOnly { common: Common::new(), landed: &landed }.id_salt("rows").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.idle(2, &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.idle(2, &mut show);
+    assert!(landed.borrow().window.is_empty(), "the window waits while the pointer is unknown");
+    frames.frame(vec![moved(LIST.center())], &mut show);
+    frames.idle(3, &mut show);
+    assert_eq!(landed.borrow().rows.len(), 1, "the row under the pointer takes the drop");
+    assert!(landed.borrow().window.is_empty());
 }
 
 impl Component for WindowOnly<'_> {

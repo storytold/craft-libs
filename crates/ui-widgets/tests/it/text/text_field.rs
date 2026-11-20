@@ -37,6 +37,24 @@ fn clearing_a_search_field_with_a_draft_leaves_it_empty_after_blur() {
     assert_eq!(*text.borrow(), "", "leaving the field commits nothing back");
 }
 
+#[trial]
+fn select_all_after_typing_selects_the_complete_new_draft() {
+    let text = Rc::new(RefCell::new("4".to_owned()));
+    let request = Rc::new(Cell::new(false));
+    let (shown, select) = (text.clone(), request.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        TextField::new("Name", Bind::bound(&mut *shown.borrow_mut())).select_on_focus().select_all(select.replace(false)).show(ui);
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    *text.borrow_mut() = "iv".to_owned();
+    request.set(true);
+    fixture.type_text("2");
+    assert_eq!(*text.borrow(), "2", "typing replaces the replacement value");
+    fixture.type_text("x").settle();
+    assert_eq!(*text.borrow(), "2x", "the next input appends to the new draft");
+}
+
 /// A letter typed into a text field is the field's own: the field gets the text, the app reads no press of it, and
 /// `focus_holds` names the letter, and Space, before they are typed.
 #[trial]

@@ -54,6 +54,25 @@ fn list_row_declares_and_accepts_access_click() {
     assert!(seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "Click selects the row");
 }
 
+#[trial]
+fn access_click_activates_a_single_click_list_row() {
+    use craft_ui::contract::ActivateOn;
+    use craft_ui::testing::focus::AccessActionKind;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = List::new("Rows").activate(ActivateOn::Click).show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.settle();
+    let row = fixture.by_label(NAMES[1]).expect("the row");
+    seen.borrow_mut().clear();
+    fixture.access(AccessActionKind::Click, &row).settle();
+    assert!(seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Activate(1))));
+}
+
 /// The rects of the three rows of a list shown with `rows`.
 fn row_rects(rows: RowHeight) -> Vec<egui::Rect> {
     let mut fixture = Fixture::new(move |ui| {
