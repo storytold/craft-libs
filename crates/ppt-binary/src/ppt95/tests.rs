@@ -2808,11 +2808,13 @@ fn the_wmf_reader_stays_in_each_record() {
 }
 
 /// For a sample with a rendering beside it (`<case>.wmf`), each shape on its first slide with a
-/// straight outline matches a polygon PowerPoint 95 drew. The number of shapes checked.
+/// straight outline matches a polygon PowerPoint 95 drew, each a polygon of its own: two shapes
+/// moved onto one place don't both match it. The number of shapes checked.
 fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
     let polygons = wmf_polygons(wmf, p.slide_size);
     let Some(slide) = p.slides.first() else { return 0 };
     let mut checked = 0;
+    let mut used = vec![false; polygons.len()];
     for s in &slide.shapes {
         let Some(corners) = outline_corners(s) else { continue };
         // A dashed line is drawn dash by dash.
@@ -2821,7 +2823,9 @@ fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
         }
         let width = s.line.as_ref().and_then(|l| l.width).unwrap_or(1.0);
         let near = polygons.iter().min_by_key(|poly| poly.len().abs_diff(corners.len()));
-        assert!(polygons.iter().any(|poly| outline_matches(&corners, poly, width)), "{name}: {corners:?} is not drawn; nearest {near:?}");
+        let hit = (0..polygons.len()).find(|&i| !used[i] && outline_matches(&corners, &polygons[i], width));
+        let Some(i) = hit else { panic!("{name}: {corners:?} is not drawn, or only where another shape is; nearest {near:?}") };
+        used[i] = true;
         checked += 1;
     }
     checked

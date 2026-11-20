@@ -37,9 +37,10 @@
 //! cap.
 //!
 //! PowerPoint 95 numbers placeholders its own way: on the master 1 title, 2 body, 6 date, 7 slide
-//! number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred title and 0x10 subtitle. A
-//! placeholder of any other type keeps its text as a text box. The master's placeholders place the
-//! caller's default master's, and the footer row places every layout's, as the PowerPoint 97 path
+//! number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred title and 0x10 subtitle. On a
+//! slide, a placeholder of any other type keeps its text as a text box; on the master it is left
+//! out. The master's placeholders place the caller's default master's, and the footer row places
+//! every layout's, as the PowerPoint 97 path
 //! does.
 //!
 //! A picture is a shape naming one of the document's pictures, which are Windows metafiles; its
