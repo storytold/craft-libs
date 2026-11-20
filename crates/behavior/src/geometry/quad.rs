@@ -754,6 +754,7 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
     let sign = if edge == 1 { 1.0 } else { -1.0 };
     let reach = if edge == 1 { reach_to(c, across(tl, tr, bl, br), uh, tr, br) } else { reach_to(c, -across(tl, tr, bl, br), -uh, tl, bl) };
     let k = 1.0 + sign * (p - g.start).dot(uh) / reach;
+    let k = side_factor_lean(g.quad0, edge, k);
     // The opposite side and the height follow a factor eased by the box's slant ([`alt_spread`], as for a top or
     // bottom drag); the dragged side stays where the plain drag puts it (measured on the reference, seven boxes).
     let k = if k.abs() > 1e-9 { k - 0.12 * alt_spread(g.quad0) * (k - 1.0) / k } else { k };
@@ -814,6 +815,21 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
         out[i] = c + uh * (column + centre) + nh * (out[i] - c).dot(nh);
     }
     out.iter().all(|x| x.is_finite()).then_some(BoxState { quad: out, pivot: c })
+}
+
+/// The factor of an ⌥ side drag on a box converging both ways, from the pointer's `k`: `k - 1` grows (a left drag) or
+/// shrinks (a right one) by `0.28 ln(w_t / w_b) ln(w_r / w_l) (1 + 1.4 (k - 1))`, `w_*` the projective weights of the
+/// edges' middles. Measured on the reference, ten boxes, side drags from -80 to +80 px: their factor is then within
+/// 1 % under a level top and 2 % under a tilted one. `k` itself where either pair of edges is parallel, and for a degenerate box.
+fn side_factor_lean(q: [Point; 4], edge: u8, k: f64) -> f64 {
+    let (Some(wt), Some(wb), Some(wl), Some(wr)) =
+        (unit_weight(q, 0.5, 0.0), unit_weight(q, 0.5, 1.0), unit_weight(q, 0.0, 0.5), unit_weight(q, 1.0, 0.5))
+    else {
+        return k;
+    };
+    let lean = 0.28 * (wt / wb).ln() * (wr / wl).ln() * if edge == 3 { 1.0 } else { -1.0 };
+    let out = 1.0 + (k - 1.0) * (1.0 + lean * (1.0 + 1.4 * (k - 1.0)));
+    if out.is_finite() { out } else { k }
 }
 
 /// The projective weight of the unit square's point `(u, v)` in `q`, `None` for a degenerate box.

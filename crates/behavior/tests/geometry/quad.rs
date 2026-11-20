@@ -979,3 +979,31 @@ fn an_alt_drag_on_a_box_converging_both_ways_turns_the_opposite_edge_like_the_re
         assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ side drags on boxes whose edges converge both ways, measured on the reference: the factor grows for a left drag
+/// and shrinks for a right one with the box's two weight ratios, so the opposite side and the height land where the
+/// reference puts them.
+#[test]
+fn an_alt_side_drag_on_a_box_converging_both_ways_scales_like_the_reference() {
+    let narrow_top = [(240.0, 125.0), (362.0, 125.0), (452.0, 287.0), (150.0, 327.0)];
+    let wider_top = [(200.0, 125.0), (402.0, 125.0), (452.0, 297.0), (150.0, 327.0)];
+    let tall = [(240.0, 85.0), (362.0, 85.0), (452.0, 287.0), (150.0, 327.0)];
+    let cases = [
+        // Was 9.0 px off.
+        (narrow_top, 3, (195.0, 226.0), (115.0, 226.0), [(230.849, 50.6801), (419.0261, 50.6801), (568.9751, 381.3199), (-45.3415, 381.3199)], 0.8),
+        // Was 2.6 px off.
+        (wider_top, 3, (175.0, 226.0), (95.0, 226.0), [(151.714, 64.1295), (470.6174, 64.1295), (547.5686, 372.8705), (33.6494, 372.8705)], 0.5),
+        // Was 2.6 px off.
+        (wider_top, 1, (427.0, 211.0), (507.0, 211.0), [(140.1445, 91.4986), (450.5891, 91.4986), (565.8905, 345.5014), (54.0495, 345.5014)], 0.5),
+        // Was 2.8 px off.
+        (tall, 1, (407.0, 186.0), (447.0, 186.0), [(220.0991, 72.5156), (367.0241, 72.5156), (532.1379, 319.4844), (94.0885, 319.4844)], 0.5),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, edge, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let mean = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, mean);
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
