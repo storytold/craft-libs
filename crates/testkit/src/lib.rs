@@ -15,6 +15,11 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! On native targets, [`fixtures`] locates generated test fixtures under `<workspace>/target/fixtures`,
+//! generates a missing one into a claimed temporary sibling, publishes it under a per-output lock that
+//! keeps a complete file another process published first, and prints the `FIXTURE made`, `cached` and
+//! `skipped` lines that FilmCraft's `cargo xtask fixtures` counts.
+//!
 //! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
 //! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
 //! polls a condition until it holds and fails the test when the limit passes first. Both read an
@@ -37,6 +42,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fixtures;
 pub mod guards;
 pub mod hostile;
 pub mod sample_damage;
