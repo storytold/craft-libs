@@ -2627,6 +2627,7 @@ dependencies = [
  "craft-frame",
  "craft-media",
  "craft-time",
+ "craft-video",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
