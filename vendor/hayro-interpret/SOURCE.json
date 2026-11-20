@@ -410,7 +410,7 @@
       "path": "src/self_draw_tests.rs",
       "source_sha256": null,
       "source_git_blob": null,
-      "sha256": "58930501e624b86fd45ddc82e464a959d989d6ef94eb7e62f8f8ad24c78ec8ec"
+      "sha256": "84263a0741b19879104fa57fad43cc80c33ba902ba25fa2b9356fffed2e46202"
     },
     {
       "path": "src/shading.rs",

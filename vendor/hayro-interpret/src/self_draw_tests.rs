@@ -58,7 +58,7 @@ fn mask_group(resources: &str, content: &str) -> String {
     )
 }
 
-/// A coloured tiling pattern whose cell draws `content` with `resources`.
+/// A colored tiling pattern whose cell draws `content` with `resources`.
 fn tiling(resources: &str, content: &str) -> String {
     stream(
         &format!(
