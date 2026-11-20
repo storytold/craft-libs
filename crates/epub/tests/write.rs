@@ -310,3 +310,12 @@ fn publication_date_is_distinct_from_modification_time_and_optional() {
         assert!(!text(&write(&b).unwrap(), "OEBPS/content.opf").contains("<dc:date>"));
     }
 }
+
+#[test]
+fn publication_date_rejects_xml_forbidden_characters() {
+    for date in ["2024\0-01", "2024\u{ffff}-01"] {
+        let mut b = book();
+        b.metadata.publication_date = Some(date.into());
+        assert!(matches!(write(&b), Err(Error::Invalid(_))), "invalid date was silently changed");
+    }
+}
