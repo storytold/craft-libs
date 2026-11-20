@@ -871,6 +871,7 @@ mod mesh_extent_tests {
     fn tiling_pattern_uses_the_alpha_current_at_paint_time() {
         let content = "q /F1 gs /Pattern cs /P0 scn 0 80 100 15 re f Q \
                        q /Pattern cs /P0 scn /F1 gs 0 55 100 15 re f Q \
+                       q /Pattern cs /P0 scn /F1 gs 0 70 50 10 re f /F2 gs 50 70 50 10 re f Q \
                        q /CS0 cs 1 0 0 /P1 scn /F1 gs 0 30 100 15 re f Q \
                        q /Pattern CS /P0 SCN /S1 gs 10 w 0 12 m 100 12 l S Q \
                        q /F1 gs /CS0 CS 1 0 0 /P1 SCN /S2 gs 6 w 0 23 m 100 23 l S Q \
@@ -880,7 +881,7 @@ mod mesh_extent_tests {
     1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
     2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
     3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R
-      /Resources << /ExtGState << /S1 << /CA 0.25 >> /S2 << /CA 0.75 >> /F1 << /ca 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >>
+      /Resources << /ExtGState << /S1 << /CA 0.25 >> /S2 << /CA 0.75 >> /F1 << /ca 0.25 >> /F2 << /ca 0.75 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >>
       /Pattern << /P0 5 0 R /P1 6 0 R >> >> >> endobj
     4 0 obj << /Length {} >> stream
     {content}
@@ -913,6 +914,11 @@ mod mesh_extent_tests {
         // Red at 75% over white is about (255, 64, 64): the stroke opacity, not the fill's 25%.
         let c = px(50, 77);
         assert!(c[0] >= 250 && (55..=73).contains(&c[1]) && (55..=73).contains(&c[2]), "uncoloured stroke, /CA set after SCN: {c:?}");
+        // The same selected pattern keeps different alpha values in the cell cache.
+        for (x, expected) in [(25, 185..=197), (75, 55..=73)] {
+            let c = px(x, 25);
+            assert!(c[0] >= 250 && expected.contains(&c[1]) && expected.contains(&c[2]), "reused fill at x={x}: {c:?}");
+        }
         // Without an opacity in force the pattern stays opaque.
         assert_eq!(px(5, 97), vec![255, 0, 0, 255], "no opacity");
     }
@@ -929,7 +935,7 @@ mod mesh_extent_tests {
     1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
     2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
     3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R
-      /Resources << /ExtGState << /F1 << /ca 0.25 >> /S1 << /CA 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >> /Pattern << /P1 5 0 R /P2 6 0 R >> >> >> endobj
+      /Resources << /ExtGState << /F1 << /ca 0.25 >> /F2 << /ca 0.75 >> /S1 << /CA 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >> /Pattern << /P1 5 0 R /P2 6 0 R >> >> >> endobj
     4 0 obj << /Length {} >> stream
     {content}
     endstream endobj
@@ -944,9 +950,11 @@ mod mesh_extent_tests {
                 content.len(),
                 cell.len()
             );
-            let p = render_at(pdf.into_bytes(), 1.0);
-            let c = p.sample(15, 25);
-            vec![c.r, c.g, c.b, c.a]
+            render_at(pdf.into_bytes(), 1.0)
+        };
+        let sample = |p: &Pixmap, x| {
+            let c = p.sample(x, 25);
+            [c.r, c.g, c.b, c.a]
         };
         // Blue at 25% over white is about (191, 191, 255); opaque blue would be (0, 0, 255).
         for (what, content) in [
@@ -955,10 +963,17 @@ mod mesh_extent_tests {
             ("uncoloured fill, /ca set after scn", "/CS0 cs 0 0 1 /P2 scn /F1 gs 0 0 40 40 re f"),
             ("uncoloured stroke, /CA set after SCN", "/CS0 CS 0 0 1 /P2 SCN /S1 gs 20 w 0 15 m 40 15 l S"),
         ] {
-            let c = render(content);
+            let c = sample(&render(content), 15);
             assert!((185..=197).contains(&c[0]) && (185..=197).contains(&c[1]) && c[2] >= 250, "{what}: {c:?}");
         }
-        assert_eq!(render("/Pattern cs /P1 scn 0 0 40 40 re f"), vec![0, 0, 255, 255], "no opacity");
+        let opaque = render("/Pattern cs /P1 scn 0 0 40 40 re f");
+        assert_eq!(sample(&opaque, 15), [0, 0, 255, 255], "no opacity");
+
+        let reused = render("/Pattern cs /P1 scn /F1 gs 10 10 5 10 re f /F2 gs 15 10 5 10 re f");
+        for (x, expected) in [(12, 185..=197), (17, 55..=73)] {
+            let c = sample(&reused, x);
+            assert!(expected.contains(&c[0]) && expected.contains(&c[1]) && c[2] >= 250, "reused single cell at x={x}: {c:?}");
+        }
     }
 
 
