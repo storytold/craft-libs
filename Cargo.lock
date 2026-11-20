@@ -2488,6 +2488,7 @@ dependencies = [
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-xml",
  "kurbo",
  "log",
@@ -3659,6 +3660,7 @@ name = "craft-ppt-binary"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-codepage",
  "craft-drawingml",
  "craft-pptx",
  "image",

@@ -7,6 +7,12 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[package.metadata.craft]
+reads = [
+    "crates/ui-contract/fonts/inter/Inter-Regular.ttf",
+    "crates/ui-contract/fonts/inter/Inter-SemiBold.ttf",
+]
+
 [lib]
 # Every test lives in the `it` integration binary, so `cargo test` builds the library once.
 test = false
