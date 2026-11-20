@@ -3902,7 +3902,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn pixels(self, pixels_per_point: f32) -> f32`. The width in whole physical pixels on a display of `pixels_per_point`.
   - `pub fn points(self, pixels_per_point: f32) -> f32`. The width in points on a display of `pixels_per_point`.
 - `craft_ui::style::ScrollBarKind`: `pub enum ScrollBarKind { Overlay, Docked }`. Where a scroll bar sits.
-- `craft_ui::style::ScrollBarLook`: `pub struct ScrollBarLook { pub kind: ScrollBarKind, pub track: Stateful<StyleColor>, pub thumb: Stateful<StyleColor>, pub thickness: f32, pub min_thumb: f32, pub inset: f32, pub edge: Option<RuleLook>, pub fade: f32 }`. A scroll bar's track and thumb.
+- `craft_ui::style::ScrollBarLook`: `pub struct ScrollBarLook { pub kind: ScrollBarKind, pub track: Stateful<StyleColor>, pub thumb: Stateful<StyleColor>, pub thickness: f32, pub min_thumb: f32, pub inset: f32, pub edge: Option<RuleLook> }`. A scroll bar's track and thumb.
 - `craft_ui::style::State`: re-export of `craft_theme::State` (outside these crates).
 - `craft_ui::style::StateMix`: re-export of `craft_theme::StateMix` (outside these crates).
 - `craft_ui::style::StateSet`: `pub struct StateSet { pub state: State, pub flags: Flags, pub t: StateMix }`. The state of a component or one of its parts at step 12: the interaction state, the value flags and the
