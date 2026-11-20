@@ -61,7 +61,7 @@ def Xform "World"
     }
 
     def Xform "External" (
-        prepend references = @./other.usda@</X>
+        prepend references = @./other.usda@
     )
     {
         variantSet "look" = {
