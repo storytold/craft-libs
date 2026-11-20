@@ -319,9 +319,13 @@ pub(super) struct Kit {
     resolutions: Vec<Entry<UnitKind>>,
 }
 
-/// The units the width and height are shown in.
+/// The length units in Canvas Size order.
 const LENGTH_UNITS: [UnitKind; 7] =
     [UnitKind::Pixels, UnitKind::Percent, UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
+
+/// Image Size lists Percent first in both dimension menus.
+const IMAGE_LENGTH_UNITS: [UnitKind; 7] =
+    [UnitKind::Percent, UnitKind::Pixels, UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
 
 /// The units the resolution is shown in.
 const RESOLUTION_UNITS: [UnitKind; 2] = [UnitKind::PixelsPerInch, UnitKind::PixelsPerCentimetre];
@@ -335,11 +339,21 @@ enum Dimension {
 }
 
 impl Kit {
+    /// The rows of Image Size.
     pub(super) fn new(ui: &Ui) -> Self {
+        Self::with_length_order(ui, &IMAGE_LENGTH_UNITS)
+    }
+
+    /// The rows of Canvas Size.
+    pub(super) fn for_canvas(ui: &Ui) -> Self {
+        Self::with_length_order(ui, &LENGTH_UNITS)
+    }
+
+    fn with_length_order(ui: &Ui, length_order: &[UnitKind]) -> Self {
         let env = Env::of(ui);
         let units = env.units();
         let entries = |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, units.name(*kind))).collect() };
-        let lengths = entries(&LENGTH_UNITS);
+        let lengths = entries(length_order);
         let mut widths = lengths.clone();
         widths.extend(entries(&[UnitKind::Columns]));
         Kit {

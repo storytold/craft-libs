@@ -267,6 +267,76 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
 }
 
+#[trial]
+fn switching_sibling_submenus_paints_only_the_new_submenu() {
+    use craft_behavior::MotionMode;
+    use craft_ui::menu::Menu;
+    use craft_ui::runtime::env::Scale;
+    use craft_ui::testing::pointer;
+    use egui::Shape;
+
+    for motion in [MotionMode::Full, MotionMode::Off] {
+        let runs = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&runs);
+        let mut fixture = Fixture::new(move |ui| {
+            Lazy::new("status", 0.0).settles(true).content(1).show(ui, |_| counted.set(counted.get() + 1));
+            let titles = vec![MenuTitle::new("Filter", |ui| {
+                Menu::submenu_row(ui, "Blur", |ui, _| {
+                    MenuItem::new("Gaussian Blur").show(ui);
+                    MenuItem::new("Motion Blur").show(ui);
+                });
+                Menu::submenu_row(ui, "Sharpen", |ui, _| {
+                    MenuItem::new("Unsharp Mask").show(ui);
+                });
+            })];
+            MenuBar::new("Main menu", titles).show(ui);
+        });
+        fixture.os(Os::Windows).room(egui::vec2(480.0, 320.0)).scale(Scale::new(1.25)).motion(motion).settle();
+        let filter = fixture.by_label("Filter").expect("the Filter title");
+        fixture.click(&filter).settle();
+        let blur = fixture.by_label("Blur").expect("the Blur row");
+        let sharpen = fixture.by_label("Sharpen").expect("the Sharpen row");
+        fixture.frame(vec![pointer::moved(blur.center())]).advance(0.25).idle(1);
+        assert!(fixture.texts().iter().any(|run| run.text == "Gaussian Blur"), "the first submenu starts open");
+
+        for (next, previous, shown, hidden) in [(sharpen, blur, "Unsharp Mask", "Gaussian Blur"), (blur, sharpen, "Gaussian Blur", "Unsharp Mask")] {
+            runs.set(0);
+            let shapes = fixture.frame_shapes_with(vec![pointer::moved(next.center())]);
+            assert_eq!(runs.get(), 0, "switching submenus leaves unrelated regions settled");
+            let painted = |label: &str| fixture.texts().iter().any(|run| run.text == label);
+            assert!(painted(shown), "the switch frame paints {shown}");
+            assert!(!painted(hidden), "the switch frame no longer paints {hidden}");
+            let highlighted = |target| shapes.iter().any(|shape| matches!(shape, Shape::Rect(row) if row.rect == target && row.fill.a() > 0));
+            assert!(highlighted(next.rect) && !highlighted(previous.rect), "only the new parent row is highlighted");
+            let child_surfaces = shapes.iter().filter(|shape| {
+                matches!(shape, Shape::Rect(surface)
+                    if surface.rect.left() >= next.rect.right() && surface.corner_radius != egui::CornerRadius::ZERO && surface.fill.a() == 255
+                )
+            });
+            assert_eq!(child_surfaces.count(), 1, "only the new submenu surface is painted");
+            fixture.advance(0.25).idle(1);
+        }
+
+        // Moving diagonally across Sharpen toward the open Blur menu keeps Blur open.
+        let toward_blur = egui::pos2(sharpen.rect.right() - 2.0, sharpen.center().y);
+        fixture.frame(vec![pointer::moved(toward_blur)]);
+        assert!(!fixture.texts().iter().any(|run| run.text == "Unsharp Mask"), "aiming into Blur does not switch menus");
+        let blur_item = fixture.by_label("Gaussian Blur").expect("the Blur submenu is still open");
+        fixture.frame(vec![pointer::moved(blur_item.center())]);
+
+        fixture.key(Key::Escape, Modifiers::NONE);
+        assert_eq!(
+            fixture.texts().iter().any(|run| run.text == "Gaussian Blur"),
+            motion == MotionMode::Full,
+            "ordinary dismissal follows the menu's inherited motion mode",
+        );
+        assert!(!fixture.texts().iter().any(|run| run.text == "Unsharp Mask"), "the replaced submenu stays closed");
+        fixture.advance(0.25).idle(1);
+        assert!(!fixture.texts().iter().any(|run| run.text == "Gaussian Blur"), "Escape finishes closing the submenu");
+        assert!(fixture.by_label("Blur").is_some(), "Escape leaves the parent menu open");
+    }
+}
+
 /// A menu bar in a settled region with a content version underlines its mnemonics while Alt is held: the modifiers
 /// it paints by are a recorded read, so the frame Alt goes down runs the region, and so does the frame it comes up,
 /// though the version stays the same. In between the region settles again.
