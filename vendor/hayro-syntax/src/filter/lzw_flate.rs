@@ -1755,7 +1755,9 @@ mod pdfcraft_png_predictor_tests {
             let params = PredictorParams {
                 predictor,
                 bits_per_component,
-                ..params
+                colors: params.colors,
+                columns: params.columns,
+                control: None,
             };
             assert!(!untagged_png_rows(&params, 36, Some(4)));
         }
