@@ -10,10 +10,11 @@
 //! source) and bounded (stream, source and total-source sizes are capped), so hostile input
 //! yields an error or a best-effort report, never a panic.
 //!
-//! Names and source are MBCS in the project's code page ([`Project::code_page`]); they are
-//! decoded as UTF-8 with replacement, which is exact for the ASCII that macro source almost
-//! always is. A code page other than 1252 is recorded, not translated. The Unicode name
-//! records (MODULENAMEUNICODE, MODULESTREAMNAMEUNICODE) are used when the project has them:
+//! Names and source are MBCS in the project's code page ([`Project::code_page`]): a
+//! single-byte code page (cp1252 and the other Windows, DOS and Mac ones) decodes through its
+//! table ([`craft_codepage`]), so a cp1252 `0xE9` is `é`; an East Asian multibyte page or one
+//! the table does not know is recorded and read as lossy UTF-8, exact for the ASCII macro
+//! source almost always is. The Unicode name records (MODULENAMEUNICODE, MODULESTREAMNAMEUNICODE) are used when the project has them:
 //! stream names are UTF-16 there, so a cp1252 name such as `Módulo1` opens its stream.
 
 use std::collections::HashMap;
@@ -61,6 +62,11 @@ const REC_PROJECT_VERSION: u16 = 0x0009;
 const REC_REFERENCE_REGISTERED: u16 = 0x000D;
 /// REFERENCEPROJECT: its `Size` is ignored on read too ([MS-OVBA] §2.3.4.2.2.6).
 const REC_REFERENCE_PROJECT: u16 = 0x000E;
+/// REFERENCENAME, the optional extended name inside a REFERENCECONTROL record.
+const REC_REFERENCE_NAME: u16 = 0x0016;
+/// REFERENCECONTROL: `SizeTwiddled` and `SizeExtended` are ignored on read ([MS-OVBA]
+/// §2.3.4.2.2.5).
+const REC_REFERENCE_CONTROL: u16 = 0x002F;
 const REC_MODULES_COUNT: u16 = 0x000F;
 const REC_MODULE_NAME: u16 = 0x0019;
 const REC_MODULE_STREAM_NAME: u16 = 0x001A;
@@ -163,7 +169,7 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
             module.source = None;
             continue;
         };
-        read_source(module, &bytes.0, bytes.1, &mut budget);
+        read_source(module, &bytes.0, bytes.1, project.code_page, &mut budget);
     }
     Ok(project)
 }
@@ -174,7 +180,7 @@ pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
 /// of `budget` — decoded first (lossy decoding can only expand), then cut to the remaining
 /// budget at a character boundary, so an ASCII source keeps its full bytes while they fit —
 /// and the module says `truncated` when anything was cut, instead of the source vanishing.
-fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, budget: &mut u64) {
+fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, code_page: u16, budget: &mut u64) {
     let at = module.text_offset.min(stream.len() as u64) as usize;
     let rest = &stream[at..];
     let (raw, truncated) = if rest.first() == Some(&CONTAINER_SIGNATURE) {
@@ -192,6 +198,36 @@ fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, budget: &mu
         (rest.to_vec(), stream_cut)
     };
     let take = raw.len().min(MAX_SOURCE as usize);
+    if craft_codepage::is_byte_code_page(code_page) {
+        // A byte of a single-byte code page becomes one to three UTF-8 bytes, so the text is
+        // decoded character by character and stops at the first one the remaining total
+        // budget (or [`MAX_SOURCE`]) cannot hold: nothing past the cut is decoded and thrown
+        // away, and a repeated reference to a cached stream never re-decodes a spent budget.
+        let mut out = String::new();
+        let mut consumed = 0usize;
+        for (i, &b) in raw[..take].iter().enumerate() {
+            let c = craft_codepage::code_page_byte(code_page, b);
+            let len = c.len_utf8();
+            if out.len() + len > MAX_SOURCE as usize || out.len() + len > *budget as usize {
+                break;
+            }
+            out.push(c);
+            consumed = i + 1;
+        }
+        if out.is_empty() && !raw.is_empty() {
+            // The budget is spent (or only part of one character fits): the module is listed
+            // without source rather than with an empty one, marked truncated so a caller can
+            // tell a budget cut from an unreadable stream.
+            log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
+            module.truncated = true;
+            module.source = None;
+            return;
+        }
+        *budget = budget.saturating_sub(out.len() as u64);
+        module.truncated = truncated || raw.len() > take || consumed < take;
+        module.source = Some(out);
+        return;
+    }
     if *budget == 0 && !raw.is_empty() {
         // The total-source budget is spent: not decoding at all, a repeated reference to a
         // cached stream would otherwise decode (and throw away) the full prefix per module.
@@ -200,9 +236,9 @@ fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, budget: &mu
         module.source = None;
         return;
     }
-    let decoded = decode(&raw[..take]);
-    // The decoded form is what the budget and [`MAX_SOURCE`] cap: lossy decoding can only
-    // expand (each dropped byte becomes three replacement bytes), so the text of a
+    let decoded = decode(&raw[..take], code_page);
+    // The decoded form is what the budget and [`MAX_SOURCE`] cap: replacement decoding can
+    // only expand (each dropped byte becomes three bytes), so the text of a
     // `MAX_SOURCE`-byte raw source can outgrow the per-module cap and is cut with the rest.
     let mut end = decoded.len().min(*budget as usize).min(MAX_SOURCE as usize);
     while !decoded.is_char_boundary(end) {
@@ -246,6 +282,10 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
     let mut count: Option<u32> = None;
     let mut in_module = false;
     let mut skipping = false;
+    // The code page the MBCS records are in: PROJECTCODEPAGE precedes the name records in
+    // every real project; a hostile file that withholds it decodes as cp1252, which is what
+    // the spec's projects write ([MS-OVBA] §2.3.4.2.1.5).
+    let mut cp = 1252u16;
     let mut at = 0;
     while at + 6 <= dir.len() {
         let (Some(id), Some(size)) = (u16_at(dir, at), u32_at(dir, at + 2)) else { break };
@@ -288,19 +328,60 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
             at = next;
             continue;
         }
+        if id == REC_REFERENCE_CONTROL {
+            // SizeTwiddled and SizeExtended are ignored on read ([MS-OVBA] §2.3.4.2.2.5), so
+            // the walk advances by the nested fields: SizeOfLibidTwiddled (4), LibidTwiddled,
+            // Reserved1 (4), Reserved2 (2).
+            let Some(tw_len) = u32_at(dir, at + 6).map(|n| n as usize) else { break };
+            let Some(mut next) =
+                at.checked_add(10).and_then(|at| at.checked_add(tw_len)).and_then(|at| at.checked_add(6)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
+            // NameRecordExtended is optional: a REFERENCENAME record (0x0016) sits here when
+            // present, Reserved3 (2, 0x0030) otherwise, so the peek is unambiguous. It skips
+            // by its own nested lengths (SizeOfName, Name, Reserved, SizeOfNameUnicode,
+            // NameUnicode, Reserved) ([MS-OVBA] §2.3.4.2.2.2).
+            if u16_at(dir, next) == Some(REC_REFERENCE_NAME) {
+                let Some(name_len) = u32_at(dir, next + 6).map(|n| n as usize) else { break };
+                let Some(uni_at) = next.checked_add(10).and_then(|at| at.checked_add(name_len)).and_then(|at| at.checked_add(2)) else {
+                    break;
+                };
+                let Some(uni_len) = u32_at(dir, uni_at).map(|n| n as usize) else { break };
+                let Some(end) =
+                    uni_at.checked_add(4).and_then(|at| at.checked_add(uni_len)).and_then(|at| at.checked_add(2)).filter(|&next| next <= dir.len())
+                else {
+                    break;
+                };
+                next = end;
+            }
+            // Reserved3 (2), SizeExtended (4, ignored), SizeOfLibidExtended (4),
+            // LibidExtended, Reserved4 (4), Reserved5 (2), OriginalTypeLib (16), Cookie (4).
+            let Some(ext_len) = u32_at(dir, next + 6).map(|n| n as usize) else { break };
+            let Some(next) =
+                next.checked_add(10).and_then(|at| at.checked_add(ext_len)).and_then(|at| at.checked_add(26)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
+            at = next;
+            continue;
+        }
         let Some(end) = at.checked_add(6).and_then(|a| a.checked_add(size)) else { break };
         let Some(payload) = dir.get(at + 6..end) else { break };
         at = end;
         // A module beyond the cap is skipped whole: its records must not touch the last
         // kept one.
         match (id, in_module && !skipping) {
-            (REC_CODE_PAGE, _) => project.code_page = u16_at(payload, 0).unwrap_or(0),
+            (REC_CODE_PAGE, _) => {
+                project.code_page = u16_at(payload, 0).unwrap_or(1252);
+                cp = project.code_page;
+            }
             (REC_MODULES_COUNT, false) => count = u16_at(payload, 0).map(u32::from),
             (REC_MODULE_NAME, _) => {
                 in_module = true;
                 if modules.len() < MAX_MODULES {
                     skipping = false;
-                    modules.push(Module { name: decode(payload), ..Module::default() });
+                    modules.push(Module { name: decode(payload, cp), ..Module::default() });
                 } else {
                     skipping = true;
                     project.truncated = true;
@@ -313,7 +394,7 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
             }
             (REC_MODULE_STREAM_NAME, true) => {
                 if let Some(module) = modules.last_mut() {
-                    module.stream_name = decode(payload);
+                    module.stream_name = decode(payload, cp);
                 }
             }
             // The Unicode stream name is how the compound file stores it: the MBCS record
@@ -479,9 +560,16 @@ fn stream(comp: &craft_cfb::CompoundFile, path: &str, cap: u64) -> Result<Vec<u8
     Ok(v)
 }
 
-/// MBCS text as UTF-8 with replacement (exact for ASCII; the code page is in the report).
-fn decode(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
+/// MBCS text as UTF-8. A single-byte code page ([`craft_codepage::is_byte_code_page`]) decodes
+/// through its table — cp1252's `0xE9` is `é`, not three replacement bytes — and any other code
+/// page (an East Asian multibyte one, or one the table does not know) falls back to lossy UTF-8,
+/// exact for the ASCII macro source almost always is; the code page is in the report either way.
+fn decode(bytes: &[u8], code_page: u16) -> String {
+    if craft_codepage::is_byte_code_page(code_page) {
+        bytes.iter().map(|&b| craft_codepage::code_page_byte(code_page, b)).collect()
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
 }
 
 /// UTF-16LE text ([MS-OVBA] §2.3.4.2.3), `None` when the bytes are cut mid-pair.

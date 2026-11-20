@@ -343,24 +343,23 @@ fn a_source_past_the_cap_is_cut_and_says_so() {
 #[test]
 fn a_project_of_many_modules_naming_one_stream_is_bounded() {
     // #5483 review: 256 modules all naming one small stream that decompresses to the cap,
-    // full of bytes 0x80-0xFF that lossy decoding turns into 3 chars each, used to hold about
-    // 768 MiB. Each distinct stream is read once and the source all modules carry counts
-    // against one budget ([`vba::MAX_TOTAL_SOURCE`]).
+    // full of bytes 0x80-0xFF whose decoding expands the text, used to hold about 768 MiB.
+    // Each distinct stream is read once and the source all modules carry counts against one
+    // budget ([`vba::MAX_TOTAL_SOURCE`]).
     let names: Vec<String> = (0..craft_docx::vba::MAX_MODULES).map(|i| format!("Module{i}")).collect();
     let pairs: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "Big")).collect();
     let dir = compress(&dir_for(&pairs));
-    // 0xFF bytes: lossy decoding turns each into one replacement character, 3 chars — the
-    // reviewer's 0x80-0xFF stream at its most expansive. Past the cap, like the review's
-    // comments, so the first copy is cut too.
+    // 0xFF bytes: in cp1252 that is ÿ, two UTF-8 bytes each — the most expansive
+    // single-byte decoding. Past the cap, like the review's comments, so the first copy is
+    // cut too.
     let big: Vec<u8> = vec![0xFF; craft_docx::vba::MAX_SOURCE as usize + 500];
     let project = craft_docx::vba::project(&cfb_project_streams(&dir, &[("Big", &module_stream(&big))])).unwrap();
     assert_eq!(project.modules.len(), craft_docx::vba::MAX_MODULES);
     let total: u64 = project.modules.iter().filter_map(|m| m.source.as_ref().map(|s| s.len() as u64)).sum();
     assert!(total <= craft_docx::vba::MAX_TOTAL_SOURCE, "the source all modules carry is bounded, got {total}");
     // The budget spends across the copies: with the decoded text capped at [`MAX_SOURCE`]
-    // per module, five modules share the budget (four full copies and a three-character
-    // tail), the rest are listed without source.
-    assert_eq!(project.modules.iter().filter(|m| m.source.is_none()).count(), craft_docx::vba::MAX_MODULES - 5);
+    // per module, four full copies drain it and the rest are listed without source.
+    assert_eq!(project.modules.iter().filter(|m| m.source.is_none()).count(), craft_docx::vba::MAX_MODULES - 4);
     assert!(project.modules[0].truncated && project.modules[1].truncated, "a cut copy says so");
 }
 
@@ -530,9 +529,9 @@ fn ascii_sources_keep_their_full_bytes_while_the_total_budget_pays() {
 }
 
 #[test]
-fn lossy_decoding_that_expands_the_source_is_cut_at_the_module_cap_too() {
-    // MAX_SOURCE raw bytes of 0xFF lossy-decode to three replacement characters each — about
-    // 1.5 MiB of text from a 1 MiB source. The decoded text, not the raw bytes, is what
+fn decoding_that_expands_the_source_is_cut_at_the_module_cap_too() {
+    // MAX_SOURCE raw bytes of 0xFF decode through cp1252 to ÿ, two UTF-8 bytes each — about
+    // 2 MiB of text from a 1 MiB source. The decoded text, not the raw bytes, is what
     // [`MAX_SOURCE`] caps, so the module keeps MAX_SOURCE worth of text or less and says the
     // source was cut instead of passing the expanded form whole.
     let source = vec![0xFFu8; craft_docx::vba::MAX_SOURCE as usize];
@@ -557,4 +556,96 @@ fn a_module_whose_source_the_budget_refuses_is_marked_truncated() {
     assert_eq!(project.modules.len(), 5);
     assert_eq!(project.modules[4].source, None, "the budget is spent");
     assert!(project.modules[4].truncated, "the budget cut is marked, not silent");
+}
+
+#[test]
+fn a_reference_control_whose_ignored_sizes_are_bogus_does_not_stop_the_walk() {
+    // [MS-OVBA] §2.3.4.2.2.5: REFERENCECONTROL's SizeTwiddled and SizeExtended are ignored on
+    // read — a generic walk bound by either stops before the module records when a writer has
+    // put 0xFFFFFFFF there. The payload's nested fields (SizeOfLibidTwiddled, LibidTwiddled,
+    // Reserved1, Reserved2, the optional REFERENCENAME, Reserved3, SizeExtended,
+    // SizeOfLibidExtended, LibidExtended, Reserved4, Reserved5, OriginalTypeLib, Cookie) say
+    // where the next record starts.
+    let libid = b"*\\G{000204EF-0000-0000-C000-000000000046}#4.2#9#2#C:\\Windows\\System32\\stdole2.tlb#OLE Automation";
+    for with_name in [false, true] {
+        let mut dir = Vec::new();
+        record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
+        // The record by hand: Id (2), SizeTwiddled (4, 0xFFFFFFFF), then the nested fields.
+        dir.extend(0x002Fu16.to_le_bytes());
+        dir.extend(0xFFFFFFFFu32.to_le_bytes());
+        dir.extend((libid.len() as u32).to_le_bytes());
+        dir.extend(&libid[..]);
+        dir.extend(0u32.to_le_bytes()); // Reserved1
+        dir.extend(0u16.to_le_bytes()); // Reserved2
+        if with_name {
+            // NameRecordExtended, a REFERENCENAME record ([MS-OVBA] §2.3.4.2.2.2): Id (2),
+            // Size (4, ignored), SizeOfName (4), Name, Reserved (2), SizeOfNameUnicode (4),
+            // NameUnicode, Reserved (2) — `record` alone would leave the walker reading the
+            // name bytes as SizeOfName.
+            let (name, name_unicode) = (b"Stdole", utf16("Stdole"));
+            dir.extend(0x0016u16.to_le_bytes());
+            dir.extend(0xFFFFFFFFu32.to_le_bytes()); // Size, ignored
+            dir.extend((name.len() as u32).to_le_bytes());
+            dir.extend(&name[..]);
+            dir.extend(0u16.to_le_bytes()); // Reserved
+            dir.extend((name_unicode.len() as u32).to_le_bytes());
+            dir.extend(&name_unicode);
+            dir.extend(0u16.to_le_bytes()); // Reserved
+        }
+        dir.extend(0x0030u16.to_le_bytes()); // Reserved3
+        dir.extend(0xFFFFFFFFu32.to_le_bytes()); // SizeExtended, ignored
+        dir.extend((libid.len() as u32).to_le_bytes()); // SizeOfLibidExtended
+        dir.extend(&libid[..]); // LibidExtended
+        dir.extend(0u32.to_le_bytes()); // Reserved4
+        dir.extend(0u16.to_le_bytes()); // Reserved5
+        dir.extend([0u8; 16]); // OriginalTypeLib
+        dir.extend(1u32.to_le_bytes()); // Cookie
+        dir.extend(dir_module());
+        let source = b"Sub Hi()\nEnd Sub\n".as_slice();
+        let project = craft_docx::vba::project(&cfb_project(&compress(&dir), &module_stream(source))).unwrap();
+        assert_eq!(project.modules.len(), 1, "the module records after the reference are reached");
+        assert_eq!(project.modules[0].source.as_deref(), Some("Sub Hi()\nEnd Sub\n"));
+        assert!(!project.truncated);
+    }
+}
+
+#[test]
+fn a_cp1252_source_decodes_through_the_project_code_page() {
+    // 0xE9 is é in cp1252 ([MS-OVBA] §2.3.4.2.1.5 says MBCS text is in the project's code
+    // page), read as lossy UTF-8 it was three replacement characters.
+    let source = b"Sub Caf\xe9()\nEnd Sub\n"; // "Sub Café()"
+    let mut dir = Vec::new();
+    record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes());
+    dir.extend(dir_module());
+    let project = craft_docx::vba::project(&cfb_project(&compress(&dir), &module_stream(source))).unwrap();
+    assert_eq!(project.modules[0].source.as_deref(), Some("Sub Café()\nEnd Sub\n"));
+    assert!(!project.modules[0].truncated);
+}
+
+#[test]
+fn the_budget_cuts_between_characters_not_inside_one() {
+    // é is two UTF-8 bytes: a budget that cannot hold the next character cuts before it, so
+    // the text stays valid UTF-8, says the cut, and the budget pays only for the characters
+    // it kept. Four filler modules spend all but 5 bytes of the total budget — one module is
+    // capped at [`MAX_SOURCE`], so it cannot drain [`MAX_TOTAL_SOURCE`] alone.
+    let source = [0xE9u8; 3]; // "ééé" as cp1252 bytes, six UTF-8 bytes decoded
+    let filler = vec![b'A'; craft_docx::vba::MAX_SOURCE as usize];
+    let tail_len = (craft_docx::vba::MAX_TOTAL_SOURCE - 3 * craft_docx::vba::MAX_SOURCE - 5) as usize;
+    let tail = vec![b'A'; tail_len];
+    let pairs = [("M1", "M1"), ("M2", "M2"), ("M3", "M3"), ("M4", "M4"), ("M5", "M5")];
+    let dir = dir_for(&pairs);
+    let streams = [
+        ("M1", module_stream(&filler)),
+        ("M2", module_stream(&filler)),
+        ("M3", module_stream(&filler)),
+        ("M4", module_stream(&tail)),
+        ("M5", module_stream(&source)),
+    ];
+    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(name, bytes)| (*name, bytes.as_slice())).collect();
+    let project = craft_docx::vba::project(&cfb_project_streams(&compress(&dir), &refs)).unwrap();
+    assert_eq!(project.modules[3].source.as_deref().map(str::len), Some(tail_len), "the budget has 5 bytes left");
+    let module = &project.modules[4];
+    let src = module.source.as_deref().unwrap_or_default();
+    assert_eq!(src, "éé", "the budget's last bytes pay for whole characters, the third é does not fit");
+    assert!(module.truncated, "the cut is told of");
 }

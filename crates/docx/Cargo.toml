@@ -14,6 +14,7 @@ workspace = true
 craft-drawingml = { workspace = true }
 craft-math = { workspace = true }
 craft-cfb = { workspace = true }
+craft-codepage = { workspace = true }
 craft-offcrypto = { workspace = true }
 craft-opc = { workspace = true }
 craft-wordmodel = { workspace = true }
