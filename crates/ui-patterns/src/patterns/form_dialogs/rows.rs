@@ -465,7 +465,7 @@ impl<'p> Pass<'p> {
         let places = options.range_places();
         let fixed = options.range_fixed_places();
         if options.popup_slider {
-            self.popup_range(ui, line, range, value, places);
+            self.popup_range(ui, line, range, value, places, fixed);
             return;
         }
         let layout = self.sliders;
@@ -499,7 +499,9 @@ impl<'p> Pass<'p> {
         }
     }
 
-    fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>) {
+    /// A range row's number field with its slider in a popup; `fixed` decimals are shown zeros included, as on the
+    /// slider row.
+    fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>, fixed: Option<u32>) {
         // Match the ordinary range row's number field precision when the caller sets no step.
         let default_step = if range.end() - range.start() <= 10.0 { 0.01 } else { 1.0 };
         let step = places.map_or(default_step, |places| 10f64.powi(-(places as i32)));
@@ -517,6 +519,9 @@ impl<'p> Pass<'p> {
                 }
                 if let Some((kind, _)) = &unit {
                     field = field.unit_kind(*kind).unit_placement(UnitPlacement::After);
+                }
+                if let Some(places) = fixed {
+                    field = field.fixed_decimals(places as usize);
                 }
                 let shown = field.show(ui);
                 if let Some((_, symbol)) = &unit {

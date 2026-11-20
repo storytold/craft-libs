@@ -822,6 +822,28 @@ fn toning(fields: &mut DialogFields) -> ParamDialog<'_> {
     ParamDialog::new("toning", "Toning", params).values(Bind::bound(fields))
 }
 
+// A range row with fixed decimals and a popup slider shows them in its field as well, and stores its value rounded to
+// them (storytold/craft-libs#2251).
+#[trial]
+fn a_popup_slider_range_row_shows_its_fixed_decimals() {
+    let fields = Rc::new(RefCell::new(DialogFields::new()));
+    let held = Rc::clone(&fields);
+    let mut fixture = Fixture::new(move |ui| {
+        let range = ParamKind::range(0.1, 4.0, 1.0, craft_ui::value_drag::SliderScale::Linear);
+        let params = vec![Param::new("contrast", "Contrast", range).fixed_decimals(2).popup_slider()];
+        ParamDialog::new("contrast", "Contrast", params).values(Bind::bound(&mut *held.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the Contrast field");
+    assert_eq!(fixture.tree().value_of(field.node), Some("1.00"));
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("0.5");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(fields.borrow().number("contrast"), Some(0.5));
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the Contrast field");
+    assert_eq!(fixture.tree().value_of(field.node), Some("0.50"));
+}
+
 // A range row with fixed decimals (storytold/craft-libs#2251) shows them, zeros included, and stores its value
 // rounded to them as `Param::decimals` does; a row with `Param::decimals` alone still trims trailing zeros.
 #[trial]
