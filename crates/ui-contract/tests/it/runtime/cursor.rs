@@ -245,7 +245,7 @@ fn the_cursor_image_draws_the_pointer_around_its_centre_pixel() {
 fn a_tip_outline_shows_only_inside_its_region() {
     const RADIUS: f32 = 40.0;
     let canvas = egui::LayerId::background();
-    let cover = egui::Id::new("cover");
+    let cover = egui::Id::unique("cover");
     // One frame with the pointer at `AT`, the tip requested within `clip`, and an area over `over` when given: the
     // cursor image, and each painted shape's clip with whether it is the ring or the area's fill, in paint order.
     let run = |frames: &mut Frames, clip: Rect, over: Option<Rect>| {
