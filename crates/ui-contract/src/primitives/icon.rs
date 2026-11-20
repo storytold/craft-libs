@@ -95,8 +95,37 @@ pub struct IconSpec<'a> {
     pub color: Option<StyleColor>,
     /// Mirroring under right-to-left.
     pub mirror: Mirror,
-    /// A dot of a colour from data at the icon's bottom-trailing corner; see [`badge`](Self::badge).
-    pub badge: Option<DataColor>,
+    /// A data-colour mark on the icon: a dot at the bottom-trailing corner (see [`badge`](Self::badge)) or a bar across
+    /// the bottom (see [`with_mark`](Self::with_mark)).
+    pub badge: Option<IconMark>,
+}
+
+/// A data-colour mark on an icon.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum IconMark {
+    /// A dot at the icon's bottom-trailing corner, ringed in the icon's colour.
+    Dot(DataColor),
+    /// A bar across the bottom of the icon square, inside it; `weight` is its thickness in points, else `StrokeWidth::Thick`.
+    #[non_exhaustive]
+    Bar {
+        /// The bar's colour.
+        color: DataColor,
+        /// The thickness in points; `None` takes `StrokeWidth::Thick`.
+        weight: Option<f32>,
+    },
+}
+
+impl IconMark {
+    /// A bar of `color` with the default thickness.
+    pub const fn bar(color: DataColor) -> Self {
+        IconMark::Bar { color, weight: None }
+    }
+
+    /// A bar of `color` `weight` points thick.
+    pub const fn weighted_bar(color: DataColor, weight: f32) -> Self {
+        IconMark::Bar { color, weight: Some(weight) }
+    }
 }
 
 impl<'a> IconSpec<'a> {
@@ -169,7 +198,13 @@ impl<'a> IconSpec<'a> {
     /// Adds a dot of `color` at the bottom-trailing corner of an SVG or glyph icon, ringed in the icon's colour: the
     /// tone a point picker sets. The dot is a data colour (`Draw::data_fill`); the ring follows the icon's colour.
     pub fn badge(mut self, color: DataColor) -> Self {
-        self.badge = Some(color);
+        self.badge = Some(IconMark::Dot(color));
+        self
+    }
+
+    /// Puts `mark` on the icon in place of any mark it has.
+    pub fn with_mark(mut self, mark: IconMark) -> Self {
+        self.badge = Some(mark);
         self
     }
 }
@@ -198,8 +233,9 @@ pub fn icon_names() -> &'static [&'static str] {
     svg_set::names()
 }
 
-/// Paints `spec`'s glyph centred in the square of `rect`'s shorter side; `Draw::icon` adds the badge.
-pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, rect: Rect, spec: &IconSpec<'_>) {
+/// Paints `spec`'s glyph centred in the square of `rect`'s shorter side; `Draw::icon` adds the badge. `single_ink` paints
+/// every layer of an app icon in the one colour: the icon of a component in its disabled state.
+pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, rect: Rect, spec: &IconSpec<'_>, single_ink: bool) {
     let color = spec.color_in(tokens);
     let rtl = direction == Direction::Rtl;
     let side = rect.width().min(rect.height());
@@ -213,7 +249,7 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
         IconSource::Glyph(glyph) => glyph.paint(painter, tokens, square, color, rtl && glyph.directional() && spec.mirror == Mirror::Auto),
         IconSource::Svg(id) => {
             if let Some(icon) = SvgIcon::of(tokens, direction, side, id, spec.mirror) {
-                icon.paint(painter, square, color);
+                icon.paint_layers(painter, square, LayerInks::of(tokens, color, single_ink));
             }
         }
         IconSource::Mark(badge) => super::pointer_art::paint_badge(painter, tokens, direction, square, *badge, color),
@@ -260,23 +296,78 @@ impl SvgIcon {
         (px, stroke_px)
     }
 
-    /// The icon in white for a square of `side` points at `ppp`, its alpha from the drawing.
+    /// The icon's ink layer in white for a square of `side` points at `ppp`, its alpha from the drawing.
     pub(crate) fn mask(&self, side: f32, ppp: f32) -> egui::ColorImage {
-        let (px, stroke_px) = self.pixels(side, ppp);
-        svg_set::rasterise_entry(self.entry, self.set, px, stroke_px as f32 / 64.0, self.mirrored)
+        self.layer(side, ppp, svg_set::Layer::Ink)
     }
 
-    /// Paints the icon in `color` centred in `square`, on whole pixels.
+    /// The icon's `layer` for a square of `side` points at `ppp`.
+    pub(crate) fn layer(&self, side: f32, ppp: f32, layer: svg_set::Layer) -> egui::ColorImage {
+        let (px, stroke_px) = self.pixels(side, ppp);
+        svg_set::rasterise_entry(self.entry, self.set, px, stroke_px as f32 / 64.0, self.mirrored, layer)
+    }
+
+    /// Paints every layer of the icon in `color` centred in `square`, on whole pixels: a one-ink silhouette (a
+    /// cursor's icon).
     pub(crate) fn paint(&self, painter: &Painter, square: Rect, color: Color32) {
+        self.paint_layers(painter, square, LayerInks::single(color));
+    }
+
+    /// Paints the icon centred in `square`, on whole pixels, each layer in its ink of `inks`. A catalog icon has only
+    /// the ink layer; an app icon also paints its accent and fixed parts over it. A layer with no part is not painted.
+    pub(crate) fn paint_layers(&self, painter: &Painter, square: Rect, inks: LayerInks) {
         let ctx = painter.ctx();
         let ppp = ctx.pixels_per_point();
         let (px, stroke_px) = self.pixels(square.width(), ppp);
-        let key = (self.entry, self.set, px, stroke_px, self.mirrored);
-        let texture = TextureCache::texture(ctx, key, || self.mask(square.width(), ppp));
         let side = px as f32 / ppp;
         let min = (square.center() - vec2(side, side) / 2.0).round_to_pixels(ppp);
+        let rect = Rect::from_min_size(min, vec2(side, side));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        crate::runtime::egui::textures::paint(painter, texture, Rect::from_min_size(min, vec2(side, side)), uv, color, egui::CornerRadius::ZERO);
+        let fixed = match inks.fixed {
+            Some(color) => (svg_set::Layer::FixedMask, color),
+            // design: allow[raw-colour/const](a fixed layer keeps the colours it is drawn in: a white tint leaves them unchanged)
+            None => (svg_set::Layer::Fixed, Color32::WHITE),
+        };
+        let layers = [(svg_set::Layer::Ink, inks.ink), (svg_set::Layer::Accent, inks.accent), fixed];
+        let count = if matches!(self.entry, svg_set::Entry::Catalog(_)) { 1 } else { layers.len() };
+        for (layer, color) in layers.into_iter().take(count) {
+            // Each layer is its own texture, so a disabled icon's one-ink fixed layer and the enabled one as drawn
+            // are both kept.
+            let key = (self.entry, self.set, px, stroke_px, self.mirrored, layer);
+            let drawn = || {
+                let image = self.layer(square.width(), ppp, layer);
+                (!image.pixels.iter().all(|pixel| pixel.a() == 0)).then_some(image)
+            };
+            let Some(texture) = TextureCache::texture_if(ctx, key, drawn) else {
+                continue;
+            };
+            crate::runtime::egui::textures::paint(painter, texture, rect, uv, color, egui::CornerRadius::ZERO);
+        }
+    }
+}
+
+/// The inks an icon's layers paint in: the ink layer, the accent layer, and the fixed layer (`None` paints it as
+/// drawn).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LayerInks {
+    ink: Color32,
+    accent: Color32,
+    fixed: Option<Color32>,
+}
+
+impl LayerInks {
+    /// Every layer in `color`.
+    pub(crate) fn single(color: Color32) -> Self {
+        LayerInks { ink: color, accent: color, fixed: Some(color) }
+    }
+
+    /// The inks of an icon painted in `color`: the accent parts in `colors.accent.solid` and the fixed parts as drawn,
+    /// except that with `single_ink` (a disabled component) every layer paints in `color`.
+    pub(crate) fn of(tokens: &UiTokens, color: Color32, single_ink: bool) -> Self {
+        if single_ink {
+            return LayerInks::single(color);
+        }
+        LayerInks { ink: color, accent: crate::style::rgba_color(tokens.color.accent.solid), fixed: None }
     }
 }
 

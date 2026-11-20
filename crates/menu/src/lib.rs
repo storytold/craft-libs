@@ -101,6 +101,7 @@ mod documents;
 mod driver;
 mod help;
 mod keymap;
+pub(crate) mod keytips;
 mod language;
 mod layout;
 mod modal;
@@ -110,6 +111,7 @@ mod theme;
 
 pub mod mac;
 
+pub mod ribbon;
 pub mod shortcuts;
 
 pub use bar::{EnglishHook, Labeled, MenuBarOutput, MenuBarUi};
@@ -119,12 +121,17 @@ pub use documents::DOCUMENT_COMMAND_PREFIX;
 pub use driver::{Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu, had_input};
 pub use help::{HelpCommand, HelpLabels, HelpLink, HelpMenu};
 pub use keymap::{ItemState, apply_keymap, apply_state};
+pub use keytips::{KeytipControl, Keytips, KeytipsOutput};
 pub use language::{LANGUAGE_COMMAND, LanguageChoice, LanguageLabels, LanguageMenu, LanguageRow};
 pub use layout::{Clash, Layout, LayoutOptions, Target, desktop_layout, layout, mac_layout, web_layout};
 pub use modal::{ModalRules, NAVIGATION_COMMANDS, PendingRule};
 pub use model::{
     Alternate, Builtin, Document, Item, ItemKind, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Row, Standard, from_items, structure_key, tidy,
     window_key,
+};
+pub use ribbon::{
+    Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput, GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonMenuRequest, RibbonOutput,
+    RibbonRow, RibbonTab, plan,
 };
 pub use theme::{THEME_COMMAND, ThemeChoice, ThemeLabels, ThemeMenu, ThemeRow};
 

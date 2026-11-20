@@ -4,6 +4,8 @@ pub(crate) mod bar;
 
 pub(crate) mod closed;
 
+pub(crate) mod companion;
+
 pub(crate) mod native;
 
 pub(crate) mod openers;
@@ -13,6 +15,8 @@ pub(crate) mod overflow;
 pub(crate) mod pick_focus;
 
 pub(crate) mod rows;
+
+pub(crate) mod search;
 
 pub(crate) mod submenus;
 

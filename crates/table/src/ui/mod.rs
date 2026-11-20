@@ -37,8 +37,8 @@ pub mod testing {
 
 pub use chart::{ChartPrimitive, HAlign, VAlign, paint_chart};
 pub use conditions::{
-    Condition, ConditionBuilder, ConditionBuilderOutput, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionValue,
-    ConditionWords, Match,
+    Condition, ConditionBuilder, ConditionBuilderOutput, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionLayout,
+    ConditionValue, ConditionWords, Join, Match,
 };
 pub use error_tag::{ErrorTag, ErrorTagOutput, ErrorTagStyle, ErrorTagWords};
 pub use fields::{

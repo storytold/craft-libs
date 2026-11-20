@@ -2,4 +2,5 @@
 //! window's answers and the hex codec.
 
 pub(crate) mod model;
+pub(crate) mod page;
 pub(crate) mod path_setting;

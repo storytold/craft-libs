@@ -14,6 +14,7 @@ pub mod gradient_overlay;
 pub mod map;
 pub(crate) mod palette;
 pub(crate) mod swatch;
+pub(crate) mod tile;
 
 pub use fill::{GradientFill, GradientStyle};
 pub use fill_editor::{GradientFillEditor, GradientFillEditorOutput, GradientFillWords};
@@ -22,3 +23,4 @@ pub use gradient_overlay::{GradientLineWords, GradientOverlay, GradientOverlayOu
 pub use map::{GradientMap, GradientMapEditor, GradientMapOutput};
 pub use palette::{GradientGroup, GradientItem, GradientPalette, GradientPaletteOutput, GradientRef};
 pub use swatch::{GradientSwatch, GradientSwatchOutput};
+pub use tile::{FocusOutline, GradientTile};

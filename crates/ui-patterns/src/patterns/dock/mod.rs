@@ -11,8 +11,8 @@ pub(crate) mod panes;
 
 pub use area::{DockArea, DockAreaOutput, InvalidGeometry};
 pub use panes::{
-    PaneArea, PaneAreaOutput, PaneCommands, PaneContent, PaneFrame, PaneFrameOutput, PaneFrameStyle, PanePlace, PaneRequest, PaneSpec, PaneState,
-    SidePolicy,
+    PaneArea, PaneAreaOutput, PaneCommands, PaneContent, PaneEdges, PaneFrame, PaneFrameOutput, PaneFrameStyle, PanePlace, PaneRequest, PaneSpec,
+    PaneState, SidePolicy,
 };
 pub use switcher::{WorkspaceSwitcher, WorkspaceSwitcherOutput};
 pub use words::WorkspaceDialogWords;

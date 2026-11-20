@@ -13,15 +13,18 @@
 pub(crate) mod stories;
 
 use super::words::CanvasWords;
+use crate::contract::overlay::{Anchor, Place};
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, THUMB, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi,
+    PartsCx, Pointer as _, Props as _, Role, Show as _, THUMB, WordSetCx as _,
 };
+use crate::display::Text;
 use crate::runtime::access::Numeric;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleCx};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::overlay::{Align, Side};
 use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -29,6 +32,9 @@ use std::ops::{Deref, Range};
 
 const HORIZONTAL: PartKey = PartKey::new("horizontal");
 const VERTICAL: PartKey = PartKey::new("vertical");
+
+/// The popup of the tip beside a dragged vertical thumb.
+const TIP: &str = "tip";
 
 /// The thumb part that `PartsCx::scroll` declares for the bar `bar`.
 fn thumb_of(bar: PartKey) -> PartRef {
@@ -162,7 +168,7 @@ fn doc_corners(doc: DocRect) -> [Point; 4] {
 /// same press. Show them at the view's rect inside the `Canvas` body. The bars are AccessKit scroll bars and no Tab
 /// stops: the canvas scrolls from the keyboard as it does without bars.
 #[derive(crate::contract::Component, crate::contract::Props)]
-#[component(canvas_control)]
+#[component(canvas_control, overlay)]
 pub struct CanvasScrollbars<'a> {
     #[common]
     common: Common,
@@ -176,12 +182,16 @@ pub struct CanvasScrollbars<'a> {
     /// horizontal bar or corner is shown.
     #[prop(flag)]
     vertical_only: bool,
+    /// While the vertical thumb drags, the bars show the tip this builds from the view as the drag moved it, beside the
+    /// thumb on the reading-start side.
+    #[prop]
+    tip: Option<&'a dyn Fn(&CanvasView) -> Label>,
 }
 
 impl<'a> CanvasScrollbars<'a> {
     /// Scroll bars named `label` that edit `view`, a view over the document `document` (document units).
     pub fn new(label: impl Into<Label>, view: Bind<'a, CanvasView>, document: DocRect) -> Self {
-        CanvasScrollbars { common: Common::new(), view, document, overscroll: false, vertical_only: false }.label(label)
+        CanvasScrollbars { common: Common::new(), view, document, overscroll: false, vertical_only: false, tip: None }.label(label)
     }
 
     /// Applies overscroll off to `view` over the document `doc`: the view can't leave the document's edges, and a
@@ -263,6 +273,13 @@ impl Component for CanvasScrollbars<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // The tip shows in the passes the vertical thumb drags and in no other: its popup opens or closes every pass.
+        let tip = cx.popup(TIP);
+        if self.tip.is_some() && thumb_dragging(cx) == Some(Axis::Y) {
+            tip.open(cx);
+        } else {
+            tip.close(cx);
+        }
         let Some(view) = cx.value().copied() else { return };
         let bars = self.bars(&view, cx.rect, cx.style.look.thickness);
         for (key, axis, _) in bars.each() {
@@ -280,6 +297,19 @@ impl Component for CanvasScrollbars<'_> {
                 cx.set(next);
             }
         }
+    }
+
+    /// The tip beside the dragged vertical thumb, on the reading-start side, in a tooltip layer of the bars' own: the
+    /// tooltip pipeline hides a tip while its subject is pressed, and here the press is the point.
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        let popup = cx.popup(TIP);
+        let (Some(tip), Some(view), Some(thumb)) = (self.tip, cx.value().copied(), cx.part_if_declared(thumb_of(VERTICAL)).map(|result| result.rect))
+        else {
+            return;
+        };
+        let label = tip(&view);
+        let layer = Overlay::tooltip().place(Place::anchored(Anchor::Rect(thumb), Side::Start, Align::Center));
+        let _ = ui.show(popup, layer, |ui, _| Text::new(label.clone()).show(ui));
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -312,8 +342,17 @@ impl Component for CanvasScrollbars<'_> {
                 .into_iter()
                 .any(|part| cx.part_if_declared(part).is_some_and(|result| result.hovered || result.press.phase.is_press()))
         });
-        CanvasScrollbarsOutput { view: cx.edit_response(), over }
+        let dragging = thumb_dragging(&cx);
+        CanvasScrollbarsOutput { view: cx.edit_response(), over, dragging }
     }
+}
+
+/// The axis whose thumb drags in this pass: its press past the drag threshold and still down.
+fn thumb_dragging(cx: &Cx<'_, CanvasScrollbars<'_>>) -> Option<Axis> {
+    [(HORIZONTAL, Axis::X), (VERTICAL, Axis::Y)].into_iter().find_map(|(key, axis)| {
+        let press = cx.part_if_declared(thumb_of(key))?.press;
+        matches!(press.phase, PressPhase::DragStart { .. } | PressPhase::Drag { .. }).then_some(axis)
+    })
 }
 
 /// What the scroll bars report in a pass.
@@ -324,6 +363,8 @@ pub struct CanvasScrollbarsOutput {
     pub view: EditResponse<CanvasView>,
     /// The pointer is over a bar or dragging one: the canvas leaves it alone.
     pub over: bool,
+    /// The thumb being dragged this pass.
+    pub dragging: Option<Axis>,
 }
 
 impl Deref for CanvasScrollbarsOutput {

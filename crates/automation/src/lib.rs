@@ -23,19 +23,18 @@ pub mod ui;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod args;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod control;
 #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
 pub mod dialogs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod protocol;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod screenshot;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod security;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod synthetic;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod trace;

@@ -21,7 +21,7 @@
 
 mod filter;
 mod native;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 pub(crate) mod portal;
 pub(crate) mod probe;
 pub mod save;
@@ -259,14 +259,13 @@ enum Show {
     Override(Override),
     /// Tests: a stand-in for the native dialog that answers (or doesn't) through the reply.
     #[cfg(test)]
-    Custom(Box<dyn FnMut(Request, Reply)>),
+    Custom(Box<dyn FnMut(Request, Reply) -> native::Shown>),
 }
 
 /// The dialog on screen.
 struct Open<T> {
     then: T,
     answer: Receiver<Answer>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     shown: native::Shown,
 }
 
@@ -317,10 +316,12 @@ impl<T> Dialogs<T> {
             let reply = Reply { tx: Some(tx), wake: self.wake.clone() };
             // A panic while showing (rfd's own checks) must not unwind into winit's handler.
             let shown = match &mut self.show {
-                Show::Override(answer_with) => catch_unwind(AssertUnwindSafe(|| reply.send(answer_with(&request)))).map(|()| None),
+                Show::Override(answer_with) => {
+                    catch_unwind(AssertUnwindSafe(|| reply.send(answer_with(&request)))).map(|()| native::Shown::default())
+                }
                 Show::Native => catch_unwind(AssertUnwindSafe(|| native::show(request, parent, reply))),
                 #[cfg(test)]
-                Show::Custom(show) => catch_unwind(AssertUnwindSafe(|| show(request, reply))).map(|()| None),
+                Show::Custom(show) => catch_unwind(AssertUnwindSafe(|| show(request, reply))),
             };
             let shown = match shown {
                 Ok(shown) => shown,
@@ -351,7 +352,7 @@ impl<T> Dialogs<T> {
     /// that would show it again. Does nothing elsewhere, where dialogs are modal to the window.
     pub fn raise(&self) {
         #[cfg(target_os = "macos")]
-        if let Some(panel) = self.open.as_ref().and_then(|open| open.shown.as_ref()) {
+        if let Some(panel) = self.open.as_ref().and_then(|open| open.shown.panel.as_ref()) {
             macos::raise(panel);
         }
     }
@@ -368,9 +369,20 @@ impl<T> Dialogs<T> {
         self.show = answer_with.map_or(Show::Native, Show::Override);
     }
 
+    /// Stops the open dialog when `gone` says nobody waits for its answer any more (its pick was
+    /// forgotten): a portal Save closes. Other dialogs cannot be closed from outside; their answer
+    /// comes as usual and the caller drops it.
+    pub(crate) fn cancel_open_if(&mut self, gone: impl FnOnce(&T) -> bool) {
+        if let Some(open) = &mut self.open
+            && gone(&open.then)
+        {
+            open.shown.cancel_save();
+        }
+    }
+
     /// Tests: show requests through `show` instead of a native dialog.
     #[cfg(test)]
-    fn set_custom(&mut self, show: impl FnMut(Request, Reply) + 'static) {
+    fn set_custom(&mut self, show: impl FnMut(Request, Reply) -> native::Shown + 'static) {
         self.show = Show::Custom(Box::new(show));
     }
 

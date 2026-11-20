@@ -2,8 +2,8 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, Pad,
-    Role, Scroll, Sizing, ThemeScope,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
+    LeastWidth, Pad, Role, Scroll, Sizing, ThemeScope, WrapWidth,
 };
 use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
@@ -266,6 +266,22 @@ impl<'a> Stack<'a> {
         if let Some(footer) = self.props.footer {
             self.props = self.props.footer(footer.gap(gap));
         }
+        self
+    }
+
+    /// The least width of the stack's content from the size role `least`: a stack sized from its content is at least
+    /// that wide (a page's side menu, `LeastWidth::SideMenu`), and wider content still widens it.
+    #[must_use]
+    pub fn least_width(mut self, least: LeastWidth) -> Self {
+        self.props = self.props.least_width(least);
+        self
+    }
+
+    /// The line length `wrap` of the paragraphs in a stack sized from its content: a wrapping text breaks its lines
+    /// there instead of widening the stack (a Print page's settings column, `WrapWidth::Column`).
+    #[must_use]
+    pub fn wrap_width(mut self, wrap: WrapWidth) -> Self {
+        self.props = self.props.wrap_width(wrap);
         self
     }
 

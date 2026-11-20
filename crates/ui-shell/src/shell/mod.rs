@@ -27,17 +27,19 @@ pub(crate) mod screen_mode_button;
 pub use app_shell::{AppShell, AppShellOutput, ShellDialogsCx, ShellRegion, ShellRegionOutput, WindowDialogs};
 pub use canvas_shell::{CanvasPanel, CanvasPanelOutput, slots};
 pub use opening::{OpeningCard, OpeningCardOutput};
-pub use screen_mode::{ScreenMode, ScreenModeCommands};
+pub use screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeSet};
 pub use screen_mode_button::{ScreenModeButton, ScreenModeButtonOutput};
 pub use words::ShellWords;
 
 // Start screen and app windows.
 mod recent;
+pub(crate) mod recent_list;
 pub(crate) mod start;
 pub(crate) mod viewport_window;
 
 pub use recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
-pub use start::{StartAction, StartLink, StartLinkTarget, StartOutput, StartPinnedCommands, StartRecentCommands, StartScreen};
+pub use recent_list::RecentList;
+pub use start::{StartAction, StartLayout, StartLink, StartLinkTarget, StartOutput, StartPinnedCommands, StartRecentCommands, StartScreen};
 pub use viewport_window::{ViewportWindow, ViewportWindowOutput};
 
 // Caption buttons: the four families' button, its slot layout and the icon-theme glyphs.

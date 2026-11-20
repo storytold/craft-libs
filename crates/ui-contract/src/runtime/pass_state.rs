@@ -87,6 +87,7 @@ pass_state! {
         gestures: crate::runtime::edit::Gestures,
         reveals: crate::contract::steps::scroll_owner::Reveals,
         scroll_moves: crate::contract::steps::scroll_owner::ScrollMoves,
+        editor_records: crate::contract::steps::report::EditorRecords,
         jumps: crate::contract::body::scroll::Jumps,
         shrink_reports: crate::layout::body::ShrinkReports,
         least_reports: crate::layout::body::LeastReports,
@@ -107,6 +108,7 @@ pass_state! {
         inspect: crate::runtime::inspect::Log,
         recorder: crate::runtime::replay::Recorder,
         pen: crate::runtime::pen::InstalledPen,
+        clipboard: crate::runtime::egui::clipboard::Installed,
         #[cfg(feature = "testing")]
         noted: crate::runtime::egui::widgets::noted::Noted,
         #[cfg(feature = "testing")]

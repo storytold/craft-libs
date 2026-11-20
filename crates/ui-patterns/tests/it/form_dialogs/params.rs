@@ -130,6 +130,47 @@ fn a_row_that_resets_drops_its_dependents_when_its_value_changes() {
     assert_ne!(values.borrow().int("layer"), Some(7), "a click on another option resets the dependent");
 }
 
+// A radio row is captioned by its label with its options in a column; with `options_in_row` its options stand side by
+// side with no caption, and still pick the value.
+#[trial]
+fn a_radio_row_in_a_row_stands_its_options_side_by_side_without_a_caption() {
+    let layouts =
+        || ParamKind::radio(vec![("diagonal".into(), "Diagonal".into()), ("horizontal".into(), "Horizontal".into())], Some("diagonal".into()));
+    let painted = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|painted| painted.text == text);
+
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let fixture = rows(vec![Param::new("layout", "Layout", layouts())], &values);
+    let (first, second) = (fixture.by_label("Diagonal").expect("the first option"), fixture.by_label("Horizontal").expect("the second option"));
+    assert!(painted(&fixture, "Layout"), "a radio row is captioned by its label");
+    assert!(second.rect.top() >= first.rect.bottom(), "the options stand in a column");
+
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(vec![Param::new("layout", "Layout", layouts()).options_in_row()], &values);
+    let (first, second) = (fixture.by_label("Diagonal").expect("the first option"), fixture.by_label("Horizontal").expect("the second option"));
+    assert!(!painted(&fixture, "Layout"), "no caption over the options");
+    assert!(second.rect.left() >= first.rect.right(), "the second option stands after the first");
+    assert!((second.rect.center().y - first.rect.center().y).abs() < 1.0, "the options share one line");
+    fixture.click(&second).settle();
+    assert_eq!(values.borrow().text("layout"), Some("horizontal"));
+}
+
+// A text row with `field_chars` asks for that many characters instead of the field length: a wide row's field is wider
+// than a plain row's, and `0` keeps the field length.
+#[trial]
+fn a_text_row_takes_the_width_in_characters_it_asks_for() {
+    let params = vec![
+        Param::new("name", "Name", ParamKind::text("")),
+        Param::new("text", "Text", ParamKind::text("CONFIDENTIAL")).field_chars(48),
+        Param::new("plain", "Plain", ParamKind::text("")).field_chars(0),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let fixture = rows(params, &values);
+    let width = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field")).rect.width();
+    let (name, text, plain) = (width("Name"), width("Text"), width("Plain"));
+    assert!(text > name, "the wide row's field is wider than the field length: {text} against {name}");
+    assert!((plain - name).abs() < 0.5, "0 characters keep the field length: {plain} against {name}");
+}
+
 // A read-only row shows its text, selectable, and keeps no value.
 #[trial]
 fn a_read_only_row_shows_its_text_and_keeps_no_value() {
@@ -296,6 +337,29 @@ fn an_optional_number_is_held_to_its_bounds_and_remembered_while_off() {
     assert_eq!(values.borrow().number("quality"), None, "the box off leaves no value");
     toggle(&mut fixture);
     assert_eq!(values.borrow().number("quality"), Some(7.0), "the box on again brings back the value typed before");
+}
+
+// A text row with `max_chars` stops typing at its limit, and the host's `set` refuses longer text; the limit counts
+// characters, not bytes.
+#[trial]
+fn a_text_row_with_a_limit_refuses_longer_text() {
+    let params = vec![Param::new("code", "Code", ParamKind::text("")).max_chars(4).mono()];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params.clone(), &values);
+    let field = fixture.by_label("Code").expect("the code row has a field");
+    fixture.click(&field).settle();
+    fixture.type_text("abcdefgh").settle();
+    assert_eq!(values.borrow().text("code"), Some("abcd"), "the field stops at the limit");
+
+    assert!(params[0].accepts("code", &FieldValue::Text("abcd".into())), "text at the limit fits");
+    assert!(params[0].accepts("code", &FieldValue::Text("éééé".into())), "four characters of two bytes each fit");
+    assert!(!params[0].accepts("code", &FieldValue::Text("abcde".into())), "text past the limit is refused");
+
+    let mut fields = DialogFields::new();
+    set_param_field(&params, &mut fields, "code", json!("wxyz")).expect("text at the limit is set");
+    let refused = set_param_field(&params, &mut fields, "code", json!("wxyz1"));
+    assert!(refused.is_err(), "longer text is refused: {refused:?}");
+    assert_eq!(fields.text("code"), Some("wxyz"), "the refused text is not set");
 }
 
 /// photocraft#15540: a parameter dialog opens with its first field's whole text selected, so typing right away replaces

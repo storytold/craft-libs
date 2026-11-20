@@ -1,7 +1,7 @@
 //! The `Pointer` trait: presses, hover, drags and cursors, on `CxCore` and `Cx`.
 
 use super::context::{Activation, Cx, CxCore};
-use crate::contract::Component;
+use crate::contract::{Component, Hover};
 use crate::primitives::PartResult;
 use crate::runtime::drag::{self, DragPreview, DropTarget, DropZone, Typed, WindowDropTarget};
 use crate::runtime::egui::areas;
@@ -28,6 +28,8 @@ pub trait Pointer {
     fn press(&self) -> &PressState;
     /// The pointer is over the component's own shapes.
     fn hit(&self) -> bool;
+    /// The pointer's stay over the component: over it, entered, left, and clicked while it has stayed over.
+    fn hover(&self) -> Hover;
     /// Set only when the component's own shapes won the press and it was released as a click, or
     /// `Intent::Activate` was routed to it.
     fn activation(&self) -> Option<Activation>;
@@ -63,6 +65,15 @@ pub trait Pointer {
 }
 
 impl Pointer for CxCore<'_> {
+    /// Step 12 leaves the report; a run that stopped before it (a sizing pass) reports no stay, so its output never
+    /// repeats an `entered` or `left` the real pass reported.
+    fn hover(&self) -> Hover {
+        if !self.stated || self.face_mode {
+            return Hover::default();
+        }
+        self.memory.recall::<Hover>(crate::contract::steps::ShownState::hover_slot(self.id))
+    }
+
     fn part(&self, part: impl Into<PartRef>) -> &PartResult {
         let part = part.into();
         match self.results.get(&(part.key, part.index)) {
@@ -170,6 +181,10 @@ impl CxCore<'_> {
 }
 
 impl<C: Component> Pointer for Cx<'_, C> {
+    fn hover(&self) -> Hover {
+        self.core.hover()
+    }
+
     fn part(&self, part: impl Into<PartRef>) -> &PartResult {
         self.core.part(part)
     }

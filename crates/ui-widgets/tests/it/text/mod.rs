@@ -1,4 +1,5 @@
 pub(crate) mod access;
+pub(crate) mod alt_text;
 pub(crate) mod chips;
 pub(crate) mod edit_menu;
 pub(crate) mod fields;

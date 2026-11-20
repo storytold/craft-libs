@@ -20,7 +20,7 @@ pub(crate) mod preview;
 pub use dialog::{
     BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ResetFooter, ResetPick, set_param_field,
 };
-pub use form::{FormCx, FormDialog, FormDialogWords, FormOutput};
+pub use form::{FormButtons, FormCx, FormDialog, FormDialogWords, FormOutput};
 pub use host_requests::{HostRequests, PreviewRequest};
 pub use path_row::{PathRow, PathRowOutput, PathRowWords};
 pub use preview::{
@@ -61,8 +61,8 @@ pub use new_document::{
 pub(crate) mod about;
 
 pub use about::{
-    AboutDialog, AboutInfo, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits, HostedAbout,
-    ModelCredit, NameMode,
+    AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort,
+    Credits, HostedAbout, ModelCredit, NameMode,
 };
 
 mod color_choice;

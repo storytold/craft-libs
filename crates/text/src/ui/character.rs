@@ -38,8 +38,8 @@ pub(crate) mod style_options;
 
 pub use paragraph::{ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign};
 pub use paragraph_dialog::{
-    LineSpacing, ParagraphAlign, ParagraphAnswer, ParagraphDialog, ParagraphDialogWords, ParagraphFormat, ParagraphPreview, ParagraphPreviewStyle,
-    SpacingKind, SpecialIndent,
+    AsianTypography, LineBreakOptions, LineSpacing, ParagraphAlign, ParagraphAnswer, ParagraphDialog, ParagraphDialogWords, ParagraphFormat,
+    ParagraphPreview, ParagraphPreviewStyle, ParagraphTab, SpacingKind, SpecialIndent,
 };
 use rows::{
     LengthRow, Lengths, PlainRow, Toggle, agree, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets,

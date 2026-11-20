@@ -1,6 +1,6 @@
 //! Stories of the crop overlay.
 
-use super::{CropOverlay, CropOverlayOutput, FRAME};
+use super::{CropOverlay, CropOverlayOutput, CropScope, FRAME};
 use crate::canvas::RasterSource as _;
 use crate::canvas::testing::canvas_story::{self, StoryDocument, StoryPicture, StoryShape, paint_shapes};
 use crate::contract::{Bind, Show as _, Validity};
@@ -72,6 +72,14 @@ fn drag_top_left(fixture: &mut Fixture) {
 fn upright(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = data.value("crop", crop());
     on_canvas(ui, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).show_at(ui, at))
+}
+
+#[story(CropOverlay<'static>, covers = [Default], drive = Drive::Custom(drag_top_left))]
+fn object_scope(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    // One placed picture's crop: the frame stays inside its source, and the shield dims only the source.
+    let source = DocRect::new(180.0, 110.0, 460.0, 290.0);
+    let rect = data.value("crop", crop());
+    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).scope(CropScope::Object { source }).show_at(ui, at))
 }
 
 #[story(CropOverlay<'static>, covers = [Mixed], drive = Drive::Custom(drag_top_left))]

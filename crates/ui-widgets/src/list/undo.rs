@@ -128,6 +128,7 @@ pub struct UndoList<'a> {
     common: Common,
     #[container]
     props: ContainerProps,
+    #[collection]
     items: CollectionProps,
     /// The mark the caller owns.
     #[prop]

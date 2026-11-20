@@ -1,5 +1,6 @@
 pub(crate) mod cross_fill;
 pub(crate) mod fill_column;
+pub(crate) mod fill_height;
 pub(crate) mod fill_share;
 pub(crate) mod fonts;
 pub(crate) mod grid_labels;
@@ -12,4 +13,5 @@ pub(crate) mod rtl_scroll;
 pub(crate) mod scroll_region;
 pub(crate) mod shrink_order;
 pub(crate) mod stack_header;
+pub(crate) mod stack_widths;
 pub(crate) mod zero_width;

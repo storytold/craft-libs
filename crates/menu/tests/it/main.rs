@@ -2,9 +2,12 @@
 
 #[cfg(target_os = "macos")]
 mod appkit;
+pub(crate) mod keytips;
 pub(crate) mod layout;
 pub(crate) mod mnemonic;
 pub(crate) mod native;
+pub(crate) mod ribbon;
+pub(crate) mod ribbon_gallery;
 mod sample;
 pub(crate) mod shortcuts;
 

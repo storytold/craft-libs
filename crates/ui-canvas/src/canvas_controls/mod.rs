@@ -22,12 +22,12 @@ pub(crate) mod pixel_grid;
 pub(crate) mod task_bar;
 
 pub use bands::{range_bands, rect_around};
-pub use grid::{CanvasGrid, GridAxis, GridLine, GridLines, GridStyle, MAX_LINES};
+pub use grid::{CanvasGrid, GridAxis, GridCrowding, GridLine, GridLines, GridStyle, MAX_LINES};
 pub use line_preview::{LineGuideStyle, StraightLinePreview};
 pub use marquee::{Marquee, MarqueeLook, MarqueeShape, MarqueeStyle, Run};
 pub use outline::{HoverMask, HoverOutline, HoverShape, OutlineStyle, SelectionOutline, SelectionOutlineLook, path_runs};
 pub use pixel_grid::{GridSegment, PixelGrid, PixelGridStyle};
-pub use task_bar::{TaskBar, TaskBarCx, TaskBarOutput, TaskBarPlace};
+pub use task_bar::{TaskBar, TaskBarCx, TaskBarDismiss, TaskBarKind, TaskBarOutput, TaskBarPlace};
 // End of canvas-controls-b.
 
 // Brush overlays.

@@ -1,5 +1,6 @@
 //! The integration binary of craft-table: every test is a registered trial.
 
+pub(crate) mod conditions;
 pub(crate) mod grid;
 pub(crate) mod outline;
 pub(crate) mod refpick;

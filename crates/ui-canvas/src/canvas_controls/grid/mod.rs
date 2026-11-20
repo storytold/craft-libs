@@ -16,7 +16,7 @@ use craft_behavior::{CanvasView, Input, Metrics};
 use egui::{Color32, Response, Shape};
 use std::sync::Arc;
 
-pub use crate::primitives::{GridAxis, GridLines, MAX_LINES};
+pub use crate::primitives::{GridAxis, GridCrowding, GridLines, MAX_LINES};
 
 /// The major step of a new grid, in document units.
 const DEFAULT_STEP: f64 = 100.0;
@@ -115,6 +115,9 @@ pub struct CanvasGrid {
     /// Draws nothing while the view's device zoom (1 is 100 percent) is below this (VectorCraft's pixel grid: 6).
     #[prop(quantity = "device zoom")]
     min_zoom: Option<f64>,
+    /// What the grid does when its lines come closer than the minimum step: `Thin` keeps it visible zoomed out.
+    #[prop]
+    crowding: GridCrowding,
 }
 
 impl CanvasGrid {
@@ -129,6 +132,7 @@ impl CanvasGrid {
             color: None,
             line: GridLine::Solid,
             min_zoom: None,
+            crowding: GridCrowding::default(),
         }
         .label(label)
     }
@@ -154,7 +158,7 @@ impl CanvasGrid {
         if !(extent.x0.is_finite() && extent.y0.is_finite() && extent.x1.is_finite() && extent.y1.is_finite()) {
             return GridLines::default();
         }
-        GridLines::document(view, extent, self.spacing, self.origin, self.subdivisions)
+        GridLines::document(view, extent, self.spacing, self.origin, self.subdivisions, self.crowding)
     }
 }
 

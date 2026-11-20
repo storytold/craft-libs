@@ -62,6 +62,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         record.chrome = Some(chrome);
         record.captions = captions.clone();
         record.resizable = Some(open.resizable);
+        record.min_size = open.limits.0;
         record.moved_by_app = open.moved_by_app;
         record.awaiting_first_paint |= spec.shown_after_first_paint && record.facts.is_none();
         if record.title.as_deref() != Some(open.title) {
