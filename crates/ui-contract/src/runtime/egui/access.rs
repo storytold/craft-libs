@@ -137,7 +137,7 @@ pub(crate) fn register_parent(ctx: &Context, id: Id, parent: Id) {
 /// Notes that the runtime emitted the node of `id`.
 fn emit(ctx: &Context, id: Id) {
     with_emitted(ctx, |emitted| emitted.emit(id));
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| emit(ctx, id));
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| emit(ctx, id));
 }
 
 /// Notes that the node of the text widget `widget` folds into the node of `owner`.
@@ -145,7 +145,7 @@ fn note_folded(ctx: &Context, widget: Id, owner: Id) {
     with_emitted(ctx, |emitted| {
         emitted.folded.insert(widget, owner);
     });
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| note_folded(ctx, widget, owner));
+    crate::runtime::replay::journal(ctx, || (widget, owner), |ctx, &(widget, owner)| note_folded(ctx, widget, owner));
 }
 
 /// Notes that the runtime wrote the node of `id`.
@@ -153,7 +153,7 @@ pub(crate) fn note_written(ctx: &Context, id: Id) {
     with_emitted(ctx, |emitted| {
         emitted.written.insert(id);
     });
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| note_written(ctx, id));
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| note_written(ctx, id));
 }
 
 /// The pass-end step: the children of each node the runtime wrote follow the order the runtime emitted them in,

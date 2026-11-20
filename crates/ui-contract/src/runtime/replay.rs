@@ -16,12 +16,63 @@ use crate::runtime::frame;
 use crate::runtime::pass_state;
 use crate::runtime::reads::BindKey;
 use egui::{Context, IdSet};
+use std::any::Any;
 use std::collections::HashSet;
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A registration of the recorded run, made again by calling it.
-type Entry = Arc<dyn Fn(&Context) + Send + Sync>;
+/// A registration of the recorded run: the call that makes it again and what it is called with. Two entries are equal
+/// when they come from the same call (the same `again` of [`journal`]) with equal arguments.
+#[derive(Clone)]
+pub(crate) struct Entry(Arc<dyn Noted>);
+
+trait Noted: Send + Sync {
+    fn call(&self, ctx: &Context);
+    fn as_any(&self) -> &dyn Any;
+    fn same(&self, other: &dyn Noted) -> bool;
+    fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+}
+
+struct Note<A, F> {
+    args: A,
+    again: F,
+}
+
+impl<A, F> Noted for Note<A, F>
+where
+    A: PartialEq + fmt::Debug + Send + Sync + 'static,
+    F: Fn(&Context, &A) + Send + Sync + 'static,
+{
+    fn call(&self, ctx: &Context) {
+        (self.again)(ctx, &self.args);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn same(&self, other: &dyn Noted) -> bool {
+        // `F` is capture-free, so its type names the call: the same type is the same call.
+        other.as_any().downcast_ref::<Self>().is_some_and(|other| other.args == self.args)
+    }
+
+    fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}({:?})", std::any::type_name::<F>(), self.args)
+    }
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.same(&*other.0)
+    }
+}
+
+impl fmt::Debug for Entry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.describe(f)
+    }
+}
 
 /// Records open across all contexts, so a registration made while none is open takes no lock.
 static OPEN: AtomicUsize = AtomicUsize::new(0);
@@ -68,7 +119,7 @@ pub(crate) struct Facts {
 /// What one real run of a region added to its pass.
 pub(crate) struct Record {
     pub(crate) focus: Transcript,
-    journal: Vec<Entry>,
+    pub(crate) journal: Vec<Entry>,
     egui: egui::PassRecords,
     /// The egui widgets of the run.
     pub(crate) widgets: IdSet,
@@ -136,7 +187,7 @@ pub(crate) fn replay(ctx: &Context, record: &Record) {
     ctx.replay_pass_records(&record.egui);
     focus::replay(ctx, &record.focus);
     for entry in &record.journal {
-        entry(ctx);
+        entry.0.call(ctx);
     }
     if let Some(at) = record.facts.wake {
         crate::runtime::egui::repaint::request_after(ctx, crate::runtime::egui::pass::current_viewport(ctx), at - frame::clock(ctx));
@@ -160,12 +211,21 @@ fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
     }
 }
 
-/// Notes, in the records open around the running code, the registration `make` builds: called again, it registers
-/// what the running code registered. A service outside this crate that keeps registrations per pass (a dock's drop
-/// spots) notes each one here, so a settled region's replay makes it again.
-pub fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
+/// Notes, in the records open around the running code, the registration the running code made: `again(ctx, &args)`
+/// registers it again. `args` builds the arguments only while a record is open. `again` captures nothing (a function
+/// or a closure without captures), so everything the registration depends on is in the arguments. A capture fails
+/// the build, not `cargo check`: the size assert is a constant that is evaluated only when the code is generated.
+/// Two notes of the same `again` with equal arguments are the same registration. A service outside this crate that
+/// keeps registrations per pass (a dock's drop spots) notes each one here, so a settled region's replay makes it
+/// again.
+pub fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
+where
+    A: PartialEq + fmt::Debug + Send + Sync + 'static,
+    F: Fn(&Context, &A) + Send + Sync + 'static,
+{
+    const { assert!(std::mem::size_of::<F>() == 0, "`journal`'s `again` captures nothing: pass its state in `args`") };
     if recording(ctx) {
-        let entry: Entry = Arc::new(make());
+        let entry = Entry(Arc::new(Note { args: args(), again }));
         pass_state::with::<Recorder, _>(ctx, |recorder| recorder.journal.push(entry));
     }
 }

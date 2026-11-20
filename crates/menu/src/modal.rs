@@ -12,6 +12,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use craft_keymap::CommandRef;
+use craft_ui::contract::{MemoKey, MemoProps};
 
 use crate::driver::Gate;
 use crate::model::{Builtin, Item};
@@ -49,7 +50,8 @@ pub struct ModalRules {
     /// run. `None`: no pending operation.
     pub pending: Option<PendingRule>,
     /// The caller's count of rule changes. A rule holds a closure and cannot be compared, so the
-    /// caller says when the rules changed; the menu skips the resync while it stays the same.
+    /// caller says when the rules changed; the menu skips the resync, and the runtime's command gate keeps its answers,
+    /// while it stays the same.
     pub revision: u64,
 }
 
@@ -83,6 +85,18 @@ impl ModalRules {
     pub fn pending(mut self, rule: Option<PendingRule>) -> Self {
         self.pending = rule;
         self
+    }
+}
+
+/// As props of the runtime's command gate: the plain fields and [`ModalRules::revision`], which stands for the
+/// [`ModalRules::pending`] closure. The derive cannot take the closure, and the revision is the caller's count of rule
+/// changes, so equal keys mean equal rules as long as the caller moves it with every change.
+impl MemoProps for ModalRules {
+    fn key(&self, key: &mut MemoKey) {
+        let ModalRules { in_dialogs, workspace, pending: _, revision } = self;
+        in_dialogs.key(key);
+        workspace.key(key);
+        revision.key(key);
     }
 }
 
