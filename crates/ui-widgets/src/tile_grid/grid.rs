@@ -830,7 +830,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
     /// Every tile gets the grid's caption place and detail line, the card look, and its row's rename state.
     fn dress<'r>(&self, tile: Self::Item<'r>, row: &RowState) -> Self::Item<'r> {
         let tile = tile.caption(self.caption).detail_line(self.detail_line).renaming(row.renaming);
-        if self.card { tile.card().with_regular_card_padding(self.regular_card_padding) } else { tile }
+        if self.card { tile.card().regular_card_padding(self.regular_card_padding) } else { tile }
     }
 
     fn can_rename(&self, key: &K) -> bool {

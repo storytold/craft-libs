@@ -300,6 +300,7 @@ pub struct Tile<'a> {
     caption: CaptionPlace,
     /// The grid asked for the theme's regular padding around a framed card.
     #[style_key]
+    #[prop]
     regular_card_padding: bool,
     /// The card has a line for the detail, whether this tile has one or not: the grid's, applied to its tiles.
     #[prop]
@@ -470,11 +471,6 @@ impl<'a> Tile<'a> {
     /// What a tile adds around its picture for every caption arrangement.
     pub(super) fn around(cx: &StyleCx<'_>, card: bool, regular_card_padding: bool) -> AroundPicture {
         AroundPicture::of(cx, card, regular_card_padding)
-    }
-
-    pub(super) fn with_regular_card_padding(mut self, enabled: bool) -> Self {
-        self.regular_card_padding = enabled;
-        self
     }
 
     /// Whether the caption band holds a detail line.

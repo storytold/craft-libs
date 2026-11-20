@@ -54,6 +54,7 @@ const HOME_COMPACT_WIDTH: f32 = 520.0;
 const HOME_DROP_WIDTH: f32 = 540.0;
 const HOME_DROP_HEIGHT: f32 = 200.0;
 const HOME_DROP_ICON: f32 = 34.0;
+// design: allow[literal-size/vec2](the desktop Home page's outer margins are larger than any spacing token)
 const HOME_DESKTOP_INSET: Vec2 = vec2(36.0, 54.0);
 const HOME_DROP_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-drop", home_drop_look);
 
