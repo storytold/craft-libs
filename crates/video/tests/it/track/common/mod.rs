@@ -29,11 +29,19 @@ pub struct Track {
 
 /// A fixture and ffmpeg's decode of it.
 pub struct Fixture {
+    /// This test's private fixture directory, removed when the fixture is dropped.
+    dir: PathBuf,
     pub file: PathBuf,
     /// Raw frames in display order, planes one after another, 16-bit samples little-endian.
     pub reference: Vec<u8>,
     /// How far a sample may be from the reference: 0 (bit-exact) unless a test sets it.
     pub max_diff: u8,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 /// Lowest PSNR of a frame decoded within a tolerance, as the MPEG-2 oracle tests require.
@@ -44,11 +52,13 @@ const MIN_PSNR: f64 = 58.0;
 /// the encoder; a failure with `CRAFT_MEDIA_REQUIRE_ORACLES=1`.
 pub fn fixture(name: &str, ext: &str, args: &[&str], pix_fmt: &str) -> Option<Fixture> {
     let ff = craft_media_testkit::ffmpeg()?;
-    let dir = craft_media_testkit::fixture_subdir("video-track");
+    // Tests can generate the same fixture concurrently in separate nextest processes. Give each
+    // one a private directory so it cannot replace a file another process is reading on Windows.
+    let dir = craft_media_testkit::private_dir("video-track");
     let required = craft_media_testkit::oracles_required();
     let file = dir.join(format!("{name}.{ext}"));
     let raw = dir.join(format!("{name}.{ext}.{pix_fmt}.raw"));
-    craft_media_testkit::generate_and_report(name, &[file.clone(), raw.clone()], || {
+    let result = craft_media_testkit::generate_and_report(name, &[file.clone(), raw.clone()], || {
         if !file.exists() {
             let tmp = craft_media_testkit::temp_path(&file);
             let mut cmd = Command::new(&ff);
@@ -68,8 +78,12 @@ pub fn fixture(name: &str, ext: &str, args: &[&str], pix_fmt: &str) -> Option<Fi
                 .arg(&tmp);
             craft_media_testkit::run_generator(&mut cmd, &tmp, &raw, required)?;
         }
-        Some(Fixture { reference: std::fs::read(&raw).unwrap(), file: file.clone(), max_diff: 0 })
-    })
+        Some(Fixture { reference: std::fs::read(&raw).unwrap(), file: file.clone(), max_diff: 0, dir: dir.clone() })
+    });
+    if result.is_none() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    result
 }
 
 /// Whether ffmpeg has `encoder`, without skipping.
