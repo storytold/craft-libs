@@ -283,6 +283,11 @@ pub(crate) fn layer_presence(ctx: &Context, base: Id, owner: Id, policy: MotionP
     let stage = MemoryStage::open_owned(ctx, memory::sub(base, "presence"), owner);
     let presence = Driver { stage: &stage, base, policy }.presence("open", open, spec);
     stage.write_back();
+    // The exit that ends here is the last pass in which the layer's hosts run it: from the next pass `layer_fading`
+    // answers false and they skip it. What ran around it this pass does not hold for the next one.
+    if !open && !layer_fading(ctx, base) {
+        note_unsettled(ctx);
+    }
     presence
 }
 

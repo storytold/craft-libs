@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use craft_host::target::Os;
 use craft_menu::{CommandRef, MenuBar, MenuBarUi, Row, Target, from_items};
-use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
+use craft_ui::testing::{Fixture, MemoRun, audit_replays, last_frame_memo_runs, trial};
 use egui::{Event, Key, Modifiers};
 
 fn model(title: &str) -> MenuBar {
@@ -61,11 +61,13 @@ fn alt_runs_the_menu_bar_once_each_way() {
     assert_eq!(counted(&fixture).0, 1, "Alt up runs the bar once");
 }
 
-/// A menu the bar opens is an overlay inside its run, which keeps the run from being replayed while it is open.
+/// A menu the bar opens is an overlay inside its run, which keeps the run from being replayed while it is open. The
+/// run in which the menu's fade ends is the last that shows it, so the replays after it match a real run (the audit).
 #[trial]
 fn an_open_menu_runs_the_bar_and_closing_it_replays_it() {
     let bar = Rc::new(RefCell::new(model("File")));
     let mut fixture = fixture(&bar);
+    audit_replays(fixture.ctx(), true);
     fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opened File");
