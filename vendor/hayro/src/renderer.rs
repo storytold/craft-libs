@@ -1867,7 +1867,12 @@ impl Renderer {
     fn knockout_shading(&mut self, paint: &Paint<'_>, path: &BezPath, is_stroke: bool, paint_it: bool) {
         let PaintSetup::Clip(clip) = self.paint_setup(&shape_of(paint), path, is_stroke) else { return };
         if let Some(clip) = clip.as_ref() {
+            // PdfCraft patch (33): the clip is pushed with its own rule, and the path is then
+            // filled with the rule its operator gave (`fill_path` set it): left at the clip's,
+            // an `f*` path in a knockout group lost its even-odd holes.
+            let fill_rule = *self.ctx.fill_rule();
             self.push_clip_path_inner(clip, FillRule::NonZero);
+            self.ctx.set_fill_rule(fill_rule);
         }
         self.ctx.set_blend_mode(peniko::BlendMode::new(Mix::Normal, Compose::DestOut));
         self.draw_shape(path, is_stroke);
@@ -1941,6 +1946,21 @@ impl Renderer {
                             let Some(area) = mesh_area(bbox, &encoded) else {
                                 return PaintSetup::Nothing;
                             };
+                            // PdfCraft patch (33): see `mesh_clip` and `mesh_paint_pixels`. A
+                            // shading's own `/BBox` clip is kept as it is, and so is a stroke:
+                            // its box only estimates how far it reaches (a miter can reach
+                            // further), and past the box the texture's edge, repeated, is all
+                            // there is to paint with.
+                            if clip_path.is_none() && !is_stroke {
+                                clip_path = mesh_clip(&encoded);
+                            }
+                            let painted = match &clip_path {
+                                Some(clip) => bbox.intersect(clip.bounding_box()),
+                                None => bbox,
+                            };
+                            MESH_PAINT_PIXELS.with(|n| {
+                                n.set(n.get().saturating_add(painted.area().max(0.0) as u64));
+                            });
                             bbox = area;
                             extend = peniko::Extend::Pad;
                         }
@@ -3081,6 +3101,40 @@ fn mesh_area(bbox: Rect, encoded: &EncodedShadingPattern) -> Option<Rect> {
     }
     let area = bbox.intersect(extent.inflate(1.0, 1.0));
     (area.width() > 0.0 && area.height() > 0.0).then_some(area)
+}
+
+/// PdfCraft patch (33): the device-space clip a mesh shading is painted through: its extent
+/// and the transparent pixel around it, on whole pixels. The texture of patch (19) covers only
+/// that much, but `Extend::Pad` repeats its transparent edge over the rest of the path, and
+/// every pixel of the path was still sampled and blended with nothing: `sh` fills the whole
+/// clip, so each of 84 small meshes on a 4032 × 2025 plan cost a full canvas of texture
+/// samples, 2.9 of its 3.2 seconds. Outside this rectangle a fill paints nothing: there the
+/// texture repeats its transparent ring, or its edge on the path's box, which the fill doesn't
+/// cross. So the clip changes no pixel; its edges are on whole pixels, so inside it every pixel
+/// keeps its full coverage. `None` for a mesh without an extent (one with a `/Background`
+/// paints everywhere).
+fn mesh_clip(encoded: &EncodedShadingPattern) -> Option<BezPath> {
+    let extent = encoded.extent?;
+    if !(extent.width() > 0.0 && extent.height() > 0.0) {
+        return None;
+    }
+    let area = extent.inflate(1.0, 1.0);
+    let whole = Rect::new(area.x0.floor(), area.y0.floor(), area.x1.ceil(), area.y1.ceil());
+    Some(whole.to_path(0.1))
+}
+
+thread_local! {
+    /// PdfCraft patch (33): see [`mesh_paint_pixels`].
+    static MESH_PAINT_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (33): the device pixels the renders on this thread have painted mesh shading
+/// textures over (each paint's path box on the canvas, within its clip): a test hook, so a
+/// regression test checks what painting a mesh costs by counting rather than by timing. The
+/// count only grows; a test takes the difference across a render.
+#[doc(hidden)]
+pub fn mesh_paint_pixels() -> u64 {
+    MESH_PAINT_PIXELS.with(std::cell::Cell::get)
 }
 
 fn convert_blend_mode(blend_mode: BlendMode) -> peniko::BlendMode {
