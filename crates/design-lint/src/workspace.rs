@@ -152,6 +152,8 @@ const NO_GLOBAL_STATE: &[(&str, &str)] = &[
     // Settled fact: a card's view of a story's state keys by the story value's revision, whether the start is taken, the
     // dialog's flags and the reset count; the view of every shown story's state is one fixed-size digest of those keys.
     // Both are props held as `&mut`, which the derive does not take.
+    // A card keys its owned story registration by the name and show function the card reads.
+    ("crates/ui-gallery/src/chrome/card.rs", "MemoProps"),
     ("crates/ui-gallery/src/viewer/picks.rs", "MemoProps"),
     // Settled fact: the names of a preset group key by a walk over the group and its folders (`dyn EachName`), which
     // the derive cannot see through.
