@@ -62,7 +62,7 @@ craft_ui::words! {
 
 /// What the panel shows: Photoshop's panel menu choices, in its order. Hue Cube is the default;
 /// the theme never changes it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ColorPanelMode {
@@ -129,7 +129,7 @@ impl ColorPanelMode {
 }
 
 /// The ramp under the sliders. Shift-click on the ramp cycles them in this order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ColorPanelRamp {
@@ -179,7 +179,7 @@ impl ColorPanelRamp {
 }
 
 /// The Color panel's settings, kept across runs (settings section `color_panel`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ColorPanelState {
