@@ -673,7 +673,10 @@ fn read_response_classified(stream: &mut Stream) -> ReplyResult<Vec<u8>> {
             let (_, headers, _) = http_response(&raw).map_err(ReplyError::Malformed)?;
             chunked = headers.iter().any(|(k, v)| k == "transfer-encoding" && v.contains("chunked"));
             if !chunked {
-                for (_, value) in headers.iter().filter(|(key, _)| key == "content-length") {
+                // An intermediary can combine identical Content-Length fields into one list
+                // (RFC 9110, 8.6). Normalize every member; ambiguity is still an error.
+                for value in headers.iter().filter(|(key, _)| key == "content-length").flat_map(|(_, value)| value.split(',')) {
+                    let value = value.trim_matches([' ', '\t']);
                     let length = (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
                         .then(|| value.parse::<usize>().ok())
                         .flatten()
@@ -710,7 +713,8 @@ fn http_response(raw: &[u8]) -> Result<(u16, Headers, &[u8])> {
     let head = String::from_utf8_lossy(raw.get(..end).unwrap_or(&[]));
     let mut lines = head.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
-    let mut words = status_line.split_whitespace();
+    // Keep HTTP's optional ASCII separator lenience, not Unicode whitespace (RFC 9112, 4).
+    let mut words = status_line.split([' ', '\t', '\u{0b}', '\u{0c}', '\r']).filter(|word| !word.is_empty());
     let version = words.next().unwrap_or_default().as_bytes();
     let code = words.next().unwrap_or_default();
     // RFC 9112 requires an HTTP version and three status digits, not merely a parseable number.
@@ -743,6 +747,10 @@ fn chunked_complete(body: &[u8], resume: &mut usize) -> bool {
         // A size past the reply cap can never be satisfied: complete, so `dechunk` rejects it
         // (checked, so `ffffffffffffffff` cannot overflow the slice arithmetic).
         let Some(end) = size.checked_add(2).filter(|_| size <= MAX_REPLY) else { return true };
+        // A wrong first separator byte is already invalid; no second byte can repair it.
+        if b.get(size).is_some_and(|byte| *byte != b'\r') {
+            return true;
+        }
         let Some(rest) = b.get(end..) else { return false };
         // A full malformed separator must reach dechunk now, even if the server stays open.
         if b.get(size..end) != Some(b"\r\n") {
@@ -900,6 +908,7 @@ pub fn print_job(endpoint: &Endpoint, job: &Job<'_>) -> Result<u32> {
         .attributes
         .iter()
         .find(|a| a.name == "job-id")
+        .filter(|a| a.tag == TAG_INTEGER)
         .and_then(Attribute::int)
         // RFC 8011 requires job-id to be an integer in 1..=i32::MAX.
         .filter(|id| *id > 0)

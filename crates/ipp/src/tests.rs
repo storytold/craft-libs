@@ -44,6 +44,8 @@ fn fake(reply: Vec<u8>, chunked: bool, http_status: u16) -> (Endpoint, mpsc::Rec
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
+        // This fake serves one request only: later optional probes must be refused, not queued.
+        drop(listener);
         serve(Stream::Tcp(stream), reply, chunked, http_status, &tx);
     });
     (Endpoint::Tcp("127.0.0.1".into(), port), rx)
@@ -1292,6 +1294,102 @@ fn identical_duplicate_content_lengths_remain_supported() {
     let _ = done.send(());
     assert_eq!(server.join().unwrap(), 1);
     assert_eq!(result, Ok(Some("Office".into())));
+}
+
+/// A wrong first CRLF byte is already malformed even while the server keeps the socket open.
+#[test]
+fn a_wrong_first_chunk_separator_byte_finishes_without_a_second_byte() {
+    for body in [b"1\r\nA".as_slice(), b"1\r\nA\r"] {
+        assert!(!chunked_complete(body, &mut 0), "a valid separator prefix needs more bytes: {body:?}");
+    }
+    for body in [b"1\r\nAX".as_slice(), b"1\r\nA\n", b"1\r\nA\0"] {
+        assert!(chunked_complete(body, &mut 0), "a wrong first separator byte cannot recover: {body:?}");
+        assert!(matches!(dechunk(body), Err(Error::Protocol(message)) if message == "invalid chunk end"));
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (release, held) = mpsc::channel();
+    let (ready, written) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nAX").unwrap();
+        ready.send(()).unwrap();
+        held.recv().unwrap();
+    });
+    let socket = TcpStream::connect(addr).unwrap();
+    socket.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    written.recv().unwrap();
+    let result = read_response(&mut Stream::Tcp(socket));
+    release.send(()).unwrap();
+    server.join().unwrap();
+    let raw = result.expect("a wrong first chunk terminator byte must not wait for the server to close");
+    let (_, _, body) = http_response(&raw).unwrap();
+    assert!(matches!(dechunk(body), Err(Error::Protocol(message)) if message == "invalid chunk end"));
+}
+
+#[test]
+fn print_job_refuses_an_enum_instead_of_an_integer_job_id() {
+    for tag in [TAG_ENUM, TAG_NAME, TAG_TEXT] {
+        let (ep, _rx) = fake(ipp(0, &[ok_header(), (TAG_JOB_GROUP, &[(tag, "job-id", &[&42i32.to_be_bytes()])])]), false, 200);
+        let result =
+            print_job(&ep, &Job { printer: "P", is_class: false, title: "t", user: "u", copies: 1, document: b"x", format: "application/pdf" });
+        assert!(matches!(result, Err(Error::Protocol(_))), "job-id tag {tag:#x}: {result:?}");
+    }
+}
+
+#[test]
+fn http_status_separators_use_http_octets_not_unicode_whitespace() {
+    for separator in [" ", "\t", "\u{0b}", "\u{0c}", "\r", " \t\r "] {
+        let raw = format!("{separator}HTTP/1.1{separator}200{separator}Ready\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(http_response(raw.as_bytes()).unwrap().0, 200, "ASCII separator {separator:?}");
+    }
+    for separator in ["\u{00a0}", "\u{1680}", "\u{2003}", "\u{2028}", "\u{202f}", "\u{3000}", "\n"] {
+        for status in [format!("HTTP/1.1{separator}200 Ready"), format!("HTTP/1.1 200{separator}Ready"), format!("{separator}HTTP/1.1 200 Ready")] {
+            let raw = format!("{status}\r\nContent-Length: 0\r\n\r\n");
+            assert!(matches!(http_response(raw.as_bytes()), Err(Error::Protocol(_))), "accepted non-HTTP separator: {status:?}");
+        }
+    }
+    assert_eq!(http_response("HTTP/1.1 200 Prêt\r\nContent-Length: 0\r\n\r\n".as_bytes()).unwrap().0, 200);
+}
+
+#[test]
+fn content_length_lists_normalize_only_identical_decimal_members() {
+    let primary = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let classes = ipp(0, &[ok_header()]);
+    let default = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let bodies = [primary, classes, default];
+    for probe in [0, 1, 2] {
+        let length = bodies[probe].len();
+        let lists = [
+            (format!("{length},{length}"), true),
+            (format!("{length}, \t{length}, 0{length}"), true),
+            (format!("{length},{}", length + 1), false),
+            (format!("{length},,{length}"), false),
+            (format!(",{length}"), false),
+            (format!("{length},"), false),
+            (format!("{length},+{length}"), false),
+            (format!("{length},garbage"), false),
+            (format!("{length},18446744073709551616"), false),
+            (format!("{length},\u{00a0}{length},{length}"), false),
+        ];
+        for (list, valid) in lists {
+            let mut responses: Vec<_> = bodies.iter().map(|body| http_probe_reply(200, body)).collect();
+            responses[probe] = format!("HTTP/1.1 200 OK\r\nContent-Length: {list}\r\nContent-Length: {length}\r\n\r\n").into_bytes();
+            responses[probe].extend_from_slice(&bodies[probe]);
+            let (endpoint, done, server) = fake_raw_probe_responses(responses);
+            let result = printers(&endpoint);
+            let _ = done.send(());
+            server.join().unwrap();
+            if valid {
+                let printers = result.unwrap_or_else(|error| panic!("probe {probe}, valid identical list {list:?}: {error}"));
+                assert_eq!(printers.len(), 1);
+                assert_eq!(printers[0].name, "Office");
+                assert!(printers[0].is_default);
+            } else {
+                assert!(matches!(result, Err(Error::Protocol(_))), "probe {probe}, invalid list {list:?}: {result:?}");
+            }
+        }
+    }
 }
 
 #[test]
