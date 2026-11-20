@@ -23,10 +23,10 @@ use egui::{Response, Ui, Vec2};
 
 mod data;
 mod drag;
-#[cfg(feature = "testing")]
-pub(super) mod stories;
-#[cfg(feature = "testing")]
-mod trials;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod trials;
 
 use data::row_groups;
 pub use data::{LastUsed, RailTool, SlotId, ToolSlot, remembered, shown_tool, visible_slots};

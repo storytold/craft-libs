@@ -15,8 +15,8 @@ use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, PixelSize};
 use egui::{Response, Ui};
 use std::time::Duration;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Shown for an item whose value the host does not know.
 const MISSING: &str = "\u{2014}";

@@ -689,7 +689,7 @@ fn install_refuses_while_the_installed_copy_is_running() {
 }
 
 #[cfg(target_os = "macos")]
-mod macos_checks {
+pub(crate) mod macos_checks {
     use craft_ui::testing::trial;
 
     use super::macos::{CheckTurn, Expect, Signature, TEAM_ID, signed_by};

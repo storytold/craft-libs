@@ -4,8 +4,8 @@
 mod cards;
 mod details;
 mod presets;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::form::{read_bind, write_bind};
 use super::{FormCx, FormDialog, HostRequests, LinkedSize};

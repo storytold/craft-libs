@@ -4,8 +4,8 @@
 //! range every written value stays in and the step that arrows, the wheel and a scrub move by. A drag on a field that
 //! is not in edit scrubs it; a click enters edit, where a drag selects text.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::adorn::{Adornment, Placed, place, reserve};
 use super::words::TextWords;

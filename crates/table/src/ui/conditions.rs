@@ -18,8 +18,8 @@ use craft_ui::style::SurfaceKind;
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The builder's words, English by default.

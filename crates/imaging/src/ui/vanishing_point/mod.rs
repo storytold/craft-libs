@@ -20,14 +20,14 @@
 //! [`FullWindowDialog`]: craft_ui::dialog::FullWindowDialog
 //! [`EditHistory`]: craft_behavior::EditHistory
 
-mod bar;
+pub(crate) mod bar;
 mod command;
 mod commands;
 mod draw;
-mod editor;
+pub(crate) mod editor;
 mod new_plane;
 mod planes;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod style;
 mod words;

@@ -15,8 +15,8 @@
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
 //! matches by label, English label, menu path or command id, each as a command row with its path as detail.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::search::{HelpEntry, search_order};
 use super::words::MenuWords;

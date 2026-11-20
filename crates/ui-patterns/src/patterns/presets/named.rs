@@ -5,8 +5,8 @@
 //! commits the name, Escape or Cancel closes it, and a name the host refuses shows its message under the field and
 //! keeps the prompt open.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::event::PresetEvent;
 use super::files::{PresetFileRequest, PresetFiles};

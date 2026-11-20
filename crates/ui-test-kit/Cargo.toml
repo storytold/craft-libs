@@ -15,6 +15,9 @@ workspace = true
 test = false
 doctest = false
 
+[features]
+suite = ["craft-ui-contract/suite"]
+
 [dependencies]
 craft-ui-contract = { workspace = true, features = ["testing"] }
 egui = { workspace = true }

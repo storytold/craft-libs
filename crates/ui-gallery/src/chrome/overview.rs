@@ -36,7 +36,7 @@ pub struct SpecStory {
     /// The index of the story in the catalog.
     pub index: usize,
     /// The story's registration.
-    pub story: &'static StoryRegistration,
+    pub story: StoryRegistration,
     /// The story's caption.
     pub caption: String,
 }

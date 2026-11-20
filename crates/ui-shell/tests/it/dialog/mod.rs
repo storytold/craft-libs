@@ -1,4 +1,4 @@
 //! Dialogs embedded in a region.
 
-mod contained;
-mod window;
+pub(crate) mod contained;
+pub(crate) mod window;

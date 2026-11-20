@@ -9,7 +9,7 @@ use craft_ui::popover::Popover;
 use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, FireSource};
 use craft_ui::runtime::env::{Label, WordTemplate};
 use craft_ui::runtime::frame::take_output;
-use craft_ui::testing::{Fixture, stories, trial};
+use craft_ui::testing::{Fixture, Registry, trial};
 use egui::{Key, Modifiers, Pos2, Ui};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -100,7 +100,8 @@ fn a_picked_command_runs_from_the_palette_and_comes_first_when_it_opens_again() 
 /// lists enabled.
 #[trial]
 fn the_palette_story_runs_under_its_command_states() {
-    let entry = stories().into_iter().find(|entry| entry.story.name == "command_palette").expect("the palette story");
+    let registry = Registry::of(&[craft_ui::testing::register]);
+    let entry = registry.stories().iter().find(|entry| entry.story.name == "command_palette").expect("the palette story");
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
     assert!(disabled(&fixture, "Redo"), "the story's Redo lists disabled");

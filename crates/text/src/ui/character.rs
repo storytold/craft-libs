@@ -30,11 +30,11 @@ use craft_ui::text::{NamedOr, NumberName, NumberPick, NumberValue as _};
 use egui::{Response, Ui};
 
 pub(crate) mod paragraph;
-mod paragraph_dialog;
+pub(crate) mod paragraph_dialog;
 pub(crate) mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
-mod style_options;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+pub(crate) mod style_options;
 
 pub use paragraph::{ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign};
 pub use paragraph_dialog::{

@@ -1,14 +1,16 @@
 //! The integration binary of craft-layers: every test is a registered trial.
 
-mod blend_rows;
-mod comps;
-mod panel_drag_menu;
-mod panel_filter;
-mod panel_input;
-mod panel_order;
-mod panel_reveal;
-mod panel_rows;
+pub(crate) mod blend_rows;
+pub(crate) mod comps;
+pub(crate) mod panel_drag_menu;
+pub(crate) mod panel_filter;
+pub(crate) mod panel_input;
+pub(crate) mod panel_order;
+pub(crate) mod panel_reveal;
+pub(crate) mod panel_rows;
+
+craft_ui::registry!();
 
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_layers::testing::registered());
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register, craft_layers::testing::register]));
 }

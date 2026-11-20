@@ -2,8 +2,8 @@
 //! page choices, showing the pages back in the same format; and `PageRangeOptions`, the All pages / Pages from-to / Subset rows of
 //! Acrobat's Page Range Options.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{Codec, NotAValue, NumberCodec};
 use craft_ui::buttons::IconButton;

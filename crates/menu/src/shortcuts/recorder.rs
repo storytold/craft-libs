@@ -17,8 +17,8 @@ use craft_ui::runtime::focus::{self, FocusTarget, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, Ink, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole};
 use egui::{Rect, Response, Ui, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The field claims bare Escape while recording, so it reaches the field as a chord (the keymap's recorder reads it as
 /// cancel) and neither leaves the row nor closes the dialog.

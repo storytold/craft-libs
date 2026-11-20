@@ -1,7 +1,7 @@
 //! `SliderField`: a slider and a number field over one value.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, Outcome, PaintUi, Props as _, Role, SideLabel, Sizing,

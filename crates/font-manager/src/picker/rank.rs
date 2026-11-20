@@ -377,7 +377,7 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use craft_ui::testing::trial;
 
     use super::{ARABIC_CORE, has_arabic_sample};

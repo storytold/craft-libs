@@ -23,8 +23,8 @@ use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 mod bar;
 mod sizing;

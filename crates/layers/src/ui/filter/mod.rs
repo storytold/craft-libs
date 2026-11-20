@@ -5,8 +5,8 @@
 //! plain code, so a host's control channel can read and set the criteria (PhotoCraft's
 //! `ui.set layerFilter {by, kinds, name, effect, mode, attribute, color, smart}`) without the panel.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvent, IconId, Mixed, SelectionChange};
 use craft_theme::{ControlSize, LabelColor};
