@@ -26,9 +26,10 @@
 //! contrast without them). A value that is not one of these is refused. `stories.tsv` lists the scale of every image.
 
 use craft_behavior::ColumnWidth;
-use craft_ui::contract::{Pad, Scroll, ShowContainer as _, Surface};
+use craft_ui::contract::{Pad, Scroll, ShowContainer as _, Surface, Tracked};
 use craft_ui::fonts::{I18nScripts, UiFonts};
 use craft_ui::layout_components::{Grid, Stack};
+use craft_ui::runtime::commands::CommandInput;
 use craft_ui::runtime::env::{RootEnv, WindowKey};
 use craft_ui::shell::AppShell;
 use craft_ui::testing::snapshot::{Renderer, RgbaImage, layer_rects, modal_open};
@@ -274,7 +275,7 @@ fn story(registration: &'static StoryRegistration, surface: Surface, env: &RootE
         flowed.set(shown.flow);
         shown.output
     });
-    fixture.commands(Story::command_input([&registration.story]));
+    fixture.commands(CommandInput::new().states(&Tracked::new(Story::command_states([&registration.story]))));
     settle(&mut fixture);
     if state.borrow().dialog.hidden {
         state.borrow_mut().show_dialog();

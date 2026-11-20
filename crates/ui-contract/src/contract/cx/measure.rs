@@ -52,7 +52,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
     /// the component, and the enabled state of its instance. `None` when the command is scoped and no instance of
     /// its scope is above the component.
-    pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<ResolvedCommand> {
+    pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<std::sync::Arc<ResolvedCommand>> {
         commands::resolve_scoped(self.ui.ctx(), self.env.command_chain(), &command.into())
     }
 
