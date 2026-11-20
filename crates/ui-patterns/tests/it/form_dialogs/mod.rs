@@ -6,6 +6,7 @@ mod dialog;
 mod export;
 mod files;
 mod hosted;
+mod image_unit_order;
 mod new_document;
 mod new_document_orientation;
 mod params;
