@@ -363,6 +363,39 @@ impl EnvValue for InCanvas {
     }
 }
 
+/// The env value that carries the guide a drag out of the canvas's rulers is placing in this pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InRulerGuide(Option<super::GuideDrag>);
+
+/// A guide a ruler drag places in this pass: a view under the canvas runs in every pass of the drag, and replays when no
+/// drag is placing one.
+impl crate::contract::MemoProps for InRulerGuide {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        match self.0 {
+            None => key.write_u32(0),
+            Some(_) => key.changes_every_pass(),
+        }
+    }
+}
+
+impl EnvValue for InRulerGuide {
+    fn root() -> Self {
+        InRulerGuide(None)
+    }
+}
+
+/// Publishes the ruler guide of this pass (or none) to a canvas's body.
+pub(super) fn publish_ruler_guide(values: &mut AppValues, guide: Option<super::GuideDrag>) {
+    values.set(InRulerGuide(guide));
+}
+
+/// The guide a drag out of the rulers of the innermost `Canvas` around the component is placing in this pass, as the
+/// rulers report it ([`RulersOutput::guide`](super::RulersOutput::guide)); `Guides` shows and commits it. `None`
+/// outside a canvas, when the canvas shows no rulers, and while no drag runs.
+pub fn ruler_guide(env: &EnvView<'_>) -> Option<super::GuideDrag> {
+    env.get::<InRulerGuide>().0
+}
+
 /// Publishes `space` (or none) to a canvas's body.
 pub(super) fn publish(values: &mut AppValues, space: Option<CanvasSpace>) {
     values.set(InCanvas(space));

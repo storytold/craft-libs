@@ -2,7 +2,7 @@
 //! value that wraps declares both steps at either end.
 
 use craft_ui::choice::Rating;
-use craft_ui::contract::{Bind, Props as _, Role, Show as _};
+use craft_ui::contract::{Props as _, Role, Show as _};
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use craft_ui::value_drag::AngleDial;

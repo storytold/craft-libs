@@ -10,7 +10,7 @@ use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Sizing, Tracked, bind_tracked};
 use craft_ui::display::Spinner;
 use craft_ui::layout_components::Stack;
-use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, Commands as _};
+use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, CommandStates, Commands as _};
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::{moved, press, release};
@@ -342,7 +342,11 @@ fn an_app_command_state_runs_the_settled_view_that_shows_it() {
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     assert!(!scene.disabled(&mut frames, 0), "Shown starts enabled");
-    let disable = |enabled: bool| CommandInput::new().state(Shown::Visible, CommandState::new().enabled(enabled));
+    let mut states = Tracked::new(CommandStates::new());
+    let mut disable = |enabled: bool| {
+        states.set(Shown::Visible, CommandState::new().enabled(enabled));
+        CommandInput::new().states(&states)
+    };
     frames.commands(disable(false));
     let (_, [reader, beside]) = scene.frame(&mut frames);
     assert!(reader > 0 && beside == 0, "only the view that shows Shown runs: {reader}, {beside}");
@@ -386,7 +390,9 @@ fn a_command_read_in_a_measured_body_settles_and_runs_when_its_state_changes() {
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     assert_eq!(scene.frame(&mut frames).1, [0, 0], "the view holding the measured body settles");
-    frames.commands(CommandInput::new().state(Shown::Measured, CommandState::new().enabled(false)));
+    let mut states = Tracked::new(CommandStates::new());
+    states.set(Shown::Measured, CommandState::new().enabled(false));
+    frames.commands(CommandInput::new().states(&states));
     let (_, [reader, beside]) = scene.frame(&mut frames);
     assert!(reader > 0 && beside == 0, "only the view that shows Measured runs: {reader}, {beside}");
     assert!(scene.disabled(&mut frames, 3), "it shows Measured disabled in the frame the app disables it");

@@ -19,19 +19,20 @@ pub use registry::{SetEntry, sets};
 pub use board::declare_child;
 #[doc(hidden)]
 pub use board::focus_within;
-#[cfg(feature = "testing")]
-#[doc(hidden)]
-pub use board::keymap_builds;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
-    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
+    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
 };
 #[doc(hidden)]
 pub use board::{bound_around, take_around};
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub use board::{chord_text_builds, keymap_builds};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
 pub(crate) use board::{keymap_generation, queued_for};
 
+use crate::contract::{MemoKey, MemoProps, PlainData, Revision, Tracked};
 use craft_behavior::CommandFlags;
 use craft_behavior::edit_history::Step;
 use craft_keymap::{Chord, Overrides};
@@ -262,6 +263,8 @@ pub struct ResolvedCommand {
     pub icon: Option<Cow<'static, str>>,
     /// The chord surfaces show: the first single-press binding that runs the command ([`chord`]).
     pub chord: Option<Chord>,
+    /// `chord` as the platform writes it, from the table the keymap builds with its bindings.
+    pub chord_text: Option<Arc<str>>,
     /// The state ANDed with the gate, the modal rule and the instance's liveness.
     pub enabled: bool,
     /// The checked state of a toggle or radio command.
@@ -279,17 +282,72 @@ pub struct ResolvedCommand {
 
 /// The app's one gate over commands: a dialog is open, a workspace is not ready, a recorder has the keys or an
 /// operation is pending. A command the gate refuses resolves disabled and does not fire.
+///
+/// The gate is a `fn` of its props, as a memoized view's `show` is: the props hold everything the gate reads, so the
+/// runtime asks it once per command while the props' key stays the same, and again only when it changes.
 #[derive(Clone)]
-pub struct CommandGate(Arc<dyn Fn(&CommandRef) -> bool + Send + Sync>);
+pub struct CommandGate {
+    key: u128,
+    allows: Arc<dyn Fn(&CommandRef) -> bool + Send + Sync>,
+}
 
 impl CommandGate {
-    /// A gate that lets `allows` commands through.
-    pub fn new(allows: impl Fn(&CommandRef) -> bool + Send + Sync + 'static) -> Self {
-        CommandGate(Arc::new(allows))
+    /// A gate that lets through the commands `allows` accepts under `props`.
+    pub fn new<P: MemoProps + Send + Sync + 'static>(props: P, allows: fn(&P, &CommandRef) -> bool) -> Self {
+        let mut key = MemoKey::new();
+        key.feed_hash(&std::any::TypeId::of::<P>());
+        key.write(&(allows as usize).to_le_bytes());
+        props.key(&mut key);
+        CommandGate { key: key.finish(), allows: Arc::new(move |command| allows(&props, command)) }
+    }
+
+    /// The key of the gate's props and `fn`: equal keys give equal answers.
+    pub(crate) fn key(&self) -> u128 {
+        self.key
     }
 
     pub(crate) fn allows(&self, command: &CommandRef) -> bool {
-        (self.0)(command)
+        (self.allows)(command)
+    }
+}
+
+/// The app-scope command states an app holds, in a [`Tracked`] it hands to [`CommandInput::states`] every frame. The
+/// runtime reads them again only when the revision moves.
+#[derive(Clone, Debug, Default, PartialEq, PlainData)]
+pub struct CommandStates {
+    #[plain_data(assume = "command refs and states are plain values; the list is copied on write")]
+    states: Arc<Vec<(CommandRef, CommandState)>>,
+}
+
+impl CommandStates {
+    /// No states.
+    pub fn new() -> Self {
+        CommandStates::default()
+    }
+
+    /// Gives `command` `state`, in place of the state it had.
+    pub fn set(&mut self, command: impl Into<CommandRef>, state: CommandState) {
+        let command = command.into();
+        let states = Arc::make_mut(&mut self.states);
+        match states.iter_mut().find(|(held, _)| *held == command) {
+            Some((_, held)) => *held = state,
+            None => states.push((command, state)),
+        }
+    }
+
+    /// Removes the state of `command`, which then resolves with its own label, enabled.
+    pub fn remove(&mut self, command: &CommandRef) -> Option<CommandState> {
+        let at = self.states.iter().position(|(held, _)| held == command)?;
+        Some(Arc::make_mut(&mut self.states).remove(at).1)
+    }
+
+    /// The state of `command`.
+    pub fn get(&self, command: &CommandRef) -> Option<&CommandState> {
+        self.states.iter().find(|(held, _)| held == command).map(|(_, state)| state)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &(CommandRef, CommandState)> {
+        self.states.iter()
     }
 }
 
@@ -297,7 +355,7 @@ impl CommandGate {
 #[derive(Clone, Default)]
 #[non_exhaustive]
 pub struct CommandInput {
-    pub(crate) states: Vec<(CommandRef, CommandState)>,
+    pub(crate) states: Option<(Revision, CommandStates)>,
     pub(crate) overrides: Option<Arc<Overrides>>,
     pub(crate) gate: Option<CommandGate>,
     pub(crate) catalog: Option<AppCatalog>,
@@ -309,10 +367,11 @@ impl CommandInput {
         CommandInput::default()
     }
 
-    /// The state of an app-scope command.
+    /// The app-scope command states the app holds. The runtime keeps the revision and reads the states again only
+    /// when it moves.
     #[must_use]
-    pub fn state(mut self, command: impl Into<CommandRef>, state: CommandState) -> Self {
-        self.states.push((command.into(), state));
+    pub fn states(mut self, states: &Tracked<CommandStates>) -> Self {
+        self.states = Some((states.revision(), (**states).clone()));
         self
     }
 
@@ -330,8 +389,8 @@ impl CommandInput {
         self
     }
 
-    /// The one gate over commands. It answers from what the app knew before the frame: the runtime asks it once per
-    /// command per frame, whichever components and passes resolve the command.
+    /// The one gate over commands. The runtime asks it once per command while the gate's props keep their key, whichever
+    /// components, passes and frames resolve the command.
     #[must_use]
     pub fn gate(mut self, gate: CommandGate) -> Self {
         self.gate = Some(gate);
@@ -342,7 +401,7 @@ impl CommandInput {
 /// The chain of container instances that receive scoped commands, innermost last. A private inherited field of
 /// the env.
 #[doc(hidden)]
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CommandChain(Arc<[(CommandScope, Id)]>);
 
 crate::stays!(CommandChain, CommandState, CommandRef, CommandScope);
@@ -439,7 +498,7 @@ pub trait Commands: CommandAccess {
     /// `command` as this context shows it: the label, icon and chord with the scoped bindings of the scopes above
     /// the context, and the enabled state of its instance. `None` when the command is scoped and no instance of its
     /// scope is above the context.
-    fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<ResolvedCommand> {
+    fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<Arc<ResolvedCommand>> {
         board::resolve_scoped(self.command_ctx(), self.command_chain(), &command.into())
     }
 }
@@ -458,7 +517,7 @@ pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -
 /// `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
 /// and hint, against the instance that [`fire`] would deliver it to. A scoped command with no live instance
 /// resolves disabled.
-pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand {
+pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> Arc<ResolvedCommand> {
     board::resolve_global(ctx, &command.into())
 }
 
@@ -466,7 +525,7 @@ pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand
 /// component's context: the label, icon, chord and state with the scoped bindings of the scopes above `ui`, `None`
 /// for a scoped command with no instance above. For a memoized view, which has no component context to ask; the
 /// answer is a tracked read of the command's state.
-pub fn resolver_in(ui: &egui::Ui) -> impl Fn(CommandRef) -> Option<ResolvedCommand> + 'static {
+pub fn resolver_in(ui: &egui::Ui) -> impl Fn(CommandRef) -> Option<Arc<ResolvedCommand>> + 'static {
     let ctx = ui.ctx().clone();
     let chain = crate::runtime::env::Env::of(ui).view().command_chain().clone();
     move |command| board::resolve_scoped(&ctx, &chain, &command)
@@ -496,7 +555,7 @@ pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
 /// once the layer closes: for a surface that closes before its command runs (the command palette), whose own layer
 /// does not block the command. Outside a modal layer it is [`resolve`].
 #[doc(hidden)]
-pub fn resolve_beneath(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand {
+pub fn resolve_beneath(ctx: &Context, command: impl Into<CommandRef>) -> Arc<ResolvedCommand> {
     match crate::runtime::overlay::modal_drawing(ctx) {
         Some(layer) => board::resolve_beneath(ctx, layer, &command.into()),
         None => resolve(ctx, command),

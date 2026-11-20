@@ -108,7 +108,7 @@ pub struct BarItemsStyle {
 #[derive(Clone)]
 struct Present {
     item: BarItem,
-    resolved: ResolvedCommand,
+    resolved: std::sync::Arc<ResolvedCommand>,
 }
 
 /// Where the parts of a strip sit this pass.

@@ -1,14 +1,13 @@
 //! Stories of `Guides`.
 
 use super::{GUIDE, Guides, GuidesOutput};
-use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with, story_view};
-use crate::canvas::{Canvas, Guide, GuideDrag, GuideKey, GuideLine, RasterSource};
-use crate::contract::{Props as _, Show as _, Validity};
-use crate::runtime::env::Message;
+use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with, show_document, story_view};
+use crate::canvas::{Canvas, Guide, GuideKey, GuideLine, RasterSource, RulerText, Rulers};
+use crate::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _, Validity};
+use crate::runtime::env::{Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{Axis, GesturePhase, Mixed};
-use craft_keymap::Mods;
+use craft_behavior::{Axis, Mixed, RulerUnits};
 use egui::{Id, Rect, Ui, Vec2};
 
 /// The most guides the invalid story accepts.
@@ -43,6 +42,35 @@ fn drag_first(fixture: &mut Fixture) {
     fixture.drag(&line, Vec2::new(travel, 0.0));
 }
 
+/// Drags a guide out of the top ruler's strip onto the document.
+fn drag_out_of_the_top_ruler(fixture: &mut Fixture) {
+    let Some(canvas) = fixture.by_role(Role::CANVAS).first().map(|target| target.rect) else { return };
+    // Inside the top strip, clear of the corner.
+    let from = egui::pos2(canvas.center().x, canvas.min.y + 4.0);
+    fixture.drag_at(from, Vec2::new(0.0, canvas.height() / 4.0));
+}
+
+#[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_out_of_the_top_ruler))]
+fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (guides, guides_at) = data.value_at("guides", guides());
+    let mut zero = Point::ZERO;
+    let canvas = ui.scope_id().with("guides story canvas");
+    let room = stage(ui);
+    let size = StoryDocument::STANDARD.size();
+    let centre = Point::new(f64::from(size.width) / 2.0, f64::from(size.height) / 2.0);
+    let view = story_view(room, ui.pixels_per_point(), centre, 100.0);
+    let text = RulerText::new(RulerUnits::pixels(), UnitKind::Pixels);
+    let strips = Rulers::new("Rulers", Bind::bound(&mut zero)).interactive(true);
+    let shown = Canvas::new("Document").id(canvas).view(view).with_rulers(Some(strips)).rulers(text, text).show_at(ui, room, |ui, body| {
+        show_document(ui, body.rect, &StoryDocument::STANDARD);
+        Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).show_at(ui, body.rect)
+    });
+    let mut output: StoryOutput = shown.inner.map(Into::into).unwrap_or_default();
+    // A click on a strip is the rulers' to report.
+    output.clicked |= shown.output.rulers.is_some_and(|rulers| StoryOutput::from(rulers).clicked);
+    output
+}
+
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]
 fn guides_over_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (guides, guides_at) = data.value_at("guides", guides());
@@ -70,13 +98,6 @@ fn too_many_guides(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn guides_that_only_draw(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (guides, guides_at) = data.value_at("guides", guides());
     on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).show_at(ui, at))
-}
-
-#[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]
-fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (guides, guides_at) = data.value_at("guides", guides());
-    let drag = GuideDrag::new_guide(Axis::Y, GesturePhase::Update, Some(200.0), Mods::NONE);
-    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).pending(drag).show_at(ui, at))
 }
 
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]

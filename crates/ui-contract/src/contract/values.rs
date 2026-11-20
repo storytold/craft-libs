@@ -281,6 +281,16 @@ impl<'a, T: Value> Bind<'a, T> {
         self.reset.as_ref()
     }
 
+    /// The one value the binding holds before this pass's edits; `None` for a mixed or kept binding.
+    pub fn value(&self) -> Option<&T> {
+        match &self.source {
+            Source::Given(Mixed::Same(value)) | Source::MutMixed(Mixed::Same(value)) => Some(value),
+            Source::Mut(value) => Some(&**value),
+            Source::Tracked { value, .. } => Some(&**value),
+            _ => None,
+        }
+    }
+
     /// The binding holds one value equal to `shown` this pass: what a component reads in `Component::keys`, which has
     /// no context to read the value from.
     #[doc(hidden)]

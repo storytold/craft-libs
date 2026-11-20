@@ -22,7 +22,7 @@
 //!    the app's shortcuts in the next pass: a plain Delete with nothing to delete runs the app's Edit > Clear.
 //!    A tool that claims the nudges has AccessKit Increment and Decrement on its node, and they reach `key` as the
 //!    arrows toward and away from the reading end.
-//! 6. The tool paints over the canvas and requests its cursor at tool priority.
+//! 6. The tool paints over the canvas and requests its cursor at tool priority, within the view on the canvas's layer.
 //! 7. A drag past the canvas edge ([`CanvasTool::autoscrolls`]), and a hover in the band inside it
 //!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`] and the pass's
 //!    [`ToolHostResponse::scroll`]; the app moves its view by it with [`Autoscroll::scroll`].
@@ -620,7 +620,7 @@ impl<'m> ToolHost<'m> {
         };
         paint_tool(ui, &env, effective, context());
         if pass.snap.as_ref().is_some_and(|snap| snap.options().smart_guides) {
-            paint_smart_lines(ui, &env, rect, space, &requests.snapped, smart_guide_color);
+            paint_smart_lines(ui, &env, space, &requests.snapped, smart_guide_color);
         }
         response.snapped = requests.snapped;
         let cx = context();
@@ -631,7 +631,9 @@ impl<'m> ToolHost<'m> {
         }
         if over {
             let wanted = effective.cursor(&cx);
-            cursor::request(&ctx, wanted.clone(), CursorPriority::Tool);
+            // A tip outline is a mark on the canvas: it shows inside the view, on the canvas's layer.
+            let view = space.map_or(rect, |space| space.view.rect).intersect(rect);
+            cursor::request_within(&ctx, wanted.clone(), CursorPriority::Tool, cursor::CursorRegion::new(ui.layer_id(), view));
             response.cursor = Some(wanted);
         }
         if let Some(at) = current.map(|pointer| pointer.pos) {
@@ -796,9 +798,9 @@ fn sub_decl(owner: Id, node: &SubNode, rect: Rect, parent: Id) -> SubDecl<'_> {
     SubDecl { owner, component: "", node, rect, enabled: true, focusable: false, clickable: false, active: false, face: None, label: "", parent }
 }
 
-/// Paints the tool over the canvas, clipped to it.
+/// Paints the tool over the canvas, under the clip of the body it runs in: the canvas's view.
 fn paint_tool(ui: &Ui, env: &Env, tool: &dyn CanvasTool, cx: ToolContext<'_>) {
-    let painter = ui.painter().with_clip_rect(cx.rect);
+    let painter = ui.painter().clone();
     let record = RefCell::new(PaintRecord::default());
     let draw = Draw::new(&painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: env.ink });
     let content = ContentPainterCx::new(painter.clone(), env, env.ink);
@@ -825,13 +827,13 @@ fn host_style<'a>(ui: &'a Ui, env: &'a Env) -> StyleCx<'a> {
 
 /// Paints the smart kinds of the snap `lines` over the canvas through the smart guides' one line loop, in `color` or
 /// the theme's smart guide colour. `SmartGuides` itself paints only inside a canvas body, which the host is not in.
-fn paint_smart_lines(ui: &Ui, env: &Env, rect: Rect, space: Option<CanvasSpace>, lines: &[SnapLine], color: Option<DataColor>) {
+fn paint_smart_lines(ui: &Ui, env: &Env, space: Option<CanvasSpace>, lines: &[SnapLine], color: Option<DataColor>) {
     let Some(space) = space else { return };
     let smart: Vec<SmartLine> = lines.iter().filter(|line| line.kind.is_smart()).map(|line| SmartLine::of(line, space.view.visible())).collect();
     if smart.is_empty() {
         return;
     }
-    let content = ContentPainterCx::new(ui.painter().with_clip_rect(rect), env, env.ink);
+    let content = ContentPainterCx::new(ui.painter().clone(), env, env.ink);
     let style = resolve_style(&host_style(ui, env), SmartGuides::new(&[], &[]).style_key(), ui.ctx(), <SmartGuides<'static> as Component>::style);
     paint_lines(&content, &space.view, &smart, &style, color);
 }

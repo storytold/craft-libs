@@ -52,7 +52,7 @@ impl ColorModel for NaiveCmyk {
     }
 }
 
-static CMYK_MODEL: NaiveCmyk = NaiveCmyk;
+const CMYK_MODEL: NaiveCmyk = NaiveCmyk;
 
 /// The picker's output with the readout of its latest event, kept in the story's data across passes.
 fn with_readout(data: &mut StoryData, shown: ColorPickerOutput) -> StoryOutput {

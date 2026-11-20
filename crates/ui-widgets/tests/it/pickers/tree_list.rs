@@ -1,6 +1,6 @@
 //! The search of a TreePicker's popup lists the items whose path holds every typed word, across closed folders.
 
-use craft_ui::contract::{Bind, Role, Show as _};
+use craft_ui::contract::{Role, Show as _};
 use craft_ui::pickers::{TreeEntry, TreePicker};
 use craft_ui::testing::access::name;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};

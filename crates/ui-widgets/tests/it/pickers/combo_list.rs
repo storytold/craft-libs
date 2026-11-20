@@ -1,7 +1,7 @@
 //! The keys in a ComboBox's open list put the active option's text in the field at once, and the list's Escape puts
 //! back what was typed.
 
-use craft_ui::contract::{Bind, Entry, Role, Show as _};
+use craft_ui::contract::{Entry, Role, Show as _};
 use craft_ui::pickers::ComboBox;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Key, Modifiers, Ui};

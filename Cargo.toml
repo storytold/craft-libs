@@ -21,6 +21,7 @@ craft-xfdf = { path = "crates/xfdf" }
 craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
+craft-sqlite = { path = "crates/sqlite" }
 craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
@@ -123,6 +124,7 @@ craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
 craft-mesh = { path = "crates/mesh" }
 craft-html = { path = "crates/html" }
+craft-ipp = { path = "crates/ipp" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
@@ -130,6 +132,10 @@ craft-font-subset = { path = "crates/font-subset" }
 # The HarfBuzz subsetter from storytold's HarfBuzz fork (branch rust-subset-15.0.0: HarfBuzz 15.0.0 plus rust/harfbuzz-subset-sys).
 harfbuzz-subset-sys = { git = "https://github.com/storytold/harfbuzz.git", rev = "f32ed1e548eaa8852bff47e49a90629a013a2faa" }
 craft-host = { path = "crates/host" }
+craft-gpu = { path = "crates/gpu" }
+craft-gpu-null = { path = "crates/gpu-null" }
+craft-gpu-providers = { path = "crates/gpu-providers" }
+craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-i18n = { path = "crates/i18n" }
 craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
@@ -172,6 +178,7 @@ craft-opc = { path = "crates/opc" }
 craft-openpgp = { path = "crates/openpgp" }
 craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
+craft-ppt-binary = { path = "crates/ppt-binary" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-pcraft-bundle = { path = "crates/pcraft-bundle" }
@@ -270,6 +277,9 @@ proptest = "1"
 encoding_rs = "0.8"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# Foundation crates for craft-gpu-wgpu. The versions match the ones the app repos already pin.
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

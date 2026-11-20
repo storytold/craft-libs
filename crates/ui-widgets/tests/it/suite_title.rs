@@ -2,7 +2,7 @@
 //! control.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::testing::story::{Story, StoryData, StoryOutput};
 use craft_ui::testing::suite::title_case;

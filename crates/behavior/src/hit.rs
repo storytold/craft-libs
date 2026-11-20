@@ -30,13 +30,15 @@ pub enum HitShape {
         /// The other end.
         b: Pos2,
     },
-    /// A chain of segments, hit within [`LINE_REACH`].
+    /// A chain of segments, hit within `reach` ([`LINE_REACH`] unless [`HitShape::polyline_within`] says otherwise).
     #[non_exhaustive]
     Polyline {
         /// The corners in order.
         points: Vec<Pos2>,
         /// Whether the last corner joins the first.
         closed: bool,
+        /// How far from the chain a point still hits it, in points.
+        reach: f32,
     },
     /// A filled polygon.
     Polygon(Vec<Pos2>),
@@ -62,9 +64,16 @@ impl HitShape {
         HitShape::Segment { a, b }
     }
 
-    /// A chain of segments, closed when `closed`.
+    /// A chain of segments, closed when `closed`, hit within [`LINE_REACH`].
     pub fn polyline(points: Vec<Pos2>, closed: bool) -> Self {
-        HitShape::Polyline { points, closed }
+        HitShape::Polyline { points, closed, reach: LINE_REACH }
+    }
+
+    /// A chain of segments, closed when `closed`, hit within `reach` points: a tool whose measured reach differs from
+    /// a line's. A negative or non-finite `reach` is [`LINE_REACH`].
+    pub fn polyline_within(points: Vec<Pos2>, closed: bool, reach: f32) -> Self {
+        let reach = if reach.is_finite() && reach >= 0.0 { reach } else { LINE_REACH };
+        HitShape::Polyline { points, closed, reach }
     }
 
     /// The part of `within` outside `polygon`.
@@ -92,7 +101,7 @@ impl HitShape {
             HitShape::Rect(rect) => HitShape::Rect(rect.translate(by)),
             HitShape::Circle { center, radius } => HitShape::Circle { center: *center + by, radius: *radius },
             HitShape::Segment { a, b } => HitShape::Segment { a: *a + by, b: *b + by },
-            HitShape::Polyline { points: line, closed } => HitShape::Polyline { points: points(line), closed: *closed },
+            HitShape::Polyline { points: line, closed, reach } => HitShape::Polyline { points: points(line), closed: *closed, reach: *reach },
             HitShape::Polygon(polygon) => HitShape::Polygon(points(polygon)),
             HitShape::OutsidePolygon { within, polygon } => HitShape::OutsidePolygon { within: within.translate(by), polygon: points(polygon) },
         }
@@ -114,8 +123,8 @@ impl HitShape {
                 HitShape::Circle { center: pos(*center, *to_center), radius: near(*radius, *to_radius) }
             }
             (HitShape::Segment { a, b }, HitShape::Segment { a: to_a, b: to_b }) => HitShape::Segment { a: pos(*a, *to_a), b: pos(*b, *to_b) },
-            (HitShape::Polyline { points: line, closed }, HitShape::Polyline { points: to_line, .. }) => {
-                HitShape::Polyline { points: points(line, to_line), closed: *closed }
+            (HitShape::Polyline { points: line, closed, reach }, HitShape::Polyline { points: to_line, reach: to_reach, .. }) => {
+                HitShape::Polyline { points: points(line, to_line), closed: *closed, reach: near(*reach, *to_reach) }
             }
             (HitShape::Polygon(polygon), HitShape::Polygon(to_polygon)) => HitShape::Polygon(points(polygon, to_polygon)),
             (HitShape::OutsidePolygon { within: area, polygon }, HitShape::OutsidePolygon { within: to_area, polygon: to_polygon }) => {
@@ -136,7 +145,8 @@ impl HitShape {
             }
             HitShape::Circle { center, radius } => center.distance(point) <= radius.max(across / 2.0),
             HitShape::Segment { a, b } => segment_distance(point, *a, *b) <= reach,
-            HitShape::Polyline { points, closed } => {
+            HitShape::Polyline { points, closed, reach: own } => {
+                let reach = own.max(across / 2.0);
                 let closing = closed.then(|| points.first().zip(points.last())).flatten();
                 points.windows(2).any(|pair| segment_distance(point, pair[0], pair[1]) <= reach)
                     || closing.is_some_and(|(first, last)| segment_distance(point, *last, *first) <= reach)
@@ -157,10 +167,10 @@ impl HitShape {
             HitShape::Rect(rect) => rect.contains(point),
             HitShape::Circle { center, radius } => center.distance(point) <= *radius,
             HitShape::Segment { a, b } => segment_distance(point, *a, *b) <= LINE_REACH,
-            HitShape::Polyline { points, closed } => {
+            HitShape::Polyline { points, closed, reach } => {
                 let closing = closed.then(|| points.first().zip(points.last())).flatten();
-                points.windows(2).any(|pair| segment_distance(point, pair[0], pair[1]) <= LINE_REACH)
-                    || closing.is_some_and(|(first, last)| segment_distance(point, *last, *first) <= LINE_REACH)
+                points.windows(2).any(|pair| segment_distance(point, pair[0], pair[1]) <= *reach)
+                    || closing.is_some_and(|(first, last)| segment_distance(point, *last, *first) <= *reach)
             }
             HitShape::Polygon(points) => inside_polygon(point, points),
             HitShape::OutsidePolygon { within, polygon } => within.contains(point) && !inside_polygon(point, polygon),
@@ -386,5 +396,19 @@ mod tests {
         assert_eq!(owner(&near), Some(2));
         let tie = [shape(big(), Sense::CLICK, 1, 0, HitLevel::Body, 0), shape(big(), Sense::CLICK, 2, 0, HitLevel::Body, 0)];
         assert_eq!(owner(&tie), Some(2));
+    }
+
+    #[test]
+    fn a_polyline_hits_within_its_own_reach_and_a_bad_reach_is_a_lines() {
+        let points = vec![pos2(0.0, 0.0), pos2(100.0, 0.0)];
+        let line = HitShape::polyline(points.clone(), false);
+        assert!(line.hit(pos2(50.0, LINE_REACH)) && !line.hit(pos2(50.0, LINE_REACH + 0.5)));
+        let wide = HitShape::polyline_within(points.clone(), false, 5.0);
+        assert!(wide.hit(pos2(50.0, 5.0)) && wide.hit(pos2(50.0, -5.0)) && !wide.hit(pos2(50.0, 5.5)));
+        let hits = |shape: HitShape, y: f32| Shape::new(shape, Sense::CLICK, 0_u8, None, HitPriority::BODY, 0).min_across(8.0).hits(pos2(50.0, y));
+        assert!(hits(wide.clone(), 5.0) && !hits(wide, 5.5), "a target size under twice the reach keeps the reach");
+        for bad in [f32::NAN, f32::INFINITY, -1.0] {
+            assert_eq!(HitShape::polyline_within(points.clone(), false, bad), line);
+        }
     }
 }

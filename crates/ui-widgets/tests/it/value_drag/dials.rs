@@ -3,7 +3,7 @@
 //! its edges.
 
 use craft_behavior::Mixed;
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::{EditKind, Fixture, Story, StoryData, StoryOutput, trial};
 use craft_ui::value_drag::{AngleDial, PointPicker};
 use egui::{Key, Modifiers, Ui, Vec2};

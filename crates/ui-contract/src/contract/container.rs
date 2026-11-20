@@ -759,7 +759,8 @@ pub struct ContainerProps {
     pub arena: bool,
     /// The container is its body's scroll owner without a scroll region, as a canvas with a view of its own is: the
     /// page and end moves and the reveals its children leave go to it (`Focus::take_scroll_moves`,
-    /// `Focus::take_reveal`). A container with a `scroll` region is one already.
+    /// `Focus::take_reveal`). A container with a `scroll` region is one already. The body is clipped to its body
+    /// region, the view, so what it shows never paints over the container's padding (a canvas's rulers).
     pub scroll_owner: bool,
     /// The container's value is a gate that disables its content while off.
     #[doc(hidden)]

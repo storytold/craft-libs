@@ -104,8 +104,8 @@ fn status_failed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(FullWindowCanvas<'static>, covers = [], drive = Drive::Never)]
 fn canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    static IMAGE_SOURCE: Flat = Flat { colour: Color32::from_rgb(0x4a, 0x7f, 0xc1), half: true };
-    static MASK: Flat = Flat { colour: Color32::from_rgba_premultiplied(0x40, 0x00, 0x00, 0x40), half: false };
+    const IMAGE_SOURCE: Flat = Flat { colour: Color32::from_rgb(0x4a, 0x7f, 0xc1), half: true };
+    const MASK: Flat = Flat { colour: Color32::from_rgba_premultiplied(0x40, 0x00, 0x00, 0x40), half: false };
     let checkerboard = *data.value("checkerboard", true);
     let overlay = *data.value("overlay", true);
     let tint = *data.value("tint", true);

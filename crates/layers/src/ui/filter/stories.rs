@@ -57,7 +57,8 @@ fn by_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(LayerFilterBar<'static>, covers = [], drive = Drive::Never, group = "Types", title = "Filter by Attribute")]
 fn by_attribute(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::Attribute, attribute: LayerAttribute::Clipped, ..LayerFilter::default() });
+    let (filter, filter_at) =
+        data.value_at("filter", LayerFilter { by: FilterBy::Attribute, attribute: LayerAttribute::Clipped, ..LayerFilter::default() });
     show(ui, filter, filter_at)
 }
 
@@ -69,7 +70,8 @@ fn by_color(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(LayerFilterBar<'static>, covers = [], drive = Drive::Never, group = "Types", title = "Filter by Smart Object")]
 fn by_smart_object(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::SmartObject, smart: vec![SmartKind::Missing], ..LayerFilter::default() });
+    let (filter, filter_at) =
+        data.value_at("filter", LayerFilter { by: FilterBy::SmartObject, smart: vec![SmartKind::Missing], ..LayerFilter::default() });
     show_over(ui, filter, filter_at, &FakeLayers::boards())
 }
 

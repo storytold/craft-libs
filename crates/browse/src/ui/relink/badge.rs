@@ -34,10 +34,10 @@ enum StatusGlyph {
     Modified,
 }
 
-static MISSING: StatusGlyph = StatusGlyph::Missing;
-static UNREADABLE: StatusGlyph = StatusGlyph::Unreadable;
-static REFUSED: StatusGlyph = StatusGlyph::Refused;
-static MODIFIED: StatusGlyph = StatusGlyph::Modified;
+const MISSING: StatusGlyph = StatusGlyph::Missing;
+const UNREADABLE: StatusGlyph = StatusGlyph::Unreadable;
+const REFUSED: StatusGlyph = StatusGlyph::Refused;
+const MODIFIED: StatusGlyph = StatusGlyph::Modified;
 
 impl Glyph for StatusGlyph {
     fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, _: Color32, _: bool) {

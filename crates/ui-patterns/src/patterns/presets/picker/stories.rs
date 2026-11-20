@@ -52,6 +52,25 @@ fn preset_picker_chip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     output.map(StoryOutput::from).unwrap_or_default()
 }
 
+/// The chip with a caption range: it holds the width of the widest number of the range ("5000", in tabular figures),
+/// so a caption that follows a dragged size ("7") moves nothing beside it on the bar.
+#[story(PresetPicker<'static, u32>, covers = [], drive = Drive::Never)]
+fn preset_picker_chip_caption_range(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = rows();
+    let ((swatch, state), at) = data.value_at("chip range", (Some(TEAL), PresetState::<u32>::new()));
+    let mut output = None;
+    Bar::new("Brush options", BarKind::Options).show(ui, |ui, _| {
+        output = Some(
+            PresetPicker::new("Swatch", at.bind(&mut *swatch), &rows, at.bind(&mut *state))
+                .field(PickerField::Chip)
+                .caption("7")
+                .caption_range((1.0..=5000.0, 0))
+                .show(ui),
+        );
+    });
+    output.map(StoryOutput::from).unwrap_or_default()
+}
+
 #[story(PresetPicker<'static, u32>, covers = [Mixed], drive = Drive::Never)]
 fn preset_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = rows();

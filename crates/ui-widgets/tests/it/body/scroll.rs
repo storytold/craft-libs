@@ -3,17 +3,19 @@
 
 use craft_behavior::{ColumnWidth, PartKey};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, ContainerProps, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, ContainerProps, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft_ui::layout_components::Grid;
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::testing::layout::{Block, in_region, measured_block};
 use craft_ui::testing::text::widget_id;
-use craft_ui::testing::{Frames, MemoRun, last_frame_memo_runs, pointer, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, last_frame_memo_runs, pointer, trial};
 use craft_ui::text::TextField;
 use craft_ui_test_kit::body::Slab;
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 const LINE: Vec2 = Vec2::new(100.0, 20.0);
 /// Positions that should coincide, and a looser bound for positions that follow a drag.
@@ -654,4 +656,34 @@ fn a_pressed_field_in_part_view_stays_put_and_tab_to_it_reveals_it() {
         "Tab scrolled the whole field into view: {rect:?} ({height} tall) in {:?}",
         view.get()
     );
+}
+
+/// A menu opened from a scroll region, below the region's view: the focus entering the menu reveals its row in
+/// the menu's own scroll body only, so the region keeps its offset. Guards that a container on its own layer passes no
+/// reveal to the scroll region of its opener.
+#[trial]
+fn a_menu_opened_in_a_scroll_region_leaves_the_region_where_it_is() {
+    let top = Rc::new(Cell::new(f32::NAN));
+    let seen = Rc::clone(&top);
+    let mut fixture = Fixture::new(move |ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, _| {
+                seen.set(ui.next_widget_position().y);
+                Block::new(Vec2::new(LINE.x, VIEW.y - 1.5 * LINE.y)).show(ui);
+                let opener = Button::new("Show").show(ui);
+                Menu::new("Main").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+                    for name in ["New", "Save", "Print", "Quit"] {
+                        MenuItem::new(name).show(ui);
+                    }
+                });
+                Block::new(Vec2::new(LINE.x, 3.0 * VIEW.y)).show(ui);
+            });
+        });
+    });
+    fixture.room(Vec2::splat(3.0 * VIEW.y)).settle();
+    let start = top.get();
+    let opener = fixture.by_label("Show").expect("the opener");
+    fixture.click(&opener).settle();
+    assert!(fixture.by_label("Quit").is_some(), "the menu is open");
+    assert!((top.get() - start).abs() < SAME, "the region keeps its offset: content top {} from {start}", top.get());
 }

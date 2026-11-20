@@ -273,3 +273,27 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
 }
+
+/// A menu bar in a memoized view underlines its mnemonics while Alt is held: the modifiers it paints by are a tracked
+/// input, so the frame Alt goes down runs the view, and so does the frame it comes up, though its props stay the same.
+/// In between the view replays again.
+#[trial]
+fn holding_alt_runs_the_memoized_view_of_a_menu_bar() {
+    use craft_ui::contract::MemoView;
+    use craft_ui::testing::{MemoRun, last_frame_memo_runs};
+    let mut fixture = Fixture::new(|ui| {
+        MemoView::new("title", MainMenu {}, main_menu).show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let frame = |fixture: &mut Fixture| {
+        fixture.frame(Vec::new());
+        last_frame_memo_runs(fixture.ctx()).iter().filter(|(_, _, run)| *run == MemoRun::Ran).count()
+    };
+    assert_eq!(frame(&mut fixture), 0, "the view replays");
+    fixture.hold(Modifiers::ALT);
+    assert!(frame(&mut fixture) > 0, "Alt going down runs the view, which underlines the mnemonics");
+    assert_eq!(frame(&mut fixture), 0, "with Alt held the view replays again");
+    fixture.hold(Modifiers::NONE);
+    assert!(frame(&mut fixture) > 0, "Alt coming up runs the view, which drops the underlines");
+}

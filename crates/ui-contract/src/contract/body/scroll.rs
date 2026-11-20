@@ -329,7 +329,7 @@ impl<'b> BodyHooks<'b> {
         self.offset = self.clamped(scroll, view, self.offset);
     }
 
-    fn clamped(&self, scroll: Scroll, view: Vec2, offset: ScrollPos) -> ScrollPos {
+    pub(super) fn clamped(&self, scroll: Scroll, view: Vec2, offset: ScrollPos) -> ScrollPos {
         let max = self.max_offset(view);
         ScrollPos {
             x: if scroll.horizontal_on() { offset.x.clamp(0.0, max.x) } else { 0.0 },

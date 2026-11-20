@@ -21,7 +21,7 @@ fn a_draft_adds_its_pieces_after_the_existing_chips() {
 }
 
 mod field {
-    use craft_ui::contract::{Bind, Role, Show as _};
+    use craft_ui::contract::{Role, Show as _};
     use craft_ui::testing::access::name;
     use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, pointer, trial};
     use craft_ui::text::ChipField;
