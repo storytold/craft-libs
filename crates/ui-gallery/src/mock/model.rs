@@ -8,7 +8,7 @@ use craft_behavior::{Axis, PixelSize};
 use craft_behavior::{CanvasView, Selection};
 use craft_ui::bars::{StatusItem, StatusMessage};
 use craft_ui::canvas::{Guide, GuideKey, PickStep, PixelRect, tool_pick};
-use craft_ui::contract::CommandSet;
+use craft_ui::contract::{CommandSet, Tracked};
 use craft_ui::rails::{LastUsed, RailTool, SlotId, ToolSlot};
 use craft_ui::runtime::env::UnitKind;
 use egui::{Color32, Rect};
@@ -226,7 +226,7 @@ pub struct LayerMove {
 }
 
 /// The open document.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Document {
     /// The title of the window and the tab.
@@ -239,8 +239,9 @@ pub struct Document {
     pub layers: Vec<Layer>,
     /// The selected layers; the lead is the current layer.
     pub selected: Selection<LayerId>,
-    /// The canvas view. A view that was never shown opens fitted.
-    pub view: CanvasView,
+    /// The canvas view, which the canvas, the Navigator and the status bar show and edit. A view that was never shown
+    /// opens fitted.
+    pub view: Tracked<CanvasView>,
     /// The ruler zero point.
     pub zero: Point,
     /// The unit the rulers count in.
@@ -277,7 +278,7 @@ impl Default for Document {
             size,
             selected: Selection::single(layers[0].id),
             layers,
-            view,
+            view: Tracked::new(view),
             zero: Point::ZERO,
             units: UnitKind::Pixels,
             guides: Vec::new(),
@@ -398,7 +399,7 @@ impl Document {
 }
 
 /// Everything the mock edits.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct MockState {
     /// The dock's panels and where they sit.

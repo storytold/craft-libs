@@ -77,7 +77,7 @@ impl Panels<'_> {
     /// The document tab's title: the name, the zoom of the device and the current layer.
     fn tab_title(&self, ui: &Ui, cx: &BodyCx<'_>) -> String {
         let document = &self.document;
-        let zoom = CanvasSpace::new(document.view, ui.pixels_per_point()).zoom_device() * 100.0;
+        let zoom = CanvasSpace::new(*document.view, ui.pixels_per_point()).zoom_device() * 100.0;
         let layer = document.current_layer().map_or("", |layer| layer.name.as_str());
         cx.words::<MockWords>().tab_title.fill(&[("name", &document.title), ("zoom", &cx.format().integer(zoom.round() as i64)), ("layer", layer)])
     }
@@ -115,7 +115,7 @@ impl DockPanels<Panel> for Panels<'_> {
     fn body(&mut self, panel: &Panel, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         match panel {
             Panel::Navigator => {
-                let props = NavigatorProps { view: Bind::bound(&mut self.document.view), size: self.document.size };
+                let props = NavigatorProps { view: craft_ui::contract::bind_tracked!(self.document.view), size: self.document.size };
                 let _ = MemoView::new("navigator", props, navigator).show(ui);
             }
             Panel::Layers => layers(ui, cx, self.document),
@@ -209,7 +209,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let page = DocRect::new(0.0, 0.0, document.size.width, document.size.height);
     let pages = [PageFrame::new(page)];
     let pixels = document.pixel_size();
-    let (view, show_rulers) = (document.view, document.rulers);
+    let (view, show_rulers) = (*document.view, document.rulers);
     let editing = matches!(tool, Tool::Move | Tool::Marquee);
     let canvas_id = ui.scope_id().with("mock document canvas");
     // What the host reported; none in a measuring run, where it does not run.
@@ -262,7 +262,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     );
     let reported: craft_ui::canvas::ToolHostResponse = reported.unwrap_or_default();
     if let Some(next) = scrolled.or(reported.view) {
-        document.view = next;
+        *document.view = next;
     }
 }
 
