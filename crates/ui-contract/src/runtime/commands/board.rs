@@ -708,6 +708,18 @@ pub fn focus_within(ctx: &Context, id: Id) -> bool {
     with(ctx, |board| board.here.focused.iter().any(|(_, chain)| chain.contains(&id)))
 }
 
+/// Simulates a focus change after the command board's previous begin hook.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn clear_focus_vantage(ctx: &Context) {
+    with(ctx, |board| {
+        board.here.inside_modal.clear();
+        for (_, chain) in &mut board.here.focused {
+            chain.clear();
+        }
+    });
+}
+
 /// Records that the container `id` is an instance of `scope` in the running pass of its viewport.
 pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
     register_in(ctx, scope, id, overlay::drawing_parent(ctx));
@@ -1188,17 +1200,19 @@ pub(crate) fn binds_scoped(ctx: &Context, chord: &Chord) -> bool {
     let focused = focus::record(ctx, viewport).focused;
     let layout = keys::layout_of(ctx);
     let found = with(ctx, |board| {
-        let chain: Vec<Id> =
-            board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.ids().collect()).unwrap_or_default();
-        let keys = board.key_scopes(&chain)?;
+        let chain = board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.clone())?;
+        let ids: Vec<Id> = chain.ids().collect();
+        let keys = board.key_scopes(&ids)?;
         let hit = keys.press(&layout, &chord_input(chord), false, None)?;
         // The lookup also ranks panels that share with the focused one and, with fallthrough, every other panel: only
         // a command of a scope around the focus counts.
         let command = std::iter::once(&hit.command).chain(&hit.cycle).find(|command| keys.scopes.contains(&board.scope_of(command)))?.clone();
-        let (_, instance) = board.target_of(ctx, &command, &board.here);
-        Some((command, instance))
+        let instance = board.innermost(&chain, board.scope_of(&command));
+        Some((command, instance, chain))
     });
-    found.is_some_and(|(command, instance)| resolve_in(ctx, &command, instance, Reach::Focus, None).0.enabled)
+    // Key routing runs before the command board refreshes its focus vantage for this pass. Check the actual focused
+    // chain, so a focus that just entered a modal can reach its own commands without opening the modal to outsiders.
+    found.is_some_and(|(command, instance, chain)| resolve_in(ctx, &command, instance, Reach::Chain(&chain), None).0.enabled)
 }
 
 /// Where a shortcut pressed with focus in a menu or on a menu bar matches, and where a hit gives the focus back. The

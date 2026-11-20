@@ -15,6 +15,9 @@ pub use registry::CommandDefError;
 #[doc(hidden)]
 pub use registry::{SetEntry, sets};
 
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub use board::clear_focus_vantage;
 #[doc(hidden)]
 pub use board::declare_child;
 #[doc(hidden)]
