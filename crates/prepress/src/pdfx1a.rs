@@ -25,6 +25,10 @@ const CONFORMANCE: &str = "PDF/X-1a:2003";
 /// `/RegistryName` of the ICC's registry of characterized printing conditions. An output intent
 /// naming one of them needs no `/DestOutputProfile` in PDF/X.
 const ICC_REGISTRY: &str = "http://www.color.org";
+const REGISTERED_CONDITIONS: &[&str] = &["FOGRA39"];
+/// Largest classic cross-reference size accepted by the public finalizer. The rewritten table
+/// emits one entry per object number, so this is also an output-allocation bound.
+const MAX_XREF_SIZE: usize = 1 << 20;
 
 /// The graphics placed on one output page, to name in errors: the page's name and the graphics'
 /// names.
@@ -114,7 +118,6 @@ pub fn check_pdfx1a(pdf: &[u8]) -> Vec<String> {
 /// [`check_pdfx1a`]'s findings: transparency and color spaces first, then the rest.
 fn checks(pdf: &[u8]) -> (Vec<String>, Vec<String>) {
     let mut issues = Vec::new();
-    let text = String::from_utf8_lossy(pdf);
     let file = craft_pdf::syntax::Pdf::new(pdf.to_vec()).ok();
     if !pdf.starts_with(b"%PDF-1.") || pdf.get(7).is_none_or(|v| *v > b'4') {
         issues.push("the PDF version must be 1.4 or lower".into());
@@ -122,41 +125,46 @@ fn checks(pdf: &[u8]) -> (Vec<String>, Vec<String>) {
     if file.as_ref().is_none_or(|f| pdfx_intents(f).is_empty()) {
         issues.push("no PDF/X output intent".into());
     }
-    let info = |key: &[u8]| file.as_ref().and_then(|f| info_text(pdf, f, key));
+    let info = |key: &[u8]| file.as_ref().and_then(|f| info_text(f, key));
     if info(b"GTS_PDFXVersion").as_deref() != Some(VERSION) {
         issues.push(format!("the document information doesn't name {VERSION}"));
     }
     if info(b"GTS_PDFXConformance").as_deref() != Some(CONFORMANCE) {
         issues.push(format!("the document information doesn't name the conformance level {CONFORMANCE}"));
     }
-    if !text.contains("/Trapped/False") && !text.contains("/Trapped/True") && !text.contains("/Trapped /False") && !text.contains("/Trapped /True") {
+    let trapped = file.as_ref().and_then(|f| f.info()).and_then(|info| info.get::<Name<'_>>(b"Trapped"));
+    if !trapped.as_ref().is_some_and(|value| matches!(value.as_ref(), b"False" | b"True")) {
         issues.push("the document information needs /Trapped True or False".into());
     }
-    if text.contains("/Interpolate true") {
-        issues.push("an image asks for interpolation".into());
-    }
-    if text.contains("/Encrypt") {
+    if file.as_ref().is_some_and(|f| f.is_encrypted()) {
         issues.push("the file is encrypted".into());
     }
-    let pages = text.matches("/Type/Page/").count() + text.matches("/Type/Page>").count();
-    let trims = text.matches("/TrimBox").count();
-    if pages > 0 && trims < pages {
-        issues.push("every page needs a trim box".into());
+    if let Some(file) = file.as_ref() {
+        for (index, page) in file.pages().iter().enumerate() {
+            let raw = page.raw();
+            let trim = raw.contains_key(b"TrimBox");
+            let art = raw.contains_key(b"ArtBox");
+            if trim == art {
+                issues.push(format!("page {} needs either a trim box or an art box, but not both", index + 1));
+            }
+        }
     }
-    let (content, fonts) = content(file.as_ref());
+    let (content, fonts, scan_issues) = content(file.as_ref());
     issues.extend(fonts);
+    issues.extend(scan_issues);
     (content, issues)
 }
 
 /// Transparency and color spaces, then the output intent and fonts, walked through every page's
 /// content and what it uses.
-fn content(file: Option<&craft_pdf::syntax::Pdf>) -> (Vec<String>, Vec<String>) {
+fn content(file: Option<&craft_pdf::syntax::Pdf>) -> (Vec<String>, Vec<String>, Vec<String>) {
     let Some(file) = file else {
-        return (vec!["the file couldn't be read to check its transparency and color spaces".into()], Vec::new());
+        return (vec!["the file couldn't be read to check its transparency and color spaces".into()], Vec::new(), Vec::new());
     };
     let mut fonts = intent_issues(file);
     let mut found: Vec<(String, Vec<usize>)> = Vec::new();
     let mut font_found: Vec<(String, Vec<usize>)> = Vec::new();
+    let mut scan_found: Vec<(String, Vec<usize>)> = Vec::new();
     for (i, page) in file.pages().iter().enumerate() {
         let mut scan = Scan::default();
         let res = page.resources();
@@ -166,7 +174,7 @@ fn content(file: Option<&craft_pdf::syntax::Pdf>) -> (Vec<String>, Vec<String>) 
         if let Some(content) = page.page_stream() {
             scan.content(content, res, 0);
         }
-        for (list, items) in [(&mut found, scan.found), (&mut font_found, scan.font_issues)] {
+        for (list, items) in [(&mut found, scan.found), (&mut font_found, scan.font_issues), (&mut scan_found, scan.other_issues)] {
             for what in items {
                 match list.iter_mut().find(|(w, _)| *w == what) {
                     Some((_, pages)) => pages.push(i + 1),
@@ -182,7 +190,7 @@ fn content(file: Option<&craft_pdf::syntax::Pdf>) -> (Vec<String>, Vec<String>) 
         format!("{what} on page{s} {}{more}", list.join(", "))
     };
     fonts.extend(font_found.into_iter().map(on_pages));
-    (found.into_iter().map(on_pages).collect(), fonts)
+    (found.into_iter().map(on_pages).collect(), fonts, scan_found.into_iter().map(on_pages).collect())
 }
 
 /// A `GTS_PDFX` output intent, as PDF/X-1a judges it.
@@ -230,7 +238,8 @@ fn pdfx_intents(file: &craft_pdf::syntax::Pdf) -> Vec<Intent> {
             Intent {
                 obj: oi.obj_id().and_then(|id| number(id.obj_number)),
                 name: text(b"OutputCondition").or_else(|| identifier.clone()).unwrap_or_else(|| "?".into()),
-                registered: registry.is_some_and(|r| r.trim_end_matches('/') == ICC_REGISTRY) && identifier.as_deref().is_some_and(|i| i != "Custom"),
+                registered: registry.is_some_and(|r| r.trim_end_matches('/') == ICC_REGISTRY)
+                    && identifier.as_deref().is_some_and(|identifier| REGISTERED_CONDITIONS.contains(&identifier)),
                 has_profile: oi.contains_key(b"DestOutputProfile"),
                 profile_obj: oi.get_ref(b"DestOutputProfile").and_then(|r| number(r.obj_number)),
                 channels: profile.as_ref().and_then(|p| p.dict().get::<i32>(b"N")),
@@ -247,14 +256,8 @@ fn raw_pdfx_intents<'a>(file: &'a craft_pdf::syntax::Pdf) -> Vec<Dict<'a>> {
     intents.iter::<Dict<'_>>().filter(|oi| oi.get::<Name<'_>>(b"S").is_some_and(|s| s.as_ref() == b"GTS_PDFX")).collect()
 }
 
-fn info_text(pdf: &[u8], file: &craft_pdf::syntax::Pdf, key: &[u8]) -> Option<String> {
-    let layout = Layout::read(pdf)?;
-    let at = layout.trailer.find("/Info")? + "/Info".len();
-    let tail = layout.trailer.get(at..)?.trim_start();
-    let (number, _) = tail.split_once(' ')?;
-    let id = number.parse::<i32>().ok()?;
-    let dict = file.xref().get::<Dict<'_>>(craft_pdf::syntax::object::ObjectIdentifier { obj_number: id, gen_number: 0 })?;
-    dict.get::<craft_pdf::syntax::object::String<'_>>(key).map(|s| String::from_utf8_lossy(s.as_bytes()).trim().to_string())
+fn info_text(file: &craft_pdf::syntax::Pdf, key: &[u8]) -> Option<String> {
+    file.info()?.get::<craft_pdf::syntax::object::String<'_>>(key).map(|s| String::from_utf8_lossy(s.as_bytes()).trim().to_string())
 }
 
 /// What PDF/X-1a finds wrong with the file's output intent: a CMYK profile, ICC v2 (PDF 1.4
@@ -285,7 +288,7 @@ pub fn finish_x1a(pdf: &[u8]) -> Result<Vec<u8>, String> {
     let layout = Layout::read(pdf).ok_or_else(unreadable)?;
     let file = craft_pdf::syntax::Pdf::new(pdf.to_vec()).map_err(|_| unreadable())?;
     let mut bodies: HashMap<usize, Vec<u8>> = HashMap::new();
-    let info = int_after(&layout.trailer, "/Info").ok_or_else(unreadable)?;
+    let info = file.info().and_then(|info| info.obj_id()).and_then(|id| usize::try_from(id.obj_number).ok()).ok_or_else(unreadable)?;
     let body = layout.body(pdf, info).ok_or_else(unreadable)?;
     let (head, close) = body.split_at_checked(rfind(body, b">>").ok_or_else(unreadable)?).ok_or_else(unreadable)?;
     bodies.insert(info, [head, format!("/GTS_PDFXConformance({CONFORMANCE})").as_bytes(), close].concat());
@@ -404,6 +407,9 @@ impl Layout {
             return None;
         }
         let size = int_after(&trailer, "/Size")?;
+        if size > MAX_XREF_SIZE {
+            return None;
+        }
         let mut tokens = std::str::from_utf8(section.get(..t)?).ok()?.split_whitespace();
         if tokens.next()? != "xref" {
             return None;
@@ -526,8 +532,8 @@ fn disallowed(cs: &Object<'_>, res: &Resources<'_>, depth: usize) -> Option<Stri
                 b"Separation" | b"DeviceN" => {
                     let _names = items.next();
                     let alt = items.next()?;
-                    if let Some(why) = disallowed(&alt, res, depth + 1) {
-                        return Some(format!("a spot color whose alternate space is {why}"));
+                    if !is_process_space(&alt, res, depth + 1) {
+                        return Some("a spot color whose alternate space isn't a CMYK or gray process space".into());
                     }
                     let _tint = items.next();
                     // NChannel attributes are PDF 1.6, past the 1.4 that PDF/X-1a:2003 allows.
@@ -546,6 +552,26 @@ fn disallowed(cs: &Object<'_>, res: &Resources<'_>, depth: usize) -> Option<Stri
     }
 }
 
+fn is_process_space(cs: &Object<'_>, res: &Resources<'_>, depth: usize) -> bool {
+    if depth > 4 {
+        return false;
+    }
+    match cs {
+        Object::Name(name) => match name.as_ref() {
+            b"DeviceCMYK" | b"CMYK" | b"DeviceGray" | b"G" => true,
+            other => match res.get_color_space(&Name::new_unescaped(other)) {
+                Some(Object::Name(alias)) if alias.as_ref() != other => is_process_space(&Object::Name(alias), res, depth + 1),
+                Some(named) if !matches!(named, Object::Name(_)) => is_process_space(&named, res, depth + 1),
+                _ => false,
+            },
+        },
+        Object::Array(array) => {
+            array.iter::<Name<'_>>().next().is_some_and(|family| matches!(family.as_ref(), b"DeviceCMYK" | b"CMYK" | b"DeviceGray" | b"G"))
+        }
+        _ => false,
+    }
+}
+
 /// What one page has that PDF/X-1a doesn't allow, in the order found.
 #[derive(Default)]
 struct Scan {
@@ -553,6 +579,7 @@ struct Scan {
     found: Vec<String>,
     known: HashSet<String>,
     font_issues: Vec<String>,
+    other_issues: Vec<String>,
     seen: HashSet<ObjectIdentifier>,
     fonts: HashSet<ObjectIdentifier>,
 }
@@ -572,6 +599,7 @@ impl Scan {
 
     fn content(&mut self, data: &[u8], res: &Resources<'_>, depth: usize) {
         if depth > MAX_DEPTH {
+            self.add("content was not fully checked because nested resources exceed the scan limit".into());
             return;
         }
         let mut ops = UntypedIter::new(data);
@@ -617,10 +645,12 @@ impl Scan {
                     }
                 }
                 b"BI" | b"EI" => {
-                    if let Some(Object::Stream(img)) = last
-                        && let Some(cs) = img.dict().get::<Object<'_>>(b"CS").or_else(|| img.dict().get::<Object<'_>>(b"ColorSpace"))
-                    {
-                        self.space(&cs, res);
+                    if let Some(Object::Stream(img)) = last {
+                        let dict = img.dict();
+                        if let Some(cs) = dict.get::<Object<'_>>(b"CS").or_else(|| dict.get::<Object<'_>>(b"ColorSpace")) {
+                            self.space(&cs, res);
+                        }
+                        self.interpolation(dict);
                     }
                 }
                 _ => {}
@@ -664,6 +694,7 @@ impl Scan {
             return;
         }
         let d = img.dict();
+        self.interpolation(d);
         if d.get::<Object<'_>>(b"SMask").is_some() {
             self.add(format!("an image with a soft mask (object {}, transparency)", img.obj_id().obj_number));
         }
@@ -685,16 +716,30 @@ impl Scan {
         }
     }
 
+    fn interpolation(&mut self, dict: &Dict<'_>) {
+        if dict.get::<bool>(b"Interpolate") == Some(true) {
+            let message = "an image asks for interpolation".to_string();
+            if !self.other_issues.contains(&message) {
+                self.other_issues.push(message);
+            }
+        }
+    }
+
     fn form(&mut self, form: &Stream<'_>, parent: &Resources<'_>, depth: usize) {
-        if depth >= MAX_DEPTH || !self.seen.insert(form.obj_id()) {
+        if depth >= MAX_DEPTH {
+            self.add("content was not fully checked because nested forms exceed the scan limit".into());
+            return;
+        }
+        if !self.seen.insert(form.obj_id()) {
             return;
         }
         let res = Resources::from_parent(form.dict().get::<Dict<'_>>(b"Resources").unwrap_or_default(), parent.clone());
         if let Some(group) = form.dict().get::<Dict<'_>>(b"Group") {
             self.group(&group);
         }
-        if let Ok(data) = form.decoded() {
-            self.content(&data, &res, depth + 1);
+        match form.decoded() {
+            Ok(data) => self.content(&data, &res, depth + 1),
+            Err(_) => self.add(format!("a form XObject could not be decoded (object {})", form.obj_id().obj_number)),
         }
     }
 
@@ -756,6 +801,7 @@ impl Scan {
     /// A Type 3 font's glyph procedures, with the font's resources over `parent`'s.
     fn type3(&mut self, font: &Dict<'_>, parent: &Resources<'_>, depth: usize) {
         if depth >= MAX_DEPTH {
+            self.add("content was not fully checked because nested Type 3 glyphs exceed the scan limit".into());
             return;
         }
         let res = Resources::from_parent(font.get::<Dict<'_>>(b"Resources").unwrap_or_default(), parent.clone());
@@ -763,10 +809,105 @@ impl Scan {
         for key in procs.keys() {
             if let Some(glyph) = procs.get::<Stream<'_>>(key.as_ref())
                 && self.seen.insert(glyph.obj_id())
-                && let Ok(data) = glyph.decoded()
             {
-                self.content(&data, &res, depth + 1);
+                match glyph.decoded() {
+                    Ok(data) => self.content(&data, &res, depth + 1),
+                    Err(_) => self.add(format!("a Type 3 glyph stream could not be decoded (object {})", glyph.obj_id().obj_number)),
+                }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod review_regressions {
+    use super::{Layout, check_pdfx1a, finish_x1a};
+    fn pdf(page_boxes: &str, info: &str, content: &[u8], extra: &[(&str, &str)]) -> Vec<u8> {
+        let mut objects = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /OutputIntents [3 0 R] >>".to_vec(),
+            b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (FOGRA39) /RegistryName (http://www.color.org) >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] {page_boxes} /Resources <<>> /Contents 5 0 R >>").into_bytes(),
+            [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+            format!("<< {info} >>").into_bytes(),
+        ];
+        for (key, body) in extra {
+            objects.push(format!("<< {key} {body} >>").into_bytes());
+        }
+        let mut out = b"%PDF-1.4\n% parser regression fixture\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+            out.extend_from_slice(body);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for offset in offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R /Info 6 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        out
+    }
+
+    fn compliant_info() -> &'static str {
+        "/GTS_PDFXVersion (PDF/X-1:2003) /GTS_PDFXConformance (PDF/X-1a:2003) /Trapped /False"
+    }
+
+    #[test]
+    fn parsed_info_values_are_required_even_when_comment_contains_expected_values() {
+        let bytes = pdf(
+            "/TrimBox [0 0 100 100]",
+            "/GTS_PDFXVersion (wrong) /GTS_PDFXConformance (wrong) /Trapped /False",
+            b"% /GTS_PDFXVersion (PDF/X-1:2003) /GTS_PDFXConformance (PDF/X-1a:2003)\n",
+            &[],
+        );
+        let issues = check_pdfx1a(&bytes);
+        assert!(issues.iter().any(|issue| issue.contains("doesn't name PDF/X-1:2003")), "{issues:?}");
+        assert!(issues.iter().any(|issue| issue.contains("doesn't name the conformance level")), "{issues:?}");
+    }
+
+    #[test]
+    fn either_trim_or_art_box_is_accepted_but_not_both() {
+        let art_only = pdf("/ArtBox [0 0 100 100]", compliant_info(), b"", &[]);
+        let both = pdf("/TrimBox [0 0 100 100] /ArtBox [0 0 100 100]", compliant_info(), b"", &[]);
+        assert!(!check_pdfx1a(&art_only).iter().any(|issue| issue.contains("either a trim box or an art box")));
+        assert!(check_pdfx1a(&both).iter().any(|issue| issue.contains("either a trim box or an art box")));
+    }
+
+    #[test]
+    fn an_unknown_registry_identifier_cannot_replace_a_destination_profile() {
+        let mut bytes = pdf("/TrimBox [0 0 100 100]", compliant_info(), b"", &[]);
+        let known = b"FOGRA39";
+        let at = bytes.windows(known.len()).position(|window| window == known);
+        assert!(at.is_some());
+        if let Some(at) = at {
+            bytes[at..at + known.len()].copy_from_slice(b"NOTREAL");
+        }
+        let issues = check_pdfx1a(&bytes);
+        assert!(issues.iter().any(|issue| issue.contains("doesn't name a printing condition in the ICC registry")), "{issues:?}");
+    }
+
+    #[test]
+    fn finalizer_rejects_unbounded_xref_size_before_allocating_the_table() {
+        let mut bytes = pdf("/TrimBox [0 0 100 100]", compliant_info(), b"", &[]);
+        let size = b"/Size 7";
+        let at = bytes.windows(size.len()).position(|window| window == size);
+        assert!(at.is_some());
+        if let Some(at) = at {
+            bytes.splice(at..at + size.len(), b"/Size 1048577".iter().copied());
+        }
+        assert!(Layout::read(&bytes).is_none());
+        assert!(finish_x1a(&bytes).is_err());
+    }
+
+    #[test]
+    fn trapped_must_be_a_pdf_name_with_a_boolean_name_value() {
+        for value in ["(False)", "true", "(True)"] {
+            let info = format!("/GTS_PDFXVersion (PDF/X-1:2003) /GTS_PDFXConformance (PDF/X-1a:2003) /Trapped {value}");
+            let bytes = pdf("/TrimBox [0 0 100 100]", &info, b"", &[]);
+            assert!(check_pdfx1a(&bytes).iter().any(|issue| issue.contains("needs /Trapped True or False")), "{value}");
         }
     }
 }

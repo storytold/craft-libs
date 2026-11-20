@@ -77,6 +77,6 @@ fn every_encode_format_has_an_extension_it_is_written_and_read_under() {
         assert!(format.mime_type().starts_with("audio/"), "{format:?}");
     }
     let extensions: Vec<_> = EncodeFormat::ALL.iter().map(|f| f.extension()).collect();
-    assert_eq!(extensions, ["wav", "aif", "flac", "m4a", "m4a", "mp3", "ac3", "eac3"]);
+    assert_eq!(extensions, ["wav", "aif", "flac", "m4a", "m4a", "mp3", "ac3", "eac3", "ogg"]);
     assert_eq!(EncodeFormat::Aiff.mime_type(), "audio/aiff");
 }
