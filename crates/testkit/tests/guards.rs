@@ -607,6 +607,13 @@ mod nested {
         ("src/bin/helper.rs", local),
     ]);
     assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("tests/part.rs", 2), ("src/bin/helper.rs", 2)]);
+    // A package's `build.rs` and a binary's `main.rs` stay roots when a file loads them through `#[path]`.
+    let found = predefined_quit([
+        ("src/lib.rs", "#[path = \"../build.rs\"]\nmod build;\n#[path = \"bin/tool/main.rs\"]\nmod tool;\n"),
+        ("build.rs", local),
+        ("src/bin/tool/main.rs", local),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("build.rs", 2), ("src/bin/tool/main.rs", 2)]);
     // A `tests` folder inside a test's module folder holds modules, so a declared file there is not a root.
     assert!(
         predefined_quit([

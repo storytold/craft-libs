@@ -1466,13 +1466,10 @@ fn extern_crates(toks: &[Token]) -> Vec<(bool, &str, usize)> {
 /// For each of `paths`, the names that an `extern crate muda as m;` outside any braces of its crate root adds
 /// to the crate's extern prelude, so that a path starting with `::m` names muda anywhere in the crate.
 ///
-/// The crate roots follow Cargo's layout: `src/lib.rs` and `src/main.rs`; `build.rs` and another `lib.rs` or
-/// `main.rs` (such as `src/bin/tool/main.rs`) when no `mod` declaration in another of the files names it,
-/// plainly or through a `#[path]` attribute; each file directly in a package's `src/bin`, `tests`, `examples`
-/// or `benches` folder (one with no `src`, `bin`, `tests`, `examples` or `benches` folder above it), other than
-/// `mod.rs`; and each other file directly in a
-/// `bin`, `examples`, `tests` or `benches` folder other than `mod.rs` when no declaration without a `#[path]`
-/// attribute names it. A root's
+/// The crate roots follow Cargo's layout: `src/lib.rs` and `src/main.rs`; each file that [`cargo_target`]
+/// accepts; another `build.rs`, `lib.rs` or `main.rs` when no `mod` declaration in another of the files names
+/// it, plainly or through a `#[path]` attribute; and each other file directly in a `bin`, `examples`, `tests`
+/// or `benches` folder other than `mod.rs` when no declaration without a `#[path]` attribute names it. A root's
 /// names reach every file that a chain of declarations
 /// from it names, where a crate root and a file loaded through a `#[path]` attribute have their modules in their
 /// own folder, as [`module_files`] reads them.
@@ -1515,18 +1512,14 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
         })
         .collect();
     let root = |file: usize| {
+        if cargo_target(&paths[file]) {
+            return true;
+        }
         let mut segments = paths[file].rsplit('/');
         match (segments.next(), segments.next()) {
             (Some("lib.rs" | "main.rs"), Some("src")) => true,
             (Some("lib.rs" | "main.rs" | "build.rs"), _) => !named[file],
-            (Some(name), Some(folder @ ("bin" | "examples" | "tests" | "benches"))) => {
-                // Cargo builds each file in a package's `src/bin`, `tests`, `examples` or `benches` folder as a
-                // crate of its own, also when another of them declares it as a module. Such a folder inside
-                // `src` or inside another of these folders holds modules.
-                let target = (folder != "bin" || segments.next() == Some("src"))
-                    && !segments.any(|s| matches!(s, "src" | "bin" | "tests" | "examples" | "benches"));
-                name.ends_with(".rs") && name != "mod.rs" && (target || !named_plainly[file])
-            }
+            (Some(name), Some("bin" | "examples" | "tests" | "benches")) => name.ends_with(".rs") && name != "mod.rs" && !named_plainly[file],
             _ => false,
         }
     };
@@ -1548,6 +1541,26 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
         }
     }
     prelude
+}
+
+/// Whether Cargo builds `path` as a crate root of its own, also when another file declares it as a module:
+/// `build.rs` in a package folder, each file other than `mod.rs` directly in its `src/bin`, `tests`,
+/// `examples` or `benches` folder, and `main.rs` in a folder directly inside one of those. A package folder is
+/// one with no `src`, `bin`, `tests`, `examples` or `benches` folder above it.
+fn cargo_target(path: &str) -> bool {
+    let mut segments = path.rsplit('/');
+    let Some(name) = segments.next() else { return false };
+    if name == "mod.rs" || !name.ends_with(".rs") {
+        return false;
+    }
+    let folders: Vec<&str> = segments.collect();
+    let package = |rest: &[&str]| !rest.iter().any(|s| matches!(*s, "src" | "bin" | "tests" | "examples" | "benches"));
+    match folders.as_slice() {
+        ["bin", "src", rest @ ..] | ["tests" | "examples" | "benches", rest @ ..] => package(rest),
+        [_, "bin", "src", rest @ ..] | [_, "tests" | "examples" | "benches", rest @ ..] if name == "main.rs" => package(rest),
+        rest if name == "build.rs" => package(rest),
+        _ => false,
+    }
 }
 
 /// The names of the muda crate in a file, and where each is bound. The names are `muda` itself, each name
@@ -1645,9 +1658,9 @@ fn muda_crate_bindings<'a>(
 /// `extern crate muda as menu;` outside any braces of a crate root (`src/lib.rs` and `src/main.rs`; `build.rs`,
 /// another `lib.rs` or `main.rs`, or a file directly in a `bin`, `examples`, `tests` or `benches` folder other
 /// than `mod.rs`, unless a `mod` declaration in another of `files` names it, for a file in those folders one
-/// without a `#[path]` attribute; a file directly in a package's `src/bin`, `tests`, `examples` or `benches`
-/// folder, one with no such folder or `src` above it, is a crate root even when a declaration names it) also
-/// adds `menu` to
+/// without a `#[path]` attribute; a package's `build.rs`, a file directly in its `src/bin`, `tests`, `examples`
+/// or `benches` folder, and a `main.rs` one folder below those, are crate roots even when a declaration names
+/// them, where a package folder has no such folder or `src` above it) also adds `menu` to
 /// the crate's extern prelude, so in that file and in every file of `files` that a chain of `mod`
 /// declarations from it names, `menu` is read like `muda` and `::menu::PredefinedMenuItem::quit` is
 /// reported. Elsewhere a path that starts with `::` names the crate only through `muda`. It also
