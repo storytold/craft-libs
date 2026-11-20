@@ -495,6 +495,15 @@ fn repair_wav_refuses_what_it_cannot_repair() {
     let mut odd_align = wav.clone();
     odd_align[fmt + 12..fmt + 14].copy_from_slice(&4u16.to_le_bytes());
     assert!(matches!(repair(odd_align), Err(AudioError::Malformed(_))));
+    // Widths the reader does not decode: 16-bit float and 40-bit PCM, each with a block size that fits.
+    let mut float16 = wav.clone();
+    float16[fmt..fmt + 2].copy_from_slice(&3u16.to_le_bytes());
+    let mut pcm40 = wav.clone();
+    pcm40[fmt + 12..fmt + 16].copy_from_slice(&[5, 0, 40, 0]);
+    for bad in [float16, pcm40] {
+        assert!(craft_audio::decode(&bad, Some("wav")).is_err());
+        assert!(matches!(repair(bad), Err(AudioError::Unsupported(_))));
+    }
     // An extensible file whose subformat is PCM's tag under another GUID is not PCM.
     let ext = encode(&sine(48_000, 2, 100), &EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24)).unwrap();
     let fmt = ext.windows(4).position(|w| w == b"fmt ").unwrap() + 8;

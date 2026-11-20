@@ -286,6 +286,10 @@ fn pcm_block_align<F: Read + Seek>(file: &mut F, pos: u64, size: u32) -> Result<
     if channels == 0 || bits == 0 || u32::from(align) != u32::from(channels) * u32::from(bits.div_ceil(8)) {
         return Err(AudioError::Malformed(format!("WAV block size {align} does not fit {channels} channels of {bits} bits")));
     }
+    // The widths the WAV reader decodes.
+    if !matches!((tag, bits), (WAVE_FORMAT_PCM, 1..=32) | (WAVE_FORMAT_IEEE_FLOAT, 32 | 64)) {
+        return Err(AudioError::Unsupported(format!("repairing a WAV of format tag {tag:#06x} with {bits} bits per sample")));
+    }
     Ok(u64::from(align))
 }
 

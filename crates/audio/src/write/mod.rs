@@ -492,8 +492,9 @@ pub struct WavRepair {
 ///   than 16 bytes or cut short by the end of the file, has 0 channels or 0 bits, has a block size
 ///   other than the channels times the bytes per sample, or is RF64 without a `ds64` chunk.
 /// - [`AudioError::Unsupported`] for a format other than PCM and IEEE float, an extensible format
-///   whose subformat is neither, and unfinished 8-bit mono data of even length (its last byte may
-///   be a sample or a pad byte).
+///   whose subformat is neither, a sample width the WAV reader does not decode (PCM above 32 bits,
+///   float other than 32 or 64 bits), and unfinished 8-bit mono data of even length (its last byte
+///   may be a sample or a pad byte).
 /// - [`AudioError::TooLarge`] for a RIFF file past 4 GiB that does not start with that `JUNK` or
 ///   `ds64` chunk.
 /// - [`AudioError::Io`] when reading, writing or seeking `file` fails.
