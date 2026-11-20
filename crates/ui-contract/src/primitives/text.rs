@@ -7,6 +7,7 @@ pub use crate::style::Span;
 use crate::style::text_measure::{paragraph_job, span_format};
 use crate::style::{StyleColor, TypeRole, UiTokens};
 use craft_i18n::Direction;
+use egui::epaint::text::FontCacheRevision;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, Context, Galley};
 use std::borrow::Cow;
@@ -262,19 +263,18 @@ struct TextMemo {
     entries: HashMap<u64, Vec<CachedText>>,
     order: VecDeque<u64>,
     generation: u64,
-    sentinel: Option<Arc<Galley>>,
+    font_revision: Option<FontCacheRevision>,
 }
 
 fn with_memo<R>(ctx: &Context, f: impl FnOnce(&mut TextMemo) -> R) -> R {
-    // Egui clears its galley cache whenever the atlas or any layout input owned by fonts changes.
-    // Keeping this cached empty galley lets us observe that reset, including external providers and rasterizers.
-    let sentinel = ctx.fonts_mut(|fonts| fonts.layout_job(LayoutJob::default()));
+    // Mark the viewport as using fonts so same-pass changes wait, just as a fresh layout would.
+    let font_revision = ctx.fonts_mut(|fonts| fonts.cache_revision_and_mark_used());
     memory::with::<TextMemo, _>(ctx, |memo| {
-        if memo.sentinel.as_ref().is_none_or(|old| !Arc::ptr_eq(old, &sentinel)) {
+        if memo.font_revision.as_ref() != Some(&font_revision) {
             memo.entries.clear();
             memo.order.clear();
             memo.generation = memo.generation.wrapping_add(1);
-            memo.sentinel = Some(sentinel);
+            memo.font_revision = Some(font_revision);
         }
         f(memo)
     })
@@ -933,6 +933,31 @@ mod memo_tests {
     use craft_theme::{Appearance, Contrast, Mode, Size, TextSize, builtins, resolve};
 
     #[trial]
+    fn cached_layout_does_not_call_egui_layout_for_a_sentinel() {
+        let appearance =
+            Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
+        let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
+        let ctx = Context::default();
+        let env = TextEnv { tokens: &tokens, direction: Direction::Ltr, ink: egui::Color32::WHITE, fonts: StackFacts::default() };
+        let run = TextRun::new("cached layout");
+        let mut first = None;
+        let mut output = ctx.run_pass(Default::default(), |ctx| first = Some(run.layout(ctx, &env, 100.0).galley));
+        output.textures_delta.clear();
+        // Let egui evict its own galleys while our external memo retains the layout.
+        for _ in 0..2 {
+            let mut output = ctx.run_pass(Default::default(), |_| {});
+            output.textures_delta.clear();
+        }
+        let mut output = ctx.run_pass(Default::default(), |ctx| {
+            assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), 0);
+            let cached = run.layout(ctx, &env, 100.0);
+            assert!(Arc::ptr_eq(first.as_ref().unwrap(), &cached.galley));
+            assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), 0, "a memo hit must not call egui layout_job");
+        });
+        output.textures_delta.clear();
+    }
+
+    #[trial]
     fn layouts_reuse_equal_inputs_and_font_updates_invalidate_them() {
         let appearance =
             Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
@@ -1061,7 +1086,7 @@ mod memo_tests {
             assert_eq!(before, 25);
         });
         output.textures_delta.clear();
-        // A direct egui font replacement bypasses framework hooks; the sentinel must detect it.
+        // A direct egui font replacement bypasses framework hooks; the revision must detect it.
         let mut definitions = ctx.fonts(|fonts| fonts.definitions().clone());
         definitions.families.insert(egui::FontFamily::Name("memo trial".into()), Vec::new());
         ctx.set_fonts(definitions);
@@ -1104,11 +1129,12 @@ mod memo_tests {
         ctx.set_pixels_per_point(scale);
         let mut output = ctx.run_pass(Default::default(), |ctx| {
             assert_eq!(ctx.pixels_per_point(), scale);
+            let before = with_memo(ctx, |memo| memo.order.len());
             let _ = run.layout(ctx, &env, 80.0);
             let after = with_memo(ctx, |memo| memo.order.len());
             let _ = run.layout(ctx, &env, 80.0);
             assert_eq!(with_memo(ctx, |memo| memo.order.len()), after);
-            assert_eq!(after, 1);
+            assert_eq!(after, before + 1, "a new scale has its own cached layout");
         });
         output.textures_delta.clear();
     }
