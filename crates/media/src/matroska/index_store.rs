@@ -8,10 +8,11 @@
 //! them there after a scan.
 //!
 //! What is saved is what the scan produced: the clusters, each track's sample table and keyframe
-//! list, and the positions of the level-1 elements the walk read (Cues, Chapters, Tags… that may
-//! lie after the clusters). An open from the store reads the file's headers and those elements as
-//! usual and attaches the tables, so it gives the same [`super::MkvFile`] as a scan, apart from
-//! the scan's warnings.
+//! list, the positions of the level-1 elements the walk read (Cues, Chapters, Tags… that may lie
+//! after the clusters) in the order it read them, and its warnings (damage found inside clusters,
+//! which an open from the store does not read). An open from the store reads the file's headers
+//! and those elements as the scan did and attaches the tables, so it gives the same
+//! [`super::MkvFile`] as a scan, its warnings too.
 //!
 //! A file is known by its length and by hashes of its first and last 64 KiB. A saved index ends
 //! with a checksum of all of it, so one damaged in the store is not used. Saved tables are also
@@ -53,8 +54,8 @@ pub(crate) fn index_store() -> Option<Arc<dyn IndexStore>> {
 
 /// How much of the start and of the end of a file its key is made of.
 const KEY_WINDOW: u64 = 64 * 1024;
-/// The first bytes of a saved index (format version 2: with a checksum).
-const MAGIC: &[u8; 8] = b"CMKVIX02";
+/// The first bytes of a saved index (format version 3: with the scan's warnings and a checksum).
+const MAGIC: &[u8; 8] = b"CMKVIX03";
 /// The seed of a saved index's checksum (FNV-1a of everything before it).
 const CHECK_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 /// The encoded size of a sample without its `addition`.
@@ -95,13 +96,15 @@ pub(crate) struct Saved {
     pub(crate) clusters: Vec<ClusterInfo>,
     /// Each track's number, sample table and keyframe list, in the file's track order.
     pub(crate) tracks: Vec<(u64, Vec<Sample>, Vec<u32>)>,
-    /// Positions of the level-1 elements the scan read.
+    /// Positions of the level-1 elements the scan read, in the order it read them.
     pub(crate) elements: Vec<u64>,
+    /// The scan's warnings.
+    pub(crate) warnings: Vec<String>,
 }
 
-/// The saved form of a scanned file's tables (`elements`: the level-1 elements the walk read) of
-/// a file `len` bytes long.
-pub(crate) fn encode(clusters: &[ClusterInfo], tracks: &[(u64, &[Sample], &[u32])], elements: &[u64], len: u64) -> Vec<u8> {
+/// The saved form of a scanned file's tables (`elements`: the level-1 elements the walk read;
+/// `warnings`: the scan's) of a file `len` bytes long.
+pub(crate) fn encode(clusters: &[ClusterInfo], tracks: &[(u64, &[Sample], &[u32])], elements: &[u64], warnings: &[String], len: u64) -> Vec<u8> {
     let samples: usize = tracks.iter().map(|(_, samples, _)| samples.len()).sum();
     let mut out = Vec::with_capacity(32 + clusters.len() * 32 + samples * (SAMPLE_BYTES + 12));
     out.extend_from_slice(MAGIC);
@@ -115,6 +118,13 @@ pub(crate) fn encode(clusters: &[ClusterInfo], tracks: &[(u64, &[Sample], &[u32]
     put_count(&mut out, elements.len());
     for position in elements {
         out.extend_from_slice(&position.to_le_bytes());
+    }
+    put_count(&mut out, warnings.len());
+    for warning in warnings {
+        out.extend_from_slice(&u32::try_from(warning.len()).unwrap_or(0).to_le_bytes());
+        if u32::try_from(warning.len()).is_ok() {
+            out.extend_from_slice(warning.as_bytes());
+        }
     }
     put_count(&mut out, tracks.len());
     for (number, samples, sync) in tracks {
@@ -182,6 +192,12 @@ pub(crate) fn decode(bytes: &[u8], len: u64) -> Option<Saved> {
         }
         elements.push(position);
     }
+    let count = r.count(4)?;
+    let mut warnings = Vec::with_capacity(count);
+    for _ in 0..count {
+        let n = usize::try_from(r.u32()?).ok()?;
+        warnings.push(String::from_utf8(r.take(n)?.to_vec()).ok()?);
+    }
     let count = r.count(16)?;
     let mut tracks = Vec::with_capacity(count);
     for _ in 0..count {
@@ -203,7 +219,7 @@ pub(crate) fn decode(bytes: &[u8], len: u64) -> Option<Saved> {
         }
         tracks.push((number, table, sync));
     }
-    (r.at == bytes.len()).then_some(Saved { clusters, tracks, elements })
+    (r.at == bytes.len()).then_some(Saved { clusters, tracks, elements, warnings })
 }
 
 /// One saved sample, checked against a file `len` bytes long with `clusters` clusters.
@@ -300,10 +316,12 @@ mod tests {
     #[test]
     fn an_index_reads_back_as_saved() {
         let (clusters, samples, sync) = tables();
-        let bytes = encode(&clusters, &[(1, &samples, &sync)], &[40, 9000], 10_000);
+        let warnings = vec!["damaged cluster at 5000".to_owned(), "über".to_owned()];
+        let bytes = encode(&clusters, &[(1, &samples, &sync)], &[9000, 40], &warnings, 10_000);
         let saved = decode(&bytes, 10_000).expect("decodes");
         assert_eq!(saved.clusters, clusters);
-        assert_eq!(saved.elements, vec![40, 9000]);
+        assert_eq!(saved.elements, vec![9000, 40]);
+        assert_eq!(saved.warnings, warnings);
         assert_eq!(saved.tracks.len(), 1);
         assert_eq!(saved.tracks[0].0, 1);
         assert_eq!(saved.tracks[0].1, samples);
@@ -313,7 +331,7 @@ mod tests {
     #[test]
     fn an_index_that_does_not_fit_is_refused() {
         let (clusters, samples, sync) = tables();
-        let bytes = encode(&clusters, &[(1, &samples, &sync)], &[40], 10_000);
+        let bytes = encode(&clusters, &[(1, &samples, &sync)], &[40], &[], 10_000);
         // Another length, every truncation, and trailing bytes.
         assert!(decode(&bytes, 9_999).is_none());
         for cut in 0..bytes.len() {
@@ -325,11 +343,18 @@ mod tests {
         // A sample past the end of the file, a cluster index past the table, a sync past the samples.
         let mut far = samples.clone();
         far[1].offset = 9_900;
-        assert!(decode(&encode(&clusters, &[(1, &far, &sync)], &[], 10_000), 10_000).is_none());
+        assert!(decode(&encode(&clusters, &[(1, &far, &sync)], &[], &[], 10_000), 10_000).is_none());
         let mut lost = samples.clone();
         lost[1].cluster = 2;
-        assert!(decode(&encode(&clusters, &[(1, &lost, &sync)], &[], 10_000), 10_000).is_none());
-        assert!(decode(&encode(&clusters, &[(1, &samples, &[5])], &[], 10_000), 10_000).is_none());
+        assert!(decode(&encode(&clusters, &[(1, &lost, &sync)], &[], &[], 10_000), 10_000).is_none());
+        assert!(decode(&encode(&clusters, &[(1, &samples, &[5])], &[], &[], 10_000), 10_000).is_none());
+        // A warning that is not UTF-8 (with a checksum that matches).
+        let mut bad = encode(&clusters, &[(1, &samples, &sync)], &[40], &["ab".to_owned()], 10_000);
+        let at = bad.windows(2).position(|w| w == b"ab").expect("the warning");
+        bad[at..at + 2].copy_from_slice(&[0xFF, 0xFE]);
+        bad.truncate(bad.len() - 8);
+        seal(&mut bad);
+        assert!(decode(&bad, 10_000).is_none());
         // A huge count with nothing behind it (and a checksum that matches) allocates nothing.
         let mut huge = MAGIC.to_vec();
         huge.extend_from_slice(&10_000u64.to_le_bytes());
@@ -343,10 +368,10 @@ mod tests {
     #[test]
     fn a_damaged_index_is_refused() {
         let (clusters, samples, sync) = tables();
-        let bytes = encode(&clusters, &[(1, &samples, &sync)], &[40], 10_000);
+        let bytes = encode(&clusters, &[(1, &samples, &sync)], &[40], &[], 10_000);
         let mut moved = samples.clone();
         moved[0].offset = 130;
-        let other = encode(&clusters, &[(1, &moved, &sync)], &[40], 10_000);
+        let other = encode(&clusters, &[(1, &moved, &sync)], &[40], &[], 10_000);
         assert!(decode(&other, 10_000).is_some());
         // The same bytes as `other` but with the first index's checksum: as if damaged in the store.
         let mut damaged = other[..other.len() - 8].to_vec();

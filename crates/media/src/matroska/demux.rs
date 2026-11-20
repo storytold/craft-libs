@@ -750,7 +750,7 @@ fn open_stored<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut 
         && file.index_end.is_none()
     {
         let tracks: Vec<(u64, &[Sample], &[u32])> = file.tracks.iter().map(|t| (t.number, t.samples.as_slice(), t.sync.as_slice())).collect();
-        store.save(key, &super::index_store::encode(&file.clusters, &tracks, &elements, src.len()));
+        store.save(key, &super::index_store::encode(&file.clusters, &tracks, &elements, &file.warnings, src.len()));
     }
     Ok(file)
 }
@@ -1014,8 +1014,9 @@ impl Walker<'_> {
     /// Attaches tables saved by an earlier scan (an [`super::IndexStore`]) to a file whose headers
     /// were walked: reads the level-1 elements that scan had read (Cues, Chapters, Tags… after the
     /// clusters) in the order it read them and then what the SeekHead points at, as the scan did,
-    /// checks the saved tracks and clusters against the file, and makes the file indexed. Tables
-    /// that do not fit are an error (the caller scans the file instead).
+    /// checks the saved tracks and clusters against the file, gives the file the scan's warnings,
+    /// and makes it indexed. Tables that do not fit are an error (the caller scans the file
+    /// instead).
     fn attach<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, saved: super::index_store::Saved) -> Result<()> {
         let bad = || Error::Invalid("saved index does not fit the file".into());
         let seg_end = file.segment_end;
@@ -1046,6 +1047,8 @@ impl Walker<'_> {
             track.sync = sync;
         }
         file.first_cluster = file.clusters.first().map(|c| c.offset).or(file.first_cluster);
+        // The scan's warnings: damage inside clusters, which this open does not read, included.
+        file.warnings = saved.warnings;
         file.cues.sort_by_key(|c| c.time);
         file.indexed = true;
         file.index_end = None;

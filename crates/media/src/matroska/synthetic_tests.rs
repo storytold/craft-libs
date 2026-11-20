@@ -276,6 +276,24 @@ impl crate::matroska::IndexStore for CountingStore {
     }
 }
 
+/// A store registered for as long as this lives: dropping it (at the end of a scope, or when an
+/// assertion fails) registers again the store that was registered before.
+struct Registered(Option<std::sync::Arc<dyn crate::matroska::IndexStore>>);
+
+impl Registered {
+    fn new(store: std::sync::Arc<dyn crate::matroska::IndexStore>) -> Self {
+        let before = crate::matroska::index_store::index_store();
+        crate::matroska::set_index_store(Some(store));
+        Registered(before)
+    }
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        crate::matroska::set_index_store(self.0.take());
+    }
+}
+
 /// The parts of an open file the scan builds or reads after the clusters.
 fn scanned(f: &MkvFile) -> String {
     let tracks: Vec<_> = f.tracks.iter().map(|t| (t.number, t.samples.clone(), t.keyframes().to_vec())).collect();
@@ -286,7 +304,8 @@ fn scanned(f: &MkvFile) -> String {
 /// next open, which then gives the same file (its Chapters and Attachments before the clusters,
 /// its Tags after them, in an unknown-size Segment). Tables that do not fit the file, or that were
 /// damaged in the store, are not used: it is scanned again (and saved again). Elements after the
-/// clusters are read in the scan's order, not first those the SeekHead points at.
+/// clusters are read in the scan's order, not first those the SeekHead points at, and the scan's
+/// warnings come back with the tables.
 ///
 /// (One test, as the store is registered for the whole process.)
 #[test]
@@ -296,7 +315,7 @@ fn an_index_store_keeps_the_scan() {
     let reference = open_with(&bytes[..], &plain).unwrap();
     let key = crate::matroska::index_store::key_of(&bytes[..]).unwrap();
     let store = std::sync::Arc::new(CountingStore::new(key.clone()));
-    crate::matroska::set_index_store(Some(store.clone()));
+    let registered = Registered::new(store.clone());
     let counts = || store.counts();
     // Scanned and saved.
     let first = open_with(&bytes[..], &plain).unwrap();
@@ -341,8 +360,9 @@ fn an_index_store_keeps_the_scan() {
     // With CRC checks or an index limit the store is not used.
     let _ = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
     assert_eq!(counts(), (6, 3));
-    crate::matroska::set_index_store(None);
+    drop(registered);
     the_store_keeps_the_order_of_elements_after_the_clusters();
+    the_store_keeps_the_scan_warnings();
 }
 
 /// Two Tags after the clusters, the SeekHead pointing at the second only: a scan reads them in the
@@ -404,13 +424,66 @@ fn the_store_keeps_the_order_of_elements_after_the_clusters() {
     assert_eq!(values.len(), 2, "{values:?}");
     assert!(values[0].contains("\"A\"") && values[1].contains("\"B\""), "{values:?}");
     let store = std::sync::Arc::new(CountingStore::new(crate::matroska::index_store::key_of(&f[..]).unwrap()));
-    crate::matroska::set_index_store(Some(store.clone()));
+    let registered = Registered::new(store.clone());
     let scan = open_with(&f[..], &plain).unwrap();
     let from_store = open_with(&f[..], &plain).unwrap();
-    crate::matroska::set_index_store(None);
+    drop(registered);
     assert_eq!(store.counts(), (2, 1));
     assert_eq!(scanned(&scan), scanned(&reference));
     assert_eq!(scanned(&from_store), scanned(&reference));
+}
+
+/// A file whose first Cluster holds an element running past its end: the scan warns about it, and
+/// an open from the store (which does not read the clusters) gives the same warnings.
+fn the_store_keeps_the_scan_warnings() {
+    let mut info = Vec::new();
+    el_uint(&mut info, TIMESTAMP_SCALE, 1_000_000);
+    let mut v = Vec::new();
+    el_uint(&mut v, TRACK_NUMBER, 1);
+    el_uint(&mut v, TRACK_TYPE, 1);
+    el_str(&mut v, CODEC_ID, "V_MPEG4/ISO/AVC");
+    let mut tracks = Vec::new();
+    el(&mut tracks, TRACK_ENTRY, &v);
+    let mut damaged = Vec::new();
+    el_uint(&mut damaged, TIMESTAMP, 0);
+    el(&mut damaged, SIMPLE_BLOCK, &block(1, 0, 0x80, &[0x65, 1]));
+    // A Void that says it is 100 bytes long, with 2 bytes left in the Cluster.
+    write_id(&mut damaged, VOID);
+    ebml::write_size(&mut damaged, 100, 1);
+    damaged.extend_from_slice(&[0, 0]);
+    let mut f = Vec::new();
+    let mut h = Vec::new();
+    el_str(&mut h, DOC_TYPE, "matroska");
+    el(&mut f, EBML, &h);
+    write_id(&mut f, SEGMENT);
+    write_unknown_size(&mut f, 8);
+    el(&mut f, INFO, &info);
+    el(&mut f, TRACKS, &tracks);
+    el(&mut f, CLUSTER, &damaged);
+    f.extend_from_slice(&one_cluster_body(40));
+
+    let plain = OpenOptions { index: true, verify_crc: false, index_limit: None };
+    let reference = open_with(&f[..], &plain).unwrap();
+    assert!(reference.warnings.iter().any(|w| w.starts_with("damaged cluster")), "{:?}", reference.warnings);
+    assert_eq!(reference.clusters.len(), 2);
+    let store = std::sync::Arc::new(CountingStore::new(crate::matroska::index_store::key_of(&f[..]).unwrap()));
+    let registered = Registered::new(store.clone());
+    let _ = open_with(&f[..], &plain).unwrap();
+    let from_store = open_with(&f[..], &plain).unwrap();
+    drop(registered);
+    assert_eq!(store.counts(), (2, 1));
+    assert_eq!(from_store.warnings, reference.warnings);
+    assert_eq!(scanned(&from_store), scanned(&reference));
+}
+
+/// A Cluster at timestamp `ts` with one keyframe of track 1.
+fn one_cluster_body(ts: u64) -> Vec<u8> {
+    let mut c = Vec::new();
+    el_uint(&mut c, TIMESTAMP, ts);
+    el(&mut c, SIMPLE_BLOCK, &block(1, 0, 0x80, &[0x65, 2]));
+    let mut o = Vec::new();
+    el(&mut o, CLUSTER, &c);
+    o
 }
 
 /// One video track and one cluster at timestamp `ts` holding `content`.
