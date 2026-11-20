@@ -225,10 +225,12 @@ mod tests {
         assert_eq!(cff_cid.name(b"Subtype"), Some(b"CIDFontType0".as_slice()));
         assert!(cff_cid.get(b"CIDToGIDMap").is_none());
 
-        let tt_top = build_type0_font_dict(&mut doc, "Inter", Object::Ref(doc.add(Object::Dict(tt_cid))), None, b"tu".to_vec());
+        let tt_cid_ref = Object::Ref(doc.add(Object::Dict(tt_cid)));
+        let tt_top = build_type0_font_dict(&mut doc, "Inter", tt_cid_ref, None, b"tu".to_vec());
         assert_eq!(tt_top.name(b"Encoding"), Some(b"Identity-H".as_slice()));
 
-        let cff_top = build_type0_font_dict(&mut doc, "InterOTF", Object::Ref(doc.add(Object::Dict(cff_cid))), Some(b"enc".to_vec()), b"tu".to_vec());
+        let cff_cid_ref = Object::Ref(doc.add(Object::Dict(cff_cid)));
+        let cff_top = build_type0_font_dict(&mut doc, "InterOTF", cff_cid_ref, Some(b"enc".to_vec()), b"tu".to_vec());
         assert!(matches!(cff_top.get(b"Encoding"), Some(Object::Ref(_))));
     }
 }
