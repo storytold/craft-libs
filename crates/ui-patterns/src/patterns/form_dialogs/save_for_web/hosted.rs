@@ -2,7 +2,7 @@
 
 #[cfg(doc)]
 use super::MATTE_COLOR_KEY;
-use super::model::{Animation, SaveForWebOptions, SaveForWebResult, WantedVariant, WebPreset, WebVariant};
+use super::model::{Animation, SaveForWebOptions, SaveForWebResult, WantedVariant, WebFormat, WebPreset, WebVariant};
 use super::{SaveForWebDialog, WebPictures, WebSlice, WebView, result_of, save_request};
 use crate::contract::Bind;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
@@ -30,6 +30,7 @@ pub struct HostedSaveForWeb {
     size: PixelSize,
     options: SaveForWebOptions,
     presets: Vec<WebPreset>,
+    formats: Vec<WebFormat>,
     animation: Option<Animation>,
     remember: Option<SaveKey>,
     pictures: WebPictures,
@@ -71,6 +72,7 @@ impl HostedSaveForWeb {
             size,
             options: SaveForWebOptions::default(),
             presets: Vec::new(),
+            formats: WebFormat::STANDARD.to_vec(),
             animation: None,
             remember: None,
             pictures: WebPictures::new().original(original),
@@ -98,6 +100,14 @@ impl HostedSaveForWeb {
     #[must_use]
     pub fn presets(mut self, presets: Vec<WebPreset>) -> Self {
         self.presets = presets;
+        self
+    }
+
+    /// The formats the Format list offers, in its order: [`WebFormat::STANDARD`] unless set. Add
+    /// [`WebFormat::Avif`] only when the app can write it.
+    #[must_use]
+    pub fn formats(mut self, formats: Vec<WebFormat>) -> Self {
+        self.formats = formats;
         self
     }
 
@@ -223,6 +233,7 @@ impl StackDialog for HostedSaveForWeb {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<SaveForWebResult>> {
         let dialog = SaveForWebDialog::new(self.name.clone(), self.size, self.pictures.clone(), Bind::bound(&mut self.options))
             .presets(self.presets.clone())
+            .formats(self.formats.clone())
             .saving(self.saving)
             .answers(self.requests.take_answers());
         let dialog = SaveForWebDialog {
