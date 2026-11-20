@@ -158,7 +158,8 @@ struct Picks {
 
 #[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
 fn stroke_editor_choice_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (picks, picks_at) = data.value_at("rows", Picks { style: StrokeStyle::default(), start: "none".into(), end: "arrow".into(), profile: "uniform".into(), last: None });
+    let (picks, picks_at) = data
+        .value_at("rows", Picks { style: StrokeStyle::default(), start: "none".into(), end: "arrow".into(), profile: "uniform".into(), last: None });
     let heads = [
         StrokeChoice::new("none", "None"),
         StrokeChoice::new("arrow", "Arrow"),

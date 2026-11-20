@@ -1,6 +1,6 @@
 //! Stories of `BlendIfBar`: halves together (one triangle per pair) and halves apart (split handles).
 
-use craft_ui::contract::{Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::display::{Shade, Text};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

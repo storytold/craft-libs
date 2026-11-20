@@ -13,7 +13,7 @@ use craft_behavior::Selection;
 use craft_docpath::Refused;
 use craft_docpath::links::{FakeLinkFiles, Link, LinkIdentity, LinkStatus, identity_of};
 use craft_host::{Jobs, ManualJobs};
-use craft_ui::contract::{Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::display::Text;
 use craft_ui::list::ThumbSize;

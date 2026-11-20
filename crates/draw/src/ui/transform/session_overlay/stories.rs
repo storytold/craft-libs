@@ -6,7 +6,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::{Line, Rect as DocRect};
 use craft_ui::canvas::RasterSource as _;
-use craft_ui::contract::{Entry};
+use craft_ui::contract::Entry;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::pointer;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, paint_shapes};

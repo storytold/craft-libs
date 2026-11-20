@@ -5,7 +5,7 @@ use super::{
 };
 use craft_behavior::kurbo::Point;
 use craft_theme::Srgba;
-use craft_ui::contract::{Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::{Ui, Vec2};
 
@@ -68,7 +68,9 @@ fn add_anchor_tool_dragged(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::part(SEGMENT.at(index(0, KnotRef { subpath: 0, knot: 0 }))).toward(Vec2::Y)))]
 fn convert_tool_straight_segment(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (paths, paths_at) = data.value_at("paths", paths());
-    on_canvas(ui, |ui, at| BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &PathSelection::default()).tool(BezierTool::Convert).show_at(ui, at))
+    on_canvas(ui, |ui, at| {
+        BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &PathSelection::default()).tool(BezierTool::Convert).show_at(ui, at)
+    })
 }
 
 #[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Never)]

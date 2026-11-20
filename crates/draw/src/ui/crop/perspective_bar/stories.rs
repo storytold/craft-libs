@@ -4,7 +4,7 @@ use super::super::options::{CropLength, CropSizeFields};
 use super::super::session::{CropDocKey, CropDocument};
 use super::PerspectiveCropBar;
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::contract::{ShowContainer as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

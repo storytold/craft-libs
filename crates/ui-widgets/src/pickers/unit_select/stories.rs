@@ -34,5 +34,7 @@ fn unit_select_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         _ => Validity::Ok,
     };
     let ((width, unit), negative_width_and_unit_at) = data.value_at("negative_width_and_unit", (Some(-5.0), UnitKind::Millimetres));
-    UnitSelect::new("Width", negative_width_and_unit_at.bind(width).check(refuse_negative), negative_width_and_unit_at.bind(unit), &units).show(ui).into()
+    UnitSelect::new("Width", negative_width_and_unit_at.bind(width).check(refuse_negative), negative_width_and_unit_at.bind(unit), &units)
+        .show(ui)
+        .into()
 }

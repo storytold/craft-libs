@@ -2,7 +2,7 @@
 
 use super::{MARK, PathRange, PathTextMarkers, PathTrack};
 use craft_behavior::kurbo::{BezPath, Circle, ParamCurve, ParamCurveArclen, ParamCurveNearest, PathSeg, Point, Shape as _, Vec2 as PathVec};
-use craft_ui::contract::{Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::testing::canvas_story::{self, OUTLINE, StoryPicture, StoryShape, paint_shapes};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::{Color32, Ui, vec2};

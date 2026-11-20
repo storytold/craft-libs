@@ -1,7 +1,7 @@
 //! Stories of `PreferencesWindow`.
 
 use super::{PreferencesState, PreferencesWindow};
-use crate::contract::{Entry};
+use crate::contract::Entry;
 use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
 use crate::runtime::env::UnitKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};

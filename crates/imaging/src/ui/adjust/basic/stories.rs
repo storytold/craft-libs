@@ -67,7 +67,8 @@ fn color_balance_highlights(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A filter preset: the Filter row is on.
 #[story(PhotoFilterEditor<'static>, covers = [Default], drive = Drive::Never, group = "Sources", title = "A filter preset")]
 fn photo_filter_preset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (value, value_at) = data.value_at("preset", PhotoFilter { color: PhotoFilterPreset::Cooling80.color(), density: 25.0, preserve_luminosity: true });
+    let (value, value_at) =
+        data.value_at("preset", PhotoFilter { color: PhotoFilterPreset::Cooling80.color(), density: 25.0, preserve_luminosity: true });
     PhotoFilterEditor::new("Photo Filter", value_at.bind(value)).show(ui).into()
 }
 

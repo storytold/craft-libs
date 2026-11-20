@@ -94,7 +94,9 @@ fn gradient_overlay_extent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn gradient_overlay_mirror(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (value, value_at) = data.value_at("gradient", gradient());
     let picture = ramp(value, false);
-    on_canvas(ui, &picture, |ui, at| GradientOverlay::new("Gradient", value_at.bind(&mut *value)).style(GradientStyle::Reflected).show_at(ui, at).edit)
+    on_canvas(ui, &picture, |ui, at| {
+        GradientOverlay::new("Gradient", value_at.bind(&mut *value)).style(GradientStyle::Reflected).show_at(ui, at).edit
+    })
 }
 
 #[story(GradientOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::new(END).toward(vec2(0.0, 1.0))))]

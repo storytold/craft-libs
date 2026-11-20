@@ -31,14 +31,26 @@ fn document() -> [u32; 2] {
 fn color_range_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (value, value_at) = data.value_at("value", sampled());
     let picture = MockImage::new(PROXY);
-    ColorRangeDialog::new("Color Range", value_at.bind(value)).mask(&picture).image(&picture).picture_scale(SCALE).document(document()).show(ui).into()
+    ColorRangeDialog::new("Color Range", value_at.bind(value))
+        .mask(&picture)
+        .image(&picture)
+        .picture_scale(SCALE)
+        .document(document())
+        .show(ui)
+        .into()
 }
 
 #[story(ColorRangeDialog<'static>, covers = [], drive = Drive::Never)]
 fn color_range_dialog_midtones(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (value, value_at) = data.value_at("value", ColorRangeValue { select: ColorRangeSelect::Midtones, ..ColorRangeValue::default() });
     let picture = MockImage::new(PROXY);
-    ColorRangeDialog::new("Color Range", value_at.bind(value)).mask(&picture).image(&picture).picture_scale(SCALE).document(document()).show(ui).into()
+    ColorRangeDialog::new("Color Range", value_at.bind(value))
+        .mask(&picture)
+        .image(&picture)
+        .picture_scale(SCALE)
+        .document(document())
+        .show(ui)
+        .into()
 }
 
 #[story(ColorRangeDialog<'static>, covers = [], drive = Drive::Never)]

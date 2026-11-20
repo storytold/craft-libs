@@ -9,7 +9,7 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use crate::geometry::fillet::fillet;
 use craft_behavior::kurbo::{BezPath, Point, Vec2};
 use craft_ui::canvas::RasterSource as _;
-use craft_ui::contract::{Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
 use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryOutput, story};
@@ -182,5 +182,7 @@ fn edit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(CornerWidgets<'static>, covers = [], drive = Drive::Never)]
 fn cycling_kinds_and_a_wide_angle_limit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (targets, targets_at) = data.value_at("kinds", targets());
-    on_canvas(ui, targets, |ui, at, targets| CornerWidgets::new("Corner radius", targets_at.bind(targets)).kinds(true).hide_above(120.0).show_at(ui, at))
+    on_canvas(ui, targets, |ui, at, targets| {
+        CornerWidgets::new("Corner radius", targets_at.bind(targets)).kinds(true).hide_above(120.0).show_at(ui, at)
+    })
 }

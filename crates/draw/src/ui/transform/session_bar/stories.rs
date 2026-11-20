@@ -3,7 +3,7 @@
 use super::{BarSlot, TransformBar};
 use super::{TransformEdit, TransformSession, TransformSettings};
 use craft_behavior::kurbo::Rect;
-use craft_ui::contract::{Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::display::Text;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

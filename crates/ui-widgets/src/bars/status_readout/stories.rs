@@ -2,7 +2,7 @@
 
 use super::{StatusItem, StatusReadout, StatusValues};
 use crate::bars::{Bar, BarKind};
-use crate::contract::{ShowContainer as _};
+use crate::contract::ShowContainer as _;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Size};

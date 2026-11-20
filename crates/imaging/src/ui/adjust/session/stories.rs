@@ -21,7 +21,8 @@ struct Panel {
 /// Reset returns to the settings the panel found while edited, and to the defaults the next time.
 #[story(ColorBalanceEditor<'static>, covers = [], drive = Drive::Never)]
 fn color_balance_properties(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (panel, panel_at) = data.value_at("panel", Panel { value: ColorBalance { shadows: [10.0, 0.0, -10.0], ..ColorBalance::default() }, ..Panel::default() });
+    let (panel, panel_at) =
+        data.value_at("panel", Panel { value: ColorBalance { shadows: [10.0, 0.0, -10.0], ..ColorBalance::default() }, ..Panel::default() });
     panel.pass += 1;
     panel.session.track(TARGET, panel.pass, &panel.value);
     let mut editor = ColorBalanceEditor::new("Color Balance", panel_at.bind(&mut panel.value)).context(AdjustContext::properties(true));

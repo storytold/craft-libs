@@ -3,7 +3,7 @@
 
 use craft_behavior::PartKey;
 use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews};
-use craft_ui::contract::{ShowContainer as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Pos2, Rect, Vec2};
 

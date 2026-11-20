@@ -9,7 +9,7 @@ use std::time::Duration;
 use craft_behavior::PixelSize;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::RasterSource;
-use craft_ui::contract::{Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{FullWindowCanvas, FullWindowView, HostedWorkspace};
 use craft_ui::runtime::pending::Job;

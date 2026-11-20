@@ -2,7 +2,7 @@
 
 use craft_behavior::Mixed;
 use craft_theme::Rgba;
-use craft_ui::contract::{Validity};
+use craft_ui::contract::Validity;
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

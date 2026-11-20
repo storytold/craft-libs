@@ -3,7 +3,7 @@
 use super::{HarmonyPanel, HarmonyPanelState, HarmonyPicked, HarmonyWheel};
 use crate::harmony::Harmony;
 use craft_theme::Srgba;
-use craft_ui::contract::{ShowContainer as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::layout_components::Stack;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

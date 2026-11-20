@@ -98,8 +98,7 @@ fn sample_points_carrying_a_new_point(ui: &mut Ui, _: &mut StoryData) -> StoryOu
 #[story(SamplerOptions<'static>, covers = [], drive = Drive::Never)]
 fn options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (size, size_at) = data.value_at("size", crate::ui::SampleSize::Point);
-    let shown =
-        Bar::new("Color sampler options", BarKind::Options).show(ui, |ui, _| SamplerOptions::new(3, size_at.bind(size)).show(ui));
+    let shown = Bar::new("Color sampler options", BarKind::Options).show(ui, |ui, _| SamplerOptions::new(3, size_at.bind(size)).show(ui));
     match shown.inner {
         Some(output) => StoryOutput::from(output),
         None => StoryOutput::from(shown.output),

@@ -2,7 +2,7 @@
 
 use super::{EyedropperBar, EyedropperOptions, SampleSize, SampleSizeSelect};
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::contract::{ShowContainer as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

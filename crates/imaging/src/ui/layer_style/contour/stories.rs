@@ -1,6 +1,6 @@
 //! Stories of the contour field: the built-in contours and a user's, under the host's "Contour" caption.
 
-use craft_ui::contract::{ShowContainer as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::form::Field;
 use craft_ui::patterns::presets::PresetState;
 use craft_ui::runtime::env::Env;
