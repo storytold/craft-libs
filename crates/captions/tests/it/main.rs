@@ -1,4 +1,5 @@
 mod ass;
+mod legacy_text;
 mod limits;
 mod literal_roundtrips;
 mod mcc_708_timing;
