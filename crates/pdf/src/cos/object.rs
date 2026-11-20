@@ -810,9 +810,14 @@ mod tests {
 
     #[test]
     fn decoded_stops_at_renderer_cap_of_256_mib() {
-        let data = vec![0u8; (256 << 20) + 1];
+        assert_eq!(crate::cos::MAX_PAGE_DECODED, 256 << 20);
+        let max = 4096;
+        let mut data = vec![0u8; max];
         let stream = Stream::flate(Dict::new(), &data);
-        assert!(matches!(stream.decoded(), Err(CosError::Filter(_))));
+        assert_eq!(stream.decoded_within(max).ok().as_deref(), Some(data.as_slice()));
+        data.push(0);
+        let stream = Stream::flate(Dict::new(), &data);
+        assert!(matches!(stream.decoded_within(max), Err(CosError::Filter(_))));
     }
 
     #[test]
