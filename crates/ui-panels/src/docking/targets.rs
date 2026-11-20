@@ -123,7 +123,7 @@ impl DockSizes {
 
     /// The width an expanded column's panels draw at, whether the column is expanded or iconic (its flyout and a
     /// floated iconic column use it): the stored width kept within the panels' limits, or a stepped column's width
-    /// at its steps ([`stepped`]).
+    /// at its steps ([`DockSizes::stepped`](super::DockSizes::stepped)).
     pub fn expanded_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
         if let Some((grid, steps)) = self.stepped(column, spec) {
             return grid.width(steps);

@@ -100,7 +100,7 @@ impl<P> Outcome for DockAreaOutput<P> {
 ///   flyouts; a group is a `DockGroup`; a floating window is a `FloatingGroup` holding one column, shown as a dock's
 ///   column is, whose bar is the window's title row. The host's `DockPanels` supplies the panels.
 /// - Edits: a divider drag and every [`Action`] of the pass (menu rows, drags, drops) are written to the workspace
-///   through its binding, with the panels' [`DockPanels::permissions`] (narrowed when `locked`). The output lists the
+///   through its binding, with the panels' [`SpecSource::permissions`](crate::docking::SpecSource::permissions) (narrowed when `locked`). The output lists the
 ///   actions the workspace took, divider sizes and window moves included. A given workspace is not written.
 /// - Requests: while the pass runs, a body changes the workspace through
 ///   [`request_actions`](crate::docking::request_actions); the output returns those actions unapplied in `requested`.

@@ -1,6 +1,6 @@
 //! Derived values: data a component computes from its inputs and keeps across passes. [`derived`] keeps one value per
 //! component id and value type, and builds it again only when its key changes. The key implements
-//! [`MemoProps`](crate::contract::MemoProps), so it can only be made of checked inputs (`Tracked` revisions, framework
+//! [`MemoProps`], so it can only be made of checked inputs (`Tracked` revisions, framework
 //! revisions, plain values), and a kept value is never stale while the key compiles.
 //!
 //! A value no pass asks for is dropped by the rule memoized views follow for absent entries (`lazy::absent_past_room`).

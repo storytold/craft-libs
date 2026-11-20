@@ -68,7 +68,7 @@ pub enum ColumnArrow {
     /// Collapses the column to icons, or expands it.
     #[default]
     Collapse,
-    /// Switches a stepped column ([`stepped`]) between one and two steps. Holds the steps it shows.
+    /// Switches a stepped column ([`DockSizes::stepped`](super::DockSizes::stepped)) between one and two steps. Holds the steps it shows.
     Steps(u16),
     /// Nothing: the column neither collapses nor has steps. It shows no double arrow, and its menu offers no
     /// collapse.
