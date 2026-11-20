@@ -158,10 +158,15 @@ fn alt_f7_at(focus: Focus, move_disabled: bool, dropped: bool) -> (Vec<String>, 
     (fired, began)
 }
 
-/// By default Alt+F7 inside a floating window is its Move (16.3), ahead of the app's binding.
+/// By default Alt+F7 inside a floating window is its Move (16.3), ahead of the app's binding. Move has no default
+/// chord on macOS, so there the app's binding runs.
 #[trial]
 fn alt_f7_in_a_floating_window_moves_it_by_default() {
-    assert_eq!(alt_f7(false, false), (Vec::new(), true), "the window's Move takes Alt+F7");
+    if cfg!(target_os = "macos") {
+        assert_eq!(alt_f7(false, false), (vec![SPELLING.to_owned()], false), "on macOS Alt+F7 is the app's");
+    } else {
+        assert_eq!(alt_f7(false, false), (Vec::new(), true), "the window's Move takes Alt+F7");
+    }
 }
 
 /// A disabled Move leaves its chord to the next binding: the app's command runs, where the press used to be dropped.
