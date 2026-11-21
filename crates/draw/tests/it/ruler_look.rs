@@ -9,7 +9,7 @@ use craft_draw::ui::measure::{RulerLine, RulerTool, show_ruler};
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::primitives::Draw;
 use craft_ui::testing::{ToolFixture, trial};
-use egui::{Color32, Pos2, Rect, Shape};
+use egui::{Color32, Pos2, Shape};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -39,8 +39,11 @@ impl CanvasTool for PaintOnly {
     }
 }
 
-/// The view of a `room`-sized canvas: the document's centre point `(w/2, h/2)` at the room's centre, at `zoom`.
-fn view(room: Rect, zoom: f64) -> CanvasView {
+/// The view of a `room`-sized canvas at `zoom`: the document's centre point `(w/2, h/2)` at the room's centre, as
+/// `measure.rs`' fixtures make it. Every trial that names exact screen points runs at `zoom` 1, where that view
+/// maps a document point to the same screen point; the zoom trial measures the picture relationally instead,
+/// because the fixture's painting pass can hand the view callback either a laid-out room or an empty one.
+fn view(room: egui::Rect, zoom: f64) -> CanvasView {
     CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), zoom)
 }
 
@@ -62,25 +65,11 @@ fn painted_by_the_tool(line: RulerLine) -> ToolFixture<PaintOnly> {
     ToolFixture::with_view(
         "Ruler",
         PaintOnly,
-        |room| view(room, 1.0),
+        move |room| view(room, 1.0),
         move |ui, body| {
             tool.borrow_mut().pass(Some(line)).show_line(ui, body.rect);
         },
     )
-}
-
-/// The document point at the centre of a `fixture`'s canvas.
-fn middle<T: CanvasTool + 'static>(fixture: &ToolFixture<T>) -> Point {
-    let rect = fixture.canvas().rect;
-    Point::new(f64::from(rect.width()) / 2.0, f64::from(rect.height()) / 2.0)
-}
-
-/// A fixture showing the line `line_of` puts at the canvas's centre, and that line: one throwaway fixture gives
-/// the centre, the real one shows the line.
-fn painted_centred(line_of: impl Fn(Point) -> RulerLine, zoom: f64) -> (ToolFixture<PaintOnly>, RulerLine) {
-    let probe = painted(RulerLine::new(Point::new(0.0, 0.0), Point::new(1.0, 1.0)), zoom);
-    let line = line_of(middle(&probe));
-    (painted(line, zoom), line)
 }
 
 /// A ruler through `at` along +x, 150 document units long.
@@ -94,17 +83,18 @@ fn with_arm(at: Point) -> RulerLine {
     line.with_protractor(line.start + Vec2::new(0.0, 60.0))
 }
 
-/// One frame of `fixture` (whose view runs at `zoom`), with its shapes and the screen point of a document point:
-/// the view puts the document's centre at the canvas's centre, so a zoom `z` maps `at` to the centre plus
-/// `(at - centre) * z`.
-fn frame(fixture: &mut ToolFixture<PaintOnly>, zoom: f64) -> (Vec<Shape>, impl Fn(Point) -> Pos2) {
+/// The anchor these trials measure at: every end of the anchor ruler, at zoom 1, lies inside the fixture's
+/// 400 x 300 canvas, and the whole figure is away from its edges.
+fn anchor() -> Point {
+    Point::new(100.0, 80.0)
+}
+
+/// One frame of `fixture` at `zoom` 1 (where the view maps document points to the same screen points), returning
+/// its shapes and the screen point of a document point.
+fn frame(fixture: &mut ToolFixture<PaintOnly>) -> (Vec<Shape>, impl Fn(Point) -> Pos2) {
     fixture.fixture().frame(Vec::new());
     let shapes = fixture.fixture().frame_shapes();
-    let rect = fixture.canvas().rect;
-    let (w, h) = (f64::from(rect.width()) / 2.0, f64::from(rect.height()) / 2.0);
-    let z = zoom as f32;
-    let screen = move |p: Point| rect.center() + egui::vec2(((p.x - w) as f32) * z, ((p.y - h) as f32) * z);
-    (shapes, screen)
+    (shapes, |p: Point| Pos2::new(p.x as f32, p.y as f32))
 }
 
 /// Every two-point stroked open path in a solid colour: its endpoints, stroke width and colour.
@@ -158,10 +148,12 @@ fn ink() -> Color32 {
 /// stroke under it.
 #[trial]
 fn the_ruler_line_is_one_physical_pixel_painted_once_with_no_halo() {
-    let (mut fixture, line) = painted_centred(plain, 1.0);
+    let line = plain(anchor());
+    let mut fixture = painted(line, 1.0);
     fixture.fixture().pixels_per_point(2.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
-    let strokes = along(&shapes, screen(line.start), screen(line.end));
+    fixture.fixture().frame(Vec::new());
+    let shapes = fixture.fixture().frame_shapes();
+    let strokes = along(&shapes, Pos2::new(25.0, 80.0), Pos2::new(175.0, 80.0));
     assert_eq!(strokes.len(), 1, "the line is one stroke, with no halo under it: {strokes:?}");
     let (width, color) = strokes[0];
     assert_eq!(width, 0.5, "one physical pixel at 2 device pixels per point is a 0.5 point stroke: {width}");
@@ -172,12 +164,12 @@ fn the_ruler_line_is_one_physical_pixel_painted_once_with_no_halo() {
 /// one-stroke rule.
 #[trial]
 fn the_active_tool_paints_the_line_the_same_way() {
-    let probe = painted_by_the_tool(RulerLine::new(Point::new(0.0, 0.0), Point::new(1.0, 1.0)));
-    let line = plain(middle(&probe));
+    let line = plain(anchor());
     let mut fixture = painted_by_the_tool(line);
     fixture.fixture().pixels_per_point(2.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
-    let strokes = along(&shapes, screen(line.start), screen(line.end));
+    fixture.fixture().frame(Vec::new());
+    let shapes = fixture.fixture().frame_shapes();
+    let strokes = along(&shapes, Pos2::new(25.0, 80.0), Pos2::new(175.0, 80.0));
     assert_eq!(strokes.len(), 1, "one stroke, no halo: {strokes:?}");
     assert_eq!(strokes[0].0, 0.5, "one physical pixel at 2 device pixels per point: {:?}", strokes[0]);
     assert_eq!(strokes[0].1, ink(), "the line's ink is the theme's overlay stroke");
@@ -187,8 +179,9 @@ fn the_active_tool_paints_the_line_the_same_way() {
 /// its start or end").
 #[trial]
 fn a_plain_ruler_shows_no_marker_at_its_start_or_end() {
-    let (mut fixture, line) = painted_centred(plain, 1.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
+    let line = plain(anchor());
+    let mut fixture = painted(line, 1.0);
+    let (shapes, screen) = frame(&mut fixture);
     for (name, at) in [("start", screen(line.start)), ("end", screen(line.end))] {
         assert_eq!(crosses_at(&shapes, at), 0, "no cross at the ruler's {name}");
         assert!(dots_at(&shapes, at).is_empty(), "no dot at the ruler's {name}");
@@ -199,8 +192,9 @@ fn a_plain_ruler_shows_no_marker_at_its_start_or_end() {
 /// colour; its other ends show no dot.
 #[trial]
 fn a_protractor_marks_its_vertex_with_a_small_dot_in_the_line_colour() {
-    let (mut fixture, line) = painted_centred(with_arm, 1.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
+    let line = with_arm(anchor());
+    let mut fixture = painted(line, 1.0);
+    let (shapes, screen) = frame(&mut fixture);
     let dots = dots_at(&shapes, screen(line.start));
     assert_eq!(dots.len(), 1, "one dot on the vertex");
     let (radius, fill) = dots[0];
@@ -213,12 +207,14 @@ fn a_protractor_marks_its_vertex_with_a_small_dot_in_the_line_colour() {
 /// A protractor's two arms are each one physical pixel with no halo (measured at 2 device pixels per point).
 #[trial]
 fn a_protractor_draws_its_arms_as_one_physical_pixel_each() {
-    let (mut fixture, line) = painted_centred(with_arm, 1.0);
+    let line = with_arm(anchor());
+    let mut fixture = painted(line, 1.0);
     fixture.fixture().pixels_per_point(2.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
-    let arm = line.protractor.expect("the arm");
-    for (name, a, b) in [("the line", line.start, line.end), ("the protractor arm", line.start, arm)] {
-        let strokes = along(&shapes, screen(a), screen(b));
+    fixture.fixture().frame(Vec::new());
+    let shapes = fixture.fixture().frame_shapes();
+    let (start, end, arm) = (Pos2::new(25.0, 80.0), Pos2::new(175.0, 80.0), Pos2::new(25.0, 140.0));
+    for (name, a, b) in [("the line", start, end), ("the protractor arm", start, arm)] {
+        let strokes = along(&shapes, a, b);
         assert_eq!(strokes.len(), 1, "{name} is one stroke with no halo: {strokes:?}");
         assert_eq!(strokes[0].0, 0.5, "{name} is one physical pixel at 2 device pixels per point: {:?}", strokes[0]);
         assert_eq!(strokes[0].1, ink(), "{name}'s ink is the theme's overlay stroke");
@@ -229,49 +225,64 @@ fn a_protractor_draws_its_arms_as_one_physical_pixel_each() {
 /// unchanged): the two arms of the cross, each the halo stroke under the line stroke.
 #[trial]
 fn the_arm_end_keeps_its_cross() {
-    let (mut fixture, line) = painted_centred(with_arm, 1.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
+    let line = with_arm(anchor());
+    let mut fixture = painted(line, 1.0);
+    let (shapes, screen) = frame(&mut fixture);
     assert_eq!(crosses_at(&shapes, screen(line.protractor.unwrap())), 4, "the arm end keeps its cross (two arms, halo and line)");
 }
 
-/// The line and the vertex dot are screen marks: at other zooms they keep the same physical width and the same
-/// screen size (the issue: keep the circle a constant screen size).
+/// The line and the vertex dot are screen marks at every zoom: the line is one physical pixel wide and `150 * zoom`
+/// screen points long, the dot is the scene's only circle, sitting on the end the two arms share, and the same at
+/// 50 %, 100 % and 200 % (the issue: keep the circle a constant screen size). The picture is read by its relations
+/// (lengths, shared ends), not absolute points, because the fixture's view room differs between passes.
 #[trial]
 fn the_line_and_the_dot_keep_their_screen_size_at_other_zooms() {
-    let (probe, line) = painted_centred(with_arm, 1.0);
-    drop(probe);
-    let dots: Vec<f32> = [0.5f64, 1.0, 2.0]
-        .into_iter()
-        .map(|zoom| {
-            let mut fixture = painted(line, zoom);
-            let (shapes, screen) = frame(&mut fixture, zoom);
-            let strokes = along(&shapes, screen(line.start), screen(line.end));
-            assert_eq!(strokes.len(), 1, "zoom {zoom}: one stroke: {strokes:?}");
-            assert_eq!(strokes[0].0, 1.0, "zoom {zoom}: one physical pixel at 1 device pixel per point: {strokes:?}");
-            let dots = dots_at(&shapes, screen(line.start));
-            assert_eq!(dots.len(), 1, "zoom {zoom}: the vertex dot paints");
-            dots[0].0
-        })
-        .collect();
-    assert!(dots.windows(2).all(|pair| pair[0] == pair[1]), "the dot keeps its screen size at every zoom: {dots:?}");
+    let line = with_arm(anchor());
+    let mut seen: Vec<(f32, f32)> = Vec::new();
+    for zoom in [0.5f64, 1.0, 2.0] {
+        let long = 150.0 * zoom as f32;
+        let arm = 60.0 * zoom as f32;
+        let mut fixture = painted(line, zoom);
+        fixture.fixture().frame(Vec::new());
+        let shapes = fixture.fixture().frame_shapes();
+        let main: Vec<_> = paths(&shapes)
+            .into_iter()
+            .filter(|(points, width, color)| ((points[0] - points[1]).length() - long).abs() < 0.6 && *width == 1.0 && *color == ink())
+            .collect();
+        assert_eq!(main.len(), 1, "zoom {zoom}: one stroke, one physical pixel wide, {long} points long: {main:?}");
+        let dots: Vec<_> = shapes.iter().filter(|shape| matches!(shape, Shape::Circle(c) if c.stroke.width == 0.0)).collect();
+        assert_eq!(dots.len(), 1, "zoom {zoom}: the vertex dot is the scene's only circle");
+        let Shape::Circle(dot) = dots[0] else { unreachable!() };
+        let vertex = main[0]
+            .0
+            .iter()
+            .find(|end| (dot.center - **end).length() < 0.6)
+            .unwrap_or_else(|| panic!("zoom {zoom}: the dot sits on an end of the line: {:?} / {:?}", dot.center, main[0].0));
+        assert!(
+            paths(&shapes)
+                .iter()
+                .any(|(points, _, _)| (dot.center - points[0]).length() < 0.6 && ((points[1] - points[0]).length() - arm).abs() < 0.6),
+            "zoom {zoom}: the arm starts at the dotted vertex and is {arm} points long: {vertex:?}"
+        );
+        seen.push((main[0].1, dot.radius));
+    }
+    assert!(seen.iter().all(|(width, _)| *width == seen[0].0), "the line keeps its one-pixel width at every zoom: {seen:?}");
+    assert!(seen.windows(2).all(|pair| pair[0].1 == pair[1].1), "the dot keeps its screen size at every zoom: {seen:?}");
 }
 
 /// A drag that has barely begun — ends under 2 screen points apart — draws no line, as the line preview lags
 /// today; past the lag the single hairline paints. (The short-line half is a guard: it passes before and after.)
 #[trial]
 fn a_line_shorter_than_two_screen_points_draws_nothing() {
-    let (probe, at_line) = painted_centred(plain, 1.0);
-    let at = at_line.start.lerp(at_line.end, 0.5);
-    drop(probe);
-
+    let at = anchor();
     let short = RulerLine::new(at - Vec2::new(0.75, 0.0), at + Vec2::new(0.75, 0.0));
     let mut fixture = painted(short, 1.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
+    let (shapes, screen) = frame(&mut fixture);
     assert!(along(&shapes, screen(short.start), screen(short.end)).is_empty(), "under the lag: no line");
 
     let over = RulerLine::new(at - Vec2::new(1.25, 0.0), at + Vec2::new(1.25, 0.0));
     let mut fixture = painted(over, 1.0);
-    let (shapes, screen) = frame(&mut fixture, 1.0);
+    let (shapes, screen) = frame(&mut fixture);
     let strokes = along(&shapes, screen(over.start), screen(over.end));
     assert_eq!(strokes.len(), 1, "past the lag: one stroke: {strokes:?}");
 }
