@@ -2,6 +2,7 @@
 //! keyboard pane's toggle.
 
 use craft_ui::buttons::{IconButton, ToggleButton};
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -104,6 +105,13 @@ fn search(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
             state.feed(env, &out.chords, now);
         } else if out.response.lost_focus() {
             state.stop_recording();
+        }
+    }
+    if env.options.match_case {
+        let mut on = state.match_case;
+        Checkbox::new(Bind::bound(&mut on)).label(words.match_case.clone()).id_salt("matchCase").show(ui);
+        if on != state.match_case {
+            state.set_match_case(on);
         }
     }
 }

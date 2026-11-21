@@ -132,6 +132,8 @@ impl Built {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct View<'a> {
     pub query: &'a str,
+    /// Match Case: the query must be in a command's name with the exact case.
+    pub match_case: bool,
     pub area: &'a AreaId,
     pub filter: Filter,
     pub collapsed: &'a BTreeSet<String>,
@@ -140,6 +142,7 @@ pub(crate) struct View<'a> {
 #[derive(Clone, Debug, PartialEq)]
 struct Key {
     query: String,
+    match_case: bool,
     folder: Folder,
     area: AreaId,
     filter: Filter,
@@ -159,6 +162,7 @@ impl RowCache {
     pub(crate) fn get(&mut self, keymap: &Keymap, options: &Options, text: &Say, view: &View) -> &Built {
         let fresh = self.key.as_ref().is_some_and(|k| {
             k.query == view.query
+                && k.match_case == view.match_case
                 && k.folder == text.folder()
                 && k.area == *view.area
                 && k.filter == view.filter
@@ -170,6 +174,7 @@ impl RowCache {
             self.built = build(keymap, options, text, view);
             self.key = Some(Key {
                 query: view.query.to_string(),
+                match_case: view.match_case,
                 folder: text.folder(),
                 area: view.area.clone(),
                 filter: view.filter,
@@ -283,21 +288,29 @@ pub(crate) fn group(area: &AreaId, b: &CommandDef, submenus: bool, text: &Say) -
     }
 }
 
-/// What a query asks for: the text folded by the env's `Folder`, and the trigger it spells, if any.
+/// What a query asks for: the text folded by the env's `Folder`, and the trigger it spells, if any. With Match
+/// Case, the text as typed, which only names match.
 struct Query {
     matcher: craft_i18n::matcher::Matcher,
     trigger: Option<Trigger>,
+    exact: Option<String>,
 }
 
 impl Query {
-    fn new(q: &str, platform: Platform, folder: &Folder) -> Query {
+    fn new(q: &str, match_case: bool, platform: Platform, folder: &Folder) -> Query {
         let matcher = craft_i18n::matcher::Matcher::new(folder, q.trim());
         let trigger = Trigger::parse(q.trim()).ok().map(|t| t.effective(platform));
-        Query { matcher, trigger }
+        let exact = match_case.then(|| q.trim().to_owned());
+        Query { matcher, trigger, exact }
     }
 
     fn hit(&self, s: &str) -> bool {
         self.matcher.score(s).is_some()
+    }
+
+    /// With Match Case: whether one of `names` contains the query with the exact case.
+    fn exact_hit(&self, names: &[&str]) -> Option<bool> {
+        self.exact.as_deref().map(|q| names.iter().any(|name| name.contains(q)))
     }
 
     /// Label, aliases, path parts and id, as written and translated; then the bindings: the same
@@ -306,6 +319,9 @@ impl Query {
     fn matches(&self, b: &CommandDef, bindings: &[Binding], text: &Say, platform: Platform) -> bool {
         if self.matcher.is_empty() {
             return true;
+        }
+        if let Some(hit) = self.exact_hit(&[&b.label, &text.command(b)]) {
+            return hit;
         }
         let named = self.hit(&b.label)
             || self.hit(&text.command(b))
@@ -338,7 +354,7 @@ fn build(keymap: &Keymap, options: &Options, text: &Say, view: &View) -> Built {
             _ => {}
         }
     }
-    let query = Query::new(view.query, platform, &text.folder());
+    let query = Query::new(view.query, view.match_case, platform, &text.folder());
     if *view.area == AreaId::Fixed {
         build_fixed(keymap, options, text, view, &query, &mut built);
         return built;
@@ -432,10 +448,12 @@ fn build_fixed(keymap: &Keymap, options: &Options, text: &Say, view: &View, quer
     let mut groups: Vec<(&str, Vec<FixedLine>)> = Vec::new();
     for f in &options.fixed {
         if !query.matcher.is_empty()
-            && !(query.hit(&f.label)
-                || query.hit(&f.keys)
-                || query.hit(&f.group)
-                || query.trigger.is_some_and(|t| f.chord.is_some_and(|c| c.effective(platform) == t)))
+            && !query.exact_hit(&[&f.label]).unwrap_or_else(|| {
+                query.hit(&f.label)
+                    || query.hit(&f.keys)
+                    || query.hit(&f.group)
+                    || query.trigger.is_some_and(|t| f.chord.is_some_and(|c| c.effective(platform) == t))
+            })
         {
             continue;
         }
