@@ -58,8 +58,7 @@ impl Printer {
 impl From<crate::Printer> for Printer {
     /// The dialog's printer for a discovered one: `name`, the `description` as the label, and `default`.
     fn from(printer: crate::Printer) -> Self {
-        let _ = printer;
-        todo!("ex.E58")
+        Printer { name: printer.name, label: printer.description, default: printer.default }
     }
 }
 

@@ -34,6 +34,7 @@ craft_ui::words! {
         portrait: "printPanel.portrait" = "Portrait";
         landscape: "printPanel.landscape" = "Landscape";
         page_in_driver: "printPanel.pageInDriver" = "set in Print Settings…";
+        setup: "printPanel.setup" = "Setup…";
     }
 }
 
@@ -103,7 +104,6 @@ pub struct PrintPanel<'a> {
     page_error: Option<String>,
     /// Which controls the panel shows.
     #[prop]
-    #[allow(dead_code)] // P3(export-w7): ex.E56
     layout: PrintPanelLayout,
 }
 
@@ -124,7 +124,7 @@ impl<'a> PrintPanel<'a> {
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
-        let PrintPanel { settings, printers, discovering, busy, driver, page, page_error, layout: _ } = self;
+        let PrintPanel { settings, printers, discovering, busy, driver, page, page_error, layout } = self;
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
         let queues: Vec<Entry<String>> =
@@ -157,8 +157,15 @@ impl<'a> PrintPanel<'a> {
                     }
                     let button = Button::new(words.refresh.clone()).enabled(!discovering).id_salt("refresh").show(ui);
                     refresh |= clicked(&button);
+                    if layout == PrintPanelLayout::PrinterOnly && driver {
+                        let button = Button::new(words.setup.clone()).id_salt("setup").show(ui);
+                        settings_clicked |= clicked(&button);
+                    }
                 });
             });
+            if layout == PrintPanelLayout::PrinterOnly {
+                return (now != before).then_some((before, now));
+            }
             Field::new(words.copies.clone()).id_salt("copies").show(ui, |ui, _| {
                 if let Some(copies) = copies_field(&words.copies, now.copies).show(ui).value().copied().flatten() {
                     now.copies = (copies.round() as u32).clamp(1, MOST_COPIES);

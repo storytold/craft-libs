@@ -1,9 +1,10 @@
 //! Stories of `PrintPanel` and `PrintDialog`.
 
 use super::dialog::PrintPreview;
-use super::{Duplex, PrintDialog, PrintMarks, PrintPanel, PrintSheet, Printer, Settings};
+use super::{Duplex, PrintDialog, PrintLayout, PrintMarks, PrintMode, PrintPanel, PrintPanelLayout, PrintPresets, PrintSection, PrintSheet, Printer, Settings};
 use craft_ui::contract::{Bind, Show as _, Validity};
-use craft_ui::patterns::form_dialogs::DialogFields;
+use craft_ui::patterns::form_dialogs::{DialogFields, Param};
+use craft_ui::patterns::presets::{PresetError, PresetRow};
 use craft_ui::primitives::TextureCache;
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::pictures::sample_picture;
@@ -29,6 +30,13 @@ fn print_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PrintPanel<'static>, covers = [], drive = Drive::Never)]
 fn print_panel_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     PrintPanel::new(Bind::bound(data.value("settings", Settings::default())), &[]).discovering(true).show(ui).into()
+}
+
+#[story(PrintPanel<'static>, covers = [], drive = Drive::Never)]
+fn print_panel_printer_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let start = Settings { printer: "Office_1".to_owned(), ..Settings::default() };
+    let printers = printers();
+    PrintPanel::new(Bind::bound(data.value("settings", start)), &printers).layout(PrintPanelLayout::PrinterOnly).driver(true).show(ui).into()
 }
 
 const PICTURE: [usize; 2] = [240, 160];
@@ -84,14 +92,68 @@ fn print_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .sheet(&sheet)
         .ready(true)
         .show(ui)
-        .into() // P3(export-w7): ex.E52
+        .into()
+}
+
+/// The sections beside the shown one, with a preset row, a one-line header and a document on three sheets.
+#[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
+fn print_dialog_sections(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let start = Settings { printer: "Office_1".to_owned(), ..Settings::default() };
+    let printers = printers();
+    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
+    let outlines = vec![Rect::from_min_size(pos2(36.0, 36.0), Vec2::new(540.0, 720.0)), Rect::from_min_size(pos2(72.0, 72.0), Vec2::new(468.0, 312.0))];
+    let sheet = sheet(ui, true).count(3).outlines(outlines);
+    let rows = [PresetRow::item("Default".to_owned(), "Default", 0), PresetRow::item("Proof".to_owned(), "Proof", 0)];
+    let built_in = ["Default".to_owned()];
+    let header = [Param::number("pagesPerSheet", "Pages per sheet", 1.0, 1.0, 0)];
+    let sections = [
+        PrintSection::new("Position and Size", vec![Param::number("scale", "Scale", 100.0, 1.0, 0)]),
+        PrintSection::new("Printing Marks", vec![Param::number("markWeight", "Mark weight", 0.25, 0.25, 2)]),
+    ];
+    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()))
+        .layout(PrintLayout::Sections)
+        .sheet(&sheet)
+        .presets(PrintPresets::new(&rows, Some("Proof".to_owned()), &built_in))
+        .header(&header)
+        .sections(&sections)
+        .driver(true)
+        .ready(true)
+        .show(ui)
+        .into()
+}
+
+/// The sections layout while the host has no sheet to show: its message stands where the preview would.
+#[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
+fn print_dialog_sections_no_sheet(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let printers = printers();
+    let sections = [PrintSection::new("Position and Size", vec![Param::number("scale", "Scale", 100.0, 1.0, 0)])];
+    PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &printers, Bind::given(DialogFields::default()))
+        .layout(PrintLayout::Sections)
+        .message("The document has no printable artwork")
+        .sections(&sections)
+        .show(ui)
+        .into()
+}
+
+/// The preset editor: a name field whose refusal shows under it.
+#[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
+fn print_dialog_preset_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let sections = [PrintSection::new("Position and Size", vec![Param::number("scale", "Scale", 100.0, 1.0, 0)])];
+    PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &[], Bind::given(DialogFields::default()))
+        .layout(PrintLayout::Sections)
+        .mode(PrintMode::PresetEditor)
+        .preset_name(Bind::bound(data.value("name", "Default".to_owned())))
+        .check_name(|name| name.eq_ignore_ascii_case("Default").then_some(PresetError::NameTaken))
+        .sections(&sections)
+        .show(ui)
+        .into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = sheet(ui, false);
     PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &[], Bind::given(DialogFields::default()))
-        .sheet(&sheet) // P3(export-w7): ex.E52
+        .sheet(&sheet)
         .discovering(true)
         .show(ui)
         .into()
@@ -106,5 +168,5 @@ fn print_dialog_busy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .sheet(&sheet)
         .busy(true)
         .show(ui)
-        .into() // P3(export-w7): ex.E52
+        .into()
 }
