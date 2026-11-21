@@ -75,6 +75,7 @@ is built with any of the decoder features below and decodes the codecs whose fea
 | DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
 | APV | `apv-decode` | ignored (access units carry the format) |
 | FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+| Motion JPEG | `mjpeg` | ignored (each packet carries its own picture) |
 | VP8 | `vp8-decode` | ignored (key frames carry the format) |
 
 Configuration that holds picture data (a slice, a frame OBU, an MPEG-2 picture) is refused.

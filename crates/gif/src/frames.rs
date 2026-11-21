@@ -7,7 +7,7 @@
 //! decoding then stops at [`FrameLimits::max_frames`] frames or [`FrameLimits::max_bytes`] of kept
 //! pictures, or at the first damaged frame after the first, and [`Animation::stop`] says which.
 
-use std::io::Cursor;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, ImageDecoder};
@@ -75,7 +75,7 @@ pub struct Animation {
 pub enum FrameError {
     /// Not a GIF, or the first frame does not decode.
     Malformed(String),
-    /// The canvas is over [`FrameLimits::max_canvas_bytes`] or more than the file can hold.
+    /// A configured budget cannot fit the first frame, or the file cannot back its canvas.
     LimitExceeded(String),
 }
 
@@ -96,7 +96,9 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
         return Err(FrameError::LimitExceeded("the frame limit is zero".into()));
     }
     let inspect_limit = limits.max_frames.saturating_add(1);
-    let info = crate::scan(bytes, inspect_limit).ok_or_else(|| FrameError::Malformed("not a GIF".into()))?;
+    let mut text_controls = Vec::new();
+    let info = crate::scan_with_text_controls(bytes, inspect_limit, |offset| text_controls.push(offset))
+        .ok_or_else(|| FrameError::Malformed("not a GIF".into()))?;
     let has_more = if info.frames.len() > limits.max_frames {
         Some(true)
     } else if info.complete {
@@ -117,13 +119,46 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     if !crate::plausible(info.bytes_to_back(4, 1 << 28), bytes.len(), 1 << 14) {
         return Err(FrameError::LimitExceeded(format!("a {} byte file cannot hold a {width}x{height} picture", bytes.len())));
     }
+    if canvas > limits.max_bytes {
+        return Err(FrameError::LimitExceeded(format!("the first frame needs {canvas} retained bytes but the limit is {}", limits.max_bytes)));
+    }
     let malformed = |e: image::ImageError| FrameError::Malformed(e.to_string());
-    let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(malformed)?;
+    let input = DecoderInput { bytes: Cursor::new(bytes), text_controls };
+    let mut decoder = GifDecoder::new(BufReader::new(input)).map_err(malformed)?;
     let mut il = image::Limits::default();
     il.max_alloc = Some(max_decode_bytes);
     decoder.set_limits(il).map_err(malformed)?;
     let (width, height) = decoder.dimensions();
     collect(width, height, decoder.into_frames().take(limits.max_frames), limits, has_more)
+}
+
+/// Present default flags, delay and transparent index for controls consumed by
+/// skipped text blocks. Keep offsets stable and copy only the bytes being read.
+struct DecoderInput<'a> {
+    bytes: Cursor<&'a [u8]>,
+    text_controls: Vec<usize>,
+}
+
+impl Read for DecoderInput<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let start = usize::try_from(self.bytes.position()).unwrap_or(usize::MAX);
+        let count = self.bytes.read(output)?;
+        if count == 0 {
+            return Ok(0);
+        }
+        let end = start + count;
+        let first = self.text_controls.partition_point(|&offset| offset + 4 <= start);
+        for &offset in self.text_controls[first..].iter().take_while(|&&offset| offset < end) {
+            output[offset.saturating_sub(start)..(offset + 4).min(end) - start].fill(0);
+        }
+        Ok(count)
+    }
+}
+
+impl Seek for DecoderInput<'_> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.bytes.seek(position)
+    }
 }
 
 /// Reads the optional ICC application extension without decoding frame pixels. As in the image
@@ -219,6 +254,52 @@ mod tests {
     }
 
     #[test]
+    fn plain_text_control_does_not_change_the_decoded_images() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut bytes, 2, 2, &[255, 0, 0, 0, 0, 255]).unwrap();
+            for (index, delay, transparent) in [(0, 23, Some(0)), (1, 7, None)] {
+                let frame = gif::Frame {
+                    width: 2,
+                    height: 2,
+                    delay,
+                    transparent,
+                    dispose: gif::DisposalMethod::Previous,
+                    buffer: vec![index; 4].into(),
+                    ..gif::Frame::default()
+                };
+                encoder.write_frame(&frame).unwrap();
+            }
+        }
+        let first_image = crate::scan(&bytes, 1).unwrap().frames[0].offset;
+        let text = [0x21, 0x01, 12, 0, 0, 0, 0, 2, 0, 2, 0, 1, 1, 1, 0, 1, b'X', 0];
+        bytes.splice(first_image..first_image, text);
+
+        let animation = read_frames(&bytes, &FrameLimits::default()).unwrap();
+        assert_eq!(animation.frames.len(), 2);
+        let first = &animation.frames[0];
+        assert_eq!((&first.rgba[..4], first.delay_ms), (&[255, 0, 0, 255][..], 0));
+        let second = &animation.frames[1];
+        assert_eq!((&second.rgba[..4], second.delay_ms), (&[0, 0, 255, 255][..], 70));
+    }
+
+    #[test]
+    fn text_control_can_span_decoder_reads() {
+        let bytes: Vec<u8> = (1..=16).collect();
+        let mut input = DecoderInput { bytes: Cursor::new(&bytes), text_controls: vec![3, 10] };
+        let mut prefix = [0; 5];
+        input.read_exact(&mut prefix).unwrap();
+        assert_eq!(prefix, [1, 2, 3, 0, 0]);
+        let mut tail = Vec::new();
+        input.read_to_end(&mut tail).unwrap();
+        assert_eq!(tail, [0, 0, 8, 9, 10, 0, 0, 0, 0, 15, 16]);
+        input.seek(SeekFrom::Start(6)).unwrap();
+        let mut around = [0; 4];
+        input.read_exact(&mut around).unwrap();
+        assert_eq!(around, [0, 8, 9, 10]);
+    }
+
+    #[test]
     fn every_frame_with_its_delay() {
         let a = read_frames(&gif(&[(10, 5), (200, 10), (10, 0)]), &FrameLimits::default()).unwrap();
         assert_eq!((a.width, a.height, a.stop.clone()), (3, 2, Stop::End));
@@ -311,6 +392,19 @@ mod tests {
         assert!(
             matches!(read_frames(&bytes, &FrameLimits { max_frames: 0, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(message)) if message.contains("frame limit is zero"))
         );
+    }
+
+    #[test]
+    fn retained_byte_budget_must_fit_one_frame() {
+        let bytes = gif(&[(10, 5), (200, 10)]);
+        let first_frame_bytes = 3 * 2 * 4;
+        let limits = FrameLimits { max_bytes: first_frame_bytes - 1, ..FrameLimits::default() };
+        assert!(matches!(read_frames(&bytes, &limits), Err(FrameError::LimitExceeded(_))));
+
+        let limits = FrameLimits { max_bytes: first_frame_bytes, ..limits };
+        let animation = read_frames(&bytes, &limits).unwrap();
+        assert_eq!(reds(&animation), [(10, 50)]);
+        assert_eq!(animation.stop, Stop::ByteLimit);
     }
 
     #[test]
