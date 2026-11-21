@@ -35,6 +35,24 @@ network I/O and has no `unsafe` code.
   1/65535. A channel whose interpolation is not finite is taken from the `f64` weighted sum
   instead, so finite texels give a finite sample. New images start with the flag off, clones keep
   it, and two images are equal only when their flags are equal.
+- **Mip chains.** `mip::MipChain::try_build` makes every level below an image down to 1 × 1, each
+  side halved and rounded down to at least 1, with `floor(log2(max(w, h))) + 1` levels, as
+  section 12.4.4 of the Vulkan specification and `ARB_texture_non_power_of_two`
+  (<https://registry.khronos.org/OpenGL/extensions/ARB/ARB_texture_non_power_of_two.txt>) size
+  them. A level averages 2 × 2 texels of the one before it in `f64`; on an odd side longer than
+  1 the last texel of the level averages the last three, and a side of 1 stays 1. Every channel,
+  alpha included, is averaged on its own as linear data, without premultiplication.
+  `from_levels` takes levels made elsewhere and checks their sizes. `lod` takes the derivatives
+  of `(u, v)` along the two screen axes and returns `log2` of the longer scaled footprint plus
+  `lod_bias`, clamped to `min_lod..=max_lod`, as section 20.3.7 defines it. `select` picks one
+  level, where a tie takes the lower-numbered level (1.5 selects level 1), or two levels with a
+  blend. `sample_grad` and `sample_lod` sample them with the wrap mode of each axis applied in
+  each level, nearest or bilinear within a level as section 20.6.3 describes.
+  `MipMinFilter::from_gltf` and `TexelFilter::from_gltf` read glTF 2.0 `minFilter` and
+  `magFilter` codes. NaN or infinite derivatives, LODs, biases and bounds, and a `min_lod` above
+  `max_lod`, return a `MipError`. Each level is checked against `MipLimits::image`, and all
+  levels together against `max_chain_bytes`, before anything is allocated; `required_bytes`
+  makes the same check for a size alone.
 - **Other operations.** `get` reads one texel, `map`, `to_gray`, `to_color` and `to_kind` convert,
   `resize` box-averages whole-factor shrinks and samples bilinearly otherwise, and
   `to_rgba8_display` encodes 8-bit sRGB RGBA. `linear_to_srgb`, `srgb_to_linear` and `luminance`
@@ -64,7 +82,7 @@ network I/O and has no `unsafe` code.
     scale, a block of 0, an occlusion product that overflows `f32`, mismatched sizes and a
     failed row read return a `TextureOpError`.
 
-Mirrored repeat, mip chains, decoding and texture-set recognition are not in the crate yet.
+Mirrored repeat, decoding and texture-set recognition are not in the crate yet.
 
 ## Cargo features
 
@@ -83,6 +101,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 | `max_side` | 8192 | every `try_` constructor, `from_data`, `try_height_to_normal` and `try_pack_orm` |
 | `max_pixels` | 2^26 (8192 × 8192) | the same |
 | `max_bytes` | 1 GiB (an 8192 × 8192 RGBA plane) | the same |
+| `MipLimits::max_chain_bytes` | 1.5 GiB (a chain over an 8192 × 8192 RGBA plane needs about 1.33 GiB) | `MipChain::try_build`, `from_levels` and `required_bytes`, with `MipLimits::image` for each level |
 
 ## Origin
 
@@ -93,6 +112,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 | `Limits`, the `try_` constructors, `from_data`, private fields with getters, the `parallel` feature, `with_integer_sampling` and `integer_sampling` | written here |
 | The Sobel normal, its strength scale, UV-tile clamp and uncovered-neighbor rule, the ORM channels and defaults, and the tests `gltf_png_matches_the_composite`, `directx_flips_green`, `height_becomes_normal_detail`, `ao_mixes_baked_and_channel`, `converted_maps_invert_and_derive_normals` and `uv_tiles_export_one_file_per_tile_without_padding_across`, with assertions on the new functions | TextureCraft `crates/formats/src/export/mod.rs`, `presets.rs` and `tests.rs` and `crates/core/src/channel.rs` at [b89badc](https://github.com/storytold/texturecraft/commit/b89badcd6f883751f79960f93c554fb77f063885) |
 | `ScalarSource`, row-at-a-time reading, the limit and non-finite checks, and the tiled-input tests | written here |
+| `mip`: mip chains, LOD and level selection, and their tests | written here |
 
 ## Migration
 
