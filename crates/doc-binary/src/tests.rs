@@ -1632,6 +1632,33 @@ fn a_custom_note_mark_is_the_references_run() {
 }
 
 #[test]
+fn a_custom_note_mark_stops_at_the_next_reference() {
+    // Two notes marked "a" and "b" side by side, in one superscript run: each reference has its
+    // own mark, and neither note is lost.
+    let text = "See ab here\r";
+    let ccp = text.chars().count() as u32;
+    let sup = grpprl(&[(0x2A48, &[1])]);
+    let spec = StructSpec {
+        text,
+        chpx_runs: vec![(0, Vec::new()), (4, sup), (6, Vec::new())],
+        note_stories: vec!["a Note\r", "b Note\r\r"],
+        extra_pairs: vec![(2, plc(&[4, 5, ccp], &[0, 0, 0, 0])), (3, plc(&[0, 7, 14, 15], &[]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = para0(&doc);
+    let marks: Vec<&str> = p0
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            craft_wordmodel::para::InlineObject::NoteRef { custom, .. } => Some(custom.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marks, ["a", "b"]);
+}
+
+#[test]
 fn a_custom_note_mark_can_be_a_symbol() {
     // Insert > Symbol as a mark: the placeholder U+0028 with sprmCSymbol (font 0, U+F071), as
     // the body text stores a symbol. The mark is the symbol's character, not "(".
@@ -1818,6 +1845,28 @@ fn bookmarks_become_objects() {
         p0.objects
     );
     assert_eq!(p0.text, "\u{FFFC}Hello\u{FFFC} world");
+}
+
+#[test]
+fn a_bookmark_starting_at_the_end_of_the_main_text_is_not_in_the_body() {
+    // The start CP is ccpText, the first character of the next story, so its end isn't in the body
+    // either: no start is left open in the body.
+    let text = "Hello\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        extra_pairs: vec![(21, sttbf_bkmk(&["bm1"])), (22, plc(&[ccp, ccp + 3], &[0, 0, 0, 0])), (23, plc(&[ccp + 2, ccp + 3], &[0, 0]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let starts = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| &p.objects)
+        .filter(|o| matches!(o, craft_wordmodel::para::InlineObject::BookmarkStart { .. }))
+        .count();
+    assert_eq!(starts, 0, "body: {:?}", doc.body);
 }
 
 #[test]
