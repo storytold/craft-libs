@@ -1,6 +1,8 @@
 use super::{Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, W, Writer, props, xml};
 use crate::write::props::open_change;
 use craft_wordmodel::Document;
+use craft_wordmodel::props::Rgb;
+use craft_wordmodel::styles::FillOff;
 use craft_wordmodel::styles::TableStyleParts;
 
 /// Built-in names Word keeps in lower case in styles.xml.
@@ -64,7 +66,13 @@ pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
 /// corresponding property element as `w:pPrChange` / `w:rPrChange`.
 /// A table style's own table properties (`w:tblPr`), in ECMA-376 order.
 fn table_style_tblpr(w: &mut W, t: &TableStyleParts) {
-    if t.borders.is_none() && t.cell_margins.is_none() && t.indent.is_none() && t.band_size.is_none() && t.col_band_size.is_none() {
+    if t.borders.is_none()
+        && t.table_shading.is_none()
+        && t.cell_margins.is_none()
+        && t.indent.is_none()
+        && t.band_size.is_none()
+        && t.col_band_size.is_none()
+    {
         return;
     }
     w.open("w:tblPr", &[]);
@@ -80,6 +88,9 @@ fn table_style_tblpr(w: &mut W, t: &TableStyleParts) {
     }
     if let Some(b) = &t.borders {
         props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+    }
+    if let Some(c) = t.table_shading {
+        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
     }
     if let Some(m) = &t.cell_margins {
         props::margins(w, "w:tblCellMar", m);
@@ -141,16 +152,24 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
     style_property_xml(wr, w, st);
     if let Some(t) = &st.table {
         table_style_tblpr(w, t);
+        // What covers every cell is the style's own `w:tcPr`: Word reads no `wholeTable` region.
+        let whole = t.part(TablePart::WholeTable);
+        let whole_off = t.fills_off.get(&TablePart::WholeTable).copied();
+        if whole.fill.is_some() || whole_off.is_some() || whole.v_align.is_some() {
+            w.open("w:tcPr", &[]);
+            shd(w, whole.fill, whole_off);
+            v_align(w, whole.v_align);
+            w.close("w:tcPr");
+        }
         // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
-        // then cell borders, shading and vertical alignment. The whole table's text formatting
-        // is the style's own (above).
-        for part in TablePart::ALL {
+        // then cell borders, shading and vertical alignment.
+        for part in TablePart::ALL.into_iter().filter(|p| *p != TablePart::WholeTable) {
             let f = t.part(part);
+            let off = t.fills_off.get(&part).copied();
             let ppr = ParaProps { align: f.align, ..ParaProps::default() };
             let has_rpr = props::has_rpr(&f.chr);
-            // The whole table's borders are its table borders (`w:tblPr` above).
-            let borders = f.borders.filter(|_| part != TablePart::WholeTable);
-            let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
+            let borders = f.borders;
+            let has_tc = f.fill.is_some() || off.is_some() || borders.is_some() || f.v_align.is_some();
             if !has_rpr && !has_tc && f.align.is_none() {
                 continue;
             }
@@ -170,25 +189,37 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
                 if let Some(bs) = borders {
                     props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[]);
                 }
-                if let Some(c) = f.fill {
-                    w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
-                }
-                if let Some(v) = f.v_align {
-                    w.val(
-                        "w:vAlign",
-                        match v {
-                            VAlign::Top => "top",
-                            VAlign::Center => "center",
-                            VAlign::Bottom => "bottom",
-                        },
-                    );
-                }
+                shd(w, f.fill, off);
+                v_align(w, f.v_align);
                 w.close("w:tcPr");
             }
             w.close("w:tblStylePr");
         }
     }
     w.close("w:style");
+}
+
+/// A table style's `w:shd`: its colour, or how it states none.
+fn shd(w: &mut W, fill: Option<Rgb>, off: Option<FillOff>) {
+    match (fill, off) {
+        (Some(c), _) => w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]),
+        (None, Some(FillOff::Auto)) => w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", "auto")]),
+        (None, Some(FillOff::Nil)) => w.empty("w:shd", &[("w:val", "nil")]),
+        (None, None) => {}
+    }
+}
+
+fn v_align(w: &mut W, v: Option<VAlign>) {
+    if let Some(v) = v {
+        w.val(
+            "w:vAlign",
+            match v {
+                VAlign::Top => "top",
+                VAlign::Center => "center",
+                VAlign::Bottom => "bottom",
+            },
+        );
+    }
 }
 
 fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
