@@ -1,5 +1,6 @@
 //! `ActionsPanel`: the whole panel, its state, output and events.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 
@@ -25,6 +26,25 @@ pub trait ActionsHost {
     /// catalogue.
     fn step_label(&self, step: &ActionStep) -> String;
 
+    /// The action's display caption, independent of its key in the list. By default its name.
+    /// Selection, expansion and events still use the list's identity, including during rename.
+    fn action_label<'a>(&'a self, action: &'a Action) -> Cow<'a, str> {
+        Cow::Borrowed(&action.name)
+    }
+
+    /// The set's display caption, independent of its key in the list. By default its name.
+    /// Apps projecting distinct imported occurrences may give them the same caption.
+    fn set_label<'a>(&'a self, set: &'a str) -> Cow<'a, str> {
+        Cow::Borrowed(set)
+    }
+
+    /// An optional display order of every set key, including empty sets. None keeps the list's
+    /// order. A repeated, missing or unknown key is ignored as a whole; it cannot hide a set.
+    /// Only presentation changes: the list, selection keys and events retain their identities.
+    fn set_order(&self) -> Option<&[String]> {
+        None
+    }
+
     /// The action's keyboard shortcut, if it has one (the app's `actions.play:<name>`
     /// override). None by default.
     fn shortcut(&self, action: &Action) -> Option<ShortcutChoice> {
@@ -49,6 +69,30 @@ pub trait ActionsHost {
     fn playing(&self) -> bool {
         false
     }
+}
+
+/// Resolve only presentation; callers keep using the original key for every event.
+pub(super) fn action_label<'a>(host: Option<&'a dyn ActionsHost>, action: &'a Action) -> Cow<'a, str> {
+    host.map_or_else(|| Cow::Borrowed(action.name.as_str()), |host| host.action_label(action))
+}
+
+pub(super) fn set_label<'a>(host: Option<&'a dyn ActionsHost>, set: &'a str) -> Cow<'a, str> {
+    host.map_or_else(|| Cow::Borrowed(set), |host| host.set_label(set))
+}
+
+/// Use only a complete permutation of the existing keys; invalid host data retains every set.
+pub(super) fn display_sets<'a>(list: &'a ActionList, host: Option<&'a dyn ActionsHost>) -> Vec<&'a str> {
+    let sets = list.sets();
+    let Some(order) = host.and_then(|host| host.set_order()) else { return sets };
+    if order.len() != sets.len() {
+        return sets;
+    }
+    let expected: BTreeSet<&str> = sets.iter().copied().collect();
+    let given: BTreeSet<&str> = order.iter().map(String::as_str).collect();
+    if given != expected {
+        return sets;
+    }
+    order.iter().map(String::as_str).collect()
 }
 
 impl ActionsSettings {
