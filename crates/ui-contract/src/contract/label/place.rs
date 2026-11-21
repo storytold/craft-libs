@@ -95,8 +95,9 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
         }
     }
     let baseline = leaf.baseline.get();
-    // An egui grid's cell grows at its right edge in any direction (`LabelIn::egui_cell`); a row grows at its end edge.
-    let grows = if input.egui_cell { Grows::Right } else { Grows::End };
+    // An egui grid's cell is decided at what it needs from its left edge in any direction (`LabelIn::egui_cell`); a
+    // row grows at its end edge.
+    let grows = if input.egui_cell { Grows::Cell } else { Grows::End };
     if input.side.layout == FieldLayout::Line {
         let number = env.control(input.size).number;
         let flow = if input.egui_cell { widened(flow, natural.x + gap + number, grows) } else { flow };
@@ -165,24 +166,25 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     }
 }
 
-/// The edge a flow that is too narrow grows at (`widened`).
+/// How a flow takes the width its label and control need (`widened`).
 #[derive(Clone, Copy)]
 enum Grows {
-    /// Its end edge: the left one under RTL.
+    /// A flow that is too narrow grows at its end edge: the left one under RTL.
     End,
-    /// Its right edge, in either direction.
-    Right,
+    /// An egui grid's cell: exactly as wide as they need from its left edge, in either direction, narrowed as well as
+    /// widened. egui offers a grid's last column the rest of the room, where the control would sit at its far edge
+    /// under RTL.
+    Cell,
 }
 
-/// `flow` widened to `need` at the edge `grows` names, when it is narrower.
+/// `flow` widened to `need` as `grows` says.
 fn widened(flow: Flow, need: f32, grows: Grows) -> Flow {
     let mut wide = flow.rect();
-    if wide.width() >= need {
-        return flow;
-    }
     match grows {
+        Grows::Cell => wide.max.x = wide.min.x + need,
+        Grows::End if wide.width() >= need => return flow,
         Grows::End if flow.is_rtl() => wide.min.x = wide.max.x - need,
-        Grows::End | Grows::Right => wide.max.x = wide.min.x + need,
+        Grows::End => wide.max.x = wide.min.x + need,
     }
     Flow::new(wide, flow.is_rtl())
 }

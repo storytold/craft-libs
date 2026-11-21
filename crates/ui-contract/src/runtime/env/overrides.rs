@@ -128,6 +128,8 @@ pub struct Overrides {
     pub words: Option<WordsOverride>,
     /// App values set for the scope.
     pub values: AppValues,
+    /// The child `Ui`'s id salt, as `ui.push_id` gives it: the ids of what it shows derive from it.
+    pub id_salt: Option<egui::Id>,
 }
 
 /// How a scope changes the built-in text: the only override path for words.
@@ -176,27 +178,25 @@ impl Overrides {
     }
 }
 
-/// Runs `body` in a child `Ui` built from `builder`, as `ui.scope_builder` does, under the env of `ui`: the components
-/// it shows are children of the body around `ui` as those shown in `ui` itself are, on its line and in its cells. The
-/// craft form of `ui.scope`, `ui.push_id` (`UiBuilder::id_salt`) and `ui.with_layout` around craft content: what a
-/// body sets up for its children in flow does not reach a `Ui` egui code makes below the body's own (`Env::of`).
-pub fn flow_scope<R>(ui: &mut Ui, builder: egui::UiBuilder, body: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
-    let env = Env::of(ui);
-    ui.scope_builder(builder, |child| Env::run_in(child, env, body))
-}
-
 /// Runs `body` in a child `Ui` with `set`'s changes applied to the inherited values. A scope that disables
 /// disables its child `Ui`; one that changes direction builds the child with an explicit layout and never
 /// inherits the parent's.
+///
+/// The components the child `Ui` shows are children of the body around `ui` as those shown in `ui` itself are, on its
+/// line and in its cells. It is the craft form of `ui.scope` and
+/// `ui.push_id` (`Overrides::id_salt`) around craft content: what a body sets up for its children in flow does not
+/// reach a `Ui` egui code makes below the body's own (`Env::of`). Content laid out along the other axis goes in a
+/// craft `Row` or `Stack`, a body of its own.
 pub fn with_env<R>(ui: &mut Ui, set: impl FnOnce(&mut Overrides), body: impl FnOnce(&mut Ui) -> R) -> R {
     let mut overrides = Overrides::default();
     set(&mut overrides);
+    let id_salt = overrides.id_salt.take();
     let outer = Env::of(ui);
     let ctx = ui.ctx().clone();
     let inner = outer.derive(|scoped| overrides.apply(&ctx, scoped));
     let direction = (inner.direction != outer.direction).then(|| inner.direction.is_rtl());
     let disabled = !inner.enabled;
-    child::scope(ui, disabled, direction, |child| {
+    child::scope(ui, id_salt, disabled, direction, |child| {
         let _restore = Restore { ctx: &ctx, installed: Some(Env::install_for(child, inner)) };
         body(child)
     })

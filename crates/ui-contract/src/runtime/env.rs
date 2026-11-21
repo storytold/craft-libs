@@ -44,7 +44,7 @@ mod view;
 pub use app_values::{AppValues, EnvValue, StyleValue};
 pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
-pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, flow_scope, with_env};
+pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
 pub use root::{ResolvedRoot, RootEnv};
 pub use system::{SystemState, system_appearance};
 pub(crate) use tokens::TokenInputs;
@@ -90,6 +90,7 @@ pub(crate) struct Flow {
     unbounded: (bool, bool),
     cell_fills: bool,
     fits: bool,
+    egui_cell: bool,
 }
 
 /// The values of an env.
@@ -216,6 +217,12 @@ pub struct Scoped {
     /// The scope is the body of a beside label in an inspector (`LabelScheme::Inspector`): the control shown there
     /// fills the width the label leaves. Only that control sees it, as with `inside_label`.
     pub(crate) cell_fills: bool,
+    /// The scope lays out in a cell of an `egui::Grid` that egui code made below the body around it: the grid places
+    /// each child from its cell's left edge in any direction, and gives the column the width the child takes from the
+    /// next frame. `Env::of` sets it where the stack between a `Ui` and its entry holds a grid's `Ui`; a scope that
+    /// passes `Env::of` on (`with_env`, `Lazy`, a memoized view) keeps it, and a body (`start_room`) or a component's
+    /// children (`child_env`) end it.
+    pub(crate) egui_cell: bool,
 }
 
 /// The values of an env that a scope rarely changes: the resolved tokens, the platform, the language and the app's
@@ -433,9 +440,10 @@ impl Scoped {
         self.shrink = None;
         self.column = None;
         self.offered = None;
+        self.egui_cell = false;
     }
 
-    /// Whether any of the facts `start_room` ends is set.
+    /// Whether any of the facts `start_room` ends is set, besides `egui_cell`, which `Env::of` sets.
     fn has_room(&self) -> bool {
         self.grid.is_some()
             || self.grid_top
@@ -454,7 +462,8 @@ impl Scoped {
     }
 
     /// Starts the layout room of a memoized view's content (`start_room`), keeping whether the enclosing body is a
-    /// content-sized or a given column, as `start_room` keeps the content axes. The view's content then measures and
+    /// content-sized or a given column and whether the view lies in an egui grid's cell, as `start_room` keeps the
+    /// content axes. The view's content then measures and
     /// fills as it would shown without the view: a child that fills takes its measured size where the body sizes from
     /// content, never the open room. Where a leaf shown here would fit its room (`view_fits`), the leaves of the view's
     /// content fit the room the view is given (`Shrink::Fit`). A view that is a unit of a shrinking `Row` sizes from its
@@ -463,9 +472,9 @@ impl Scoped {
     pub(crate) fn start_view_room(&mut self) {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
-        let (content_column, given_column) = (self.content_column, self.given_column);
+        let (content_column, given_column, egui_cell) = (self.content_column, self.given_column, self.egui_cell);
         self.start_room();
-        (self.content_column, self.given_column) = (content_column, given_column);
+        (self.content_column, self.given_column, self.egui_cell) = (content_column, given_column, egui_cell);
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
@@ -524,6 +533,7 @@ impl Scoped {
             unbounded: self.unbounded,
             cell_fills: self.cell_fills,
             fits: self.view_fits(),
+            egui_cell: self.egui_cell,
         }
     }
 
@@ -675,6 +685,7 @@ impl Env {
                 item_facts: None,
                 inside_label: None,
                 cell_fills: false,
+                egui_cell: false,
             }),
         }
     }
@@ -687,21 +698,27 @@ impl Env {
     /// it shows in the `Ui` it installed its env for. A `Ui` egui code makes below that one (an `egui::Grid`,
     /// `ui.horizontal`, `ui.push_id` in a caller's closure) lays out its own children: an entry found for an ancestor
     /// of `ui` comes without those facts, so a component there takes no cell, line or shrink step of the body around it.
+    /// Where that stack holds an `egui::Grid`'s `Ui`, the env says the component lays out in the grid's cell
+    /// (`Scoped::egui_cell`).
     ///
     /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
-        let own = stack::node_id(ui);
-        let found = PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| {
-            stack::nearest(ui, |node| envs.entries.get(&node).map(|env| (env.clone(), node == own)))
-                .or_else(|| envs.root.clone().map(|env| (env, true)))
+        // The root env stands for an entry above the whole stack.
+        let (found, grid) = PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| {
+            let stack::Found { value, grid } = stack::nearest(ui, |node| envs.entries.get(&node).cloned());
+            (value.or_else(|| envs.root.clone().map(|env| (env, false))), grid)
         });
-        let env = match found {
-            Some((env, true)) => env,
-            Some((env, false)) if env.scoped.has_room() => env.derive_local(Scoped::start_room),
-            Some((env, false)) => env,
-            None => Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)),
+        let (env, own) = found.unwrap_or_else(|| (Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)), false));
+        let egui_cell = env.egui_cell || grid;
+        let env = if own || !(env.scoped.has_room() || egui_cell != env.egui_cell) {
+            env
+        } else {
+            env.derive_local(|scoped| {
+                scoped.start_room();
+                scoped.egui_cell = egui_cell;
+            })
         };
         // egui's `invisible()` also disables the `Ui`, and a sizing `Ui` is invisible, not disabled: in a sizing pass
         // the env keeps the enabled state the real run has, so a memoized view keys alike in both.

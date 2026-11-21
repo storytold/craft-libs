@@ -214,8 +214,9 @@ layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
     ///
     /// The cells are the grid's craft children. An egui container shown in the body (`ui.horizontal`, an
-    /// `egui::Grid`) is no cell: egui places it below the cells placed so far, its children are not cells, and the
-    /// next child takes the next cell. Content that should take a cell goes in a craft body (`Row`).
+    /// `egui::Grid`) is no cell: egui places it below the cells placed so far, and its children are not cells. The
+    /// rows after it are placed over it, since the grid's rows do not count it: show it as the last child, or put it
+    /// in a craft body (`Row`), which takes a cell.
     Grid,
     GridStyleKey,
     []

@@ -1,14 +1,6 @@
 config_version = 1
 
 [[exception]]
-name = "dock-header-gap"
-kind = "marker"
-rule = "style-mutation"
-path = "crates/ui-panels/src/docking/group.rs"
-reason = "The header lays its title cells with an egui layout and sets that layout gap."
-count = 1
-
-[[exception]]
 name = "iconic-story-stage"
 kind = "marker"
 rule = "style/token-read"

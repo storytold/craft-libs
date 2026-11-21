@@ -29,9 +29,9 @@ pub(super) struct MeasureKey {
     /// Whether the body shows, and how much of it an animated collapse shows.
     shows: (bool, f32),
     env: EnvFacts,
-    /// Where its parent flow showed the container: as a row of a vertical flow (`label::in_column`), with a rule just
-    /// before it (a rule above its header is not drawn), and in a cell of an `egui::Grid`.
-    flow: (bool, bool, bool),
+    /// Where its parent flow showed the container: as a row of a vertical flow (`label::in_column`), and with a rule
+    /// just before it (a rule above its header is not drawn).
+    flow: (bool, bool),
 }
 
 /// The props a body was measured under, compared on the fields its measure reads.
@@ -61,6 +61,7 @@ pub(crate) struct EnvFacts {
     offered: Option<f32>,
     measure: Option<f32>,
     grid: Option<Id>,
+    egui_cell: bool,
 }
 
 impl EnvFacts {
@@ -80,6 +81,7 @@ impl EnvFacts {
             offered: env.offered,
             measure: env.measure,
             grid: env.grid,
+            egui_cell: env.egui_cell,
         }
     }
 }
@@ -95,7 +97,7 @@ impl<'b> BodyHooks<'b> {
             width,
             shows: (self.open, self.presence.t),
             env: EnvFacts::of(env),
-            flow: (self.in_column, self.after_rule, self.egui_cell),
+            flow: (self.in_column, self.after_rule),
         }
     }
 

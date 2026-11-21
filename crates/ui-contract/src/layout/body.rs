@@ -94,7 +94,8 @@ impl BodyLayout {
 
     /// Children row-major over `columns`: a `'static` slice, or columns built in the pass. The cells are the body's
     /// craft children: an egui container shown in the body is no cell, and egui places it below the cells placed so
-    /// far. Content that should take a cell goes in a craft body (`Row`).
+    /// far. The rows after it are placed over it: show it as the last child, or put it in a craft body (`Row`), which
+    /// takes a cell.
     pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self {
         BodyLayout::Grid { columns: columns.into(), fit: GridFit::Stack, cells: CellAlign::Center }
     }

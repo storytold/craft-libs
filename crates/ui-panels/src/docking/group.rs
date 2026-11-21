@@ -9,10 +9,11 @@ use super::{PanelDrag, PanelKey, PanelTitle, Titles};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
-    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, HeaderEdge, HeaderParts, HeaderRegion,
+    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, Gap, HeaderEdge, HeaderParts, HeaderRegion,
     ListDrag, MeasureCx, MemoProps, MemoView, Name, Outbox, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _,
     Role, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
+use crate::layout_components::Row;
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
@@ -504,14 +505,11 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         let started = drop::started(&cx.env);
         let mut extra = self.extra.take();
         let env = crate::runtime::env::Env::of(ui);
-        let rtl = env.direction.is_rtl();
-        let (line, gap) = (env.tokens.size.panel_header, env.tokens.space.gap.item);
-        ui.set_min_height(line);
+        ui.set_min_height(env.tokens.size.panel_header);
         let surface_pressed = cx.surface_pressed();
-        let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
         let mut sent = Vec::new();
-        let strip = crate::runtime::env::flow_scope(ui, egui::UiBuilder::new().layout(layout), |ui| {
-            ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
+        let mut strip = None;
+        let _ = Row::new().fill_width().gap(Gap::Item).show(ui, |ui, _| {
             if let Some(hook) = extra.as_mut() {
                 hook.run(ui, cx);
             }
@@ -526,9 +524,8 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             };
             // The env around the tab row holds only values its key follows (the shell, the dock's arrangement, a
             // floating window's layer), no handle or context rebuilt each pass, so it replays at rest.
-            MemoView::new(("tabs", cx.id), row, tab_row::<P>).show(ui)
-        })
-        .inner;
+            strip = MemoView::new(("tabs", cx.id), row, tab_row::<P>).show(ui);
+        });
         self.extra = extra;
         // A press on the group's empty body focuses its panel, as in Photoshop.
         if surface_pressed && let Some(strip) = strip {
