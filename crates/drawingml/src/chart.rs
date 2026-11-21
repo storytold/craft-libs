@@ -1772,6 +1772,8 @@ mod chartex_tests {
         assert_eq!((groups.len(), stats[0].len()), (n, n));
         assert!(stats[0].iter().all(Option::is_some));
         // 2,000 series cap the groups so the result stays within MAX_BOX_CELLS.
+        // Keep values beyond the 500-group cap without cloning the 50,000-value tail.
+        c.series[0].values.truncate(600);
         c.series = vec![c.series[0].clone(); 2000];
         let (groups, stats) = c.box_groups();
         assert_eq!(groups.len(), MAX_BOX_CELLS / 2000);
