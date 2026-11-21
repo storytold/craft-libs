@@ -1653,11 +1653,11 @@ impl Styles {
         {
             fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
-        // A known kind maps to a built-in Word style. Keep the ODF parent's direction here
-        // because the built-in style doesn't carry it.
+        // Built-in Word styles do not carry the direction of remapped ODF parents. Keep the
+        // direction of Standard or another remapped parent unless the custom style sets its own.
         let rtl = s.rtl.or_else(|| match &parent {
-            Parent::Kind(_) => self.chain(odt).into_iter().skip(1).find_map(|(_, style)| style.rtl),
-            _ => None,
+            Parent::Normal | Parent::Kind(_) => self.chain(odt).into_iter().skip(1).find_map(|(_, style)| style.rtl),
+            Parent::Named(_) => None,
         });
         let look = ParaLook {
             align: s.align,

@@ -140,6 +140,37 @@ fn exported_normal_style_keeps_its_direction_separate_from_document_defaults() {
 }
 
 #[test]
+fn custom_styles_based_on_normal_keep_inherited_and_explicit_direction() {
+    use craft_wordmodel::styles::{Style, StyleKind};
+    use craft_wordmodel::{Path, StoryRef};
+
+    for default_rtl in [false, true] {
+        let mut doc = Document::from_text("Inherited direction\nExplicit direction");
+        let styles = std::sync::Arc::make_mut(&mut doc.styles);
+        styles.default_para.bidi = Some(default_rtl);
+        styles.get_mut("Normal").unwrap().para.bidi = Some(!default_rtl);
+        for (name, bidi) in [("ByNormal", None), ("Explicit", Some(default_rtl))] {
+            styles.upsert(Style {
+                id: name.into(),
+                name: name.into(),
+                kind: StyleKind::Paragraph,
+                based_on: Some("Normal".into()),
+                para: craft_wordmodel::props::ParaProps { bidi, ..Default::default() },
+                ..Default::default()
+            });
+        }
+        for (i, name) in ["ByNormal", "Explicit"].into_iter().enumerate() {
+            doc.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.style = Some(name.into());
+        }
+        let expected = [!default_rtl, default_rtl];
+        assert_eq!(resolved_directions(&doc), expected);
+
+        let back = import(&export(&doc).unwrap()).unwrap();
+        assert_eq!(resolved_directions(&back), expected);
+    }
+}
+
+#[test]
 fn exported_custom_style_keeps_direction_when_its_heading_parent_is_remapped() {
     use craft_wordmodel::styles::{Style, StyleKind};
     use craft_wordmodel::{Path, StoryRef};
