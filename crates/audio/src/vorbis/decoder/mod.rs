@@ -310,6 +310,45 @@ impl Decoder {
         self.previous = None;
     }
 
+    /// The block size of an audio packet, from its mode number (§4.3.1); `None` when the packet
+    /// is not an audio packet or names no mode. It reads the packet's first byte only, since a
+    /// mode number takes at most 6 bits.
+    pub(crate) fn block_size(&self, packet: &[u8]) -> Option<usize> {
+        let mut r = BitReader::new(packet);
+        if r.bit().ok()? {
+            return None;
+        }
+        let mode_number = r.read(ilog(self.setup.modes.len() as i64 - 1)).ok()? as usize;
+        let mode = self.setup.modes.get(mode_number)?;
+        Some(if mode.long { self.id.blocksize_1 } else { self.id.blocksize_0 } as usize)
+    }
+
+    /// The block size a packet counts as, damaged or not: the one its mode names, else the
+    /// previous block's (`prev`), else the short block size. [`Decoder::conceal`] uses the same
+    /// rule, so a timeline built from it matches the decoded output.
+    pub(crate) fn block_size_or(&self, packet: Option<&[u8]>, prev: Option<usize>) -> usize {
+        packet.and_then(|p| self.block_size(p)).or(prev).unwrap_or(self.id.blocksize_0 as usize)
+    }
+
+    /// What stands in for an audio packet that failed to decode: the previous block's tail,
+    /// overlapped with silence, as long as the packet would have been. The packet's block size
+    /// comes from [`Decoder::block_size_or`]. The failed block counts as silence for the next
+    /// packet's overlap. Empty when no block came before, as for the first packet.
+    pub(crate) fn conceal(&mut self, packet: Option<&[u8]>) -> Vec<Vec<f32>> {
+        let channels = usize::from(self.id.channels);
+        let prev = self.previous.take();
+        let n = self.block_size_or(packet, prev.as_ref().map(|p| p.n));
+        let out = match &prev {
+            None => vec![Vec::new(); channels],
+            Some(prev) => {
+                let count = prev.n / 4 + n / 4;
+                prev.data.iter().map(|old| (0..count).map(|k| old.get(prev.n / 2 + k).copied().unwrap_or(0.0)).collect()).collect()
+            }
+        };
+        self.previous = Some(Previous { n, data: vec![vec![0.0; n]; channels] });
+        out
+    }
+
     /// The window of a block (§4.3.1).
     fn window(&self, n: usize, long: bool, prev_long: bool, next_long: bool) -> Vec<f32> {
         let half = n / 2;
