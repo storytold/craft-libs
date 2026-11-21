@@ -12,7 +12,7 @@ a person's own Google Drive directly, with no service in between and no OAuth cl
 | `List(path)` | One folder, folders first. Paths are slash-separated names; the backend maps them to Drive folder ids. |
 | `SharedWithMe` | Files other people shared, with who shared them. Folders are left out (they have no path here). Offered only with the full `drive` scope. |
 | `Read` | The file's bytes. Google Docs, Sheets and Slides are exported as `.docx`, `.xlsx` and `.pptx`. |
-| `Write` | Replaces the file if its content revision is still the one that was read; otherwise `Fault::Conflict` and nothing is uploaded. |
+| `Write` | Replaces the file if its content revision is still the one that was read; otherwise `Fault::Conflict` and nothing is uploaded. Best effort: the revision is checked just before the upload, not by Drive (see **Conflicts**). |
 | `Create` | A new file in the folder being browsed. A name already there is refused. |
 | `SignOut` | Revokes the grant at Google and removes the token. |
 

@@ -1,6 +1,9 @@
 //! A host that logs `ureq_proto` at `TRACE` would record tokens: nothing is sent then. Its own
 //! test binary, since it installs the process's logger.
 
+// The crate is empty on wasm, like `tests/backend.rs`.
+#![cfg(not(target_arch = "wasm32"))]
+
 use craft_cloud_google_drive::Error;
 use craft_cloud_google_drive::http::{Method, Request, Transport, Ureq, wire_traced};
 
