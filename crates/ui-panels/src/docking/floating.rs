@@ -9,7 +9,7 @@
 
 use super::dock_column::{CHEVRON, ColumnArrow, describe_chevron, paint_chevron};
 use super::drop::{DragUnit, start_group_drag};
-use super::{DockDropTarget, DockDropped, DockWords, GroupDrag, PanelDrag, PanelKey, native};
+use super::{DockDropTarget, DockDropped, DockSizes, DockWords, GroupDrag, PanelDrag, PanelKey, native};
 use crate::contract::BodyCx;
 use crate::contract::SizeLimits;
 use crate::contract::overlay::{PlacementChange, PlacementKind, Popup, ResizeEdges};
@@ -369,11 +369,10 @@ impl<'a> FloatingGroup<'a> {
     /// Shows the group; `body` fills the area under the title row unless the group is minimized.
     pub fn show_group<R>(mut self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<FloatingGroupOutput, R> {
         let env = Env::of(ui);
-        let header = title_row(&env.tokens);
         // A window in the app window keeps the band over its title row that a layer the user moves keeps for its top
-        // grip; an OS window's grips lie over its title row.
-        let band = if self.native.is_none() { crate::contract::grip_band(&env.tokens) } else { 0.0 };
-        (self.header, self.chrome, self.rtl) = (header, header + band, env.direction.is_rtl());
+        // grip; an OS window's grips lie over its title row. The rule under the title row takes a band of its own.
+        let sizes = DockSizes::style(&StyleCx::of_env(ui.ctx(), &env));
+        (self.header, self.chrome, self.rtl) = (sizes.title_row, sizes.window_chrome(self.native.is_none()), env.direction.is_rtl());
         let mount = self.mount();
         self.props = self.props.mount(mount);
         let minimized = self.minimized;

@@ -250,6 +250,8 @@ struct NativeDock {
     builder: Option<ViewportBuilder>,
     /// The palette's window: the first child window the dock opened.
     palette: Option<ViewportId>,
+    /// The tree the palette window's pass produced in the last frame.
+    palette_tree: Option<AccessTree>,
 }
 
 impl NativeDock {
@@ -270,7 +272,7 @@ impl NativeDock {
         windows.root_info(info(true, MAIN_AT));
         windows.child_info(info(true, FLOAT_AT));
         let workspace = Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette]));
-        let mut dock = NativeDock { windows, workspace, stepped, builder: None, palette: None };
+        let mut dock = NativeDock { windows, workspace, stepped, builder: None, palette: None, palette_tree: None };
         for _ in 0..3 {
             dock.frame(vec![]);
         }
@@ -295,6 +297,7 @@ impl NativeDock {
             self.palette = out.builders.iter().map(|(viewport, _)| *viewport).find(|viewport| *viewport != ViewportId::ROOT);
         }
         let palette = self.palette;
+        self.palette_tree = out.trees.into_iter().find(|(viewport, _)| Some(*viewport) == palette).map(|(_, tree)| tree);
         for (_, builder) in out.builders.into_iter().filter(|(viewport, _)| Some(*viewport) == palette) {
             match self.builder.as_mut() {
                 Some(kept) => {
@@ -747,6 +750,9 @@ fn a_minimized_native_palette_keeps_its_width_resizable_and_comes_back_at_its_he
         follow(&mut dock, &mut at, 3);
         let strips = at;
         assert!(strips.height() < expanded.y / 4.0, "{os:?}: the window shrinks to its title row and strip: {strips:?}");
+        if let Err(fit) = fits_exactly(dock.palette_tree.as_ref().expect("the palette ran a pass"), strips.size(), Role::TAB_LIST) {
+            panic!("{os:?}: the minimized window fits its title row and strip: {fit}");
+        }
         assert_eq!((strips.min, strips.width()), (FLOAT_AT.min, expanded.x), "{os:?}: at its place and width");
         assert_eq!(recorded(&dock), expanded, "{os:?}: minimized, the model keeps the expanded size");
         let builder = dock.builder.clone().expect("the palette's window opened");
@@ -867,6 +873,25 @@ fn node_rect(tree: &AccessTree, name: &str, role: Role) -> Option<Rect> {
     tree.keys().into_iter().find(|key| tree.name_of(*key) == Some(name) && tree.role_of(*key) == Some(role)).and_then(|key| tree.bounds_of(key))
 }
 
+/// How far a node's edge may stray from the window's for float rounding: far under a pixel at any scale.
+const FIT_ROUNDING: f32 = 0.05;
+
+/// Whether a window `size` big fits what its pass shows in `tree` exactly: every node lies inside it, and the lowest
+/// node of `role` ends at its bottom, within float rounding.
+fn fits_exactly(tree: &AccessTree, size: Vec2, role: Role) -> Result<(), String> {
+    let window = Rect::from_min_size(Pos2::ZERO, size);
+    let outside: Vec<Rect> =
+        tree.keys().into_iter().filter_map(|key| tree.bounds_of(key)).filter(|rect| !window.expand(FIT_ROUNDING).contains_rect(*rect)).collect();
+    let bottom = tree.with_role(role).into_iter().filter_map(|key| tree.bounds_of(key)).map(|rect| rect.max.y).fold(f32::MIN, f32::max);
+    if !outside.is_empty() {
+        return Err(format!("nodes past the {size:?} window: {outside:?}"));
+    }
+    if (bottom - size.y).abs() > FIT_ROUNDING {
+        return Err(format!("the content ends at {bottom}, the {size:?} window at {}", size.y));
+    }
+    Ok(())
+}
+
 /// The role and name of each named node of `tree`.
 fn nodes(tree: &AccessTree) -> Vec<(Option<Role>, String)> {
     let mut nodes: Vec<(Option<Role>, String)> =
@@ -951,7 +976,8 @@ fn hovered_arrow(dock: &mut NativeDock, at: &mut Rect) -> (Out, Rect) {
 }
 
 /// A native palette collapsed to icons paints the icons of its panels and no text cut by its window, also while the
-/// pointer rests on its double arrow: the arrow's tooltip shows outside the strip, not wrapped inside it.
+/// pointer rests on its double arrow: the arrow's tooltip shows outside the strip, not wrapped inside it, and the
+/// window fits the title row, its rule and the icons exactly.
 #[trial]
 fn a_collapsed_native_palette_paints_its_icons_and_no_clipped_text() {
     let (mut dock, mut at) = collapsed_palette();
@@ -962,6 +988,9 @@ fn a_collapsed_native_palette_paints_its_icons_and_no_clipped_text() {
     let icon = node_rect(tree, PALETTE_TITLE, Role::BUTTON).expect("the strip shows the panel's icon");
     assert!(window.contains(icon.center()), "the icon shows in the strip: {icon:?} in {window:?}");
     assert!(tree.with_role(Role::TOOLTIP).is_empty(), "no tooltip shows inside the strip");
+    if let Err(fit) = fits_exactly(tree, at.size(), Role::BUTTON) {
+        panic!("the strip's window fits its icons: {fit}");
+    }
 }
 
 /// The tooltip of a collapsed native palette's double arrow opens in a popup OS window below the arrow, in desktop
