@@ -12,7 +12,7 @@ use craft_keymap::{Binding, CommandDef, CommandRef, ImportPlan, ImportReport};
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, BodyCx, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
+use craft_ui::contract::{Animate as _, Bind, BodyCx, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::notices::Notice;

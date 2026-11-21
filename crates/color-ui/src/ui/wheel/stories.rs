@@ -53,7 +53,7 @@ fn color_wheel_square_gamut(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ColorWheel<'static>, covers = [Mixed], drive = Drive::Never, title = "Square, mixed")]
 fn color_wheel_square_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("mixed", craft_ui::contract::Mixed::<craft_theme::ModelValues>::Mixed);
+    let values = data.value("mixed", craft_behavior::Mixed::<craft_theme::ModelValues>::Mixed);
     ColorWheel::new("Color wheel", Bind::bound_mixed(values)).inner(WheelInner::Square).show(ui).into()
 }
 

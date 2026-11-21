@@ -30,10 +30,8 @@ pub struct ColorAreaStyle {
     #[style(metrics)]
     metrics: Metrics,
     /// The fill of a cell the gamut moves (`surface.scrim`).
-    #[style(skip)]
     scrim: StyleColor,
     /// The marker look: its halo is the dark edge line and its ring the light one.
-    #[style(skip)]
     marker: MarkerLook,
 }
 

@@ -2,7 +2,7 @@
 
 use super::face::{self, FaceLook, FaceSpec};
 use crate::contract::{
-    Access, Common, Component, Cx, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _, WordSetCx as _,
+    Access, Common, Component, Cx, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, PopupKind, Props, Role, Styled as _, WordSetCx as _,
 };
 use crate::display::{ChordWrite, DisplayWords, Kbd, Spinner};
 use crate::primitives::{HAlign, IconSpec, PaintShape};
@@ -180,6 +180,12 @@ pub struct Button<'a> {
     /// Whether a command button shows its command's chord after the label.
     #[prop]
     chord: ButtonChord,
+    /// The kind of popup the button opens: AccessKit reports it.
+    #[prop(into)]
+    popup: Option<PopupKind>,
+    /// Whether the popup the button opens is open, as the host knows it.
+    #[prop(into)]
+    expanded: Option<bool>,
 }
 
 impl<'a> Button<'a> {
@@ -196,6 +202,8 @@ impl<'a> Button<'a> {
             align: HAlign::Center,
             detail: None,
             chord: ButtonChord::Hidden,
+            popup: None,
+            expanded: None,
         }
         .label(label)
     }
@@ -285,6 +293,12 @@ impl Component for Button<'_> {
             && cx.resolved.description.is_none()
         {
             access.description(detail);
+        }
+        if let Some(kind) = self.popup {
+            access.has_popup(kind);
+        }
+        if let Some(open) = self.expanded {
+            access.expanded(open);
         }
     }
 

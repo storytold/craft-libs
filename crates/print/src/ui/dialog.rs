@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use craft_behavior::{
-    CursorIcon, EditEvent, EditEvents, IconId, Metrics, Mixed, PartKey, PointerButton, PressPhase, Sense, keyed,
+    CursorIcon, EditEvent, EditEvents, IconId, Metrics, Mixed, PartKey, PointerButton, PressPhase, Sense, Value, keyed,
 };
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
-    Props as _, Remember as _, Role, Show as _, ShowContainer as _, Validity, Value, WordSetCx as _, clicked,
+    Props as _, Remember as _, Role, Show as _, ShowContainer as _, Validity, WordSetCx as _, clicked,
 };
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
 use craft_ui::display::{Shade, Text};

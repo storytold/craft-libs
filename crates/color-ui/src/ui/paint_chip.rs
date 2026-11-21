@@ -17,7 +17,7 @@ use craft_theme::Srgba;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{ChoiceWords, RING_SHARE, Segmented, Swatch, SwatchFace, SwatchStyle, paint_ring};
 use craft_ui::contract::{
-    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _, Pages,
+    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Meta as _, Outcome, Overlay, OverlayUi, Overlays as _, Pages,
     PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
 use craft_ui::display::{Shade, Text};

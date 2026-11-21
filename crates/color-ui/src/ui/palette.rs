@@ -14,7 +14,7 @@ use std::sync::Arc;
 mod stories;
 
 /// The table's drag mapper, type-erased so the palette needs no payload parameter.
-type TableMap<'a> = Arc<dyn Fn(SwatchTable<'a>) -> SwatchTable<'a> + 'a>;
+type TableMap = Arc<dyn for<'t> Fn(SwatchTable<'t>) -> SwatchTable<'t>>;
 
 /// What a [`SwatchPalette`] reports.
 #[derive(Debug)]
@@ -53,7 +53,7 @@ pub struct SwatchPalette<'a> {
     color: Bind<'a, Srgba>,
     swatches: &'a [(Label, Srgba)],
     spacing: SwatchSpacing,
-    drag: Option<TableMap<'a>>,
+    drag: Option<TableMap>,
 }
 
 impl<'a> SwatchPalette<'a> {
@@ -90,7 +90,10 @@ impl<'a> SwatchPalette<'a> {
             let selected = swatches.iter().position(|(_, c)| c.to_rgba() == before.to_rgba());
             let mut current = selected.map_or_else(Selection::default, Selection::single);
             let table = SwatchTable::new(label.clone(), swatches).tips(true).wells(true).spacing(spacing).selection(Bind::bound(&mut current));
-            let table = drag.as_ref().map_or(table, |map| map(table));
+            let table = match &drag {
+                Some(map) => map(table),
+                None => table,
+            };
             let table = table.show_all(ui);
             let picked = table.selected.or(table.open)?;
             let after = swatches.get(picked)?.1;

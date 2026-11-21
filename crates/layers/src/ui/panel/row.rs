@@ -178,18 +178,18 @@ fn paint_picture<Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static>(
 fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind, glyph: Option<IconId>) {
     let rect = rect.round_to_pixels(painter.pixels_per_point());
     let side = rect.width().min(rect.height()) * KIND_GLYPH_SHARE;
-    let glyph = Rect::from_center_size(rect.center(), vec2(side, side));
+    let at = Rect::from_center_size(rect.center(), vec2(side, side));
     let icon = glyph.map(IconSpec::svg);
     if kind == LayerKind::Text {
         painter.painter.rect_filled(rect, 0.0, TYPE_PAPER);
         if let Some(icon) = icon {
-            painter.icon(glyph, &icon.data_color(DataColor::new(TYPE_INK)));
+            painter.icon(at, &icon.data_color(DataColor::new(TYPE_INK)));
         }
         return;
     }
     painter.surface(rect, SurfaceKind::Sunken, Corners::None);
     if let Some(icon) = icon {
-        painter.icon(glyph, &icon.ink(SurfaceKind::Sunken.ink()));
+        painter.icon(at, &icon.ink(SurfaceKind::Sunken.ink()));
     }
 }
 

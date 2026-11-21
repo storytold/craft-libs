@@ -58,7 +58,7 @@ mod new_document;
 pub use new_document::{
     BACKGROUND_COLOR_KEY, BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, ColorProfiles, DetailsCx, DocumentCard, DocumentOptions,
     DocumentPreset, DocumentSettings, HostedNewDocument, NewDocumentDialog, NewDocumentOutput, NewDocumentPresetWords, NewDocumentResult,
-    NewDocumentWords, Orientation, PIXEL_ASPECTS, PresetCategory, RasterSetup, SQUARE_PIXELS,
+    NewDocumentWords, Orientation, PIXEL_ASPECTS, PresetCategory, RasterMemory, RasterSetup, SQUARE_PIXELS,
 };
 
 mod about;

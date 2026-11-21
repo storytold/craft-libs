@@ -21,7 +21,7 @@ use craft_ui::pickers::Select;
 use craft_ui::popover::Popover;
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::primitives::textures::{Priority, Revision, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails};
-use craft_ui::runtime::commands::{CommandSet as _, CommandState, Commands as _};
+use craft_ui::runtime::commands::{CommandState, Commands as _};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{DataColor, SurfaceKind};
 use craft_ui::tile_grid::{CaptionPlace, ThumbnailSlider, Tile, TileGrid, TilePartEvent, TileZoom};
