@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use craft_keymap::editor::{self, DOUBLE_PRESS, EditSession, Recorded, Recorder};
-use craft_keymap::import::{self, ForeignSet, ImportOptions, ImportPlan, ImportReport};
+use craft_keymap::import::{self, ForeignSet, ImportOptions, ImportPlan, ImportReport, Start};
 use craft_keymap::profiles::{Builtins, ProfileError, Profiles, set_name};
 use craft_keymap::{
     AssignError, Assigned, Binding, BindingError, Chord, CommandRef, Holder, Key, Keymap, MAX_BINDINGS, Overrides, ParseError, Policy, Scope, Trigger,
@@ -154,6 +154,12 @@ pub(crate) struct Review {
     pub name: String,
     /// After Import as New Set: the set's name and the report.
     pub done: Option<(String, ImportReport)>,
+    /// Whether each entry of the set is imported.
+    #[allow(dead_code)] // P3(shortcuts-w4): kb.C12
+    pub included: Vec<bool>,
+    /// The search over label, path and key text.
+    #[allow(dead_code)] // P3(shortcuts-w4): kb.C12
+    pub search: String,
 }
 
 /// The set row's inline form: New Set… or Rename….
@@ -1074,7 +1080,7 @@ impl DialogState {
         let name = plan.report.set.clone().unwrap_or_else(|| word!(env, imported));
         self.stop_recording();
         self.conflict = None;
-        self.review = Some(Review { set, options, plan, name, done: None });
+        self.review = Some(Review { set, options, plan, name, done: None, included: Vec::new(), search: String::new() });
     }
 
     /// Picks candidate `candidate` for suggestion `suggestion`, re-plans, and reports the answers
@@ -1084,9 +1090,37 @@ impl DialogState {
         let Some(s) = r.plan.report.suggestions.get(suggestion) else { return };
         let Some(command) = s.candidates.get(candidate).cloned() else { return };
         let Some(entry) = r.set.entries.iter().find(|e| e.item() == s.item && e.line == s.line) else { return };
-        r.options.remembered.insert(entry.remember_key(), command);
+        r.options.remembered.insert(entry.remember_key(), Some(command)); // P3(shortcuts-w4): kb.C12
         r.plan = import::plan(&r.set, env.keymap, &r.options);
-        self.outcome = Some(Outcome::Remembered(r.options.remembered.clone()));
+        self.outcome = Some(Outcome::Remembered { targets: r.options.remembered.clone(), codes: r.options.codes.clone() }); // P3(shortcuts-w4): kb.C29
+    }
+
+    /// Starts the review from `start` and re-plans.
+    #[allow(dead_code)] // P3(shortcuts-w4): kb.C12
+    pub(crate) fn set_start(&mut self, env: &Env, start: Start) {
+        let _ = (env, start);
+        todo!("kb.C12")
+    }
+
+    /// Imports entry `entry` or leaves it out, and re-plans.
+    #[allow(dead_code)] // P3(shortcuts-w4): kb.C12
+    pub(crate) fn include(&mut self, env: &Env, entry: usize, on: bool) {
+        let _ = (env, entry, on);
+        todo!("kb.C12")
+    }
+
+    /// Picks `command` for entry `entry` (`None` is No equivalent), re-plans and reports the answer.
+    #[allow(dead_code)] // P3(shortcuts-w4): kb.C12
+    pub(crate) fn pick_target(&mut self, env: &Env, entry: usize, command: Option<CommandRef>) {
+        let _ = (env, entry, command);
+        todo!("kb.C12")
+    }
+
+    /// Answers the undecided `code` (`None` is No equivalent), re-plans and reports the answer.
+    #[allow(dead_code)] // P3(shortcuts-w4): kb.C12
+    pub(crate) fn answer_code(&mut self, env: &Env, code: String, answer: Option<String>) {
+        let _ = (env, code, answer);
+        todo!("kb.C12")
     }
 
     /// Import as New Set (with sets), else applies the plan to the keymap as one undo step.

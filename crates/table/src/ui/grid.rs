@@ -37,6 +37,18 @@ pub use row::GridRow;
 pub(crate) use geometry::{digits_of, header_insets, row_digits};
 pub(crate) use reference::edges;
 
+/// Where a column's resize edge is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ColumnEdges {
+    /// Only on the column headers.
+    #[default]
+    Headers,
+    /// Also over the cell rows in view, with the header edge's drag, cursor and double press; a press beside the
+    /// band selects the cell.
+    Cells,
+}
+
 /// The rows of a sheet as the collection's source: one key per row, equal to its position.
 struct SheetRows(Positions);
 
@@ -192,6 +204,9 @@ pub struct CellGrid<'a> {
     /// The cell whose problem shows an error tag, with its fixes.
     #[prop]
     error_tag: Option<CellProblem<'a>>,
+    /// Where a column's resize edge is drawn.
+    #[prop]
+    column_edges: ColumnEdges,
     outline: Option<(&'a OutlineAxis, &'a OutlineAxis)>,
     selectable: Box<dyn Fn(CellAt<u32>) -> bool + 'a>,
     frame: Option<paint::Frame>,
@@ -222,6 +237,7 @@ impl<'a> CellGrid<'a> {
             copy_mark: &[],
             filters: &[],
             error_tag: None,
+            column_edges: ColumnEdges::default(),
             outline: None,
             selectable: Box::new(move |cell| model.selectable(cell)),
             frame: None,

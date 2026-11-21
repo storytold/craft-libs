@@ -192,14 +192,19 @@ fn format_label(format: FontFormat, words: &FontPickerWords) -> Label {
 
 /// The filter toggles above the list: the class column's collapse button, variable fonts, favourites and similar
 /// fonts, and Clear All.
-fn filter_bar(ui: &mut egui::Ui, filters: &mut FontFilters, hide_classes: &mut bool, words: &FontPickerWords) {
+fn filter_bar(ui: &mut egui::Ui, filters: &mut FontFilters, hide_classes: &mut bool, current: &str, words: &FontPickerWords) {
     Row::new().show(ui, |ui, _| {
         let (icon, label) = if *hide_classes { ("chevrons_right", &words.show_classes) } else { ("chevrons_left", &words.hide_classes) };
         ToggleButton::new(label.clone(), Bind::bound(hide_classes)).icon(IconId::new(icon)).icon_only().show(ui);
         ToggleButton::new(words.variable.clone(), Bind::bound(&mut filters.variable)).icon(IconId::new("font_variable")).icon_only().show(ui);
         let star = if filters.favorites { "star_filled" } else { "star" };
         ToggleButton::new(words.favorites.clone(), Bind::bound(&mut filters.favorites)).icon(IconId::new(star)).icon_only().show(ui);
-        ToggleButton::new(words.similar.clone(), Bind::bound(&mut filters.similar)).icon(IconId::new("font_similar")).icon_only().show(ui);
+        // P3(type-w2): ty.X7
+        let mut similar = filters.similar.is_some();
+        ToggleButton::new(words.similar.clone(), Bind::bound(&mut similar)).icon(IconId::new("font_similar")).icon_only().show(ui);
+        if similar != filters.similar.is_some() {
+            filters.similar = similar.then(|| current.to_owned());
+        }
         let clear = Button::new(words.clear_all.clone()).enabled(filters.any()).show(ui);
         if clicked(&clear) {
             filters.clear();
@@ -320,7 +325,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let favorites_empty = settings.as_ref().is_none_or(|s| s.favorites.is_empty());
     // Rows are keyed, so the stamp names only what rebuilds the list: opening a family keeps the lead.
     let mut stamp = DefaultHasher::new();
-    (&query, narrowing.class, narrowing.favorites, narrowing.variable, narrowing.similar).hash(&mut stamp);
+    // P3(type-w2): ty.X7
+    (&query, narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar).hash(&mut stamp);
     let banner_family = lead.unwrap_or_else(|| family.clone());
     let banner_text = picker.preview_text;
     let name = words.list.clone();
@@ -335,14 +341,14 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                 banner(ui, catalog, &infos, &banner_family, &shown_name, text);
             }
             if let Some(filters) = filters.as_mut() {
-                filter_bar(ui, filters, &mut hide_classes, &words);
+                filter_bar(ui, filters, &mut hide_classes, &family, &words);
             }
             Row::new().show(ui, |ui, _| {
                 if let (Some(filters), false) = (filters.as_mut(), hide_classes) {
                     class_column(ui, filters, &words);
                 }
                 Stack::new().show(ui, |ui, _| {
-                    if narrowing.similar && !comparable {
+                    if narrowing.similar.is_some() && !comparable {
                         Text::new(words.no_similar.clone()).show(ui);
                     }
                     if slots.is_empty() {

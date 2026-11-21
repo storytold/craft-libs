@@ -42,6 +42,12 @@ pub enum HiddenMark {
     ParagraphEnd,
     /// #.
     StoryEnd,
+    /// ˚ (centred on the space).
+    NarrowNoBreakSpace,
+    /// ˈ (centred on the space).
+    FixedSpace,
+    /// ¬ (the discretionary hyphen's mark).
+    DiscretionaryHyphen,
 }
 
 impl HiddenMark {
@@ -54,6 +60,7 @@ impl HiddenMark {
             HiddenMark::NoBreakSpace => "°",
             HiddenMark::ParagraphEnd => "¶",
             HiddenMark::StoryEnd => "#",
+            HiddenMark::NarrowNoBreakSpace | HiddenMark::FixedSpace | HiddenMark::DiscretionaryHyphen => todo!("cv.F43"),
         }
     }
 

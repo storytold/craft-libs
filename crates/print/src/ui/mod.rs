@@ -52,6 +52,14 @@ impl Printer {
     }
 }
 
+impl From<crate::Printer> for Printer {
+    /// The dialog's printer for a discovered one: `name`, the `description` as the label, and `default`.
+    fn from(printer: crate::Printer) -> Self {
+        let _ = printer;
+        todo!("ex.E58")
+    }
+}
+
 /// The text the dialog shows for each of `printers`, in order: its label, or its name when it has
 /// none. Text two printers would share is followed by the name in brackets, so neither hides the
 /// other; when even that text is shared (another printer's label is `Office (Office_1)`), those

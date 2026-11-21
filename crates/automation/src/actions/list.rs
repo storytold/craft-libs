@@ -457,6 +457,21 @@ impl ActionList {
         Ok(())
     }
 
+    /// Renames the set `set` to `name` (trimmed) in the order and in every member's `set`: [`ActionListError::EmptyName`]
+    /// for an empty name, [`ActionListError::NameTaken`] for a name another set has, [`ActionListError::NoSuchSet`] for an
+    /// unknown set. The same name succeeds and changes nothing.
+    pub fn rename_set(&mut self, set: &str, name: &str) -> Result<(), ActionListError> {
+        let _ = (set, name);
+        todo!("mn.M50")
+    }
+
+    /// Removes the set `set` from the order and its actions from the list, and returns the actions in list order:
+    /// [`ActionListError::NoSuchSet`] for an unknown set.
+    pub fn delete_set(&mut self, set: &str) -> Result<Vec<Action>, ActionListError> {
+        let _ = set;
+        todo!("mn.M51")
+    }
+
     /// Duplicates the set `set` under a unique name and returns that name; `shift` is as for
     /// [`duplicate_action`](Self::duplicate_action). The copies of its actions go after its last
     /// action; a set with none becomes an empty set after it.

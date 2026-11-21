@@ -20,10 +20,12 @@
 
 use craft_behavior::PointerButton;
 use craft_keymap::{Key, Mods};
+use craft_ui::runtime::egui::access::AccessTree;
 use craft_ui::runtime::windows::{Released, WindowHost};
 use egui::{Pos2, Vec2, ViewportId, pos2, vec2};
 use serde_json::Value;
 
+use crate::access;
 use crate::protocol::{BUTTONS, KEY_MODIFIERS, Params};
 
 /// Most clicks one `ui.click` may ask for (`count`).
@@ -53,14 +55,22 @@ pub const NOT_FINITE: &str = "the point must be finite";
 /// shows a document. Applications without documents pass `&|_| None`.
 pub type DocumentMap<'a> = &'a dyn Fn(Pos2) -> Option<Pos2>;
 
-/// A point of a request: screen points, or document points the application maps.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A point of a request: screen points, document points the application maps, or an offset from a named control.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum At {
     /// Screen points.
     Screen(Pos2),
     /// Document points.
     Document(Pos2),
+    /// An offset from the centre of the rect of the control `target` names.
+    #[non_exhaustive]
+    Control {
+        /// The control.
+        target: access::Target,
+        /// The offset from the rect's centre.
+        offset: Vec2,
+    },
 }
 
 impl At {
@@ -77,8 +87,10 @@ impl At {
 
     /// The screen point, through `map` for a document point; [`NO_DOCUMENT`] when the map has none, and
     /// [`OFF_SCREEN`] when it maps beyond [`MAX_SCREEN_POINT`]; a point that is not finite is [`NOT_FINITE`].
-    pub fn resolve(self, map: DocumentMap<'_>) -> Result<Pos2, String> {
-        match self {
+    pub fn resolve(&self, map: DocumentMap<'_>, tree: Option<&AccessTree>) -> Result<Pos2, String> {
+        let _ = tree; // P3(widgets-w8): wg.W53
+        match *self {
+            Self::Control { .. } => todo!("wg.W53"),
             Self::Screen(at) if at.x.is_finite() && at.y.is_finite() => Ok(at),
             Self::Screen(_) => Err(NOT_FINITE.to_owned()),
             Self::Document(at) if !(at.x.is_finite() && at.y.is_finite()) => Err(NOT_FINITE.to_owned()),
@@ -156,7 +168,7 @@ impl Click {
     /// Queues a move to the target, then `count` presses and releases of the button, in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
         let count = u32::try_from(self.count).unwrap_or(u32::MAX);
-        host.inject_click(viewport, self.at.resolve(map)?, self.button, count, self.mods, self.hold);
+        host.inject_click(viewport, self.at.resolve(map, None)?, self.button, count, self.mods, self.hold); // P3(widgets-w8): wg.W53
         Ok(())
     }
 }
@@ -187,7 +199,7 @@ impl Move {
 
     /// Queues the move in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
-        host.inject_move(viewport, self.at.resolve(map)?, self.mods, self.rest);
+        host.inject_move(viewport, self.at.resolve(map, None)?, self.mods, self.rest); // P3(widgets-w8): wg.W53
         Ok(())
     }
 }
@@ -200,6 +212,8 @@ pub struct Wheel {
     pub at: At,
     /// The scroll in points, as egui reports it (positive `y` scrolls towards the content's top).
     pub delta: Vec2,
+    /// Whether `delta` is in points or in whole notches of lines.
+    pub unit: egui::MouseWheelUnit,
     /// Modifiers held from the turn on.
     pub mods: Mods,
 }
@@ -211,12 +225,12 @@ impl Wheel {
         let p = Params(&p);
         let dx = p.number_in("dx", "dx", None)?.unwrap_or(0.0) as f32;
         let dy = p.number_in("dy", "dy", None)?.unwrap_or(0.0) as f32;
-        Ok(Self { at: At::from_params(&p)?, delta: vec2(dx, dy), mods: p.modifiers(&KEY_MODIFIERS)? })
+        Ok(Self { at: At::from_params(&p)?, delta: vec2(dx, dy), unit: egui::MouseWheelUnit::Point, mods: p.modifiers(&KEY_MODIFIERS)? })
     }
 
     /// Queues the move and the turn in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
-        host.inject_wheel(viewport, self.at.resolve(map)?, self.delta, self.mods);
+        host.inject_wheel(viewport, self.at.resolve(map, None)?, self.delta, self.unit, self.mods); // P3(widgets-w8): wg.W53, sh.K4
         Ok(())
     }
 }
@@ -250,7 +264,7 @@ impl KeyPress {
 }
 
 /// A validated `ui.release`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Release {
     /// Where the release happens; where the pointer is when absent.
@@ -277,7 +291,7 @@ impl Release {
 
     /// Queues the release in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
-        let at = self.at.map(|at| at.resolve(map)).transpose()?;
+        let at = self.at.as_ref().map(|at| at.resolve(map, None)).transpose()?; // P3(widgets-w8): wg.W53
         host.inject_release(viewport, at, self.released);
         Ok(())
     }

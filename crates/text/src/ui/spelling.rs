@@ -103,6 +103,10 @@ pub struct SpellingItem {
     pub word: String,
     /// At most [`SUGGESTION_COUNT`], best first.
     pub suggestions: Vec<String>,
+    /// The sentence's text before the word; empty with `after` for the word alone.
+    pub before: String,
+    /// The sentence's text after the word.
+    pub after: String,
 }
 
 /// A button the app acts on. Ignore is the dialog's own (it moves to the next item).
@@ -130,6 +134,8 @@ pub enum SpellingAction {
     },
     /// Add `word` to the user's dictionary ([`SpellingSettings`]).
     Add(String),
+    /// Ignore reports the item it skipped; the dialog still moves to the next item itself.
+    Ignore(SpellingItem),
     /// Find the misspellings again: Ignore All added a word to [`CheckSpellingDialog::ignored`],
     /// or Check All Layers changed.
     Relist,
@@ -138,7 +144,14 @@ pub enum SpellingAction {
 impl SpellingItem {
     /// The misspelling `word` at `range` of the text object `object`, with the `suggestions` best first.
     pub fn new(object: u64, range: Range<usize>, word: impl Into<String>, suggestions: Vec<String>) -> Self {
-        SpellingItem { object, range, word: word.into(), suggestions }
+        SpellingItem { object, range, word: word.into(), suggestions, before: String::new(), after: String::new() }
+    }
+
+    /// Sets the sentence's text before and after the word.
+    #[must_use]
+    pub fn context(self, before: impl Into<String>, after: impl Into<String>) -> Self {
+        let _ = (before.into(), after.into());
+        todo!("ty.X97")
     }
 }
 
@@ -206,6 +219,13 @@ impl CheckSpellingDialog {
     /// The button pressed this pass that the app must run, once.
     pub fn take_action(&mut self) -> Option<SpellingAction> {
         self.action.take()
+    }
+
+    /// Replaces the list and shows its first item (Change To from its first suggestion): a host that walks its text
+    /// itself hands the dialog the words from its current place.
+    pub fn restart(&mut self, items: Vec<SpellingItem>) {
+        let _ = items;
+        todo!("ty.X100")
     }
 
     /// The misspellings found again after an action. The dialog keeps its position in the list (after Change, Ignore

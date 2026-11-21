@@ -12,6 +12,9 @@ use serde_json::{Value, json};
 
 use crate::protocol::Params;
 
+/// The most `fields` one `ui.dialog.set` call takes.
+pub const MAX_DIALOG_FIELDS: usize = 256;
+
 /// The open dialogs, the top one last: `{id, parent, key, fields}`, `null` for a missing parent, key or fields. Ids
 /// are 64-bit hashes, so they are listed as decimal strings, which every JSON reader keeps exact.
 pub fn inspect(host: &DialogHost) -> Value {

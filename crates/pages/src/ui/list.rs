@@ -50,6 +50,11 @@ craft_ui::words! {
         visibility: "pageList.visibility" = "Visibility {row}";
         lock: "pageList.lock" = "Lock";
         locking: "pageList.locking" = "Lock {row}";
+        move_up: "pageList.moveUp" = "Move Up";
+        move_down: "pageList.moveDown" = "Move Down";
+        rearrange: "pageList.rearrange" = "Rearrange All Artboards";
+        lock_row: "pageList.lockRow" = "Lock {row}";
+        unlock_row: "pageList.unlockRow" = "Unlock {row}";
     }
 }
 
@@ -125,6 +130,16 @@ pub enum PageListEvent {
     /// eyes off, or on again when it is the only one on; `UndoShowOnly` puts the eyes back as they were. The lock
     /// column ignores Alt. The app groups one sweep as one undo step.
     Toggle(SweepStep<usize>),
+    /// A click on a row's lock.
+    #[non_exhaustive]
+    Lock {
+        /// The row whose lock was clicked.
+        row: usize,
+        /// Whether the row is locked after the click.
+        locked: bool,
+    },
+    /// The Rearrange button.
+    Rearrange,
     /// New, Duplicate, or a row dropped on New (`duplicate`, the dragged rows' grabbed row); `options` with Alt held
     /// (open the options for the new one first).
     #[non_exhaustive]
@@ -153,6 +168,8 @@ pub struct PageListOutput {
     pub response: Response,
     /// What the user did this pass, in order.
     pub events: Vec<PageListEvent>,
+    /// Key focus is in the list this pass (the table's response).
+    pub focused: bool,
 }
 
 impl Outcome for PageListOutput {
@@ -336,6 +353,6 @@ impl<'a> PageList<'a> {
                 }
                 shown.response
             });
-        PageListOutput { response: response.output.response, events: events.into_inner() }
+        PageListOutput { response: response.output.response, events: events.into_inner(), focused: false }
     }
 }

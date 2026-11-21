@@ -33,7 +33,7 @@
 //!         Some(Outcome::Import { formats, .. }) => self.pick_import_file(formats),
 //!         Some(Outcome::Export { name, json, .. }) => self.save_file(&name, json),
 //!         Some(Outcome::Summary { name, html, .. }) => self.show_summary(&name, html),
-//!         Some(Outcome::Remembered(answers)) => self.settings.import_answers.extend(answers),
+//!         Some(Outcome::Remembered { targets, codes }) => self.settings.import_answers.extend(targets, codes),
 //!         _ => {}
 //!     }
 //!     if !state.is_open() {
@@ -52,7 +52,7 @@
 //! | `Import { formats }` | Opens a file of one of the formats, then calls [`ShortcutsDialog::import_json`] (craft-keymap JSON, [`JSON_FORMAT`]) or reads it into a `ForeignSet` and calls [`ShortcutsDialog::review_import`]. |
 //! | `Export { name, json }`, `ExportAs { format, name, keymap }` | Writes the set where the user chooses (a download on the web). |
 //! | `Summary { name, html, text }` | Shows, saves or prints the summary. |
-//! | `Remembered(answers)` | Keeps the user's import answers for the next import (`ImportOptions::remembered`). |
+//! | `Remembered { targets, codes }` | Keeps the user's import answers for the next import (`ImportOptions::remembered` and `ImportOptions::codes`). |
 //!
 //! The crate never opens a file dialog or touches the file system. When the app's own step fails
 //! while the dialog is open (a file it cannot read), [`DialogState::show_error`] shows the
@@ -77,6 +77,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 
 use craft_behavior::edit_history::Step;
 use craft_keymap::{Binding, Builtins, CommandDef, CommandRef, ForeignSet, ImportOptions, Keymap, ProfileError, Profiles, Trigger};
@@ -172,8 +173,14 @@ pub enum Outcome {
         /// The summary as plain text.
         text: String,
     },
-    /// Import answers the user gave (item → command), for the app to keep for later imports.
-    Remembered(BTreeMap<String, CommandRef>),
+    /// Import answers the user gave, for the app to keep for later imports.
+    #[non_exhaustive]
+    Remembered {
+        /// The target picked by remember key (`None`: No equivalent), feeding `ImportOptions::remembered`.
+        targets: BTreeMap<String, Option<CommandRef>>,
+        /// The answer for each undecided code by `key:N` / `mods:N`, feeding `ImportOptions::codes`.
+        codes: BTreeMap<String, Option<String>>,
+    },
 }
 
 /// What happens when a recorded chord is held by other commands.
@@ -361,6 +368,17 @@ impl craft_ui::contract::Outcome for ShortcutsOutput {
     }
 }
 
+/// The Hold Shortcuts setting the dialog shows and edits.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoldSetting {
+    /// Whether hold shortcuts are on.
+    pub on: bool,
+    /// The delay, in seconds, before a held key counts as a hold.
+    pub delay: f64,
+    /// The delays the field accepts.
+    pub range: RangeInclusive<f64>,
+}
+
 /// The dialog for one pass: what it edits, borrowed, and how it behaves.
 #[must_use = "show the dialog with `show`"]
 #[derive(Pattern)]
@@ -372,6 +390,13 @@ pub struct ShortcutsDialog<'a> {
 }
 
 impl<'a> ShortcutsDialog<'a> {
+    /// Shows the Hold Shortcuts switch, its delay and the explanation, and a Hold column recorded like the
+    /// shortcut column. Cancel restores the setting; the app saves it on [`Outcome::Ok`].
+    pub fn holds(self, holds: &'a mut HoldSetting) -> Self {
+        let _ = holds;
+        todo!("kb.C16a")
+    }
+
     /// A dialog editing `keymap`; without further builder calls it has no sets and default options.
     pub fn new(keymap: &'a mut Keymap) -> Self {
         ShortcutsDialog { keymap, sets: None, options: None, tabs: None }

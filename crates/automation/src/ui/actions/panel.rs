@@ -98,6 +98,20 @@ pub struct ActionsPanelState {
     pub selected: Option<ActionSelection>,
     /// The expanded actions, by name (names are unique, so expansion survives moves).
     pub expanded: BTreeSet<String>,
+    /// The sets a shift-click selected, from the current set to the clicked one, in the set order; empty when there is
+    /// no range.
+    pub selected_sets: Vec<String>,
+}
+
+/// Which step cells the rows show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum StepCells {
+    /// The include cell and the dialog cell.
+    #[default]
+    IncludeAndDialog,
+    /// The include cell only: the dialog column is left out of the cells and the list's columns.
+    Include,
 }
 
 /// A function-key shortcut chosen in the context menu (Photoshop's Action Options).
@@ -235,6 +249,8 @@ pub enum ActionsEvent {
     /// Duplicate this row ([`ActionList::duplicate_action`], [`ActionList::duplicate_step`],
     /// [`ActionList::duplicate_set`]): from the menu row or a row dropped on New Action.
     Duplicate(ActionSelection),
+    /// Delete with a range of sets selected: the range, in one event, so the app asks one question.
+    DeleteSets(Vec<String>),
     /// Record Again: replace step `step` of `action` with a new recording
     /// ([`ActionList::replace_step`]).
     #[non_exhaustive]
@@ -393,6 +409,13 @@ impl<'a> ActionsPanel<'a> {
     pub fn start_rename(mut self, action: usize) -> Self {
         self.rename = Some(action);
         self
+    }
+
+    /// Which step cells the rows show.
+    #[must_use]
+    pub fn step_cells(self, cells: StepCells) -> Self {
+        let _ = cells;
+        todo!("mn.M40")
     }
 
     /// Whether the panel takes input (default true).

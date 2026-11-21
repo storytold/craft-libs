@@ -75,6 +75,21 @@ craft_ui::words! {
         format_true_type: "fontPicker.formatTrueType" = "TrueType";
         format_variable: "fontPicker.formatVariable" = "Variable";
         served: "fontPicker.served" = "Not installed";
+        all_scripts: "fontPicker.allScripts" = "All Scripts";
+        script_latin: "fontPicker.scriptLatin" = "Latin";
+        script_japanese: "fontPicker.scriptJapanese" = "Japanese";
+        script_thai: "fontPicker.scriptThai" = "Thai";
+        any_kind: "fontPicker.anyKind" = "Any Kind";
+        font_technology: "fontPicker.fontTechnology" = "Font Technology";
+        preview_size: "fontPicker.previewSize" = "Font Preview Size";
+        preview_small: "fontPicker.previewSmall" = "Small";
+        preview_medium: "fontPicker.previewMedium" = "Medium";
+        preview_large: "fontPicker.previewLarge" = "Large";
+        /// The similar-fonts chip, with `{family}` for the reference family.
+        similar_to: template "fontPicker.similarTo" = "≈ {family}";
+        clear_similar: "fontPicker.clearSimilar" = "Clear Similar Fonts";
+        /// The name of a row's show-similar action, with `{row}` for the row's label.
+        show_similar: template "fontPicker.showSimilar" = "Show fonts similar to {row}";
     }
 }
 
@@ -155,6 +170,75 @@ impl FontPreviewSize {
     }
 }
 
+/// Coverage from the face: Latin, the basic Latin letters in the cmap; Japanese, the OS/2 kana or CJK unicode-range
+/// bits or the JIS code page bit, or a Japanese family name; Thai, U+0E01 and U+0E32 in the cmap. Read lazily like the
+/// class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FontScript {
+    /// The basic Latin letters.
+    Latin,
+    /// Japanese kana and CJK.
+    Japanese,
+    /// Thai.
+    Thai,
+}
+
+impl FontScript {
+    /// Every script the script row can offer, in order.
+    pub const ALL: [FontScript; 3] = [FontScript::Latin, FontScript::Japanese, FontScript::Thai];
+}
+
+/// A family set the host gives (VectorCraft: Document, Recently Added), one filter toggle each. An `ordered` set that
+/// is on lists in its own order. A disabled set's toggle is off and dimmed, with its hint as the reason.
+#[allow(dead_code)] // P3(type-w2): ty.X11
+pub struct FamilySet<'a> {
+    key: &'a str,
+    label: Label,
+    hint: Option<Label>,
+    families: &'a [String],
+    ordered: bool,
+    enabled: bool,
+}
+
+impl<'a> FamilySet<'a> {
+    /// The set `key` named `label` over `families`.
+    pub fn new(key: &'a str, label: impl Into<Label>, families: &'a [String]) -> Self {
+        let _ = (key, label.into(), families);
+        todo!("ty.X11")
+    }
+
+    /// The reason shown while the set is disabled.
+    pub fn hint(self, hint: impl Into<Label>) -> Self {
+        let _ = hint.into();
+        todo!("ty.X11")
+    }
+
+    /// Lists the set in its own order while it is on.
+    pub fn ordered(self) -> Self {
+        todo!("ty.X11")
+    }
+
+    /// Whether the set's toggle can be turned on.
+    pub fn enabled(self, on: bool) -> Self {
+        let _ = on;
+        todo!("ty.X11")
+    }
+}
+
+/// Named layout of the list's filter area. `Toolbar`: the toggle row and class column. `Chips`: rows of chip toggles
+/// (the script row; Favorites, the host sets, Any Kind and the classes; Font Technology and Variable; the Font
+/// Preview Size row).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FilterLayout {
+    /// The toggle row and class column.
+    #[default]
+    Toolbar,
+    /// Rows of chip toggles.
+    Chips,
+}
+
 /// What narrows the list. Every filter off shows every installed family.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -165,14 +249,18 @@ pub struct FontFilters {
     pub favorites: bool,
     /// Only variable fonts.
     pub variable: bool,
-    /// Families like the current one, most alike first ([`SIMILAR_COUNT`] of them).
-    pub similar: bool,
+    /// The reference family of Show Similar Fonts, most alike first ([`SIMILAR_COUNT`] of them); `None` is off.
+    pub similar: Option<String>,
+    /// Only families whose regular face covers the script.
+    pub script: Option<FontScript>,
+    /// Keys of the host family sets that are on; each keeps only its families.
+    pub sets: Vec<String>,
 }
 
 impl FontFilters {
     /// Whether any filter narrows the list (Clear All is enabled).
     pub fn any(&self) -> bool {
-        self.class.is_some() || self.favorites || self.variable || self.similar
+        self.class.is_some() || self.favorites || self.variable || self.similar.is_some() || self.script.is_some() || !self.sets.is_empty()
     }
 
     /// Clear All: every filter off.
@@ -200,6 +288,8 @@ pub struct FontPickerSettings {
     pub preview: FontPreviewSize,
     /// Show family names in English rather than their own language (Type › Show Font Names in English).
     pub names_in_english: bool,
+    /// Row samples and the banner paint black type on a white paper fill, in every theme.
+    pub samples_on_white: bool,
 }
 
 impl Default for FontPickerSettings {
@@ -210,6 +300,7 @@ impl Default for FontPickerSettings {
             recent_limit: 10,
             preview: FontPreviewSize::default(),
             names_in_english: false,
+            samples_on_white: false,
         }
     }
 }
@@ -461,6 +552,18 @@ pub struct FontPicker<'a> {
     /// Families the host can fetch but that are not installed, listed with the served mark.
     #[prop]
     served: &'a [String],
+    /// The host's family sets; their toggles follow Favorites.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w2): ty.X12
+    sets: &'a [FamilySet<'a>],
+    /// The scripts the script row offers (with All Scripts first); empty: no script row.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w2): ty.X13
+    scripts: &'a [FontScript],
+    /// Picks the layout of the filter area.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w2): ty.X15
+    filter_layout: FilterLayout,
 }
 
 impl<'a> FontPicker<'a> {
@@ -478,6 +581,9 @@ impl<'a> FontPicker<'a> {
             preview: Preview::Unchanged,
             preview_text: None,
             served: &[],
+            sets: &[],
+            scripts: &[],
+            filter_layout: FilterLayout::default(),
         }
         .label(label)
     }

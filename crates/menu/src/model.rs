@@ -6,6 +6,7 @@ use std::ops::BitOr;
 
 use craft_keymap::{Chord, CommandRef, Mods};
 use craft_theme::Srgba;
+use craft_ui::primitives::FacePaint;
 
 /// The app's menus, in order, and its open documents.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -151,6 +152,8 @@ pub enum Node {
         /// The platforms it is shown on.
         platforms: Platforms,
     },
+    /// A caption over the rows that follow it. Never a command.
+    Heading(String),
     /// An item AppKit provides and runs itself (Services, Zoom, …), with the label to show.
     #[non_exhaustive]
     Standard {
@@ -194,6 +197,9 @@ pub struct Item {
     pub tooltip: Option<String>,
     /// The command the item runs instead while its modifiers are held as it is chosen.
     pub alternate: Option<Alternate>,
+    /// A small painted sample shown in the row (in-window bar only; the native menu ignores it, as it
+    /// ignores `tint`).
+    pub sample: Option<FacePaint>,
 }
 
 /// The command a row runs while `mods` are held as it is chosen (Alt on Merge Visible runs Stamp
@@ -362,6 +368,7 @@ impl Item {
             tint: None,
             tooltip: None,
             alternate: None,
+            sample: None,
         }
     }
 
@@ -418,6 +425,12 @@ impl Item {
         self.tooltip = Some(text.into());
         self
     }
+
+    /// Show `sample` in the row, painted by the in-window bar.
+    pub fn sample(self, sample: FacePaint) -> Item {
+        let _ = sample;
+        todo!("mn.M6")
+    }
 }
 
 impl From<Item> for Node {
@@ -437,12 +450,18 @@ impl Node {
         Node::Submenu { label: label.into(), children, role: None, platforms: Platforms::ALL }
     }
 
+    /// A caption over the rows that follow it.
+    pub fn heading(label: impl Into<String>) -> Node {
+        let _ = label;
+        todo!("mn.M2")
+    }
+
     /// Give an item or a submenu a role: `Node::submenu("Theme", pages).role(ItemRole::Appearance)`.
     pub fn role(mut self, role: ItemRole) -> Node {
         match &mut self {
             Node::Item(it) => it.role = Some(role),
             Node::Submenu { role: r, .. } => *r = Some(role),
-            Node::Separator | Node::Standard { .. } => {}
+            Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
         }
         self
     }
@@ -452,7 +471,7 @@ impl Node {
         match &mut self {
             Node::Item(it) => it.platforms = platforms,
             Node::Submenu { platforms: p, .. } => *p = platforms,
-            Node::Separator | Node::Standard { .. } => {}
+            Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
         }
         self
     }
@@ -490,7 +509,7 @@ impl MenuBar {
                 match n {
                     Node::Item(it) => out.push(it),
                     Node::Submenu { children, .. } => walk(children, out),
-                    Node::Separator | Node::Standard { .. } => {}
+                    Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
                 }
             }
         }
@@ -508,7 +527,7 @@ impl MenuBar {
                 match n {
                     Node::Item(it) => f(it),
                     Node::Submenu { children, .. } => walk(children, f),
-                    Node::Separator | Node::Standard { .. } => {}
+                    Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
                 }
             }
         }
@@ -770,6 +789,7 @@ fn hash_nodes(nodes: &[Node], h: &mut DefaultHasher) {
                 ']'.hash(h);
             }
             Node::Standard { kind, label } => ('s', kind, label).hash(h),
+            Node::Heading(_) => todo!("mn.M4"),
         }
     }
 }

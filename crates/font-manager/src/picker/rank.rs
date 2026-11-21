@@ -342,7 +342,8 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
         });
     }
     let mut comparable = true;
-    if filters.similar {
+    // P3(type-w2): ty.X7
+    if filters.similar.is_some() {
         let reference = infos.traits(catalog, listing.current).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
         if let Some(reference) = reference {
             let mut scored: Vec<(f32, FamilyRow)> = rows

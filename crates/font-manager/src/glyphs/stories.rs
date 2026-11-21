@@ -8,7 +8,7 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{FontRef, MetadataProvider as _};
 
-use super::{GlyphSource, GlyphsPanel, GlyphsPanelSettings};
+use super::{GlyphCell, GlyphSource, GlyphsPanel, GlyphsPanelSettings};
 
 const UBUNTU: &[u8] = epaint_default_fonts::UBUNTU_LIGHT;
 const HACK: &[u8] = epaint_default_fonts::HACK_REGULAR;
@@ -67,7 +67,11 @@ impl GlyphSource for NotReady {
         Vec::new()
     }
 
-    fn glyph(&self, _: &str, _: &str, _: char, _: u32) -> Option<ColorImage> {
+    fn cells(&self, _: &str, _: &str, _: &str) -> Vec<GlyphCell> {
+        todo!("ty.X41")
+    }
+
+    fn glyph(&self, _: &str, _: &str, _: GlyphCell, _: u32) -> Option<ColorImage> {
         None
     }
 
@@ -98,7 +102,13 @@ impl GlyphSource for FaceGlyphs {
         chars
     }
 
-    fn glyph(&self, family: &str, _style: &str, c: char, px: u32) -> Option<ColorImage> {
+    fn cells(&self, _: &str, _: &str, _: &str) -> Vec<GlyphCell> {
+        todo!("ty.X41")
+    }
+
+    fn glyph(&self, family: &str, _style: &str, cell: GlyphCell, px: u32) -> Option<ColorImage> {
+        // P3(type-w4): ty.X43
+        let GlyphCell::Char(c) = cell else { return None };
         let font = Self::font(family)?;
         let id = font.charmap().map(c)?;
         let em = px as f32 * 0.8;

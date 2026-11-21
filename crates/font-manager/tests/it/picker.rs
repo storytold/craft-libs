@@ -114,7 +114,7 @@ fn a_served_family_lists_without_a_sample_and_is_reported_rested_once() {
 fn similar_fonts_put_the_current_family_first_and_leave_the_list_alone_without_a_reference() {
     let catalog = catalog_of(&[epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT, INTER_REGULAR]);
     let mut similar = FontFilters::default();
-    similar.similar = true;
+    similar.similar = Some("Inter".to_owned()); // P3(type-w2): ty.X7
     let rows = family_rows(&catalog, "", None, &similar, "Inter", "en");
     let names: Vec<&str> = rows.iter().map(|row| row.family.as_str()).collect();
     assert_eq!(names.first(), Some(&"Inter"), "the current family first, though it is not first by name");

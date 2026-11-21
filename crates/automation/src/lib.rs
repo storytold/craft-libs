@@ -21,21 +21,22 @@ pub mod agents;
 #[cfg(feature = "ui")]
 pub mod ui;
 
+#[cfg(feature = "ui")]
+pub mod access;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod args;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod control;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod dialogs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod protocol;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod screenshot;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod security;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod synthetic;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod trace;
@@ -45,11 +46,10 @@ pub mod client;
 #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
 pub mod server;
 
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub use control::{ControlChannel, ControlRequest, ControlResponse, Dispatch, Reply};
-#[cfg(not(target_arch = "wasm32"))]
 pub use protocol::REPLY_DEADLINE;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub use screenshot::Captures;
 #[cfg(not(target_arch = "wasm32"))]
 pub use security::AutomationError;
