@@ -695,14 +695,17 @@ impl<'a, S> AppShell<'a, S> {
                         if !*shown || covers(&placed.slot, only) != covering {
                             continue;
                         }
-                        let extent = placed.extent(&tokens, &measured_before);
                         let by_content = placed.sized_by_content();
                         let along_x = placed.along_x();
-                        let Placed { slot, edge, named, add, .. } = placed;
                         // A slot sized by its content is as large as its content from its outer edge, in the room it
-                        // can grow into; any other slot fills its rect.
-                        let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent);
-                        let pane = if by_content { pane.at_content_extent(grow_room(slot.key())) } else { pane.at(rect_of(slot.key())) };
+                        // can grow into; any other slot takes its extent and fills its rect.
+                        let pane = ShellPane::new(placed.slot.key()).edge(placed.edge);
+                        let pane = if by_content {
+                            pane.at_content_extent(grow_room(placed.slot.key()))
+                        } else {
+                            pane.extent(placed.extent(&tokens, &measured_before)).at(rect_of(placed.slot.key()))
+                        };
+                        let Placed { slot, named, add, .. } = placed;
                         // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
                         // the body.
                         let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
@@ -722,17 +725,17 @@ impl<'a, S> AppShell<'a, S> {
                         }
                         // The slot's extent along its edge is the pane's: its content's, with what the pane keeps
                         // around its body (its rule). A top or bottom slot's content fills its width and is as tall
-                        // as it is; a rail's is as wide as it is.
-                        let pane = region
-                            .show(ui, |ui, bcx| {
-                                let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
-                                stack.show(ui, |ui, _| add(ui, bcx, app));
-                            })
-                            .output
-                            .response
-                            .rect;
+                        // as it is; a rail's is as wide as it is. Only the slot's own real run records it: a run in a
+                        // sizing pass (the scope's measuring run, which alone runs for a shell out of sight) is not
+                        // what shows.
+                        let shown = region.show(ui, |ui, bcx| {
+                            let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
+                            stack.show(ui, |ui, _| add(ui, bcx, app));
+                            !ui.is_sizing_pass()
+                        });
+                        let pane = shown.output.response.rect;
                         let took = if along_x { pane.width() } else { pane.height() };
-                        if took.is_finite() && took > 0.0 {
+                        if shown.inner == Some(true) && took.is_finite() && took > 0.0 {
                             measured_now.push((key, took));
                         }
                     }
