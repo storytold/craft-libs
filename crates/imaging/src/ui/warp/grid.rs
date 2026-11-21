@@ -4,6 +4,7 @@
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::kurbo::Rect as DocRect;
+use craft_behavior::kurbo::Vec2 as DocVec;
 use craft_behavior::{
     CancelReason, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase,
     PressState, Roving, Sense, resize_cursor,
@@ -24,6 +25,13 @@ use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 
 /// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
 const REVEAL_IN_TARGETS: f32 = 7.0;
+
+/// How far from an anchor or a handle end a press takes it, in hit targets (12.25 at an 8 target).
+const REACH_IN_TARGETS: f32 = 1.53125;
+
+/// Where the pointer acts in the document: half a document pixel up and left of it. A dragged point
+/// goes there and a split cuts there.
+const POINTER_OFFSET: DocVec = DocVec::new(-0.5, -0.5);
 
 /// An anchor or a handle end: `POINT.at(index)` with the index into [`WarpMesh::points`].
 pub const POINT: PartKey = PartKey::new("point");
@@ -133,10 +141,11 @@ struct Report {
 /// - Look: patch boundaries `overlay.line` at `stroke.thin`; a one-patch mesh also its rule-of-thirds
 ///   lines. Anchors always show; a handle and its arm only near the pointer, while its anchor or one of
 ///   its handles is dragged, or while one of its anchor's parts is picked and the grid has the keyboard.
-/// - Pointer: the nearest anchor or handle within the hit reach drags that point; elsewhere on the
+/// - Pointer: the nearest anchor or handle within the hit reach (12.25 at an 8 target) drags that
+///   point, which jumps to the pointer, half a document pixel up and left of it; elsewhere on the
 ///   surface the press pulls it. One drag is one gesture; Esc cancels it.
 /// - Split: with a [`split`](Self::split) tool set, a hover over the surface previews the new lines and a
-///   click inserts them. With no tool, Alt or Ctrl at the press is a quick split chosen by the pointer.
+///   click inserts them, through the point half a document pixel up and left of the pointer. With no tool, Alt or Ctrl at the press is a quick split chosen by the pointer.
 /// - Keyboard: one Tab stop. Page Down and Page Up pick the next and previous point (anchors row by row,
 ///   each followed by its handles), Home and End the first and last; the arrows move the picked point.
 ///   With a split tool set, Enter splits the picked anchor's patch in the middle.
@@ -237,7 +246,11 @@ impl<'a> WarpGrid<'a> {
                 }
                 let by = view.to_doc(pos) - view.to_doc(start.origin);
                 let edit = match held.target {
-                    Target::Point(index) => WarpEdit::Point { index, by },
+                    // The point jumps to the pointer rather than keeping its distance from the press.
+                    Target::Point(index) => match held.mesh.points.get(index) {
+                        Some(&from) => WarpEdit::Point { index, by: view.to_doc(pos) + POINTER_OFFSET - from },
+                        None => WarpEdit::Point { index, by },
+                    },
                     Target::Surface(s, t) => WarpEdit::Surface { s, t, by },
                     Target::Split => return,
                 };
@@ -254,7 +267,7 @@ impl<'a> WarpGrid<'a> {
                 let Some(held) = cx.press_slot::<Press>().take() else { return };
                 match held.target {
                     Target::Split => {
-                        if let Some(at) = mesh.split_at(self.preset, self.bounds, self.split, held.quick, view.to_doc(pos)) {
+                        if let Some(at) = mesh.split_at(self.preset, self.bounds, self.split, held.quick, view.to_doc(pos) + POINTER_OFFSET) {
                             let edit = at.edit();
                             cx.set(self.apply(mesh, &edit));
                             self.report.edit = Some(edit);
@@ -308,7 +321,7 @@ impl<'a> WarpGrid<'a> {
         }
         let quick = hover.is_some_and(|(_, held)| held);
         let preview = hover.map(|(at, _)| at).filter(|_| self.split.is_some() || quick).and_then(|at| {
-            let found = mesh.split_at(self.preset, self.bounds, self.split, self.split.is_none(), space.view.to_doc(at))?;
+            let found = mesh.split_at(self.preset, self.bounds, self.split, self.split.is_none(), space.view.to_doc(at) + POINTER_OFFSET)?;
             let cursor = match found.motion {
                 None => CursorIcon::Crosshair,
                 Some(across) => resize_cursor(&space.view, across),
@@ -395,7 +408,7 @@ impl Component for WarpGrid<'_> {
             halo: cx.color(overlay.halo),
             anchor: cx.handle(),
             end,
-            reach: cx.tokens.size.hit.target,
+            reach: cx.tokens.size.hit.target * REACH_IN_TARGETS,
             reveal: cx.tokens.size.hit.target * REVEAL_IN_TARGETS,
         }
     }

@@ -46,6 +46,11 @@ fn harness(mesh: WarpMesh) -> Harness {
 }
 
 fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
+    harness_with(mesh, rotation, flip, None)
+}
+
+/// A harness with the split tool `tool` armed.
+fn harness_with(mesh: WarpMesh, rotation: f64, flip: bool, tool: Option<WarpSplit>) -> Harness {
     let id = Rc::new(Cell::new(Id::NULL));
     let mesh = Rc::new(RefCell::new(mesh));
     let view = Rc::new(Cell::new(None));
@@ -61,7 +66,11 @@ fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
         view.set(Some(shown_view));
         let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
             let mut held = mesh.borrow_mut();
-            WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).show_at(ui, body.rect)
+            let grid = WarpGrid::new("Warp", Bind::bound(&mut *held), RECT);
+            match tool {
+                Some(tool) => grid.split(tool).show_at(ui, body.rect),
+                None => grid.show_at(ui, body.rect),
+            }
         });
         if let Some(output) = canvas.inner {
             id.set(output.mesh.response.id);
@@ -130,7 +139,7 @@ impl Harness {
 
 #[trial]
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
-    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target;
+    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.53125;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
         let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
         // Out of the mesh along the bottom right anchor's diagonal, as the view draws it.
@@ -140,10 +149,9 @@ fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
         let pull = 20.0_f32;
         h.drag(at, at + out * pull);
         match h.edit.get() {
-            Some(WarpEdit::Point { index, by, .. }) => {
+            Some(WarpEdit::Point { index, .. }) => {
                 assert!(taken, "{offset} pt");
                 assert_eq!(index, 15);
-                assert!((by.hypot() - f64::from(pull)).abs() < 1e-3, "{by:?}");
             }
             other => assert!(!taken && other.is_none(), "{offset} pt: {other:?}"),
         }
@@ -155,6 +163,23 @@ fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
     h.drag(at, at + shift(0.0, -10.0));
     assert!(matches!(h.edit.get(), Some(WarpEdit::Point { index: 1, .. })), "{:?}", h.edit.get());
     assert_eq!(h.picked.get(), Some(1));
+}
+
+#[trial]
+fn a_dragged_point_jumps_to_half_a_pixel_up_and_left_of_the_pointer() {
+    for (rotation, flip) in [(0.0, false), (30.0, true)] {
+        let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), rotation, flip);
+        let view = h.view.get().expect("drawn");
+        // 9 right of and 3 below the bottom right anchor, outside the mesh.
+        let from = view.to_screen(Point::new(RECT.x1 + 9.0, RECT.y1 + 3.0));
+        let to = view.to_screen(Point::new(RECT.x1 + 29.0, RECT.y1 + 13.0));
+        h.drag(from, to);
+        assert!(matches!(h.edit.get(), Some(WarpEdit::Point { index: 15, .. })), "{:?}", h.edit.get());
+        let landed = h.mesh().points[15];
+        let want = Point::new(RECT.x1 + 28.5, RECT.y1 + 12.5);
+        assert!(landed.distance(want) < 1e-3, "{rotation} deg: {landed:?}, want {want:?}");
+        assert_eq!(h.count(Seen::Commit), 1);
+    }
 }
 
 #[trial]
@@ -213,6 +238,32 @@ fn alt_or_ctrl_with_no_tool_is_a_quick_split_chosen_by_the_pointer() {
     let from = h.at_fraction(0.5, 0.5);
     h.drag(from, from + shift(10.0, 0.0));
     assert!(matches!(h.edit.get(), Some(WarpEdit::Surface { .. })), "{:?}", h.edit.get());
+}
+
+#[trial]
+fn a_split_cuts_half_a_pixel_up_and_left_of_the_pointer() {
+    let mut h = harness(WarpMesh::identity(RECT, 2, 2));
+    let at = h.screen(Point::new(RECT.x0 + 40.0, RECT.y0 + 30.0));
+    h.click(at, Modifiers::ALT);
+    assert!(matches!(h.edit.get(), Some(WarpEdit::Split { split: WarpSplit::Cross, .. })), "{:?}", h.edit.get());
+    let mesh = h.mesh();
+    // Within 0.02 of a pixel: the pointer is in f32 screen points.
+    let (u, v) = (39.5 / RECT.width(), 29.5 / RECT.height());
+    assert!(mesh.us.iter().any(|k| (k - u).abs() < 1e-4), "{:?}, want {u}", mesh.us);
+    assert!(mesh.vs.iter().any(|k| (k - v).abs() < 1e-4), "{:?}, want {v}", mesh.vs);
+}
+
+#[trial]
+fn a_split_less_than_a_pixel_beside_a_line_is_a_new_line_and_one_on_it_is_none() {
+    // The 2 x 2 mesh's middle column is at x 190, its patches 90 wide: 0.6 is under 1 % of one.
+    let line = RECT.x0 + 0.5 * RECT.width();
+    for (beside, inserted) in [(0.6, true), (0.0, false)] {
+        let mut h = harness_with(WarpMesh::identity(RECT, 2, 2), 0.0, false, Some(WarpSplit::Vertical));
+        // The split cuts half a pixel left of the pointer.
+        let at = h.screen(Point::new(line + beside + 0.5, RECT.y0 + 30.0));
+        h.click(at, Modifiers::NONE);
+        assert_eq!(h.size().0, if inserted { 3 } else { 2 }, "{beside} beside: {:?}", h.mesh().us);
+    }
 }
 
 fn warped(mesh: &mut WarpMesh) {
@@ -383,4 +434,61 @@ fn cylinder_handles_drag_their_values_and_keep_them_sound() {
     h.fixture.key(egui::Key::ArrowRight, Modifiers::SHIFT);
     near(h.values(), [100.0, 200.0, 291.0, 80.0, 0.5, 0.5, 0.85], "Shift and an arrow");
     assert_eq!(h.count(Seen::Set), 2);
+}
+
+/// A canvas tool that takes every key the host offers it, so a test sees which reach the tool.
+#[derive(Default)]
+struct KeyTaker {
+    seen: Vec<craft_ui::canvas::ToolKey>,
+}
+
+impl craft_ui::canvas::CanvasTool for KeyTaker {
+    fn press(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) -> craft_ui::canvas::ToolAction {
+        craft_ui::canvas::ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn release(&mut self, _: &craft_ui::canvas::ToolPointer, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: craft_behavior::CancelReason, _: &mut craft_ui::canvas::ToolContext<'_>) {}
+
+    fn key(&mut self, key: &craft_ui::canvas::ToolKey, _: &mut craft_ui::canvas::ToolContext<'_>) -> bool {
+        self.seen.push(key.clone());
+        true
+    }
+
+    fn paint(&self, _: &craft_ui::primitives::Draw<'_>, _: &craft_ui::canvas::ToolContext<'_>) {}
+
+    fn command_form(&self) -> craft_ui::canvas::ToolPath {
+        craft_ui::canvas::ToolPath::Command("the tool's form")
+    }
+}
+
+#[trial]
+fn enter_after_a_point_drag_reaches_the_canvas_tool() {
+    // A transform applies its warp on Enter from its canvas tool: the point a drag left focused takes no Enter of its
+    // own (no split tool is armed), so the canvas's tool still gets it, as it gets the Escape.
+    let mesh = Rc::new(RefCell::new(WarpMesh::identity(RECT, 1, 1)));
+    let view = Rc::new(Cell::new(None));
+    let (shown_mesh, shown_view) = (Rc::clone(&mesh), Rc::clone(&view));
+    let mut canvas = craft_ui::testing::ToolFixture::with_view(
+        "Document",
+        KeyTaker::default(),
+        |rect| CanvasView::new(rect, Point::new(190.0, 140.0), 1.0),
+        move |ui, body| {
+            if let Some(space) = craft_ui::canvas::canvas_space(&body.env) {
+                shown_view.set(Some(space.view));
+            }
+            WarpGrid::new("Warp", Bind::bound(&mut *shown_mesh.borrow_mut()), RECT).show_at(ui, body.rect);
+        },
+    );
+    canvas.fixture().settle();
+    let corner = view.get().expect("drawn").to_screen(Point::new(RECT.x1, RECT.y1));
+    drag_frames(canvas.fixture(), corner, corner + Vec2::new(-20.0, -15.0));
+    assert_ne!(*mesh.borrow(), WarpMesh::identity(RECT, 1, 1), "the drag moved the corner point");
+    assert!(canvas.fixture().focused_stop().is_some(), "the dragged point has focus");
+    canvas.fixture().key(egui::Key::Enter, Modifiers::NONE).settle();
+    let seen = &canvas.tool().seen;
+    assert!(matches!(seen[..], [craft_ui::canvas::ToolKey::Submit]), "Enter reaches the tool: {seen:?}");
 }
