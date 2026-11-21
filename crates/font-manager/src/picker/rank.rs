@@ -10,7 +10,7 @@ use craft_i18n::{Collator, Folder};
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FontRef, TableProvider};
 
-use super::{FamilyRow, FontClass, FontFilters, FontFormat, FontPickerSettings, SIMILAR_COUNT};
+use super::{FamilyRow, FamilySet, FontClass, FontFilters, FontFormat, FontPickerSettings, FontScript, SIMILAR_COUNT};
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -33,6 +33,8 @@ pub(super) struct Traits {
     pub(super) class: Option<FontClass>,
     pub(super) panose: [u8; 10],
     pub(super) weight: u16,
+    /// The scripts the face covers.
+    pub(super) scripts: Vec<FontScript>,
 }
 
 impl Traits {
@@ -181,7 +183,12 @@ pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: boo
     info.localized.iter().find(exact).or_else(|| info.localized.iter().find(same_language)).map_or_else(|| family.to_owned(), |n| n.name.clone())
 }
 
-/// A face's class, PANOSE and weight from its `OS/2` and `post` tables.
+/// Whether a family name of the face is in Japanese.
+fn japanese_name(face: &FaceInfo) -> bool {
+    face.localized_families.iter().any(|n| n.language.as_deref().and_then(|l| l.split(['-', '_']).next()).is_some_and(|l| l.eq_ignore_ascii_case("ja")))
+}
+
+/// A face's class, PANOSE, weight and scripts from its `OS/2`, `post` and `cmap` tables.
 fn read_traits(catalog: &Catalog, face: &FaceInfo) -> Option<Traits> {
     let data = catalog.load(face).ok()?;
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
@@ -195,7 +202,17 @@ fn read_traits(catalog: &Catalog, face: &FaceInfo) -> Option<Traits> {
     }
     let weight = os2.as_ref().map_or(400, |t| t.us_weight_class()).clamp(1, 1000);
     let fixed_pitch = font.post().ok().is_some_and(|p| p.is_fixed_pitch() != 0);
-    Some(Traits { class: classify(&face.family, family_class, panose, fixed_pitch), panose, weight })
+    let map = font.charmap();
+    let latin = ('A'..='Z').chain('a'..='z').all(|c| map.map(c).is_some());
+    let scripts = [
+        (FontScript::Latin, latin),
+        (FontScript::Japanese, face.traits.japanese || japanese_name(face)),
+        (FontScript::Thai, face.traits.thai),
+    ]
+    .into_iter()
+    .filter_map(|(script, covered)| covered.then_some(script))
+    .collect();
+    Some(Traits { class: classify(&face.family, family_class, panose, fixed_pitch), panose, weight, scripts })
 }
 
 /// The class of a family from its regular face, `None` when the face can't be read.
@@ -278,6 +295,14 @@ pub(super) struct Listing<'a> {
     pub(super) language: &'a str,
     /// Families the host can fetch but the catalog lacks; they list with the matches, by rank and name, with no class, format or sample.
     pub(super) served: &'a [String],
+    /// The host's family sets; those whose key is in the filters and that are enabled narrow the list.
+    pub(super) sets: &'a [FamilySet<'a>],
+}
+
+/// The sets that filter: their key is in `filters.sets` and they are enabled. A key naming a disabled set or no set
+/// filters nothing, so a toggle the user cannot turn off never hides families.
+fn active<'s, 'a>(sets: &'s [FamilySet<'a>], filters: &FontFilters) -> Vec<&'s FamilySet<'a>> {
+    sets.iter().filter(|set| set.enabled && filters.sets.iter().any(|key| key == set.key)).collect()
 }
 
 /// How the interface language folds and orders text.
@@ -339,16 +364,26 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
             r.class == Some(class)
         });
     }
+    if let Some(script) = filters.script {
+        rows.retain(|r| infos.traits(catalog, &r.family).is_some_and(|t| t.scripts.contains(&script)));
+    }
+    let on = active(listing.sets, filters);
+    for set in &on {
+        rows.retain(|r| set.position(&r.family).is_some());
+    }
+    // The first set that is on and ordered gives the order; the others only filter.
+    if let Some(set) = on.iter().find(|set| set.ordered) {
+        rows.sort_by_cached_key(|r| set.position(&r.family));
+    }
     let mut comparable = true;
-    // P3(type-w2): ty.X7
-    if let Some(current) = filters.similar.as_deref() {
-        let reference = infos.traits(catalog, current).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
+    if let Some(reference_family) = filters.similar.as_deref() {
+        let reference = infos.traits(catalog, reference_family).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
         if let Some(reference) = reference {
             let mut scored: Vec<(f32, FamilyRow)> = rows
                 .drain(..)
                 .filter_map(|r| {
                     let traits = infos.traits(catalog, &r.family)?;
-                    let distance = if r.family == current { -1.0 } else { reference.difference(&traits) };
+                    let distance = if r.family == reference_family { -1.0 } else { reference.difference(&traits) };
                     Some((distance, r))
                 })
                 .collect();
@@ -358,9 +393,10 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
             comparable = false;
         }
     }
+    let narrowing = !on.is_empty() || (FontFilters { sets: Vec::new(), ..filters.clone() }).any();
     if narrowed
         && matcher.is_empty()
-        && !filters.any()
+        && !narrowing
         && let Some(settings) = settings
     {
         let recent: Vec<FamilyRow> = settings

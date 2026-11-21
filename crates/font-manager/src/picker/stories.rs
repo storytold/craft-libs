@@ -10,7 +10,7 @@ use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};
 
-use super::{FontFilters, FontPicker, FontPickerSettings};
+use super::{FamilySet, FilterLayout, FontFilters, FontPicker, FontPickerSettings, FontScript};
 use crate::Catalog;
 use crate::craft_font_catalog::{Limits, Source};
 use crate::panel::fixtures::story_catalog;
@@ -55,6 +55,9 @@ fn styled_catalog() -> Arc<Catalog> {
 struct Extras<'a> {
     served: &'a [String],
     banner: Option<&'a str>,
+    sets: &'a [FamilySet<'a>],
+    scripts: &'a [FontScript],
+    layout: FilterLayout,
 }
 
 fn show_with(ui: &mut Ui, data: &mut StoryData, init: Demo, catalog: &Arc<Catalog>, extras: &Extras<'_>) -> StoryOutput {
@@ -62,7 +65,10 @@ fn show_with(ui: &mut Ui, data: &mut StoryData, init: Demo, catalog: &Arc<Catalo
     let mut picker = FontPicker::new("Font family", Bind::bound(family), catalog)
         .settings(Bind::bound(settings))
         .filters(Bind::bound(filters))
-        .served(extras.served);
+        .served(extras.served)
+        .sets(extras.sets)
+        .scripts(extras.scripts)
+        .filter_layout(extras.layout);
     if let Some(text) = extras.banner {
         picker = picker.preview_text(text);
     }
@@ -123,13 +129,13 @@ fn font_picker_expanded_styles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 #[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
 fn font_picker_served(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let served = ["Gotham".to_owned(), "Proxima Nova".to_owned()];
-    show_with(ui, data, demo("Hack", FontPickerSettings::default(), FontFilters::default()), &catalog(), &Extras { served: &served, banner: None })
+    show_with(ui, data, demo("Hack", FontPickerSettings::default(), FontFilters::default()), &catalog(), &Extras { served: &served, ..Extras::default() })
 }
 
 /// The preview banner above the filters.
 #[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
 fn font_picker_banner_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let extras = Extras { served: &[], banner: Some("The quick brown fox") };
+    let extras = Extras { banner: Some("The quick brown fox"), ..Extras::default() };
     show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras)
 }
 
@@ -138,6 +144,30 @@ fn font_picker_banner_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn font_picker_arabic_sample(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = FontPickerSettings { preview: crate::picker::FontPreviewSize::Large, ..FontPickerSettings::default() };
     show_with(ui, data, demo("Inter", settings, FontFilters::default()), &styled_catalog(), &Extras::default())
+}
+
+/// The `Chips` filter area: the script row, a host set that is on and one that is disabled with its reason, the
+/// classes, Variable and the preview size row.
+#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+fn font_picker_filter_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let document = ["ubuntu".to_owned(), "hack".to_owned()];
+    let added: [String; 0] = [];
+    let sets = [
+        FamilySet::new("document", "Document", &document),
+        FamilySet::new("added", "Recently Added", &added).ordered().enabled(false).hint("No fonts were added recently"),
+    ];
+    let scripts = [FontScript::Latin, FontScript::Japanese, FontScript::Thai];
+    let filters = FontFilters { sets: vec!["document".to_owned()], ..FontFilters::default() };
+    let extras = Extras { sets: &sets, scripts: &scripts, layout: FilterLayout::Chips, ..Extras::default() };
+    show_with(ui, data, demo("Hack", FontPickerSettings::default(), filters), &catalog(), &extras)
+}
+
+/// The "≈ family ✕" chip while Show Similar Fonts is on, and the Show Similar part on each row.
+#[story(FontPicker<'static>, covers = [], drive = Drive::Custom(open_list))]
+fn font_picker_filter_chips_similar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let filters = FontFilters { similar: Some("Inter".to_owned()), ..FontFilters::default() };
+    let extras = Extras { layout: FilterLayout::Chips, ..Extras::default() };
+    show_with(ui, data, demo("Inter", FontPickerSettings::default(), filters), &styled_catalog(), &extras)
 }
 
 /// The family of a selection whose members differ.

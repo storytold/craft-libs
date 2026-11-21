@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Preview, Selection};
 use craft_font_catalog::Catalog;
-use craft_ui::buttons::{Button, ToggleButton};
+use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::overlay::Dismiss;
 use craft_ui::contract::{
@@ -20,12 +20,13 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, RowEvent, ThumbAspect, ThumbSize, TrailingFace};
 use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::Label;
-use egui::Rect;
+use craft_ui::runtime::memory::StageAccess;
+use egui::{Color32, Rect};
 
 use super::rank::{Infos, Language, Listing, list, shown_name};
 use super::{
-    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerSettings, FontPickerWords, POPUP, STAR, Typing, infos, read, ui_language,
-    write,
+    FamilyRow, FamilySet, FilterLayout, FontClass, FontFilters, FontFormat, FontPicker, FontPickerSettings, FontPickerWords, FontPreviewSize,
+    FontScript, POPUP, SIMILAR, STAR, Typing, infos, read, ui_language, write,
 };
 use crate::panel::faces::{Owner, Shown, paint_sample, shown};
 use craft_ui::style::DataColor;
@@ -199,7 +200,6 @@ fn filter_bar(ui: &mut egui::Ui, filters: &mut FontFilters, hide_classes: &mut b
         ToggleButton::new(words.variable.clone(), Bind::bound(&mut filters.variable)).icon(IconId::new("font_variable")).icon_only().show(ui);
         let star = if filters.favorites { "star_filled" } else { "star" };
         ToggleButton::new(words.favorites.clone(), Bind::bound(&mut filters.favorites)).icon(IconId::new(star)).icon_only().show(ui);
-        // P3(type-w2): ty.X7
         let mut similar = filters.similar.is_some();
         ToggleButton::new(words.similar.clone(), Bind::bound(&mut similar)).icon(IconId::new("font_similar")).icon_only().show(ui);
         if similar != filters.similar.is_some() {
@@ -226,24 +226,136 @@ fn class_column(ui: &mut egui::Ui, filters: &mut FontFilters, words: &FontPicker
     filters.class = usize::from(chosen).checked_sub(1).and_then(|i| FontClass::ALL.get(i).copied());
 }
 
+/// The sizes the preview size row offers; the three largest sizes share the largest thumbnail.
+const PREVIEW_SIZES: [FontPreviewSize; 3] = [FontPreviewSize::Small, FontPreviewSize::Medium, FontPreviewSize::Large];
+
+fn script_label(script: FontScript, words: &FontPickerWords) -> Label {
+    match script {
+        FontScript::Latin => words.script_latin.clone(),
+        FontScript::Japanese => words.script_japanese.clone(),
+        FontScript::Thai => words.script_thai.clone(),
+    }
+}
+
+/// A chip of an exclusive choice: on while `slot` holds `value`. A click sets `value`, or `off` when it was on.
+fn choice_chip<T: PartialEq>(ui: &mut egui::Ui, label: Label, slot: &mut T, value: T, off: T) {
+    let held = *slot == value;
+    let mut on = held;
+    ToggleButton::new(label, Bind::bound(&mut on)).show(ui);
+    if on != held {
+        *slot = if on { value } else { off };
+    }
+}
+
+/// The chip of a host set: on while its key is in `keys` and the set is enabled.
+fn set_chip(ui: &mut egui::Ui, set: &FamilySet<'_>, keys: &mut Vec<String>) {
+    let held = set.enabled && keys.iter().any(|key| key == set.key);
+    let mut on = held;
+    ToggleButton::new(set.label.clone(), Bind::bound(&mut on)).enabled(set.enabled).show(ui);
+    if on != held {
+        keys.retain(|key| key != set.key);
+        if on {
+            keys.push(set.key.to_owned());
+        }
+    }
+}
+
+/// The `Chips` filter area: the script row; Favorites, the host sets, Any Kind and the classes; Font Technology and
+/// Variable; the similar chip while Show Similar Fonts is on; and the Font Preview Size row while samples show.
+fn filter_chips(
+    ui: &mut egui::Ui,
+    filters: &mut FontFilters,
+    preview: &mut Option<FontPreviewSize>,
+    sets: &[FamilySet<'_>],
+    scripts: &[FontScript],
+    words: &FontPickerWords,
+) {
+    Stack::new().show(ui, |ui, _| {
+        if !scripts.is_empty() {
+            Row::new().wrap(true).show(ui, |ui, _| {
+                choice_chip(ui, words.all_scripts.clone(), &mut filters.script, None, None);
+                for script in scripts {
+                    choice_chip(ui, script_label(*script, words), &mut filters.script, Some(*script), None);
+                }
+            });
+        }
+        Row::new().wrap(true).show(ui, |ui, _| {
+            ToggleButton::new(words.favorites.clone(), Bind::bound(&mut filters.favorites)).show(ui);
+            for set in sets {
+                set_chip(ui, set, &mut filters.sets);
+            }
+            choice_chip(ui, words.any_kind.clone(), &mut filters.class, None, None);
+            for class in FontClass::ALL {
+                choice_chip(ui, class_label(class, words), &mut filters.class, Some(class), None);
+            }
+        });
+        for hint in sets.iter().filter(|set| !set.enabled).filter_map(|set| set.hint.as_ref()) {
+            Text::new(hint.clone()).show(ui);
+        }
+        Row::new().wrap(true).show(ui, |ui, _| {
+            Text::new(words.font_technology.clone()).show(ui);
+            ToggleButton::new(words.variable.clone(), Bind::bound(&mut filters.variable)).show(ui);
+        });
+        if let Some(reference) = filters.similar.clone() {
+            Row::new().show(ui, |ui, _| {
+                Text::new(Label::from(words.similar_to.fill(&[("family", reference.as_str())]))).show(ui);
+                let clear = IconButton::new(IconId::new("close")).label(words.clear_similar.clone()).show(ui);
+                if clicked(&clear) {
+                    filters.similar = None;
+                }
+            });
+        }
+        if let Some(size) = preview.as_mut().filter(|size| **size != FontPreviewSize::None) {
+            let last = PREVIEW_SIZES.len() as u8 - 1;
+            let before = PREVIEW_SIZES.iter().position(|s| s == size).map_or(last, |at| at as u8);
+            let mut chosen = before;
+            Text::new(words.preview_size.clone()).show(ui);
+            RadioGroup::new(words.preview_size.clone(), Bind::bound(&mut chosen)).show(ui, |ui, _| {
+                Row::new().wrap(true).show(ui, |ui, _| {
+                    for (at, label) in [&words.preview_small, &words.preview_medium, &words.preview_large].into_iter().enumerate() {
+                        Radio::new(at as u8).label(label.clone()).show(ui);
+                    }
+                });
+            });
+            if chosen != before
+                && let Some(next) = PREVIEW_SIZES.get(usize::from(chosen))
+            {
+                *size = *next;
+            }
+        }
+    });
+}
+
 /// A thumbnail painting `text` in the regular face of `family`; nothing for a family the catalog lacks or an empty
-/// text, and nothing until the face is loaded.
-fn face_thumb<'a>(catalog: &'a Arc<Catalog>, infos: &'a Infos, family: &'a str, text: String) -> impl Fn(&ContentPainterCx<'_>, Rect) + 'a {
+/// text, and nothing until the face is loaded. `on_white` paints black type on a white paper fill, in every theme.
+fn face_thumb<'a>(
+    catalog: &'a Arc<Catalog>,
+    infos: &'a Infos,
+    family: &'a str,
+    text: String,
+    on_white: bool,
+) -> impl Fn(&ContentPainterCx<'_>, Rect) + 'a {
     move |cx, rect| {
         let Some(info) = infos.families.get(family) else { return };
         if text.is_empty() {
             return;
         }
+        let ink = if on_white {
+            cx.painter.rect_filled(rect, 0.0, Color32::WHITE);
+            DataColor::new(Color32::BLACK)
+        } else {
+            DataColor::new(cx.ink())
+        };
         if let Shown::Ready(font) = shown(cx, catalog, Owner::Installed, &info.regular) {
-            let ink = DataColor::new(cx.ink());
             paint_sample(cx, rect, &font, &text, rect.height() * SAMPLE_EM, ink);
         }
     }
 }
 
 /// The banner: `text` in the face of `family`, on one line cut at the end, in a picture as high as the large thumbnail.
-fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &Infos, family: &str, shown_name: &str, text: &str) {
-    Picture::painter(shown_name.to_owned(), ThumbAspect::new(BANNER_ASPECT.0, BANNER_ASPECT.1), face_thumb(catalog, infos, family, text.to_owned()))
+fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &Infos, family: &str, shown_name: &str, text: &str, on_white: bool) {
+    let aspect = ThumbAspect::new(BANNER_ASPECT.0, BANNER_ASPECT.1);
+    Picture::painter(shown_name.to_owned(), aspect, face_thumb(catalog, infos, family, text.to_owned(), on_white))
         .extent(PictureSize::Thumb(ThumbSize::Large))
         .show(ui);
 }
@@ -273,10 +385,12 @@ fn rest<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontPicker<'a>>, family
 
 /// Shows `family` as the live preview, led by the pointer or by the keys; the pass reports it when the family changes.
 fn show_preview<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontPicker<'a>>, family: String, by_pointer: bool) {
+    let (ctx, owner) = (cx.stage().ctx().clone(), cx.base());
     let typing = cx.memory::<Typing>();
     typing.lead_by_pointer = by_pointer;
     if typing.lead.as_ref() != Some(&family) {
         typing.lead = Some(family.clone());
+        typing.watch.arm(&ctx, owner);
         picker.preview = Preview::Shows(family);
     }
 }
@@ -285,6 +399,7 @@ fn show_preview<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontPicker<'a>>
 pub(super) fn end_preview<'a>(picker: &mut FontPicker<'a>, cx: &mut Cx<'_, FontPicker<'a>>) {
     let typing = cx.memory::<Typing>();
     typing.lead_by_pointer = false;
+    typing.watch.disarm();
     if typing.lead.take().is_some() {
         picker.preview = Preview::Ended;
     }
@@ -305,12 +420,16 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let settings = read(&mut picker.settings, cx);
     let mut filters = read(&mut picker.filters, cx);
     let has_filters = filters.is_some();
+    let chips = picker.filter_layout == FilterLayout::Chips;
+    let on_white = settings.as_ref().is_some_and(|s| s.samples_on_white);
+    let mut preview_size = settings.as_ref().map(|s| s.preview);
+    let (sets, scripts) = (picker.sets, picker.scripts);
     let narrowing = filters.clone().unwrap_or_default();
     let catalog = picker.catalog;
     let infos = infos(catalog);
     let language_code = ui_language(&cx.env);
     let (folder, collator) = (cx.env.folder(), cx.env.collator());
-    let listing = Listing { query: &query, settings: settings.as_ref(), filters: &narrowing, language: &language_code, served: picker.served };
+    let listing = Listing { query: &query, settings: settings.as_ref(), filters: &narrowing, language: &language_code, served: picker.served, sets };
     let (found, comparable) = list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, true);
     let slots = slots(catalog, found, &expanded);
     let current = slots.iter().position(|slot| matches!(slot, Slot::Family { row, .. } if row.family == family));
@@ -318,8 +437,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let favorites_empty = settings.as_ref().is_none_or(|s| s.favorites.is_empty());
     // Rows are keyed, so the stamp names only what rebuilds the list: opening a family keeps the lead.
     let mut stamp = DefaultHasher::new();
-    // P3(type-w2): ty.X7
-    (&query, narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar).hash(&mut stamp);
+    (&query, narrowing.class, narrowing.favorites, narrowing.variable, &narrowing.similar, narrowing.script, &narrowing.sets, on_white, chips)
+        .hash(&mut stamp);
     let banner_family = lead.unwrap_or_else(|| family.clone());
     let banner_text = picker.preview_text;
     let name = words.list.clone();
@@ -331,13 +450,17 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         Stack::new().show(ui, |ui, _| {
             if let Some(text) = banner_text {
                 let shown_name = banner_shown_name(&slots, &infos, &banner_family, &language_code, settings.as_ref());
-                banner(ui, catalog, &infos, &banner_family, &shown_name, text);
+                banner(ui, catalog, &infos, &banner_family, &shown_name, text, on_white);
             }
             if let Some(filters) = filters.as_mut() {
-                filter_bar(ui, filters, &mut hide_classes, &family, &words);
+                if chips {
+                    filter_chips(ui, filters, &mut preview_size, sets, scripts, &words);
+                } else {
+                    filter_bar(ui, filters, &mut hide_classes, &family, &words);
+                }
             }
             Row::new().show(ui, |ui, _| {
-                if let (Some(filters), false) = (filters.as_mut(), hide_classes) {
+                if let (Some(filters), false, false) = (filters.as_mut(), hide_classes, chips) {
                     class_column(ui, filters, &words);
                 }
                 Stack::new().show(ui, |ui, _| {
@@ -369,8 +492,13 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 let icon = if row.starred { "star_filled" } else { "star" };
                                 let name = Label::from(words.favorite.fill(&[("row", row.shown.as_str())]));
                                 let star = TrailingFace::Icon(IconSpec::svg(IconId::new(icon)));
-                                let mut line =
-                                    ListRow::new(row.shown.clone()).option().depth(0).check(current == Some(item.at)).trailing_part(STAR, star, name);
+                                let mut line = ListRow::new(row.shown.clone()).option().depth(0).check(current == Some(item.at));
+                                if chips && has_filters {
+                                    let similar = TrailingFace::Icon(IconSpec::svg(IconId::new("font_similar")));
+                                    let similar_name = Label::from(words.show_similar.fill(&[("row", row.shown.as_str())]));
+                                    line = line.trailing_part(SIMILAR, similar, similar_name);
+                                }
+                                line = line.trailing_part(STAR, star, name);
                                 if source.has_children(item.at) {
                                     line = line.group(*open);
                                 }
@@ -387,9 +515,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 let samples =
                                     infos.sample_text(catalog, &row.family, words.sample.as_str(), words.sample_arabic.as_str(), &row.shown);
                                 let aspect = ThumbAspect::new(SAMPLE_ASPECT.0, SAMPLE_ASPECT.1);
-                                line = line.thumb_aspect(size, aspect, face_thumb(catalog, &infos, &row.family, samples.latin));
+                                line = line.thumb_aspect(size, aspect, face_thumb(catalog, &infos, &row.family, samples.latin, on_white));
                                 match samples.arabic {
-                                    Some(arabic) => line.extra_thumb(face_thumb(catalog, &infos, &row.family, arabic)),
+                                    Some(arabic) => line.extra_thumb(face_thumb(catalog, &infos, &row.family, arabic, on_white)),
                                     None => line,
                                 }
                             }
@@ -426,6 +554,11 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                 }
             }
             CollectionEvent::Activate(key) => picked = Some(key),
+            CollectionEvent::Item(key, RowEvent::Trailing { part, .. }) if part == SIMILAR => {
+                if let (Some(filters), Some(Slot::Family { row, .. })) = (filters.as_mut(), slot_of(&slots, &key)) {
+                    filters.similar = Some(row.family.clone());
+                }
+            }
             CollectionEvent::Item(key, RowEvent::Trailing { part, .. }) if part == STAR => {
                 if let Some(Slot::Family { row, .. }) = slot_of(&slots, &key) {
                     stars.push((row.family.clone(), !row.starred));
@@ -450,11 +583,17 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     {
         show_preview(picker, cx, family, true);
     }
-    if let Some(mut changed) = settings.clone().filter(|_| !stars.is_empty()) {
+    if let Some(mut changed) = settings.clone() {
         for (family, on) in &stars {
             changed.set_favorite(family, *on);
         }
-        write(&mut picker.settings, cx, changed, "Favorite font");
+        if let Some(size) = preview_size {
+            changed.preview = size;
+        }
+        if Some(&changed) != settings.as_ref() {
+            let label = if stars.is_empty() { "Font preview size" } else { "Favorite font" };
+            write(&mut picker.settings, cx, changed, label);
+        }
     }
     if has_filters
         && filters != Some(narrowing)

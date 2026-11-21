@@ -11,16 +11,18 @@ mod stories;
 use std::sync::Arc;
 
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense, Value};
-use craft_behavior::{HitLevel, HitPriority, NavMove, Preview};
+use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps, wheel_step};
+use craft_behavior::{HitLevel, HitPriority, NavMove, Preview, WheelPhase};
 use craft_font_catalog::Catalog;
 use craft_host::Section;
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _, step_stop,
 };
 use craft_ui::list::{ThumbSize, TrailingPart};
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
+use craft_ui::runtime::edit::PreviewWatch;
 use craft_ui::runtime::env::{EnvView, Label};
 use craft_ui::runtime::memory::StageAccess;
 use craft_ui::text::{Adornment, place, reserve};
@@ -191,7 +193,6 @@ impl FontScript {
 
 /// A family set the host gives (VectorCraft: Document, Recently Added), one filter toggle each. An `ordered` set that
 /// is on lists in its own order. A disabled set's toggle is off and dimmed, with its hint as the reason.
-#[allow(dead_code)] // P3(type-w2): ty.X11
 pub struct FamilySet<'a> {
     key: &'a str,
     label: Label,
@@ -204,25 +205,30 @@ pub struct FamilySet<'a> {
 impl<'a> FamilySet<'a> {
     /// The set `key` named `label` over `families`.
     pub fn new(key: &'a str, label: impl Into<Label>, families: &'a [String]) -> Self {
-        let _ = (key, label.into(), families);
-        todo!("ty.X11")
+        FamilySet { key, label: label.into(), hint: None, families, ordered: false, enabled: true }
     }
 
     /// The reason shown while the set is disabled.
-    pub fn hint(self, hint: impl Into<Label>) -> Self {
-        let _ = hint.into();
-        todo!("ty.X11")
+    pub fn hint(mut self, hint: impl Into<Label>) -> Self {
+        self.hint = Some(hint.into());
+        self
     }
 
     /// Lists the set in its own order while it is on.
-    pub fn ordered(self) -> Self {
-        todo!("ty.X11")
+    pub fn ordered(mut self) -> Self {
+        self.ordered = true;
+        self
     }
 
     /// Whether the set's toggle can be turned on.
-    pub fn enabled(self, on: bool) -> Self {
-        let _ = on;
-        todo!("ty.X11")
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
+    }
+
+    /// The family's place in the set. A host may give canonical lowercase names, so case does not matter.
+    fn position(&self, family: &str) -> Option<usize> {
+        self.families.iter().position(|f| f.eq_ignore_ascii_case(family))
     }
 }
 
@@ -383,9 +389,8 @@ pub fn family_rows(
     sets: &[FamilySet<'_>],
     language: &str,
 ) -> Vec<FamilyRow> {
-    let _ = sets; // P3(type-w2): ty.X7
     let (folder, collator) = (craft_i18n::Folder::new(language), craft_i18n::Collator::new(language));
-    let listing = rank::Listing { query, settings, filters, language, served: &[] };
+    let listing = rank::Listing { query, settings, filters, language, served: &[], sets };
     rank::list(catalog, &infos(catalog), &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
 }
 
@@ -430,6 +435,8 @@ const CHEVRON_ICON: &str = "chevron_down";
 const POPUP: &str = "list";
 /// The star at the end of a row.
 const STAR: TrailingPart = TrailingPart::new(0);
+/// The Show Similar part before the star, in the `Chips` layout.
+const SIMILAR: TrailingPart = TrailingPart::new(1);
 /// The widest family names in common use, which the field's width is sized by.
 const NAME_SAMPLE: &str = "Source Sans Pro Semibold Condensed";
 
@@ -472,10 +479,12 @@ impl Codec for FamilyCodec {
 }
 
 /// What the picker keeps between passes: the draft the list was last filtered for, the family the list previews,
-/// whether the class column is hidden, and, for the open list only, the families whose styles show and the families
-/// already reported as rested.
+/// whether the class column is hidden, the watch that reports a preview the picker stopped showing, and, for the open
+/// list only, the families whose styles show and the families already reported as rested.
 #[derive(Clone, Default)]
 struct Typing {
+    /// Armed while a preview shows: the picker's eviction then ends the preview it proposed.
+    watch: PreviewWatch,
     draft: Option<String>,
     lead: Option<String>,
     /// The lead's family was proposed by the pointer, so it ends when the pointer leaves the rows.
@@ -555,15 +564,12 @@ pub struct FontPicker<'a> {
     served: &'a [String],
     /// The host's family sets; their toggles follow Favorites.
     #[prop]
-    #[allow(dead_code)] // P3(type-w2): ty.X12
     sets: &'a [FamilySet<'a>],
     /// The scripts the script row offers (with All Scripts first); empty: no script row.
     #[prop]
-    #[allow(dead_code)] // P3(type-w2): ty.X13
     scripts: &'a [FontScript],
     /// Picks the layout of the filter area.
     #[prop]
-    #[allow(dead_code)] // P3(type-w2): ty.X15
     filter_layout: FilterLayout,
 }
 
@@ -597,14 +603,16 @@ impl<'a> FontPicker<'a> {
         FamilyCodec { infos: infos(self.catalog), language: ui_language(env) }
     }
 
-    /// The families in list order without filters or recents, which the arrows and the wheel step through.
-    fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>) -> Vec<FamilyRow> {
+    /// The families in the list's narrowed order (the bound filters and the host's sets apply) without the Recent
+    /// group, which the arrows and the wheel step through.
+    fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>, filters: &FontFilters) -> Vec<FamilyRow> {
         let infos = infos(self.catalog);
         let (folder, collator) = (cx.env.folder(), cx.env.collator());
-        let filters = FontFilters::default();
         let language = ui_language(&cx.env);
-        let listing = rank::Listing { query: "", settings, filters: &filters, language: &language, served: &[] };
-        rank::list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, false).0
+        let listing = rank::Listing { query: "", settings, filters, language: &language, served: &[], sets: self.sets };
+        let mut rows = rank::list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, true).0;
+        rows.retain(|row| !row.recent);
+        rows
     }
 }
 
@@ -682,25 +690,39 @@ impl Component for FontPicker<'_> {
         typing.expanded.clear();
         typing.rested.clear();
         let settings = read(&mut self.settings, cx);
-        let current = cx.value().cloned().unwrap_or_default();
-        let all = self.ordered(cx, settings.as_ref());
-        let Some(here) = all.iter().position(|row| row.family == current) else { return };
+        let filters = read(&mut self.filters, cx).unwrap_or_default();
+        let all = self.ordered(cx, settings.as_ref(), &filters);
+        let stops: Vec<usize> = (0..all.len()).collect();
+        let here = cx.value().and_then(|current| all.iter().position(|row| row.family == *current));
         let mut to = here;
         while let Some((step, mods)) = cx.intents().take_move() {
             match step {
-                NavMove::Down if !mods.fine => to = (to + 1).min(all.len() - 1),
-                NavMove::Up if !mods.fine => to = to.saturating_sub(1),
+                NavMove::Down if !mods.fine => to = step_stop(&stops, to, true),
+                NavMove::Up if !mods.fine => to = step_stop(&stops, to, false),
                 _ => {}
             }
         }
-        if let Some(wheel) = cx.take_wheel()
-            && wheel.scroll.y != 0.0
+        if to != here
+            && let Some(row) = to.and_then(|at| all.get(at))
         {
-            to = if wheel.scroll.y < 0.0 { (to + 1).min(all.len() - 1) } else { to.saturating_sub(1) };
+            cx.set(row.family.clone());
         }
-        if to != here {
-            self.picked = Some(all[to].family.clone());
-            cx.set(all[to].family.clone());
+        // The wheel steps one family a line down for a step forward, as one run the wheel's end commits.
+        if let Some(wheel) = cx.take_wheel() {
+            if wheel.phase == WheelPhase::End {
+                cx.wheel_run(wheel.phase, None);
+            } else if let StepResult::Set(along) =
+                wheel_step(&ValueSteps::new(0.0, -f64::MAX, f64::MAX, 1.0, 1.0).fine(1.0), ValueAxes::Both, &wheel, cx.env.direction().is_rtl())
+                && along != 0.0
+            {
+                let mut stop = cx.value().and_then(|current| all.iter().position(|row| row.family == *current));
+                for _ in 0..along.abs().round() as usize {
+                    stop = step_stop(&stops, stop, along < 0.0);
+                }
+                if let Some(row) = stop.and_then(|at| all.get(at)) {
+                    cx.wheel_run(wheel.phase, Some(row.family.clone()));
+                }
+            }
         }
     }
 
