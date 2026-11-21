@@ -10,5 +10,8 @@ publish = false
 
 [dependencies]
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
 [lints]
 workspace = true
