@@ -681,7 +681,7 @@ impl FooterBar {
             }
         });
         let inner = shown.inner.unwrap_or_default();
-        let mods = if inner.picked.is_some() { crate::runtime::pointer::frame(ui.ctx()).mods } else { craft_keymap::Mods::NONE };
+        let mods = if inner.picked.is_some() { crate::runtime::pointer::mods(ui.ctx()) } else { craft_keymap::Mods::NONE };
         let output = FooterOutput {
             response: shown.output,
             picked: inner.picked,

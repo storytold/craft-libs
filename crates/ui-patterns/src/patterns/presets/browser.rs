@@ -812,7 +812,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 (out.response.clone(), shown.clone(), Pass { seen: seen(out.events), grid: Vec::new() })
             };
 
-            let mods = crate::runtime::pointer::frame(ui.ctx()).mods;
+            let mods = crate::runtime::pointer::mods(ui.ctx());
             let row_of = |key: &K| rows.iter().position(|row| row.key == *key);
             if let Some(zone) = drop_zone {
                 let target = ZoneDrop { source: response.id, rows, zone };
@@ -848,15 +848,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             }
             // A secondary press or release selects the row it lands on so that the row's menu acts on it; that selection
             // is not a pick, and a picker would commit it.
-            let frame = crate::runtime::pointer::frame(ui.ctx());
-            let secondary =
-                frame.buttons.contains(craft_behavior::Buttons::SECONDARY) || frame.release == Some(craft_behavior::PointerButton::Secondary);
+            // The pointer is read only for the rows' events: a pass without one does not depend on it, so a memoized view
+            // holding the list replays while the pointer moves elsewhere (#2812).
+            let frame = (!pass.seen.is_empty()).then(|| crate::runtime::pointer::frame(ui.ctx()));
+            let secondary = frame.as_ref().is_some_and(|frame| {
+                frame.buttons.contains(craft_behavior::Buttons::SECONDARY) || frame.release == Some(craft_behavior::PointerButton::Secondary)
+            });
             // An action row of the list is a plain row: a single press picks it, and Enter activates it. Its selection by
             // an arrow key, and the activation by the second click of a double click, are not a choice. The grid's
             // tail rows report Enter and a click as their activation.
             let list = view == PresetView::List;
-            let first_press = frame.press.as_ref().is_some_and(|press| press.clicks == 1);
-            let released = frame.release.is_some();
+            let first_press = frame.as_ref().and_then(|frame| frame.press.as_ref()).is_some_and(|press| press.clicks == 1);
+            let released = frame.as_ref().is_some_and(|frame| frame.release.is_some());
             let action = |events: &mut Vec<PresetEvent<K>>, at: usize| {
                 if !events.contains(&PresetEvent::Action(at)) {
                     events.push(PresetEvent::Action(at));

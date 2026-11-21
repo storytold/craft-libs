@@ -407,9 +407,9 @@ impl<'a> TextStylesPanel<'a> {
                 });
                 let (events, second) = (shown_rows.events, shown_rows.activation_clicks >= 2);
 
-                let pointer = craft_ui::runtime::pointer::frame(ui.ctx());
-                let alt = pointer.mods.alt;
-                let plain = !pointer.mods.shift && !pointer.mods.cmd;
+                let mods = craft_ui::runtime::pointer::mods(ui.ctx());
+                let alt = mods.alt;
+                let plain = !mods.shift && !mods.cmd;
                 for event in events {
                     match event {
                         CollectionEvent::Activate(id) if second && (id != 0 || paragraph) => action.set(Some(TextStyleAction::Options(id))),

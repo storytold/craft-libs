@@ -326,7 +326,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         }
         let unit = drag.unit(self.layout)?;
         let window = matches!(unit, DragUnit::Window(_));
-        if pointer::frame(self.ctx).mods.cmd {
+        if pointer::mods(self.ctx).cmd {
             return if window { None } else { self.float(&unit, at, drag.source(), drag.strip()) };
         }
         if window && !self.title_bar_docks {
