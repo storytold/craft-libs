@@ -279,6 +279,8 @@ struct Place {
     collapsed: Option<f32>,
     /// The X11 window type it opened with.
     window_type: X11WindowType,
+    /// The window uses the Windows tool-window style when this is true.
+    tool_window: bool,
 }
 
 /// Whether two rects differ by more than rounding.
@@ -559,11 +561,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         // A minimized window shows its bar and what `floating_body` draws below it.
         let collapsed = window.minimized.then(|| BAR_HEIGHT + self.minimized_body(window));
         let shown = |[x, y, w, h]: [f32; 4]| [x, y, w, collapsed.unwrap_or(h)];
-        // Under X11 on Linux a palette is a utility window, which GNOME and KDE Plasma leave off
-        // the taskbar. egui ignores the type elsewhere, Wayland included, so there it stays the
-        // same and egui does not recreate the window when its panels change.
+        // X11 palettes use the utility window type. Other backends ignore this field.
         let x11 = cfg!(target_os = "linux") && !wayland(ctx, env_session());
         let window_type = if normal || !x11 { X11WindowType::Normal } else { X11WindowType::Utility };
+        let native_tool_window = cfg!(target_os = "windows") && !normal;
         let mut place = match ctx.data(|d| d.get_temp::<Place>(key)) {
             Some(mut place) => {
                 // The application changed the window's place (undo, reset, a reloaded layout):
@@ -590,17 +591,33 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 };
                 seen.insert(window.id);
                 ctx.data_mut(|d| d.insert_temp(seen_key, seen));
-                Place { spawn, known: spawn, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type }
+                Place {
+                    spawn,
+                    known: spawn,
+                    pending: Some(now + MOVE_WAIT),
+                    corrected: false,
+                    collapsed: None,
+                    window_type,
+                    tool_window: native_tool_window,
+                }
             }
         };
         // egui recreates a window whose type changes. The new window opens where the old one was:
         // where the window system last put it, unless a move the application commanded has not
         // landed yet. The collapsed height a minimized window reports is not the size to keep.
-        if place.window_type != window_type {
+        if place.window_type != window_type || place.tool_window != native_tool_window {
             let waiting = place.pending.is_some_and(|until| now < until);
             let latest = info.as_ref().and_then(placed).filter(|_| !waiting && !moving(ctx));
             let at = latest.map_or(place.known, |[x, y, w, h]| [x, y, w, if place.collapsed.is_some() { place.known[3] } else { h }]);
-            place = Place { spawn: at, known: at, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type };
+            place = Place {
+                spawn: at,
+                known: at,
+                pending: Some(now + MOVE_WAIT),
+                corrected: false,
+                collapsed: None,
+                window_type,
+                tool_window: native_tool_window,
+            };
         }
         // Minimized or expanded: the window keeps its top-left corner and width, and its
         // height is fixed while it shows only its bar.
@@ -634,6 +651,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             // No taskbar entry. egui applies `taskbar` only on Windows, and the window type only
             // under X11 on Linux.
             .with_taskbar(false)
+            .with_tool_window(!normal)
             .with_window_type(place.window_type);
         // The bar replaces the OS title bar. macOS keeps the frame, with its title bar and
         // buttons hidden: AppKit resizes a movable window from its edges and corners with its
