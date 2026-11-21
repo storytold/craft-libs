@@ -3,3 +3,4 @@
 mod common;
 mod ffmpeg;
 mod modes;
+mod ogg;

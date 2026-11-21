@@ -265,6 +265,53 @@ fn a_lost_page_is_silence_and_the_audio_after_it_stays_in_place() {
     }
 }
 
+/// A granule position that jumps far past what the file could hold (here by 2^40 frames) is
+/// damage, not a lost page: the jump counts as one damaged packet, no silence is made for it, and
+/// the audio after it follows on, in the length, the decode and a seek. That holds whether the
+/// pages after the jump keep it or come back down. A packet after a jump that is damaged too
+/// counts once.
+#[test]
+fn a_granule_jump_past_what_the_file_holds_is_damage() {
+    let ogg = encode(44_100, 2, 60_000, 5.0);
+    let p = parts(&ogg);
+    let clean = decode_ogg(&ogg).expect("decode_ogg").channels;
+    let jump = 1i64 << 40;
+    // eight packets to a page: the pages of the packets in `jumped` carry granule positions
+    // `jump` higher (the end of the range past the last packet: the last page too)
+    let file = |packets: &[Vec<u8>], jumped: &std::ops::Range<usize>| {
+        let mut w = PageWriter::new(7).with_page_target(1 << 20, 8);
+        let mut file = Vec::new();
+        for h in &p.headers {
+            file.extend(w.header(h));
+        }
+        let mut end = 0i64;
+        for (k, (packet, &n)) in packets.iter().zip(&p.frames).enumerate() {
+            end += n as i64;
+            file.extend(w.packet(packet, if jumped.contains(&k) { end + jump } else { end }));
+        }
+        let last = if jumped.contains(&packets.len()) { p.last_granule + jump } else { p.last_granule };
+        file.extend(w.finish(Some(last)));
+        file
+    };
+    // the page of packets 16 to 23 jumps, and every page after it too, or none, or every page but
+    // the last
+    let last_page = 8 * ((p.packets.len() - 1) / 8);
+    for jumped in [16..usize::MAX, 16..24, 16..last_page] {
+        let file = file(&p.packets, &jumped);
+        let mut dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).expect("open");
+        assert_eq!(dec.info().frames, p.last_granule as u64, "jump on packets {jumped:?}");
+        assert_eq!(dec.seek(30_000).expect("seek"), 30_000);
+        assert_eq!(drain(&mut dec), clean.iter().map(|c| c[30_000..].to_vec()).collect::<Vec<_>>(), "jump on packets {jumped:?}");
+        let (info, buf) = decode(&file, None).expect("decode");
+        assert_eq!((info.frames, info.damaged), (p.last_granule as u64, 1), "jump on packets {jumped:?}");
+        assert_eq!(buf.channels, clean, "jump on packets {jumped:?}");
+    }
+    let mut packets = p.packets.clone();
+    packets[16][0] |= 1; // not an audio packet any more
+    let (info, _) = decode(&file(&packets, &(16..usize::MAX)), None).expect("decode");
+    assert_eq!((info.frames, info.damaged), (p.last_granule as u64, 1));
+}
+
 #[test]
 fn damaged_and_cut_files_are_errors_or_results() {
     let ogg = encode(44_100, 2, 20_000, 3.0);
@@ -279,6 +326,15 @@ fn damaged_and_cut_files_are_errors_or_results() {
     let mut broken = Parts { headers: p.headers.clone(), packets: Vec::new(), frames: p.frames.clone(), last_granule: p.last_granule };
     broken.headers[2] = [&b"\x05vorbis"[..], &[0xFF; 64]].concat();
     assert!(decode(&remux(&broken, &p.packets, 8, 0, p.last_granule), None).is_err());
+    // every audio packet damaged: an error when decoding reaches the declared length, with or
+    // without a lost page's silence before the last page
+    let mut damaged = p.packets.clone();
+    for packet in &mut damaged {
+        packet[0] |= 1; // not an audio packet any more
+    }
+    for last in [p.last_granule, p.last_granule + 50_000] {
+        assert!(decode(&remux(&p, &damaged, 8, 0, last), None).is_err(), "last granule position {last}");
+    }
     // headers and no audio
     let empty = remux(&broken, &[], 8, 0, 0);
     let _ = decode(&empty, None);
