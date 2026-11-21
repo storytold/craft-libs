@@ -490,7 +490,7 @@ impl Converter<'_> {
 
     /// A text box story holding `made`.
     fn text_box(&mut self, made: Vec<Blk>, need_final_p: bool, bt: &BoxText) -> u32 {
-        let id = self.doc.add_part(PartKind::TextBox, blocks(made, need_final_p));
+        let id = self.doc.add_part(PartKind::TextBox, blocks(made, need_final_p, &mut self.origins));
         if let Some(part) = self.doc.parts.get_mut(&id) {
             if let Some(a) = bt.anchor {
                 part.body.anchor = valign_from_anchor(a);

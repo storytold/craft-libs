@@ -244,7 +244,7 @@ impl Converter<'_> {
         for h in hf.iter() {
             if let Some(blocks) = &h.blocks {
                 let kind = if h.kind == "header" { PartKind::Header } else { PartKind::Footer };
-                let id = self.doc.add_part(kind, super::blocks(blocks.clone(), true));
+                let id = self.doc.add_part(kind, super::blocks(blocks.clone(), true, &mut self.origins));
                 self.carry.parts.insert(h.name.clone(), id);
             }
             set_ref(&mut self.sec.refs, (h.kind, h.which), h.name.clone());

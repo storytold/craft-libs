@@ -72,6 +72,8 @@ pub(crate) struct P {
     pub page_num: bool,
     /// Ends a section: its properties.
     pub section: Option<SectionProps>,
+    /// The source paragraph it was made of (see [`crate::KEPT_FORMAT`]).
+    pub origin: Option<Arc<str>>,
 }
 
 impl P {
@@ -183,6 +185,10 @@ pub(crate) struct Converter<'a> {
     pub pic_n: u32,
     /// Pictures stored so far, by package entry: their media key.
     pub media_keys: HashMap<String, String>,
+    /// The section being read (0-based).
+    pub sec_index: usize,
+    /// Made paragraphs by `rev`: the source paragraph each was made of.
+    pub origins: HashMap<u64, Arc<str>>,
 }
 
 /// Read an opened package.
@@ -223,13 +229,36 @@ pub(crate) fn read(pkg: &Package) -> Result<Document> {
         made_cells_left: section::MAX_MADE_CELLS,
         pic_n: 0,
         media_keys: HashMap::new(),
+        sec_index: 0,
+        origins: HashMap::new(),
     };
     c.doc.body.clear();
     c.convert()?;
+    c.keep_origins();
     Ok(c.doc)
 }
 
 impl Converter<'_> {
+    /// Files the paragraphs' origins for the writer: those still as read once reading ends.
+    fn keep_origins(&mut self) {
+        let mut bytes = 0;
+        let mut pending = HashMap::new();
+        for (rev, o) in std::mem::take(&mut self.origins) {
+            if bytes + o.len() > craft_wordmodel::kept::MAX_KEPT_BYTES {
+                break;
+            }
+            bytes += o.len();
+            pending.insert(rev, o);
+        }
+        self.doc.kept = craft_wordmodel::kept::Kept::new(craft_wordmodel::kept::KeptXml {
+            format: crate::KEPT_FORMAT.into(),
+            pending,
+            bytes,
+            ..Default::default()
+        });
+        self.doc.seal_kept();
+    }
+
     pub(crate) fn missing(&mut self, key: &str) {
         *self.unsupported.entry(key.to_string()).or_insert(0) += 1;
     }
@@ -239,6 +268,7 @@ impl Converter<'_> {
         let mut body: Vec<Blk> = Vec::new();
         let n_sections = names.len();
         for (i, name) in names.iter().enumerate() {
+            self.sec_index = i;
             self.sec =
                 if i > 0 { Section { outline: self.sec.outline, tab_stop: self.sec.tab_stop, ..Section::default() } } else { Section::default() };
             self.sec.first_section = i == 0;
@@ -358,7 +388,7 @@ impl Converter<'_> {
                 }
             }
         }
-        self.doc.body = blocks(body, false);
+        self.doc.body = blocks(body, false, &mut self.origins);
         self.doc.styles = Arc::new(self.style_sheet());
         self.doc.numbering = Arc::new(self.numbering());
         self.doc.settings.default_tab = props::pt(tw(self.sec.tab_stop).max(1));
@@ -367,7 +397,7 @@ impl Converter<'_> {
         self.doc.core.title = get("title");
         self.doc.core.creator = get("creator");
         for (what, n) in &self.unsupported {
-            log::debug!("HWPX: {n} × {what} not read");
+            log::warn!("HWPX: {n} × {what} not read");
         }
         Ok(())
     }
@@ -433,11 +463,17 @@ impl Converter<'_> {
                 _ => 0,
             };
         }
-        // Korean words wrap as the paragraph shape says, on each paragraph made of it
-        if p.get(ORDINAL).is_some() {
+        // Korean words wrap as the paragraph shape says, on each paragraph made of it; each
+        // piece notes where it came from
+        if let Some(ord) = p.get(ORDINAL) {
+            let mut piece = 0;
             for b in blocks.iter_mut() {
                 if let Blk::P(bp) = b {
                     bp.props.keep_hangul_words = Some(ctx.pp.keep_words);
+                    if bp.origin.is_none() {
+                        bp.origin = Some(Arc::from(format!("{}:{ord}:{piece}", self.sec_index)));
+                        piece += 1;
+                    }
                 }
             }
         }
@@ -850,7 +886,7 @@ impl Converter<'_> {
         // the memo's time: a FILETIME in two halves (low, high), UTC (viewer-checked)
         let half = |k: usize| parts.get(k).and_then(|v| v.trim().parse::<u32>().ok());
         let when = half(3).zip(half(4)).and_then(|(lo, hi)| iso_from_filetime((u64::from(hi) << 32) | u64::from(lo)));
-        let part = self.doc.add_part(PartKind::Comment, blocks(made, true));
+        let part = self.doc.add_part(PartKind::Comment, blocks(made, true, &mut self.origins));
         let cid = self.doc.comments.len() as u32;
         let initials: String = author.chars().take(2).collect();
         self.doc.comments.insert(cid, Comment { author, initials, date: when.unwrap_or_default(), part, ..Comment::default() });
@@ -876,7 +912,7 @@ impl Converter<'_> {
         }
         (self.note, self.note_ref_done) = saved;
         if let Some(part) = self.doc.parts.get_mut(&id) {
-            part.blocks = blocks(made, true);
+            part.blocks = blocks(made, true, &mut self.origins);
         }
         Item::Obj(Box::new(InlineObject::NoteRef { kind, id, custom: String::new() }), superscript())
     }
@@ -961,7 +997,7 @@ pub(crate) fn merge_spacing(blocks: &mut [Blk]) {
 
 /// The finished blocks of a story: spacing merged, adjacent tables kept apart, and an empty
 /// paragraph at the end of a story that needs one (`need_final_p`: a header, a note, a cell).
-pub(crate) fn blocks(mut made: Vec<Blk>, need_final_p: bool) -> Blocks {
+pub(crate) fn blocks(mut made: Vec<Blk>, need_final_p: bool, origins: &mut HashMap<u64, Arc<str>>) -> Blocks {
     merge_spacing(&mut made);
     let mut out: Blocks = Vec::new();
     let mut prev_table = false;
@@ -976,8 +1012,13 @@ pub(crate) fn blocks(mut made: Vec<Blk>, need_final_p: bool) -> Blocks {
                 out.push(Arc::new(Block::Table(*t)));
                 prev_table = true;
             }
-            Blk::P(p) => {
-                out.push(Arc::new(Block::Para(paragraph(*p))));
+            Blk::P(mut p) => {
+                let origin = p.origin.take();
+                let para = paragraph(*p);
+                if let Some(o) = origin {
+                    origins.insert(para.rev, o);
+                }
+                out.push(Arc::new(Block::Para(para)));
                 prev_table = false;
             }
         }

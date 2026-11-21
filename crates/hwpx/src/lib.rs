@@ -26,5 +26,18 @@ pub fn sniff(bytes: &[u8]) -> bool {
 /// panic.
 pub fn read(bytes: &[u8]) -> Result<craft_wordmodel::Document, HwpxError> {
     let pkg = package::Package::open(bytes)?;
-    read::read(&pkg)
+    let mut doc = read::read(&pkg)?;
+    doc.passthrough.insert(PACKAGE_KEY.into(), std::sync::Arc::new(bytes.to_vec()));
+    Ok(doc)
 }
+
+/// `Document::passthrough` key holding the file a document was read from, as read, for a writer
+/// that saves back into it: what changed written, the rest kept.
+pub const PACKAGE_KEY: &str = "hwpx:package";
+
+/// The format paragraphs read from a file are kept under (`craft_wordmodel::kept::KeptXml::format`).
+/// Each kept paragraph's entry names the source paragraph it was made of, `section:ordinal:piece`
+/// (the ordinal counts every `hp:p` of the section part in document order; a source paragraph
+/// split around its tables makes several pieces), so a writer can tell the paragraphs nothing
+/// changed and write their source back as it was.
+pub const KEPT_FORMAT: &str = "hwpx";

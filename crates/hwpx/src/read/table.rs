@@ -401,7 +401,8 @@ impl Converter<'_> {
                 _ => None,
             };
         }
-        let blocks = if vmerge == VMerge::Continue { vec![Arc::new(Block::Para(Paragraph::new()))] } else { super::blocks(made, true) };
+        let blocks =
+            if vmerge == VMerge::Continue { vec![Arc::new(Block::Para(Paragraph::new()))] } else { super::blocks(made, true, &mut self.origins) };
         (Cell { props, blocks, controls: Default::default() }, mar[0] + mar[2])
     }
 

@@ -73,3 +73,24 @@ fn master_page_objects_lie_behind_the_text_in_the_header() {
     assert_eq!(floats.len(), 1, "the master page's shape is not in a header");
     assert!(floats.iter().all(|o| wrap_of(o) == Some(craft_wordmodel::para::Wrap::BehindText)));
 }
+
+/// Each paragraph remembers the source paragraph it came from while it stays as read, so a
+/// save back can tell edited paragraphs from untouched ones.
+#[test]
+fn paragraphs_remember_their_source_until_edited() {
+    let bytes =
+        hwpx(&format!(r#"<hs:sec {NS}><hp:p><hp:run><hp:t>첫째</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>둘째</hp:t></hp:run></hp:p></hs:sec>"#));
+    let doc = read_bytes(&bytes).unwrap();
+    let kept = doc.kept.of(crate::KEPT_FORMAT).expect("nothing kept");
+    let paras: Vec<&craft_wordmodel::Paragraph> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let sources: Vec<_> = paras.iter().map(|p| kept.para(p).cloned()).collect();
+    assert!(sources.iter().all(Option::is_some), "a paragraph as read has no source");
+    assert_ne!(sources[0], sources[1], "two paragraphs name one source");
+    let mut edited = paras[0].clone();
+    edited.text.push('!');
+    if let Some(r) = edited.runs.last_mut() {
+        r.len += 1;
+    }
+    assert!(kept.para(&edited).is_none(), "an edited paragraph still names its source");
+    assert_eq!(doc.passthrough.get(crate::PACKAGE_KEY).map(|b| b.as_slice()), Some(bytes.as_slice()), "the file read isn't kept");
+}
