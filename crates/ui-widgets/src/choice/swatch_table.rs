@@ -375,7 +375,7 @@ pub struct SwatchTable<'a> {
         striped,
         allow_empty,
         lead_on_open,
-        lead_follows_hover,
+        hover_lead,
         arrows_select,
         arrows_wrap,
         type_ahead,

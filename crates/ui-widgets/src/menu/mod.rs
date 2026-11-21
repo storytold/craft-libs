@@ -17,7 +17,7 @@ pub use alternate::Alternate;
 pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle};
 pub(crate) use edit::text_menu;
 pub use edit::{EditMenu, EditMenuOutput};
-pub use item::{MenuItem, MenuItemOutput, MenuItemStyle, MenuSamplePaint, MenuShortcut};
+pub use item::{MenuItem, MenuItemOutput, MenuItemStyle, MenuShortcut};
 pub use panel::{GroupItem, PanelMenu, PanelMenuOutput, PanelRow};
 #[doc(hidden)]
 pub use popup::entry_rows;
