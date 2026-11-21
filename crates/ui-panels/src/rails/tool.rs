@@ -257,11 +257,16 @@ struct GridProps<'a, T: PlainData> {
     columns: usize,
     captions: bool,
     tear_off: bool,
-    tips: Option<&'a dyn ToolTips<T>>,
+    tips: Option<&'a HostTips<'a, T>>,
     mark: Option<&'a T>,
     reveal: Option<&'a T>,
     sent: Outbox<'a, RailEvent<T>>,
 }
+
+/// The host's tool tips, which the grid reads through a trait object: while the host sets them the grid runs every pass.
+#[derive(MemoProps)]
+#[memo_props(every_pass = "the host's tips are a trait object, whose answers no key can follow")]
+struct HostTips<'a, T>(&'a dyn ToolTips<T>);
 
 /// What the body of one pass draws from.
 struct Draw<'a, T: PlainData> {
@@ -284,6 +289,7 @@ impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
     /// Shows the grid as a memoized view; what the buttons report goes into `events` (nothing on a replay). Returns the
     /// Edit Toolbar button's id while the rail shows it.
     fn run(&self, ui: &mut Ui, events: &mut Vec<RailEvent<T>>) -> Option<Id> {
+        let tips = self.tips.map(HostTips);
         let props = GridProps {
             slots: self.slots,
             current: self.current,
@@ -295,7 +301,7 @@ impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
             columns: self.columns,
             captions: self.captions,
             tear_off: self.tear_off,
-            tips: self.tips,
+            tips: tips.as_ref(),
             mark: self.mark,
             reveal: self.reveal,
             sent: Outbox::new(events),
@@ -308,6 +314,7 @@ impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
 /// is the Edit Toolbar button's id, which the rail's output turns into its response.
 fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut Ui) -> Option<Id> {
     let GridProps { slots, current, last_used, hidden, editing, columns, opens, captions, tear_off, tips, mark, reveal, .. } = *props;
+    let tips = tips.map(|tips| tips.0);
     let visible = visible_slots(slots, hidden_in(hidden));
     let cells = visible.len() + usize::from(props.edit_label.is_some());
     let resolve = resolver_in(ui);
