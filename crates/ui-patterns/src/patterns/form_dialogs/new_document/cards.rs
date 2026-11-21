@@ -8,7 +8,7 @@ use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::PresetId;
 use crate::primitives::{ContentPainterCx, StrokeWidth};
-use crate::runtime::env::{Env, Label, UnitKind};
+use crate::runtime::env::{Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{Tile, TileGrid};
