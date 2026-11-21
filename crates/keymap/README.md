@@ -487,7 +487,14 @@ lists (hidden entries keep their keys and still count in conflicts).
     macOS, `Cmd+K` and `Ctrl+K` are one hotkey (`GlobalError::Duplicate`). A chord another
     application holds is `GlobalError::Taken`. Windows registers F1 to F24 and macOS F1 to F20.
     On X11 the ISO key between left Shift and Z and `\` are one hotkey (`GlobalError::Duplicate`),
-    and `'` cannot be grabbed (`GlobalError::Unbindable`).
+    and `'` cannot be grabbed (`GlobalError::Unbindable`). On Windows a chord with Ctrl and Alt on
+    a letter, digit, symbol or Space key is refused (`GlobalError::AltGr`), since Windows reports AltGr
+    as Ctrl+Alt.
+  - On X11 a symbol chord is grabbed at the key that types the symbol in the current layout. A
+    symbol the layout types only with AltGr is refused (`GlobalError::Unbindable`): with German,
+    `Ctrl+[` would grab Ctrl+8. A symbol typed with Shift needs Shift in the chord
+    (`Ctrl+Shift+.` with AZERTY). Two chords that land on one key and modifier set are one hotkey
+    (`GlobalError::Duplicate`): with AZERTY, `Ctrl+-` and `Ctrl+6`.
   - On Windows and X11 a letter chord is grabbed at the key that types the letter, as the keymap
     matches letters on a Latin layout. On macOS it is grabbed at the letter's position on a US
     keyboard: with AZERTY, `Cmd+A` is the key that types Q.

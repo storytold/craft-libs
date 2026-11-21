@@ -68,6 +68,10 @@ pub enum GlobalError {
     /// A chord without Cmd, Ctrl or Alt whose key is not F1 to F35: it would take the key from
     /// typing in every application.
     TypingKey(Chord),
+    /// On Windows, a chord with Ctrl and Alt on a letter, digit, symbol or Space key. Windows reports
+    /// AltGr as Ctrl+Alt, so the chord would take a character from typing in every application on
+    /// layouts with AltGr (Ctrl+Alt+E types `€` on German).
+    AltGr(Chord),
     /// This set already holds the chord, or a chord the platform treats as the same one (`Cmd+K`
     /// and `Ctrl+K` off macOS; on X11, two keys the layout types on one key, such as Ctrl+- and
     /// Ctrl+6 on French AZERTY).
@@ -91,6 +95,7 @@ impl fmt::Display for GlobalError {
             GlobalError::AlreadyOpen => f.write_str("system-wide hotkeys are already open in this process"),
             GlobalError::Unbindable(c) => write!(f, "{c} has no key of its own"),
             GlobalError::TypingKey(c) => write!(f, "{c} needs Cmd, Ctrl or Alt to work system-wide"),
+            GlobalError::AltGr(c) => write!(f, "{c} is AltGr on Windows, which types characters on many keyboard layouts"),
             GlobalError::Duplicate(c) => write!(f, "{c} is already registered"),
             GlobalError::Taken(c) => write!(f, "{c} is in use by the system or another application"),
             GlobalError::TooMany => write!(f, "more than {MAX_GLOBAL} system-wide hotkeys"),
@@ -635,6 +640,7 @@ impl GlobalError {
         match self {
             GlobalError::Unbindable(_) => GlobalError::Unbindable(chord),
             GlobalError::TypingKey(_) => GlobalError::TypingKey(chord),
+            GlobalError::AltGr(_) => GlobalError::AltGr(chord),
             GlobalError::Duplicate(_) => GlobalError::Duplicate(chord),
             GlobalError::Taken(_) => GlobalError::Taken(chord),
             GlobalError::NotRegistered(_) => GlobalError::NotRegistered(chord),
@@ -751,6 +757,10 @@ fn hotkey(chord: Chord, platform: Platform) -> Result<HotKey, GlobalError> {
     let mods = chord.mods.effective(platform);
     if !(mods.cmd || mods.ctrl || mods.alt) && !chord.key.is_function_key() {
         return Err(GlobalError::TypingKey(chord));
+    }
+    let types = chord.key.is_letter() || chord.key.is_digit() || chord.key.is_symbol() || chord.key == Key::Space;
+    if platform == Platform::Windows && (mods.cmd || mods.ctrl) && mods.alt && types {
+        return Err(GlobalError::AltGr(chord));
     }
     let mut out = Modifiers::empty();
     if mods.cmd {
@@ -1051,6 +1061,20 @@ mod tests {
         }
         let plus = Chord { mods: Mods::CMD, key: Key::Plus };
         assert_eq!(hotkey(plus, Platform::Linux), Err(GlobalError::Unbindable(plus)));
+    }
+
+    #[test]
+    fn windows_refuses_ctrl_alt_on_keys_altgr_types_with() {
+        for text in ["Ctrl+Alt+E", "Cmd+Alt+Q", "Ctrl+Alt+Shift+7", "Ctrl+Alt+[", "Ctrl+Alt+-", "Ctrl+Alt+Space"] {
+            assert_eq!(hotkey(chord(text), Platform::Windows), Err(GlobalError::AltGr(chord(text))), "{text}");
+        }
+        // Keys that type nothing, and the same chords where AltGr is not Ctrl+Alt.
+        for text in ["Ctrl+Alt+F9", "Ctrl+Alt+Home", "Ctrl+Alt+Enter", "Ctrl+Shift+E", "Alt+E"] {
+            assert!(hotkey(chord(text), Platform::Windows).is_ok(), "{text}");
+        }
+        for platform in [Platform::Mac, Platform::Linux] {
+            assert!(hotkey(chord("Ctrl+Alt+E"), platform).is_ok(), "{platform:?}");
+        }
     }
 
     fn entry(text: &str, command: &str) -> Entry {
