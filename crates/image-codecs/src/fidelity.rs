@@ -7,7 +7,7 @@ use std::fmt;
 use crate::codecs::{dds, dpx};
 use crate::format::{Format, caps};
 use crate::image::{ChannelLayout, Image, SampleType};
-use crate::options::{DdsCompression, EncodeOptions};
+use crate::options::{DdsCompression, EncodeOptions, TiffCompression};
 
 /// Something that will be lost or altered when writing an image to a format.
 #[derive(Debug, Clone, PartialEq)]
@@ -252,7 +252,11 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     // Compression
     if format == Format::Gif {
         w.push(W::PaletteQuantized);
-    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) || (format == Format::Dds && opts.dds.compression.is_block()) {
+    } else if c.lossy
+        || (format == Format::WebP && !opts.webp_lossless)
+        || (format == Format::Dds && opts.dds.compression.is_block())
+        || (format == Format::Tiff && opts.tiff_compression == TiffCompression::Jpeg)
+    {
         w.push(W::LossyCompression);
     }
 

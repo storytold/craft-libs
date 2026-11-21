@@ -9,9 +9,11 @@
 //! # Sources
 //!
 //! - TIFF Revision 6.0 (Final, June 3, 1992), Section 21 "YCbCr Images": `YCbCrSubSampling`
-//!   defaults to 2, 2, so it is always written; `ReferenceBlackWhite` gives the code range.
+//!   defaults to 2, 2, so it is always written; `ReferenceBlackWhite` defaults to
+//!   [0, 255, 0, 255, 0, 255], and the section lists [0, 255, 128, 255, 128, 255] for YCbCr
+//!   with no headroom or footroom, which is JPEG's full range.
 //!   <https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf>
-//! - TIFF Technical Note #2, "Replacement TIFF/JPEG specification" (17 March 1995): compression
+//! - TIFF Technical Note #2, "Replacement TIFF/JPEG specification": compression
 //!   7, one JPEG datastream per strip, optional `JPEGTables`, PhotometricInterpretation 6 when
 //!   the JPEG data is YCbCr, and `RowsPerStrip` a multiple of 8 × the vertical sampling factor.
 

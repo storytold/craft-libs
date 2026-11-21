@@ -112,8 +112,18 @@ fn refuses_what_jpeg_cannot_store() {
     let mut spot = gradient(4, 4, ChannelLayout::Gray);
     spot.meta.extra_samples.push(ExtraSample { kind: 0, data: vec![1; 16] });
     let wide = Image::from_raw(70_000, 1, ChannelLayout::Gray, SampleType::U8, vec![0; 70_000]).unwrap();
-    for (label, img) in [("rgba", rgba), ("rgb16", rgb16), ("cmyk", cmyk), ("lab", lab), ("gray f32", gray_f32), ("spot", spot), ("wide", wide)] {
+    let images = [("rgba", rgba), ("rgb16", rgb16), ("cmyk", cmyk), ("lab", lab), ("gray f32", gray_f32), ("spot", spot), ("wide", wide)];
+    for (label, img) in images {
         let err = encode(&img, Format::Tiff, &jpeg(true)).unwrap_err();
         assert!(err.to_string().contains("JPEG"), "{label}: {err}");
     }
+}
+
+/// A save with JPEG strips is reported as lossy before it happens, as lossy WebP is.
+#[test]
+fn fidelity_reports_jpeg_strips_as_lossy() {
+    let img = gradient(8, 8, ChannelLayout::Rgb);
+    let lossy = |opts: &EncodeOptions| fidelity_warnings_with(&img, Format::Tiff, opts).contains(&FidelityWarning::LossyCompression);
+    assert!(lossy(&jpeg(true)));
+    assert!(!lossy(&EncodeOptions { tiff_compression: TiffCompression::Lzw, ..Default::default() }));
 }
