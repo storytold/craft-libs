@@ -56,6 +56,10 @@ pub use filter::Filter;
 /// from any thread when a dialog has answered or stopped.
 pub use craft_host::Wake;
 
+/// Runs around a native dialog's blocking show: it gets the show as a closure and calls it once, so the app can mark
+/// the wait as waiting for the user.
+pub type ShowHook = Box<dyn FnMut(&mut dyn FnMut())>;
+
 /// Answers every request instead of a native dialog (tests and automation).
 pub type Override = Box<dyn FnMut(&Request) -> Answer>;
 

@@ -3,7 +3,7 @@
 //! remembers what it ran.
 
 use craft_ui::contract::{Bind, CommandSet, Overlay, Role, ShowContainer as _};
-use craft_ui::menu::search::{HelpEntry, SearchIndex, Synonyms};
+use craft_ui::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use craft_ui::patterns::panels::CommandPalette;
 use craft_ui::popover::Popover;
 use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, FireSource};
@@ -40,7 +40,8 @@ fn palette(entries: Vec<HelpEntry>, in_dialog: bool) -> PaletteRig {
             let mut is_open = shown_open.get();
             // P3(menus-w3): mn.M28
             let env = craft_ui::runtime::env::Env::of(ui);
-            let index = SearchIndex::new(&env.folder(), &entries, &Synonyms::of(&env));
+            let view = env.view();
+            let index = SearchIndex::new(&view, &entries, &Synonyms::of(&view.words::<SearchWords>()));
             let output = CommandPalette::new("Commands", &entries, &index, Bind::bound(&mut is_open)).show(ui);
             shown_open.set(is_open);
             if let Some(command) = output.picked {

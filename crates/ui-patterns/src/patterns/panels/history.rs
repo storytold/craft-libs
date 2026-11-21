@@ -382,7 +382,8 @@ impl<'a> HistoryPanel<'a> {
             let mut picked = events.borrow_mut();
             for event in out.events {
                 match event {
-                    CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+                    CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                        // P3(mechanical): dp.C12
                         if let Some(key) = keys.last() {
                             picked.push(HistoryEvent::Select(*key));
                         }

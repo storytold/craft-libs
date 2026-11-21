@@ -127,7 +127,7 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
         .shown(session.tab)
         .show_items(ui, &source, &mut |tab, _| Tab::new(tab_title(*tab, setup, words)));
     for event in strip.response.events {
-        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
             && let Some(tab) = keys.last()
         {
             left.tab = Some(*tab);
@@ -183,7 +183,8 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
 fn route<E>(events: Vec<CollectionEvent<usize, E>>, cards: &[Card], left: &mut Left) {
     for event in events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                // P3(mechanical): dp.C12
                 if let Some(index) = keys.last() {
                     pick(left, cards, *index, false);
                 }

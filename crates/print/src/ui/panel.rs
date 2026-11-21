@@ -61,6 +61,17 @@ impl Outcome for PrintPanelOutput {
     }
 }
 
+/// Which controls the print panel shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintPanelLayout {
+    /// Printer, copies, two-sided mode and grayscale.
+    #[default]
+    Full,
+    /// The printer choice and its Refresh and Print Settings… buttons only.
+    PrinterOnly,
+}
+
 /// The printer choice with a Refresh button, the number of copies, the two-sided mode and the grayscale option of one
 /// print job, over the job's [`Settings`].
 ///
@@ -90,17 +101,30 @@ pub struct PrintPanel<'a> {
     /// Why the driver gave no page.
     #[prop]
     page_error: Option<String>,
+    /// Which controls the panel shows.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E56
+    layout: PrintPanelLayout,
 }
 
 impl<'a> PrintPanel<'a> {
     /// The panel over `settings`, offering `printers`.
     pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer]) -> Self {
-        PrintPanel { settings, printers, discovering: false, busy: false, driver: false, page: None, page_error: None }
+        PrintPanel {
+            settings,
+            printers,
+            discovering: false,
+            busy: false,
+            driver: false,
+            page: None,
+            page_error: None,
+            layout: PrintPanelLayout::default(),
+        }
     }
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
-        let PrintPanel { settings, printers, discovering, busy, driver, page, page_error } = self;
+        let PrintPanel { settings, printers, discovering, busy, driver, page, page_error, layout: _ } = self;
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
         let queues: Vec<Entry<String>> =

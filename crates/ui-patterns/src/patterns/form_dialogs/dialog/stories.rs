@@ -7,6 +7,7 @@ use crate::dialog::stories::hosted_with;
 use crate::patterns::form_dialogs::{DialogFields, Param};
 use crate::primitives::TextureCache;
 use crate::runtime::env::Label;
+use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::load::SizedTexture;
 use egui::{Color32, ColorImage, Ui, Vec2};
@@ -78,7 +79,10 @@ const COMMAND_SPEC: &str = r#"{"name":text,"size":1..100=10,"method":"fit|fill",
 fn param_dialog_with_footer_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamDialog::new("color-table", "Color Table", Param::parse_list(SPEC))
         .opened(Bind::bound(data.value("open", true)))
-        .extra_buttons(vec![("load".to_owned(), Label::from("Load…")), ("save".to_owned(), Label::from("Save…"))])
+        .extra_buttons(vec![
+            ("load".to_owned(), FooterButton::new(Label::from("Load…"), DialogRole::Other)),
+            ("save".to_owned(), FooterButton::new(Label::from("Save…"), DialogRole::Other)),
+        ]) // P3(forms-w1): q337
         .footer_note("About 1.2 MB")
         .show(ui)
         .into()

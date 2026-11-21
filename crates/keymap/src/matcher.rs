@@ -2,7 +2,7 @@
 //! Alt variant. It reads no toolkit's events; craft-ui's key stage runs it.
 
 use crate::DOUBLE_PRESS;
-use crate::chord::{Chord, Key, Mods, Press as PressKind, Trigger};
+use crate::chord::{Chord, Key, Mods, PressKind, Trigger};
 use crate::command::CommandRef;
 use crate::keymap::{Keymap, Lookup};
 use crate::layout::{KeyInput, Layout};

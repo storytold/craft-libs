@@ -232,6 +232,19 @@ pub struct TransformFields<'a> {
     enabled: bool,
     relative: Option<Bind<'a, bool>>,
     document: Option<craft_behavior::kurbo::Size>,
+    #[allow(dead_code)] // P3(object-panels-w1): op.F12
+    arrangement: FieldArrangement,
+}
+
+/// Which fields the strip lists first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FieldArrangement {
+    /// Width and height before X and Y.
+    #[default]
+    SizeFirst,
+    /// X and Y before width and height.
+    PositionFirst,
 }
 
 impl<'a> TransformFields<'a> {
@@ -253,7 +266,15 @@ impl<'a> TransformFields<'a> {
             enabled: true,
             relative: None,
             document: None,
+            arrangement: FieldArrangement::default(),
         }
+    }
+
+    /// Which fields come first: the size (default) or the position.
+    #[must_use]
+    pub fn arrangement(mut self, arrangement: FieldArrangement) -> Self {
+        self.arrangement = arrangement;
+        self
     }
 
     /// The rulers X and Y read from: absolute X and Y are measured from the rulers' zero in their units (pixels from the
@@ -330,8 +351,23 @@ impl<'a> TransformFields<'a> {
 
     /// Shows the fields.
     pub fn show(self, ui: &mut Ui) -> TransformFieldsOutput {
-        let TransformFields { label, row, start, linked, size_unit, x, y, bar, groups, interpolation, size_units, enabled, relative, document } =
-            self;
+        let TransformFields {
+            label,
+            row,
+            start,
+            linked,
+            size_unit,
+            x,
+            y,
+            bar,
+            groups,
+            interpolation,
+            size_units,
+            enabled,
+            relative,
+            document,
+            arrangement: _,
+        } = self;
         let env = Env::of(ui);
         let mut cells = Cells {
             words: env.words::<TransformFieldWords>(),

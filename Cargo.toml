@@ -38,6 +38,8 @@ craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-win32 = { path = "crates/win32" }
+craft-appkit = { path = "crates/appkit" }
+craft-wayland = { path = "crates/wayland" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }

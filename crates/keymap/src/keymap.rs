@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::chord::{Chord, Key, Mods, ParseError, Platform, Press, Trigger};
+use crate::chord::{Chord, Key, Mods, ParseError, Platform, PressKind, Trigger};
 use crate::command::{CommandRef, MAX_KEY};
 use crate::scope::{Active, Scope, ScopeKind, Scopes};
 
@@ -418,7 +418,7 @@ impl Keymap {
         let command = |i: usize| self.catalog[i].command.clone();
         // P3(shortcuts-w3): kb.C13b
         match self.winners(
-            Trigger { chord: chord.effective(self.platform), press: if double { Press::Double } else { Press::Single } },
+            Trigger { chord: chord.effective(self.platform), press: if double { PressKind::Double } else { PressKind::Single } },
             active,
             outer,
         ) {
@@ -488,7 +488,7 @@ impl Keymap {
                 ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
             };
             // P3(shortcuts-w3): kb.C13b
-            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), press: Press::Single }, &active, &[]) {
+            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), press: PressKind::Single }, &active, &[]) {
                 Winners::None => false,
                 Winners::Run(j) => j == i,
                 Winners::Cycle(cycle) => cycle.contains(&i),
@@ -512,7 +512,7 @@ impl Keymap {
             Lookup::Cycle(cycle) => return cycle.into_iter().next(),
             Lookup::None => {}
         }
-        let want = Trigger { chord: chord.effective(self.platform), press: Press::Single }; // P3(shortcuts-w3): kb.C13b
+        let want = Trigger { chord: chord.effective(self.platform), press: PressKind::Single }; // P3(shortcuts-w3): kb.C13b
         self.by_trigger.get(&want)?.iter().find(|&&(i, k)| self.at(i, k).is_some()).map(|&(i, _)| self.catalog[i].command.clone())
     }
 

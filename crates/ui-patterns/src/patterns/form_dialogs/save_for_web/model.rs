@@ -177,6 +177,8 @@ pub enum ColorTableEdit {
     Transparent,
     /// Shifts the colours to their web-safe colours.
     WebShift,
+    /// Shifts the colours to the colour `to`, the colour the palette answered with.
+    Shift([u8; 3]),
     /// Unshifts the colours.
     Unshift,
     /// Unshifts every colour.

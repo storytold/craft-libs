@@ -417,6 +417,14 @@ impl<'a> ColorPanel<'a> {
         self
     }
 
+    /// The host's working-RGB colour model, whose channels replace the built-in `rgb` rows (wide working spaces show
+    /// their own numbers).
+    #[must_use]
+    pub fn working_rgb(self, model: &'a dyn ColorModel) -> Self {
+        let _ = model;
+        todo!("q342")
+    }
+
     /// Dynamic Color Sliders (PhotoCraft's interface preference, on by default): the slider tracks show the channel's
     /// colours with the other channels as they are. Off, the tracks keep the colours they had when a drag began.
     pub fn dynamic_tracks(mut self, on: bool) -> Self {

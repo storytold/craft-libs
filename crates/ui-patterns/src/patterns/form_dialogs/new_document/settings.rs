@@ -5,7 +5,7 @@ use super::NewDocumentWords;
 use super::presets::{ColorProfiles, DocumentOptions, DocumentPreset, NewDocumentPresetWords, Orientation, PresetCategory};
 use crate::patterns::presets::PresetId;
 use crate::runtime::env::{Label, Units};
-use crate::runtime::requests::ColorRequest;
+use crate::runtime::requests::{ColorRequest, HostAnswer};
 use craft_behavior::PixelSize;
 use egui::Ui;
 use serde::Serialize;
@@ -36,6 +36,11 @@ pub trait DocumentSettings: Clone + PartialEq + Debug + Default + Serialize + De
     /// The settings made valid; they are unchanged by default.
     fn fitted(self) -> Self {
         self
+    }
+    /// Notes that the settings key `field` was set from outside the dialog (automation), before `fitted` runs; nothing
+    /// by default.
+    fn note_set(&mut self, field: &str, memory: &mut Self::Memory) {
+        let _ = (field, memory);
     }
     /// Fills what the dialog adds to the settings it opens on: the clipboard's size and the default name `untitled`.
     fn open(&mut self, setup: &Self::Setup, untitled: &str);
@@ -171,6 +176,18 @@ impl<S: DocumentSettings> DetailsCx<'_, S> {
     /// Asks the host to run the action `id`; it comes back in `NewDocumentOutput::actions`.
     pub fn request_action(&mut self, id: impl Into<String>) {
         let _ = (self, id);
+        todo!("fl.F25")
+    }
+
+    /// This pass's host answers, once, as `FormCx::take_answers`.
+    pub fn take_answers(&mut self) -> Vec<HostAnswer> {
+        let _ = self;
+        todo!("fl.F25")
+    }
+
+    /// Drops the card the settings were last filled from, as an edit of the details does.
+    pub fn drop_card(&mut self) {
+        let _ = self;
         todo!("fl.F25")
     }
 }

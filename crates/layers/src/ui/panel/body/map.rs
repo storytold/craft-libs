@@ -49,7 +49,8 @@ pub(super) fn map_events<T: LayerTree>(
     let mut toggle_label: Arc<str> = Arc::from("");
     for event in list {
         match event {
-            CollectionEvent::Selection(change) => {
+            CollectionEvent::Selection { change, .. } => {
+                // P3(mechanical): dp.C12
                 // A set made on an effects or Smart Filter row names that row; a toggle acts on its layer only.
                 let (row, set, mapped) = match change {
                     SelectionChange::Set(keys) => (keys.last().cloned(), true, SelectionChange::Set(layers_of(&keys))),

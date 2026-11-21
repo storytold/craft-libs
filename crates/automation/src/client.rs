@@ -12,6 +12,12 @@ use crate::security::{AUTH_METHOD, IO_TIMEOUT};
 /// server's own timeout error arrives before the client gives up.
 pub const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(REPLY_DEADLINE.as_secs() + 5);
 
+/// How long [`ControlClient::connect`] waits for the connection: 800 ms, as the server is on loopback only.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// The longest reply line a client reads: 256 MiB. A longer one is an error and closes the connection.
+pub const MAX_REPLY_BYTES: u64 = 256 << 20;
+
 /// One authenticated connection.
 pub struct ControlClient {
     stream: std::net::TcpStream,
@@ -42,6 +48,18 @@ impl ControlClient {
         let id = self.next_id;
         self.next_id += 1;
         self.exchange(id, method, params)
+    }
+
+    /// As [`ControlClient::call`], but gives up with `Err("cancelled")` and closes the connection when `cancelled()`
+    /// turns true while it waits for the reply.
+    pub fn call_until(&mut self, method: &str, params: Value, cancelled: &dyn Fn() -> bool) -> Result<Value, String> {
+        let _ = (method, params, cancelled);
+        todo!("sh.N3")
+    }
+
+    /// Whether the connection is still open: false once it broke.
+    pub fn is_open(&self) -> bool {
+        todo!("sh.N3")
     }
 
     fn exchange(&mut self, id: u64, method: &str, params: Value) -> Result<Value, String> {

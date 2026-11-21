@@ -151,8 +151,15 @@ impl CharacterRows {
     pub const EAST_ASIAN: CharacterRows = CharacterRows(1 << 8);
     /// Horizontal and vertical diacritic positions.
     pub const MIDDLE_EASTERN: CharacterRows = CharacterRows(1 << 9);
+    /// The baseline-shift row.
+    pub const BASELINE: CharacterRows = CharacterRows(1 << 10);
+    /// The style toggles: Faux Bold and Italic, Superscript and Subscript.
+    pub const STYLE_TOGGLES: CharacterRows = CharacterRows(1 << 11);
+    /// The Properties panel's section: family, style, Variable Font, Size, Leading, Kerning, Tracking.
+    pub const PROPERTIES: CharacterRows = CharacterRows(1 << 12);
     /// The set `show` draws by default.
-    pub const PHOTOSHOP: CharacterRows = CharacterRows(Self::COLOR.0 | Self::FAUX.0 | Self::SCALES.0 | Self::OPENTYPE.0);
+    pub const PHOTOSHOP: CharacterRows =
+        CharacterRows(Self::COLOR.0 | Self::FAUX.0 | Self::SCALES.0 | Self::OPENTYPE.0 | Self::BASELINE.0 | Self::STYLE_TOGGLES.0);
 
     /// Whether every group in `rows` is on.
     pub const fn contains(self, rows: CharacterRows) -> bool {
@@ -505,8 +512,10 @@ pub struct CharacterValues {
     pub opentype: Vec<&'static str>,
     /// BCP 47 tag of the text's language (hyphenation, spelling, smart quotes).
     pub language: Option<String>,
-    /// The variable-font axis values of the selection, by axis tag; `None` while the selection mixes them or has none.
+    /// The variable-font axis values of the selection, by axis tag; `None` while the selection has no variable axes.
     pub axes: Option<Vec<([u8; 4], f32)>>,
+    /// The axes (by tag) whose values differ across the selection; `axes` holds the shared ones.
+    pub mixed_axes: Vec<[u8; 4]>,
     /// Rotation in degrees.
     pub rotation: Option<f32>,
     /// Insert Aki Left, thousandths of an em.
@@ -552,6 +561,7 @@ impl CharacterValues {
             opentype: self.opentype.iter().copied().filter(|tag| other.opentype.contains(tag)).collect(),
             language: agree(&self.language, &other.language),
             axes: agree(&self.axes, &other.axes),
+            mixed_axes: self.mixed_axes.iter().chain(&other.mixed_axes).copied().collect(), // P3(type-w3): ty.X29
             rotation: agree(&self.rotation, &other.rotation),
             aki_left: agree(&self.aki_left, &other.aki_left),
             aki_right: agree(&self.aki_right, &other.aki_right),

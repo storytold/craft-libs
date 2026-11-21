@@ -108,6 +108,27 @@ impl<T> HeldAnswer<T> {
     }
 }
 
+/// A hosted dialog with a held OK: the app opens it with [`held_ok`](HoldsOk::held_ok), takes the answer OK filed with
+/// [`take_ok`](HoldsOk::take_ok), and answers it with [`answer_ok`](HoldsOk::answer_ok) once it has accepted or refused
+/// it. One path for every dialog family, so no module drains a held OK of its own.
+pub trait HoldsOk: super::StackDialog {
+    /// What OK files for the app to judge.
+    type Answer: Clone + Send;
+
+    /// The dialog with its OK held: OK files its answer instead of closing the dialog.
+    #[must_use]
+    fn held_ok(self) -> Self
+    where
+        Self: Sized;
+
+    /// The answer OK filed, once; `None` when none is filed or it was taken already.
+    fn take_ok(&mut self) -> Option<Self::Answer>;
+
+    /// The app's answer to the filed answer: `Ok` accepts it, `Err` refuses it for the reason, which the dialog shows
+    /// with OK enabled again.
+    fn answer_ok(&mut self, answer: Result<(), Label>);
+}
+
 impl<T: Clone> HeldAnswer<T> {
     /// The filed answer for the app to judge, once; `None` when none is filed or it was handed out already.
     pub fn take(&mut self) -> Option<T> {

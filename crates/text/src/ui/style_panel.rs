@@ -144,6 +144,12 @@ impl TextStyleAction {
     pub const fn apply(id: u64, clear_overrides: bool) -> Self {
         TextStyleAction::Apply { id, clear_overrides }
     }
+
+    /// A New: a style from the selected type when `from_selection`, else a default one; with `ask_name` the host asks
+    /// for the new style's name.
+    pub const fn new_style(from_selection: bool, ask_name: bool) -> Self {
+        TextStyleAction::New { from_selection, ask_name }
+    }
 }
 
 /// The panel's result.

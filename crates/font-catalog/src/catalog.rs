@@ -374,6 +374,12 @@ impl Catalog {
         self.write_config().app_dirs = dirs;
     }
 
+    /// Folders in which a link is followed only when it stays inside a confined folder.
+    pub fn set_confined_dirs(&self, dirs: Vec<PathBuf>) {
+        let _ = dirs;
+        todo!("ty.S1")
+    }
+
     fn write_config(&self) -> std::sync::RwLockWriteGuard<'_, Config> {
         self.config.write().unwrap_or_else(PoisonError::into_inner)
     }

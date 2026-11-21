@@ -380,11 +380,12 @@ pub fn family_rows(
     query: &str,
     settings: Option<&FontPickerSettings>,
     filters: &FontFilters,
-    current: &str,
+    sets: &[FamilySet<'_>],
     language: &str,
 ) -> Vec<FamilyRow> {
+    let _ = sets; // P3(type-w2): ty.X7
     let (folder, collator) = (craft_i18n::Folder::new(language), craft_i18n::Collator::new(language));
-    let listing = rank::Listing { query, settings, filters, current, language, served: &[] };
+    let listing = rank::Listing { query, settings, filters, language, served: &[] };
     rank::list(catalog, &infos(catalog), &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
 }
 
@@ -602,7 +603,7 @@ impl<'a> FontPicker<'a> {
         let (folder, collator) = (cx.env.folder(), cx.env.collator());
         let filters = FontFilters::default();
         let language = ui_language(&cx.env);
-        let listing = rank::Listing { query: "", settings, filters: &filters, current: "", language: &language, served: &[] };
+        let listing = rank::Listing { query: "", settings, filters: &filters, language: &language, served: &[] };
         rank::list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, false).0
     }
 }

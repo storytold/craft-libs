@@ -7,7 +7,7 @@
 use craft_behavior::{EditEvent, SelectionChange};
 use craft_keymap::Mods;
 use craft_theme::LabelColor;
-use craft_ui::contract::OpenChange;
+use craft_ui::contract::{DropPayload, OpenChange};
 
 use super::footer::{LayersFooterAction, LayersFooterButton};
 use crate::ui::filter::LayerFilter;
@@ -159,6 +159,20 @@ pub enum LayersEvent<K> {
     /// Delete or Backspace in the rows of a [`deletable`](super::LayersPanel::deletable) panel: the selected rows when
     /// the lead is selected, else the lead.
     Delete(Vec<LayerRowKey<K>>),
+    /// A payload of the host's type, dragged from outside the list, released `position` of the layer `target`
+    /// ([`LayersPanel::takes_drop`](super::LayersPanel::takes_drop)); `copy` when the operation is Copy. A
+    /// `LayersDrag` still reports `Drop`.
+    #[non_exhaustive]
+    HostDrop {
+        /// The payload dragged.
+        payload: DropPayload,
+        /// The layer the payload was released on.
+        target: K,
+        /// Where in relation to `target`.
+        position: LayerPosition,
+        /// Whether the drop operation is Copy.
+        copy: bool,
+    },
 }
 
 // `#[non_exhaustive]` variants have no struct literal outside the crate: these constructors are what the
@@ -192,6 +206,12 @@ impl<K> LayersEvent<K> {
     /// A pick of the host's `command` in the row menu opened at `target`.
     pub fn menu(target: MenuTarget<K>, command: impl Into<String>) -> Self {
         Self::Menu { target, command: command.into() }
+    }
+
+    /// A host payload released `position` of the layer `target`; `copy` when the operation is Copy.
+    pub fn host_drop(payload: DropPayload, target: K, position: LayerPosition, copy: bool) -> Self {
+        let _ = (payload, target, position, copy);
+        todo!("dp.L3")
     }
 
     /// A claimed press on `column` of `row`, with the modifiers held.

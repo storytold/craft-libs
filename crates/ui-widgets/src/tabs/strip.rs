@@ -44,6 +44,14 @@ pub struct TornOff<K> {
     pub pointer: Pos2,
 }
 
+impl<K> TornOff<K> {
+    /// A tear-off of `keys`, the tab `grabbed` among them, released with the pointer at `pointer`.
+    pub fn new(keys: Vec<K>, grabbed: K, pointer: Pos2) -> Self {
+        let _ = (keys, grabbed, pointer);
+        todo!("ch.K15")
+    }
+}
+
 /// What a `TabStrip` reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -525,7 +533,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
                 other => kept.push(other),
             }
         }
-        kept.extend(wheeled.map(|key| CollectionEvent::Selection(SelectionChange::Set(vec![key]))));
+        kept.extend(wheeled.map(|key| CollectionEvent::Selection {
+            change: SelectionChange::Set(vec![key]),
+            by: crate::contract::LeadSource::Pointer,
+            mods: craft_keymap::Mods::NONE,
+        })); // P3(document-panels-w2): dp.C12
         response.events = kept;
         TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
     }

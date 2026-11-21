@@ -36,7 +36,9 @@ mod list_manager;
 mod password;
 mod report;
 
-pub use list_manager::{ActionEnabled, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerOutput, ListManagerWords};
+pub use list_manager::{
+    ActionEnabled, HostedListManager, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerOutput, ListManagerWords,
+};
 pub use password::{PasswordAnswer, PasswordDialog, PasswordOutput, PasswordPurpose, PasswordStrength, PasswordWords, Secret};
 pub use report::{HostedReport, ReportDialog, ReportGroup, ReportNote, ReportOutput, ReportWords};
 
@@ -96,8 +98,8 @@ pub use export::{
 mod pdf_export;
 
 pub use pdf_export::{
-    HostedPdfExport, PdfArtboards, PdfExportAnswer, PdfExportDialog, PdfExportMode, PdfExportOutput, PdfExportResult, PdfExportWords, PdfPresetEvent,
-    PdfSection, PresetDraft, RangeError, summary_text,
+    ArtboardChoice, HostedPdfExport, PasswordSwitches, PdfArtboards, PdfExportAnswer, PdfExportDialog, PdfExportMode, PdfExportOutput,
+    PdfExportResult, PdfExportWords, PdfPresetEvent, PdfSection, PresetDraft, RangeError, differences, summary_text,
 };
 
 mod save_for_web;

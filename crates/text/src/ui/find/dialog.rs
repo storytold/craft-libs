@@ -348,7 +348,7 @@ impl StackDialog for FindReplaceDialog {
                     Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone()))
                 });
                 for event in out.response.events {
-                    if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
                         && let Some(chosen) = keys.last()
                     {
                         next_tab = *chosen;

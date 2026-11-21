@@ -315,6 +315,12 @@ impl I18n {
         todo!("sh.K16")
     }
 
+    /// The exact `@msg` row for a filled-in English message, or `None` when the catalog has no such row.
+    pub fn message_exact(&self, lang: Lang, s: &str) -> Option<String> {
+        let _ = (lang, s);
+        todo!("sh.K16")
+    }
+
     /// Translates a message around a kept span (placeholder U+FFFC). The message is shown in English
     /// when the placeholder does not appear exactly once.
     pub fn message_keeping(&self, lang: Lang, before: &str, kept: &str, after: &str) -> String {

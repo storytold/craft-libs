@@ -36,7 +36,7 @@ fn rig(paper: Vec2) -> (Fixture, Log) {
     let mut fixture = Fixture::new(move |ui| {
         let image = Rect::from_min_size(IMAGE_AT, IMAGE_SIZE);
         let sheet = PrintSheet::new(paper, image, picture(ui), "200 × 300 pt".into());
-        let out = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).ready(true).show(ui);
+        let out = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields)).sheet(&sheet).ready(true).show(ui); // P3(export-w7): ex.E52
         seen.borrow_mut().extend(out.moved);
         // Every frame runs twice; the second pass has no new input, and a repeated move would show in the log.
         if ui.ctx().current_pass_index() == 0 {

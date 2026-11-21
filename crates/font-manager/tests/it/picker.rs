@@ -115,14 +115,15 @@ fn similar_fonts_put_the_current_family_first_and_leave_the_list_alone_without_a
     let catalog = catalog_of(&[epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT, INTER_REGULAR]);
     let mut similar = FontFilters::default();
     similar.similar = Some("Inter".to_owned()); // P3(type-w2): ty.X7
-    let rows = family_rows(&catalog, "", None, &similar, "Inter", "en");
+    let rows = family_rows(&catalog, "", None, &similar, &[], "en");
     let names: Vec<&str> = rows.iter().map(|row| row.family.as_str()).collect();
     assert_eq!(names.first(), Some(&"Inter"), "the current family first, though it is not first by name");
     assert!(rows.len() <= SIMILAR_COUNT);
 
     // A current family the catalog lacks has no traits: the list stays as unfiltered.
-    let unfiltered = family_rows(&catalog, "", None, &FontFilters::default(), "", "en");
-    assert_eq!(family_rows(&catalog, "", None, &similar, "Missing", "en"), unfiltered);
+    let unfiltered = family_rows(&catalog, "", None, &FontFilters::default(), &[], "en");
+    similar.similar = Some("Missing".to_owned());
+    assert_eq!(family_rows(&catalog, "", None, &similar, &[], "en"), unfiltered);
 }
 
 #[trial]

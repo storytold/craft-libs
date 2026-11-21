@@ -3,7 +3,7 @@
 use crate::contract::{
     Bind, CollectionEvent, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
-use crate::dialog::{ButtonPlace, Dialog, DialogOutput};
+use crate::dialog::{ButtonPlace, Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog};
 use crate::display::{Shade, Text};
 use crate::form::Field;
 use crate::layout_components::Stack;
@@ -215,6 +215,52 @@ impl Outcome for ListManagerOutput {
 
     fn response(&self) -> &Response {
         &self.response
+    }
+}
+
+/// A [`ListManager`] the [`DialogHost`](crate::dialog::DialogHost) owns, over its entries and actions. It answers with
+/// the [`ListManagerChoice`] of the action pressed, as `HostedNewWorkspace` answers with its value.
+pub struct HostedListManager {
+    id: DialogId,
+    key: String,
+}
+
+impl HostedListManager {
+    /// A hosted list manager for the command `key`, titled `title` over a name box labelled `name_label`, with the
+    /// buttons `actions`.
+    pub fn new(key: impl Into<String>, title: impl Into<Label>, name_label: impl Into<Label>, actions: Vec<ListManagerAction>) -> Self {
+        let _ = (key, title, name_label, actions);
+        todo!("q345")
+    }
+
+    /// The entries the list opens with.
+    #[must_use]
+    pub fn entries(self, entries: Vec<ListManagerEntry>) -> Self {
+        let _ = (self, entries);
+        todo!("q345")
+    }
+
+    /// Replaces the entries of an open dialog; the name box keeps its text.
+    pub fn set_entries(&mut self, entries: Vec<ListManagerEntry>) {
+        let _ = (self, entries);
+        todo!("q345")
+    }
+}
+
+impl StackDialog for HostedListManager {
+    type Result = ListManagerChoice;
+
+    fn id(&self) -> DialogId {
+        self.id
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ListManagerChoice>> {
+        let _ = ui;
+        todo!("q345")
+    }
+
+    fn key(&self) -> Option<&str> {
+        Some(&self.key)
     }
 }
 

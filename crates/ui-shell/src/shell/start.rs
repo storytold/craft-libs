@@ -339,7 +339,8 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
             }
             CollectionEvent::LeadMoved { key, .. } => *lead = Some(key),
             CollectionEvent::Delete(keys) => deleted.extend(keys),
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                // P3(mechanical): dp.C12
                 if let Some(key) = keys.into_iter().last() {
                     *lead = Some(key);
                 }

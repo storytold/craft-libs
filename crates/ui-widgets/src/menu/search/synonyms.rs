@@ -1,7 +1,5 @@
 //! The groups of words that mean the same thing when searching commands.
 
-use crate::runtime::env::Env;
-
 craft_ui::words! {
     /// The synonym groups of the command search: each row is the group's English words joined by ", "; a catalog may
     /// add the group's words in its language the same way.
@@ -34,9 +32,9 @@ craft_ui::words! {
 pub struct Synonyms {}
 
 impl Synonyms {
-    /// The groups of `env`: the 21 English groups, each joined with its row in the UI language when a catalog has one.
-    pub fn of(env: &Env) -> Synonyms {
-        let _ = env;
+    /// The groups of `words`: the 21 English groups, each joined with its row in the UI language when a catalog has one.
+    pub fn of(words: &SearchWords) -> Synonyms {
+        let _ = words;
         todo!("mn.M23")
     }
 }

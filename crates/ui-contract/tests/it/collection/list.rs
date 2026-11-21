@@ -57,7 +57,7 @@ impl Seen {
         self.events
             .borrow()
             .iter()
-            .filter_map(|event| if let CollectionEvent::Selection(change) = event { Some(change.clone()) } else { None })
+            .filter_map(|event| if let CollectionEvent::Selection { change, .. } = event { Some(change.clone()) } else { None }) // P3(mechanical): dp.C12
             .collect()
     }
 }

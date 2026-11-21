@@ -88,6 +88,10 @@ pub struct DialogFields {
     #[serde(skip)]
     #[allow(dead_code)] // P3(forms-w1): ty.X64
     mixed: BTreeSet<String>,
+    /// The keys of the tabs a reset button reset ([`DialogFields::mark_reset`]).
+    #[serde(skip)]
+    #[allow(dead_code)] // P3(forms-w1): ty.FD1
+    reset: BTreeSet<String>,
 }
 
 /// Equal when the values are; the opening snapshot is bookkeeping, not content.
@@ -105,7 +109,12 @@ impl DialogFields {
 
     /// Builds from `(key, value)` pairs.
     pub fn from_pairs(pairs: impl IntoIterator<Item = (impl Into<String>, impl Into<FieldValue>)>) -> Self {
-        Self { values: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(), opening: BTreeMap::new(), mixed: BTreeSet::new() }
+        Self {
+            values: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
+            opening: BTreeMap::new(),
+            mixed: BTreeSet::new(),
+            reset: BTreeSet::new(),
+        }
     }
 
     /// Sets `key` to `value`, replacing any earlier value.
@@ -242,6 +251,18 @@ impl DialogFields {
     /// True when there are no keys.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
+    }
+
+    /// Marks the tab `key` as reset by a reset button.
+    pub fn mark_reset(&mut self, key: impl Into<String>) {
+        let _ = (self, key);
+        todo!("ty.FD1")
+    }
+
+    /// Whether a reset button reset the tab `key`; `snapshot` and `reset` clear the marks.
+    pub fn was_reset(&self, key: &str) -> bool {
+        let _ = (self, key);
+        todo!("ty.FD1")
     }
 
     /// Records the current values as the opening ones. Dialogs call it on open; a host that

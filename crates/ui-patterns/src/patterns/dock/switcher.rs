@@ -8,6 +8,7 @@ use crate::display::Divider;
 use crate::docking::{DockWords, WorkspaceCommands};
 use crate::menu::MenuItem;
 use crate::pickers::Select;
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Env;
 use craft_behavior::dock::WorkspaceSet;
 use craft_theme::ControlSize;
@@ -47,6 +48,13 @@ impl<'a, P> WorkspaceSwitcher<'a, P> {
     /// A switcher over `set`.
     pub fn new(set: &'a WorkspaceSet<P>) -> Self {
         WorkspaceSwitcher { set }
+    }
+
+    /// The header menu's command rows, in place of the default `WorkspaceCommands` rows.
+    #[must_use]
+    pub fn commands(self, rows: Vec<CommandRef>) -> Self {
+        let _ = (self, rows);
+        todo!("ch.K40")
     }
 
     /// Shows the switcher and reports the workspace picked.

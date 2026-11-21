@@ -25,7 +25,7 @@ fn an_arrow_moves_the_focus_and_enter_shows_the_tab() {
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Documents").shown(now.get()).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
                 && let Some(key) = keys.last()
             {
                 seen.borrow_mut().push(*key);
@@ -79,7 +79,7 @@ fn wheel_rig(wheel_selects: bool) -> (Fixture, Rc<Cell<usize>>) {
         let strip = if wheel_selects { strip.wheel_selects() } else { strip };
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
                 && let Some(key) = keys.last()
             {
                 now.set(*key);
@@ -214,7 +214,8 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Panels").kind(TabKind::Panel).shown(0).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event {
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event {
+                // P3(mechanical): dp.C12
                 picked.borrow_mut().extend(keys.iter().copied());
             }
         }
@@ -276,7 +277,7 @@ fn tabs_with_the_same_label_keep_their_own_selection_and_click() {
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Settings").kind(TabKind::Text).shown(now.get()).show_items(ui, &source, &mut |_, _| Tab::new("Options"));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
                 && let Some(key) = keys.last()
             {
                 now.set(*key);

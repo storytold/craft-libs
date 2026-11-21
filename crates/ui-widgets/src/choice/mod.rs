@@ -17,7 +17,7 @@ pub use segmented::{Segmented, SegmentedStyle};
 pub use switch::{Switch, SwitchStyle};
 pub use words::ChoiceWords;
 
-pub use swatch::{CellMarks, Swatch, SwatchFace, SwatchMetrics, SwatchOutput, SwatchStyle, paint_ring};
+pub use swatch::{CellMarks, RING_SHARE, Swatch, SwatchFace, SwatchMetrics, SwatchOutput, SwatchStyle, paint_ring};
 pub use swatch_table::{RowMarks, SwatchRows, SwatchSpacing, SwatchTable, SwatchTableOutput, SwatchTableStyle};
 
 /// The well of a check box, radio button or switch track with `radius` corners: the sunken surface, so a bevelled theme

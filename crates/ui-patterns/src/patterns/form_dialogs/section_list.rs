@@ -21,6 +21,13 @@ impl<'a, K> SectionList<'a, K> {
         todo!("ty.X70")
     }
 
+    /// Content under the list, in the list's column.
+    #[must_use]
+    pub fn foot(self, foot: impl FnOnce(&mut Ui) + 'a) -> Self {
+        let _ = (self, foot);
+        todo!("ex.E57")
+    }
+
     /// Shows the list with a row per section from `row` and `body` beside it; the section picked this pass.
     pub fn show(self, ui: &mut Ui, row: impl FnMut(&K) -> ListRow, body: impl FnOnce(&mut Ui)) -> Option<K> {
         let _ = (self, ui, row, body);

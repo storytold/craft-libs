@@ -310,14 +310,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let infos = infos(catalog);
     let language_code = ui_language(&cx.env);
     let (folder, collator) = (cx.env.folder(), cx.env.collator());
-    let listing = Listing {
-        query: &query,
-        settings: settings.as_ref(),
-        filters: &narrowing,
-        current: &family,
-        language: &language_code,
-        served: picker.served,
-    };
+    let listing = Listing { query: &query, settings: settings.as_ref(), filters: &narrowing, language: &language_code, served: picker.served };
     let (found, comparable) = list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, true);
     let slots = slots(catalog, found, &expanded);
     let current = slots.iter().position(|slot| matches!(slot, Slot::Family { row, .. } if row.family == family));

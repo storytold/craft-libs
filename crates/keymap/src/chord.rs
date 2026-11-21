@@ -732,7 +732,7 @@ impl<'de> Deserialize<'de> for Chord {
 
 /// How a chord starts a command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Press {
+pub enum PressKind {
     /// One press of the chord.
     #[default]
     Single,
@@ -748,33 +748,33 @@ pub struct Trigger {
     /// The chord to press.
     pub chord: Chord,
     /// How the chord is pressed.
-    pub press: Press,
+    pub press: PressKind,
 }
 
 impl Trigger {
     /// A trigger that fires on one press of `chord`.
     pub const fn single(chord: Chord) -> Trigger {
-        Trigger { chord, press: Press::Single }
+        Trigger { chord, press: PressKind::Single }
     }
 
     /// A trigger that fires on two presses of `chord` in a row.
     pub const fn double(chord: Chord) -> Trigger {
-        Trigger { chord, press: Press::Double }
+        Trigger { chord, press: PressKind::Double }
     }
 
     /// A trigger that fires while `chord` is held.
     pub const fn hold(chord: Chord) -> Trigger {
-        Trigger { chord, press: Press::Hold }
+        Trigger { chord, press: PressKind::Hold }
     }
 
     /// Whether this is a double press.
     pub const fn is_double(&self) -> bool {
-        matches!(self.press, Press::Double)
+        matches!(self.press, PressKind::Double)
     }
 
     /// Whether this is a hold.
     pub const fn is_hold(&self) -> bool {
-        matches!(self.press, Press::Hold)
+        matches!(self.press, PressKind::Hold)
     }
 
     /// Reads a chord as [`Chord::parse`] does, or the same chord twice separated by whitespace

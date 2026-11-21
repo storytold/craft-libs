@@ -41,6 +41,10 @@ pub struct RootEnv {
     pub dialog_tab: TabReach,
     /// Whether the canvas surround shows the theme's pattern.
     pub canvas_pattern: bool,
+    /// Whether painted cursor images scale with the interface zoom.
+    pub cursor_follows_zoom: bool,
+    /// Whether tooltips show.
+    pub tooltips: bool,
     /// The theme the tokens resolve from; an id no built-in theme has resolves to the suite default.
     /// Private with `theme_def`, so the two change together.
     pub(super) theme: ThemeId,
@@ -68,6 +72,8 @@ impl Default for RootEnv {
             tab_toggles_chrome: false,
             dialog_tab: TabReach::Root,
             canvas_pattern: true,
+            cursor_follows_zoom: true,
+            tooltips: true,
             theme: ThemeId::suite_default(),
             theme_def: None,
             values: AppValues::default(),
@@ -190,6 +196,19 @@ impl RootEnv {
     /// Sets the contrast choice.
     pub fn contrast(mut self, contrast: impl Into<ContrastChoice>) -> Self {
         self.contrast = contrast.into();
+        self
+    }
+
+    /// Sets whether painted cursor images scale with the interface zoom (the Scale Cursor Proportional to UI
+    /// preference). On by default.
+    pub fn cursor_follows_zoom(mut self, on: bool) -> Self {
+        self.cursor_follows_zoom = on;
+        self
+    }
+
+    /// Sets whether tooltips show (the Show Tool Tips preference). On by default.
+    pub fn tooltips(mut self, on: bool) -> Self {
+        self.tooltips = on;
         self
     }
 

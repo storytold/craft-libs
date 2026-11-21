@@ -43,7 +43,7 @@ pub use grid::{PageGrid, PageGridColors, PageGrids, baseline_lines};
 pub use header_footer::{HeaderFooterPage, HeaderFooterZones, HeaderFooterZonesOutput, Zone, ZoneAt, ZoneBands, ZoneText};
 pub use list::{PageList, PageListEvent, PageListOutput, PageListRow, PageListWords};
 pub use margins::{MarginChange, MarginEdge, MarginHandles, MarginHandlesOutput, MarginRules, PageEdges, clamp_margin, dragged_margin, margin_range};
-pub use marks::{FrameExtras, HiddenMark, PlacedMark, TextFrameMarks};
+pub use marks::{FrameExtras, HiddenMark, MarkAnchor, PlacedMark, TextFrameMarks};
 pub use preview::{PagePreview, PagePreviewCommands, PagePreviewOutput, PagePreviewWords};
 pub use range::{PageRangeCodec, PageRangeField, PageRangeFieldOutput, PageRangeOptions, PageRangeOptionsOutput, PageSelection};
 pub use reading::{ReadingNav, ReadingNavOutput, ReadingState, ReadingView, ReadingViewOutput};

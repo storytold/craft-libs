@@ -205,6 +205,9 @@ pub fn path_text(path: &Path, saving: bool) -> Result<String, String> {
 /// Whether `reveal` can show a file on this platform.
 pub const CAN_REVEAL: bool = cfg!(not(target_arch = "wasm32"));
 
+/// Whether [`open_with`] can open a file in an application on this platform.
+pub const CAN_OPEN_WITH: bool = cfg!(not(target_arch = "wasm32"));
+
 /// Shows `path` selected in the system file manager: `open -R` on macOS, Explorer's
 /// `/select,"<path>"` on Windows (raw arguments; a path containing `"` is refused), and on Linux
 /// and FreeBSD the FileManager1 D-Bus call through `dbus-send` on a thread of its own, falling back
@@ -327,7 +330,7 @@ pub fn open_external(target: &str) -> Result<(), String> {
 /// macOS `open -a app target`, waiting at most 2 s for Launch Services to refuse; elsewhere `app` runs with
 /// `target` as its only argument, without waiting. A path holding `"` is refused on Windows.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn open_with(app: &Path, target: &Path) -> Result<(), String> {
+pub fn open_with(app: &Path, target: &Path) -> std::io::Result<()> {
     let _ = (app, target);
     todo!("sh.B2a")
 }

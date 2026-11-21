@@ -273,16 +273,22 @@ impl Outcome for PaintChipOutput {
 /// The look of a paint well: the chip's own look fields.
 #[allow(dead_code)] // P3(color-w4): wg.W47
 pub(crate) struct WellLook {
-    none_fill: StyleColor,
-    none_mark: StyleColor,
-    edge: StyleColor,
-    height: f32,
+    pub(crate) none_fill: StyleColor,
+    pub(crate) none_mark: StyleColor,
+    pub(crate) edge: StyleColor,
+    pub(crate) height: f32,
+    /// The well's corners.
+    pub(crate) radius: egui::CornerRadius,
+    /// Whether the well shows its colour as a ring.
+    pub(crate) ring: bool,
+    /// The swatch look the ring is painted with.
+    pub(crate) swatch: craft_ui::choice::SwatchStyle,
 }
 
 /// One paint-well face for `PaintChip` and `SwatchPair`: none, solid, a gradient face or ramp, a pattern or a picture;
 /// a face paints over the checker.
 #[allow(dead_code)] // P3(color-w4): wg.W47
-pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl Component>, well: Rect, paint: &Paint, style: &WellLook) {
+pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl craft_ui::contract::ContentPainter>, well: Rect, paint: &Paint, style: &WellLook) {
     let _ = (ui, cx, well, paint, style);
     todo!("wg.W47")
 }

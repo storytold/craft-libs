@@ -556,8 +556,7 @@ pub(crate) fn facts(ctx: &Context) -> PassFacts {
     })
 }
 
-/// The running pass's time in seconds, read once by the begin hook.
-#[doc(hidden)]
+/// The running pass's time in seconds, read once by the begin hook: what an app waits on.
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {
         Some(facts) => facts.now,

@@ -411,6 +411,13 @@ impl CustomContext {
         CustomContext { title, request: None, canvas, eyedropper: None, sampling: false }
     }
 
+    /// Asks the host to run the action `id`; the host takes this pass's requests once with
+    /// `HostedParamDialog::take_actions`.
+    pub fn request_action(&mut self, id: impl Into<String>) {
+        let _ = (self, id);
+        todo!("ex.FA1")
+    }
+
     /// Arms the host's eyedropper for the colour under `request.key`, as a colour row's dropper toggle does.
     pub fn arm_eyedropper(&mut self, request: EyedropperRequest) {
         self.eyedropper = Some(request);
@@ -562,9 +569,9 @@ pub struct Param {
     pub unit: Option<UnitKind>,
     /// The row takes input only while `fields[key]` equals one of the values.
     pub enabled_when: Option<(String, Vec<FieldValue>)>,
-    /// The row is shown only while `fields[key]` equals the value ([`Param::visible_when`]). A hidden row takes no
-    /// space; its value stays in the fields and in the result.
-    pub visible_when: Option<(String, Vec<FieldValue>)>,
+    /// The row is shown only while every condition holds: `fields[key]` equals the value, or one of the values
+    /// ([`Param::visible_when`]). A hidden row takes no space; its value stays in the fields and in the result.
+    pub visible_when: Vec<(String, Vec<FieldValue>)>,
     /// A Browse button after a [`ParamKind::Text`] field.
     pub browse: Option<PathKind>,
     /// The hint and tooltip, boxed so rows without them stay small.
@@ -582,7 +589,7 @@ impl Param {
             kind,
             unit: None,
             enabled_when: None,
-            visible_when: None,
+            visible_when: Vec::new(),
             browse: None,
             texts: None,
             options: None,
@@ -658,6 +665,37 @@ impl Param {
     pub fn enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
         self.enabled_when = Some((key.into(), values.into_iter().map(Into::into).collect()));
         self
+    }
+
+    /// The row takes input only while the number `fields[key]` is above `bound` (an int reads as a number); otherwise
+    /// it is shown disabled.
+    #[must_use]
+    pub fn enabled_above(self, key: impl Into<String>, bound: f64) -> Self {
+        let _ = (self, key, bound);
+        todo!("pl.F4")
+    }
+
+    /// The row takes input only while `fields[a]` and `fields[b]` differ (for two switches: exactly one is on);
+    /// otherwise it is shown disabled.
+    #[must_use]
+    pub fn enabled_when_differs(self, a: impl Into<String>, b: impl Into<String>) -> Self {
+        let _ = (self, a, b);
+        todo!("pl.F5")
+    }
+
+    /// The value the row shows while it is disabled, in place of its own.
+    #[must_use]
+    pub fn disabled_value(self, value: impl Into<FieldValue>) -> Self {
+        let _ = (self, value);
+        todo!("q343")
+    }
+
+    /// A [`Param::custom`] row's set-time rule: `set` runs for the row's key and its companions when a value is set
+    /// from outside the row (automation), and may change other fields or refuse the value. Other rows ignore it.
+    #[must_use]
+    pub fn on_set(self, set: fn(&mut DialogFields, &str, serde_json::Value) -> Result<(), String>) -> Param {
+        let _ = (self, set);
+        todo!("q336")
     }
 
     /// A bare number row: a [`ParamKind::Number`] open on both sides. Bound it with [`Param::bounds`].
@@ -851,7 +889,7 @@ impl Param {
     /// otherwise it takes no space. Its value stays in the fields and in the result.
     #[must_use]
     pub fn visible_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
-        self.visible_when = Some((key.into(), vec![value.into()]));
+        self.visible_when.push((key.into(), vec![value.into()])); // P3(forms-w1): od.OD4
         self
     }
 
@@ -1059,7 +1097,7 @@ impl Param {
     /// Whether the row is shown with `fields`.
     pub fn visible(&self, fields: &DialogFields) -> bool {
         // P3(forms-w1): od.OD4
-        self.visible_when.as_ref().is_none_or(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
+        self.visible_when.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
     /// Whether the row takes input with `fields`.

@@ -1,16 +1,17 @@
 //! The command search's word index and its ranking.
 
 use super::{HelpEntry, Synonyms};
-use craft_i18n::Folder;
+use crate::runtime::env::EnvView;
 
 /// The word index of the help search: the words of each entry's label, English label, path, id and words, English
 /// stems, a typo bound and synonym expansion.
 pub struct SearchIndex {}
 
 impl SearchIndex {
-    /// The index of `entries`, folded by `folder`, with `synonyms` expanding each word.
-    pub fn new(folder: &Folder, entries: &[HelpEntry], synonyms: &Synonyms) -> Self {
-        let _ = (folder, entries, synonyms);
+    /// The index of `entries`, with `synonyms` expanding each word. Labels resolve with `env.resolve` and fold with
+    /// `env.folder()`; the path joins with the common words' path separator.
+    pub fn new(env: &EnvView<'_>, entries: &[HelpEntry], synonyms: &Synonyms) -> Self {
+        let _ = (env, entries, synonyms);
         todo!("mn.M19")
     }
 }

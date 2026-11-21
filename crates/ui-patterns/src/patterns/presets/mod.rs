@@ -19,7 +19,7 @@ mod manager;
 mod named;
 mod picker;
 
-pub use browser::{BrowserTools, PresetBrowser, PresetDrop, PresetItemCommands, PresetReorder, ThumbPainter};
+pub use browser::{BrowserTools, PresetBrowser, PresetDrop, PresetItemCommands, PresetReorder, RowItems, ThumbPainter};
 pub use event::{PresetEvent, PresetOutput};
 pub use files::{PresetExport, PresetFileEvent, PresetFileFailure, PresetFileRequest, PresetFiles};
 pub use footer::{PresetFooter, PresetFooterEvent, PresetFooterOptions, PresetFooterOutput};

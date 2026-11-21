@@ -43,6 +43,26 @@ pub struct ForeignSet {
     /// Entries the reader dropped at its own limits; [`plan`] counts them in
     /// [`ImportReport::truncated`].
     pub truncated: usize,
+    /// Lines of the file the reader could not read.
+    pub not_read: Vec<NotRead>,
+}
+
+/// A line of the source file the reader could not read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct NotRead {
+    /// The line's number in the source file, when the reader gives one.
+    pub line: Option<usize>,
+    /// The line as written.
+    pub text: String,
+}
+
+impl NotRead {
+    /// A line the reader could not read.
+    pub fn new(line: Option<usize>, text: impl Into<String>) -> NotRead {
+        NotRead { line, text: text.into() }
+    }
 }
 
 /// One item of a foreign set.
@@ -88,6 +108,12 @@ impl ForeignSet {
     /// Entries the reader dropped at its own limits ([`ForeignSet::truncated`]).
     pub fn with_truncated(mut self, truncated: usize) -> ForeignSet {
         self.truncated = truncated;
+        self
+    }
+
+    /// Lines of the file the reader could not read ([`ForeignSet::not_read`]).
+    pub fn with_not_read(mut self, lines: Vec<NotRead>) -> ForeignSet {
+        self.not_read = lines;
         self
     }
 }
@@ -523,6 +549,10 @@ pub struct ImportReport {
     /// use each.
     #[serde(default)]
     pub codes: Vec<DecodedCode>,
+    /// Lines of the file the reader could not read; [`plan`] copies them from the set, capped, and
+    /// counts the cut in [`ImportReport::truncated`].
+    #[serde(default)]
+    pub not_read: Vec<NotRead>,
 }
 
 /// An undecided key or modifier code of the source and what the plan made of it: decoded when at

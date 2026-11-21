@@ -454,6 +454,14 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
     runs_elsewhere(ctx, viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
 }
 
+/// The pointer of the running session in screen space, whatever its payload: the pointer `dragging_of` pairs with a
+/// payload. `None` without a session or a pointer.
+#[allow(dead_code)] // P3(canvas-w2): widgets-w7 request
+pub(crate) fn session_pointer(ctx: &Context) -> Option<Pos2> {
+    let _ = ctx;
+    todo!("widgets-w7 request")
+}
+
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the
 /// pointer is the platform's desktop pointer in this window when it tells one (outside this window means no
 /// pointer), else the frame's: the OS sends the window no pointer events while it drags files over it (winit 0.30).

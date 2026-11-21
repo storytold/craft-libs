@@ -549,6 +549,8 @@ pub enum InjectedPointer {
         mods: Mods,
         /// The pen's reading; `None` for a mouse.
         pen: Option<PointerSample>,
+        /// Seconds the pointer must rest at `at` before the step counts as processed; 0 for none.
+        rest: f64,
     },
     /// Every button injected input holds comes up at `at`, after a move there; the modifiers go with them when no
     /// button or key stays down. Nothing held queues nothing.
@@ -569,7 +571,13 @@ impl InjectedPointer {
 
     /// The pointer moves to `at` with `mods` held and the pen's reading `pen`.
     pub const fn move_to(at: Pos2, mods: Mods, pen: Option<PointerSample>) -> Self {
-        InjectedPointer::Move { at, mods, pen }
+        InjectedPointer::Move { at, mods, pen, rest: 0.0 }
+    }
+
+    /// The pointer moves to `at` with `mods` held and the pen's reading `pen`, and the step counts as processed once
+    /// the pointer has rested there `rest` seconds.
+    pub const fn move_resting(at: Pos2, mods: Mods, pen: Option<PointerSample>, rest: f64) -> Self {
+        InjectedPointer::Move { at, mods, pen, rest }
     }
 
     /// Every injected button comes up at `at` with `mods` held.
@@ -594,10 +602,14 @@ pub(crate) fn inject_pointer(ctx: &Context, viewport: ViewportId, step: Injected
                 request.step(mods, [self::button(at, pressed_button, true, mods)]).pen = pen;
             });
         }
-        InjectedPointer::Move { at, mods, pen } => {
+        InjectedPointer::Move { at, mods, pen, rest } => {
             let Some(at) = finite(at) else { return };
             let mods = platform_modifiers(ctx, mods);
-            queue(ctx, viewport, |request| request.step(mods, [pointer_moved(at)]).pen = pen);
+            queue(ctx, viewport, |request| {
+                let step = request.step(mods, [pointer_moved(at)]);
+                step.pen = pen;
+                step.rest = rest.max(0.0);
+            });
         }
         InjectedPointer::Up { at, mods } => {
             let mods = platform_modifiers(ctx, mods);

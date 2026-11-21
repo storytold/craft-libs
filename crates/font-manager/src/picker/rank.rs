@@ -274,8 +274,6 @@ pub(super) struct Listing<'a> {
     pub(super) settings: Option<&'a FontPickerSettings>,
     /// The filters; they apply only to a `narrowed` list.
     pub(super) filters: &'a FontFilters,
-    /// The committed family, the reference of Show Similar Fonts.
-    pub(super) current: &'a str,
     /// The interface language code the names are shown in.
     pub(super) language: &'a str,
     /// Families the host can fetch but the catalog lacks; they list with the matches, by rank and name, with no class, format or sample.
@@ -343,14 +341,14 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
     }
     let mut comparable = true;
     // P3(type-w2): ty.X7
-    if filters.similar.is_some() {
-        let reference = infos.traits(catalog, listing.current).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
+    if let Some(current) = filters.similar.as_deref() {
+        let reference = infos.traits(catalog, current).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
         if let Some(reference) = reference {
             let mut scored: Vec<(f32, FamilyRow)> = rows
                 .drain(..)
                 .filter_map(|r| {
                     let traits = infos.traits(catalog, &r.family)?;
-                    let distance = if r.family == listing.current { -1.0 } else { reference.difference(&traits) };
+                    let distance = if r.family == current { -1.0 } else { reference.difference(&traits) };
                     Some((distance, r))
                 })
                 .collect();

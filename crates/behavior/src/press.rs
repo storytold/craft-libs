@@ -99,12 +99,14 @@ pub struct PointerSample {
     pub rotation: f32,
     /// The eraser end of a pen.
     pub eraser: bool,
+    /// An airbrush pen's finger wheel, 0 to 1; `None` when the pen has none.
+    pub wheel: Option<f32>,
 }
 
 impl PointerSample {
     /// A sample with no tilt or rotation.
     pub const fn new(pressure: f32) -> Self {
-        PointerSample { pressure, tilt: [0.0, 0.0], rotation: 0.0, eraser: false }
+        PointerSample { pressure, tilt: [0.0, 0.0], rotation: 0.0, eraser: false, wheel: None }
     }
 
     /// The sample with every field in range: pressure within 0 to 1, tilt and rotation finite radians, a stray value
@@ -118,7 +120,8 @@ impl PointerSample {
         let quarter = std::f32::consts::FRAC_PI_2;
         let tilt = self.tilt.map(|tilt| if tilt.is_finite() { tilt.clamp(-quarter, quarter) } else { 0.0 });
         let rotation = if self.rotation.is_finite() { self.rotation } else { 0.0 };
-        PointerSample { pressure, tilt, rotation, eraser: self.eraser }
+        let wheel = self.wheel.filter(|wheel| wheel.is_finite()).map(|wheel| wheel.clamp(0.0, 1.0));
+        PointerSample { pressure, tilt, rotation, eraser: self.eraser, wheel }
     }
 }
 

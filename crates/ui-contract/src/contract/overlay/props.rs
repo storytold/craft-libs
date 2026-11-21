@@ -5,7 +5,7 @@ use super::place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, S
 use crate::runtime::access::PopupKind;
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::motion::{MotionSpec, spec};
-use crate::runtime::overlay::{Backdrop, Rank};
+use crate::runtime::overlay::{Backdrop, LayerRole, Rank};
 use crate::runtime::windows::ResizeEdge;
 use craft_behavior::overlay::{Align, MinWidth, Side};
 use craft_behavior::{GesturePhase, OwnerClass};
@@ -142,6 +142,8 @@ pub struct Overlay {
     /// title row, whose move docks the window). The window is opened knowing it, so its hit test never hands the band
     /// to the system. A layer is always moved by the app.
     pub moved_by_app: bool,
+    /// What the layer is for; a progress window is left out of `any_open`.
+    pub role: LayerRole,
     /// Set only by [`Overlay::full_window`].
     full_window: bool,
 }
@@ -180,6 +182,7 @@ impl Overlay {
             body_scroll: true,
             moves_window: false,
             moved_by_app: false,
+            role: LayerRole::default(),
             full_window: false,
         }
     }
@@ -430,6 +433,12 @@ impl Overlay {
     /// Sets whether the user may move it.
     pub fn movable(mut self, on: bool) -> Overlay {
         self.movable = on;
+        self
+    }
+
+    /// Sets what the layer is for ([`Overlay::role`]).
+    pub fn role(mut self, role: LayerRole) -> Overlay {
+        self.role = role;
         self
     }
 

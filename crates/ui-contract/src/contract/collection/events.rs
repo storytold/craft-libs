@@ -185,7 +185,14 @@ pub enum ColumnEvent {
 #[non_exhaustive]
 pub enum CollectionEvent<K, E> {
     /// The selection changed.
-    Selection(SelectionChange<K>),
+    Selection {
+        /// What changed.
+        change: SelectionChange<K>,
+        /// What made the change: `Pointer` for a pick on press or release, `Keys` for a key.
+        by: LeadSource,
+        /// The modifiers of the pick; `Mods::NONE` for a key.
+        mods: craft_keymap::Mods,
+    },
     /// The lead moved, by keys or by the pointer.
     LeadMoved {
         /// The item that took the lead.

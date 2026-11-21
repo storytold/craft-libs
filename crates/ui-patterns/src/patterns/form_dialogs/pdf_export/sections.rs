@@ -31,15 +31,19 @@ const PERCENT: RangeInclusive<f64> = 0.0..=100.0;
 
 /// The artboards to write: all, or the typed range ("1-3, 5").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct ArtboardChoice {
+pub struct ArtboardChoice {
+    /// Only the typed range is written.
     pub range_only: bool,
+    /// The typed range ("1-3, 5").
     pub range: String,
 }
 
 /// The two check boxes that turn a password on. A password that is set keeps its box checked.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct PasswordSwitches {
+pub struct PasswordSwitches {
+    /// The check box of the open password.
     pub open: bool,
+    /// The check box of the permissions password.
     pub permissions: bool,
 }
 

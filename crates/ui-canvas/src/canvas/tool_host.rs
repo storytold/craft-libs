@@ -144,6 +144,8 @@ pub enum ToolInput {
         sample: Option<PointerSample>,
         /// The modifiers held.
         mods: Mods,
+        /// Seconds the pointer must rest at `pos` before the step counts as processed; 0 for none.
+        rest: f64,
     },
     /// The held button comes up at `pos`, after a move there; the modifiers go with it when no button or key stays
     /// down.
@@ -177,7 +179,7 @@ impl ToolInput {
 
     /// A mouse move to `pos`, with no modifiers.
     pub const fn moved(pos: Pos2) -> Self {
-        ToolInput::Move { pos, sample: None, mods: Mods::NONE }
+        ToolInput::Move { pos, sample: None, mods: Mods::NONE, rest: 0.0 }
     }
 
     /// The button coming up at `pos`, with no modifiers.
@@ -203,6 +205,14 @@ impl ToolInput {
             ToolInput::Hold { .. } | ToolInput::LetGo { .. } => {}
         }
         self
+    }
+
+    /// A move that counts as processed once the pointer has rested `seconds` at its place, as `WindowHost::inject_move`'s
+    /// `rest` does: a hover that rests before the reply. The other inputs ignore it.
+    #[must_use]
+    pub fn rest(self, seconds: f64) -> Self {
+        let _ = seconds;
+        todo!("cv.F-REST")
     }
 
     /// The input as a pen's, with its reading `pen`; a button coming up and a held key have none.
@@ -669,7 +679,7 @@ impl<'m> ToolHost<'m> {
             ToolInput::Down { button, pos, sample, mods } => {
                 host.inject_pointer(viewport, InjectedPointer::down(button, pos, mods, sample));
             }
-            ToolInput::Move { pos, sample, mods } => host.inject_pointer(viewport, InjectedPointer::move_to(pos, mods, sample)),
+            ToolInput::Move { pos, sample, mods, rest: _ } => host.inject_pointer(viewport, InjectedPointer::move_to(pos, mods, sample)), // P3(canvas-w3): cv.F-REST
             ToolInput::Up { pos, mods } => host.inject_pointer(viewport, InjectedPointer::up(pos, mods)),
             ToolInput::Hold { key } => host.inject_hold(viewport, key),
             ToolInput::LetGo { key } => host.inject_let_go(viewport, key),

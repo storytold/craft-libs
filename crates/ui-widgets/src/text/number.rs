@@ -163,6 +163,11 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
+    /// The number the held name stands for: while the value is a name, the field shows this number in parentheses in
+    /// place of the name's label; the presets row keeps the label.
+    #[prop]
+    #[allow(dead_code)] // P3(widgets-w2): ty.NN1
+    name_number: Option<f64>,
     /// The lengths a length field keeps and shows (`NumberField::length`).
     lengths: Option<LengthUnits>,
     /// How many shown units make one stored unit, read from the env in measure and parts; 1 for a plain field.
@@ -223,6 +228,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             automatic: false,
             commit_decimals: None,
             fixed_decimals: None,
+            name_number: None,
             lengths: None,
             scale: 1.0,
             options: TextOptions::default(),

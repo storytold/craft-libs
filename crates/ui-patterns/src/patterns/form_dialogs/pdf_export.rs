@@ -9,9 +9,11 @@ mod words;
 mod stories;
 
 pub use self::hosted::{HostedPdfExport, PdfExportAnswer};
-use self::sections::{ArtboardChoice, PasswordSwitches, Sections};
+use self::sections::Sections;
+pub use self::sections::{ArtboardChoice, PasswordSwitches};
+pub(crate) use self::summary::check_range;
+pub use self::summary::differences;
 pub use self::summary::{RangeError, summary_text};
-pub(crate) use self::summary::{check_range, differences};
 pub use self::words::PdfExportWords;
 use super::form::FormDialog;
 use crate::contract::{
@@ -179,6 +181,8 @@ pub struct PdfExportOutput {
     pub save_summary: Option<String>,
     /// The preset editor's name and description, when they changed this pass.
     pub draft: Option<PresetDraft>,
+    /// The answer OK filed this pass while `hold_ok` is on; the host accepts or refuses it.
+    pub held: Option<PdfExportResult>,
 }
 
 impl Outcome for PdfExportOutput {
@@ -302,6 +306,34 @@ pub struct PdfExportDialog<'a> {
     /// Warnings of the host, shown after the settings' own.
     #[prop]
     host_warnings: &'a [String],
+    /// Binds the preset the settings started from or were last filled from.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ex.P9
+    chosen_preset: Option<Bind<'a, Option<String>>>,
+    /// Binds the artboard choice.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ex.P9
+    artboard_choice: Option<Bind<'a, ArtboardChoice>>,
+    /// Binds the two check boxes that turn a password on.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ex.P9
+    password_switches: Option<Bind<'a, PasswordSwitches>>,
+    /// OK files its answer in the output's `held` instead of closing the dialog; the host answers it.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ex.P11
+    hold_ok: bool,
+    /// The host accepted the held answer: the dialog closes with it.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ex.P11
+    finish_held: bool,
+    /// The host refused the held answer for the reason, which shows under the rows until the settings change.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ex.P11
+    refusal: Option<(Label, PdfSettings)>,
+    /// Whether OK is enabled.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ex.P11
+    ok_enabled: bool,
 }
 
 impl<'a> PdfExportDialog<'a> {
@@ -328,6 +360,13 @@ impl<'a> PdfExportDialog<'a> {
             section: None,
             custom_flattener: false,
             host_warnings: &[],
+            chosen_preset: None,
+            artboard_choice: None,
+            password_switches: None,
+            hold_ok: false,
+            finish_held: false,
+            refusal: None,
+            ok_enabled: true,
         }
     }
 
@@ -353,6 +392,13 @@ impl<'a> PdfExportDialog<'a> {
             section: _,
             custom_flattener: _,
             host_warnings: _,
+            chosen_preset: _,
+            artboard_choice: _,
+            password_switches: _,
+            hold_ok: _,
+            finish_held: _,
+            refusal: _,
+            ok_enabled: _,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<PdfExportWords>();
@@ -509,7 +555,7 @@ impl<'a> PdfExportDialog<'a> {
                     .selection(Bind::given(Selection::single(section)))
                     .show_items(ui, &pages, &mut |key, _| ListRow::new(key.title(&words).clone()));
                 for event in listed.events {
-                    if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
                         && let Some(key) = keys.into_iter().last()
                     {
                         section = key;
@@ -563,6 +609,7 @@ impl<'a> PdfExportDialog<'a> {
             custom_flattener: false,
             save_summary: None,
             draft: None,
+            held: None,
         }
     }
 }

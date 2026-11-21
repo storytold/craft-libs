@@ -15,5 +15,6 @@ pub use session_bar::{BarSlot, TransformBar, TransformBarOutput, TransformBarWor
 pub use session_overlay::{TransformOverlay, TransformOverlayOutput, TransformTool};
 pub use transform_box::{ApplyBy, BOX, LineLook, RotateZone, TransformBox, TransformBoxOutput, TransformBoxStyle, TransformBoxWords, TransformReach};
 pub use transform_fields::{
-    SizeUnit, TransformField, TransformFieldWords, TransformFields, TransformFieldsOutput, TransformGroups, TransformRow, TransformSource,
+    FieldArrangement, SizeUnit, TransformField, TransformFieldWords, TransformFields, TransformFieldsOutput, TransformGroups, TransformRow,
+    TransformSource,
 };

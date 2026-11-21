@@ -8,10 +8,11 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, FormDialog, HostRequests, Param, ParamRows, set_color_field, set_param_field};
+use craft_ui::patterns::presets::{NameCheck, NamedPresetEvent, PresetError, PresetRow};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::runtime::overlay::CloseReason;
@@ -78,13 +79,17 @@ pub struct PrintSheet {
     pub marks: PrintMarks,
     /// The readout under the preview.
     pub readout: Label,
+    /// How many sheets the document prints on; 1 for a document that fits one.
+    pub count: usize,
+    /// The outline of each sheet on the paper, in paper points, for a document that prints on several.
+    pub outlines: Vec<egui::Rect>,
 }
 
 impl PrintSheet {
     /// A sheet of `paper` with the image box `image` holding `picture`, `readout` under the preview, no printable area
     /// and no marks.
     pub fn new(paper: egui::Vec2, image: egui::Rect, picture: SizedTexture, readout: Label) -> Self {
-        PrintSheet { paper, printable: None, image, picture, marks: PrintMarks::default(), readout }
+        PrintSheet { paper, printable: None, image, picture, marks: PrintMarks::default(), readout, count: 1, outlines: Vec::new() }
     }
 
     /// The printable area of the paper.
@@ -100,6 +105,54 @@ impl PrintSheet {
         self.marks = marks;
         self
     }
+
+    /// How many sheets the document prints on.
+    #[must_use]
+    pub fn count(self, count: usize) -> Self {
+        let _ = count;
+        todo!("ex.E53")
+    }
+
+    /// The outline of each sheet on the paper, in paper points.
+    #[must_use]
+    pub fn outlines(self, outlines: Vec<egui::Rect>) -> Self {
+        let _ = outlines;
+        todo!("ex.E53")
+    }
+}
+
+/// How the print dialog arranges its sections.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintLayout {
+    /// Every section stacked under the printer panel.
+    #[default]
+    Stacked,
+    /// A list of sections beside the shown section.
+    Sections,
+}
+
+/// What the print dialog is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintMode {
+    /// Print the document.
+    #[default]
+    Print,
+    /// Edit a print preset: a name field with its refusal in place of the printer and the job.
+    PresetEditor,
+}
+
+/// The print presets a [`PrintDialog`] lists in its preset row.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct PrintPresets<'a> {
+    /// The presets, as the preset picker's rows.
+    pub rows: &'a [PresetRow<String>],
+    /// The preset the settings started from or were last filled from.
+    pub held: Option<String>,
+    /// The names of the built-in presets, which a typed name may not take.
+    pub built_in: &'a [String],
 }
 
 /// One titled section of the app's rows (Color Management, Position and Size, Printing Marks,
@@ -359,7 +412,9 @@ pub struct PrintDialog<'a> {
     settings: Bind<'a, Settings>,
     printers: &'a [Printer],
     fields: Bind<'a, DialogFields>,
-    sheet: &'a PrintSheet,
+    /// This pass's layout, from the app; without one the dialog shows no preview.
+    #[prop]
+    sheet: Option<&'a PrintSheet>,
     /// The app's sections under the printer panel.
     #[prop]
     sections: &'a [PrintSection],
@@ -378,6 +433,46 @@ pub struct PrintDialog<'a> {
     /// The host's answers to the dialog's requests.
     #[prop]
     answers: Vec<HostAnswer>,
+    /// Binds the number of the sheet the preview shows, for a document that prints on several.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E52
+    sheet_index: Option<Bind<'a, usize>>,
+    /// A line of the host's under the preview.
+    #[prop(into)]
+    #[allow(dead_code)] // P3(export-w7): ex.E52
+    message: Option<Label>,
+    /// How the sections are arranged.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E48
+    layout: PrintLayout,
+    /// Binds the shown section, with [`PrintLayout::Sections`].
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E48
+    section: Option<Bind<'a, String>>,
+    /// The print presets the preset row lists.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E49
+    presets: Option<PrintPresets<'a>>,
+    /// Rows above the sections.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E50
+    header: &'a [Param],
+    /// What the dialog is for.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E51
+    mode: PrintMode,
+    /// Binds the preset editor's name.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E51
+    preset_name: Option<Bind<'a, String>>,
+    /// Whether a typed preset name may be used, in the preset editor.
+    #[prop(func = "Fn(&str) -> Option<PresetError>")]
+    #[allow(dead_code)] // P3(export-w7): ex.E51
+    check_name: Option<NameCheck<'a>>,
+    /// The driver controls (Print Settings…, Portrait and Landscape, the page line) are shown.
+    #[prop]
+    #[allow(dead_code)] // P3(export-w7): ex.E56
+    driver: bool,
 }
 
 /// What [`PrintDialog::show`] returns.
@@ -397,6 +492,12 @@ pub struct PrintDialogOutput {
     pub refresh: bool,
     /// The dialog's requests of the host.
     pub requests: HostRequests,
+    /// What the user did to the print presets this pass (Create, Rename, Delete).
+    pub presets: Vec<NamedPresetEvent<String>>,
+    /// The sheet the user stepped to this pass.
+    pub sheet: Option<usize>,
+    /// Print Settings… was pressed this pass: the host opens the driver's own dialog.
+    pub setup: bool,
 }
 
 impl Outcome for PrintDialogOutput {
@@ -408,27 +509,57 @@ impl Outcome for PrintDialogOutput {
 }
 
 impl<'a> PrintDialog<'a> {
-    /// The dialog over `settings`, the `printers` found, the sections' `fields` and this pass's
-    /// `sheet`.
-    pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer], fields: Bind<'a, DialogFields>, sheet: &'a PrintSheet) -> Self {
+    /// The dialog over `settings`, the `printers` found and the sections' `fields`.
+    pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer], fields: Bind<'a, DialogFields>) -> Self {
         PrintDialog {
             settings,
             printers,
             fields,
-            sheet,
+            sheet: None,
             sections: &[],
             opened: None,
             busy: false,
             discovering: false,
             ready: false,
             answers: Vec::new(),
+            sheet_index: None,
+            message: None,
+            layout: PrintLayout::default(),
+            section: None,
+            presets: None,
+            header: &[],
+            mode: PrintMode::default(),
+            preset_name: None,
+            check_name: None,
+            driver: false,
         }
     }
 
     /// Draws the dialog. The body reports the drag events and the Refresh press of its last run only, so a measuring run
     /// adds none; a second pass of a frame has no new input and reports none.
     pub fn show(self, ui: &mut Ui) -> PrintDialogOutput {
-        let PrintDialog { mut settings, printers, fields, sheet, sections, opened, busy, discovering, ready, answers } = self;
+        let PrintDialog {
+            mut settings,
+            printers,
+            fields,
+            sheet,
+            sections,
+            opened,
+            busy,
+            discovering,
+            ready,
+            answers,
+            sheet_index: _,
+            message: _,
+            layout: _,
+            section: _,
+            presets: _,
+            header: _,
+            mode: _,
+            preset_name: _,
+            check_name: _,
+            driver: _,
+        } = self; // P3(export-w7): ex.E48
         let env = Env::of(ui);
         let words = env.words::<PrintDialogWords>();
         let mut form = FormDialog::new(words.title.clone(), fields)
@@ -457,9 +588,12 @@ impl<'a> PrintDialog<'a> {
             }
             Row::new().show(ui, |ui, _| {
                 Stack::new().show(ui, |ui, _| {
-                    let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(sheet.image.min)).show(ui);
-                    moved.extend(preview.edit.events);
-                    Text::new(sheet.readout.clone()).show(ui);
+                    // P3(export-w7): ex.E52 -- a dialog without a sheet shows no preview.
+                    if let Some(sheet) = sheet {
+                        let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(sheet.image.min)).show(ui);
+                        moved.extend(preview.edit.events);
+                        Text::new(sheet.readout.clone()).show(ui);
+                    }
                 });
                 Stack::new().show(ui, |ui, _| {
                     Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| {
@@ -483,7 +617,17 @@ impl<'a> PrintDialog<'a> {
         } else {
             None
         };
-        PrintDialogOutput { response: shown.response, closed: shown.closed, finish, moved, refresh, requests: shown.requests }
+        PrintDialogOutput {
+            response: shown.response,
+            closed: shown.closed,
+            finish,
+            moved,
+            refresh,
+            requests: shown.requests,
+            presets: Vec::new(), // P3(export-w7): ex.E54
+            sheet: None,
+            setup: false,
+        }
     }
 }
 
@@ -512,6 +656,8 @@ pub struct HostedPrint {
     refresh: bool,
     requests: HostRequests,
     json_form: Option<Box<JsonForm>>,
+    /// The OK the host holds back until it answers `answer_ok`, and its refusal.
+    held: HeldAnswer<PrintAnswer>,
 }
 
 /// Adds the app's own keys to the automation listing of the sections' values.
@@ -530,7 +676,98 @@ impl HostedPrint {
             refresh: true,
             requests: HostRequests::new(),
             json_form: None,
+            held: HeldAnswer::new(),
         }
+    }
+
+    /// How the sections are arranged.
+    #[must_use]
+    pub fn layout(self, layout: PrintLayout) -> Self {
+        let _ = layout;
+        todo!("ex.E55")
+    }
+
+    /// What the dialog is for.
+    #[must_use]
+    pub fn mode(self, mode: PrintMode) -> Self {
+        let _ = mode;
+        todo!("ex.E55")
+    }
+
+    /// Rows above the sections.
+    #[must_use]
+    pub fn header(self, header: Vec<Param>) -> Self {
+        let _ = header;
+        todo!("ex.E55")
+    }
+
+    /// Whether a typed preset name may be used, in the preset editor.
+    #[must_use]
+    pub fn check_name(self, check: impl Fn(&str) -> Option<PresetError> + Send + 'static) -> Self {
+        let _ = check;
+        todo!("ex.E55")
+    }
+
+    /// The print presets the preset row lists, the one the settings started from, and the built-in names.
+    pub fn set_presets(&mut self, rows: Vec<PresetRow<String>>, held: Option<String>, built_in: Vec<String>) {
+        let _ = (rows, held, built_in);
+        todo!("ex.E55")
+    }
+
+    /// What the user did to the print presets since the last call.
+    pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<String>> {
+        todo!("ex.E55")
+    }
+
+    /// A line of the host's under the preview.
+    pub fn set_message(&mut self, message: Option<Label>) {
+        let _ = message;
+        todo!("ex.E55")
+    }
+
+    /// The number of the sheet the preview shows.
+    pub fn sheet_index(&self) -> usize {
+        todo!("ex.E55")
+    }
+
+    /// The preset editor's name.
+    pub fn preset_name(&self) -> &str {
+        todo!("ex.E55")
+    }
+
+    /// The sections' values.
+    pub fn fields(&self) -> &DialogFields {
+        &self.fields
+    }
+
+    /// Sets the section value `key`.
+    pub fn set_field(&mut self, key: impl Into<String>, value: FieldValue) {
+        let _ = (key, value);
+        todo!("ex.E55")
+    }
+
+    /// Print Settings… was pressed since the last call: the host opens the driver's own dialog.
+    pub fn take_setup(&mut self) -> bool {
+        todo!("ex.E56")
+    }
+
+    /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
+    /// [`answer_ok`](HostedPrint::answer_ok). OK stays disabled until then.
+    #[must_use]
+    pub fn held_ok(self) -> Self {
+        todo!("ex.E55")
+    }
+
+    /// The OK filed by a held dialog, once.
+    pub fn take_ok(&mut self) -> Option<PrintAnswer> {
+        todo!("ex.E55")
+    }
+
+    /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
+    /// OK again and shows the label until a value changes.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        let _ = answer;
+        todo!("ex.E55")
     }
 
     /// Lists keys the sections' values do not show as they are: `form` gets the values and the listing, and may replace or
@@ -558,9 +795,9 @@ impl HostedPrint {
         self.state.listen(printers)
     }
 
-    /// This pass's layout, from the app.
-    pub fn set_sheet(&mut self, sheet: PrintSheet) {
-        self.sheet = Some(sheet);
+    /// This pass's layout, from the app; `None` shows the dialog without a preview.
+    pub fn set_sheet(&mut self, sheet: Option<PrintSheet>) {
+        self.sheet = sheet;
     }
 
     /// The image box drags since the last call.
@@ -581,6 +818,22 @@ impl HostedPrint {
     /// The answer of the dialog as it stands.
     fn answer(&self, finish: PrintFinish) -> PrintAnswer {
         PrintAnswer { finish, settings: self.state.settings.clone(), fields: self.fields.clone() }
+    }
+}
+
+impl HoldsOk for HostedPrint {
+    type Answer = PrintAnswer;
+
+    fn held_ok(self) -> Self {
+        HostedPrint::held_ok(self)
+    }
+
+    fn take_ok(&mut self) -> Option<PrintAnswer> {
+        HostedPrint::take_ok(self)
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        HostedPrint::answer_ok(self, answer);
     }
 }
 
@@ -622,7 +875,8 @@ impl StackDialog for HostedPrint {
         let sheet = self.sheet.as_ref()?;
         let answers = if craft_ui::runtime::measure::active(ui.ctx()) { Vec::new() } else { self.requests.take_answers() };
         let (busy, discovering, ready) = (self.state.busy(), self.state.discovering(), self.state.ready());
-        let shown = PrintDialog::new(Bind::bound(&mut self.state.settings), &self.state.printers, Bind::bound(&mut self.fields), sheet)
+        let shown = PrintDialog::new(Bind::bound(&mut self.state.settings), &self.state.printers, Bind::bound(&mut self.fields))
+            .sheet(sheet)
             .sections(&self.sections)
             .busy(busy)
             .discovering(discovering)
@@ -649,6 +903,10 @@ impl StackDialog for HostedPrint {
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
         }
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
     }
 
     /// Answers Print as the button does: none while a job cannot start.

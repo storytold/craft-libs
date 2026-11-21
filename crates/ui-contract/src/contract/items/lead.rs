@@ -18,7 +18,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         let before = self.selection.clone();
         self.selection.apply(change.clone());
         if self.selection != before {
-            self.events.push(CollectionEvent::Selection(change));
+            self.events.push(CollectionEvent::Selection { change, by: LeadSource::Pointer, mods: craft_keymap::Mods::NONE }); // P3(document-panels-w2): dp.C12
         }
     }
 

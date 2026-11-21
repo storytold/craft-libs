@@ -80,13 +80,18 @@ fn print_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { printer: "Office_1".to_owned(), duplex: Some(Duplex::LongEdge), ..Settings::default() };
     let printers = printers();
     let sheet = sheet(ui, true);
-    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()), &sheet).ready(true).show(ui).into()
+    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
+        .ready(true)
+        .show(ui)
+        .into() // P3(export-w7): ex.E52
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = sheet(ui, false);
-    PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &[], Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &[], Bind::given(DialogFields::default()))
+        .sheet(&sheet) // P3(export-w7): ex.E52
         .discovering(true)
         .show(ui)
         .into()
@@ -97,5 +102,9 @@ fn print_dialog_busy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { printer: "Office_1".to_owned(), ..Settings::default() };
     let printers = printers();
     let sheet = sheet(ui, false);
-    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()), &sheet).busy(true).show(ui).into()
+    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()))
+        .sheet(&sheet)
+        .busy(true)
+        .show(ui)
+        .into() // P3(export-w7): ex.E52
 }

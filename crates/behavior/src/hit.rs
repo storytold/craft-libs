@@ -51,6 +51,15 @@ pub enum HitShape {
         /// The corners of the polygon cut out of `within`.
         polygon: Vec<Pos2>,
     },
+    /// A shape with discs cut out of it: a widget part over a bounding-box handle leaves the handle's disc to the
+    /// handle.
+    #[non_exhaustive]
+    Excluding {
+        /// The shape the discs are cut out of.
+        shape: Box<HitShape>,
+        /// The discs cut out, each a centre and a radius.
+        holes: Vec<(Pos2, f32)>,
+    },
 }
 
 impl HitShape {
@@ -81,10 +90,17 @@ impl HitShape {
         HitShape::OutsidePolygon { within, polygon }
     }
 
+    /// `shape` without the discs `holes` (a centre and a radius each).
+    pub fn excluding(shape: HitShape, holes: Vec<(Pos2, f32)>) -> HitShape {
+        let _ = (shape, holes);
+        todo!("q341")
+    }
+
     /// The smallest rectangle around the shape.
     pub fn bounds(&self) -> Rect {
         match self {
             HitShape::Rect(rect) | HitShape::OutsidePolygon { within: rect, .. } => *rect,
+            HitShape::Excluding { .. } => todo!("q341"),
             HitShape::Circle { center, radius } => Rect::from_center_size(*center, Vec2::splat(radius * 2.0)),
             HitShape::Segment { a, b } => Rect::from_two_pos(*a, *b),
             HitShape::Polyline { points, .. } | HitShape::Polygon(points) => {
@@ -111,6 +127,7 @@ impl HitShape {
                     || closing.is_some_and(|(first, last)| segment_distance(point, *last, *first) <= reach)
             }
             HitShape::OutsidePolygon { within, polygon } => within.contains(point) && !inside_polygon(point, polygon),
+            HitShape::Excluding { .. } => todo!("q341"),
             HitShape::Polygon(points) => {
                 let bounds = self.bounds();
                 let small = bounds.width() < across || bounds.height() < across;
@@ -133,6 +150,7 @@ impl HitShape {
             }
             HitShape::Polygon(points) => inside_polygon(point, points),
             HitShape::OutsidePolygon { within, polygon } => within.contains(point) && !inside_polygon(point, polygon),
+            HitShape::Excluding { .. } => todo!("q341"),
         }
     }
 }

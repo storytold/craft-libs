@@ -374,6 +374,10 @@ pub struct SaveForWebDialog<'a> {
     /// Shows "Optimize to File Size…" under the Preset row.
     #[prop(flag)]
     optimize: bool,
+    /// The label of the OK button, in place of Save.
+    #[prop(into)]
+    #[allow(dead_code)] // P3(export-w2): ex.W5
+    ok_label: Option<Label>,
 }
 
 impl<'a> SaveForWebDialog<'a> {
@@ -406,6 +410,7 @@ impl<'a> SaveForWebDialog<'a> {
             ],
             marks: None,
             optimize: false,
+            ok_label: None,
         }
     }
 
@@ -430,6 +435,7 @@ impl<'a> SaveForWebDialog<'a> {
             color_tables: _,
             marks: _,
             optimize: _,
+            ok_label: _,
         } = self;
         let mut view_held = view.map(Held::new);
         let mut frame_held = frame.map(Held::new);

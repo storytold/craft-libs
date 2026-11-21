@@ -29,7 +29,8 @@ impl Scene {
     fn selected(&self) -> Vec<usize> {
         let mut selection = Selection::<usize>::default();
         for event in self.events.borrow().iter() {
-            if let CollectionEvent::Selection(change) = event {
+            if let CollectionEvent::Selection { change, .. } = event {
+                // P3(mechanical): dp.C12
                 selection.apply(change.clone());
             }
         }

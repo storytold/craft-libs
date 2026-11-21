@@ -260,10 +260,13 @@ impl CellMarks {
     }
 }
 
+/// The share of a ring well's width its band of colour takes.
+pub const RING_SHARE: f32 = 0.3;
+
 /// Paints `color` as a ring in `well`: a band of the colour round the edge, open in the middle, each side with the
 /// edge and the inner edge (`SwatchStyle::inner_edge`) that stand out from the colour, in `state`.
-pub fn paint_ring(draw: &Draw<'_>, well: Rect, color: Srgba, style: &SwatchStyle, state: &StateSet) {
-    let _ = (draw, well, color, style, state);
+pub fn paint_ring(draw: &Draw<'_>, well: Rect, color: Srgba, style: &SwatchStyle, state: &StateSet, radius: CornerRadius) {
+    let _ = (draw, well, color, style, state, radius);
     todo!("cv.F40")
 }
 

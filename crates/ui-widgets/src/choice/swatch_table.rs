@@ -80,8 +80,8 @@ pub struct SwatchTableOutput {
     pub chosen: Vec<usize>,
     /// The entry a double click or Enter asked to edit this pass.
     pub open: Option<usize>,
-    /// Delete or Backspace was pressed on the selection this pass (`CollectionEvent::Delete`).
-    pub delete: bool,
+    /// The keys Delete or Backspace deleted this pass (`CollectionEvent::Delete`).
+    pub delete: Vec<usize>,
 }
 
 impl Outcome for SwatchTableOutput {
@@ -219,8 +219,14 @@ impl Component for SwatchTable<'_> {
             CollectionEvent::Activate(key) => Some(*key),
             _ => None,
         });
-        let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection(_)));
-        SwatchTableOutput { response: response.response, selected: selection.lead.filter(|_| changed), chosen: selection.items, open, delete: false } // P3(color-w1): ex.E20
+        let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })); // P3(mechanical): dp.C12
+        SwatchTableOutput {
+            response: response.response,
+            selected: selection.lead.filter(|_| changed),
+            chosen: selection.items,
+            open,
+            delete: Vec::new(),
+        } // P3(color-w1): ex.E20
     }
 }
 

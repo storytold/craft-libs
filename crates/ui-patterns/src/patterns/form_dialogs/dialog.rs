@@ -15,7 +15,7 @@ use super::rows::{ParamRows, ParamRowsOutput};
 use crate::contract::{Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
 
 use crate::dialog::{
-    Alert, ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id,
+    Alert, ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id,
 };
 
 use crate::display::{Shade, Text};
@@ -254,10 +254,10 @@ pub struct ParamDialog<'a> {
     /// passes (`Sampler::pass_canvas_gesture`): the app centres the pane on the point under it.
     #[prop]
     canvas: Option<egui::Id>,
-    /// Extra footer buttons after OK and Cancel (Color Table's Load… and Save…), each an id and a label. They keep the
+    /// Extra footer buttons after OK and Cancel (Color Table's Load… and Save…), each an id and a button. They keep the
     /// dialog open; a press comes back as `ParamDialogOutput::footer_action`.
     #[prop]
-    extra_buttons: Vec<(String, Label)>,
+    extra_buttons: Vec<(String, FooterButton)>,
     /// The patterns the dialog's [`ParamKind::Pattern`] rows offer.
     #[prop]
     patterns: Cow<'a, [PresetRow<String>]>,
@@ -487,7 +487,8 @@ impl<'a> ParamDialog<'a> {
             .accept_stays_open(hold)
             .answers(answers);
         if let Some(reset_to) = reset_to {
-            form = form.reset_with(move |_, opened| {
+            form = form.reset_with(move |_, opened, _| {
+                // P3(forms-w1): ex.P11
                 let mut values = opened.clone();
                 for (name, value) in reset_to.iter() {
                     values.set(name, value.clone());
@@ -517,7 +518,7 @@ impl<'a> ParamDialog<'a> {
         // The pane shows only in a dialog that previews.
         let preview = preview.filter(|_| previews);
         if !extra_buttons.is_empty() {
-            form = form.extra_buttons(extra_buttons.iter().map(|(_, label)| FooterButton::new(label.clone(), DialogRole::Other)));
+            form = form.extra_buttons(extra_buttons.iter().map(|(_, button)| button.clone())); // P3(forms-w1): q337
         }
         if let Some(note) = footer_note {
             form = form.footer_extra(move |ui| {
@@ -983,6 +984,19 @@ impl HostedParamDialog {
         self.requests.take_eyedropper()
     }
 
+    /// The Preview check box starts off.
+    #[must_use]
+    pub fn preview_off(self) -> Self {
+        let _ = self;
+        todo!("ef.F1")
+    }
+
+    /// The ids of the actions the custom rows requested since the last call (`CustomContext::request_action`).
+    pub fn take_actions(&mut self) -> Vec<String> {
+        let _ = self;
+        todo!("ex.FA1")
+    }
+
     /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
     /// [`answer_ok`](HostedParamDialog::answer_ok). OK stays disabled until then.
     #[must_use]
@@ -1178,6 +1192,22 @@ fn read_value(kind: &ParamKind, value: Value) -> Option<FieldValue> {
         ParamKind::Custom(_) => FieldValue::Json(value),
         ParamKind::ReadOnlyText { .. } | ParamKind::Section => return None,
     })
+}
+
+impl HoldsOk for HostedParamDialog {
+    type Answer = ParamResult;
+
+    fn held_ok(self) -> Self {
+        HostedParamDialog::held_ok(self)
+    }
+
+    fn take_ok(&mut self) -> Option<ParamResult> {
+        HostedParamDialog::take_ok(self)
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        HostedParamDialog::answer_ok(self, answer);
+    }
 }
 
 impl StackDialog for HostedParamDialog {

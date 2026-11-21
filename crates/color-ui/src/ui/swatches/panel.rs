@@ -2,17 +2,16 @@
 
 use std::collections::HashMap;
 
-use craft_behavior::IconId;
 use craft_cms::convert::CmykConverter;
 use craft_i18n::Format;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
 use craft_ui::choice::SwatchFace;
-use craft_ui::contract::{Bind, DropZone, Held, NoValue, Outcome, Pattern, ShowContainer as _, request_rename};
+use craft_ui::contract::{Bind, DropAt, DropPlace, DropZone, Entry, Held, NoValue, Outcome, Pattern, SelectMode, ShowContainer as _, request_rename};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetWords, ThumbInfo};
-use craft_ui::primitives::ContentPainterCx;
+use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::{Count, Env};
 use egui::{Rect, Response, Ui};
 
@@ -135,8 +134,30 @@ impl<'a> SwatchesPanel<'a> {
 
     /// The icons trailing each swatch row, through `PresetRow::trailing`.
     #[must_use]
-    pub fn row_icons(self, icons: impl Fn(&SwatchKey) -> Vec<IconId> + 'a) -> Self {
+    pub fn row_icons(self, icons: impl Fn(&SwatchKey) -> Vec<(IconSpec<'static>, String)> + 'a) -> Self {
         let _ = icons;
+        todo!("co.K31")
+    }
+
+    /// How picks select: one swatch, or several with Shift and Cmd.
+    #[must_use]
+    pub fn select(self, mode: SelectMode) -> Self {
+        let _ = mode;
+        todo!("co.K31")
+    }
+
+    /// A host payload of type `P` can be dropped onto a swatch or between swatches at `place` where `accepts` agrees;
+    /// the drop comes back as `PresetEvent::Dropped`.
+    #[must_use]
+    pub fn takes_drop<P: Send + Sync + 'static>(self, place: DropPlace, accepts: impl Fn(&P, &DropAt<SwatchKey>) -> bool + 'a) -> Self {
+        let _ = (place, accepts);
+        todo!("co.K31")
+    }
+
+    /// The host's rows of the row menu for a swatch.
+    #[must_use]
+    pub fn row_items(self, items: impl Fn(&SwatchKey) -> Vec<Entry<String>> + 'a) -> Self {
+        let _ = items;
         todo!("co.K31")
     }
 

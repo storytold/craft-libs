@@ -566,9 +566,17 @@ pub fn keymap(ctx: &Context) -> Option<Arc<craft_keymap::Keymap>> {
 
 /// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
 /// turns hold bindings on.
-pub fn holds(ctx: &Context, rect: egui::Rect, commands: &[CommandRef], label: crate::runtime::env::Label) {
-    let _ = (ctx, rect, commands, label);
+pub fn holds(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, commands: &[CommandRef], label: crate::runtime::env::Label) {
+    let _ = (ctx, layer, rect, commands, label);
     todo!("mn.M36")
+}
+
+/// Records that `command` was shown at `rect` in `layer`, with `label`, for this pass and viewport: [`holds`] calls it
+/// for a holder and the report step for a bound component wholly inside its clip.
+#[allow(dead_code)] // P3(shortcuts-w1): mn.M37
+pub(crate) fn note_shown(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, label: crate::runtime::env::Label, command: &CommandRef) {
+    let _ = (ctx, layer, rect, label, command);
+    todo!("mn.M37")
 }
 
 /// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it

@@ -1,6 +1,7 @@
 //! The command search of the Help menu: [`HelpEntry`], a command found by its label, its English label or its menu
 //! path, and [`search_order`], which ranks the entries for a query.
 
+use crate::primitives::IconSpec;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_i18n::Folder;
@@ -27,12 +28,25 @@ pub struct HelpEntry {
     home: Option<Label>,
     #[allow(dead_code)] // P3(menus-w2): mn.M18
     words: Option<String>,
+    #[allow(dead_code)] // P3(menus-w2): mn.M17
+    icon: Option<IconSpec<'static>>,
+    #[allow(dead_code)] // P3(menus-w2): mn.M18
+    ids: Vec<String>,
 }
 
 impl HelpEntry {
     /// A command found by `label`, the label its menu row shows.
     pub fn new(command: impl Into<CommandRef>, label: impl Into<Label>) -> Self {
-        HelpEntry { command: command.into(), label: label.into(), english: None, path: Vec::new(), home: None, words: None }
+        HelpEntry {
+            command: command.into(),
+            label: label.into(),
+            english: None,
+            path: Vec::new(),
+            home: None,
+            words: None,
+            icon: None,
+            ids: Vec::new(),
+        }
     }
 
     /// The English label, which matches too.
@@ -62,10 +76,36 @@ impl HelpEntry {
         todo!("mn.M17")
     }
 
+    /// The icon the palette row shows. It is not searched.
+    #[must_use]
+    pub fn with_icon(self, icon: IconSpec<'static>) -> Self {
+        let _ = icon;
+        todo!("mn.M17")
+    }
+
+    /// The icon the palette row shows, if any.
+    #[must_use]
+    pub fn icon(&self) -> Option<&IconSpec<'static>> {
+        todo!("mn.M17")
+    }
+
     /// The command id and description words: searched (word index, description tier), never shown.
     #[must_use]
     pub fn with_words(self, words: impl Into<String>) -> Self {
         let _ = words;
+        todo!("mn.M18")
+    }
+
+    /// The ids searched in the ID and exact-id tiers; with none given, the command's own id.
+    #[must_use]
+    pub fn with_ids(self, ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let _ = ids;
+        todo!("mn.M18")
+    }
+
+    /// The ids searched in the ID and exact-id tiers.
+    #[must_use]
+    pub fn ids(&self) -> &[String] {
         todo!("mn.M18")
     }
 

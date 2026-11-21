@@ -39,6 +39,9 @@ pub use imp::{hide_app, hide_other_apps, install_app_menu, system_title};
 /// platform already handled.
 pub type Handler = Arc<dyn Fn(&str, Chosen) + Send + Sync>;
 
+/// Called from any thread when menu tracking ends, so the app repaints and applies the changes it held back.
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
+
 /// How a menu item was chosen: by a key equivalent or a click, and the modifiers held then.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -267,8 +270,10 @@ impl NativeBar {
     /// Make `bar` the application's menu bar. Call it once, on the main thread, before the event
     /// loop starts menus of its own. `None` when the platform refused the menus (the app keeps its
     /// in-window menus), off the main thread, when a bar is already installed, or on a platform
-    /// without an application menu bar. It replaces a menu from [`install_app_menu`].
-    pub fn install(bar: &Bar, options: Options) -> Option<NativeBar> {
+    /// without an application menu bar. It replaces a menu from [`install_app_menu`]. `wake` is called when menu
+    /// tracking ends.
+    pub fn install(bar: &Bar, options: Options, wake: Wake) -> Option<NativeBar> {
+        let _ = wake; // P3(menus-w1): mn.M13
         imp::Installed::install(bar, options).map(NativeBar)
     }
 

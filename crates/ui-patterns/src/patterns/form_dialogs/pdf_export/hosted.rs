@@ -1,6 +1,6 @@
 //! `HostedPdfExport`: the Save PDF dialog owned by a `DialogHost`.
 
-use super::{PdfArtboards, PdfExportMode, PdfExportResult, PdfPresetEvent, PresetDraft};
+use super::{PdfArtboards, PdfExportMode, PdfExportResult, PdfExportWords, PdfPresetEvent, PresetDraft};
 use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog};
 use crate::patterns::presets::PresetError;
 use crate::runtime::env::{Label, UnitKind};
@@ -171,9 +171,9 @@ impl HostedPdfExport {
         todo!("ex.P18")
     }
 
-    /// The Summary's text for the dialog's settings, as Save Summary… saves it.
-    pub fn summary_text(&self, ctx: &egui::Context) -> String {
-        let _ = (self, ctx);
+    /// The Summary's text for the dialog's settings, as Save Summary… saves it, worded by `words`.
+    pub fn summary_text(&self, words: &PdfExportWords) -> String {
+        let _ = (self, words);
         todo!("ex.P18")
     }
 

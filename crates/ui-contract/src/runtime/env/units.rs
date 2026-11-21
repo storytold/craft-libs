@@ -32,6 +32,8 @@ craft_ui::words! {
         metres: unit "units.metres" = "{n} m";
         q: unit "units.q" = "{n} Q";
         ha: unit "units.ha" = "{n} H";
+        letters: unit "units.letters" = "{n} letters";
+        hyphens: unit "units.hyphens" = "{n} hyphens";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
         pixels_name: "units.pixelsName" = "Pixels";
@@ -54,6 +56,8 @@ craft_ui::words! {
         metres_name: "units.metresName" = "Metres";
         q_name: "units.qName" = "Q";
         ha_name: "units.haName" = "H";
+        letters_name: "units.lettersName" = "Letters";
+        hyphens_name: "units.hyphensName" = "Hyphens";
     }
 }
 
@@ -140,6 +144,10 @@ pub enum UnitKind {
     Q,
     /// `{n} H`.
     Ha,
+    /// `{n} letters`: a hyphenation setting counted in letters.
+    Letters,
+    /// `{n} hyphens`: a hyphenation setting counted in hyphens.
+    Hyphens,
 }
 
 impl UnitKind {
@@ -152,7 +160,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 20] = [
+    const ALL: [UnitKind; 22] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -173,12 +181,14 @@ impl UnitKind {
         UnitKind::Metres,
         UnitKind::Q,
         UnitKind::Ha,
+        UnitKind::Letters,
+        UnitKind::Hyphens,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
     pub const fn decimals(self) -> RangeInclusive<usize> {
         match self {
-            UnitKind::Pixels | UnitKind::Minutes => 0..=0,
+            UnitKind::Pixels | UnitKind::Minutes | UnitKind::Letters | UnitKind::Hyphens => 0..=0,
             UnitKind::Percent | UnitKind::Degrees | UnitKind::Points => 0..=1,
             UnitKind::Q | UnitKind::Ha => 0..=2,
             UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0..=4,
@@ -397,6 +407,8 @@ impl Units {
             UnitKind::Metres => words.metres.as_str(),
             UnitKind::Q => words.q.as_str(),
             UnitKind::Ha => words.ha.as_str(),
+            UnitKind::Letters => words.letters.as_str(),
+            UnitKind::Hyphens => words.hyphens.as_str(),
         }
     }
 
@@ -424,6 +436,8 @@ impl Units {
             UnitKind::Metres => &words.metres_name,
             UnitKind::Q => &words.q_name,
             UnitKind::Ha => &words.ha_name,
+            UnitKind::Letters => &words.letters_name,
+            UnitKind::Hyphens => &words.hyphens_name,
         };
         name.clone()
     }

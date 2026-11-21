@@ -6,8 +6,11 @@ mod panel;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-pub use dialog::{HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintMarks, PrintSection, PrintSheet};
-pub use panel::{PrintPanel, PrintPanelOutput, PrintWords};
+pub use dialog::{
+    HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintLayout, PrintMarks, PrintMode, PrintPresets,
+    PrintSection, PrintSheet,
+};
+pub use panel::{PrintPanel, PrintPanelLayout, PrintPanelOutput, PrintWords};
 
 use craft_ui::contract::Bind;
 use craft_ui::runtime::frame::request_repaint_after;

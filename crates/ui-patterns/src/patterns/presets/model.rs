@@ -7,7 +7,7 @@ mod library;
 pub use library::{GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetLibrary};
 
 use crate::list::ThumbAspect;
-use crate::primitives::ContentPainterCx;
+use crate::primitives::{ContentPainterCx, IconSpec};
 use craft_behavior::IconId;
 use egui::Rect;
 use std::fmt;
@@ -133,8 +133,11 @@ pub struct PresetRow<K> {
     pub tooltip: Option<String>,
     /// The name a screen reader reads, instead of the label (and caption): the label stays what a rename starts from.
     pub accessible_name: Option<String>,
-    /// List view: icons after the label at the row's end; the grid ignores them.
-    pub trailing: Vec<IconId>,
+    /// List view: icons after the label at the row's end, each with its accessible name; the grid ignores them.
+    pub trailing: Vec<(IconSpec<'static>, String)>,
+    /// The name the browser's Find also matches, beside the label: a library item's stored name beside its shown,
+    /// translated name.
+    pub search_name: Option<String>,
 }
 
 /// What the row menu of a browser or picker shows.
@@ -165,6 +168,7 @@ impl<K> PresetRow<K> {
             tooltip: None,
             accessible_name: None,
             trailing: Vec::new(),
+            search_name: None,
         }
     }
 

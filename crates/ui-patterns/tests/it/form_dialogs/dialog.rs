@@ -9,6 +9,7 @@ use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDial
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::testing::relations::{above, left_of};
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -281,7 +282,10 @@ fn a_hosted_dialog_reopened_under_the_same_key_opens() {
 fn stack_dialog(fields: &mut DialogFields) -> ParamDialog<'_> {
     ParamDialog::new("stack", "Load Files into Stack", vec![Param::files("sources", "Source Files").folder_mode(true)])
         .values(Bind::bound(fields))
-        .extra_buttons(vec![("load".to_owned(), Label::from("Load…")), ("save".to_owned(), Label::from("Save…"))])
+        .extra_buttons(vec![
+            ("load".to_owned(), FooterButton::new(Label::from("Load…"), DialogRole::Other)),
+            ("save".to_owned(), FooterButton::new(Label::from("Save…"), DialogRole::Other)),
+        ]) // P3(forms-w1): q337
 }
 
 /// The `{files, folder, useFolder}` value of a files row that lists `folder`.

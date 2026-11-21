@@ -3,7 +3,7 @@
 
 use super::{DialogFields, FormDialog, HostRequests, Param, ParamRows, ParamRowsOutput, open_fields};
 use crate::contract::{Bind, CollectionEvent, NoValue, Outcome, Remember as _, Show as _, ShowCollection as _};
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
 use crate::display::Text;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -215,6 +215,14 @@ pub struct PropertiesDialog<'a> {
     /// The Preview check box; the host previews while it is on.
     #[prop]
     preview: Option<Bind<'a, bool>>,
+    /// Whether OK is enabled.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ty.X82
+    ok_enabled: bool,
+    /// Why OK is disabled: the tooltip of the disabled button.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w6): ty.X82
+    ok_reason: Option<Label>,
 }
 
 impl<'a> PropertiesDialog<'a> {
@@ -230,12 +238,15 @@ impl<'a> PropertiesDialog<'a> {
             tab: None,
             answers: Vec::new(),
             preview: None,
+            ok_enabled: true,
+            ok_reason: None,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> PropertiesOutput {
-        let PropertiesDialog { title, tabs, values, read_only, open, tab_layout: _, tab: _, answers: _, preview: _ } = self;
+        let PropertiesDialog { title, tabs, values, read_only, open, tab_layout: _, tab: _, answers: _, preview: _, ok_enabled: _, ok_reason: _ } =
+            self;
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let per_tab: Vec<Vec<Param>> = tabs.iter().enumerate().map(|(at, tab)| tab.params(at)).collect();
@@ -261,7 +272,7 @@ impl<'a> PropertiesDialog<'a> {
                     .shown(current)
                     .show_items(ui, &Titles(&tabs), &mut |key, _| Tab::new(tabs[*key].title.clone()));
                 for event in strip.response.events {
-                    if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
                         && let Some(key) = keys.into_iter().last()
                     {
                         current = key.min(last);
@@ -311,6 +322,9 @@ pub struct HostedPropertiesDialog {
     /// The tab the host shows, bound to the dialog's `tab` prop.
     #[allow(dead_code)] // P3(type-w6): fl.F36
     tab: usize,
+    /// The OK the host holds back until it answers `answer_ok`, and its refusal.
+    #[allow(dead_code)] // P3(type-w6): ty.X82
+    held: HeldAnswer<DialogFields>,
 }
 
 impl HostedPropertiesDialog {
@@ -321,12 +335,54 @@ impl HostedPropertiesDialog {
         build: impl for<'b> Fn(Bind<'b, DialogFields>) -> PropertiesDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
-        HostedPropertiesDialog { id: dialog_id(key.as_str()), key, fields, build: Box::new(build), requests: HostRequests::new(), tab: 0 }
+        HostedPropertiesDialog {
+            id: dialog_id(key.as_str()),
+            key,
+            fields,
+            build: Box::new(build),
+            requests: HostRequests::new(),
+            tab: 0,
+            held: HeldAnswer::new(),
+        }
     }
 
     /// The values the dialog shows.
     pub fn fields(&self) -> &DialogFields {
         &self.fields
+    }
+
+    /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
+    /// [`answer_ok`](HostedPropertiesDialog::answer_ok). OK stays disabled until then.
+    #[must_use]
+    pub fn held_ok(self) -> Self {
+        let _ = self;
+        todo!("ty.X82")
+    }
+
+    /// [`held_ok`](HostedPropertiesDialog::held_ok) for a dialog already open.
+    pub fn hold_ok(&mut self) {
+        let _ = self;
+        todo!("ty.X82")
+    }
+
+    /// The OK filed by a held dialog, once.
+    pub fn take_ok(&mut self) -> Option<DialogFields> {
+        let _ = self;
+        todo!("ty.X82")
+    }
+
+    /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
+    /// OK again and shows the label under the rows until a value changes.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        let _ = (self, answer);
+        todo!("ty.X82")
+    }
+
+    /// `Some`: the host refuses the current values, and OK stays off with the reason shown under the rows until the
+    /// values change; `None` ends the refusal.
+    pub fn refuse(&mut self, reason: Option<Label>) {
+        let _ = (self, reason);
+        todo!("ty.X82")
     }
 
     /// The colour row whose button was pressed, once.
@@ -421,5 +477,26 @@ impl StackDialog for HostedPropertiesDialog {
     fn cancelled(&mut self, ctx: &Context) {
         let _ = ctx;
         todo!("ty.X82")
+    }
+
+    /// Where the held OK stands.
+    fn held_state(&self) -> Option<HeldOk> {
+        todo!("ty.X82")
+    }
+}
+
+impl HoldsOk for HostedPropertiesDialog {
+    type Answer = DialogFields;
+
+    fn held_ok(self) -> Self {
+        HostedPropertiesDialog::held_ok(self)
+    }
+
+    fn take_ok(&mut self) -> Option<DialogFields> {
+        HostedPropertiesDialog::take_ok(self)
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        HostedPropertiesDialog::answer_ok(self, answer);
     }
 }

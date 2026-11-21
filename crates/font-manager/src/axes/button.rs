@@ -24,12 +24,16 @@ pub struct AxesButton<'a> {
     /// Whether the style is italic: an unset `ital` axis then shows its maximum, once a weight is given.
     #[prop]
     italic: bool,
+    /// The axes (by tag) the selection mixes: each shows `Mixed` and is left out of the edit's held values.
+    #[prop]
+    #[allow(dead_code)] // P3(type-w3): ty.X21
+    mixed: &'a [[u8; 4]],
 }
 
 impl<'a> AxesButton<'a> {
     /// A button named `label` over the `axes` of a face, editing the coordinates `values`.
     pub fn new(label: impl Into<Label>, axes: &'a [FontAxis], values: Bind<'a, AxisValues>) -> Self {
-        AxesButton { label: label.into(), axes, values, instances: &[], weight: None, italic: false }
+        AxesButton { label: label.into(), axes, values, instances: &[], weight: None, italic: false, mixed: &[] }
     }
 
     /// Draws the button and, while it is open, the sliders; reports the sliders' edit made this pass.

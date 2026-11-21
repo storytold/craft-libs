@@ -2,7 +2,7 @@
 
 use super::CommandPalette;
 use crate::contract::Bind;
-use crate::menu::search::{HelpEntry, SearchIndex, Synonyms};
+use crate::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use crate::runtime::commands::{CommandRef, CommandState, CommandStates, EditCommands};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -56,7 +56,8 @@ fn palette(ui: &mut Ui, data: &mut StoryData, recents: Vec<CommandRef>) -> Story
     let mut open = *data.value("open", true);
     // P3(menus-w3): mn.M28
     let env = crate::runtime::env::Env::of(ui);
-    let index = SearchIndex::new(&env.folder(), ENTRIES.as_slice(), &Synonyms::of(&env));
+    let view = env.view();
+    let index = SearchIndex::new(&view, ENTRIES.as_slice(), &Synonyms::of(&view.words::<SearchWords>()));
     let out = CommandPalette::new("Command palette", ENTRIES.as_slice(), &index, Bind::bound(&mut open))
         .recents(Bind::bound(data.value("recents", recents)))
         .show(ui);

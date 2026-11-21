@@ -48,7 +48,6 @@ pub(crate) struct State {
 }
 
 /// Requests `cursor` for the running pass of this viewport.
-#[doc(hidden)]
 pub fn request(ctx: &Context, cursor: Cursor, priority: CursorPriority) {
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.requests.push((cursor, priority)));
 }

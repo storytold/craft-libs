@@ -627,7 +627,8 @@ pub(super) fn show(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogS
 fn apply(env: &mut Env<'_>, state: &mut DialogState, now: f64, lines: &[Line], out: CollectionResponse<usize, RowAct>) {
     for event in out.events {
         match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                // P3(mechanical): dp.C12
                 if let Some(Line::Row(row)) = keys.last().and_then(|key| lines.get(*key)) {
                     state.select_row(&row.command);
                 }

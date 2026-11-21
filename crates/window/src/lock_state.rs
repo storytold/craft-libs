@@ -4,8 +4,9 @@
 /// Whether Caps Lock is on now.
 ///
 /// macOS reads the modifier flags of AppKit's current event state, Windows the toggle bit of the Caps Lock key.
-/// Linux, the BSDs and the web have no query the windowing backend exposes, so they report off.
-pub fn caps_lock() -> bool {
+/// Linux and the BSDs on X11 (XWayland included) read the XKB lock state; Wayland and the web report off.
+pub fn caps_lock(backend: craft_host::target::Backend) -> bool {
+    let _ = backend; // P3(shell-w2): sh.K9
     imp::caps_lock()
 }
 

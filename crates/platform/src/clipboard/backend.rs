@@ -37,6 +37,17 @@ pub trait ClipboardBackend: Send {
     fn read_files(&mut self, limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError>;
     /// Does the clipboard hold one of `mimes`? Cheap enough to ask a few times a second.
     fn has(&mut self, mimes: &[&str]) -> bool;
+    /// As [`read`](Self::read), but the slow part (the Wayland pipe, a DIB conversion) is left in the returned
+    /// closure, which runs off the UI thread. Reads now and wraps the result by default.
+    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Box<dyn FnOnce() -> Option<Flavor> + Send>>, ClipboardError> {
+        let _ = (mimes, limit);
+        todo!("sh.N1")
+    }
+    /// Whether the clipboard can be read at any time; `false` where it can be read only inside a paste event (the
+    /// web).
+    fn readable_any_time(&self) -> bool {
+        true
+    }
     /// The flavours of a paste the host delivered as an event (the browser's Paste). Only
     /// [`EventClipboard`] keeps them; the system clipboard ignores them.
     fn offer(&mut self, _flavors: Vec<Flavor>) {}

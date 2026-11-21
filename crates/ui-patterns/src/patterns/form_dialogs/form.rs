@@ -147,7 +147,7 @@ type FooterExtraFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 type OnResetFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>) + 'a>;
 
-type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
+type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V, &mut BodyCx<'_>) -> V + 'a>;
 
 /// A dialog over one value `V`.
 ///
@@ -346,9 +346,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// The value Reset sets, given the current value and the one from when the dialog opened; without it Reset sets
-    /// the opening value.
-    pub fn reset_with(mut self, target: impl Fn(&V, &V) -> V + 'a) -> Self {
+    /// The value Reset sets, given the current value, the one from when the dialog opened and the body's context (the
+    /// dialog's own memory); without it Reset sets the opening value.
+    pub fn reset_with(mut self, target: impl Fn(&V, &V, &mut BodyCx<'_>) -> V + 'a) -> Self {
         self.reset_with = Some(Box::new(target));
         self
     }
@@ -417,7 +417,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                     Some(Mixed::Same(held)) => held,
                     _ => opened.clone(),
                 };
-                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened));
+                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened, cx)); // P3(type-w6): ex.P11
                 let _ = bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(current), target, name.clone(), None));
                 if let Some(restore) = on_reset.as_mut() {
                     restore(cx);

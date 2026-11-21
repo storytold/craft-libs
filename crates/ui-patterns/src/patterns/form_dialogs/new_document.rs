@@ -13,7 +13,9 @@ use super::{FormCx, FormDialog, HostRequests, LinkedSize};
 use crate::contract::{Bind, NoValue, Outcome, Remember as _, SaveKey, Scroll, ShowContainer as _};
 use crate::runtime::requests::{ColorRequest, HostAnswer};
 
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
+use crate::dialog::{
+    DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id, serde_fields, set_serde_field,
+};
 
 use crate::layout_components::{Grid, Stack};
 
@@ -759,6 +761,9 @@ pub struct HostedNewDocument<S: DocumentSettings = DocumentOptions> {
     /// The settings the dialog opened on, the clipboard's size and the default name filled in: what Reset restores,
     /// whatever automation sets before the first show.
     opening: S,
+    /// The OK the host holds back until it answers `answer_ok`, and its refusal.
+    #[allow(dead_code)] // P3(files-w3): fl.F30
+    held: HeldAnswer<NewDocumentResult<S>>,
 }
 
 impl<S: DocumentSettings> HostedNewDocument<S> {
@@ -784,6 +789,27 @@ impl<S: DocumentSettings> HostedNewDocument<S> {
     /// Replaces the settings the dialog shows.
     pub fn set_options(&mut self, options: S) {
         let _ = (self, options);
+        todo!("fl.F30")
+    }
+
+    /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
+    /// [`answer_ok`](HostedNewDocument::answer_ok). OK stays disabled until then.
+    #[must_use]
+    pub fn held_ok(self) -> Self {
+        let _ = self;
+        todo!("fl.F30")
+    }
+
+    /// The OK filed by a held dialog, once.
+    pub fn take_ok(&mut self) -> Option<NewDocumentResult<S>> {
+        let _ = self;
+        todo!("fl.F30")
+    }
+
+    /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
+    /// OK again and shows the label until a value changes.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        let _ = (self, answer);
         todo!("fl.F30")
     }
 }
@@ -813,6 +839,7 @@ impl HostedNewDocument<DocumentOptions> {
             recent: Vec::new(),
             tab: TabId::Recent.key(&[]),
             events: Vec::new(),
+            held: HeldAnswer::new(),
         }
     }
 
@@ -948,5 +975,26 @@ impl StackDialog for HostedNewDocument<DocumentOptions> {
 
     fn cancelled(&mut self, _: &egui::Context) {
         self.requests.cancel();
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
+    }
+}
+
+// P3(files-w3): fl.F30 -- the `StackDialog` impl is the raster one until the writer generalises it over `S`.
+impl HoldsOk for HostedNewDocument<DocumentOptions> {
+    type Answer = NewDocumentResult<DocumentOptions>;
+
+    fn held_ok(self) -> Self {
+        HostedNewDocument::held_ok(self)
+    }
+
+    fn take_ok(&mut self) -> Option<NewDocumentResult<DocumentOptions>> {
+        HostedNewDocument::take_ok(self)
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        HostedNewDocument::answer_ok(self, answer);
     }
 }

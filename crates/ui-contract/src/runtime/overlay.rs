@@ -107,6 +107,17 @@ pub enum CloseReason {
     AnchorGone,
 }
 
+/// What a layer is for, beyond its rank.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LayerRole {
+    /// An ordinary layer.
+    #[default]
+    Plain,
+    /// A progress window: `any_open` leaves it out, as it blocks nothing the user waits on.
+    Progress,
+}
+
 /// What `any_open` counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -131,6 +142,8 @@ pub struct OpenEntry {
     pub rank: Rank,
     /// Its key class.
     pub keys: OwnerClass,
+    /// What the layer is for.
+    pub role: LayerRole,
     /// The anchor in screen space.
     pub anchor: Option<Rect>,
     /// The rects in screen space of the other parts of the owner that open popups: a press on one is not outside,
@@ -168,6 +181,7 @@ impl OpenEntry {
             parent: None,
             rank,
             keys,
+            role: LayerRole::default(),
             anchor: None,
             peers: Vec::new(),
             rect,
@@ -362,7 +376,7 @@ pub(crate) fn peek_close(ctx: &Context, id: Id) -> Option<CloseReason> {
 /// Whether any layer of the running viewport that `filter` counts was shown last frame.
 pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
     with_pass(ctx, |pass| {
-        pass.last.iter().filter(|entry| !entry.exiting).any(|entry| match filter {
+        pass.last.iter().filter(|entry| !entry.exiting && entry.role != LayerRole::Progress).any(|entry| match filter {
             OpenFilter::Any => true,
             OpenFilter::Modal => entry.blocks_window(),
             OpenFilter::Keys => entry.takes_keys(),

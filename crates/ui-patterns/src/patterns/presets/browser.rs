@@ -143,7 +143,17 @@ impl<'a, K> ThumbPainter<'a, K> {
     }
 }
 
-type RowItems<'a, K> = Box<dyn Fn(&K) -> Vec<Entry<String>> + 'a>;
+type RowItemsFn<'a, K> = Box<dyn Fn(&K) -> Vec<Entry<String>> + 'a>;
+
+/// The host's rows of the row menu for a target ([`PresetBrowser::row_items`]).
+pub struct RowItems<'a, K>(#[allow(dead_code)] RowItemsFn<'a, K>); // P3(appearance-w5): ap.AP5
+
+impl<'a, K> RowItems<'a, K> {
+    /// The rows that `items` gives for a target.
+    pub fn new(items: impl Fn(&K) -> Vec<Entry<String>> + 'a) -> Self {
+        RowItems(Box::new(items))
+    }
+}
 
 /// A drop target on the presets: a host payload of type `P` dropped onto a preset or between presets.
 pub struct PresetDrop<'a, K> {
@@ -152,7 +162,7 @@ pub struct PresetDrop<'a, K> {
 
 impl<'a, K> PresetDrop<'a, K> {
     /// Takes payloads of type `P` at `place` where `accepts` agrees; the drop comes back as `PresetEvent::Dropped`.
-    pub fn new<P: 'static>(place: DropPlace, accepts: impl Fn(&P, &DropAt<K>) -> bool + 'a) -> Self {
+    pub fn new<P: Send + Sync + 'static>(place: DropPlace, accepts: impl Fn(&P, &DropAt<K>) -> bool + 'a) -> Self {
         let _ = (place, accepts);
         todo!("ap.AP2")
     }
@@ -246,8 +256,12 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     #[prop]
     row_menu: PresetRowMenu,
     /// The host's rows of the row menu for a target, after the standard ones (or alone with `PresetRowMenu::Host`).
-    #[prop(boxed = "Fn(&K) -> Vec<Entry<String>> + 'a")]
+    #[prop(func = "Fn(&K) -> Vec<Entry<String>>")]
     row_items: Option<RowItems<'a, K>>,
+    /// Presets drag out as `ListDrag<K>`, without reorder or a drop zone.
+    #[prop]
+    #[allow(dead_code)] // P3(appearance-w5): ap.AP-drags
+    drags: bool,
     /// Fixes the view, whatever the state says; the toolbar then has no view buttons.
     #[prop]
     view_lock: Option<PresetView>,
@@ -316,6 +330,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             tools: None,
             row_menu: PresetRowMenu::Standard,
             row_items: None,
+            drags: false,
             view_lock: None,
             can_rename: None,
             can_delete: None,
@@ -553,7 +568,7 @@ fn seen<K, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<Seen<K>> {
     events
         .into_iter()
         .filter_map(|event| match event {
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.into_iter().last().map(Seen::Select),
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.into_iter().last().map(Seen::Select), // P3(mechanical): dp.C12
             CollectionEvent::Activate(key) => Some(Seen::Activate(key)),
             CollectionEvent::Open(change) => Some(Seen::Open(change)),
             CollectionEvent::ContextMenu(request) => Some(Seen::Menu(request.key)),
@@ -624,6 +639,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             mut tools,
             row_menu,
             row_items: _,
+            drags: _,
             view_lock,
             can_rename,
             can_delete,

@@ -8,8 +8,8 @@ use super::backend::ClipboardBackend;
 
 /// How often the probe's worker looks at the clipboard while the UI wants to know: 250 ms.
 pub const PROBE_INTERVAL: Duration = Duration::from_millis(250);
-/// How long dropping the probe waits for the worker to let go of its handle: 250 ms.
-pub const PROBE_STOP_WAIT: Duration = Duration::from_millis(250);
+/// How long dropping the probe waits for the worker to let go of its handle: 27 s.
+pub const PROBE_STOP_WAIT: Duration = Duration::from_secs(27);
 
 /// Whether Paste has something to take from the system clipboard, asked on a worker thread.
 ///

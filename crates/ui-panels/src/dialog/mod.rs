@@ -26,7 +26,7 @@ mod words;
 pub use alert::{Alert, AlertOutput, HostedAlert};
 pub use blocking::{BlockingOverlay, BlockingOverlayStyle};
 pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks};
-pub use held::{HeldAnswer, HeldOk};
+pub use held::{HeldAnswer, HeldOk, HoldsOk};
 #[doc(hidden)]
 pub use host::dialog_probe;
 pub use host::{DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, StartupStage};

@@ -67,6 +67,19 @@ fn sub_row_group<K>(key: &LayerRowKey<K>) -> Option<SubRowGroup> {
     }
 }
 
+/// The layer and the place a drop of a host payload on the displayed rows means: the one place `layer_drop` reports
+/// for a reorder of the rows `mv` names, as a target and a position. `None` for a place no layer names.
+#[allow(dead_code)] // P3(document-panels-w2): dp.L3
+pub(super) fn host_place<K: Clone + PartialEq>(
+    mv: &ReorderMove<LayerRowKey<K>>,
+    order: &[LayerRowKey<K>],
+    parent_of: &dyn Fn(&K) -> Option<K>,
+    relaxed: bool,
+) -> Option<(K, LayerPosition)> {
+    let _ = (mv, order, parent_of, relaxed);
+    todo!("dp.L3")
+}
+
 /// What a reorder of the displayed rows means. `order` is the display order the move was made in and
 /// `parent_of` the tree's parent of a layer. A filtered view shows every layer at the top level, so
 /// it matches the landing place by neighbours alone (`relaxed`).

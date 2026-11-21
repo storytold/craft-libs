@@ -113,7 +113,7 @@ pub(super) fn show_body<T: LayerTree>(
         },
         _ => None,
     };
-    let selection_changed = out.events.iter().any(|event| matches!(event, CollectionEvent::Selection(_)));
+    let selection_changed = out.events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })); // P3(mechanical): dp.C12
     let list_events = out.events;
     map_events(cx, &order, &parent_of, filtered, lock_name, session, list_events, &mut events);
     if selection_changed {

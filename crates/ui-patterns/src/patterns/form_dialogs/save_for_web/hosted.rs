@@ -97,6 +97,19 @@ impl HostedSaveForWeb {
         todo!("ex.W8")
     }
 
+    /// The label of the OK button, in place of Save: Done where the host saves the file itself.
+    #[must_use]
+    pub fn ok_label(self, label: impl Into<Label>) -> Self {
+        let _ = label;
+        todo!("ex.W5")
+    }
+
+    /// Forgets the options the last Optimize search found, so its result line goes.
+    pub fn forget_optimized(&mut self) {
+        let _ = self;
+        todo!("ex.W8")
+    }
+
     /// Preview in Browser was pressed since the last call, once; the host previews `current()`.
     pub fn take_browser_preview(&mut self) -> bool {
         let _ = self;

@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use craft_behavior::Selection;
 use craft_ui::contract::ReorderMove;
 use craft_ui::patterns::presets::{PresetRow, PresetState};
 
@@ -29,6 +30,8 @@ pub struct SwatchesState {
     pub browser: PresetState<SwatchKey>,
     /// The selected row.
     pub selected: Option<SwatchKey>,
+    /// The selected rows, with the lead.
+    pub selection: Selection<SwatchKey>,
     /// A row to open the rename on in the next pass.
     pub rename: Option<SwatchKey>,
     /// The notes of the export whose file the host is writing.
@@ -37,7 +40,7 @@ pub struct SwatchesState {
 
 impl Default for SwatchesState {
     fn default() -> Self {
-        SwatchesState { browser: PresetState::new(), selected: None, rename: None, export_notes: None }
+        SwatchesState { browser: PresetState::new(), selected: None, selection: Selection::default(), rename: None, export_notes: None }
     }
 }
 

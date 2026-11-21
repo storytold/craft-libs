@@ -101,6 +101,19 @@ impl Clipboard {
         Ok(Some(flavor))
     }
 
+    /// As [`read`](Self::read), with its limits and gates, but the slow part of the read is the returned closure,
+    /// which runs off the UI thread.
+    pub fn read_later(&mut self, mimes: &[&str]) -> Result<Option<Box<dyn FnOnce() -> Option<Flavor> + Send>>, ClipboardError> {
+        let _ = mimes;
+        todo!("sh.N1")
+    }
+
+    /// Whether the clipboard can be read at any time; `false` where it can be read only inside a paste event (the
+    /// web).
+    pub fn readable_any_time(&self) -> bool {
+        self.backend.readable_any_time()
+    }
+
     /// The clipboard's bitmap. An image that isn't [`ClipboardImage::is_whole`] reads as `None`.
     pub fn read_image(&mut self) -> Result<Option<ClipboardImage>, ClipboardError> {
         let limit = self.limits.image_bytes;

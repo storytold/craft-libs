@@ -1929,6 +1929,7 @@ dependencies = [
  "craft-vectordrawable",
  "craft-video",
  "craft-wasm",
+ "craft-wayland",
  "craft-web-api",
  "craft-web-host",
  "craft-webp",
@@ -2016,6 +2017,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "craft-appkit"
+version = "0.1.0"
 
 [[package]]
 name = "craft-assuan"
@@ -4512,6 +4517,13 @@ dependencies = [
  "thiserror 2.0.21",
  "wasmparser 0.261.0",
  "wasmprinter",
+]
+
+[[package]]
+name = "craft-wayland"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
 ]
 
 [[package]]

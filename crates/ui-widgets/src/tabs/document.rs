@@ -290,7 +290,9 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         let response = shown.response.response.clone();
         for event in shown.response.events {
             match event {
-                CollectionEvent::Selection(SelectionChange::Set(keys)) => events.extend(keys.last().cloned().map(DocumentTabsEvent::Selected)),
+                CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
+                    events.extend(keys.last().cloned().map(DocumentTabsEvent::Selected))
+                } // P3(mechanical): dp.C12
                 CollectionEvent::Activate(key) => events.push(DocumentTabsEvent::Activated(key)),
                 CollectionEvent::Reorder(edit) => {
                     if let (Some(moved), true) = (edit.value(), matches!(edit, EditEvent::Set { .. } | EditEvent::Commit { .. })) {

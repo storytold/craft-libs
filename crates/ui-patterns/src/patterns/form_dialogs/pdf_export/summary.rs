@@ -242,7 +242,7 @@ fn value_text(words: &PdfExportWords, shown: &Shown) -> String {
 
 /// One "Section › Setting: value" line for every setting of `settings` that differs from `base`, in the order of the
 /// sections. Passwords are never part of the comparison.
-pub(crate) fn differences(words: &PdfExportWords, settings: &PdfSettings, base: &PdfSettings) -> Vec<String> {
+pub fn differences(words: &PdfExportWords, settings: &PdfSettings, base: &PdfSettings) -> Vec<String> {
     let base = leaves(base);
     let mut diff: Vec<(&'static str, Shown)> = leaves(settings)
         .into_iter()

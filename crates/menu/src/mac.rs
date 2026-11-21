@@ -78,7 +78,11 @@ impl MacOptions {
 /// [`install`] with `options`.
 pub fn install_with(ctx: &egui::Context, bar: &MenuBar, options: MacOptions) -> Option<NativeMenu> {
     let (spec, targets) = lower(bar);
-    let installed = native::NativeBar::install(&spec, native::Options::default().window_list(options.window_list))?;
+    let wake: native::Wake = Arc::new({
+        let ctx = ctx.clone();
+        move || ctx.request_repaint()
+    });
+    let installed = native::NativeBar::install(&spec, native::Options::default().window_list(options.window_list), wake)?;
     let (tx, rx) = channel();
     let backend = Native { ctx: ctx.clone(), bar: installed, targets: Arc::new(Mutex::new(targets)), tx, rx, pending: None };
     // `NativeMenu::new` attaches the driver's dispatch, which points the handler at this menu.
