@@ -262,9 +262,9 @@ fn spacing_css(s: &Spacing) -> Vec<String> {
     css
 }
 
-/// A paragraph's ` style="…"` attribute (empty when it has nothing to say): its alignment, with
-/// `spaced` its spacing and indents, a page break before it and its shading.
+/// A paragraph's direction and style attributes, including spacing and indents when `spaced` is set.
 fn para_attrs(p: &Para, spaced: bool) -> String {
+    let mut attrs = if p.rtl { " dir=\"rtl\"".to_string() } else { String::new() };
     let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
         css.push(a.to_string());
@@ -278,7 +278,10 @@ fn para_attrs(p: &Para, spaced: bool) -> String {
     if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
         css.push(format!("background-color:#{}", bg.hex()));
     }
-    if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
+    if !css.is_empty() {
+        attrs.push_str(&format!(" style=\"{}\"", css.join(";")));
+    }
+    attrs
 }
 
 /// A paragraph, heading or rule as HTML, with `spaced` keeping its spacing and indents.
@@ -393,7 +396,11 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             }
             let single = match c.blocks.as_slice() {
                 [FBlock::Para(p)]
-                    if p.kind == Kind::Normal && p.list.is_none() && !p.page_break && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
+                    if p.kind == Kind::Normal
+                        && p.list.is_none()
+                        && !p.page_break
+                        && !p.rtl
+                        && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
                 {
                     Some(p)
                 }
@@ -417,6 +424,12 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("</table>\n");
 }
 
+struct ListLevel {
+    ordered: bool,
+    item_open: bool,
+    item_rtl: bool,
+}
+
 /// Append `blocks` as HTML. With `spaced`, plain paragraphs and headings write their own spacing
 /// and indents (for a fragment, which has no style sheet). List items, code and quotes don't.
 fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, spaced: bool) {
@@ -431,35 +444,39 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, spaced: bool) 
             }
             FBlock::Para(p) if p.list.is_some() => {
                 // Nested lists from consecutive list paragraphs.
-                let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
+                let mut stack: Vec<ListLevel> = Vec::new();
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
                     let Some(li) = q.list else { break };
                     let lv = li.level.min(8) as usize;
                     while stack.len() > lv + 1 {
                         close_list(&mut stack, out);
                     }
-                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered) {
+                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.ordered != li.ordered) {
                         close_list(&mut stack, out);
                     }
                     while stack.len() < lv + 1 {
                         if let Some(top) = stack.last_mut()
-                            && !top.1
+                            && !top.item_open
                         {
                             out.push_str("<li>");
-                            top.1 = true;
+                            top.item_open = true;
                         }
                         out.push_str(if li.ordered { "<ol>" } else { "<ul>" });
-                        stack.push((li.ordered, false));
+                        let item_rtl = stack.last().is_some_and(|top| top.item_rtl);
+                        stack.push(ListLevel { ordered: li.ordered, item_open: false, item_rtl });
                     }
+                    let parent_rtl = stack.iter().rev().nth(1).is_some_and(|parent| parent.item_rtl);
                     if let Some(top) = stack.last_mut() {
-                        if top.1 {
+                        if top.item_open {
                             out.push_str("</li>\n");
                         }
-                        top.1 = true;
+                        top.item_open = true;
+                        top.item_rtl = q.rtl;
                     }
                     let body = inlines_html(&q.inlines);
                     let attrs = para_attrs(q, false);
-                    out.push_str(&format!("<li{attrs}>{body}"));
+                    let reset = if parent_rtl && !q.rtl { " dir=\"ltr\"" } else { "" };
+                    out.push_str(&format!("<li{reset}{attrs}>{body}"));
                     i += 1;
                 }
                 while !stack.is_empty() {
@@ -507,12 +524,12 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, spaced: bool) 
     }
 }
 
-fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
-    if let Some((ordered, li_open)) = stack.pop() {
-        if li_open {
+fn close_list(stack: &mut Vec<ListLevel>, out: &mut String) {
+    if let Some(level) = stack.pop() {
+        if level.item_open {
             out.push_str("</li>");
         }
-        out.push_str(if ordered { "</ol>" } else { "</ul>" });
+        out.push_str(if level.ordered { "</ol>" } else { "</ul>" });
     }
 }
 

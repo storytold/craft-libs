@@ -274,6 +274,7 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             Parent::Named(p) => style_id(p),
         };
         let look = &def.look;
+        let parent_rtl = doc.styles.resolve_para(&craft_wordmodel::props::ParaProps { style: Some(based_on.clone()), ..Default::default() }).bidi;
         let sp = &look.spacing;
         let para = craft_wordmodel::props::ParaProps {
             space_before: sp.before,
@@ -298,7 +299,9 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
                 tabs
             }),
             contextual_spacing: look.contextual,
-            bidi: look.rtl.filter(|r| *r),
+            // Left to right only when it overrides a style it is based on that reads right to left
+            // (the parents are added first); otherwise it is the default anyway.
+            bidi: look.rtl.filter(|r| *r || parent_rtl),
             // The document's nine levels; ODF's tenth is the last of them.
             outline_level: def.outline.map(|o| o.clamp(1, 9) - 1),
             ..Default::default()
@@ -806,6 +809,7 @@ struct Parsed {
     scripts: craft_wordmodel::props::CharProps,
     /// The document's default language, if it states one.
     default_lang: Option<String>,
+    default_rtl: Option<bool>,
     /// The default tab interval, points.
     default_tab: Option<f32>,
     /// Tab stops are measured from the indent (LibreOffice's `TabsRelativeToIndent`).
@@ -1021,6 +1025,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         widows: styles.stated_widows(),
         scripts: styles.default_scripts.clone(),
         default_lang: styles.document_lang(),
+        default_rtl: styles.default_rtl,
         default_tab: styles.default_tab,
         tabs_from_indent: styles.tabs_from_indent,
         page_doc: pages.doc.clone(),
@@ -1067,6 +1072,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         widows,
         scripts,
         default_lang,
+        default_rtl,
         default_tab,
         tabs_from_indent,
         page_doc,
@@ -1132,6 +1138,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         (doc.settings.endnote_format, doc.settings.endnote_pr) = (fmt, props);
     }
     let d = &mut Arc::make_mut(&mut doc.styles).default_para;
+    d.bidi = default_rtl;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
     // Unstated: on, XSL's initial value of 2 lines (§20.312 and §20.244 refer to it), and Word's.

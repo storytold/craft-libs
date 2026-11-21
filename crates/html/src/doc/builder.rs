@@ -43,6 +43,8 @@ struct El {
     /// automatic spacing.
     auto_margins: bool,
     align: Option<Align>,
+    /// Effective paragraph direction for this element and its descendants.
+    rtl: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -101,6 +103,7 @@ struct ElementStyle {
     fmt: Fmt,
     block_background: Option<Rgb>,
     align: Option<Align>,
+    rtl: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -621,7 +624,7 @@ impl<'r> Builder<'r> {
     /// Paragraph context from the open elements (innermost first, up to the enclosing cell).
     pub(super) fn start_para(&mut self) -> &mut Para {
         if self.para.is_none() {
-            let mut p = Para::default();
+            let mut p = Para { rtl: self.paragraph_rtl(), ..Default::default() };
             let mut list_level: Option<(bool, usize)> = None;
             let mut li_at: Option<usize> = None;
             let mut lists = 0usize;
@@ -1185,6 +1188,11 @@ impl<'r> Builder<'r> {
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind, css: &str) -> ElementStyle {
         let mut fmt = self.fmt();
         let mut align = None;
+        let mut rtl = match attr(attrs, "dir").map(str::trim) {
+            Some(dir) if dir.eq_ignore_ascii_case("rtl") => true,
+            Some(dir) if dir.eq_ignore_ascii_case("ltr") => false,
+            _ => self.paragraph_rtl(),
+        };
         let mut preserve = self.preserve();
         let mut page_break = false;
         let mut page_break_after = false;
@@ -1239,7 +1247,7 @@ impl<'r> Builder<'r> {
             .stack
             .last()
             .and_then(|e| if !self.page && matches!(e.name.as_str(), "body" | "html") { None } else { e.fmt.background.or(e.block_background) });
-        apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
+        apply_style(css, &mut fmt, (&mut align, &mut rtl), &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
         if kind == ElKind::Pre {
             preserve = true;
         }
@@ -1256,7 +1264,11 @@ impl<'r> Builder<'r> {
             // background, so drop it too rather than painting light text on the page default.
             fmt.color = None;
         }
-        ElementStyle { fmt, block_background, align, preserve, page_break, page_break_after }
+        ElementStyle { fmt, block_background, align, rtl, preserve, page_break, page_break_after }
+    }
+
+    fn paragraph_rtl(&self) -> bool {
+        self.stack.iter().rev().find(|e| e.kind != ElKind::Inline).is_some_and(|e| e.rtl)
     }
 
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
@@ -1292,7 +1304,8 @@ impl<'r> Builder<'r> {
             self.flush();
         }
         let css = self.css_of(name, attrs);
-        let ElementStyle { mut fmt, block_background, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
+        let ElementStyle { mut fmt, block_background, align, rtl, preserve, page_break, page_break_after } =
+            self.element_style(name, attrs, kind, &css);
         match kind {
             ElKind::Table => self.tables.push(TableB {
                 rows: Vec::new(),
@@ -1393,6 +1406,7 @@ impl<'r> Builder<'r> {
             spacing,
             auto_margins,
             align,
+            rtl,
             preserve,
             page_break,
             page_break_after,
