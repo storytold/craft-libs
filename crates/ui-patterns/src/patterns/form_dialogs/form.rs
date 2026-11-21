@@ -417,7 +417,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                     Some(Mixed::Same(held)) => held,
                     _ => opened.clone(),
                 };
-                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened, cx)); // P3(type-w6): ex.P11
+                let target = reset_with.as_ref().map_or(opened.clone(), |target| target(&current, &opened, cx));
                 let _ = bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(current), target, name.clone(), None));
                 if let Some(restore) = on_reset.as_mut() {
                     restore(cx);

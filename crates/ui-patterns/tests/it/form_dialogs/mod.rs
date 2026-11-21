@@ -15,4 +15,5 @@ mod preview;
 mod preview_width;
 mod properties;
 mod save_for_web;
+mod section_list;
 mod size_model;

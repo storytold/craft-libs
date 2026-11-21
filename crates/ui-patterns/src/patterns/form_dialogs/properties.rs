@@ -1,10 +1,16 @@
 //! `PropertiesDialog`: an object's properties as tabs of label and value rows, with text, number and check rows to
 //! edit and read-only rows to read.
 
-use super::{DialogFields, FormDialog, HostRequests, Param, ParamRows, ParamRowsOutput, open_fields};
-use crate::contract::{Bind, CollectionEvent, NoValue, Outcome, Remember as _, Show as _, ShowCollection as _};
-use crate::dialog::{DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
+use super::dialog::{ResetFooter, ResetPick, apply_answers, set_param_field};
+use super::form::{read_bind, write_bind};
+use super::param::fill_defaults;
+use super::{DialogFields, FormDialog, HostRequests, Param, ParamRows, ParamRowsOutput, SectionList, open_fields};
+use crate::buttons::Button;
+use crate::contract::{Bind, CollectionEvent, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowCollection as _, clicked};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
 use crate::display::Text;
+use crate::list::ListRow;
+use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::requests::{ColorRequest, HostAnswer};
@@ -12,11 +18,12 @@ use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::tabs::{Tab, TabKind, TabStrip};
 use craft_behavior::{DisplayOrder, ItemSource, SelectionChange};
-use craft_theme::Srgba;
+use craft_theme::variant::Tone;
 use egui::{Context, Response, Ui};
 use serde_json::Value;
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -103,17 +110,17 @@ impl PropertiesTab {
 
     /// Names the tab for automation and for the host.
     #[must_use]
-    pub fn key(self, key: impl Into<String>) -> Self {
-        let _ = (self, key);
-        todo!("ty.X75")
+    pub fn key(mut self, key: impl Into<String>) -> Self {
+        self.key = Some(key.into());
+        self
     }
 
     /// Enables the footer's Reset Panel button while this tab shows; a press puts the tab's keys back to their rows'
     /// defaults.
     #[must_use]
-    pub fn resettable(self) -> Self {
-        let _ = self;
-        todo!("ty.X76")
+    pub fn resettable(mut self) -> Self {
+        self.resettable = true;
+        self
     }
 
     /// The parameters the rows are: a value is a read-only text row, a heading is a section.
@@ -172,6 +179,8 @@ pub struct PropertiesOutput {
     pub rows: Option<ParamRowsOutput>,
     /// Reset Panel was pressed this pass.
     pub tab_reset: bool,
+    /// The answer OK filed this pass while `hold_ok` is on; the host accepts or refuses it.
+    pub held: Option<DialogFields>,
 }
 
 impl Outcome for PropertiesOutput {
@@ -190,7 +199,13 @@ impl Outcome for PropertiesOutput {
 ///   it answers with empty values.
 /// - Values: the `values` binding holds them; the first pass fills the rows' defaults for keys it lacks. Alt turns
 ///   Cancel into Reset, which restores the values from when the dialog opened.
-/// - Tab: the shown tab is kept while the dialog is open.
+/// - Tab: the shown tab is kept while the dialog is open; with [`TabLayout::List`] the tabs stand as a list of sections
+///   at the start edge instead of a strip.
+/// - Reset Panel: a footer button, enabled while the shown tab is [`resettable`](PropertiesTab::resettable); it puts
+///   that tab's keys back to their rows' defaults, and Alt on Cancel still restores the values from when the dialog
+///   opened.
+/// - Held OK: with `hold_ok`, OK files its answer in the output's `held` and the dialog stays open until the host sets
+///   `finish_held` or a `refusal`.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct PropertiesDialog<'a> {
@@ -217,12 +232,19 @@ pub struct PropertiesDialog<'a> {
     preview: Option<Bind<'a, bool>>,
     /// Whether OK is enabled.
     #[prop]
-    #[allow(dead_code)] // P3(type-w6): ty.X82
     ok_enabled: bool,
     /// Why OK is disabled: the tooltip of the disabled button.
     #[prop]
-    #[allow(dead_code)] // P3(type-w6): ty.X82
     ok_reason: Option<Label>,
+    /// OK files its answer in the output's `held` instead of closing the dialog; the host answers it.
+    #[prop]
+    hold_ok: bool,
+    /// The host accepted the held answer: the dialog closes with it.
+    #[prop]
+    finish_held: bool,
+    /// The host refused the held answer for the reason, which shows under the rows until the values change.
+    #[prop]
+    refusal: Option<(Label, DialogFields)>,
 }
 
 impl<'a> PropertiesDialog<'a> {
@@ -240,63 +262,158 @@ impl<'a> PropertiesDialog<'a> {
             preview: None,
             ok_enabled: true,
             ok_reason: None,
+            hold_ok: false,
+            finish_held: false,
+            refusal: None,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> PropertiesOutput {
-        let PropertiesDialog { title, tabs, values, read_only, open, tab_layout: _, tab: _, answers: _, preview: _, ok_enabled: _, ok_reason: _ } =
-            self;
+        let PropertiesDialog {
+            title,
+            tabs,
+            mut values,
+            read_only,
+            open,
+            tab_layout,
+            tab: mut tab_bind,
+            answers,
+            preview,
+            ok_enabled,
+            ok_reason,
+            hold_ok,
+            finish_held,
+            refusal,
+        } = self;
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
+        let words = env.words::<PropertiesWords>();
         let per_tab: Vec<Vec<Param>> = tabs.iter().enumerate().map(|(at, tab)| tab.params(at)).collect();
-        let mut dialog = FormDialog::new(title.clone(), values).collection_body(true);
+        let hold = hold_ok && !read_only;
+        let bound_tab = tab_bind.as_mut().and_then(read_bind);
+        let footer = ResetFooter::new(ui, None, !read_only);
+        // The footer is a region of its own: the body tells it whether the shown tab resets, and it tells back a press.
+        let (resettable, pressed) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        let mut dialog = FormDialog::new(title.clone(), values.reborrowed())
+            .collection_body(true)
+            .ok_enabled(ok_enabled)
+            .accept_stays_open(hold)
+            .answers(answers);
+        if let Some(reason) = ok_reason {
+            dialog = dialog.ok_reason(reason);
+        }
         if read_only {
             let ok = FooterButton::new(common.ok.clone(), DialogRole::Accept);
             dialog = dialog.alt_resets(false).shaped(move |dialog| dialog.buttons([ok]));
+        } else if tabs.iter().any(|tab| tab.resettable) {
+            let (on, pressed, label) = (Rc::clone(&resettable), Rc::clone(&pressed), words.reset_tab.clone());
+            dialog = dialog.footer_extra(move |ui| {
+                if clicked(&Button::new(label.clone()).enabled(on.get()).show(ui)) {
+                    pressed.set(true);
+                }
+            });
         }
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
+        if let Some(preview) = preview {
+            dialog = dialog.preview(Some(preview));
+        }
         let rows = RefCell::new(None::<ParamRowsOutput>);
+        let (shown_tab, mut latest) = (Cell::new(0), None::<DialogFields>);
         let shown = dialog.show(ui, |ui, form, fields| {
             if form.first() {
                 let all: Vec<Param> = per_tab.iter().flatten().cloned().collect();
                 open_fields(&all, fields);
             }
             let last = tabs.len().saturating_sub(1);
-            let mut current = form.memory::<OpenTab>().0.min(last);
-            if tabs.len() > 1 {
-                let strip = TabStrip::new(title.clone())
-                    .kind(TabKind::Text)
-                    .shown(current)
-                    .show_items(ui, &Titles(&tabs), &mut |key, _| Tab::new(tabs[*key].title.clone()));
-                for event in strip.response.events {
-                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
-                        && let Some(key) = keys.into_iter().last()
-                    {
-                        current = key.min(last);
-                    }
-                }
-            }
+            let mut current = bound_tab.unwrap_or_else(|| form.memory::<OpenTab>().0).min(last);
+            let answers = form.take_answers();
             if let Some(params) = per_tab.get(current) {
-                *rows.borrow_mut() = Some(ParamRows::new(title.clone(), params, Bind::bound(&mut *fields)).read_only(read_only).show(ui));
+                apply_answers(params, fields, answers);
+            }
+            // A measuring run closes nothing: the real run of the same pass makes the close.
+            if finish_held && !crate::runtime::measure::active(ui.ctx()) {
+                form.request_close_as(CloseReason::Activated);
+            }
+            let mut show_rows = |ui: &mut Ui, current: usize| {
+                if let Some(params) = per_tab.get(current) {
+                    *rows.borrow_mut() = Some(ParamRows::new(title.clone(), params, Bind::bound(&mut *fields)).read_only(read_only).show(ui));
+                }
+            };
+            let titles = Titles(&tabs);
+            let title_of = |key: &usize| tabs.get(*key).map_or(Label::Empty, |tab| tab.title.clone());
+            match (tabs.len() > 1, tab_layout) {
+                (true, TabLayout::List) => {
+                    let picked = SectionList::new(title.clone(), &titles, current).show(ui, |key| ListRow::new(title_of(key)), |ui| show_rows(ui, current));
+                    current = picked.map_or(current, |key| key.min(last));
+                }
+                (true, TabLayout::Strip) => {
+                    let strip = TabStrip::new(title.clone())
+                        .kind(TabKind::Text)
+                        .shown(current)
+                        .show_items(ui, &titles, &mut |key, _| Tab::new(title_of(key)));
+                    for event in strip.response.events {
+                        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
+                            && let Some(key) = keys.into_iter().last()
+                        {
+                            current = key.min(last);
+                        }
+                    }
+                    show_rows(ui, current);
+                }
+                _ => show_rows(ui, current),
+            }
+            if let Some((reason, _)) = refusal.as_ref().filter(|(_, refused)| *refused == *fields) {
+                Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
             }
             form.memory::<OpenTab>().0 = current;
+            shown_tab.set(current);
+            resettable.set(tabs.get(current).is_some_and(|tab| tab.resettable));
+            if hold {
+                latest = Some(fields.clone());
+            }
             true
         });
+        if let Some(bind) = tab_bind.as_mut()
+            && read_bind(bind) != Some(shown_tab.get())
+        {
+            write_bind(bind, shown_tab.get());
+        }
+        let tab_reset = pressed.get();
+        if tab_reset
+            && let Some(tab) = tabs.get(shown_tab.get())
+        {
+            let mut fields = read_bind(&mut values).unwrap_or_default();
+            Self::reset_tab(tab, shown_tab.get(), &mut fields);
+            write_bind(&mut values, fields);
+        }
         let result = match shown.closed {
             Some(_) if read_only => Some(DialogFields::new()),
             _ => shown.accepted,
         };
-        PropertiesOutput { response: shown.response, closed: shown.closed, result, rows: rows.into_inner(), tab_reset: false }
+        let held = match (footer.pick(shown.picked), latest) {
+            (Some(ResetPick::Accept), Some(fields)) if result.is_none() => Some(fields),
+            _ => None,
+        };
+        PropertiesOutput { response: shown.response, closed: shown.closed, result, rows: rows.into_inner(), tab_reset, held }
     }
 
     /// Puts the keys of `tab` (the tab at position `at`) back to their rows' defaults, as the Reset Panel button does;
     /// a key whose row has no default is removed.
     pub fn reset_tab(tab: &PropertiesTab, at: usize, fields: &mut DialogFields) {
-        let _ = (tab, at, fields);
-        todo!("ty.X78")
+        let params = tab.params(at);
+        for param in &params {
+            fields.remove(&param.key);
+            if let Some(unit) = param.unit_key() {
+                fields.remove(unit);
+            }
+        }
+        fill_defaults(&params, fields);
+        if let Some(key) = &tab.key {
+            fields.mark_reset(key.clone());
+        }
     }
 }
 
@@ -317,14 +434,20 @@ pub struct HostedPropertiesDialog {
     fields: DialogFields,
     build: Box<Build>,
     /// The colour requests the rows made, and the host's answers to them.
-    #[allow(dead_code)] // P3(type-w6): fl.F36
     requests: HostRequests,
     /// The tab the host shows, bound to the dialog's `tab` prop.
-    #[allow(dead_code)] // P3(type-w6): fl.F36
     tab: usize,
+    /// Whether the dialog has the Preview check box ([`previews`](HostedPropertiesDialog::previews)).
+    previews: bool,
+    /// The Preview check box's value, bound to the dialog's `preview` prop so it is known before the first pass.
+    preview_on: bool,
+    /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedPropertiesDialog::held_ok)).
+    hold: bool,
     /// The OK the host holds back until it answers `answer_ok`, and its refusal.
-    #[allow(dead_code)] // P3(type-w6): ty.X82
     held: HeldAnswer<DialogFields>,
+    /// The host's refusal of the current values ([`refuse`](HostedPropertiesDialog::refuse)): the reason and the values
+    /// it refused.
+    refusal: Option<(Label, DialogFields)>,
 }
 
 impl HostedPropertiesDialog {
@@ -342,8 +465,22 @@ impl HostedPropertiesDialog {
             build: Box::new(build),
             requests: HostRequests::new(),
             tab: 0,
+            previews: false,
+            preview_on: true,
+            hold: false,
             held: HeldAnswer::new(),
+            refusal: None,
         }
+    }
+
+    /// The tabs `build` makes over the current values.
+    fn tabs(&self) -> Vec<PropertiesTab> {
+        (self.build)(Bind::given(self.fields.clone())).tabs.into_owned()
+    }
+
+    /// The params of every tab, for the rows `set_json_field` may set.
+    fn params(&self) -> Vec<Param> {
+        self.tabs().iter().enumerate().flat_map(|(at, tab)| tab.params(at)).collect()
     }
 
     /// The values the dialog shows.
@@ -354,84 +491,71 @@ impl HostedPropertiesDialog {
     /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
     /// [`answer_ok`](HostedPropertiesDialog::answer_ok). OK stays disabled until then.
     #[must_use]
-    pub fn held_ok(self) -> Self {
-        let _ = self;
-        todo!("ty.X82")
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
     }
 
     /// [`held_ok`](HostedPropertiesDialog::held_ok) for a dialog already open.
     pub fn hold_ok(&mut self) {
-        let _ = self;
-        todo!("ty.X82")
+        self.hold = true;
     }
 
     /// The OK filed by a held dialog, once.
     pub fn take_ok(&mut self) -> Option<DialogFields> {
-        let _ = self;
-        todo!("ty.X82")
+        self.held.take()
     }
 
     /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
-    /// OK again and shows the label under the rows until a value changes.
+    /// OK again and shows the label under the rows until a value changes. Without a held OK it does nothing.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        let _ = (self, answer);
-        todo!("ty.X82")
+        self.held.answer(answer);
     }
 
     /// `Some`: the host refuses the current values, and OK stays off with the reason shown under the rows until the
     /// values change; `None` ends the refusal.
     pub fn refuse(&mut self, reason: Option<Label>) {
-        let _ = (self, reason);
-        todo!("ty.X82")
-    }
-
-    /// The colour row whose button was pressed, once.
-    pub fn pick_color(&mut self) -> Option<ColorRequest> {
-        let _ = self;
-        todo!("fl.F36")
-    }
-
-    /// Answers the colour request `key`: the dialog writes the colour into its values in its next pass.
-    pub fn answer_color(&mut self, key: impl Into<String>, color: Srgba) {
-        let _ = (self, key, color);
-        todo!("fl.F36")
-    }
-
-    /// Drops the pending colour request.
-    pub fn cancel_color(&mut self) {
-        let _ = self;
-        todo!("fl.F36")
+        self.refusal = reason.map(|reason| (reason, self.fields.clone()));
     }
 
     /// The dialog has the Preview check box, starting on.
     #[must_use]
-    pub fn previews(self) -> Self {
-        let _ = self;
-        todo!("ty.X79")
+    pub fn previews(mut self) -> Self {
+        self.previews = true;
+        self.preview_on = true;
+        self
     }
 
     /// Whether the dialog previews and its Preview check box is on.
     pub fn is_previewing(&self) -> bool {
-        let _ = self;
-        todo!("ty.X80")
+        self.previews && self.preview_on
     }
 
     /// The position of the shown tab, which the host binds.
     pub fn tab(&self) -> usize {
-        let _ = self;
-        todo!("ty.X81")
+        self.tab
     }
 
     /// Whether Reset Panel is enabled: the shown tab is resettable.
     pub fn can_reset_tab(&self) -> bool {
-        let _ = self;
-        todo!("ty.X81")
+        self.tabs().get(self.tab).is_some_and(|tab| tab.resettable)
     }
 
     /// Runs Reset Panel on the shown tab, as the button does; whether it changed a value.
     pub fn reset_tab(&mut self) -> bool {
-        let _ = self;
-        todo!("ty.X81")
+        let tabs = self.tabs();
+        let Some(tab) = tabs.get(self.tab).filter(|tab| tab.resettable) else { return false };
+        let before = self.fields.clone();
+        PropertiesDialog::reset_tab(tab, self.tab, &mut self.fields);
+        self.fields != before
+    }
+
+    /// The key of the tab at `at`, else its position, as the `tab` field names it.
+    fn tab_name(tabs: &[PropertiesTab], at: usize) -> Value {
+        match tabs.get(at).and_then(|tab| tab.key.clone()) {
+            Some(key) => Value::from(key),
+            None => Value::from(at),
+        }
     }
 }
 
@@ -443,9 +567,43 @@ impl StackDialog for HostedPropertiesDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<DialogFields>> {
-        let shown = (self.build)(Bind::bound(&mut self.fields)).show(ui);
+        let measuring = crate::runtime::measure::active(ui.ctx());
+        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
+        let finish = self.held.is_accepted();
+        let mut dialog = (self.build)(Bind::bound(&mut self.fields))
+            .tab(Bind::bound(&mut self.tab))
+            .answers(answers)
+            .hold_ok(self.hold)
+            .finish_held(finish);
+        if self.previews {
+            dialog = dialog.preview(Bind::bound(&mut self.preview_on));
+        }
+        // The host's refusal of the held OK leaves OK enabled; its refusal of the values does not.
+        if let Some((reason, refused)) = self.held.refusal() {
+            dialog = dialog.refusal((reason.clone(), refused.clone()));
+        } else if let Some((reason, refused)) = &self.refusal {
+            dialog = dialog.refusal((reason.clone(), refused.clone())).ok_enabled(false);
+        }
+        // OK waits for the host's answer: a second OK cannot file over the held one.
+        if self.held.is_waiting() {
+            dialog = dialog.ok_enabled(false);
+        }
+        let mut shown = dialog.show(ui);
+        if let Some(rows) = shown.rows.as_mut() {
+            self.requests.absorb(rows);
+        }
+        if self.held.refusal().is_some_and(|(_, refused)| *refused != self.fields) {
+            self.held.clear_refusal();
+        }
+        if self.refusal.as_ref().is_some_and(|(_, refused)| *refused != self.fields) {
+            self.refusal = None;
+        }
+        if let Some(answer) = shown.held {
+            self.held.file(answer);
+        }
         match (shown.result, shown.closed) {
             (Some(result), _) => Some(DialogResult::Ok(result)),
+            (None, Some(CloseReason::Activated)) if finish => Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok)),
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
         }
@@ -455,33 +613,82 @@ impl StackDialog for HostedPropertiesDialog {
         Some(&self.key)
     }
 
-    /// The values as [`DialogFields`] serializes them, plus `"tab"` (the shown tab's key) and `"preview"`.
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
+    }
+
+    fn take_color_request(&mut self) -> Option<ColorRequest> {
+        self.requests.take_color()
+    }
+
+    // PLAN: fl.F36 names inherent `pick_color`/`answer_color`/`cancel_color`; they clash with co.K13's trait methods,
+    // so these serve, and `cancelled` drops the pending request.
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba) {
+        self.requests.answer_color(key, color);
+    }
+
+    /// The values as [`DialogFields`] serializes them, plus `"tab"` (the shown tab's key, else its position) and, with
+    /// the Preview check box, `"preview"`.
     fn json_fields(&self) -> Option<Value> {
-        todo!("ty.X82")
+        let mut fields = serde_json::to_value(&self.fields).ok()?;
+        let map = fields.as_object_mut()?;
+        map.insert("tab".to_owned(), Self::tab_name(&self.tabs(), self.tab));
+        if self.previews {
+            map.insert("preview".to_owned(), Value::Bool(self.preview_on));
+        }
+        Some(fields)
     }
 
-    /// Takes `tab` (a key), `preview` (a bool), else a param field over every tab's params; inactive and unknown fields
-    /// are refused.
-    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("ty.X82")
+    /// Takes `tab` (a key, or a position), `preview` (a bool), else a param field over every tab's params; inactive and
+    /// unknown fields are refused.
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
+        match field {
+            "tab" => {
+                let tabs = self.tabs();
+                let at = match &value {
+                    Value::String(key) => tabs.iter().position(|tab| tab.key.as_deref() == Some(key.as_str())),
+                    Value::Number(at) => at.as_u64().and_then(|at| usize::try_from(at).ok()).filter(|at| *at < tabs.len()),
+                    _ => None,
+                };
+                self.tab = at.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                Ok(())
+            }
+            "preview" if self.previews => {
+                self.preview_on = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                Ok(())
+            }
+            _ => set_param_field(&self.params(), &mut self.fields, field, value),
+        }
     }
 
-    /// The values, as OK answers them (empty values when read-only).
-    fn confirm(&mut self, ctx: &Context) -> Option<DialogFields> {
-        let _ = ctx;
-        todo!("ty.X82")
+    /// The values, as OK answers them (empty values when read-only); none while OK is disabled. A held dialog files the
+    /// answer for the host, as its button does, and answers none; once the host accepted the held answer, it answers
+    /// that.
+    fn confirm(&mut self, _: &Context) -> Option<DialogFields> {
+        if self.held.is_accepted() {
+            return self.held.finish();
+        }
+        if self.held.is_waiting() || self.refusal.is_some() {
+            return None;
+        }
+        let (enabled, read_only) = {
+            let dialog = (self.build)(Bind::bound(&mut self.fields));
+            (dialog.ok_enabled, dialog.read_only)
+        };
+        if !enabled {
+            return None;
+        }
+        let answer = if read_only { DialogFields::new() } else { self.fields.clone() };
+        if self.hold && !read_only {
+            self.held.file(answer);
+            return None;
+        }
+        Some(answer)
     }
 
     /// Drops the pending colour requests.
-    fn cancelled(&mut self, ctx: &Context) {
-        let _ = ctx;
-        todo!("ty.X82")
-    }
-
-    /// Where the held OK stands.
-    fn held_state(&self) -> Option<HeldOk> {
-        todo!("ty.X82")
+    fn cancelled(&mut self, _: &Context) {
+        self.requests.cancel();
     }
 }
 

@@ -74,8 +74,8 @@ impl<'a> NameCheck<'a> {
 }
 
 impl NameCheck<'_> {
-    /// The refusal of `name`, `None` when the host accepts it.
-    pub fn refuses(&self, name: &str) -> Option<PresetError> {
+    /// Why the host refuses `name`; the preset editor of the PDF dialog asks it for its own name field.
+    pub(crate) fn refuses(&self, name: &str) -> Option<PresetError> {
         (self.0)(name)
     }
 }
