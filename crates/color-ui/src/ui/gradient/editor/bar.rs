@@ -133,7 +133,8 @@ struct Drag {
     /// Where the press was and the marker's location then, so the marker doesn't jump.
     press: Pos2,
     grab: f32,
-    /// Alt was held at the press: the drag moves a copy of the stop.
+    /// Alt was held at the press: the drag moves a copy of the stop, or under `AltDrop::Swap` swaps its colours with
+    /// the colour stop it is held over.
     copy: bool,
 }
 
@@ -387,17 +388,23 @@ impl Geometry {
         }
     }
 
-    /// The colour stop or location a payload dropped at `pos` lands on.
-    fn drop_place(&self, stops: &GradientStops, pos: Pos2) -> StopDrop {
-        let near = stops
+    /// The colour stop other than `except` nearest to `x` and within `hit` of it.
+    fn nearest_color(&self, stops: &GradientStops, x: f32, except: Option<usize>) -> Option<usize> {
+        stops
             .color
             .iter()
             .enumerate()
-            .map(|(i, s)| (i, (self.x(s.location) - pos.x).abs()))
+            .filter(|(i, _)| Some(*i) != except)
+            .map(|(i, s)| (i, (self.x(s.location) - x).abs()))
             .filter(|(_, d)| *d <= self.hit)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        match near {
-            Some((i, _)) => StopDrop::OnStop(i),
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
+    /// The colour stop or location a payload dropped at `pos` lands on.
+    fn drop_place(&self, stops: &GradientStops, pos: Pos2) -> StopDrop {
+        match self.nearest_color(stops, pos.x, None) {
+            Some(i) => StopDrop::OnStop(i),
             None => StopDrop::At(stops::round_location(self.location(pos.x))),
         }
     }
@@ -482,7 +489,7 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
         self.select = Some(marker);
     }
 
-    /// The drag's stops with the marker at the pointer: moved, copied, or torn off.
+    /// The drag's stops with the marker at the pointer: moved, copied, colour-swapped, or torn off.
     fn drag_to(&mut self, cx: &mut Cx<'_, Self>, geo: &Geometry, drag: &Drag, pos: Pos2) {
         let Drag { marker, ref base, press, grab, copy, .. } = *drag;
         let to = grab + geo.location(pos.x) - geo.location(press.x);
@@ -500,9 +507,14 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
             }
             m => {
                 let (row, i, at) = (m.row(), m.index(), stops::round_location(to));
+                // Chosen from the stops at the press, so a pointer that leaves the other stop returns to the copy.
+                let swap = (moved && copy && row == StopRow::Color && rules.alt_drop == stops::AltDrop::Swap)
+                    .then(|| geo.nearest_color(base, pos.x, Some(i)).and_then(|j| stops::swap_colors(base, i, j)))
+                    .flatten()
+                    .map(|(s, j)| (s, Some(StopRef::stop(row, j))));
                 // At the row's minimum a stop dragged off the bar stays and moves.
                 let torn = (off && !copy).then(|| stops::remove(base, row, i, rules)).flatten().map(|(s, _)| (s, None));
-                let edited = torn.or_else(|| match (moved, copy) {
+                let edited = swap.or(torn).or_else(|| match (moved, copy) {
                     (false, _) => None,
                     (true, true) => stops::copy(base, row, i, at, rules).map(|(s, j)| (s, Some(StopRef::stop(row, j)))),
                     (true, false) => stops::move_to(base, row, i, at, rules).map(|(s, j)| (s, Some(StopRef::stop(row, j)))),

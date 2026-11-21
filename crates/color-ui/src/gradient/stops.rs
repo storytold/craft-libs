@@ -81,8 +81,16 @@ impl Default for StopRules {
 /// The stops with the colours of stops `i` and `j` exchanged (RGB and `tag`; locations, alpha and
 /// midpoints stay), and the index of the stop `i`; `None` for `i == j` or an index out of range.
 pub fn swap_colors(stops: &GradientStops, i: usize, j: usize) -> Option<(GradientStops, usize)> {
-    let _ = (stops, i, j);
-    todo!("co.K39")
+    if i == j || i >= stops.color.len() || j >= stops.color.len() {
+        return None;
+    }
+    let (a, b) = (stops.color[i], stops.color[j]);
+    let mut out = stops.clone();
+    out.color[i].color = Srgba { a: a.color.a, ..b.color };
+    out.color[i].tag = b.tag;
+    out.color[j].color = Srgba { a: b.color.a, ..a.color };
+    out.color[j].tag = a.tag;
+    Some((out, i))
 }
 
 /// One Left or Right press moves a stop or midpoint by this share of the bar or line.

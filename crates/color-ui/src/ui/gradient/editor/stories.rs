@@ -1,6 +1,7 @@
 //! Stories of `GradientEditor`.
 
 use super::{GradientEditor, GradientEditorOutput};
+use crate::gradient::stops::AltDrop;
 use crate::ui::gradient::{ColorStop, GradientStops, OpacityStop, StopRef, StopRows, StopRules};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
@@ -65,6 +66,15 @@ fn gradient_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn gradient_editor_combined(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let stops = data.value("stops", combined());
     let output = GradientEditor::new("Gradient", Bind::bound(stops)).rules(StopRules::new(StopRows::Combined)).show(ui);
+    hinted(ui, data, output)
+}
+
+/// An Alt-drag of a colour stop onto another swaps their colours.
+#[story(GradientEditor<'static, u8>, covers = [], drive = Drive::Never, title = "Alt-drop swaps")]
+fn gradient_editor_alt_drop_swap(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let stops = data.value("stops", combined());
+    let rules = StopRules::new(StopRows::Combined).alt_drop(AltDrop::Swap);
+    let output = GradientEditor::new("Gradient", Bind::bound(stops)).rules(rules).show(ui);
     hinted(ui, data, output)
 }
 

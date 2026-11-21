@@ -72,7 +72,8 @@ impl<P> Outcome for GradientEditorOutput<P> {
 /// Pointer: a press on a marker or diamond selects and grabs it without a jump; a drag moves it (stops pass their
 /// neighbours and the selection follows) and is one gesture. A stop dragged more than the tear-off distance above or
 /// below the ramp is removed while its row is above the minimum, and comes back on re-entry within the drag. Alt held
-/// at the press drags a copy, which can't be torn off. A click on empty space adds a stop there (under `Split`, above
+/// at the press drags a copy, which can't be torn off; under `AltDrop::Swap` a colour stop held over another colour
+/// stop swaps their colours instead (locations, opacities and midpoints stay). A click on empty space adds a stop there (under `Split`, above
 /// the ramp's centre an opacity stop) as one Set; a press and drag on empty space does nothing. A double click on a
 /// colour stop asks for its colour.
 ///
