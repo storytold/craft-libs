@@ -8,6 +8,8 @@ use egui::Id;
 #[derive(Debug, Default)]
 #[doc(hidden)]
 pub struct PaintRecord {
+    /// A face dropped its label, as a compact group level drops an inline one: the label is no tooltip text.
+    pub label_dropped: bool,
     /// The full text of the first elided run, shown as the tooltip and accessible name when no tooltip is set.
     pub elided: Option<String>,
     /// The screen y of the first text's baseline; step 17 turns it into a distance from the component's top, which

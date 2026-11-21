@@ -33,9 +33,9 @@ use super::popover::compact_picker;
 use super::{PickedColor, ScreenPickGesture, SwatchKey, SwatchPalette, SwatchesWords, swatch_rows};
 use crate::palette::{SwatchColor, SwatchGroup};
 
-mod paint_list;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod paint_list;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use paint_list::{PaintLink, PaintLinkKind, PaintList, PaintListEvent, PaintListOptions, PaintListOutput, PaintRow};
 

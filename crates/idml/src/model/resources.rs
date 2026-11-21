@@ -1406,6 +1406,22 @@ impl ObjectStyleValues {
     }
 }
 
+/// Emits an `ObjectStyleObjectEffectsCategorySettings` element for an object style.
+pub fn object_style_effects_category_settings(enable_drop_shadow: bool, enable_feather: bool) -> El {
+    let bool_s = |b: bool| if b { "true" } else { "false" };
+    El::new("ObjectStyleObjectEffectsCategorySettings")
+        .with_attr("EnableTransparency", "false")
+        .with_attr("EnableDropShadow", bool_s(enable_drop_shadow))
+        .with_attr("EnableFeather", bool_s(enable_feather))
+        .with_attr("EnableInnerShadow", "false")
+        .with_attr("EnableOuterGlow", "false")
+        .with_attr("EnableInnerGlow", "false")
+        .with_attr("EnableBevelEmboss", "false")
+        .with_attr("EnableSatin", "false")
+        .with_attr("EnableDirectionalFeather", "false")
+        .with_attr("EnableGradientFeather", "false")
+}
+
 impl StyleGroup {
     /// The root group `el`; `None` when `el` is no root style group.
     pub fn from_el(el: &El) -> Option<StyleGroup> {

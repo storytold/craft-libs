@@ -20,7 +20,9 @@ fn workspace_root() -> PathBuf {
 
 fn main() -> ExitCode {
     let root = workspace_root();
-    let text = components_index(&root, &library_registrations());
+    let registry = library_registrations();
+    let registrations: Vec<_> = registry.registrations().iter().collect();
+    let text = components_index(&root, &registrations);
     let target = root.join(OUTPUT);
     if std::env::args().any(|argument| argument == "--check") {
         let current = fs::read_to_string(&target).unwrap_or_default();

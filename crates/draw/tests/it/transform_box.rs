@@ -1,12 +1,13 @@
 //! `TransformBox`, `TransformOverlay` and `TransformTool`: the parts the pointer takes, what each drag does, the
 //! keys, the readout and the overlay's edits.
 
-use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
-use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
-use craft_behavior::kurbo::{Point, Rect};
-use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
+use craft_behavior::geometry::quad::{BoxAllow, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
+use craft_behavior::geometry::{SnapKind, SnapOptions, SnapSuspend, SnapTarget, SnapTargets};
+use craft_behavior::kurbo::{Affine, Point, Rect};
+use craft_behavior::{CanvasView, EditEvent, GesturePhase, RulerUnits, Ticks};
 use craft_draw::ui::transform::{
-    LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformReach, TransformSession, TransformSettings,
+    LineEnd, LineEndDrag, LineEnds, LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformReach, TransformSession,
+    TransformSettings,
 };
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{Canvas, RulerText, Snap};
@@ -55,6 +56,10 @@ struct Config {
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
+    /// The key that suspends the canvas's snapping.
+    suspend: SnapSuspend,
+    /// egui runs each frame twice and gives the frame's input to its first pass only.
+    twice: bool,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -71,6 +76,8 @@ struct Host {
     guide_events: usize,
     /// The snap lines the last pass reported.
     snapped: usize,
+    /// Every free line end drag the passes reported.
+    line_ends: Vec<LineEndDrag>,
 }
 
 struct Harness {
@@ -99,6 +106,8 @@ fn defaults() -> Config {
         centre_mark: false,
         line: None,
         targets: Vec::new(),
+        suspend: SnapSuspend::Control,
+        twice: false,
     }
 }
 
@@ -125,6 +134,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         view: CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0),
         guide_events: 0,
         snapped: 0,
+        line_ends: Vec::new(),
     }));
     let shown_host = Rc::clone(&host);
     let mut guides = vec![Guide::new(GuideKey::new(1), craft_behavior::Axis::Y, 300.0)];
@@ -142,6 +152,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         // A box on the pixel grid alone has the grid through a snap that snaps to nothing.
         let mut options = SnapOptions::default();
         options.on = config.snap;
+        options.suspend = config.suspend;
         let snap = Snap::new(Arc::clone(&targets), options).whole_pixels(config.pixel_grid);
         let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0)
             .rotation(config.rotation)
@@ -157,7 +168,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             canvas = canvas.snap(snap);
         }
         if let Some(ruler) = config.rulers {
-            canvas = canvas.rulers(ruler, ruler, Point::ZERO);
+            canvas = canvas.rulers(ruler, ruler);
         }
         let canvas = canvas.show(ui, |ui, body| {
             let mut guide_edits = 0;
@@ -183,10 +194,16 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             }
             (control.show_at(ui, body.rect), guide_edits)
         });
+        if config.twice && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the frame runs twice");
+        }
         if let Some((output, guide_edits)) = canvas.inner {
             let mut host = shown_host.borrow_mut();
             host.guide_events += guide_edits;
             host.snapped = output.snapped.len();
+            if let Some(drag) = output.line_end {
+                host.line_ends.push(drag);
+            }
             host.id = output.edit.response.id;
             host.applied += usize::from(output.apply.is_some());
             host.discarded += usize::from(output.discard);
@@ -439,6 +456,27 @@ fn a_text_frame_fed_back_through_an_f32_host_follows_every_move_to_the_commit() 
     assert!(!events.contains(&Seen::Cancel), "the rounded write-back cancels nothing: {events:?}");
     assert!((first - 250.0).abs() < 0.01 && (second - 280.0).abs() < 0.01, "each move reaches the host: {first} {second}");
     assert!((h.state().quad[2].y - 280.0).abs() < 0.01 && events.last() == Some(&Seen::Commit), "the commit holds the last move");
+}
+
+/// A frame egui runs twice reports each move of a drag once: its second pass proposes the box the first did, and an
+/// equal proposal reports no `Update` again, so a host that applies each `Update` (a text layer's box) applies it once
+/// per move.
+#[trial]
+fn a_frame_run_twice_reports_each_move_of_a_drag_once() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.text_frame = true);
+    let (start, mid, end) = (h.screen(Point::new(200.0, 220.0)), h.screen(Point::new(200.0, 250.0)), h.screen(Point::new(200.0, 280.0)));
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    h.config.borrow_mut().twice = true;
+    h.host.borrow_mut().events.clear();
+    frame(&mut h, vec![pointer::moved(mid)]);
+    assert_eq!(h.fixture.passes(), 2, "the frame ran twice");
+    frame(&mut h, vec![pointer::moved(end)]);
+    frame(&mut h, Vec::new());
+    let events = h.host.borrow().events.clone();
+    let updates = events.iter().filter(|seen| **seen == Seen::Update).count();
+    assert_eq!(updates, 2, "two moves report two updates, a held frame none: {events:?}");
+    assert!((h.state().quad[2].y - 280.0).abs() < 0.01, "the last move reached the host");
 }
 
 #[trial]
@@ -983,6 +1021,181 @@ fn control_keeps_snapping_on_an_explicit_distort_corner_only() {
         let x = h.state().quad[2].x;
         assert_eq!((x - 310.0).abs() < 1e-6, snaps, "{mode:?}: corner at x {x}");
     }
+}
+
+/// The rotate handle stands on its stem above the middle of the top side: a drag from it turns the box about its
+/// reference point (Shift in rotate steps); the rest of the outside is the tool's, and a click there or on the handle
+/// applies nothing. Where the rules refuse rotating there is no handle.
+#[trial]
+fn the_rotate_handle_turns_the_box_about_its_reference_point_and_the_rest_of_the_outside_is_the_tools() {
+    let handle = |config: &mut Config| config.zone = RotateZone::Handle;
+    // The points straight above the top side's middle that the handle takes.
+    let handle_reach = |h: &mut Harness| -> Vec<Point> {
+        (1..80)
+            .map(|up| Point::new(200.0, RECT.y0 - f64::from(up)))
+            .filter(|&at| {
+                hover(h, at);
+                h.host.borrow().hovered == Some(BoxPart::Outside)
+            })
+            .collect()
+    };
+    let mut h = harness(BoxState::from_rect(RECT), handle);
+    let reach = handle_reach(&mut h);
+    assert!(!reach.is_empty(), "the handle stands above the top side");
+    assert!(reach[0].y < RECT.y0 - 8.0, "on a stem, clear of the top edge's handle: {reach:?}");
+    let knob = reach[reach.len() / 2];
+
+    let centre = RECT.center();
+    for (mods, angle, within) in [(None, 20.0, 0.01), (Some(Mods::SHIFT), 15.0, 1e-6)] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            handle(config);
+            config.mods = mods;
+        });
+        drag(&mut h, knob, Affine::rotate_about(20f64.to_radians(), centre) * knob);
+        let state = h.state();
+        assert!((state.angle() - angle).abs() < within, "{mods:?}: turned {}, expected {angle}", state.angle());
+        assert!(state.pivot.distance(centre) < 1e-9, "about the reference point: {:?}", state.pivot);
+        assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit));
+    }
+
+    // Elsewhere outside: nothing of the box.
+    let mut h = harness(BoxState::from_rect(RECT), handle);
+    let away = Point::new(340.0, 260.0);
+    hover(&mut h, away);
+    assert_eq!(h.host.borrow().hovered, None, "the rest of the outside is the tool's");
+    drag(&mut h, away, Point::new(360.0, 200.0));
+    assert!(h.host.borrow().events.is_empty(), "a drag there turns nothing: {:?}", h.host.borrow().events);
+    assert_eq!(h.state(), BoxState::from_rect(RECT));
+    for at in [away, knob] {
+        let at = h.screen(at);
+        frame(&mut h, vec![pointer::moved(at)]);
+        frame(&mut h, vec![pointer::press(at)]);
+        frame(&mut h, vec![pointer::release(at)]);
+        frame(&mut h, Vec::new());
+    }
+    assert_eq!(h.host.borrow().applied, 0, "a click outside or on the handle applies nothing");
+
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        handle(config);
+        config.rules = BoxRules::default().with_allow(BoxAllow::new(false, true, true));
+    });
+    assert!(handle_reach(&mut h).is_empty(), "no handle where rotating is refused");
+}
+
+/// With Alt as the snap suspend key, Alt suspends the snapping and is never the drag's: a corner does not scale about
+/// the reference point and an Alt press inside moves the box, not the reference point. Control no longer suspends.
+#[trial]
+fn with_alt_as_the_snap_key_alt_suspends_snapping_and_no_alt_press_moves_the_reference_point() {
+    // (os, the keys held, whether the corner snaps onto 310)
+    let cases = [
+        (Platform::Mac, None, true),
+        (Platform::Mac, Some(Mods::ALT), false),
+        (Platform::Mac, Some(Mods::CTRL), true),
+        (Platform::Windows, Some(Mods::ALT), false),
+    ];
+    for (os, held, snaps) in cases {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.suspend = SnapSuspend::Alt;
+            config.mods = held;
+            config.rules = BoxRules::default().with_aspect_linked(false);
+        });
+        h.fixture.os(os);
+        let from = h.screen(Point::new(300.0, 220.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+        frame(&mut h, vec![pointer::release(from + by(7.0, 0.0))]);
+        let quad = h.state().quad;
+        let moved = quad[2].x - RECT.x1;
+        let expected = if snaps { 10.0 } else { 7.0 };
+        assert!((moved - expected).abs() < 1e-3, "{os:?} {held:?}: moved {moved}, expected {expected}");
+        assert!(quad[0].distance(Point::new(RECT.x0, RECT.y0)) < 1e-6, "{os:?} {held:?}: no scaling about the reference point: {quad:?}");
+    }
+
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.snap = true;
+        config.suspend = SnapSuspend::Alt;
+        config.mods = Some(Mods::ALT);
+    });
+    // 7 right brings the right edge within reach of the guide at 310; the Alt drag stays unsnapped.
+    drag(&mut h, Point::new(150.0, 120.0), Point::new(157.0, 120.0));
+    let state = h.state();
+    assert!(state.quad[0].distance(Point::new(107.0, RECT.y0)) < 1e-3, "the Alt drag moves the box, unsnapped: {:?}", state.quad);
+    assert!(state.pivot.distance(Point::new(207.0, 150.0)) < 1e-3, "the reference point rides along: {:?}", state.pivot);
+}
+
+/// The resize arrows follow the box's own axes: corner 2's along its bisector, the right edge's along the box's x
+/// axis, so a box turned by 30° shows other arrows than a level one.
+#[trial]
+fn a_turned_box_shows_resize_arrows_along_its_own_axes() {
+    use craft_behavior::{Cursor, CursorIcon};
+    let cursor_over = |h: &mut Harness, at: Point| {
+        hover(h, at);
+        craft_ui::runtime::cursor::current(h.fixture.ctx())
+    };
+    let level = BoxState::from_rect(RECT);
+    let turned = level.turned_about_pivot(30f64.to_radians());
+    // Level: the corner's arrow at 45°, the edge's at 0°. Turned by 30°: 75° and 30°.
+    for (state, corner, edge) in
+        [(level, CursorIcon::ResizeNwSe, CursorIcon::ResizeHorizontal), (turned, CursorIcon::ResizeVertical, CursorIcon::ResizeNwSe)]
+    {
+        let mut h = harness(state, |_| {});
+        let at_corner = state.quad[2];
+        let at_edge = state.quad[1].midpoint(state.quad[2]);
+        assert_eq!(cursor_over(&mut h, at_corner), Some(Cursor::from(corner)), "corner 2 of {:?}", state.quad);
+        assert_eq!(cursor_over(&mut h, at_edge), Some(Cursor::from(edge)), "the right edge of {:?}", state.quad);
+    }
+}
+
+/// Free line ends: a drag of an end reports Begin, Update and Commit for that end only, at any angle, snapped through
+/// the canvas's snap unless Control suspends it, and leaves the box value alone; Escape cancels the drag.
+#[trial]
+fn free_line_ends_move_one_end_and_report_the_drag_for_the_host_to_commit() {
+    let (from, to) = (Point::new(RECT.x0, RECT.y1), Point::new(RECT.x1, RECT.y0));
+    let line = LineLook::new(from, to).ends(LineEnds::Free);
+    let free = |held: Option<Mods>| {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.mods = held;
+            config.reference_point = false;
+            config.zone = RotateZone::Band;
+            config.line = Some(line);
+        });
+        h.fixture.os(Platform::Mac);
+        h
+    };
+    // 7 right and 30 up, at a slant: the end lands on the guide at 310.
+    let dragged_to = to + kurbo_vec(7.0, -30.0);
+    for (held, x) in [(None, 310.0), (Some(Mods::CTRL), 307.0)] {
+        let mut h = free(held);
+        drag(&mut h, to, dragged_to);
+        let drags = h.host.borrow().line_ends.clone();
+        let phases: Vec<GesturePhase> = drags.iter().map(|drag| drag.phase).collect();
+        assert_eq!(phases.first(), Some(&GesturePhase::Begin), "{held:?}: {phases:?}");
+        assert_eq!(phases.last(), Some(&GesturePhase::Commit), "{held:?}: {phases:?}");
+        assert!(phases[1..phases.len() - 1].iter().all(|phase| *phase == GesturePhase::Update), "{held:?}: {phases:?}");
+        assert!(drags.iter().all(|drag| drag.end == LineEnd::To), "only the dragged end moves: {drags:?}");
+        let Some(last) = drags.last() else { panic!("no drag reported") };
+        assert!(last.at.distance(Point::new(x, dragged_to.y)) < 1e-3, "{held:?}: the end at {:?}, expected x {x}", last.at);
+        assert_eq!(h.state(), BoxState::from_rect(RECT), "the box value is unchanged");
+        assert!(h.host.borrow().events.is_empty(), "no edit of the box: {:?}", h.host.borrow().events);
+    }
+
+    let mut h = free(None);
+    let (start, end) = (h.screen(to), h.screen(dragged_to));
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    frame(&mut h, vec![pointer::moved(start + (end - start) * 0.5)]);
+    frame(&mut h, vec![pointer::moved(end)]);
+    h.fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+    frame(&mut h, vec![pointer::release(end)]);
+    frame(&mut h, Vec::new());
+    let phases: Vec<GesturePhase> = h.host.borrow().line_ends.iter().map(|drag| drag.phase).collect();
+    assert_eq!(phases.last(), Some(&GesturePhase::Cancel), "Escape cancels the end drag: {phases:?}");
+    assert!(!phases.contains(&GesturePhase::Commit), "nothing is committed: {phases:?}");
+    assert_eq!(h.host.borrow().discarded, 0, "Escape cancels the drag and does not close the box");
 }
 
 /// The reference point snaps to the turned box's nine points and to nothing else, with the canvas's snapping on or

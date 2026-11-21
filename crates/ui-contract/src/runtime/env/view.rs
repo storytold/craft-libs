@@ -58,11 +58,6 @@ impl<'a> EnvView<'a> {
         self.scoped.measure
     }
 
-    /// The roving group of the innermost body with `ContainerProps.roving`.
-    pub(crate) fn roving(&self) -> Option<Id> {
-        self.scoped.roving
-    }
-
     /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).
     pub(crate) fn inside_held(&self) -> Option<&'a Held> {
         self.scoped.inside_label.as_ref()
@@ -113,11 +108,13 @@ impl<'a> EnvView<'a> {
     /// The platform and the running viewport's window facts: the OS, the capabilities and the window's kind,
     /// chrome, state, insets and focus.
     pub fn shell(&self) -> &'a ShellInfo {
+        crate::runtime::replay::note_input(&self.scoped.ctx, crate::runtime::inputs::Input::Shell);
         &self.scoped.shell
     }
 
     /// The keyboard layout: which character each key position types, for text that names a key.
     pub fn keyboard_layout(&self) -> &'a craft_keymap::Layout {
+        crate::runtime::replay::note_input(&self.scoped.ctx, crate::runtime::inputs::Input::Keyboard);
         &self.scoped.keyboard
     }
 
@@ -170,5 +167,15 @@ impl<'a> EnvView<'a> {
     /// itself shows.
     pub fn resolve(&self, label: &Label) -> Label {
         label.resolved(&self.scoped.words)
+    }
+
+    /// The env this view shows, owned: what the drag preview, which paints after the region it started in, paints with.
+    pub(crate) fn to_env(self) -> super::Env {
+        super::Env { scoped: Arc::new(self.scoped.clone()) }
+    }
+
+    /// The scope's resolved tokens, shared: what a drop target's mark paints with.
+    pub(crate) fn shared_tokens(&self) -> Arc<crate::style::UiTokens> {
+        self.scoped.tokens.clone()
     }
 }

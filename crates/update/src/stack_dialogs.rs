@@ -3,7 +3,7 @@
 //! host's `AppInfo` and the words from [`UpdateWords`].
 
 use std::hash::{Hash as _, Hasher as _};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Link;
@@ -23,8 +23,8 @@ use crate::release::{Release, safe_web_link};
 use crate::self_update;
 use crate::updater::Status;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 const PROMPT_KEY: &str = "updateDialog.prompt";
 const CHECK_KEY: &str = "updateDialog.check";
@@ -380,6 +380,8 @@ pub struct UpdateCheckDialog {
     chosen: Option<CheckChoice>,
     open: bool,
     icon: IconCell,
+    /// The words the app passed; the scope's [`UpdateWords`] when none.
+    words: Option<Arc<UpdateWords>>,
 }
 
 impl UpdateCheckDialog {
@@ -397,7 +399,15 @@ impl UpdateCheckDialog {
             chosen: None,
             open: true,
             icon: IconCell::new(),
+            words: None,
         }
+    }
+
+    /// Shows these words instead of the scope's [`UpdateWords`] (an app passes its translated words).
+    #[must_use]
+    pub fn words(mut self, words: UpdateWords) -> Self {
+        self.words = Some(Arc::new(words));
+        self
     }
 
     /// Sets whether the install can update itself, for an app that knows better than
@@ -466,7 +476,7 @@ impl UpdateCheckDialog {
     /// Shows one pass. The choices are the footer buttons' meanings, in the order of the dialog's `picked`.
     fn present(&mut self, ui: &mut Ui) -> (DialogOutput, Vec<CheckChoice>) {
         let env = Env::of(ui);
-        let words = env.words::<UpdateWords>();
+        let words = self.words.clone().unwrap_or_else(|| env.words::<UpdateWords>());
         let ok = env.words::<CommonWords>().ok.clone();
         let subject = Subject::of(&env);
         let self_updating = *self.self_updating.get_or_insert_with(|| subject.app.is_some_and(self_update::is_self_updating));
@@ -567,6 +577,11 @@ impl StackDialog for UpdateCheckDialog {
 
     fn id(&self) -> DialogId {
         self.id
+    }
+
+    /// What the last update came to is a notice that leaves the app usable behind it.
+    fn modeless(&self) -> bool {
+        matches!(self.status, Status::Updated(_))
     }
 
     /// Answers as pressing the chosen button would. A dialog not yet drawn and not told by

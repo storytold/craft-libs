@@ -272,7 +272,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     spec.has_popup = access.has_popup.or_else(|| popup.map(|popup| popup.kind));
     spec.required = access.required;
     spec.url = access.url.clone();
-    spec.shortcut = access.shortcut.clone().or_else(|| own.shortcut.map(str::to_owned));
+    spec.shortcut = if access.no_shortcut { None } else { access.shortcut.clone().or_else(|| own.shortcut.map(str::to_owned)) };
     spec.access_key = access.access_key;
     spec.labelled_by = relations.labelled_by.clone();
     spec.described_by = relations.described_by.clone();
@@ -328,7 +328,9 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
             description: spec.description.clone(),
             unnamed,
             inner_stop: None,
+            focusable: own.focusable || crate::runtime::focus::has_reachable_stop(ctx, own.id),
             disabled: !own.enabled,
+            arranged: false,
             display: own.display,
         },
     );
@@ -377,6 +379,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.expanded = expanded;
     spec.access_key = node.access_key;
     spec.shortcut = node.shortcut.clone();
+    spec.url = node.url.clone();
     spec.has_popup = node.has_popup;
     spec.current = node.current || flags.contains(Flags::CURRENT);
     if let Some(expanded) = expanded {

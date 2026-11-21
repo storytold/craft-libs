@@ -1,8 +1,13 @@
 //! Stories of `Picture`.
 
+use std::sync::Arc;
+
+use craft_host::InlineJobs;
+
 use super::{Picture, PictureSize};
 use crate::contract::Show as _;
 use crate::list::{ThumbAspect, ThumbSize};
+use crate::primitives::textures::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::{Color32, ColorImage, Ui};
 
@@ -28,6 +33,17 @@ fn picture_thumbnail(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     })
     .inner
     .into()
+}
+
+/// A picture made off the frame: its source renders as a `Later` job, so the picture shows the placeholder until the
+/// job lands on the loader's lanes, then the picture. The job runs inline, so the picture lands in the next frame and
+/// not whenever a thread ends: the suite's settled frames are the same on every run.
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let options = ThumbnailOptions::new().jobs(Arc::new(InlineJobs));
+    let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "craft_ui::stories::picture_rendered", options);
+    let source = FakeThumbSource::<u64>::new().later(true).opaque(true);
+    Picture::rendered("Rendered", 1, &thumbnails, &source).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
 }
 
 #[story(Picture<'static>, covers = [], drive = Drive::Never)]

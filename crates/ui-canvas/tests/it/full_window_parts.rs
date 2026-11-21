@@ -39,7 +39,7 @@ fn a_zoom_command_ends_the_fit_and_fit_returns_to_it() {
 }
 
 /// The canvas's navigation: the wheel, the middle button and the Hand tool it falls back to.
-mod canvas_navigation {
+pub(crate) mod canvas_navigation {
     use craft_behavior::PixelSize;
     use craft_behavior::kurbo::Point;
     use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource};
@@ -130,7 +130,7 @@ mod canvas_navigation {
 }
 
 /// The momentary tools every full-window canvas runs.
-mod momentary {
+pub(crate) mod momentary {
     use craft_behavior::{CancelReason, PixelSize};
     use craft_ui::canvas::{CanvasTool, PixelRect, RasterSource, ToolAction, ToolContext, ToolPath, ToolPointer};
     use craft_ui::contract::{Bind, ShowContainer as _};
@@ -221,7 +221,7 @@ mod momentary {
 }
 
 /// Escape on a focused canvas inside a full-window dialog.
-mod escape {
+pub(crate) mod escape {
     use craft_behavior::{CancelReason, Intent, PixelSize};
     use craft_ui::canvas::{CanvasTool, PixelRect, RasterSource, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
     use craft_ui::contract::{Bind, ShowContainer as _};
@@ -319,7 +319,7 @@ mod escape {
 }
 
 /// A full-window dialog in a window of its own.
-mod own_window {
+pub(crate) mod own_window {
     use craft_ui::contract::{Bind, ShowContainer as _};
     use craft_ui::dialog::{DialogResult, FullWindowDialog};
     use craft_ui::runtime::overlay::CloseReason;
@@ -365,7 +365,7 @@ mod own_window {
 }
 
 /// An overlay drawn through a frame.
-mod mapped_overlay {
+pub(crate) mod mapped_overlay {
     use craft_behavior::PixelSize;
     use craft_behavior::geometry::quad::Homography;
     use craft_behavior::kurbo::{Point, Rect};

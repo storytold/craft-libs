@@ -13,8 +13,8 @@ use craft_theme::Mix as _;
 use egui::{CornerRadius, Rect, Response, Ui};
 use std::f32::consts::TAU;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The period of the pulse in seconds: a sine of four radians per second.
 const PULSE_PERIOD: f64 = std::f64::consts::FRAC_PI_2;

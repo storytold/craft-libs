@@ -2,25 +2,32 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Layout, Node, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx};
-use craft_ui::docking::{DockConfig, DockPanels, GroupAt, PanelSpec};
+use craft_ui::contract::{Bind, BodyCx, PlainData, Tracked};
+use craft_ui::docking::{DockConfig, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Ui, Vec2};
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Panel 0 is a canvas the host draws in its group's place; it records the group's rect and the `Ui` it was given.
 struct Panels {
     seen: Rc<Cell<Option<(Rect, Rect, Rect)>>>,
 }
 
-impl DockPanels<usize> for Panels {
+/// Panel 0 is a canvas.
+#[derive(PlainData)]
+struct Specs;
+
+impl PanelSpecs<usize> for Specs {
     fn spec(&self, panel: &usize) -> PanelSpec {
         let spec = PanelSpec::new(format!("Panel {panel}"));
         if *panel == 0 { spec.canvas() } else { spec }
     }
+}
 
+impl DockPanels<usize> for Panels {
     fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
 
     fn group_view(&mut self, panels: &[usize], _: usize, ui: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
@@ -41,10 +48,10 @@ impl DockPanels<usize> for Panels {
 fn a_group_view_lays_out_and_clips_to_its_group_rect() {
     let seen = Rc::new(Cell::new(None));
     let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0], 0), Node::tabs(vec![1], 0));
-    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
-    let mut panels = Panels { seen: seen.clone() };
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())));
+    let (mut panels, specs) = (Panels { seen: seen.clone() }, Tracked::new(Specs));
     let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default()).show(ui);
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle();
     let (rect, room, clip) = seen.get().expect("the canvas group was shown");

@@ -2,15 +2,15 @@
 
 use super::ColorWheel;
 use craft_theme::{ColorModel, HsbModel, Srgba};
-use craft_ui::contract::{Bind, Props as _, Show as _, Validity};
+use craft_ui::contract::{Props as _, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::Ui;
 
 #[story(ColorWheel<'static>, covers = [Default], drive = Drive::Drag(Grip::new(super::RING)))]
 fn color_wheel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
-    let shown = ColorWheel::new("Color wheel", Bind::bound(values)).show(ui);
+    let (values, values_at) = data.value_at("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
+    let shown = ColorWheel::new("Color wheel", values_at.bind(values)).show(ui);
     let last = data.note("last", String::new());
     if let Some(event) = shown.events.last() {
         *last = format!("{event:?}");
@@ -23,12 +23,12 @@ fn color_wheel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn color_wheel_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_dim =
         |values: &craft_theme::ModelValues| if values.values[2] < 50.0 { Validity::Refuse(Message::new("Too dim")) } else { Validity::Ok };
-    let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.1, 0.2, 0.3)));
-    ColorWheel::new("Color wheel", Bind::bound(values).check(refuse_dim)).show(ui).into()
+    let (values, values_at) = data.value_at("values", HsbModel.from_srgb(Srgba::rgb(0.1, 0.2, 0.3)));
+    ColorWheel::new("Color wheel", values_at.bind(values).check(refuse_dim)).show(ui).into()
 }
 
 #[story(ColorWheel<'static>, covers = [], drive = Drive::Never, title = "Disabled")]
 fn color_wheel_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
-    ColorWheel::new("Color wheel", Bind::bound(values)).enabled(false).show(ui).into()
+    let (values, values_at) = data.value_at("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
+    ColorWheel::new("Color wheel", values_at.bind(values)).enabled(false).show(ui).into()
 }

@@ -8,22 +8,28 @@
 #![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Printing in the browser.
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 /// Direct local-CUPS transport, independent of command-line spooler selection.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cups;
+pub mod spool;
 
 #[cfg(any(test, windows))]
-mod progress;
+pub(crate) mod progress;
 #[cfg(any(test, windows))]
-mod sheets;
+pub(crate) mod sheets;
 #[cfg(test)]
-mod tests;
+pub(crate) mod spool_tests;
+#[cfg(test)]
+pub(crate) mod tests;
 #[cfg(any(test, windows))]
-mod ticket;
+pub(crate) mod ticket;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(any(test, windows))]
-mod xml;
+pub(crate) mod xml;
 
 /// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
@@ -39,7 +45,9 @@ pub mod ui;
 /// The registrations of this crate's UI types, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 /// A system spooler failure. Document permissions belong to the caller.
@@ -859,7 +867,9 @@ pub struct Cancel(std::sync::Arc<std::sync::atomic::AtomicU8>);
 
 const PENDING: u8 = 0;
 const CANCELLED: u8 = 1;
+#[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
 const SENDING: u8 = 2;
+#[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
 const CANCELLED_MESSAGE: &str = "the print job was cancelled before anything was sent to the printer";
 
 impl Cancel {
@@ -881,6 +891,7 @@ impl Cancel {
 
     /// The last point before anything reaches the spooler: the job is being sent from here on,
     /// unless it was cancelled.
+    #[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
     pub(crate) fn start_sending(&self) -> Result<(), Error> {
         use std::sync::atomic::Ordering::{AcqRel, Acquire};
         match self.0.compare_exchange(PENDING, SENDING, AcqRel, Acquire) {
@@ -1084,9 +1095,10 @@ pub fn command_preview(job: &Job) -> Result<Vec<String>, Error> {
 extern crate self as craft_print;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

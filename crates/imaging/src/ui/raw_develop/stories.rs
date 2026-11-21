@@ -164,14 +164,14 @@ fn floating_scope(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(RawDevelopPanel<'static>, covers = [Default], drive = Drive::Never)]
 fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = data.value("settings", RawDevelopSettings::default());
-    RawDevelopPanel::new(Bind::bound(settings)).show(ui).into()
+    let (settings, settings_at) = data.value_at("settings", RawDevelopSettings::default());
+    RawDevelopPanel::new(settings_at.bind(settings)).show(ui).into()
 }
 
 #[story(RawDevelopPanel<'static>, covers = [], drive = Drive::Never)]
 fn panel_with_demosaic(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = data.value("settings", RawDevelopSettings::default());
-    RawDevelopPanel::new(Bind::bound(settings)).demosaic(Demosaic::Ahd).show(ui).into()
+    let (settings, settings_at) = data.value_at("settings", RawDevelopSettings::default());
+    RawDevelopPanel::new(settings_at.bind(settings)).demosaic(Demosaic::Ahd).show(ui).into()
 }
 
 /// A click on the Color Mixer's Saturation tab, the second of its three.
@@ -183,8 +183,8 @@ fn saturation_tab(fixture: &mut Fixture) {
 
 #[story(RawDevelopPanel<'static>, covers = [], drive = Drive::Custom(saturation_tab))]
 fn panel_with_color_mixer_saturation(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = data.value("settings", RawDevelopSettings::default());
-    RawDevelopPanel::new(Bind::bound(settings)).show(ui).into()
+    let (settings, settings_at) = data.value_at("settings", RawDevelopSettings::default());
+    RawDevelopPanel::new(settings_at.bind(settings)).show(ui).into()
 }
 
 /// The scope state of the strip stories: Expanded, so the zone values and statistics show.
@@ -225,7 +225,7 @@ fn floating_scope_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(RawFilmstrip<'static>, covers = [Default], drive = Drive::Never)]
 fn filmstrip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let items = raws();
-    let current = data.value("current", 1_usize);
-    RawFilmstrip::new(&items, Bind::bound(current)).show(ui);
+    let (current, current_at) = data.value_at("current", 1_usize);
+    RawFilmstrip::new(&items, current_at.bind(current)).show(ui);
     StoryOutput::default()
 }

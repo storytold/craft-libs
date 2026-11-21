@@ -4,10 +4,10 @@
 use crate::layout::flow_region;
 use crate::runtime::egui::alloc;
 use crate::runtime::layout_memory;
-use crate::runtime::lazy::{self, Place};
+use crate::runtime::lazy;
 use crate::runtime::memory::sub;
 use crate::runtime::{measure, reads, replay};
-use egui::{Pos2, Rect, Ui, UiBuilder, Vec2};
+use egui::{Rect, Ui, UiBuilder, Vec2};
 use std::hash::Hash;
 
 /// Pages that take turns in one place, such as the paint kinds of a paint chip's popover: one shows, and the place
@@ -16,10 +16,9 @@ use std::hash::Hash;
 ///
 /// The pages it does not show are measured only. Each runs in a measuring run (`measure::run`) inside an invisible egui
 /// sizing child, where every component stops after its measure (steps 1 to 6): it senses nothing and adds no hit
-/// shape, focus stop, access node, paint or memory write. A hidden page reuses the size its last measuring run found
-/// while nothing it read has changed, under the settled rules of `Lazy::settles` for content without a content
-/// version: it is measured again in a frame where a value it read was written, something in it still moves, the app
-/// asked for a repaint, or the frame or the one before had input other than pointer motion.
+/// shape, focus stop, access node, paint or memory write. Each hidden page is measured once per pass: the page closure
+/// reads app data the framework does not track, so a size from an earlier pass could be stale. Later runs in the pass
+/// (a measuring run of the body around it, then its real run) take that pass's size, so the pass places by one size.
 ///
 /// The page closure runs for the shown page and for every hidden page it measures, so it builds what it shows from its
 /// page argument alone and changes nothing outside a component's value (a measuring run applies no edit).
@@ -45,15 +44,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
         let layout = *ui.layout();
         let hidden = self.pages.iter().filter(|key| *key != self.current).fold(Vec2::ZERO, |largest, key| {
             let id = sub(base, hash(key));
-            let place = Place {
-                room: Rect::from_min_size(Pos2::ZERO, Vec2::new(region.width(), f32::INFINITY)),
-                clip: Rect::EVERYTHING,
-                layer: ui.layer_id(),
-                layout,
-                pixels_per_point: ctx.pixels_per_point(),
-                env: crate::runtime::env::Env::of(ui).key,
-            };
-            let kept = lazy::measured(&ctx, id, place).map(|(size, reads)| {
+            let kept = lazy::measured(&ctx, id).map(|(size, reads)| {
                 // The page reads them again, as far as an edit later in the pass sees it.
                 for key in reads {
                     reads::note(&ctx, key, id, true, &[]);
@@ -61,7 +52,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
                 size
             });
             let size = kept.unwrap_or_else(|| {
-                replay::open(&ctx);
+                replay::open_in_pass(&ctx);
                 let size = measure::run(&ctx, || {
                     // What the hidden page measures joins no transcript around it: the run that shows the pages does
                     // not show it, so nothing there checks it.
@@ -73,7 +64,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
                     })
                 });
                 let record = replay::close(&ctx, ui.layer_id());
-                lazy::measured_run(&ctx, id, record.facts, place, size);
+                lazy::measured_run(&ctx, id, record.facts.reads.into_iter().collect(), size);
                 size
             });
             largest.max(size)

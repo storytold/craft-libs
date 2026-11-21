@@ -1,6 +1,6 @@
 [package]
 name = "craft-xfdf"
-description = "Bounded XFDF field-value reader without PDF or form policy"
+description = "Bounded XFDF field-value reader and annotation/FDF grammar without PDF or form policy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

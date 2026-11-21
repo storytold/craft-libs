@@ -365,6 +365,7 @@ fn show_root(ui: &mut Ui, ctx: &Context, root: &ProbeRoot) -> RootReport {
     };
     // The owner places its `over` parts once its body has shown: above its members.
     sensing::place_over_widgets(ui, id, None, &decls);
+    sensing::widen_root(ctx, id, false);
     RootReport {
         root: SenseReport {
             id,

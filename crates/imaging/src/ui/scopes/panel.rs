@@ -33,14 +33,14 @@ use craft_ui::style::TypeRole;
 use egui::{Rect, Response, Ui, pos2};
 
 /// The columns of the statistics grid: label and value, twice.
-static STATISTICS_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content; 4];
+const STATISTICS_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content; 4];
 
 /// Runs `content` in a block that resolves the dark mode when `dark`, else in the flow.
 fn themed<R>(ui: &mut Ui, dark: bool, mut content: impl FnMut(&mut Ui) -> R) -> Option<R> {
     if !dark {
         return Some(content(ui));
     }
-    Stack::new().theme(ThemeScope::mode(Mode::Dark)).show(ui, |ui, _| content(ui)).inner
+    Stack::new().theme(ThemeScope::new().mode(Mode::Dark)).show(ui, |ui, _| content(ui)).inner
 }
 
 /// Photoshop's Histogram panel and Camera Raw's scope in one widget.

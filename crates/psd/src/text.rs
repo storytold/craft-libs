@@ -1,4 +1,4 @@
-//! Type layers: the `TySh` block as a read-only view.
+//! Type layers: read-only views and borrowed data framing for the `TySh` block.
 //!
 //! Layout (Adobe's specification, "Type tool object setting"): a version, six doubles of
 //! transform, a text version, a descriptor version and the text descriptor, whose `Txt ` is the
@@ -7,12 +7,40 @@
 //! read here. The block stays raw in the model and writes back unchanged. Came from EffectCraft's
 //! `effectcraft-psd`.
 
-use crate::descriptor::Descriptor;
+use crate::descriptor::{Descriptor, ParseLimits};
 use crate::engine_data::{self, TextStyle};
 use crate::error::Result;
 use crate::io::Reader;
 use crate::layer::LayerRecord;
 
+/// Raw text prefix of a `TySh` block, before the optional warp and bounds suffix.
+///
+/// Version fields are consumed without validation. Transform and descriptor numbers
+/// are retained without normalization; consumers choose their own interpretation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TypeLayerPrefix {
+    /// Stored affine transform (xx, xy, yx, yy, tx, ty), including nonfinite values.
+    pub transform: [f64; 6],
+    /// Text descriptor, read using the caller's item limits.
+    pub descriptor: Descriptor,
+}
+
+impl TypeLayerPrefix {
+    /// Read the required header and text descriptor only. A missing or malformed
+    /// trailing warp/bounds suffix is ignored; truncated required fields are errors.
+    pub fn from_bytes_with_limits(data: &[u8], limits: ParseLimits) -> Result<Self> {
+        let mut r = Reader::new(data);
+        let _version = r.u16()?;
+        let mut transform = [0.0; 6];
+        for value in &mut transform {
+            *value = r.f64()?;
+        }
+        let _text_version = r.u16()?;
+        let _descriptor_version = r.u32()?;
+        let descriptor = Descriptor::read_with_limits(&mut r, limits)?;
+        Ok(Self { transform, descriptor })
+    }
+}
 /// What a type layer says: its text, where it sits and how its first style run looks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypeLayer {
@@ -32,19 +60,11 @@ pub struct TypeLayer {
 impl TypeLayer {
     /// Reads the data of a `TySh` block.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let mut r = Reader::new(data);
-        let _version = r.u16()?;
-        let mut transform = [0.0; 6];
-        for v in &mut transform {
-            *v = r.f64()?;
-        }
+        let TypeLayerPrefix { mut transform, descriptor } = TypeLayerPrefix::from_bytes_with_limits(data, ParseLimits::default())?;
         // A transform with NaN or infinity is unusable: fall back to the identity.
         if transform.iter().any(|v| !v.is_finite()) {
             transform = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
         }
-        let _text_version = r.u16()?;
-        let _descriptor_version = r.u32()?;
-        let descriptor = Descriptor::read(&mut r)?;
         let text = descriptor.get_text("Txt ").unwrap_or_default().replace("\r\n", "\n").replace('\r', "\n");
         let text = text.strip_suffix('\n').map(str::to_string).unwrap_or(text);
         let style = descriptor.get_raw_data("EngineData").map(|e| engine_data::first_style(&engine_data::parse_lossy(e))).unwrap_or_default();
@@ -61,6 +81,32 @@ impl LayerRecord {
     pub fn type_layer(&self) -> Option<TypeLayer> {
         TypeLayer::from_bytes(&self.block(b"TySh")?.data).ok()
     }
+}
+
+/// Append TySh data with fixed version fields and a zero-bounds suffix.
+///
+/// Writes version 1, six raw transform doubles, text version 50 and descriptor
+/// version 16, the text descriptor, warp version 1 and descriptor version 16,
+/// the warp descriptor, then sixteen zero bytes. No outer key, length or padding
+/// is written. Text, EngineData and warp semantics remain the caller's policy.
+/// Both views inherit the finite, stable, acyclic borrowed-writer contract.
+/// Existing output is preserved; traversal uses O(depth) heap frames, without
+/// an owned model conversion or a full serialized temporary.
+pub fn append_type_layer_data_with_zero_bounds(
+    out: &mut Vec<u8>,
+    transform: &[f64; 6],
+    text: &dyn crate::descriptor::borrowed::DescriptorView,
+    warp: &dyn crate::descriptor::borrowed::DescriptorView,
+) {
+    out.extend_from_slice(&[0, 1]);
+    for value in transform {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+    out.extend_from_slice(&[0, 50, 0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, text);
+    out.extend_from_slice(&[0, 1, 0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, warp);
+    out.extend_from_slice(&[0; 16]);
 }
 
 #[cfg(test)]
@@ -148,6 +194,75 @@ mod tests {
         engine.truncate(keep.min(engine.len() - 4));
         let t = TypeLayer::from_bytes(&type_block([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], "x", Some(engine), None)).unwrap();
         assert_eq!(t.style.size, Some(12.0));
+    }
+
+    #[test]
+    fn raw_type_prefix_preserves_numbers_and_applies_explicit_limits() {
+        let mut data = Vec::new();
+        data.put_u16(999);
+        for value in [f64::NAN, 0.0, 0.0, 1.0, f64::INFINITY, -0.0] {
+            data.put_f64(value);
+        }
+        data.put_u16(999);
+        data.put_u32(999);
+        let d = Descriptor::new("TxLr")
+            .with("Txt ", Value::Text(UnicodeString::new("a\r\n")))
+            .with("nums", Value::List(vec![Value::Double(f64::NEG_INFINITY), Value::Integer(2)]));
+        d.write(&mut data);
+        let limits = ParseLimits { max_descriptor_items: 2, max_list_items: 2 };
+        for cut in 0..data.len() {
+            assert!(TypeLayerPrefix::from_bytes_with_limits(&data[..cut], limits).is_err(), "cut {cut}");
+        }
+        for suffix in [vec![], vec![255], vec![0; 6], vec![255; 40]] {
+            let mut bytes = data.clone();
+            bytes.extend(suffix);
+            let raw = TypeLayerPrefix::from_bytes_with_limits(&bytes, limits).unwrap();
+            assert!(raw.transform[0].is_nan());
+            assert_eq!(raw.transform[4], f64::INFINITY);
+            assert!(raw.transform[5].is_sign_negative());
+            assert_eq!(raw.descriptor.get_text("Txt "), Some("a\r\n".to_string()));
+            assert!(
+                matches!(raw.descriptor.get("nums"), Some(Value::List(v)) if matches!(v.first(), Some(Value::Double(x)) if *x == f64::NEG_INFINITY))
+            );
+            assert_eq!(TypeLayer::from_bytes(&bytes).unwrap().transform, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        }
+        assert!(TypeLayerPrefix::from_bytes_with_limits(&data, ParseLimits { max_descriptor_items: 1, ..limits }).is_err());
+        assert!(TypeLayerPrefix::from_bytes_with_limits(&data, ParseLimits { max_list_items: 1, ..limits }).is_err());
+    }
+
+    #[test]
+    fn borrowed_type_data_preserves_raw_transform_two_views_and_zero_tail() {
+        use crate::descriptor::borrowed::{ClassRef, DescriptorView, IdRef, UnicodeRef, ValueRef};
+        struct View(bool);
+        impl DescriptorView for View {
+            fn class(&self) -> ClassRef<'_> {
+                ClassRef { name: UnicodeRef::Units(&[]), id: IdRef::Code(*b"null") }
+            }
+            fn item(&self, index: usize) -> Option<(IdRef<'_>, ValueRef<'_>)> {
+                (self.0 && index == 0).then_some((IdRef::Code(*b"flag"), ValueRef::Boolean(true)))
+            }
+        }
+        let transform = [1.0, -0.0, f64::INFINITY, f64::NEG_INFINITY, f64::from_bits(0x7ff8_1234_5678_9abc), -3.0];
+        for (text, warp) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut out = vec![0xa5];
+            append_type_layer_data_with_zero_bounds(&mut out, &transform, &View(text), &View(warp));
+            let mut expected = vec![
+                0xa5, 0, 1, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x7f, 0xf0, 0, 0, 0, 0, 0, 0, 0xff, 0xf0, 0, 0, 0, 0, 0, 0,
+                0x7f, 0xf8, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xc0, 8, 0, 0, 0, 0, 0, 0, 0, 50, 0, 0, 0, 16,
+            ];
+            for (index, populated) in [text, warp].into_iter().enumerate() {
+                if index == 1 {
+                    expected.extend([0, 1, 0, 0, 0, 16]);
+                }
+                expected.extend_from_slice(b"\0\0\0\0\0\0\0\0null\0\0\0");
+                expected.push(u8::from(populated));
+                if populated {
+                    expected.extend_from_slice(b"\0\0\0\0flagbool\x01");
+                }
+            }
+            expected.extend([0; 16]);
+            assert_eq!(out, expected);
+        }
     }
 }
 

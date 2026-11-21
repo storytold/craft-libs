@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use super::color::Rgba;
 use super::ramp::Mode;
 use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, Status, WellShape};
-use crate::{AppId, ThemeId};
+use crate::{AppId, IconPackId, ThemeId};
 
 /// A theme: seeds to derive from, values that override the derivation, and an optional shape.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +31,9 @@ pub struct ThemeDef {
     pub high_contrast: ModePins,
     /// Whether the theme is meant to have low contrast.
     pub contrast_intent: ContrastIntent,
+    /// The icon pack the theme draws its icons from; `None` draws the suite's default set. Icons the pack lacks fall
+    /// back to the default drawings.
+    pub icon_pack: Option<IconPackId>,
     /// Per-app overrides, applied over the theme's own values when resolving for that app.
     pub apps: BTreeMap<AppId, AppOverrides>,
 }
@@ -43,6 +46,9 @@ pub struct AppOverrides {
     pub pins: ModePins,
     /// Fixed colours per mode used only with [`Contrast::High`].
     pub high_contrast: ModePins,
+    /// The app's own shape, in place of the theme's `shape` for that app (an app whose buttons are rounded
+    /// rectangles under a theme of capsules). `None` keeps the theme's.
+    pub shape: Option<ShapeSeed>,
 }
 
 impl ThemeDef {

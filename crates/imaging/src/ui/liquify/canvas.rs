@@ -1,7 +1,7 @@
 //! Liquify's canvas: the canvas tool, the backdrop layering, the freeze mask source, the lasso line, the mesh.
 
 mod backdrop;
-mod lasso;
+pub(crate) mod lasso;
 mod mesh;
 
 pub(super) use backdrop::MaskAtTexel;

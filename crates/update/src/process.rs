@@ -560,7 +560,7 @@ pub(crate) mod tests {
 }
 
 #[cfg(test)]
-mod run_tests {
+pub(crate) mod run_tests {
     use super::*;
 
     #[cfg(unix)]
@@ -630,7 +630,7 @@ mod run_tests {
 }
 
 #[cfg(test)]
-mod inherited_pipe_tests {
+pub(crate) mod inherited_pipe_tests {
     use super::*;
     use craft_ui::testing::trial;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -768,7 +768,7 @@ pub(crate) fn cancellable_output(mut cmd: Command, check: impl Fn() -> Result<()
 
 #[cfg(test)]
 #[cfg(target_os = "linux")]
-mod update_cancel_tests {
+pub(crate) mod update_cancel_tests {
     use super::*;
     use craft_ui::testing::trial;
 

@@ -41,7 +41,7 @@ fn rig() -> Rig {
                 MenuItem::new("&About").show(ui);
             }),
         ];
-        let help = vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"])];
+        let help = || vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"])];
         MenuBar::new("Main menu", titles).help(MenuHelp::new(1, &help)).show(ui);
         let mut held = text.borrow_mut();
         field.set(Some(TextField::new("Name", Bind::bound(&mut *held)).show(ui).response.id));
@@ -212,7 +212,7 @@ fn scoped_rig() -> ScopedRig {
         let titles = vec![MenuTitle::new("&Help", |ui| {
             MenuItem::new("&About").show(ui);
         })];
-        let help = vec![HelpEntry::new(BarKeysCommand::Toggle, "Toggle")];
+        let help = || vec![HelpEntry::new(BarKeysCommand::Toggle, "Toggle")];
         MenuBar::new("Main menu", titles).help(MenuHelp::new(0, &help)).show(ui);
         craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
             while cx.take_command::<BarKeysCommand>().is_some() {

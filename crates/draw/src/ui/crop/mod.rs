@@ -8,17 +8,17 @@
 //! The tool reports events and never crops the document: the app crops on [`CropEvent::Apply`] with the
 //! [`CropCommit`] it carries.
 
-mod bar;
+pub(crate) mod bar;
 mod bar_words;
-mod menus;
+pub(crate) mod menus;
 mod options;
-mod perspective_bar;
-mod perspective_crop;
+pub(crate) mod perspective_bar;
+pub(crate) mod perspective_crop;
 mod perspective_tool;
-mod preset_list;
+pub(crate) mod preset_list;
 mod session;
 mod size_cells;
-mod tool;
+pub(crate) mod tool;
 mod words;
 
 pub use bar::{CropBar, CropBarOutput, CropRatioChange};
