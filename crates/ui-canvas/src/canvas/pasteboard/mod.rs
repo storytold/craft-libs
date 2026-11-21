@@ -397,7 +397,7 @@ impl Component for Pasteboard<'_> {
             .map(|page| {
                 let run = name_run(page.name.as_ref()?, name_color(cx.style, page.active)).elide();
                 let width = bounds(&space.view.quad(page.rect)).width();
-                (width >= cx.least_width(&run)).then(|| cx.layout_at(&run, width).size())
+                (width >= cx.least(&run).width).then(|| cx.layout_at(&run, width).size())
             })
             .collect();
         for (at, page) in self.pages.iter().enumerate() {
