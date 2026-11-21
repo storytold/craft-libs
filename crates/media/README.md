@@ -84,6 +84,10 @@ Output that differs on valid input:
 - MOV PCM at 65,536 Hz and above, and unsigned 16-bit PCM, is written as `lpcm` (sound
   description v2), and signed 8-bit PCM as `twos`. FilmCraft wrote 0 Hz for the former and
   labeled the signedness wrongly for the latter two. `raw ` under a sound handler reads as PCM.
+- Dolby Vision entries (`dvh1`, `dvhe`, `dva1`, `dvav`, `dav1`) read their base layer's codec
+  configuration, where FilmCraft read `CodecConfig::Unknown`, and a `dvcC`, `dvvC` or `dvwC` box
+  is read into the new `VideoParams::dolby_vision` and written back (see
+  [Dolby Vision](#dolby-vision)).
 - Matroska `BlockDuration` is rounded to the nearest tick; FilmCraft truncated it.
 - A Matroska `TimestampScale` above 2³² is ignored, like a zero scale.
 - `matroska::MkvWriter` writes `MuxingApp` = `craft-media`, and `MuxOptions::default()` has
@@ -188,6 +192,9 @@ Boxes with 64-bit sizes and with size 0 (runs to the end of the file) are suppor
 | `avc1`/`avc3` + `avcC` | `Avc(AvcConfig)`: profile, level, length size, SPS/PPS, extension bytes |
 | `hvc1`/`hev1` + `hvcC` | `Hevc(HevcConfig)`: all header fields plus NAL arrays (`vps()/sps()/pps()`) |
 | `av01` + `av1C` | `Av1(Av1Config)` |
+| `dvh1`/`dvhe` + `hvcC` (Dolby Vision) | `Hevc(HevcConfig)`, as `hvc1`/`hev1` |
+| `dva1`/`dvav` + `avcC` (Dolby Vision) | `Avc(AvcConfig)`, as `avc1`/`avc3` |
+| `dav1` + `av1C` (Dolby Vision) | `Av1(Av1Config)`, as `av01` |
 | `vp09` + `vpcC` | `Vp9(VpcConfig)` |
 | `apch apcn apcs apco ap4h ap4x` | `ProRes { fourcc }` |
 | `jpeg mjpa mjpb` | `Jpeg { fourcc }` |
@@ -207,6 +214,41 @@ Video entries also parse `colr` (`nclx`/`nclc`/ICC), `pasp`, `clap`, `fiel`, `ga
 transfer-function identifier (`com.apple.rec2020.apple-log` for Apple Log), kept as text whatever
 curve it names. It is non-empty UTF-8 without NUL of at most 255 bytes; anything else, or a second
 `logs` box, reads as unknown, and the writer refuses an identifier the reader would not accept. Audio entries parse QuickTime sound description v0/v1/v2 into `AudioParams`.
+
+#### Dolby Vision
+
+A Dolby Vision entry (`dvh1`, `dvhe`, `dva1`, `dvav`, `dav1`) is read as the entry it is derived
+from, so its codec is the base layer's (HEVC, H.264 or AV1) and decoders treat it as that codec.
+Its `format` keeps the Dolby Vision type, which a remux writes back.
+
+Any video entry, Dolby Vision or not (an iPhone recording stores Dolby Vision 8.4 under `hvc1`),
+also reads a `dvcC`, `dvvC` or `dvwC` box into `VideoParams::dolby_vision`, a `DolbyVisionConfig`:
+
+- It keeps the box type and the record byte for byte, and the writer puts the same box back right
+  after the codec configuration, before `colr` and the other descriptive boxes, where the iPhone
+  recording has it. A record of 5 to 24 bytes is read. A shorter or longer one, or a second
+  configuration box, reads as `None`.
+- `version_major()`, `version_minor()`, `profile()`, `level()`, `rpu_present()`, `el_present()`,
+  `bl_present()` and `bl_signal_compatibility_id()` decode the record's first five bytes. The
+  bits after the compatibility ID are kept verbatim and not interpreted.
+- `base_layer_compatible()` is true when there is a base layer and its compatibility ID is HDR10
+  (1), SDR (2), HLG (4) or Ultra HD Blu-ray HDR (6). Profile 5 (ID 0) has no such base layer.
+  craft-media only reports this; refusing a stream is the application's decision.
+- `DolbyVisionConfig::new` builds a version 1.0 record for a new stream: 24 bytes, zero after the
+  compatibility ID, in `dvcC` up to profile 7, `dvvC` for 8 to 10 and `dvwC` above. Entries built
+  with the `SampleEntry` constructors have no Dolby Vision configuration. An encode that copies a
+  demuxed entry's `VideoParams` must set `dolby_vision` to `None`, or it claims metadata the new
+  stream does not carry.
+
+Sources: the profiles and compatibility IDs are from Dolby's public *Dolby Vision Profiles and
+Levels* (version 1.5, December 2024). The box and sample entry types, and the entry each Dolby
+Vision type is derived from, are from the MP4 registration authority (mp4ra.org). Dolby's
+specification of Dolby Vision in ISO BMFF was not publicly readable, so the fields read are the
+ones confirmed by real files: an iPhone recording's 24-byte `dvvC` (profile 8, level 4, RPU and
+base layer present, compatibility ID 4) and the records ffmpeg writes. ffmpeg puts profiles 4, 5
+and 7 in `dvcC`, 8, 9 and 10 in `dvvC` and 11 and 20 in `dvwC`, and `DolbyVisionConfig::new`
+follows that split. Matroska's Dolby Vision mapping, RPU parsing and enhancement layers are not
+supported.
 
 #### Robustness
 The parser does not panic on malformed input; every error comes back as an `Error`. Table counts are
@@ -240,7 +282,8 @@ let bytes = w.finish_faststart()?.into_inner(); // or finish() for moov-at-end
   sync), `stsc`, `stsz` (constant or table), `stco`/`co64`. Consecutive samples of one track share a chunk;
   a PCM chunk ends at 1 MiB.
 - Sample entries come from `SampleEntry` (`avc`, `hevc`, `prores`, `jpeg`, `aac`, `pcm`, or any demuxed
-  entry). Remuxing copies codec config, `colr`, `pasp`, `clap`, `fiel`, `gama` and `btrt`.
+  entry). Remuxing copies codec config, the Dolby Vision configuration, `colr`, `pasp`, `clap`,
+  `fiel`, `gama` and `btrt`.
   PCM is written as `sowt`/`twos` (16-bit) or `raw ` (8-bit) or sound description v2 `lpcm` in MOV, and as
   `ipcm`/`fpcm` + `pcmC` in MP4. A PCM `write_sample` call can hold any whole number of frames, and the
   track timescale must equal the sample rate.
