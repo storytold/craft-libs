@@ -561,9 +561,7 @@ mod tests {
         assert_eq!(MAX_PART_ELEMENTS, 8_000_002);
         let cap = 100;
         let inline = |children| format!("<r>{}</r>", "<y/>".repeat(children));
-        let part = |name: &str, xml: &str| {
-            format!("<pkg:part pkg:name=\"{name}\"><pkg:xmlData>{xml}</pkg:xmlData></pkg:part>")
-        };
+        let part = |name: &str, xml: &str| format!("<pkg:part pkg:name=\"{name}\"><pkg:xmlData>{xml}</pkg:xmlData></pkg:part>");
         let package = |parts: &str| format!("<pkg:package xmlns:pkg=\"{PKG_NS}\">{parts}</pkg:package>");
         // The part, xmlData and r wrappers count too: 97 children make exactly 100.
         let xml = inline(97);
