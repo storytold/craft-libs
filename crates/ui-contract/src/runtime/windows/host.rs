@@ -421,7 +421,7 @@ pub(super) fn monitors(ctx: &Context) -> Vec<Monitor> {
 
 /// The monitor the top-left corner of a window with `facts` lies on. A corner is on a monitor when its pixel position
 /// at that monitor's scale is inside the monitor.
-fn monitor_of(ctx: &Context, facts: &viewports::Facts) -> Option<Monitor> {
+pub(super) fn monitor_of(ctx: &Context, facts: &viewports::Facts) -> Option<Monitor> {
     let corner = facts.outer.or(facts.inner)?.min;
     monitors(ctx).into_iter().find(|monitor| monitor.rect_px().contains(corner * monitor.scale))
 }

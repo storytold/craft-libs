@@ -197,6 +197,13 @@ pub struct Stamped<T> {
     value: T,
 }
 
+impl<T> Stamped<T> {
+    /// The record as its viewport's latest pass left it.
+    pub(crate) fn value(&self) -> &T {
+        &self.value
+    }
+}
+
 impl<T: Default> PerViewport<T> {
     fn record(&mut self, viewport: ViewportId) -> &mut T {
         let at = match self.records.iter().position(|(id, _)| *id == viewport) {
@@ -255,6 +262,11 @@ impl<T: Stored> PerViewport<T> {
         if !registered {
             Self::register_prune(ctx);
         }
+    }
+
+    /// Runs `f` on the record of `viewport` when it has one; creates none.
+    pub(crate) fn with_existing<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        T::records(ctx, |records| records.records.iter_mut().find(|(id, _)| *id == viewport).map(|(_, record)| f(record)))
     }
 
     /// Runs `f` on the record of every viewport that has one.

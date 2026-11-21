@@ -46,6 +46,12 @@ pub fn opens_os_windows(ctx: &Context, config: &DockConfig) -> bool {
     config.native_windows && host.opens_windows() && host.positions_reported()
 }
 
+/// The display scale the OS window `viewport` lays out at: its monitor's scale with the app's zoom, as the window
+/// reported it (`WindowHost::facts`). `None` before it reported one.
+pub fn pixels_per_point(ctx: &Context, viewport: ViewportId) -> Option<f32> {
+    WindowHost::of(ctx).facts(viewport)?.scale.map(|scale| scale * ctx.zoom_factor())
+}
+
 /// The window a group of panels with `specs` opens: a document window when any panel is a document, else a tool
 /// window (a palette level, no taskbar entry).
 pub fn spec_for(specs: &[PanelSpec]) -> WindowSpec {
