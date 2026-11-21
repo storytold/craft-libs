@@ -66,6 +66,7 @@ impl<'a> EffectParameters<'a> {
         let filter = index.filter(&effect.filter);
         let mut change = None;
         let mut pick_color = None;
+        let mut path = None;
         let stack = Stack::new().show(ui, |ui, _| {
             let picked = Select::new(words.filter.clone(), Bind::given(effect.filter.clone()), &entries).show(ui);
             if let Some(key) = picked.value().filter(|key| **key != effect.filter) {
@@ -80,10 +81,11 @@ impl<'a> EffectParameters<'a> {
                 change = Some(EffectChange::with_fields(at, fields));
             }
             pick_color = rows.pick_color;
+            path = rows.path;
             if filter.uses_colors {
                 Text::new(words.uses_colors.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
             }
         });
-        EffectParametersOutput { response: stack.output, change, pick_color, path: None }
+        EffectParametersOutput { response: stack.output, change, pick_color, path }
     }
 }
