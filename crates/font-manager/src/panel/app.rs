@@ -6,20 +6,23 @@ use std::sync::Arc;
 
 use crate::craft_font_catalog::{FontEnv, Limits, Os};
 use crate::filter::{Query, Search};
-use crate::index::{Category, Family, Index, categories, source_label};
+use crate::index::{Category, Family, FontFile, Index, categories, source_label};
 use crate::installed::{InstalledFamily, group};
-use crate::store::{Installer, RemoveRequest, StoreError};
+use crate::remote::Previews;
+use crate::store::{Installer, LegalText, RemoveRequest, StoreError};
 use crate::{Catalog, FaceInfo, Source};
 use craft_i18n::Folder;
 use craft_ui::direction;
 use craft_ui::fonts::{CraftFace, I18nScripts, UiFonts};
 use egui::{CentralPanel, Context, Frame, Margin, Panel, Ui};
 
+use crate::panel::details::Legal;
 use crate::panel::faces::FaceFonts;
 use crate::panel::i18n::{self, I18N, LANGUAGES, fmt, tl};
 use crate::panel::jobs::{Finished, Jobs, Kind, Request, Runner};
 use crate::panel::look::{Look, Palette};
 use crate::panel::samples;
+use crate::panel::subsets::Subsets;
 use crate::panel::widgets::{self, Skin};
 
 /// Installs the standalone app's interface fonts in `ctx` and sets the interface direction: craft-ui's
@@ -182,7 +185,13 @@ pub struct FontsPanel {
     /// Downloaded preview files, never installed.
     pub(crate) previews: Arc<Catalog>,
     pub(crate) previewed: HashMap<String, Vec<FaceInfo>>,
+    /// The list's previews from the font preview service.
+    pub(crate) subsets: Subsets,
     pub(crate) faces: FaceFonts,
+    /// The detail view's axis sliders, by file sha256 and axis tag.
+    pub(crate) detail_axes: HashMap<(String, [u8; 4]), f32>,
+    /// Licence and NOTICE texts, by family key.
+    pub(crate) legal: HashMap<(String, LegalText), Legal>,
     pub(crate) jobs: Jobs,
     pub(crate) asking: Option<Pending>,
     /// By lower-case family name.
@@ -231,6 +240,12 @@ pub(crate) fn source_name(s: Source) -> &'static str {
     }
 }
 
+/// The file of the face the list shows for a family of the index: the one closest to an upright
+/// regular.
+pub(crate) fn list_file(family: &Family) -> Option<&FontFile> {
+    family.files.iter().min_by_key(|f| (f.is_italic(), !f.has_weight(400, f.is_italic()), f.weight.abs_diff(400), !f.has_normal_width()))
+}
+
 /// The face closest to an upright regular.
 pub(crate) fn regular(faces: &[FaceInfo]) -> Option<&FaceInfo> {
     faces.iter().min_by_key(|f| (f.italic, ((f.weight - 400.0).abs() * 10.0) as i64, ((f.width - 100.0).abs() * 10.0) as i64))
@@ -262,6 +277,7 @@ impl FontsPanel {
         let catalogue = options.index.map(|index| Catalogue { search: Search::new(&index), index: Arc::new(index) });
         let previews = Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false));
         let look = Look::default();
+        let subsets = Subsets::new(Arc::clone(&options.installer), Previews::new(Arc::clone(&options.installer)));
         FontsPanel {
             settings,
             tab: Tab::Catalogue,
@@ -292,7 +308,10 @@ impl FontsPanel {
             detail: None,
             previews,
             previewed: HashMap::new(),
+            subsets,
             faces: FaceFonts::default(),
+            detail_axes: HashMap::new(),
+            legal: HashMap::new(),
             jobs: Jobs::new(options.runner),
             asking: None,
             failed: HashMap::new(),
@@ -305,6 +324,24 @@ impl FontsPanel {
             move_focus: false,
             focus_search: false,
         }
+    }
+
+    /// Fetches the list's previews through `previews` instead of craft-font-store's client.
+    pub fn with_previews(mut self, previews: Previews) -> FontsPanel {
+        self.subsets.replace(previews);
+        self
+    }
+
+    /// Reads the preview service and previews settings again on the next frame, after a host's
+    /// settings page changed them. The panel also reads them every few seconds and when its
+    /// window regains focus.
+    pub fn reload_preview_settings(&mut self) {
+        self.subsets.read_settings_soon();
+    }
+
+    /// Whether previews from the font preview service are being fetched.
+    pub fn loading_previews(&self) -> bool {
+        self.subsets.loading()
     }
 
     /// Shows `index` (after the host fetched the sources, say). The details sheet closes, as
@@ -455,6 +492,8 @@ impl FontsPanel {
         let ctx = ui.ctx().clone();
         self.skin = Skin { p: self.look.palette(&ctx), look: self.look.clone() };
         self.faces.begin_frame(&ctx);
+        let typed = format!("{:?}\n{:?}\n{}", self.settings.preset, self.query.language, self.settings.sample);
+        self.subsets.begin_frame(&ctx, typed);
         self.poll_jobs();
         let focused = ctx.input(|i| i.focused);
         if focused && !self.focused {
@@ -462,6 +501,7 @@ impl FontsPanel {
                 self.catalog.rescan_if_changed();
             }
             self.consent = None;
+            self.subsets.read_settings_soon();
         }
         self.focused = focused;
         self.refresh_installed();
@@ -617,8 +657,9 @@ impl FontsPanel {
         self.installed_shown.0.clone()
     }
 
-    /// The sample for a family with `scripts`: what the user typed, else the preset.
-    pub(crate) fn sample_for<'a>(&self, scripts: impl IntoIterator<Item = &'a str>) -> String {
+    /// The sample for a family with `scripts` and the index sample `own` ([`samples::of_family`]):
+    /// what the user typed, else the preset.
+    pub(crate) fn sample_for<'a>(&self, own: Option<&str>, scripts: impl IntoIterator<Item = &'a str>) -> String {
         if !self.settings.sample.trim().is_empty() {
             return self.settings.sample.clone();
         }
@@ -627,7 +668,7 @@ impl FontsPanel {
             Preset::Numerals => samples::NUMERALS.to_owned(),
             Preset::Sentence => {
                 let language = self.catalogue.as_ref().ok().zip(self.query.language).and_then(|(c, l)| c.index.languages().get(l));
-                language.and_then(|l| samples::for_language(&l.id)).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
+                language.and_then(|l| samples::for_language(&l.id)).or(own).unwrap_or_else(|| samples::for_scripts(scripts)).to_owned()
             }
         }
     }
