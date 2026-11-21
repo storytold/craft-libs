@@ -88,7 +88,7 @@ fn sets_the_mapping(b: Bytes, mut pos: usize) -> bool {
         if func == 0 || b.slice(pos, len).is_none() {
             return false;
         }
-        if matches!(func, 0x0103 | 0x020E) {
+        if matches!(func, 0x0103 | 0x020E) || (func == 0x0626 && pos.checked_add(6).and_then(|o| b.u16(o)) == Some(0x000F)) {
             return true;
         }
         let Some(next) = pos.checked_add(len) else { return false };

@@ -30,7 +30,7 @@ pub(crate) fn is_emf(b: Bytes) -> bool {
 
 /// The picture frame: `rclFrame` (0.01 mm) mapped to device units through `szlDevice` and
 /// `szlMillimeters`, sized in points. Without a usable frame, the device bounds stand in (1 unit = 1 point).
-pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
+pub(crate) fn parse(input: Bytes, depth: u8) -> Result<(Canvas, Option<Frame>), Error> {
     if !is_emf(input) {
         return Err(Error::BadHeader);
     }
@@ -45,7 +45,7 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
     if let Some(px_mm) = device_px_per_mm(input) {
         cv.set_device_mm(px_mm);
     }
-    let mut plus = crate::emfplus::Plus::new();
+    let mut plus = crate::emfplus::Plus::new(depth);
     plus.frame = frame.as_ref().map(|f| f.rect);
     let mut parsed = 0usize;
     let mut pos = hsize.max(88);
