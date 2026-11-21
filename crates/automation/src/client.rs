@@ -1,6 +1,6 @@
 //! A JSON-lines client for integration tests and CLIs.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::SocketAddr;
 
 use serde_json::{Value, json};
@@ -58,13 +58,13 @@ impl ControlClient {
     /// the reply's `error` text as `Refused` when it isn't `ok`, or the I/O error's message as `Transport`.
     pub fn connect(addr: SocketAddr, token: &str) -> Result<Self, ConnectError> {
         let io = |e: std::io::Error| ConnectError::Transport(e.to_string());
-        let stream = std::net::TcpStream::connect(addr).map_err(io)?;
+        let stream = std::net::TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(io)?;
         stream.set_read_timeout(Some(CALL_TIMEOUT)).map_err(io)?;
         stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(io)?;
         let reader = BufReader::new(stream.try_clone().map_err(io)?);
         let mut client = Self { stream, broken: false, reader, next_id: 2 };
         // `exchange` marks the client broken on a transport failure only, so an error reply is a refusal.
-        let auth = client.exchange(1, AUTH_METHOD, json!({"token": token}));
+        let auth = client.exchange(1, AUTH_METHOD, json!({"token": token}), None);
         auth.map_err(|e| if client.broken { ConnectError::Transport(e) } else { ConnectError::Refused(e) })?;
         Ok(client)
     }
@@ -74,23 +74,26 @@ impl ControlClient {
     /// `"ok": true`, `Err(error)` otherwise. After an I/O error or a timeout the connection is
     /// closed and every later call fails, so a late reply can't answer the wrong call.
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.exchange(id, method, params)
+        self.call_with(method, params, None)
     }
 
     /// As [`ControlClient::call`], but gives up with `Err("cancelled")` and closes the connection when `cancelled()`
     /// turns true while it waits for the reply.
     pub fn call_until(&mut self, method: &str, params: Value, cancelled: &dyn Fn() -> bool) -> Result<Value, String> {
-        let _ = (method, params, cancelled);
-        todo!("sh.N3")
+        self.call_with(method, params, Some(cancelled))
     }
 
-    fn exchange(&mut self, id: u64, method: &str, params: Value) -> Result<Value, String> {
+    fn call_with(&mut self, method: &str, params: Value, cancelled: Option<&dyn Fn() -> bool>) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.exchange(id, method, params, cancelled)
+    }
+
+    fn exchange(&mut self, id: u64, method: &str, params: Value, cancelled: Option<&dyn Fn() -> bool>) -> Result<Value, String> {
         if self.broken {
             return Err("connection closed".into());
         }
-        let result = self.round_trip(id, method, params);
+        let result = self.round_trip(id, method, params, cancelled);
         if matches!(result, Err(Failure::Io(_))) {
             self.broken = true;
             let _ = self.stream.shutdown(std::net::Shutdown::Both);
@@ -100,14 +103,21 @@ impl ControlClient {
         })
     }
 
-    fn round_trip(&mut self, id: u64, method: &str, params: Value) -> Result<Value, Failure> {
+    fn round_trip(&mut self, id: u64, method: &str, params: Value, cancelled: Option<&dyn Fn() -> bool>) -> Result<Value, Failure> {
         let io = |e: std::io::Error| Failure::Io(e.to_string());
         writeln!(self.stream, "{}", json!({"id": id, "method": method, "params": params})).map_err(io)?;
         self.stream.flush().map_err(io)?;
         loop {
+            if let Some(cancelled) = cancelled {
+                self.wait_for_reply(cancelled)?;
+            }
             let mut line = String::new();
-            if self.reader.read_line(&mut line).map_err(io)? == 0 {
+            let read = (&mut self.reader).take(MAX_REPLY_BYTES + 1).read_line(&mut line).map_err(io)?;
+            if read == 0 {
                 return Err(Failure::Io("connection closed".into()));
+            }
+            if read as u64 > MAX_REPLY_BYTES {
+                return Err(Failure::Io(format!("reply longer than {MAX_REPLY_BYTES} bytes")));
             }
             let mut reply: Value = serde_json::from_str(&line).map_err(|e| Failure::Io(format!("bad reply: {e}")))?;
             // A reply to an earlier request (a null id is the server's answer to an unparseable line).
@@ -120,6 +130,36 @@ impl ControlClient {
                 Err(Failure::Reply(reply.get("error").and_then(Value::as_str).unwrap_or("request failed").to_string()))
             };
         }
+    }
+
+    /// Waits until a reply line starts to arrive, asking `cancelled` between short reads, for at most
+    /// [`CALL_TIMEOUT`]. A cancel is a transport failure, so the connection closes and a late reply can't answer the
+    /// next call.
+    fn wait_for_reply(&self, cancelled: &dyn Fn() -> bool) -> Result<(), Failure> {
+        const POLL: std::time::Duration = std::time::Duration::from_millis(100);
+        if !self.reader.buffer().is_empty() {
+            return Ok(());
+        }
+        let io = |e: std::io::Error| Failure::Io(e.to_string());
+        let start = std::time::Instant::now();
+        self.stream.set_read_timeout(Some(POLL)).map_err(io)?;
+        let outcome = loop {
+            match self.stream.peek(&mut [0]) {
+                Ok(_) => break Ok(()),
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                    if cancelled() {
+                        break Err(Failure::Io("cancelled".into()));
+                    }
+                    if start.elapsed() >= CALL_TIMEOUT {
+                        break Err(io(e));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => break Err(io(e)),
+            }
+        };
+        self.stream.set_read_timeout(Some(CALL_TIMEOUT)).map_err(io)?;
+        outcome
     }
 }
 
