@@ -14,7 +14,7 @@ use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::style::TypeRole;
 use crate::text::TextField;
-use craft_behavior::{DisplayOrder, ItemSource, Selection};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed, Selection};
 use craft_i18n::Folder;
 use egui::{Response, Ui};
 use std::borrow::Cow;
@@ -187,13 +187,12 @@ pub struct ListManagerChoice {
 }
 
 impl ListManagerChoice {
-    /// The action id of an in-place rename ([`ListManager::renames`]).
+    /// The action id of an in-place rename ([`ListManager::renames`]). An app's own action must not use this id.
     pub const RENAME: &'static str = "rename";
 
     /// Whether the choice is an in-place rename.
     pub fn is_rename(&self) -> bool {
-        let _ = self;
-        todo!("ch.K25")
+        self.action == Self::RENAME
     }
 }
 
@@ -320,6 +319,8 @@ fn is_enabled(action: &ListManagerAction, entries: &[ListManagerEntry], folder: 
 ///   it is enabled, Delete in the list runs the `delete` action, Escape cancels.
 /// - Actions are the buttons in a column beside the list: the first action, Cancel, then the other actions in the
 ///   given order. The app replaces `entries` between passes; the name box keeps its text.
+/// - Rename: with `renames`, F2 on an entry of that kind edits its name in the row. A commit reports a choice whose
+///   action is [`ListManagerChoice::RENAME`] and leaves the dialog open; Escape reports nothing.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct ListManager<'a> {
@@ -342,6 +343,10 @@ pub struct ListManager<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
+    /// Entries of this kind rename in place: a commit reports a [`ListManagerChoice`] with the `RENAME` action, the
+    /// entry's id and the trimmed name, and the dialog stays open.
+    #[prop]
+    renames: Option<u32>,
 }
 
 impl<'a> ListManager<'a> {
@@ -362,20 +367,13 @@ impl<'a> ListManager<'a> {
             searchable: false,
             name: None,
             open: None,
+            renames: None,
         }
-    }
-
-    /// Entries of `kind` rename in place: a commit reports a [`ListManagerChoice`] with the `RENAME` action, the
-    /// entry's id and the trimmed name, and the dialog stays open.
-    #[must_use]
-    pub fn renames(self, kind: u32) -> Self {
-        let _ = (self, kind);
-        todo!("ch.K25")
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ListManagerOutput {
-        let ListManager { title, name_label, entries, actions, empty, note, searchable, name, open } = self;
+        let ListManager { title, name_label, entries, actions, empty, note, searchable, name, open, renames } = self;
         let env = Env::of(ui);
         let words = env.words::<ListManagerWords>();
         let common = env.words::<CommonWords>();
@@ -416,6 +414,7 @@ impl<'a> ListManager<'a> {
         let folder = env.folder();
         let activated = Cell::new(None::<usize>);
         let typed = RefCell::new(String::new());
+        let renamed = RefCell::new(None::<(usize, String)>);
         let shown = dialog.show(ui, |ui, cx| {
             let mut session = cx.memory::<Session>().clone();
             if cx.appeared()
@@ -458,6 +457,9 @@ impl<'a> ListManager<'a> {
                     if searchable {
                         list = list.filter(&session.name, |at| Label::from(entries[*at].name.clone()));
                     }
+                    if let Some(kind) = renames {
+                        list = list.rename(true).can_rename(move |at| entries[*at].kind == kind);
+                    }
                     let events = list
                         .show_items(ui, &source, &mut |at, _| {
                             let entry = &entries[*at];
@@ -488,6 +490,13 @@ impl<'a> ListManager<'a> {
                                 let delete = actions.iter().position(|action| action.id == DELETE);
                                 activated.set(delete.filter(|at| is_enabled(&actions[*at], entries, &folder, &session.name)));
                             }
+                            CollectionEvent::Rename(EditEvent::Commit { after: Mixed::Same(rename), .. }) => {
+                                let name = rename.name.trim();
+                                if !name.is_empty() {
+                                    session.name = name.to_owned();
+                                    *renamed.borrow_mut() = Some((rename.key, session.name.clone()));
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -509,6 +518,9 @@ impl<'a> ListManager<'a> {
             let entry = entries.iter().find(|entry| is_named(entry, &folder, &typed) && accepts(&actions[at], entry));
             ListManagerChoice { action: actions[at].id.clone(), entry: entry.map(|entry| entry.id.clone()), name: typed.trim().to_owned() }
         });
-        ListManagerOutput { response, closed, choice }
+        let rename = renamed.take().and_then(|(at, name)| {
+            entries.get(at).map(|entry| ListManagerChoice { action: ListManagerChoice::RENAME.to_owned(), entry: Some(entry.id.clone()), name })
+        });
+        ListManagerOutput { response, closed, choice: choice.or(rename) }
     }
 }

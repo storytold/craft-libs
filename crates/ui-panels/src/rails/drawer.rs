@@ -6,13 +6,13 @@ use super::words::RailWords;
 use crate::buttons::{Button, IconButton};
 use crate::contract::overlay::{Anchor, Dismiss, Overlay, Place};
 use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, Gap, ListDrag, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    Sizing, clicked,
+    ActivateOn, Bind, CollectionEvent, Gap, ListDrag, NoValue, Outcome, PopupKind, Props as _, SelectMode, Show as _, ShowCollection as _,
+    ShowContainer as _, Sizing, Trigger, clicked,
 };
-use crate::display::{Shade, Text};
+use crate::display::{Shade, TargetMark, Text};
 use crate::layout_components::{Row, Stack};
-use crate::list::{List, ListRow, RowInk};
-use crate::menu::PanelRow;
+use crate::list::{List, ListRow, RowInk, RowRun};
+use crate::menu::{Menu, PanelMenu, PanelRow};
 use crate::popover::Popover;
 use crate::primitives::IconSpec;
 use crate::runtime::commands::{self, ResolvedCommand};
@@ -49,8 +49,8 @@ impl<T> DrawerGroup<T> {
     /// A group headed `label` that lists the tools of `slots` one after another; each row carries its slot's run by
     /// position.
     pub fn slotted(label: impl Into<Label>, slots: Vec<Vec<RailTool<T>>>) -> Self {
-        let _ = (label, slots);
-        todo!("ch.K23")
+        let lengths = slots.iter().map(Vec::len).collect();
+        DrawerGroup { label: label.into(), tools: slots.into_iter().flatten().collect(), slots: lengths }
     }
 }
 
@@ -135,6 +135,8 @@ impl<T: Value> Outcome for ToolbarDrawerOutput<T> {
 /// - **Closing.** Escape, the close button or a press outside the drawer and the rail closes it: `closed` is set and
 ///   the host stops showing it. A press on the rail is the start of a drag or a pick there, so it leaves the drawer open.
 ///   The focus then returns to the drawer's [opener](ToolbarDrawer::opened_by), the rail's Edit Toolbar button.
+/// - **Menu and footer.** With [`menu`](ToolbarDrawer::menu) rows the header holds a menu button, and
+///   [`show_with`](ToolbarDrawer::show_with) draws the host's content in the footer above Restore Defaults.
 #[must_use = "show the drawer with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(ToolbarDrawer<'static, u8>))]
@@ -146,13 +148,11 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     #[prop]
     opens: Side,
     /// The tool whose row wears the target mark.
-    #[prop]
-    #[allow(dead_code)] // P3(chrome-w6): dp.T3
     mark: Option<&'a T>,
     /// A request of the pass: scrolls the tool's row into the list's view.
-    #[prop]
-    #[allow(dead_code)] // P3(chrome-w6): dp.T3
     reveal: Option<&'a T>,
+    /// The rows of the menu the header's menu button opens; no button without rows.
+    menu: Vec<PanelRow>,
     dropped: Option<ToolDropped>,
     opener: Option<Response>,
 }
@@ -161,13 +161,25 @@ impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
     /// A drawer beside `rail` (the rail's rect), listing `groups`, over a toolbar of `toolbar` slots. `dropped` is the
     /// drag the rail took in this pass (`ToolRailOutput::dropped`); the drawer turns it into an edit.
     pub fn new(rail: Rect, groups: &'a [DrawerGroup<T>], toolbar: &'a [ToolSlot<T>], dropped: Option<ToolDropped>) -> Self {
-        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, mark: None, reveal: None, dropped, opener: None }
+        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, mark: None, reveal: None, menu: Vec::new(), dropped, opener: None }
     }
 
     /// The control that opened the drawer, the rail's Edit Toolbar button (`ToolRailOutput::edit_toolbar`): the focus
     /// returns to it when the drawer closes. The drawer still hangs from the rail.
     pub fn opened_by(mut self, opener: &Response) -> Self {
         self.opener = Some(opener.clone());
+        self
+    }
+
+    /// The tool whose row wears the target mark; `None` marks none.
+    pub fn mark(mut self, tool: Option<&'a T>) -> Self {
+        self.mark = tool;
+        self
+    }
+
+    /// A request: scrolls the row of `tool` into the list's view. Send it in the pass that needs it, not every pass.
+    pub fn reveal(mut self, tool: Option<&'a T>) -> Self {
+        self.reveal = tool;
         self
     }
 }
@@ -226,6 +238,24 @@ impl DisplayOrder<DrawerKey> for Rows<'_> {
 
 impl ItemSource<DrawerKey> for Rows<'_> {}
 
+/// The place of the row at `tool` in the runs `slots` count: `None` without slots or past the last run.
+fn run_of(slots: &[usize], tool: usize) -> Option<RowRun> {
+    let mut start = 0;
+    for length in slots {
+        let end = start + length;
+        if tool < end {
+            return Some(match (tool == start, tool + 1 == end) {
+                (true, true) => RowRun::Alone,
+                (true, false) => RowRun::First,
+                (false, true) => RowRun::Last,
+                (false, false) => RowRun::Middle,
+            });
+        }
+        start = end;
+    }
+    None
+}
+
 /// Whether the toolbar holds the tool `id`.
 fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
     toolbar.iter().any(|slot| slot.tools.iter().any(|tool| tool.id == *id))
@@ -234,20 +264,19 @@ fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
     /// With rows, an icon button after the title opens a menu of `rows`.
     #[must_use]
-    pub fn menu(self, rows: Vec<PanelRow>) -> Self {
-        let _ = rows;
-        todo!("ch.K21")
-    }
-
-    /// [`show`](ToolbarDrawer::show) with `below` drawn in the footer above Restore Defaults.
-    pub fn show_with(self, ui: &mut Ui, below: impl FnMut(&mut Ui)) -> ToolbarDrawerOutput<T> {
-        let _ = (ui, below);
-        todo!("ch.K22")
+    pub fn menu(mut self, rows: Vec<PanelRow>) -> Self {
+        self.menu = rows;
+        self
     }
 
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener, .. } = self;
+        self.show_with(ui, |_| {})
+    }
+
+    /// [`show`](ToolbarDrawer::show) with `below` drawn in the footer above Restore Defaults.
+    pub fn show_with(self, ui: &mut Ui, mut below: impl FnMut(&mut Ui)) -> ToolbarDrawerOutput<T> {
+        let ToolbarDrawer { rail, groups, toolbar, opens, mark, reveal, menu, dropped, opener } = self;
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
         let os = os_of(ui.ctx());
@@ -261,6 +290,9 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
         let mut restore = false;
         let layout = env.view().keyboard_layout();
         let chord_of = |command: &ResolvedCommand| command.chord.as_ref().map(|chord| chord.display_for(os, layout));
+        let key_of = |id: &T| {
+            groups.iter().enumerate().find_map(|(group, held)| held.tools.iter().position(|tool| tool.id == *id).map(|tool| DrawerKey::Tool { group, tool }))
+        };
 
         let mut popover = Popover::new(words.drawer_title.clone(), Bind::bound(&mut open));
         if let Some(opener) = &opener {
@@ -286,14 +318,23 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                     .header(|ui, _| {
                         Row::new().show(ui, |ui, _| {
                             Text::new(words.drawer_title.clone()).role(TypeRole::Title).show(ui);
+                            if !menu.is_empty() {
+                                let more = IconButton::new(IconId::new("menu")).label(words.drawer_menu.clone()).popup(PopupKind::Menu).show(ui);
+                                let _ = Menu::new(words.drawer_menu.clone()).opened_by(&more, Trigger::Click).show(ui, |ui, _| {
+                                    PanelMenu::new(menu.clone(), Vec::new()).show(ui);
+                                });
+                            }
                             let close = IconButton::new(IconId::new("close")).label(words.drawer_close.clone()).show(ui);
                             leave |= clicked(&close);
                         });
                         Text::new(words.drawer_hint.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
                     })
-                    .footer(|ui, _| restore |= clicked(&Button::new(words.drawer_restore.clone()).show(ui)))
+                    .footer(|ui, _| {
+                        below(ui);
+                        restore |= clicked(&Button::new(words.drawer_restore.clone()).show(ui));
+                    })
                     .show(ui, |ui, _| {
-                        let list = List::<DrawerKey>::new(words.drawer_tools.clone())
+                        let mut list = List::<DrawerKey>::new(words.drawer_tools.clone())
                             .id(ui.scope_id().with("drawer-tools"))
                             .select(SelectMode::None)
                             .activate(ActivateOn::Click)
@@ -306,11 +347,17 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 DrawerKey::Group(_) => None,
                             })
                             .sizing(Sizing::Content);
+                        if let Some(key) = reveal.and_then(key_of) {
+                            list = list.reveal(key);
+                        }
                         let out = list.show_items(ui, &rows, &mut |key, _| match *key {
                             DrawerKey::Group(group) => ListRow::new(groups[group].label.clone()).section_heading(),
                             DrawerKey::Tool { group, tool } => {
                                 let command = &resolved[group][tool];
                                 let mut row = ListRow::new(command.label.to_string());
+                                if let Some(run) = run_of(&groups[group].slots, tool) {
+                                    row = row.run(run);
+                                }
                                 if let Some(icon) = &command.icon {
                                     row = row.icon(IconSpec::svg(IconId::from(icon.clone())));
                                 }
@@ -323,6 +370,11 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 }
                             }
                         });
+                        if let Some(key) = mark.and_then(key_of)
+                            && let Some(row) = out.shown.iter().find(|row| row.key == key)
+                        {
+                            TargetMark::new(row.rect).show_mark(ui);
+                        }
                         let tool_of = |key: &DrawerKey| match *key {
                             DrawerKey::Tool { group, tool } => groups[group].tools.get(tool),
                             DrawerKey::Group(_) => None,

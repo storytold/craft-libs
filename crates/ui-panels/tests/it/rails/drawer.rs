@@ -154,3 +154,38 @@ fn the_drawer_opens_on_the_side_it_is_given() {
         assert!(away, "{opens:?}: the drawer row {row:?} lies on that side of the rail {rail:?}");
     }
 }
+
+/// With two groups of tools the list holds heading rows between the tools, so a tool's key is not its flat index: a
+/// revealed tool far down the list scrolls into the drawer's room, and only a marked tool wears the mark.
+#[trial]
+fn a_revealed_tool_scrolls_into_view_and_wears_the_mark() {
+    use craft_ui::display::TargetMark;
+    use craft_ui::rails::{DrawerGroup, ToolbarDrawer};
+    use egui::{Pos2, Rect};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    const ROOM: Vec2 = Vec2::new(480.0, 240.0);
+    let shown = |marked: bool| {
+        let pending = Rc::new(Cell::new(true));
+        let mut fixture = Fixture::new(move |ui| {
+            let ids = |from: u8, to: u8| (from..to).map(tool).collect::<Vec<_>>();
+            let mut second = ids(30, 49);
+            second.push(tool(CUT));
+            let groups = [DrawerGroup::new("First", ids(10, 30)), DrawerGroup::new("Second", second)];
+            let toolbar = [slot(0, &[UNDO])];
+            let rail = Rect::from_min_size(Pos2::ZERO, Vec2::new(48.0, ROOM.y));
+            let target = CUT;
+            let reveal = pending.replace(false).then_some(&target);
+            ToolbarDrawer::new(rail, &groups, &toolbar, None).reveal(reveal).mark(marked.then_some(&target)).show(ui);
+        });
+        fixture.room(ROOM).idle(60);
+        let row = fixture.by_label("Cut").expect("the revealed tool's row is shown").rect;
+        (row, !fixture.styles_of(std::any::type_name::<TargetMark>()).is_empty())
+    };
+    let room = Rect::from_min_size(Pos2::ZERO, ROOM);
+    let (row, marked) = shown(true);
+    assert!(room.contains_rect(row), "the revealed row {row:?} lies inside the room {room:?}");
+    assert!(marked, "the marked tool wears the mark");
+    let (_, unmarked) = shown(false);
+    assert!(!unmarked, "without a mark no ring is drawn");
+}

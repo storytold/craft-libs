@@ -28,6 +28,15 @@ fn list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// Entries of kind 1 rename in place: F2 on a row edits its name there.
+#[story(ListManager<'static>, covers = [], drive = Drive::Never)]
+fn list_manager_renames(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<ListManagerWords>();
+    let actions = vec![ListManagerAction::run(&words), ListManagerAction::delete(&words)];
+    let entries: Vec<ListManagerEntry> = entries().into_iter().enumerate().map(|(at, entry)| if at == 1 { entry } else { entry.kind(1) }).collect();
+    ListManager::new("Macros", "Macro name:", entries, actions).renames(1).opened(Bind::bound(data.value("open", true))).show(ui).into()
+}
+
 #[story(ListManager<'static>, covers = [], drive = Drive::Never)]
 fn list_manager_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<ListManagerWords>();
