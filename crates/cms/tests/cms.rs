@@ -139,26 +139,31 @@ fn identity_transform_is_identity() {
 fn cmyk_profile_is_monotonic_and_in_range() {
     let p = cmyk();
     assert_eq!(p.color_space, ColorSpace::Cmyk);
+    let back = Transform::new(p, lab(), Intent::RelativeColorimetric, false).unwrap();
+    let measure = |dev: &[f32]| {
+        let mut o = [0.0f32; 3];
+        back.eval(dev, &mut o).unwrap();
+        dec(&o)
+    };
     // CMYK → Lab: L* decreases with every ink.
     for ink in 0..4 {
         let mut prev = f64::INFINITY;
         for i in 0..=32 {
             let mut v = [0.1f32, 0.1, 0.1, 0.1];
             v[ink] = i as f32 / 32.0;
-            let l = to_lab(p, &v, Intent::RelativeColorimetric)[0];
+            let l = measure(&v)[0];
             assert!(l <= prev + 0.05, "ink {ink} at {i}: {l} > {prev}");
             prev = l;
         }
     }
     // Paper is L* 100 (relative).
-    let w = to_lab(p, &[0.0; 4], Intent::RelativeColorimetric);
+    let w = measure(&[0.0; 4]);
     assert!(delta_e76(w, [100.0, 0.0, 0.0]) < 0.5, "{w:?}");
     // sRGB gray ramp → CMYK: in range, K never decreases, total ink within the limit.
     for intent in [Intent::Perceptual, Intent::RelativeColorimetric] {
         let t = Transform::new(srgb(), p, intent, true).unwrap();
         let mut prev_k = -1.0f32;
         let mut prev_l = f64::INFINITY;
-        let back = Transform::new(p, lab(), Intent::RelativeColorimetric, false).unwrap();
         for v in (0..=255).rev().step_by(5) {
             let g = v as f32 / 255.0;
             let mut o = [0.0f32; 4];
