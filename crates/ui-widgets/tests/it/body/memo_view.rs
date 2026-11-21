@@ -1164,6 +1164,7 @@ fn a_view_in_a_row_narrows_with_it_and_runs_only_when_its_width_changes() {
     }
     let (wide, _) = frame(&mut frames, "B");
     assert_eq!(runs_of(&frames, "Line"), [MemoRun::Replayed], "an idle frame replays the view");
+    assert!(measuring_runs_of(&frames, "Line") <= SWEEPS, "an idle frame runs the view at most once per measuring sweep of the row");
     let (narrow, after) = frame(&mut frames, "A much longer button label");
     assert_eq!(runs_of(&frames, "Line"), [MemoRun::Ran], "a new width runs the view");
     assert!(narrow.width() < wide.width(), "the view narrows: {narrow:?} from {wide:?}");
@@ -1172,4 +1173,18 @@ fn a_view_in_a_row_narrows_with_it_and_runs_only_when_its_width_changes() {
         frame(&mut frames, "A much longer button label");
     }
     assert_eq!(runs_of(&frames, "Line"), [MemoRun::Replayed], "at the same width it replays again");
+    assert!(measuring_runs_of(&frames, "Line") <= SWEEPS, "at the same width the view runs at most once per measuring sweep of the row");
+}
+
+/// The sweeps of a shrinking row's measuring run that show its units: the counting sweep and, for a short row, the
+/// sweep that asks its body units for their least. Until FW-310 moves `unbounded` out of the scope key, the counting
+/// sweep's call keys apart from the real call's and a memoized unit runs in each sweep; FW-310 tightens this to none.
+const SWEEPS: usize = 2;
+
+/// How many times the views named `name` ran in the last frame outside the real run of its last pass: in sizing and
+/// measuring runs.
+fn measuring_runs_of(frames: &Frames, name: &str) -> usize {
+    let ran =
+        |runs: Vec<(&'static str, egui::Id, MemoRun)>| runs.into_iter().filter(|(of, _, run)| of.contains(name) && *run == MemoRun::Ran).count();
+    ran(last_frame_memo_runs(&frames.ctx)) - ran(last_pass_memo_runs(&frames.ctx))
 }
