@@ -804,15 +804,24 @@ fn assert_reader_matches_open(f: &[u8]) {
     for (s, (rs, os)) in r.streams().iter().zip(&o.streams).enumerate() {
         assert_eq!((rs.serial, rs.codec, &rs.headers, rs.pages, rs.saw_eos), (os.serial, os.codec, &os.headers, os.pages, os.saw_eos));
         assert!(rs.packets.is_empty());
-        let mine: Vec<&ReadPacket> =got.iter().filter(|g| g.0 == s).collect();
+        let mine: Vec<&ReadPacket> = got.iter().filter(|g| g.0 == s).collect();
         assert_eq!(mine.len(), os.packets.len(), "stream {s}");
         for (i, (g, p)) in mine.iter().zip(&os.packets).enumerate() {
             assert_eq!(&g.1, p, "stream {s} packet {i}");
             assert_eq!(g.2, o.read_packet(f, s, i).unwrap(), "stream {s} packet {i}");
         }
     }
-    // file order: each packet lies after the one before it
-    assert!(got.windows(2).all(|w| w[0].1.parts.last().map(|p| p.0) < w[1].1.parts.last().map(|p| p.0)));
+    // file order: packets come in the order of the pages they complete on (from a walk of the
+    // pages), and within a page in their own order
+    let mut d = Demux::new(f.len() as u64, None);
+    let mut rank = HashMap::new();
+    while let Some((s, _)) = d.next_page(f, u64::MAX).unwrap() {
+        rank.insert((s, d.streams[s].pages - 1), rank.len());
+        d.streams[s].packets.clear();
+    }
+    let mut want: Vec<(usize, &Packet)> = o.streams.iter().enumerate().flat_map(|(s, st)| st.packets.iter().map(move |p| (s, p))).collect();
+    want.sort_by_key(|&(s, p)| rank[&(s, p.page)]);
+    assert!(got.iter().map(|g| (g.0, &g.1)).eq(want));
     assert_eq!(r.warnings(), o.warnings);
 }
 
@@ -878,6 +887,19 @@ fn probe_waits_for_the_headers_of_every_stream() {
     assert_eq!(probe(&g).unwrap().streams[0].headers.len(), 1);
     assert!(matches!(probe(&b"not ogg at all, no capture pattern".to_vec()), Err(Error::NotOgg)));
     assert!(matches!(PacketReader::new(&b"OggS but nothing after it".to_vec()), Err(Error::NotOgg)));
+}
+
+#[test]
+fn probe_does_not_wait_for_a_stream_a_new_link_replaced() {
+    // stream 1 begins with a packet that never completes, then a new link reuses its serial: the
+    // probe stops after the new link's header pages
+    let mut f = Vec::new();
+    page(&mut f, 0x02, -1, 1, 0, &[255], &[7; 255]);
+    opus_pages(&mut f, 1, 50, 40, true);
+    let o = probe(&f).unwrap();
+    assert_eq!(o.streams.len(), 2);
+    assert!(o.streams[0].headers.is_empty());
+    assert_eq!((o.streams[1].codec, o.streams[1].headers.len(), o.streams[1].packets.len()), (Codec::Opus, 2, 0));
 }
 
 #[test]
@@ -966,6 +988,133 @@ fn packet_reader_returns_what_open_indexes() {
         f[starts[k] + 30] ^= 0xFF;
     }
     assert_reader_matches_open(&f);
+    // stream 1 begins a packet, stream 2 completes one, then stream 1 completes its packet with
+    // a zero lacing value: stream 2's packet comes first, though its bytes lie after stream 1's
+    let mut f = Vec::new();
+    let (l, b) = lace(&[&opus_head(0)], false);
+    page(&mut f, 0x02, 0, 1, 0, &l, &b);
+    page(&mut f, 0x02, 0, 2, 0, &l, &b);
+    let (l, b) = lace(&[b"OpusTags"], false);
+    page(&mut f, 0, 0, 1, 1, &l, &b);
+    page(&mut f, 0, 0, 2, 1, &l, &b);
+    page(&mut f, 0, -1, 1, 2, &[255], &pkt(0, 255));
+    let (l, b) = lace(&[&pkt(1, 30)], false);
+    page(&mut f, 0x04, 960, 2, 2, &l, &b);
+    page(&mut f, 0x01 | 0x04, 960, 1, 3, &[0], &[]);
+    assert_reader_matches_open(&f);
+}
+
+/// A source that fails the first read starting at `at`.
+struct FailOnce {
+    data: Vec<u8>,
+    at: u64,
+    armed: std::cell::Cell<bool>,
+}
+
+impl ByteSource for FailOnce {
+    fn len(&self) -> u64 {
+        self.data.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if offset == self.at && self.armed.replace(false) {
+            return Err(io::Error::other("injected read failure"));
+        }
+        self.data.read_at(offset, buf)
+    }
+}
+
+#[test]
+fn a_read_that_fails_while_filing_headers_can_be_tried_again() {
+    // a chained file whose second link has both Opus headers on its first page; reading the second
+    // header fails once, after the first one is filed
+    let mut f = Vec::new();
+    opus_pages(&mut f, 1, 2, 40, true);
+    let link = f.len();
+    let head = opus_head(0);
+    let tags = b"OpusTags\x00\x00\x00\x00\x00\x00\x00\x00".to_vec();
+    let (l, b) = lace(&[&head, &tags], false);
+    page(&mut f, 0x02, 0, 2, 0, &l, &b);
+    let tags_at = (link + 27 + l.len() + head.len()) as u64;
+    let (l, b) = lace(&[&pkt(5, 40)], false);
+    page(&mut f, 0x04, 960, 2, 1, &l, &b);
+    let src = FailOnce { data: f.clone(), at: tags_at, armed: std::cell::Cell::new(true) };
+    let mut r = PacketReader::new(&src).unwrap();
+    let mut buf = Vec::new();
+    let mut got = Vec::new();
+    let mut failed = 0;
+    loop {
+        match r.next_packet(&mut buf) {
+            Ok(Some((s, _))) => got.push((s, buf.clone())),
+            Ok(None) => break,
+            Err(e) => {
+                assert!(matches!(e, Error::Io(_)), "{e}");
+                failed += 1;
+                assert!(failed < 2, "the read failed again");
+            }
+        }
+    }
+    assert_eq!(failed, 1);
+    let (want, w) = read_all(f.as_slice());
+    assert_eq!(got, want.into_iter().map(|(s, _, b)| (s, b)).collect::<Vec<_>>());
+    assert_eq!(r.streams().len(), 2);
+    assert_eq!(r.streams()[1].headers, [head, tags]);
+    assert_eq!(r.warnings(), w.warnings());
+}
+
+/// A source of zeros with `head` at its start and `tail` at `at`, for files too large to hold.
+struct Sparse {
+    head: Vec<u8>,
+    at: u64,
+    tail: Vec<u8>,
+}
+
+impl Sparse {
+    /// Copy the part of `data`, placed at `at`, that `buf` at `offset` covers.
+    fn place(buf: &mut [u8], offset: u64, data: &[u8], at: u64) {
+        let start = offset.max(at);
+        let end = (offset + buf.len() as u64).min(at + data.len() as u64);
+        if start < end {
+            buf[(start - offset) as usize..(end - offset) as usize].copy_from_slice(&data[(start - at) as usize..(end - at) as usize]);
+        }
+    }
+}
+
+impl ByteSource for Sparse {
+    fn len(&self) -> u64 {
+        self.at + self.tail.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if offset.checked_add(buf.len() as u64).is_none_or(|end| end > self.len()) {
+            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        }
+        buf.fill(0);
+        Sparse::place(buf, offset, &self.head, 0);
+        Sparse::place(buf, offset, &self.tail, self.at);
+        Ok(())
+    }
+}
+
+#[test]
+fn lost_sync_across_the_probe_stop_is_reported_from_where_it_began() {
+    // an OpusHead page, junk, then the OpusTags page at PROBE_BYTES or just after it: the probe
+    // stops in the junk, and the reader reports the lost-sync region open reports
+    let mut head = Vec::new();
+    let (l, b) = lace(&[&opus_head(0)], false);
+    page(&mut head, 0x02, 0, 1, 0, &l, &b);
+    let mut tail = Vec::new();
+    let (l, b) = lace(&[b"OpusTags"], false);
+    page(&mut tail, 0, 0, 1, 1, &l, &b);
+    let (l, b) = lace(&[&pkt(0, 30)], false);
+    page(&mut tail, 0x04, 960, 1, 2, &l, &b);
+    for at in [PROBE_BYTES, PROBE_BYTES + 100] {
+        let src = Sparse { head: head.clone(), at, tail: tail.clone() };
+        let o = open(&src).unwrap();
+        assert_eq!(o.warnings, [format!("lost sync at byte {}; resumed at {at}", head.len())]);
+        let (got, r) = read_all(&src);
+        assert_eq!(r.streams()[0].headers, o.streams[0].headers);
+        assert_eq!(got.len(), 1);
+        assert_eq!(r.warnings(), o.warnings, "page at {at}");
+    }
 }
 
 #[test]
