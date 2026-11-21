@@ -110,7 +110,9 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
     }
 
     /// Runs the view in a child `Ui` placed in flow in `ui`, or adds its last run again. Returns what the run returned,
-    /// the kept value when it replayed; `None` only when it is out of view in a scroll area.
+    /// the kept value when it replayed; `None` only when it is out of view in a scroll area. A measuring run that
+    /// replays returns the kept real run's value, laid out in that run's room and flow: code that measures sizes from
+    /// the extent the view takes in `ui`, never from rects in the value.
     pub fn show(self, ui: &mut Ui) -> Option<R> {
         let MemoView { lazy, mut props, show } = self;
         let ctx = ui.ctx().clone();

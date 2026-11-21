@@ -741,10 +741,11 @@ impl Container for Headed {
     }
 }
 
-/// One frame of `Headed` with the body text `label`; returns how many sizing passes its body ran in.
-fn headed_frame(frames: &mut Frames, label: &str) -> usize {
+/// One frame of `Headed` with the body text `label`; returns the frame's passes and how many sizing passes its body ran
+/// in.
+fn headed_frame(frames: &mut Frames, label: &str) -> (usize, usize) {
     let sizing = Cell::new(0);
-    frames.frame(vec![], |ui| {
+    let passes = frames.frame(vec![], |ui| {
         in_region(ui, STACK_ROOM, |ui| {
             let headed = Headed { common: Common::new(), props: ContainerProps::new().header(HeaderRegion::new()) };
             headed.show(ui, |ui, _| {
@@ -755,7 +756,7 @@ fn headed_frame(frames: &mut Frames, label: &str) -> usize {
             });
         });
     });
-    sizing.get()
+    (passes, sizing.get())
 }
 
 /// A view in the header of a content-sized container replays when the container measures its regions again: its
@@ -771,9 +772,19 @@ fn a_view_in_a_measured_header_replays_in_the_sizing_pass_and_the_real_run() {
     headed_frame(&mut frames, "Short");
     assert_eq!(title_runs(), 0, "settled: an idle frame replays the header's view");
     // A second line, no wider than the first: the container's width, and with it the header's room, stays.
-    let sizing = headed_frame(&mut frames, "Short\nShort");
+    let (passes, sizing) = headed_frame(&mut frames, "Short\nShort");
     assert!(sizing > 0, "the taller label made the container measure its regions again");
+    assert_eq!(passes, 2, "the taller container asks for one discard pass");
     assert_eq!(title_runs(), 0, "the unchanged view replayed in every call: {:?}", last_frame_memo_runs(&frames.ctx));
+    let heading = |runs: Vec<(&'static str, Id, MemoRun)>| -> Vec<MemoRun> {
+        runs.into_iter().filter(|(name, _, _)| name.ends_with("::Title")).map(|(_, _, run)| run).collect()
+    };
+    assert_eq!(heading(last_pass_memo_runs(&frames.ctx)), [MemoRun::Replayed], "the discard pass's real run replayed the view");
+    assert_eq!(
+        heading(last_frame_memo_runs(&frames.ctx)),
+        [MemoRun::Replayed; 3],
+        "the view was called and replayed in the sizing pass and in the real run of each of the two passes"
+    );
 }
 
 /// A paragraph that wraps at its room's width.

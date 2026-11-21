@@ -150,6 +150,8 @@ impl Lazy {
                 }
                 kept
             } else {
+                // The kept real run's output, laid out in that run's room and flow: a caller that measures sizes from
+                // the extent this call takes, never from rects in it.
                 lazy::kept_output(&ctx, id)
             };
             report_unit(&ctx, shrink, id, rect.size());
