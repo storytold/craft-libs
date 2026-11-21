@@ -61,13 +61,16 @@ pub enum GlobalError {
     /// Another [`GlobalHotkeys`] is open in this process.
     AlreadyOpen,
     /// The key has no physical key of its own (`+`, `:`, `|`, `?`, `!`, `{`, `}`), or the system
-    /// cannot grab it (`'` on X11).
+    /// cannot grab it (`'` on X11). On X11 a key is also refused when the current layout types its
+    /// character only with AltGr (`[` on German): the grab would go to the key that types it
+    /// (Ctrl+8 for Ctrl+[).
     Unbindable(Chord),
     /// A chord without Cmd, Ctrl or Alt whose key is not F1 to F35: it would take the key from
     /// typing in every application.
     TypingKey(Chord),
     /// This set already holds the chord, or a chord the platform treats as the same one (`Cmd+K`
-    /// and `Ctrl+K` off macOS).
+    /// and `Ctrl+K` off macOS; on X11, two keys the layout types on one key, such as Ctrl+- and
+    /// Ctrl+6 on French AZERTY).
     Duplicate(Chord),
     /// The operating system or another application holds the chord.
     Taken(Chord),
@@ -156,6 +159,8 @@ struct Entry {
     chord: Chord,
     command: CommandRef,
     down: bool,
+    /// The key the system grabs for it ([`KeyMap::slot`]). No two entries share one.
+    slot: u64,
 }
 
 /// System-wide hotkeys, one set per process.
@@ -181,6 +186,7 @@ pub struct GlobalHotkeys {
     platform: Platform,
     entries: Vec<Entry>,
     pending: Vec<GlobalEvent>,
+    session: Session,
 }
 
 impl GlobalHotkeys {
@@ -189,7 +195,7 @@ impl GlobalHotkeys {
     /// where no X11 grab can work, and with [`GlobalError::Unsupported`] on other systems than
     /// Windows, macOS, Linux and the BSDs.
     pub fn new() -> Result<GlobalHotkeys, GlobalError> {
-        check_session()?;
+        let session = check_session()?;
         if OPEN.swap(true, Ordering::AcqRel) {
             return Err(GlobalError::AlreadyOpen);
         }
@@ -197,7 +203,7 @@ impl GlobalHotkeys {
         HANDLER.call_once(|| GlobalHotKeyEvent::set_event_handler(Some(push)));
         take_queue();
         match GlobalHotKeyManager::new().map_err(|e| GlobalError::Os(e.to_string())).and_then(|manager| check_worker(&manager).map(|()| manager)) {
-            Ok(manager) => Ok(GlobalHotkeys { manager, platform: Platform::current(), entries: Vec::new(), pending: Vec::new() }),
+            Ok(manager) => Ok(GlobalHotkeys { manager, platform: Platform::current(), entries: Vec::new(), pending: Vec::new(), session }),
             Err(e) => {
                 OPEN.store(false, Ordering::Release);
                 Err(e)
@@ -222,11 +228,12 @@ impl GlobalHotkeys {
             return Err(GlobalError::TooMany);
         }
         let hotkey = hotkey(chord, self.platform)?;
-        if self.entries.iter().any(|e| e.hotkey.id() == hotkey.id()) {
+        let slot = KeyMap::read(&self.session)?.slot(&hotkey, chord)?;
+        if self.entries.iter().any(|e| e.slot == slot) {
             return Err(GlobalError::Duplicate(chord));
         }
         self.manager.register(hotkey).map_err(|e| os_error(e, chord))?;
-        self.entries.push(Entry { hotkey, chord, command: command.into(), down: false });
+        self.entries.push(Entry { hotkey, chord, command: command.into(), down: false, slot });
         Ok(())
     }
 
@@ -256,9 +263,11 @@ impl GlobalHotkeys {
     pub fn replace(&mut self, bindings: impl IntoIterator<Item = (CommandRef, Chord)>) -> Vec<Refused> {
         let mut refused = Vec::new();
         let mut wanted = Vec::new();
+        let keys = KeyMap::read(&self.session);
         for (command, chord) in bindings {
-            match hotkey(chord, self.platform) {
-                Ok(hotkey) => wanted.push((command, chord, hotkey.id())),
+            let slot = hotkey(chord, self.platform).and_then(|hotkey| keys.as_ref().map_err(Clone::clone)?.slot(&hotkey, chord));
+            match slot {
+                Ok(slot) => wanted.push((command, chord, slot)),
                 Err(error) => refused.push(Refused { command, chord, error }),
             }
         }
@@ -275,24 +284,10 @@ impl GlobalHotkeys {
                 None => self.release_if_down(&entry),
             }
         }
-        // The new bindings, checked against the kept ones and each other.
-        let kept_ids: Vec<u32> = slots.iter().flatten().map(|e| e.hotkey.id()).collect();
-        let mut ids = kept_ids.clone();
-        let mut new = Vec::new();
-        let mut new_ids = Vec::new();
-        for (slot, (command, chord, id)) in slots.iter().zip(&wanted) {
-            if slot.is_some() {
-                continue;
-            }
-            let result = if ids.contains(id) {
-                Err(GlobalError::Duplicate(*chord))
-            } else {
-                ids.push(*id);
-                hotkey(*chord, self.platform).map(|hotkey| Entry { hotkey, chord: *chord, command: command.clone(), down: false })
-            };
-            new.push(result);
-            new_ids.push(*id);
-        }
+        // The new bindings, checked against the kept ones and each other, so the batch below never
+        // holds a key that a kept entry or another new one grabs.
+        let kept_ids: Vec<u64> = slots.iter().flatten().map(|e| e.slot).collect();
+        let (mut new, new_ids) = new_entries(&slots, &wanted, self.platform);
         // Registered in rounds that fill the room left under `MAX_GLOBAL`, so a chord the system
         // refuses leaves its place to the next one.
         let candidates: Vec<usize> = (0..new.len()).filter(|&i| new[i].is_ok()).collect();
@@ -341,7 +336,9 @@ impl GlobalHotkeys {
 
     /// Registers the entries of `new` at the positions `at` with the system, and replaces each one
     /// the system refuses with its error. On X11 they go to the key-grab thread in one request; it
-    /// handles one request every 50 ms.
+    /// handles one request every 50 ms. When that request fails, the batch is unregistered and
+    /// registered again one by one. No entry of the batch grabs a key that another entry grabs
+    /// ([`new_entries`]), so unregistering the batch leaves the other entries' grabs in place.
     fn register_many(&self, new: &mut [Result<Entry, GlobalError>], at: &[usize]) {
         let hotkeys: Vec<HotKey> = at.iter().filter_map(|&i| new[i].as_ref().ok().map(|e| e.hotkey)).collect();
         if hotkeys.is_empty() || (BATCH && self.manager.register_all(&hotkeys).is_ok()) {
@@ -424,6 +421,173 @@ fn backend_code(code: Code) -> Option<Code> {
     Some(code)
 }
 
+/// The X11 connection [`KeyMap::read`] reads the keyboard mapping through.
+#[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+type Session = x11rb::rust_connection::RustConnection;
+
+#[cfg(not(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")))]
+struct Session;
+
+/// The keyboard mapping of the X11 display: for each key code from `min_keycode` on,
+/// `per_keycode` keysyms, group 1 levels 1 and 2 first.
+#[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+struct KeyMap {
+    min_keycode: u8,
+    per_keycode: usize,
+    keysyms: Vec<u32>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+impl KeyMap {
+    fn read(display: &Session) -> Result<KeyMap, GlobalError> {
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+        let setup = display.setup();
+        let (min, max) = (setup.min_keycode, setup.max_keycode);
+        let os = |e: &dyn fmt::Display| GlobalError::Os(format!("cannot read the keyboard mapping: {e}"));
+        let reply = display.get_keyboard_mapping(min, max.saturating_sub(min).saturating_add(1)).map_err(|e| os(&e))?.reply().map_err(|e| os(&e))?;
+        Ok(KeyMap { min_keycode: min, per_keycode: usize::from(reply.keysyms_per_keycode), keysyms: reply.keysyms })
+    }
+
+    /// The key code and modifiers global-hotkey grabs for `hotkey`, as one number. It grabs the
+    /// first key code whose keysyms hold the key's keysym. The chord is refused when that key
+    /// types the keysym only at a third or later level (AltGr): the grab would then go to another
+    /// key than the one `chord` names. Letters and digits may be at level 2 (`A` is the shifted
+    /// letter, and French AZERTY types digits with Shift); other keys must be at level 1.
+    fn slot(&self, hotkey: &HotKey, chord: Chord) -> Result<u64, GlobalError> {
+        let keysym = x11_keysym(hotkey.key).ok_or(GlobalError::Unbindable(chord))?;
+        let (index, keysyms) =
+            self.keysyms.chunks(self.per_keycode.max(1)).enumerate().find(|(_, k)| k.contains(&keysym)).ok_or(GlobalError::Unbindable(chord))?;
+        let levels = if chord.key.is_letter() || chord.key.is_digit() { 2 } else { 1 };
+        if !keysyms[..levels.min(keysyms.len())].contains(&keysym) {
+            return Err(GlobalError::Unbindable(chord));
+        }
+        let keycode = u64::from(self.min_keycode) + index as u64;
+        Ok((keycode << 32) | u64::from(hotkey.mods.bits()))
+    }
+}
+
+/// Elsewhere the system grabs one key for each hotkey id.
+#[cfg(not(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")))]
+struct KeyMap;
+
+#[cfg(not(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")))]
+impl KeyMap {
+    fn read(_session: &Session) -> Result<KeyMap, GlobalError> {
+        Ok(KeyMap)
+    }
+
+    fn slot(&self, hotkey: &HotKey, _chord: Chord) -> Result<u64, GlobalError> {
+        Ok(u64::from(hotkey.id()))
+    }
+}
+
+/// The keysym global-hotkey 0.9.0 looks up for each code [`code`] and [`backend_code`] return
+/// (its `keycode_to_x11_keysym`), from X11's `keysymdef.h`.
+#[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+fn x11_keysym(code: Code) -> Option<u32> {
+    const LETTERS: [Code; 26] = [
+        Code::KeyA,
+        Code::KeyB,
+        Code::KeyC,
+        Code::KeyD,
+        Code::KeyE,
+        Code::KeyF,
+        Code::KeyG,
+        Code::KeyH,
+        Code::KeyI,
+        Code::KeyJ,
+        Code::KeyK,
+        Code::KeyL,
+        Code::KeyM,
+        Code::KeyN,
+        Code::KeyO,
+        Code::KeyP,
+        Code::KeyQ,
+        Code::KeyR,
+        Code::KeyS,
+        Code::KeyT,
+        Code::KeyU,
+        Code::KeyV,
+        Code::KeyW,
+        Code::KeyX,
+        Code::KeyY,
+        Code::KeyZ,
+    ];
+    const DIGITS: [Code; 10] =
+        [Code::Digit0, Code::Digit1, Code::Digit2, Code::Digit3, Code::Digit4, Code::Digit5, Code::Digit6, Code::Digit7, Code::Digit8, Code::Digit9];
+    const FUNCTION: [Code; 35] = [
+        Code::F1,
+        Code::F2,
+        Code::F3,
+        Code::F4,
+        Code::F5,
+        Code::F6,
+        Code::F7,
+        Code::F8,
+        Code::F9,
+        Code::F10,
+        Code::F11,
+        Code::F12,
+        Code::F13,
+        Code::F14,
+        Code::F15,
+        Code::F16,
+        Code::F17,
+        Code::F18,
+        Code::F19,
+        Code::F20,
+        Code::F21,
+        Code::F22,
+        Code::F23,
+        Code::F24,
+        Code::F25,
+        Code::F26,
+        Code::F27,
+        Code::F28,
+        Code::F29,
+        Code::F30,
+        Code::F31,
+        Code::F32,
+        Code::F33,
+        Code::F34,
+        Code::F35,
+    ];
+    let at = |list: &[Code], first: u32| list.iter().position(|&c| c == code).map(|i| first + i as u32);
+    // `A` (0x41) to `Z`, `0` (0x30) to `9`, `F1` (0xffbe) to `F35`.
+    if let Some(keysym) = at(&LETTERS, 0x41).or_else(|| at(&DIGITS, 0x30)).or_else(|| at(&FUNCTION, 0xffbe)) {
+        return Some(keysym);
+    }
+    Some(match code {
+        Code::Escape => 0xff1b,
+        Code::Tab => 0xff09,
+        Code::Backspace => 0xff08,
+        Code::Enter => 0xff0d,
+        Code::Space => 0x20,
+        Code::Insert => 0xff63,
+        Code::Delete => 0xffff,
+        Code::Home => 0xff50,
+        Code::End => 0xff57,
+        Code::PageUp => 0xff55,
+        Code::PageDown => 0xff56,
+        Code::ArrowUp => 0xff52,
+        Code::ArrowDown => 0xff54,
+        Code::ArrowLeft => 0xff51,
+        Code::ArrowRight => 0xff53,
+        Code::Minus => 0x2d,
+        Code::Equal => 0x3d,
+        Code::BracketLeft => 0x5b,
+        Code::BracketRight => 0x5d,
+        Code::Backslash => 0x5c,
+        Code::Semicolon => 0x3b,
+        Code::Backquote => 0x60,
+        Code::Comma => 0x2c,
+        Code::Period => 0x2e,
+        Code::Slash => 0x2f,
+        _ => return None,
+    })
+}
+
 /// Whether hotkeys are registered in batches: global-hotkey's X11 key-grab thread handles one
 /// request every 50 ms, while `RegisterHotKey` and the Carbon calls return at once.
 #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
@@ -431,8 +595,31 @@ const BATCH: bool = true;
 #[cfg(not(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd")))]
 const BATCH: bool = false;
 
-/// The refusal of the first binding in `new` with hotkey `id`, when none with that id registered.
-fn first_refusal(new: &[Result<Entry, GlobalError>], ids: &[u32], id: u32) -> Option<GlobalError> {
+/// For each binding in `wanted` that has no kept entry in `slots`, a new entry, or
+/// [`GlobalError::Duplicate`] when a kept entry or an earlier binding grabs the same key. Also
+/// returns the slot of each.
+fn new_entries(slots: &[Option<Entry>], wanted: &[(CommandRef, Chord, u64)], platform: Platform) -> (Vec<Result<Entry, GlobalError>>, Vec<u64>) {
+    let mut taken: Vec<u64> = slots.iter().flatten().map(|e| e.slot).collect();
+    let mut new = Vec::new();
+    let mut new_ids = Vec::new();
+    for (kept, (command, chord, slot)) in slots.iter().zip(wanted) {
+        if kept.is_some() {
+            continue;
+        }
+        let result = if taken.contains(slot) {
+            Err(GlobalError::Duplicate(*chord))
+        } else {
+            taken.push(*slot);
+            hotkey(*chord, platform).map(|hotkey| Entry { hotkey, chord: *chord, command: command.clone(), down: false, slot: *slot })
+        };
+        new.push(result);
+        new_ids.push(*slot);
+    }
+    (new, new_ids)
+}
+
+/// The refusal of the first binding in `new` with slot `id`, when none with that slot registered.
+fn first_refusal(new: &[Result<Entry, GlobalError>], ids: &[u64], id: u64) -> Option<GlobalError> {
     let mut same = new.iter().zip(ids).filter(|(_, i)| **i == id).map(|(r, _)| r);
     match same.next()? {
         Ok(_) => None,
@@ -469,7 +656,7 @@ fn in_rounds(candidates: &[usize], mut room: usize, mut register: impl FnMut(&[u
 
 /// For each entry, the index of the binding in `wanted` it already registers (same chord, same
 /// command), or `None` when the entry is to go. Each binding keeps at most one entry.
-fn kept(entries: &[Entry], wanted: &[(CommandRef, Chord, u32)]) -> Vec<Option<usize>> {
+fn kept(entries: &[Entry], wanted: &[(CommandRef, Chord, u64)]) -> Vec<Option<usize>> {
     let mut taken = vec![false; wanted.len()];
     entries
         .iter()
@@ -477,7 +664,7 @@ fn kept(entries: &[Entry], wanted: &[(CommandRef, Chord, u32)]) -> Vec<Option<us
             let slot = wanted
                 .iter()
                 .zip(&taken)
-                .position(|((command, chord, id), taken)| !taken && *id == entry.hotkey.id() && *chord == entry.chord && *command == entry.command)?;
+                .position(|((command, chord, id), taken)| !taken && *id == entry.slot && *chord == entry.chord && *command == entry.command)?;
             taken[slot] = true;
             Some(slot)
         })
@@ -689,7 +876,7 @@ fn code(key: Key) -> Option<Code> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-fn check_session() -> Result<(), GlobalError> {
+fn check_session() -> Result<Session, GlobalError> {
     if is_wayland(std::env::var_os("WAYLAND_DISPLAY").as_deref(), std::env::var_os("XDG_SESSION_TYPE").as_deref()) {
         return Err(GlobalError::Wayland);
     }
@@ -697,8 +884,8 @@ fn check_session() -> Result<(), GlobalError> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-fn check_session() -> Result<(), GlobalError> {
-    Ok(())
+fn check_session() -> Result<Session, GlobalError> {
+    Ok(Session)
 }
 
 /// global-hotkey has no backend for other systems (Android, iOS): it accepts every chord there
@@ -712,7 +899,7 @@ fn check_session() -> Result<(), GlobalError> {
     target_os = "openbsd",
     target_os = "netbsd"
 )))]
-fn check_session() -> Result<(), GlobalError> {
+fn check_session() -> Result<Session, GlobalError> {
     Err(GlobalError::Unsupported)
 }
 
@@ -743,12 +930,12 @@ fn is_wayland(wayland_display: Option<&std::ffi::OsStr>, session_type: Option<&s
     wayland_display.is_some_and(|d| !d.is_empty()) || session_type.is_some_and(|t| t.eq_ignore_ascii_case("wayland"))
 }
 
-/// Opens and closes a connection to the X11 display `name` (`DISPLAY` when `None`). The key-grab
-/// thread reports no error of its own when it cannot connect, and every registration would then
-/// look successful.
+/// Opens a connection to the X11 display `name` (`DISPLAY` when `None`). The key-grab thread
+/// reports no error of its own when it cannot connect, and every registration would then look
+/// successful.
 #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-fn open_display(name: Option<&str>) -> Result<(), GlobalError> {
-    x11rb::connect(name).map(drop).map_err(|e| GlobalError::NoDisplay(e.to_string()))
+fn open_display(name: Option<&str>) -> Result<Session, GlobalError> {
+    Session::connect(name).map(|(display, _screen)| display).map_err(|e| GlobalError::NoDisplay(e.to_string()))
 }
 
 #[cfg(test)]
@@ -866,7 +1053,8 @@ mod tests {
     }
 
     fn entry(text: &str, command: &str) -> Entry {
-        Entry { hotkey: hk(text, Platform::Windows), chord: chord(text), command: command.into(), down: false }
+        let hotkey = hk(text, Platform::Windows);
+        Entry { hotkey, chord: chord(text), command: command.into(), down: false, slot: u64::from(hotkey.id()) }
     }
 
     fn event(entry: &Entry, state: HotKeyState) -> GlobalHotKeyEvent {
@@ -897,7 +1085,7 @@ mod tests {
     #[test]
     fn replace_keeps_bindings_that_do_not_change() {
         let entries = vec![entry("Ctrl+F9", "record.toggle"), entry("Ctrl+F10", "mic.mute"), entry("Ctrl+F11", "scene.next")];
-        let want = |text: &str, command: &str| (CommandRef::from(command), chord(text), hk(text, Platform::Windows).id());
+        let want = |text: &str, command: &str| (CommandRef::from(command), chord(text), u64::from(hk(text, Platform::Windows).id()));
         let wanted = vec![
             want("Ctrl+F11", "scene.next"),
             // Same chord, another command: registered again.
@@ -936,7 +1124,7 @@ mod tests {
     #[test]
     fn a_second_copy_of_a_refused_chord_gets_its_refusal() {
         let f9 = entry("Ctrl+F9", "record.toggle");
-        let id = f9.hotkey.id();
+        let id = f9.slot;
         let taken = vec![Err(GlobalError::Taken(chord("Ctrl+F9"))), Err(GlobalError::Duplicate(chord("Ctrl+F9")))];
         assert_eq!(first_refusal(&taken, &[id, id], id), Some(GlobalError::Taken(chord("Ctrl+F9"))));
         assert_eq!(GlobalError::Taken(chord("Ctrl+F9")).for_chord(chord("Ctrl+F10")), GlobalError::Taken(chord("Ctrl+F10")));
@@ -944,6 +1132,26 @@ mod tests {
         let registered = vec![Ok(f9), Err(GlobalError::Duplicate(chord("Ctrl+F9")))];
         assert_eq!(first_refusal(&registered, &[id, id], id), None);
         assert_eq!(first_refusal(&registered, &[id, id], id + 1), None);
+    }
+
+    #[test]
+    fn a_new_binding_on_a_kept_or_earlier_key_is_a_duplicate() {
+        // Two chords the system grabs on one key: the kept one stays, the new ones are refused
+        // before they reach the system.
+        let mut six = entry("Ctrl+6", "zoom.fit");
+        six.slot = 7;
+        let slots = vec![Some(six), None, None, None];
+        let wanted = vec![
+            (CommandRef::from("zoom.fit"), chord("Ctrl+6"), 7),
+            (CommandRef::from("zoom.out"), chord("Ctrl+-"), 7),
+            (CommandRef::from("zoom.in"), chord("Ctrl+F7"), 8),
+            (CommandRef::from("view.reset"), chord("Ctrl+F8"), 8),
+        ];
+        let (new, ids) = new_entries(&slots, &wanted, Platform::Windows);
+        assert_eq!(ids, [7, 8, 8]);
+        assert!(matches!(&new[0], Err(GlobalError::Duplicate(c)) if *c == chord("Ctrl+-")), "{:?}", new[0].as_ref().err());
+        assert!(matches!(&new[1], Ok(e) if e.chord == chord("Ctrl+F7") && e.slot == 8));
+        assert!(matches!(&new[2], Err(GlobalError::Duplicate(c)) if *c == chord("Ctrl+F8")));
     }
 
     #[test]
@@ -1050,6 +1258,63 @@ mod tests {
         assert_ne!(id(Key::Slash), id(Key::Backslash));
         let quote = Chord { mods: Mods::CMD, key: Key::Quote };
         assert_eq!(hotkey(quote, Platform::Linux), Err(GlobalError::Unbindable(quote)));
+    }
+
+    /// A keyboard mapping with two keysyms (levels 1 and 2) and two AltGr keysyms per key code,
+    /// starting at key code 8.
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    fn key_map(keys: &[(u8, [u32; 4])]) -> KeyMap {
+        let mut keysyms = vec![0; 4 * 248];
+        for &(keycode, syms) in keys {
+            let at = 4 * usize::from(keycode - 8);
+            keysyms[at..at + 4].copy_from_slice(&syms);
+        }
+        KeyMap { min_keycode: 8, per_keycode: 4, keysyms }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    fn slot(map: &KeyMap, text: &str) -> Result<u64, GlobalError> {
+        map.slot(&hk(text, Platform::Linux), chord(text))
+    }
+
+    // Keysyms from X11's keysymdef.h, at the evdev key codes of the keys in xkeyboard-config's `us`,
+    // `de` and `fr` layouts.
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    const PARENLEFT: u32 = 0x28;
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    const UDIAERESIS: u32 = 0xfc;
+
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn x11_refuses_a_key_the_layout_types_only_with_altgr() {
+        // German: `[` is AltGr+8, and the key at the US `[` position types `ü`.
+        let de = key_map(&[(17, [0x38, PARENLEFT, 0x5b, 0]), (34, [UDIAERESIS, 0xdc, 0, 0]), (38, [0x61, 0x41, 0, 0])]);
+        assert_eq!(slot(&de, "Ctrl+["), Err(GlobalError::Unbindable(chord("Ctrl+["))));
+        assert!(slot(&de, "Ctrl+8").is_ok());
+        assert!(slot(&de, "Ctrl+A").is_ok());
+        // US: `[` has a key of its own.
+        let us = key_map(&[(17, [0x38, 0x2a, 0, 0]), (34, [0x5b, 0x7b, 0, 0])]);
+        assert!(slot(&us, "Ctrl+[").is_ok());
+        assert_ne!(slot(&us, "Ctrl+["), slot(&us, "Ctrl+8"));
+        // A key the layout lacks is refused.
+        assert_eq!(slot(&us, "Ctrl+]"), Err(GlobalError::Unbindable(chord("Ctrl+]"))));
+        // Every key the backend can grab has a keysym here.
+        for &key in Key::ALL {
+            if let Ok(hotkey) = hotkey(Chord { mods: Mods::CMD, key }, Platform::Linux) {
+                assert!(x11_keysym(hotkey.key).is_some(), "{key:?}");
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn x11_chords_on_one_key_share_a_slot() {
+        // French AZERTY types `-` and, with Shift, `6` on one key.
+        let fr = key_map(&[(15, [0x2d, 0x36, 0, 0]), (17, [0x5f, 0x38, 0, 0])]);
+        assert_eq!(slot(&fr, "Ctrl+-"), slot(&fr, "Ctrl+6"));
+        assert!(slot(&fr, "Ctrl+6").is_ok());
+        assert_ne!(slot(&fr, "Ctrl+6"), slot(&fr, "Ctrl+Shift+6"));
+        assert_ne!(slot(&fr, "Ctrl+6"), slot(&fr, "Ctrl+8"));
     }
 
     #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
