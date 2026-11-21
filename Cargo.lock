@@ -1742,6 +1742,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-convert"
+version = "0.1.0"
+
+[[package]]
 name = "craft-crs"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,11 @@
+[package]
+name = "craft-convert"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Compile-checked conversion between two models with the same shape: a Convert trait with impls for the standard containers, and a convert_types! macro that fails to compile when either model gains a field or a variant"
+
+[lints]
+workspace = true
