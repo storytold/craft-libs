@@ -335,7 +335,7 @@ impl Shown<'_> {
                         Text::new("·").shade(Shade::Faint).show(ui);
                     }
                     let activated = if let Some(icon) = &item.icon {
-                        clicked(&IconButton::new(icon.clone()).label(item.label.clone()).tooltip(item.label.clone()).id_salt(("link", at)).show(ui))
+                        clicked(&Button::new(item.label.clone()).icon(icon.clone()).variant(Variant::GHOST).id_salt(("link", at)).show(ui))
                     } else {
                         clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui))
                     };
