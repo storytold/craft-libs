@@ -8,7 +8,7 @@ mod stories;
 use super::{Tab, TabStrip};
 use crate::contract::{
     CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, Props as _, ReorderRule, ShowCollection as _,
-    ShowContainer as _,
+    ShowContainer as _, Sizing,
 };
 use crate::layout_components::Row;
 use crate::runtime::drag::OsFile;
@@ -269,10 +269,14 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     pub fn show(self, ui: &mut Ui) -> DocumentTabsOutput<D> {
         let DocumentTabs { label, tabs, selected, reorderable, tear_off, leading, trailing, large, takes_files } = self;
         let source = keyed(tabs, |tab: &DocumentTab<D>| tab.id.clone()).with_text(|tab| Cow::Borrowed(tab.label.as_str()));
+        let has_trailing = trailing.is_some();
         let make_strip = || {
             let mut strip = TabStrip::new(label.clone())
                 .takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true))
                 .can_close(move |key: &D| tabs.iter().any(|tab| &tab.id == key && tab.closable));
+            if has_trailing {
+                strip = strip.sizing(Sizing::Content);
+            }
             if takes_files {
                 strip = strip.takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true));
             }
@@ -332,7 +336,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
             let mut shown = None;
             // The row measures more than once to reserve non-filling children before sharing the
             // remaining width. Recreate the strip and show both areas on every sweep.
-            let row = Row::new().show(ui, |ui, _| {
+            let row = Row::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
                 if let Some(area) = leading.as_mut() {
                     area(ui);
                 }

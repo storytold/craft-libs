@@ -69,6 +69,48 @@ fn document_tabs_shrink_before_overflow() {
 }
 
 #[trial]
+fn document_tabs_with_trailing_control_fill_their_parent_row() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Row;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..5).map(|i| DocumentTab::new(i, format!("Document number {i}, scanned.pdf"))).collect();
+        Row::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            Button::new("Home").show(ui);
+            let _ = DocumentTabs::new("Documents", &tabs)
+                .trailing(|ui| {
+                    Button::new("Open").show(ui);
+                })
+                .show(ui);
+            Button::new("Settings").show(ui);
+        });
+    });
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let visible = (0..5).filter(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).is_some()).count();
+    assert!(visible > 1, "the strip uses the available width: {visible} tab visible");
+}
+
+#[trial]
+fn trailing_control_follows_short_document_tabs() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs = [DocumentTab::new(1, "One document")];
+        let _ = DocumentTabs::new("Documents", &tabs)
+            .trailing(|ui| {
+                Button::new("Open").show(ui);
+            })
+            .show(ui);
+    });
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let tab = fixture.by_label("One document").expect("document tab").rect;
+    let open = fixture.by_label("Open").expect("trailing control").rect;
+    assert!(open.left() - tab.right() < tab.width(), "trailing control follows the tab: {tab:?}, {open:?}");
+}
+
+#[trial]
 fn document_tabs_reserve_space_for_the_trailing_control() {
     use craft_ui::buttons::Button;
     use craft_ui::contract::Show as _;
