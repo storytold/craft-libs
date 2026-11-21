@@ -1018,7 +1018,7 @@ impl<'p> Pass<'p> {
             group = group.tooltip(tip.clone());
         }
         let group = group.show(ui, |ui, _| {
-            let mut radios = |ui: &mut Ui| {
+            let radios = |ui: &mut Ui| {
                 for (at, (id, label)) in options.iter().enumerate() {
                     let radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled).label(label.clone());
                     match details.get(at) {
