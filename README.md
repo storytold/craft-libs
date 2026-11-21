@@ -291,9 +291,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   glTF 2.0 / GLB, FBX and 3MF, one feature each. Readers are bounded by `Limits`, never open a file
   themselves and never panic. Carved from EffectCraft, SolidCraft, TextureCraft and MaterialCraft.
 - [`craft-mesh-ops`](crates/mesh-ops/README.md): operations on triangle meshes: smooth normals,
-  MikkTSpace tangents, welding, UV unwrapping, a UV-space G-buffer, primitives with UVs and a
-  BVH for ray casts (feature `bvh`), with slice functions checked against `Limits`. From
-  TextureCraft and MaterialCraft.
+  MikkTSpace tangents, welding, UV unwrapping, a UV-space G-buffer, primitives with UVs,
+  triangulation of polygons with holes, beveled extrusion of 2D outlines and a BVH for ray casts
+  (feature `bvh`), with slice functions checked against `Limits`. From TextureCraft,
+  MaterialCraft and EffectCraft.
 - [`craft-midi`](crates/midi/README.md): Standard MIDI Files: a bounded reader for formats 0, 1 and
   2 and a format-1 writer, over a neutral model of notes and channel events in ticks at 960 per
   quarter note. From SoundCraft.

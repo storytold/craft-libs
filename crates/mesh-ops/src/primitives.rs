@@ -516,6 +516,276 @@ pub fn try_plane(size: f32, subdivisions: usize, limits: &Limits) -> Result<Mesh
     b.finish("Plane")
 }
 
+/// The shapes of [`try_shape`]: each face or surface maps to the whole UV square, and the
+/// shapes are centered on the origin.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ShapeKind {
+    /// A box of `size` (width along X, height along Y, depth along Z).
+    #[default]
+    Cuboid,
+    /// A UV sphere of `radius`, `segments` around and `rings` from pole to pole.
+    Sphere,
+    /// A rectangle of `size[0]` × `size[1]` in the XY plane, facing +Z.
+    Plane,
+    /// A ring torus around Y: `radius` from the center to the middle of the tube, `tube` the
+    /// tube's radius, `segments` around the ring and `rings` around the tube.
+    Torus,
+    /// A cone along Y with its apex up and its base capped: base `radius`, `height` and
+    /// `segments` around.
+    Cone,
+    /// A cylinder along Y with both ends capped: `radius`, `height` and `segments` around.
+    Cylinder,
+}
+
+impl ShapeKind {
+    pub const ALL: [ShapeKind; 6] = [ShapeKind::Cuboid, ShapeKind::Sphere, ShapeKind::Plane, ShapeKind::Torus, ShapeKind::Cone, ShapeKind::Cylinder];
+
+    /// The name of the shape's material.
+    fn name(self) -> &'static str {
+        match self {
+            ShapeKind::Cuboid => "Cuboid",
+            ShapeKind::Sphere => "Sphere",
+            ShapeKind::Plane => "Plane",
+            ShapeKind::Torus => "Torus",
+            ShapeKind::Cone => "Cone",
+            ShapeKind::Cylinder => "Cylinder",
+        }
+    }
+}
+
+/// Dimensions and tessellation of a [`ShapeKind`]. Each shape reads only the fields its variant
+/// names.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeParams {
+    /// Width, height and depth of a cuboid; width and height of a plane.
+    pub size: [f32; 3],
+    /// Radius of a sphere, cone or cylinder; ring radius of a torus.
+    pub radius: f32,
+    /// Tube radius of a torus.
+    pub tube: f32,
+    /// Height of a cone or cylinder.
+    pub height: f32,
+    /// Segments around; at least 3 are built.
+    pub segments: usize,
+    /// Rings of a sphere (at least 2 are built) or sides of a torus's tube (at least 3).
+    pub rings: usize,
+}
+
+impl Default for ShapeParams {
+    fn default() -> Self {
+        ShapeParams { size: [300.0; 3], radius: 150.0, tube: 50.0, height: 300.0, segments: 48, rings: 24 }
+    }
+}
+
+/// A [`ShapeKind`] built from `p`, with normals, UVs and tangents. Y is up and triangles are
+/// counterclockwise seen from outside.
+///
+/// Errors: `Invalid` for a size, radius, tube or height the shape reads that is not finite and
+/// positive, a size or height whose half is 0 in `f32`, a torus tube that is not smaller than
+/// its radius, coordinates that overflow `f32`, and a shape so small that corners of a triangle
+/// round to one `f32` position; `TooLarge` for a segment or ring count over [`Limits::max_segments`] and for vertex or
+/// triangle counts over the limits.
+pub fn try_shape(kind: ShapeKind, p: &ShapeParams, limits: &Limits) -> Result<Mesh> {
+    let mut b = Builder::new(limits);
+    let segs = || segments("shape segments", p.segments, 3, limits);
+    let rings = |min| segments("shape rings", p.rings, min, limits);
+    match kind {
+        ShapeKind::Cuboid => {
+            let half = Vec3::new(half("cuboid width", p.size[0])?, half("cuboid height", p.size[1])?, half("cuboid depth", p.size[2])?);
+            cuboid_into(&mut b, half);
+        }
+        ShapeKind::Plane => plane_into(&mut b, half("plane width", p.size[0])?, half("plane height", p.size[1])?),
+        ShapeKind::Sphere => uv_sphere_into(&mut b, positive("sphere radius", p.radius)?, segs()?, rings(2)?),
+        ShapeKind::Torus => {
+            let (radius, tube) = (positive("torus radius", p.radius)?, positive("torus tube", p.tube)?);
+            if tube >= radius {
+                return Err(MeshOpsError::Invalid(format!("torus tube {tube} is not smaller than its radius {radius}")));
+            }
+            ring_torus_into(&mut b, radius, tube, segs()?, rings(3)?);
+        }
+        ShapeKind::Cone | ShapeKind::Cylinder => {
+            let (radius, half_height) = (positive("shape radius", p.radius)?, half("shape height", p.height)?);
+            capped_into(&mut b, kind == ShapeKind::Cone, radius, half_height, segs()?);
+        }
+    }
+    // Every triangle the builders emit has three distinct corners, so a repeated corner means the
+    // size rounded the shape together in f32.
+    if b.idx.as_chunks::<3>().0.iter().any(|t| {
+        let [a, c, d] = t.map(|i| b.p.get(i as usize).copied());
+        a == c || c == d || a == d
+    }) {
+        return Err(MeshOpsError::Invalid(format!("{} too small: corners of a triangle round to one f32 position", kind.name())));
+    }
+    b.finish(kind.name())
+}
+
+/// Half of a finite positive size, when the half is still greater than 0.
+fn half(what: &str, value: f32) -> Result<f32> {
+    let h = positive(what, value)? * 0.5;
+    if h > 0.0 { Ok(h) } else { Err(MeshOpsError::Invalid(format!("{what} {value} has no half greater than 0 in f32"))) }
+}
+
+impl Builder {
+    fn tri(&mut self, a: u32, b: u32, c: u32) {
+        self.idx.extend_from_slice(&[a, b, c]);
+        self.diag.push(0);
+    }
+
+    /// Two triangles `a`-`b`-`c` and `a`-`c`-`d`, with the diagonal `a`-`c` hidden.
+    fn quad(&mut self, a: u32, b: u32, c: u32, d: u32) {
+        self.idx.extend_from_slice(&[a, b, c, a, c, d]);
+        self.diag.extend_from_slice(&[0b100, 0b001]);
+    }
+}
+
+fn cuboid_into(b: &mut Builder, half: Vec3) {
+    if !b.room(Some(24), Some(12)) {
+        return;
+    }
+    // (normal, u axis, v axis) per face, v running down the texture.
+    let faces = [
+        (Vec3::Z, Vec3::X, -Vec3::Y),
+        (-Vec3::Z, -Vec3::X, -Vec3::Y),
+        (Vec3::X, -Vec3::Z, -Vec3::Y),
+        (-Vec3::X, Vec3::Z, -Vec3::Y),
+        (Vec3::Y, Vec3::X, Vec3::Z),
+        (-Vec3::Y, Vec3::X, -Vec3::Z),
+    ];
+    for (n, u, v) in faces {
+        let c = |su: f32, sv: f32| (n + u * su + v * sv) * half;
+        let i0 = b.vert(c(-1.0, -1.0), n, Vec2::new(0.0, 0.0));
+        let i1 = b.vert(c(1.0, -1.0), n, Vec2::new(1.0, 0.0));
+        let i2 = b.vert(c(1.0, 1.0), n, Vec2::new(1.0, 1.0));
+        let i3 = b.vert(c(-1.0, 1.0), n, Vec2::new(0.0, 1.0));
+        b.quad(i0, i3, i2, i1);
+    }
+}
+
+fn plane_into(b: &mut Builder, w: f32, h: f32) {
+    if !b.room(Some(4), Some(2)) {
+        return;
+    }
+    let i0 = b.vert(Vec3::new(-w, h, 0.0), Vec3::Z, Vec2::new(0.0, 0.0));
+    let i1 = b.vert(Vec3::new(w, h, 0.0), Vec3::Z, Vec2::new(1.0, 0.0));
+    let i2 = b.vert(Vec3::new(w, -h, 0.0), Vec3::Z, Vec2::new(1.0, 1.0));
+    let i3 = b.vert(Vec3::new(-w, -h, 0.0), Vec3::Z, Vec2::new(0.0, 1.0));
+    b.quad(i0, i3, i2, i1);
+}
+
+/// A sphere whose poles are exact, with one triangle per segment in the rows at the poles.
+fn uv_sphere_into(b: &mut Builder, r: f32, seg: usize, rings: usize) {
+    let vertices = rings.checked_add(1).zip(seg.checked_add(1)).and_then(|(a, c)| a.checked_mul(c));
+    let triangles = rings.checked_sub(1).and_then(|k| k.checked_mul(seg)).and_then(|t| t.checked_mul(2));
+    if !b.room(vertices, triangles) {
+        return;
+    }
+    let base = b.p.len() as u32;
+    for j in 0..=rings {
+        let th = PI * j as f32 / rings as f32;
+        let (st, ct) = if j == 0 {
+            (0.0, 1.0)
+        } else if j == rings {
+            (0.0, -1.0)
+        } else {
+            th.sin_cos()
+        };
+        for i in 0..=seg {
+            let ph = TAU * (i % seg) as f32 / seg as f32;
+            let n = Vec3::new(st * ph.sin(), ct, st * ph.cos());
+            b.vert(n * r, n, Vec2::new(i as f32 / seg as f32, j as f32 / rings as f32));
+        }
+    }
+    let (row, seg, rings) = (seg as u32 + 1, seg as u32, rings as u32);
+    for j in 0..rings {
+        for i in 0..seg {
+            let a = base + j * row + i;
+            let (b0, c, d) = (a + row, a + row + 1, a + 1);
+            if j == 0 {
+                b.tri(d, b0, c);
+            } else if j == rings - 1 {
+                b.tri(a, b0, d);
+            } else {
+                // Edge b0-d of the first triangle and d-b0 of the second split the cell.
+                b.idx.extend_from_slice(&[a, b0, d, d, b0, c]);
+                b.diag.extend_from_slice(&[0b010, 0b001]);
+            }
+        }
+    }
+}
+
+fn ring_torus_into(b: &mut Builder, rr: f32, tr: f32, seg: usize, rings: usize) {
+    let vertices = rings.checked_add(1).zip(seg.checked_add(1)).and_then(|(a, c)| a.checked_mul(c));
+    if !b.room(vertices, rings.checked_mul(seg).and_then(|t| t.checked_mul(2))) {
+        return;
+    }
+    let base = b.p.len() as u32;
+    for j in 0..=rings {
+        let v = TAU * (j % rings) as f32 / rings as f32;
+        for i in 0..=seg {
+            let u = TAU * (i % seg) as f32 / seg as f32;
+            // Ring in the XZ plane.
+            let (cu, su, cv, sv) = (u.cos(), u.sin(), v.cos(), v.sin());
+            let n = Vec3::new(cv * su, sv, cv * cu);
+            let p = Vec3::new((rr + tr * cv) * su, tr * sv, (rr + tr * cv) * cu);
+            b.vert(p, n, Vec2::new(i as f32 / seg as f32, j as f32 / rings as f32));
+        }
+    }
+    let (row, seg, rings) = (seg as u32 + 1, seg as u32, rings as u32);
+    for j in 0..rings {
+        for i in 0..seg {
+            let a = base + j * row + i;
+            b.quad(a, a + 1, a + row + 1, a + row);
+        }
+    }
+}
+
+/// A cylinder, or a cone (`cone`) with its apex at the top, of half height `h`. The side's
+/// normal follows the slope, worked out in `f64` so that a very flat cone keeps it.
+fn capped_into(b: &mut Builder, cone: bool, r: f32, h: f32, seg: usize) {
+    let caps = if cone { 1 } else { 2 };
+    let side_tris = if cone { seg } else { seg.saturating_mul(2) };
+    let vertices = seg.checked_add(1).and_then(|s| s.checked_mul(2 + caps)).and_then(|v| v.checked_add(caps));
+    if !b.room(vertices, side_tris.checked_add(seg.saturating_mul(caps))) {
+        return;
+    }
+    let top_r = if cone { 0.0 } else { r };
+    let s = f64::from(r - top_r) / (2.0 * f64::from(h));
+    let l = 1f64.hypot(s);
+    let (ny, nk) = ((s / l) as f32, (1.0 / l) as f32);
+    let base = b.p.len() as u32;
+    for i in 0..=seg {
+        let a = TAU * (i % seg) as f32 / seg as f32;
+        let (sn, cs) = a.sin_cos();
+        let n = Vec3::new(sn * nk, ny, cs * nk);
+        let u = i as f32 / seg as f32;
+        b.vert(Vec3::new(sn * top_r, h, cs * top_r), n, Vec2::new(u, 0.0));
+        b.vert(Vec3::new(sn * r, -h, cs * r), n, Vec2::new(u, 1.0));
+    }
+    for i in 0..seg as u32 {
+        let t0 = base + 2 * i;
+        let (b0, t1, b1) = (t0 + 1, t0 + 2, t0 + 3);
+        if cone {
+            b.tri(t0, b0, b1);
+        } else {
+            b.quad(t0, b0, b1, t1);
+        }
+    }
+    for side in if cone { &[-1.0f32][..] } else { &[1.0f32, -1.0][..] } {
+        let n = Vec3::new(0.0, *side, 0.0);
+        let c = b.vert(Vec3::new(0.0, h * side, 0.0), n, Vec2::splat(0.5));
+        let first = b.p.len() as u32;
+        for i in 0..=seg {
+            let a = TAU * (i % seg) as f32 / seg as f32;
+            let (sn, co) = a.sin_cos();
+            b.vert(Vec3::new(sn * r, h * side, co * r), n, Vec2::new(0.5 + 0.5 * sn, 0.5 - 0.5 * co * side));
+        }
+        for i in 0..seg as u32 {
+            let (p0, p1) = (first + i, first + i + 1);
+            if *side > 0.0 { b.tri(c, p0, p1) } else { b.tri(c, p1, p0) }
+        }
+    }
+}
+
 /// Two planes side by side on UV tiles 1001 and 1002 (UDIM): one material, 4 × 2 units.
 pub fn udim_plane() -> Mesh {
     let mut m = plane(2.0, 16);
@@ -858,6 +1128,187 @@ mod tests {
             let (top, bottom) = (&m.uvs[..17], &m.uvs[17..34]);
             assert!(top.iter().all(|uv| (uv.y - 0.01).abs() < 1e-6), "{radius} {height}: {top:?}");
             assert!(bottom.iter().all(|uv| (uv.y - 0.49).abs() < 1e-6), "{radius} {height}: {bottom:?}");
+        }
+    }
+
+    /// Every edge, welded by position, is shared by exactly two triangles that run it in
+    /// opposite directions.
+    fn assert_watertight(m: &Mesh) {
+        let mut ids = std::collections::HashMap::new();
+        let id: Vec<usize> = m
+            .positions
+            .iter()
+            .map(|p| {
+                let n = ids.len();
+                *ids.entry((p + Vec3::ZERO).to_array().map(f32::to_bits)).or_insert(n)
+            })
+            .collect();
+        let mut edges = std::collections::HashMap::new();
+        for t in 0..m.triangle_count() {
+            let v = m.tri(t).unwrap().map(|i| id[i]);
+            if v[0] == v[1] || v[1] == v[2] || v[0] == v[2] {
+                continue;
+            }
+            for k in 0..3 {
+                *edges.entry((v[k], v[(k + 1) % 3])).or_insert(0) += 1;
+            }
+        }
+        for (&(a, b), &n) in &edges {
+            assert_eq!(n, 1, "directed edge {a}-{b} used {n} times");
+            assert_eq!(edges.get(&(b, a)), Some(&1), "edge {a}-{b} has no twin");
+        }
+    }
+
+    /// Signed volume, positive when the triangles wind outward.
+    fn volume(m: &Mesh) -> f64 {
+        (0..m.triangle_count())
+            .map(|t| {
+                let [a, b, c] = m.tri(t).unwrap().map(|i| m.positions[i].as_dvec3());
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum()
+    }
+
+    /// Unit normals on the side each triangle faces.
+    fn assert_normals_outward(m: &Mesh) {
+        for t in 0..m.triangle_count() {
+            let [a, b, c] = m.tri(t).unwrap();
+            let f = (m.positions[b] - m.positions[a]).cross(m.positions[c] - m.positions[a]);
+            if f.length_squared() < 1e-10 {
+                continue;
+            }
+            for i in [a, b, c] {
+                let n = m.normals[i];
+                assert!((n.length() - 1.0).abs() < 1e-3, "normal not unit");
+                assert!(f.dot(n) > 0.0, "normal {n:?} faces away from triangle {f:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn primitive_vertex_counts_and_normals() {
+        let l = Limits::default();
+        let pr = ShapeParams { segments: 16, rings: 8, ..Default::default() };
+        let cases = [
+            (ShapeKind::Cuboid, 24, 36),
+            (ShapeKind::Plane, 4, 6),
+            (ShapeKind::Sphere, 17 * 9, 6 * 16 * 7),
+            (ShapeKind::Torus, 17 * 9, 6 * 16 * 8),
+            (ShapeKind::Cylinder, 2 * 17 + 2 * 18, 6 * 16 + 2 * 3 * 16),
+            // MikkTSpace gives the two side triangles at each of the 15 inner base vertices
+            // different frames, so the tangent pass splits those vertices.
+            (ShapeKind::Cone, 2 * 17 + 18 + 15, 3 * 16 + 3 * 16),
+        ];
+        for (k, v, i) in cases {
+            let m = try_shape(k, &pr, &l).unwrap();
+            assert_eq!((m.positions.len(), m.indices.len()), (v, i), "{k:?}");
+            assert_eq!(m.normals.len(), v);
+            assert_eq!(m.uvs.len(), v);
+            assert_eq!(m.tangents.len(), v);
+            assert_eq!(m.materials, [k.name()]);
+            m.validate().unwrap();
+            assert!(m.tangents.iter().all(|t| t.is_finite() && (t.truncate().length() - 1.0).abs() < 1e-3), "{k:?}");
+            assert!(m.uvs.iter().all(|uv| (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y)), "{k:?}");
+            assert_normals_outward(&m);
+            if k != ShapeKind::Plane {
+                assert!(volume(&m) > 0.0, "{k:?} winds inward");
+                assert_watertight(&m);
+            }
+        }
+        // Volumes approach the analytic ones.
+        let cube = try_shape(ShapeKind::Cuboid, &ShapeParams { size: [2.0, 3.0, 4.0], ..Default::default() }, &l).unwrap();
+        assert!((volume(&cube) - 24.0).abs() < 1e-4);
+        let s = try_shape(ShapeKind::Sphere, &ShapeParams { radius: 1.0, segments: 128, rings: 64, ..Default::default() }, &l).unwrap();
+        assert!((volume(&s) - 4.0 / 3.0 * std::f64::consts::PI).abs() < 0.01);
+    }
+
+    #[test]
+    fn shapes_reject_invalid_parameters() {
+        let l = Limits::default();
+        let ok = ShapeParams::default();
+        for bad in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+            let cases = [
+                (ShapeKind::Cuboid, ShapeParams { size: [1.0, bad, 1.0], ..ok }),
+                (ShapeKind::Cuboid, ShapeParams { size: [1.0, 1.0, bad], ..ok }),
+                (ShapeKind::Plane, ShapeParams { size: [bad, 1.0, 1.0], ..ok }),
+                (ShapeKind::Sphere, ShapeParams { radius: bad, ..ok }),
+                (ShapeKind::Torus, ShapeParams { radius: bad, ..ok }),
+                (ShapeKind::Torus, ShapeParams { tube: bad, ..ok }),
+                (ShapeKind::Cone, ShapeParams { height: bad, ..ok }),
+                (ShapeKind::Cylinder, ShapeParams { radius: bad, ..ok }),
+            ];
+            for (k, p) in cases {
+                assert!(matches!(try_shape(k, &p, &l), Err(MeshOpsError::Invalid(_))), "{k:?} {p:?}");
+            }
+        }
+        // A plane reads no depth.
+        assert!(try_shape(ShapeKind::Plane, &ShapeParams { size: [1.0, 1.0, f32::NAN], ..ok }, &l).is_ok());
+        // Sizes whose half rounds to 0 would put both sides at one position.
+        let least = f32::from_bits(1);
+        for (k, p) in [
+            (ShapeKind::Cuboid, ShapeParams { size: [1.0, least, 1.0], ..ok }),
+            (ShapeKind::Plane, ShapeParams { size: [least, 1.0, 1.0], ..ok }),
+            (ShapeKind::Cone, ShapeParams { height: least, ..ok }),
+            (ShapeKind::Cylinder, ShapeParams { height: least, ..ok }),
+            // Radii so small that corners of one triangle round to one position.
+            (ShapeKind::Sphere, ShapeParams { radius: least, ..ok }),
+            (ShapeKind::Torus, ShapeParams { radius: least * 4.0, tube: least, ..ok }),
+            (ShapeKind::Cylinder, ShapeParams { radius: least, ..ok }),
+        ] {
+            assert!(matches!(try_shape(k, &p, &l), Err(MeshOpsError::Invalid(_))), "{k:?}");
+        }
+        assert!(try_shape(ShapeKind::Sphere, &ShapeParams { radius: 1e-30, ..ok }, &l).is_ok());
+        // A torus whose tube reaches its axis would cross itself.
+        assert!(matches!(try_shape(ShapeKind::Torus, &ShapeParams { radius: 1.0, tube: 2.0, ..ok }, &l), Err(MeshOpsError::Invalid(_))));
+        assert!(matches!(try_shape(ShapeKind::Torus, &ShapeParams { radius: 1.0, tube: 1.0, ..ok }, &l), Err(MeshOpsError::Invalid(_))));
+        assert!(try_shape(ShapeKind::Torus, &ShapeParams { radius: 1.0, tube: 0.999, ..ok }, &l).is_ok());
+        // Coordinates past the f32 range.
+        assert!(matches!(try_shape(ShapeKind::Cuboid, &ShapeParams { size: [f32::MAX; 3], ..ok }, &l), Ok(_) | Err(MeshOpsError::Invalid(_))));
+        assert!(matches!(
+            try_shape(ShapeKind::Torus, &ShapeParams { radius: f32::MAX, tube: f32::MAX / 2.0, ..ok }, &l),
+            Err(MeshOpsError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn shapes_check_their_counts() {
+        let l = Limits::default();
+        let ok = ShapeParams::default();
+        for k in [ShapeKind::Sphere, ShapeKind::Torus, ShapeKind::Cone, ShapeKind::Cylinder] {
+            let many = ShapeParams { segments: l.max_segments + 1, ..ok };
+            assert!(matches!(try_shape(k, &many, &l), Err(MeshOpsError::TooLarge { .. })), "{k:?}");
+            let full = try_shape(k, &ok, &l).unwrap().vertex_count();
+            assert!(
+                matches!(try_shape(k, &ok, &Limits { max_vertices: full - 1, ..l }), Err(MeshOpsError::TooLarge { what: "vertex count", .. })),
+                "{k:?}"
+            );
+        }
+        for k in [ShapeKind::Sphere, ShapeKind::Torus] {
+            assert!(matches!(try_shape(k, &ShapeParams { rings: usize::MAX, ..ok }, &l), Err(MeshOpsError::TooLarge { .. })), "{k:?}");
+        }
+        assert!(matches!(
+            try_shape(ShapeKind::Cuboid, &ok, &Limits { max_triangles: 11, ..l }),
+            Err(MeshOpsError::TooLarge { what: "triangle count", .. })
+        ));
+        // Counts under the minimum are raised to it.
+        let m = try_shape(ShapeKind::Sphere, &ShapeParams { segments: 0, rings: 0, ..ok }, &l).unwrap();
+        assert_eq!(m.triangle_count(), 2 * 3);
+        // A torus tube needs three sides to enclose any volume.
+        let m = try_shape(ShapeKind::Torus, &ShapeParams { segments: 0, rings: 0, ..ok }, &l).unwrap();
+        assert_eq!(m.triangle_count(), 3 * 3 * 2);
+    }
+
+    #[test]
+    fn a_flat_cone_keeps_its_side_normals() {
+        // The side rises 1e-9 over a radius of 1e-6: nearly flat, facing up.
+        let p = ShapeParams { radius: 1e-6, height: 1e-9, segments: 16, ..Default::default() };
+        let m = try_shape(ShapeKind::Cone, &p, &Limits::default()).unwrap();
+        for t in 0..16 {
+            let [a, b, c] = m.tri(t).unwrap();
+            let f = (m.positions[b].as_dvec3() - m.positions[a].as_dvec3()).cross(m.positions[c].as_dvec3() - m.positions[a].as_dvec3()).normalize();
+            for i in [a, b, c] {
+                assert!(f.dot(m.normals[i].as_dvec3()) > 0.999, "side normal {:?} against face {f:?}", m.normals[i]);
+            }
         }
     }
 }

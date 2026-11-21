@@ -2,8 +2,9 @@
 //!
 //! Operations on triangle meshes: area-weighted smooth normals, flat normals, MikkTSpace
 //! tangents, welding, automatic UV unwrapping, the UV-space [`UvGBuffer`] that maps texels to surface points,
-//! built-in [`primitives`] with UVs, a [`Bvh`] for ray casts and box queries (feature `bvh`) and
-//! the [`OrbitCamera`].
+//! built-in [`primitives`] with UVs, a [`Bvh`] for ray casts and box queries (feature `bvh`),
+//! the [`OrbitCamera`], [`triangulate`] for polygons with holes and [`outline`] for grouping 2D
+//! contours into outlines and extruding them with bevels.
 //!
 //! The functions at the crate root take plain slices: positions and normals as `[f32; 3]`, UVs as
 //! `[f32; 2]` in the glTF convention (origin top-left, v down), tangents as `[f32; 4]` with the
@@ -18,7 +19,9 @@ pub mod bvh;
 pub mod camera;
 pub mod gbuffer;
 pub mod mesh;
+pub mod outline;
 pub mod primitives;
+pub mod triangulate;
 pub mod unwrap;
 
 #[cfg(feature = "bvh")]
@@ -72,6 +75,15 @@ pub struct Limits {
     pub max_gbuffer_bin_entries: u64,
     /// Triangles one UV unwrap processes. Default 4,000,000.
     pub max_unwrap_triangles: usize,
+    /// Points in the contours one outline call takes: one polygon for
+    /// [`triangulate::triangulate`], every contour for [`outline::group_contours`], every
+    /// outline for [`outline::extrude`]. Default 1,000,000.
+    pub max_outline_vertices: usize,
+    /// Contours in one polygon, or contours kept by [`outline::group_contours`]. Default 10,000.
+    pub max_outline_contours: usize,
+    /// Steps one outline call takes: edge pairs compared, points tested for containment and
+    /// vertices scanned while clipping ears. Default 2^30.
+    pub max_outline_work: u64,
 }
 
 impl Default for Limits {
@@ -85,6 +97,9 @@ impl Default for Limits {
             max_gbuffer_work: 1 << 32,
             max_gbuffer_bin_entries: 1 << 26,
             max_unwrap_triangles: 4_000_000,
+            max_outline_vertices: 1_000_000,
+            max_outline_contours: 10_000,
+            max_outline_work: 1 << 30,
         }
     }
 }

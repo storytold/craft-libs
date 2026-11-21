@@ -81,8 +81,43 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   distance is not finite, and `OrbitCamera::zoom` ignores a distance at which the eye rounds to
   the target. `OrbitCamera::ray` unprojects in `f64`.
 
-Triangulation with holes, extrusion of 2D outlines and conversion from `craft_mesh::Mesh` are not
-in the crate yet.
+- **Shapes.** `primitives::try_shape` builds a `ShapeKind` (cuboid, sphere, plane, torus, cone
+  or cylinder) from `ShapeParams`, with each face or surface mapped to the whole UV square: a
+  cuboid of separate width, height and depth, a plane in XY facing +Z, a sphere with exact poles
+  and one triangle per segment at each pole, a ring torus, and a cone and cylinder whose caps
+  each take the whole square. It returns `Invalid` for a size, radius, tube or height the shape
+  reads that is not finite and positive, and for a torus tube that is not smaller than its
+  radius; a segment count over `Limits::max_segments` is `TooLarge`. The cone's side normal is
+  worked out in `f64`, so a cone of height 1e-9 and radius 1e-6 keeps it.
+- **Triangulation.** `triangulate::triangulate` takes an outer contour and its holes as `[f64; 2]`
+  points and returns `u32` triangles over the contours concatenated in order, counterclockwise
+  with y up. Holes are joined to the outer contour by bridges and ears are clipped, following
+  Eberly's *Triangulation by Ear Clipping*
+  (<https://www.geometrictools.com/Documentation/TriangulationByEarClipping.pdf>); a vertex where
+  the contour goes straight on becomes a triangle without area, so every contour edge belongs to
+  exactly one triangle. It returns `Invalid` for a contour with fewer than three points, a
+  non-finite or repeated point, a contour without area, edges that cross or touch, a hole outside
+  the outer contour or inside another hole, a bounding box wider or taller than 1e150, and a
+  polygon with no ear left to clip. Coordinates are taken relative to the corner of the bounding
+  box, and `triangulate::signed_area` relative to the first point, so a contour far from the
+  origin keeps its area.
+- **Outlines.** `outline::group_contours` groups closed contours into `Outline`s by nesting depth
+  (a hole goes to the innermost containing outer contour; overlapping contours each count as a
+  container) after removing repeated points and dropping contours of area 1e-9 or less. Contours
+  that together span more than 1e150 in x or y are `Invalid`. `outline::extrude` builds a beveled solid from outlines in a y-down plane: the front cap at
+  z = 0 facing -z, the back cap at the extrusion depth facing +z, walls between them and a
+  `BevelStyle` (none, angular, concave or convex) at both edges. `extrude_surfaces` splits the
+  result into front, bevel, side and back meshes, and the `_stacked` forms move it by
+  `outline::STACK_GAP` (0.02) per level towards -z before the conversion to `f32`. Caps and walls share positions, so the solid
+  is closed when welded by position. `ExtrudeParams` with a depth that is not finite and positive,
+  a bevel depth that is not finite and 0 or more, or a hole bevel outside 0 to 1 is `Invalid`, as
+  is a bevel that collapses or turns a cap's contour inside out, a point outside the `f32`
+  range, and neighboring points that round to one `f32` position (a unit square near x = 1e8,
+  where `f32` steps by 8), cap or wall contours that cross or touch once rounded to `f32`, a
+  depth that rounds to 0 in `f32`, and a bevel step that rounds to no width in `f32`. A bevel
+  deeper than half the extrusion is built at half the extrusion.
+
+Conversion from `craft_mesh::Mesh` is not in the crate yet.
 
 ## Cargo features
 
@@ -92,7 +127,7 @@ No default features.
 |---|---|---|
 | `bvh` | `Bvh`, `Hit` | nothing |
 | `parallel` | the UV G-buffer rasterizes bands of rows on several threads; the result is the same | `rayon` |
-| `serde` | `Serialize` and `Deserialize` for `OrbitCamera` | `serde`, `glam/serde` |
+| `serde` | `Serialize` and `Deserialize` for `OrbitCamera` and `outline::BevelStyle` | `serde`, `glam/serde` |
 
 Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 
@@ -108,13 +143,18 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 | `max_gbuffer_work` | 2^32 | the same: the texels the rasterizer visits, summed over each triangle's bounding box clipped to the buffer |
 | `max_gbuffer_bin_entries` | 2^26 | the same: one entry per triangle for each band of 32 rows its clipped box reaches |
 | `max_unwrap_triangles` | 4,000,000 | `unwrap_uvs` and `unwrap::auto_unwrap`, for the mesh's triangles and for the triangles its submeshes list |
+| `max_outline_vertices` | 1,000,000 | `triangulate` (the polygon's points), `group_contours` and `group_largest_contours` (every contour's points), `extrude` and its forms (every outline's points) |
+| `max_outline_contours` | 10,000 | `triangulate` and `extrude` (contours in one polygon), `group_contours` (contours left after dropping; `group_largest_contours` keeps the largest instead) |
+| `max_outline_work` | 2^30 | `triangulate`, the grouping and the extrusion: edge pairs compared for crossings, points tested for containment, and vertices scanned while clipping ears, summed over the call |
 
 A BVH holds at most `bvh::MAX_BVH_TRIANGLES` (2^31 − 1) triangles.
 
 `Bvh::from_slices`, `Bvh::try_new`, `UvGBuffer::try_new` and `UvGBuffer::from_slices` reserve all
 their memory before using it. The other slice functions, `weld`, `Mesh::try_compute_normals`,
 `Mesh::try_flat_normals`, `Mesh::try_compute_tangents`, `Mesh::try_subdivided`, the `try_` primitives, `unwrap::weld_ids`
-and the unwrap functions reserve their working memory and their results as they grow. Each
+and the unwrap functions reserve their working memory and their results as they grow. `triangulate`,
+the grouping and `extrude` reserve their points, rings and triangles before filling them; `extrude`
+counts its output and checks it against `max_vertices` and `max_triangles` before it builds. Each
 returns `MeshOpsError::OutOfMemory` when a reservation fails. `Bvh::new` then returns an empty
 tree, `UvGBuffer::new` a 1 × 1 uncovered buffer, and `compute_normals` and `compute_tangents`
 leave the mesh unchanged. `UvGBuffer::new` also returns that buffer when the input is over a
@@ -131,7 +171,8 @@ limits allow.
 | `mesh.rs`, `bvh.rs`, `primitives.rs`, `gbuffer.rs`, `unwrap.rs`, `camera.rs` and their tests | TextureCraft `crates/geom` at [386630e](https://github.com/storytold/texturecraft/commit/386630ee85cb22679295b24013575d1aecb39ad2) |
 | `Mesh::subdivided` and `subdivision_shares_edge_midpoints` | MaterialCraft `crates/geom/src/mesh.rs` at [3133062](https://github.com/storytold/materialcraft/commit/3133062968b8a1566eda12a357cb06062db16687) |
 | The index check in `Mesh::from_parts` and `compute_tangents`, and its two tests | TextureCraft [#386](https://github.com/storytold/texturecraft/pull/386) by simonhull, at `faa4548a` |
-| `Limits`, `MeshOpsError::TooLarge` and `OutOfMemory`, the slice functions, the `try_` forms, the finite-value and overflow checks, the `bvh`, `parallel` and `serde` features | written here |
+| `triangulate.rs`, `outline.rs`, `try_shape` and their moved tests | EffectCraft `crates/model/src/triangulate.rs`, `extrude.rs`, `prim.rs` and `tests.rs` at [fae7ad7](https://github.com/storytold/effectcraft/commit/fae7ad76412f29b104a4f070373020f70bd9b479) |
+| `Limits`, `MeshOpsError::TooLarge` and `OutOfMemory`, the slice functions, the `try_` forms, the finite-value and overflow checks, the outline checks and limits, the `bvh`, `parallel` and `serde` features | written here |
 
 MikkTSpace comes from the `mikktspace` crate; its notice is in [ATTRIBUTION.md](ATTRIBUTION.md).
 
@@ -141,7 +182,7 @@ MikkTSpace comes from the `mikktspace` crate; its notice is in [ATTRIBUTION.md](
 |---|---|
 | TextureCraft | `texturecraft-geom` is the source. The app switches to this crate in its own pull request. |
 | MaterialCraft | `materialcraft-geom` is the source of `subdivided`. The app switches in its own pull request. |
-| EffectCraft | `effectcraft-model`'s `Primitive::compute_normals` and `flat_normals` give the same normals as `smooth_normals` and `flat_normals`, apart from the rows below. The app switches in its own pull request. |
+| EffectCraft | `effectcraft-model`'s `Primitive::compute_normals` and `flat_normals` give the same normals as `smooth_normals` and `flat_normals`, and its `triangulate`, `extrude` and `prim` modules the same geometry as `triangulate`, `outline` and `try_shape`, apart from the rows below. The app switches in its own pull request. |
 
 For both apps:
 
@@ -190,3 +231,21 @@ For EffectCraft:
 | `flat_normals` panics when the UVs, joints or weights are shorter than the positions | `flat_normals` returns `source`, and the caller copies each array through it; `Mesh::try_flat_normals` returns `Invalid` for short UVs or colors |
 | The cross products are taken in `f32`, so a triangle with sides of 1e-15 or 1e20 gets +Z | they are taken in `f64`, and the triangle keeps its normal |
 | `flat_normals` copies each vertex's tangent to its corners | `Mesh::try_flat_normals` computes the tangents again for the new normals |
+
+| `effectcraft-model` `triangulate`, `extrude` and `prim` | craft-mesh-ops |
+| --- | --- |
+| `triangulate` returns `usize` triangles | `u32` triangles, with the contour count, point count and work checked against `Limits` |
+| `triangulate` clips arbitrary triangles when no ear is left (a bow-tie, a crossing or touching hole, a hole outside the outer contour) and ignores a hole shorter than three points | an `Invalid` error |
+| `triangulate` can join a hole to the copy of an earlier bridge that faces away from it, leaving no ear | only edges that run upward across the hole's ray count, so the hole joins the copy that faces it |
+| `signed_area` multiplies absolute coordinates, so a contour far from the origin loses its area | the products are taken relative to the first point |
+| `group_contours` takes `Vec<Vec<[f64; 2]>>`, drops a contour with a NaN point, and keeps the 10,000 largest contours with a warning | it takes a slice of contours, returns `Invalid` for a non-finite point or a span over 1e150 and `TooLarge` for more than `max_outline_contours`; `group_largest_contours` keeps the largest |
+| `extrude` raises a depth under 1e-3, or NaN, to 1e-3, clamps the hole bevel to 0..1, and builds no bevel for a NaN bevel depth or hole bevel | an `Invalid` error for a depth that is not finite and positive, a bevel depth that is not finite and 0 or more, and a hole bevel outside 0 to 1 |
+| `extrude` builds a cap from a bevel that collapses or turns the contour inside out, and from an outline whose contours cross | an `Invalid` error |
+| `extrude` converts to `f32` without a check, so a point past the `f32` range becomes infinite and neighboring points can round to one position | an `Invalid` error |
+| `extrude` returns an `effectcraft_model::Primitive` with material 0, and `Surface` names the parts | an `OutlineMesh` of positions, normals, UVs and indices, and `OutlineSurface` names the parts; `BevelStyle` has no labels |
+| `mesh(PrimitiveKind, &PrimParams)` takes absolute values of negative sizes and clamps segments to 3..=512 and rings to 2..=512 | `try_shape(ShapeKind, &ShapeParams, &Limits)` returns `Invalid` for a size that is not finite and positive or whose half is 0 in `f32` and for a shape whose triangle corners round to one `f32` position, and `TooLarge` past `max_segments`; counts under 3 segments, 2 sphere rings or 3 torus tube sides are raised to them |
+| `PrimitiveKind::Cube` | `ShapeKind::Cuboid` |
+| A torus whose tube is as wide as its radius or wider | an `Invalid` error |
+| The cone's side normal divides by at least 1e-6, so a cone lower than that tilts its normal | the slope is taken from the real height in `f64` |
+| `compute_tangents` gives one tangent per vertex | MikkTSpace tangents; the cone's 15 inner base vertices (at 16 segments) are split where the two side triangles get different frames |
+| `model` marks the plane's material double-sided, and `PrimitiveKind::label` and `parse` name the kinds | not moved; they stay in the app |
