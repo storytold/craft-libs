@@ -122,6 +122,7 @@ fn job_decides(name: &str, job: &Job) -> bool {
         .any(|feature| name.starts_with(feature))
         || (job.duplex.is_some() && matches!(name, "JobDuplexAllDocumentsContiguously" | "DocumentDuplex"))
         || (job.grayscale && name == "PageOutputColor")
+        || crate::finishing::print_schema::decides(name, &job.finishing)
 }
 
 /// `xml` without the Print Schema features and parameter initializers directly under its root
