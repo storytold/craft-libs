@@ -18,8 +18,8 @@ use craft_ui::runtime::env::Env;
 use egui::{Rect, Ui};
 
 use crate::context::Rows;
-use crate::layout::Target;
-use crate::model::{MenuBar, MenuRole};
+use crate::layout::{Target, node_commands};
+use crate::model::{Builtin, MenuBar, MenuRole};
 use crate::palette::entries_of;
 
 /// Whether a menu of the bar is open; the app's single-key shortcuts wait while it is true.
@@ -136,8 +136,17 @@ impl<'a> MenuBarUi<'a> {
         let labels =
             rows.labels(&self.bar.menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| rows.english_of(Labeled::Title(&menu.title)));
         let shared = &rows;
-        let titles: Vec<MenuTitle<'_>> =
-            self.bar.menus.iter().zip(labels).map(|(menu, label)| MenuTitle::new(label, move |ui| shared.show(ui, &menu.children))).collect();
+        let titles: Vec<MenuTitle<'_>> = self
+            .bar
+            .menus
+            .iter()
+            .zip(labels)
+            .map(|(menu, label)| {
+                // The commands the title holds, for the palette's callout; a built-in has no command of the app.
+                let held = menu.children.iter().flat_map(node_commands).filter(|command| Builtin::of(command).is_none()).collect();
+                MenuTitle::new(label, move |ui| shared.show(ui, &menu.children)).holds(held)
+            })
+            .collect();
         let help = self.help_search.then(|| self.bar.menus.iter().position(|menu| menu.role == MenuRole::Help)).flatten();
         // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
         let (bar_model, english) = (self.bar, self.english);
@@ -146,6 +155,7 @@ impl<'a> MenuBarUi<'a> {
         if let Some(menu) = help {
             bar = bar.help(MenuHelp::new(menu, &entries));
         }
-        MenuBarOutput { titles: bar.show(ui).titles, opened: false } // P3(menus-w3): mn.M26
+        let out = bar.show(ui);
+        MenuBarOutput { titles: out.titles, opened: out.opened }
     }
 }

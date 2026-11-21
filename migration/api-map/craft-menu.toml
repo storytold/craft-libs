@@ -14,7 +14,7 @@ name = "MenuBarOutput"
 old = "craft_menu::MenuBarOutput"
 new = "craft_menu::MenuBarOutput"
 status = "same"
-note = "The `commands` field is gone: a choice is a `Fired` with `FireSource::Menu` in `FrameOutput.fired`."
+note = "The `commands` field is gone: a choice is a `Fired` with `FireSource::Menu` in `FrameOutput.fired`. New field `opened`: true in the one pass where a menu of the bar opened while none was open."
 
 [[type]]
 name = "BarStyle"

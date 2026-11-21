@@ -58,9 +58,18 @@ pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)>
 /// own tooltip shows it.
 pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) -> Option<String> {
     let validity = register_validity(p);
+    register_shown(p.core_ref());
     report_access(p, facts, input, validity.as_ref().map(|(text, _)| text.clone()));
     crate::contract::cx::write_cursor(p.core_ref());
     validity.filter(|(_, shown)| !shown).map(|(text, _)| text)
+}
+
+/// Registers a component bound to a command as where that command is shown, for `commands::shown`. A measuring run
+/// or a layer that shows nothing records nothing (`parted`), and a component the clip cuts is not shown whole.
+fn register_shown(core: &CxCore<'_>) {
+    let Some(command) = core.command.as_deref().filter(|_| core.parted && core.visible == core.rect) else { return };
+    let label = if *core.resolved.label == *command.label { Label::from(command.label.clone()) } else { Label::from(core.resolved.label.to_owned()) };
+    crate::runtime::commands::note_shown(&core.ctx, core.response.layer_id, core.visible, label, &command.command);
 }
 
 /// The message of a validity that warns or refuses as text, registered with the innermost label scope, and whether

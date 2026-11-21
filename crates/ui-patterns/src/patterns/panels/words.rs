@@ -18,7 +18,6 @@ craft_ui::words! {
         palette_list: "commandPalette.list" = "Commands";
         palette_empty: "commandPalette.empty" = "No matching commands";
         palette_count: template "commandPalette.count" = "{shown} of {n} results. Keep typing to narrow them.";
-        palette_hint: "commandPalette.hint" = "↑↓ navigate  Enter run  Esc close";
         palette_results: count "commandPalette.results" = "{n} result" | "{n} results";
         tour_back: "tour.back" = "Back";
         tour_next: "tour.next" = "Next";

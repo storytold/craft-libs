@@ -2,14 +2,16 @@
 //! layer closes before the command runs, so it blocks none of them. A palette without a `recents` binding still
 //! remembers what it ran.
 
-use craft_ui::contract::{Bind, CommandSet, Overlay, Role, ShowContainer as _};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, CommandSet, Overlay, Role, Show as _, ShowContainer as _, clicked};
 use craft_ui::menu::search::{HelpEntry, SearchIndex, SearchWords, Synonyms};
 use craft_ui::patterns::panels::CommandPalette;
 use craft_ui::popover::Popover;
-use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, FireSource};
+use craft_ui::runtime::commands::{self, CommandRef, CommandState, EditCommands, FireSource};
+use craft_ui::runtime::env::Label;
 use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::{Fixture, stories, trial};
-use egui::{Key, Modifiers, Ui};
+use egui::{Key, Modifiers, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -30,19 +32,40 @@ enum TrialCommand {
 
 type PaletteRig = (Fixture, Rc<Cell<bool>>, Rc<RefCell<Option<CommandRef>>>);
 
-/// A palette open over `entries`, inside a modal dialog when `in_dialog`; `picked` holds the last pick.
-fn palette(entries: Vec<HelpEntry>, in_dialog: bool) -> PaletteRig {
+/// A palette over `entries` and what the trial reads of it.
+struct Rig {
+    fixture: Fixture,
+    open: Rc<Cell<bool>>,
+    /// The last command picked.
+    picked: Rc<RefCell<Option<CommandRef>>>,
+    /// The bound `recents`, newest first; empty and unused when the rig keeps them in the palette.
+    recents: Rc<RefCell<Vec<CommandRef>>>,
+}
+
+/// A palette open over `entries`, inside a modal dialog when `in_dialog`, with `beneath` shown before it in the same
+/// window. `recents` binds the palette's recent commands to the rig when given; else the palette keeps them.
+fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: bool, beneath: impl Fn(&mut Ui) + 'static) -> Rig {
     let open = Rc::new(Cell::new(true));
     let picked = Rc::new(RefCell::new(None::<CommandRef>));
-    let (shown_open, shown_picked) = (open.clone(), picked.clone());
+    let bound = recents.is_some();
+    let held = Rc::new(RefCell::new(recents.unwrap_or_default()));
+    let (shown_open, shown_picked, shown_held) = (open.clone(), picked.clone(), held.clone());
     let fixture = Fixture::new(move |ui| {
+        beneath(ui);
         let show = |ui: &mut Ui| {
             let mut is_open = shown_open.get();
-            // P3(menus-w3): mn.M28
             let env = craft_ui::runtime::env::Env::of(ui);
             let view = env.view();
             let index = SearchIndex::new(&view, &entries, &Synonyms::of(&view.words::<SearchWords>()));
-            let output = CommandPalette::new("Commands", &entries, &index, Bind::bound(&mut is_open)).show(ui);
+            let palette = CommandPalette::new("Commands", &entries, &index, Bind::bound(&mut is_open));
+            let output = if bound {
+                let mut recents = shown_held.borrow().clone();
+                let output = palette.recents(Bind::bound(&mut recents)).show(ui);
+                *shown_held.borrow_mut() = recents;
+                output
+            } else {
+                palette.show(ui)
+            };
             shown_open.set(is_open);
             if let Some(command) = output.picked {
                 *shown_picked.borrow_mut() = Some(command);
@@ -54,7 +77,18 @@ fn palette(entries: Vec<HelpEntry>, in_dialog: bool) -> PaletteRig {
             show(ui);
         }
     });
-    (fixture, open, picked)
+    Rig { fixture, open, picked, recents: held }
+}
+
+/// A palette open over `entries`, inside a modal dialog when `in_dialog`; `picked` holds the last pick.
+fn palette(entries: Vec<HelpEntry>, in_dialog: bool) -> PaletteRig {
+    let rig = rig(entries, None, in_dialog, |_| ());
+    (rig.fixture, rig.open, rig.picked)
+}
+
+/// An entry for a command the trial makes up, found by `label`.
+fn entry(id: &str, label: &str) -> HelpEntry {
+    HelpEntry::new(CommandRef::new(format!("paletteTrial.{id}")), label.to_owned())
 }
 
 /// The listed rows, by label: whether each is disabled.
@@ -136,4 +170,165 @@ fn a_palette_opened_in_a_modal_dialog_lists_what_the_dialog_blocks_as_disabled()
     fixture.settle();
     assert!(disabled(&fixture, "Rotate"), "the dialog under the palette blocks a default-rule app command");
     assert!(!disabled(&fixture, "Zoom"), "a command that runs whatever is open stays enabled");
+}
+
+/// The names of the listed rows.
+fn names(fixture: &Fixture) -> Vec<String> {
+    rows(fixture).into_iter().map(|(name, _)| name).collect()
+}
+
+/// How many texts equal to `text` the window paints.
+fn painted(fixture: &Fixture, text: &str) -> usize {
+    fixture.texts().iter().filter(|painted| painted.text == text).count()
+}
+
+#[trial]
+fn a_result_list_is_capped_at_the_limit_and_keeps_the_active_result_in_the_last_row() {
+    let entries: Vec<HelpEntry> = (0..60).map(|n| entry(&format!("cap{n}"), &format!("Alpha {n:02}"))).collect();
+    let mut rig = rig(entries.clone(), Some(Vec::new()), false, |_| ());
+    rig.fixture.settle();
+    rig.fixture.type_text("alpha").settle();
+    assert_eq!(names(&rig.fixture).len(), 50, "sixty matches list fifty");
+
+    // Up wraps to the last row, which is the active result.
+    rig.fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
+    let before = names(&rig.fixture);
+    let active = before.last().expect("a last row").clone();
+    let listed = |entry: &HelpEntry| before.iter().any(|name| name.starts_with(entry.label().as_str()));
+
+    // Recent picks rank ahead of equal matches: eight results that were past the cap now rank above the active one.
+    let ahead: Vec<&HelpEntry> = entries.iter().filter(|entry| !listed(entry)).take(8).collect();
+    *rig.recents.borrow_mut() = ahead.iter().map(|entry| entry.command().clone()).collect();
+    rig.fixture.settle();
+    let after = names(&rig.fixture);
+    assert_eq!(after.len(), 50, "the list stays at the cap: {after:?}");
+    assert_eq!(after.last(), Some(&active), "the active result keeps the last row when better matches push it past the cap");
+    assert!(ahead.iter().any(|entry| after.iter().any(|name| name.starts_with(entry.label().as_str()))), "the better matches are listed above it");
+
+    rig.fixture.key(Key::Enter, Modifiers::NONE).settle();
+    let command = rig.picked.borrow().clone().expect("Enter picked the active result");
+    let picked = entries.iter().find(|entry| *entry.command() == command).expect("a listed entry");
+    assert!(active.starts_with(picked.label().as_str()), "the pick is the active result: {active} / {}", picked.label().as_str());
+}
+
+#[trial]
+fn recents_keep_twenty_and_the_empty_query_lists_the_newest_eight_that_have_an_entry() {
+    let trees = ["Alder", "Birch", "Cedar", "Dogwood", "Elm", "Fir", "Ginkgo", "Hazel", "Ironwood", "Juniper", "Larch", "Maple"];
+    let entries: Vec<HelpEntry> = trees.iter().map(|tree| entry(tree, tree)).collect();
+    let ghost = |n: usize| CommandRef::new(format!("paletteTrial.ghost{n}"));
+    // A command with no entry first, every entry, then a dozen more commands with none: 25 in all.
+    let mut recents = vec![ghost(0)];
+    recents.extend(entries.iter().map(|entry| entry.command().clone()));
+    recents.extend((1..=12).map(ghost));
+    let mut rig = rig(entries.clone(), Some(recents), false, |_| ());
+    rig.fixture.settle();
+
+    rig.fixture.type_text("Fir").settle();
+    rig.fixture.key(Key::Enter, Modifiers::NONE).settle();
+    let fir = entries[5].command().clone();
+    assert_eq!(*rig.picked.borrow(), Some(fir.clone()), "Enter picked Fir");
+    let kept = rig.recents.borrow().clone();
+    assert_eq!(kept.first(), Some(&fir), "a pick goes first");
+    assert_eq!(kept.get(1), Some(&ghost(0)), "a command with no entry keeps its place");
+    assert_eq!(kept.len(), 20, "twenty are kept");
+    assert_eq!(kept.iter().filter(|command| **command == fir).count(), 1, "a pick is in the list once");
+
+    rig.open.set(true);
+    rig.fixture.settle();
+    let listed = names(&rig.fixture);
+    let expected: Vec<&str> = kept
+        .iter()
+        .filter_map(|command| entries.iter().find(|entry| entry.command() == command))
+        .map(|entry| entry.label().as_str())
+        .take(8)
+        .collect();
+    assert_eq!(listed.len(), 8, "the empty query lists eight: {listed:?}");
+    assert!(
+        listed.iter().zip(&expected).all(|(name, label)| name.starts_with(label)),
+        "the newest recents that have an entry, newest first: {listed:?} against {expected:?}"
+    );
+}
+
+#[trial]
+fn a_press_outside_closes_the_palette() {
+    let clicks = Rc::new(Cell::new(0));
+    let counted = clicks.clone();
+    let entries = vec![HelpEntry::new(TrialCommand::Rotate, "Rotate")];
+    let mut rig = rig(entries, None, false, move |ui| {
+        if clicked(&Button::new("Below").show(ui)) {
+            counted.set(counted.get() + 1);
+        }
+    });
+    rig.fixture.settle();
+    assert!(rig.open.get(), "the palette starts open");
+    let below = rig.fixture.by_label("Below").expect("the button under the palette");
+    rig.fixture.click(&below).settle();
+    assert!(!rig.open.get(), "a press outside closed the palette");
+    assert_eq!(clicks.get(), 1, "the press reached the window below");
+}
+
+#[trial]
+fn the_footer_says_why_the_active_row_is_off_or_how_many_results_there_are() {
+    let entries = vec![
+        HelpEntry::new(TrialCommand::Rotate, "Rotate"),
+        HelpEntry::new(TrialCommand::Zoom, "Rotation"),
+        HelpEntry::new(TrialCommand::Flip, "Flip"),
+        HelpEntry::new(TrialCommand::Crop, "Crop"),
+    ];
+    let (mut fixture, ..) = palette(entries, false);
+    let why = "Needs a selection";
+    fixture.command_state(TrialCommand::Crop, CommandState::new().enabled(false).hint(why));
+    fixture.settle();
+
+    fixture.type_text("crop").settle();
+    assert!(disabled(&fixture, "Crop"), "the active row is off");
+    assert_eq!(painted(&fixture, why), 1, "the footer gives the command's hint while the active row is off");
+
+    // The count follows the rows: digits stand in the footer only, as no label has one.
+    fixture.key(Key::Escape, Modifiers::NONE).type_text("rotat").settle();
+    let many = names(&fixture).len();
+    fixture.key(Key::Escape, Modifiers::NONE).type_text("flip").settle();
+    let few = names(&fixture).len();
+    assert_ne!(many, few, "the two queries match different numbers of commands");
+    assert_eq!(painted(&fixture, why), 0, "the hint goes with the off row");
+    let counted = |n: usize| fixture.texts().iter().any(|text| text.text.contains(&n.to_string()));
+    assert!(counted(few), "the footer counts {few} results: {:?}", fixture.texts());
+    assert!(!counted(many), "the count of the earlier query is gone");
+
+    let before: Vec<String> = fixture.texts().iter().map(|text| text.text.clone()).collect();
+    fixture.key(Key::Escape, Modifiers::NONE).type_text("qqzx").settle();
+    assert!(names(&fixture).is_empty(), "nothing matches");
+    let said = fixture.texts().iter().any(|text| text.text != "qqzx" && !before.contains(&text.text));
+    assert!(said, "the footer says that nothing matches: {:?}", fixture.texts());
+}
+
+#[trial]
+fn the_active_row_marks_its_shown_control_and_a_hidden_home_goes_to_the_footer() {
+    let entries = vec![
+        HelpEntry::new(TrialCommand::Flip, "Flip"),
+        HelpEntry::new(TrialCommand::Crop, "Crop").with_home("Toolbox"),
+        HelpEntry::new(TrialCommand::Rotate, "Rotate"),
+    ];
+    // Flip is held by a rect in the corner, the way a menu title holds its commands; Rotate has a bound button.
+    let mut rig = rig(entries, Some(vec![TrialCommand::Flip.into()]), false, |ui| {
+        let corner = egui::Rect::from_min_size(ui.max_rect().min, Vec2::new(60.0, 20.0));
+        commands::holds(ui.ctx(), ui.layer_id(), corner, &[TrialCommand::Flip.into()], Label::from("Rail slot"));
+        ui.add_space(24.0);
+        Button::command(TrialCommand::Rotate).show(ui);
+    });
+    rig.fixture.room(Vec2::new(1000.0, 600.0));
+    rig.fixture.settle();
+    assert_eq!(painted(&rig.fixture, "Rail slot"), 1, "the box beside the control names it");
+    assert_eq!(painted(&rig.fixture, "Toolbox"), 0, "a command in view has no home line");
+
+    // Rotate has a button in view: the box shows its label beside it, over the button's own and the row's.
+    *rig.recents.borrow_mut() = vec![TrialCommand::Rotate.into()];
+    rig.fixture.settle();
+    assert_eq!(painted(&rig.fixture, "Rail slot"), 0, "the box follows the active row");
+    assert!(painted(&rig.fixture, "Rotate") >= 3, "the button, the row and the box paint the label");
+
+    // Crop is shown nowhere: its home stands in the row and the footer.
+    *rig.recents.borrow_mut() = vec![TrialCommand::Crop.into()];
+    rig.fixture.settle();
+    assert_eq!(painted(&rig.fixture, "Toolbox"), 2, "the footer names the home of a command shown nowhere");
 }
