@@ -1837,6 +1837,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `const OVERLAYS: bool`. Whether the component hosts popups: `false` skips the overlay bookkeeping of steps 9, 10, 12, 15 and 16.
   - `const PARTS: bool`. Whether the component declares parts, a text part or an editor part: `false` skips the parts step (the parts
   - `const STOPS: bool`. Whether the component or its parts can take key focus: `false` skips the stop registration of step 7, except
+  - `const FOCUS_SCOPE: crate::runtime::focus::FocusPolicy`. The focus scope a leaf runs in, as `ContainerProps::focus` gives a container's: the leaf's own stop and its
   - `const KEYS: crate::runtime::focus::KeyUse`. Keys the focused component keeps from egui and the shortcut dispatcher.
   - `fn keys(&self) -> crate::runtime::focus::KeyUse`. The keys this instance keeps in its current state. The default is `KEYS`; a component whose key use depends
   - `const SHOWS_LABEL: bool`. Whether the component paints its label as visible text. `false` for a face that shows only an icon or a
