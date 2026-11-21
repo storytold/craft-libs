@@ -130,7 +130,7 @@ The old app is the visual reference, but not automatically right: judge each dif
 | Command-line values | `args::ControlOptions`, `EnvNames` | Parses its own flags and calls `ControlOptions::resolve` |
 | Transport | `server::listen`, `server::serve`, `ControlClient` | Calls `listen` (or `serve` on a listener it bound earlier), keeps the `Listening` and owns the `ControlChannel` |
 | Request queue, replies | `ControlChannel`, `Reply`, `result_reply` | Runs each request and returns a `Reply` |
-| Input methods | `synthetic::Click`, `KeyPress`, `move_from_params`: the checked parameters of `ui.click`, `ui.key`, `ui.move` | Dispatches the method names to them |
+| Input methods | `synthetic::Click`, `KeyPress`, `move_from_params`, `Drag`: the checked parameters of `ui.click`, `ui.key`, `ui.move`, `ui.drag` | Dispatches the method names to them |
 | Dialog methods | `dialogs`: `ui.dialog.set`, `ui.dialog.confirm`, `ui.dialog.cancel` and the dialog list | Dispatches them; may add `ui.dialog.open` for its own dialog kinds |
 | Screenshots | `Captures` (the bounded queue), `screenshot_reply`, PNG encoding | Allocates a token for `ui.screenshot`, drives the queue each frame, supplies the file writer |
 | View and window state | nothing | Methods such as `ui.set` (tool, panels, theme), `ui.resize`, `engine.execute` |
