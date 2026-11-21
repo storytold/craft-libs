@@ -134,7 +134,20 @@ fn page_size_and_usable_validation() {
 
     assert_eq!(usable_page_size(512, 32), Ok(480));
     assert_eq!(usable_page_size(512, 33), Err(Error::UsablePageSizeTooSmall(479)));
+    assert_eq!(usable_page_size(100, 150), Err(Error::UsablePageSizeTooSmall(0)));
     assert_eq!(usable_page_size(512, 0), Ok(512));
+
+    for err in [
+        Error::InvalidPageSize(0),
+        Error::UsablePageSizeTooSmall(479),
+        Error::TruncatedPage,
+        Error::UnsupportedBtreePageType(0x01),
+        Error::InvalidCellPointer { offset: 109, min: 110, usable: 512 },
+        Error::CellIndexOutOfBounds { index: 1, cells: 1 },
+        Error::InvalidIntegerWidth(0),
+    ] {
+        assert!(!err.to_string().is_empty());
+    }
 }
 
 #[test]
@@ -165,7 +178,21 @@ fn btree_page_header_and_cell_pointer_bounds() {
     page[108..110].copy_from_slice(&109u16.to_be_bytes());
     assert_eq!(btree_cell_offset(&page, &hdr, 0), Err(Error::InvalidCellPointer { offset: 109, min: 110, usable: 512 }));
 
-    // Unsupported page kind is rejected.
+    // Unsupported page kind and truncated pages are rejected.
     page[0] = 0x01;
     assert_eq!(parse_btree_page_header(&page, false), Err(Error::UnsupportedBtreePageType(0x01)));
+    assert_eq!(parse_btree_page_header(&[], false), Err(Error::TruncatedPage));
+    assert_eq!(parse_btree_page_header(&[0x0d, 0, 0, 0], false), Err(Error::TruncatedPage));
+
+    // Interior page with pointer array exceeding usable page is rejected.
+    page[0] = 0x05;
+    page[3..5].copy_from_slice(&300u16.to_be_bytes());
+    assert_eq!(parse_btree_page_header(&page, false), Err(Error::TruncatedPage));
+
+    // Cell pointer >= usable is rejected.
+    page[0] = 0x0d;
+    page[3..5].copy_from_slice(&1u16.to_be_bytes());
+    page[8..10].copy_from_slice(&512u16.to_be_bytes());
+    let small_hdr = parse_btree_page_header(&page, false).unwrap();
+    assert_eq!(btree_cell_offset(&page, &small_hdr, 0), Err(Error::InvalidCellPointer { offset: 512, min: 10, usable: 512 }));
 }
