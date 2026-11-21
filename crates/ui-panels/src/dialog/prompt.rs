@@ -103,10 +103,15 @@ impl Outcome for PromptOutput {
 }
 
 /// The index Escape and the close action answer with: the answer of `chosen` when there is one, else Cancel, else
-/// the first Other answer, else the default answer.
+/// the first Alternate answer, else the first Other answer, else the default answer.
 fn escape_answer(answers: &[FooterButton], chosen: Option<DialogRole>) -> Option<usize> {
     let find = |wanted: DialogRole| answers.iter().position(|answer| answer.role() == wanted);
-    chosen.and_then(find).or_else(|| find(DialogRole::Cancel)).or_else(|| find(DialogRole::Other)).or_else(|| default_answer(answers))
+    chosen
+        .and_then(find)
+        .or_else(|| find(DialogRole::Cancel))
+        .or_else(|| find(DialogRole::Alternate))
+        .or_else(|| find(DialogRole::Other))
+        .or_else(|| default_answer(answers))
 }
 
 /// The first Accept answer, else the first Destructive one, whether it is enabled or not.

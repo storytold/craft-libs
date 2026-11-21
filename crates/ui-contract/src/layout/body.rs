@@ -138,19 +138,38 @@ pub(crate) struct Cursors(IdMap<Cursor>);
 #[derive(Default)]
 pub(crate) struct FillCounts(IdMap<u32>);
 
-/// The narrowest width a held fill-width child of each content-sized `Stack` column measured at in the first sweep of
-/// the column's measuring run (`report_held`), by column id.
-#[derive(Default)]
-pub(crate) struct HeldWidths(IdMap<f32>);
+/// What makes a child of a content-sized `Stack` column a held child: it measures at its own width while the column
+/// settles its width from the others, and the column's second sweep gives it the settled width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeldKind {
+    /// A fill-width child: it shows across the width the column settles on.
+    Fill,
+    /// A picture whose height follows from its width that took its least for want of room
+    /// (`MeasureCx::picture_size`): it shows at the width it sizes at in the column's width, which may be narrower than
+    /// the column.
+    Picture,
+}
 
-/// Reports a held fill-width child of the content-sized column `column` in its first sweep: the `width` it measured
-/// at. A column with no first sweep open takes no report.
-pub(crate) fn report_held(ctx: &egui::Context, column: Id, width: f32) {
+/// The held children of each content-sized `Stack` column in its measuring run, by column id: each child's kind and
+/// the narrowest width it measured at in the column's first sweep, by child id.
+#[derive(Default)]
+pub(crate) struct HeldWidths(IdMap<IdMap<(HeldKind, f32)>>);
+
+/// Reports a held child `child` of the content-sized column `column` in its first sweep: its kind and the `width` it
+/// measured at. A column with no first sweep open takes no report.
+pub(crate) fn report_held(ctx: &egui::Context, column: Id, child: Id, kind: HeldKind, width: f32) {
     pass_state::with::<HeldWidths, _>(ctx, |held| {
-        if let Some(narrowest) = held.0.get_mut(&column) {
-            *narrowest = narrowest.min(width);
+        if let Some(children) = held.0.get_mut(&column) {
+            let entry = children.entry(child).or_insert((kind, width));
+            entry.1 = entry.1.min(width);
         }
     });
+}
+
+/// The kind of the held child `child` of the column `column`, as the column's first sweep reported it, while the
+/// column's measuring run runs.
+pub(crate) fn held_kind(ctx: &egui::Context, column: Id, child: Id) -> Option<HeldKind> {
+    pass_state::with::<HeldWidths, _>(ctx, |held| held.0.get(&column).and_then(|children| children.get(&child)).map(|(kind, _)| *kind))
 }
 
 /// What the first child a measuring sweep placed in flow in each open target reported (`Scoped::first_line`): the y
@@ -577,11 +596,18 @@ pub(crate) struct ShrinkCap {
     pub width: f32,
     /// The unit dropped out of the row (`shrink_or_drop`): it shows nothing and takes no place.
     pub dropped: bool,
+    /// The row gave the unit less than it asks for in no room, or dropped it: what the unit shows depends on the row's
+    /// room. A unit the row did not narrow shows as in no room.
+    pub narrowed: bool,
 }
 
 /// What the shrink step of the row `row` gave its unit `leaf` in this pass's measuring run.
 pub(crate) fn shrink_cap(ctx: &egui::Context, row: Id, leaf: Id) -> Option<ShrinkCap> {
-    layout_memory::shrink(ctx, shrink_key(row, leaf)).map(|(found, dropped)| ShrinkCap { width: found.took.x, dropped })
+    layout_memory::shrink(ctx, shrink_key(row, leaf)).map(|(found, given)| ShrinkCap {
+        width: found.took.x,
+        dropped: given.dropped,
+        narrowed: given.narrowed,
+    })
 }
 
 fn shrink_key(row: Id, leaf: Id) -> Id {
@@ -685,9 +711,13 @@ fn shrink_or_drop(
     let shown_first: Vec<bool> = first.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(first, _)| *first).collect();
     let mut widths = shrink_in_turns(&shown, &pick(whole), &shown_first, fixed, room, order).into_iter();
     kept.iter()
-        .map(|kept| match kept {
-            true => ShrinkCap { width: widths.next().unwrap_or_default(), dropped: false },
-            false => ShrinkCap { width: 0.0, dropped: true },
+        .zip(units)
+        .map(|(kept, unit)| match kept {
+            true => {
+                let width = widths.next().unwrap_or_default();
+                ShrinkCap { width, dropped: false, narrowed: unit.ideal - width >= 0.5 }
+            }
+            false => ShrinkCap { width: 0.0, dropped: true, narrowed: true },
         })
         .collect()
 }
@@ -768,21 +798,23 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let widths = if room.is_finite() {
             shrink_or_drop(&units, &whole, &first, (fixed + held, gap), room, order, drops)
         } else {
-            units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false }).collect()
+            units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false, narrowed: false }).collect()
         };
         // A levelled unit took no place of its own content in the first sweep (it measured each level apart), so the
         // records its content's run leaves for the real run come from a sweep at the levels given.
         let mut again = !levelled.is_empty();
         for (leaf, cap) in continuous.iter().zip(widths) {
             let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(cap.width, 0.0));
-            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, cap.dropped);
+            let given = layout_memory::ShrinkGiven { dropped: cap.dropped, narrowed: cap.narrowed };
+            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, given);
             // Half a point: less than a pixel shows at any scale the box runs.
             again |= (leaf.took - cap.width).abs() >= 0.5;
         }
         for (leaf, level) in levelled.iter().zip(levels) {
             // The level travels as the record's height (`level_of`).
             let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width_at(leaf, level), level as f32));
-            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, false);
+            let given = layout_memory::ShrinkGiven { dropped: false, narrowed: level > 0 };
+            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, given);
         }
         again
     };
@@ -944,13 +976,14 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
 /// is bounded: each sweep is `run_sharing`'s, with the column's sweep (`ColumnSweep`) in its children's env. It adds no
 /// `Ui` of its own, so the children have the ids `run_sharing` gives them when the column's width is not bounded.
 ///
-/// A held fill-width child measures at its own width while the column settles its width from the others, so it may
-/// measure narrower than it shows. A measuring run sweeps the children once, each held child reporting the width it
-/// measured at (`report_held`). When one of them measured narrower than the column settled on, it sweeps them again
-/// with that width, at which the held children measure across the column and the others reuse their records; else the
-/// first sweep stands, and each held child keeps the record it made at its own width, which is the column's. It
-/// records which (`sub(id, "column")`): the real run gives the held children the width the column shows at only after
-/// a second sweep, so each shows as its records were made.
+/// A held child (`HeldKind`: a fill-width child, or a picture that took its least for want of room) measures at its
+/// own width while the column settles its width from the others, so it may measure narrower than it shows. A
+/// measuring run sweeps the children once, each held child reporting the width it measured at (`report_held`). When
+/// one of them measured narrower than the column settled on, it sweeps them again with that width, at which the held
+/// children measure in the column's width and the others reuse their records; else the first sweep stands, and each
+/// held child keeps the record it made at its own width, which is the column's. It records which
+/// (`sub(id, "column")`): the real run gives the held children the width the column shows at only after a second
+/// sweep, so each shows as its records were made.
 // PLAN: the second sweep's need is decided once for the column, not per held container at body/hooks.rs's reuse
 // rule: a container that reused its content-sized record there would be laid out across in the real run under records
 // not made across.
@@ -967,29 +1000,34 @@ fn run_column<R>(ui: &mut Ui, env: &Env, id: Id, layout: egui::Layout, mut body:
     };
     if !measure::active(&ctx) {
         let across = this_pass(&ctx, false, key).is_some_and(|took| took.x > 0.0);
-        let column = across.then(|| ColumnSweep::Column(flow_room(ui).x));
+        let column = across.then(|| ColumnSweep::Column(id, flow_room(ui).x));
         return sweep(ui, column, &mut body);
     }
     let (inner, rect, again) = crate::contract::keeping_ids(&ctx, || {
-        pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.insert(id, f32::INFINITY));
+        pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.insert(id, IdMap::default()));
         let env = column_env(Some(ColumnSweep::Count(id)));
         let installed = Env::install_for(ui, env.clone());
         let (inner, rect) = measure_sharing(ui, &env, id, Axis::Y, layout, &mut body);
         Env::restore(&ctx, installed);
-        let narrowest = pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.remove(&id));
+        let narrowest = pass_state::with::<HeldWidths, _>(&ctx, |held| {
+            held.0.get(&id).map_or(f32::INFINITY, |children| children.values().fold(f32::INFINITY, |least, (_, width)| least.min(*width)))
+        });
         // Half a point: less than a pixel shows at any scale the box runs.
-        let again = narrowest.is_some_and(|narrowest| narrowest < rect.width() - 0.5);
+        let again = narrowest < rect.width() - 0.5;
         ((inner, rect, again), again)
     });
     let column = rect.width();
     // 0 when the first sweep stands, so nothing an earlier run of the pass left is read.
     found(&ctx, true, key, Vec2::ZERO, Vec2::new(if again { column } else { 0.0 }, 0.0));
-    if again {
-        sweep(ui, Some(ColumnSweep::Column(column)), &mut body)
+    // The second sweep reads the held children's kinds (`held_kind`); the column's record closes after it.
+    let inner = if again {
+        sweep(ui, Some(ColumnSweep::Column(id, column)), &mut body)
     } else {
         ui.advance_cursor_after_rect(rect);
         inner
-    }
+    };
+    pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.remove(&id));
+    inner
 }
 
 /// What places the children in flow of a body that places them itself.
@@ -1191,8 +1229,10 @@ pub(crate) struct InFlow {
     /// rows run along Y, or a container whose first child is one. The child is one line when that centre lies at
     /// half its height (`one_line`).
     pub first: Option<f32>,
-    /// `first` is the line of the child's own unwrapped `Row` body: the child sits on a row's line by it even when it
-    /// is more than one line (a nested row with a child of two lines).
+    /// `first` is the line of the child's own unwrapped `Row` body, of the control of a labelled control's row, or of
+    /// the first control of a container labelled above its body: the child sits on a row's line by it even when it is
+    /// more than one line (a nested row with a child of two lines, a check box whose label has a detail line under it,
+    /// a control or a field under its label).
     pub line: bool,
 }
 
@@ -1201,8 +1241,8 @@ const ONE_LINE_SLACK: f32 = 0.5;
 
 /// The centre of the line of a child `height` tall whose first line's centre lies `first` below its top, when the
 /// child is one line: a control, a row of one-line children, a container around one line (a field with its label
-/// beside its control). A child of more than one line (a column, a field with its label above or a help line below)
-/// has its first line above its middle.
+/// beside its control). A child of more than one line (a column, a field with a help line below) has its first line
+/// above its middle.
 fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
     first.filter(|first| (2.0 * first - height).abs() <= ONE_LINE_SLACK)
 }

@@ -3,7 +3,7 @@
 
 use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
-use crate::runtime::env::{Env, Scoped};
+use crate::runtime::env::{Env, Scoped, Shrink};
 use crate::runtime::shift::Shift;
 use egui::Ui;
 use std::fmt;
@@ -15,15 +15,22 @@ use std::sync::Arc;
 /// it adds that run again (paint, widgets, accessibility nodes, focus stops and the other per-pass
 /// registrations) and returns what that run returned. It runs in a pass where its key differs, or where any of these
 /// holds:
-/// - the pointer is over it or was in its last run, a press started on it, or one of its widgets is dragged or holds
-///   focus, or did;
+/// - the pointer is over it or an overlay layer it shows, or was in its last run, a press started on either, or one of
+///   its widgets is dragged, or was;
+/// - the focus moved into, out of or within it, or, while the focus is in it, a key, text, IME, clipboard or AccessKit
+///   event came;
 /// - an intent of the pass is routed to a component in it (an AccessKit request on one of its nodes);
 /// - an animation in it is not at its end, a texture it shows is still loading, something in it asked for a repaint
 ///   (`frame::request_repaint`), or a wake time it asked for came;
 /// - a bound value, inspection record or command state it read changed;
 /// - its place differs from its last run (see below), or the shown life of a component it showed ended;
-/// - its last run asked for a discard pass or did something a replay cannot repeat (an overlay, paint on another
-///   layer).
+/// - it shows an overlay layer and a press came anywhere, a close waits for the layer, or the layers or the window's
+///   safe rect changed;
+/// - its last run asked for a discard pass or did something a replay cannot repeat (paint on a layer that is neither
+///   its own nor an overlay it shows, a window of another viewport).
+///
+/// An overlay it shows is part of its run: a replay shows the layer again, with its paint, widgets, nodes, focus scope
+/// and layer stack entry, at the place of the run. A view that shows one replays only at the room and clip it ran in.
 ///
 /// Input elsewhere in the window and repaint requests outside it do not run it: what they change in the data it shows
 /// reaches it through its props.
@@ -44,14 +51,18 @@ use std::sync::Arc;
 /// - what the scope around it hands down beyond those (enabled, read-only, size, ink, the command chain, motion, every
 ///   app value, and the rest of `Scoped::scope_key`), in the key;
 /// - the framework inputs it reads outside its props (`runtime::inputs`: the modifiers, the pointer, the keys held, the
-///   window facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the scroll view of a nested
-///   `Lazy`): a change of one runs only the views that read it;
+///   window facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the requests to collections,
+///   the scroll view of a nested `Lazy`): a change of one runs only the views that read it;
 /// - the clock, read through `frame::stepped_clock`: the view runs at the next step;
 /// - commands sent to a command scope instance inside it: it runs while one waits.
 ///
-/// Its content is a layout room of its own, as a pane's is: the flow of the body around it (a row's shrink, a column's
-/// sweep, a grid's cursor) does not reach in, so the room it is given reaches it only through its place. To the body
-/// around it the view is one unit, sized by its content's measure.
+/// Its content is a layout room of its own, as a pane's is: the flow of the body around it (a column's sweep, a grid's
+/// cursor) does not reach in, so the room it is given reaches it only through its place. To the body
+/// around it the view is one unit, sized by its content's measure. In a shrinking `Row` it is a unit the row narrows
+/// as it narrows a body unit: from what its content takes in no room down to what it takes with every leaf at its
+/// least. When the row narrows it, the width the row gives it is the room of its place; otherwise it shows as in no
+/// room, in the row's flow region. Its content sizes from its content along x, and its leaves fit the view's room, as
+/// they fit the room of a `Stack` the view is shown in.
 ///
 /// What `show` returns holds layout facts only (a size, a rect, which part took the room). A replay returns the kept
 /// value again, moved with the record when the room moved (`Shift`), so an event returned through it would arrive once
@@ -100,11 +111,16 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
     pub fn show(self, ui: &mut Ui) -> Option<R> {
         let MemoView { lazy, mut props, show } = self;
         let ctx = ui.ctx().clone();
+        // In the counting sweep of a shrinking row the view reports what it takes in no room, as a leaf there does.
+        let counting = matches!(Env::of(ui).shrink, Some(Shrink::Count(_)));
+        let unbounded = counting.then(|| Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.unbounded.0 = true)));
         let env = Env::of(ui);
         let key = Self::key(&ctx, &env, &props, show);
         let shown = lazy.run_keyed(ui, std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
-            // The content is a layout room of its own: the flow of the body around it does not reach in.
-            let installed = Env::install_for(ui, env.derive_local(Scoped::start_room));
+            // The content is a layout room of its own: the flow of the body around it does not reach in. It keeps how
+            // that body sizes from its content and whether its leaves fit their room (`Scoped::start_view_room`), so
+            // the view takes what its content used there, as the same content shown without the view would.
+            let installed = Env::install_for(ui, env.derive_local(Scoped::start_view_room));
             let out = show(&mut props, ui);
             Env::restore(&ctx, installed);
             run.output = Some(Arc::new(out.clone()));
@@ -114,6 +130,9 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
             }
             out
         });
+        if let Some(installed) = unbounded {
+            Env::restore(&ctx, installed);
+        }
         match shown {
             Shown::Ran(out) => Some(out),
             // A replay at another place moves what the run returned with its record.

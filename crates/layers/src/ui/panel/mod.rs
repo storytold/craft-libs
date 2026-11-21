@@ -378,7 +378,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             lock_column,
             visibility_key,
             trailing: trailing.as_deref(),
-            held: craft_ui::runtime::pointer::frame(ui.ctx()).mods,
+            held: craft_ui::runtime::pointer::mods(ui.ctx()),
         };
         let events = RefCell::new(Vec::new());
         let current = RefCell::new(LayerFilter::default());

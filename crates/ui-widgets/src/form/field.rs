@@ -21,6 +21,16 @@ pub enum Help {
     Status(Tone, Label),
 }
 
+impl Help {
+    /// The help line as a field shows it under its control.
+    pub fn text(&self) -> Text {
+        match self {
+            Help::Text(text) => Text::new(text.clone()).role(TypeRole::Caption).shade(Shade::Muted),
+            Help::Status(tone, text) => Text::new(text.clone()).role(TypeRole::Caption).tone(*tone),
+        }
+    }
+}
+
 /// The style of a field: no look of its own; the label step and the help line carry it.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -116,10 +126,8 @@ impl Container for Field {
             Text::new(message.text.clone()).role(TypeRole::Caption).tone(tone).show(ui);
             return;
         }
-        match &self.help {
-            Some(Help::Text(text)) => Text::new(text.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui),
-            Some(Help::Status(tone, text)) => Text::new(text.clone()).role(TypeRole::Caption).tone(*tone).show(ui),
-            None => return,
-        };
+        if let Some(help) = &self.help {
+            help.text().show(ui);
+        }
     }
 }

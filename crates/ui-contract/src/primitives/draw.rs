@@ -400,7 +400,15 @@ impl<'a> Draw<'a> {
                 self.initial(rect, letter, StyleColor(color));
                 return;
             }
-            _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon, self.data != DataMode::Full),
+            _ => super::icon::paint(
+                self.painter,
+                self.env.tokens,
+                self.env.direction,
+                rect,
+                icon,
+                self.data != DataMode::Full,
+                self.env.ink == Ink::OnDark,
+            ),
         }
         match icon.badge {
             Some(super::IconMark::Dot(badge)) => {
@@ -485,6 +493,11 @@ impl<'a> Draw<'a> {
     /// colour or width.
     pub fn rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2) {
         self.painter.extend(super::rule::Rule::shapes(look, from, to, self.painter.pixels_per_point()));
+    }
+
+    /// Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a grip's dotted line.
+    pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32) {
+        self.painter.extend(super::rule::Rule::dotted(look, from, to, gap, self.painter.pixels_per_point()));
     }
 
     /// Paints a surface of `kind` (tracks, plot wells).
