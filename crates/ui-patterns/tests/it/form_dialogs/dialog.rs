@@ -7,7 +7,7 @@ use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult,
+    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult, PreviewOverlay,
 };
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
@@ -22,6 +22,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 const SPEC: &str = r#"{"radius":0..100=10,"smooth":bool}"#;
 
@@ -653,6 +654,51 @@ fn a_preview_that_centres_on_clicks_passes_a_press_on_the_canvas_under_it() {
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 1, "a pane that does not centre on clicks leaves the press blocked");
+}
+
+// A host that renders its preview itself reads what the pane shows and paints over it: `preview_visible` is the part
+// of the picture the pane showed (around the view's centre, more once zoomed out, always inside the picture), and the
+// overlay runs each pass the pane shows, with the picture's rect, until the host ends it.
+#[trial]
+fn a_hosted_preview_reports_what_it_shows_and_runs_the_host_overlay() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    fixture.room(Vec2::new(1200.0, 900.0));
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), |fields| blur(fields).previews(true)));
+    let size = vec2(4000.0, 3000.0);
+    let picture = SizedTexture::new(TextureId::default(), size);
+    let drawn: Arc<Mutex<Vec<egui::Rect>>> = Arc::default();
+    let seen = Arc::clone(&drawn);
+    let overlay: PreviewOverlay = Arc::new(move |_, _, rect| seen.lock().unwrap_or_else(PoisonError::into_inner).push(rect));
+    on_dialog(&host, |dialog| {
+        assert_eq!(dialog.preview_visible(), None, "nothing shown before the first pass");
+        dialog.set_preview(Some(picture));
+        dialog.set_preview_overlay(Some(overlay));
+    });
+    fixture.idle(4);
+    let whole = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+    let first = on_dialog(&host, |dialog| dialog.preview_visible()).flatten().expect("the pane showed the picture");
+    let centre = on_dialog(&host, |dialog| dialog.preview_centre()).flatten().expect("the pane has a centre");
+    assert!(whole.contains_rect(first) && first.width() < size.x, "a part of a picture larger than the well: {first:?}");
+    assert!((first.center() - centre).length() < 1.0, "around the view's centre: {first:?}, {centre:?}");
+    let runs = drawn.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    assert!(!runs.is_empty(), "the overlay ran");
+    let ratio = |r: egui::Rect| r.width() / r.height();
+    assert!(runs.iter().all(|rect| (ratio(*rect) - size.x / size.y).abs() < 1e-3), "with the picture's rect: {runs:?}");
+
+    let zoom_out = fixture.by_label("Zoom out").expect("the zoom row has Zoom out");
+    for _ in 0..3 {
+        fixture.click(&zoom_out).settle();
+    }
+    let zoomed = on_dialog(&host, |dialog| dialog.preview_visible()).flatten().expect("the pane still shows");
+    assert!(zoomed.width() > first.width() && zoomed.height() > first.height(), "zoomed out, more shows: {zoomed:?}");
+    assert!(whole.expand(0.5).contains_rect(zoomed), "inside the picture: {zoomed:?}");
+
+    on_dialog(&host, |dialog| dialog.set_preview_overlay(None));
+    fixture.idle(2);
+    let before = drawn.lock().unwrap_or_else(PoisonError::into_inner).len();
+    fixture.idle(4);
+    assert_eq!(drawn.lock().unwrap_or_else(PoisonError::into_inner).len(), before, "an ended overlay no longer runs");
 }
 
 /// A dialog with one colour row.

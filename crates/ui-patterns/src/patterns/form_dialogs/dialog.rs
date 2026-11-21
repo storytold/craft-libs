@@ -8,7 +8,7 @@ use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, List
 use super::form::{FormDialog, FormDialogWords};
 use super::host_requests::HostRequests;
 use super::param::{Param, ParamKind, open_fields, set_color_field};
-use super::preview::{PreviewPane, PreviewView, PreviewZoom};
+use super::preview::{PaneOverlay, PreviewPane, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
 
@@ -31,10 +31,13 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 
+use crate::primitives::ContentPainterCx;
+use craft_behavior::CanvasTransform;
 use craft_theme::Srgba;
 use egui::load::SizedTexture;
-use egui::{Context, Pos2, Response, Ui};
+use egui::{Context, Pos2, Rect, Response, Ui};
 use serde_json::Value;
+use std::sync::Arc;
 
 use std::borrow::Cow;
 
@@ -139,6 +142,8 @@ pub struct ParamDialogOutput {
     pub footer_action: Option<String>,
     /// The picture point at the centre of the view the preview pane drew this pass; `None` without a preview.
     pub(crate) preview_centre: Option<Pos2>,
+    /// The part of the picture the preview pane showed this pass (`PreviewOutput::visible`); `None` without a preview.
+    pub(crate) preview_visible: Option<Rect>,
 }
 
 impl Outcome for ParamDialogOutput {
@@ -228,6 +233,10 @@ pub struct ParamDialog<'a> {
     /// no pane.
     #[prop]
     preview: Option<SizedTexture>,
+    /// The host's drawing over the preview picture (`PreviewPane::overlay`): a host that renders the preview itself
+    /// paints it here, with the transform the pane drew the picture with and the picture's rect.
+    #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
+    preview_overlay: Option<PaneOverlay<'a>>,
     /// Whether a click on the preview centres it on the point clicked (`PreviewPane::click_centres`); a dialog whose
     /// preview clicks pick a colour turns it off. The default is true. While it is on and the pane shows, a primary
     /// press on the dialog's [`canvas`](ParamDialog::canvas) passes the modal layer too: the image is the pane's
@@ -311,6 +320,7 @@ impl<'a> ParamDialog<'a> {
             previews: false,
             preview_on: None,
             preview: None,
+            preview_overlay: None,
             click_centres: true,
             canvas: None,
             extra_buttons: Vec::new(),
@@ -414,6 +424,7 @@ impl<'a> ParamDialog<'a> {
             previews,
             preview_on,
             preview,
+            mut preview_overlay,
             click_centres,
             canvas,
             extra_buttons,
@@ -544,15 +555,17 @@ impl<'a> ParamDialog<'a> {
                 (Some(texture), ParamLayout::Beside) => {
                     Row::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        Stack::new()
-                            .show(ui, |ui, _| shown_preview = show_preview(ui, &preview_label, texture, click_centres, ZoomRow::Above, &mut live));
+                        Stack::new().show(ui, |ui, _| {
+                            shown_preview =
+                                show_preview(ui, &preview_label, texture, preview_overlay.take(), click_centres, ZoomRow::Above, &mut live)
+                        });
                     });
                 }
                 (Some(texture), layout) => {
                     let zoom = if layout == ParamLayout::Stacked { ZoomRow::Below } else { ZoomRow::Above };
                     Stack::new().show(ui, |ui, _| {
                         show_rows(ui, values);
-                        shown_preview = show_preview(ui, &preview_label, texture, click_centres, zoom, &mut live);
+                        shown_preview = show_preview(ui, &preview_label, texture, preview_overlay.take(), click_centres, zoom, &mut live);
                     });
                 }
                 (None, _) => show_rows(ui, values),
@@ -582,6 +595,7 @@ impl<'a> ParamDialog<'a> {
             preview_click: shown_preview.clicked,
             footer_action,
             preview_centre: shown_preview.centre,
+            preview_visible: shown_preview.visible,
         }
     }
 }
@@ -723,6 +737,8 @@ struct ShownPreview {
     clicked: Option<Pos2>,
     /// The picture point at the centre of the view the pane drew.
     centre: Option<Pos2>,
+    /// The part of the picture the pane showed.
+    visible: Option<Rect>,
 }
 
 /// Where the zoom row stands: over the preview pane or under it.
@@ -733,13 +749,25 @@ enum ZoomRow {
 }
 
 /// The zoom row and the pane.
-fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, click_centres: bool, zoom_row: ZoomRow, live: &mut Live) -> ShownPreview {
+fn show_preview(
+    ui: &mut Ui,
+    label: &Label,
+    texture: &SizedTexture,
+    overlay: Option<PaneOverlay<'_>>,
+    click_centres: bool,
+    zoom_row: ZoomRow,
+    live: &mut Live,
+) -> ShownPreview {
     let above = (zoom_row == ZoomRow::Above).then(|| PreviewZoom::new(&live.view).show(ui));
-    let pane = PreviewPane::new(label.clone(), *texture, &live.view).click_centres(click_centres).show(ui);
+    let mut pane = PreviewPane::new(label.clone(), *texture, &live.view).click_centres(click_centres);
+    if let Some(overlay) = overlay {
+        pane = pane.overlay(overlay.into_paint());
+    }
+    let pane = pane.show(ui);
     let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
     let centre = pane.shown.centre(texture.size);
     live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown);
-    ShownPreview { clicked: pane.clicked, centre: Some(centre) }
+    ShownPreview { clicked: pane.clicked, centre: Some(centre), visible: pane.visible }
 }
 
 /// Builds the dialog over the host-owned values of a [`HostedParamDialog`] for one pass.
@@ -789,7 +817,13 @@ pub struct HostedParamDialog {
     held: HeldAnswer<DialogFields>,
     /// The picture point the next pass centres the preview on ([`centre_preview`](HostedParamDialog::centre_preview)).
     centre: Option<Pos2>,
+    /// The host's drawing over the preview picture, run each pass ([`set_preview_overlay`](HostedParamDialog::set_preview_overlay)).
+    overlay: Option<PreviewOverlay>,
 }
+
+/// A [`HostedParamDialog`]'s drawing over its preview picture: it gets the content painter, the transform the pane drew
+/// the picture with and the picture's rect, as `PreviewPane::overlay` does, each pass the pane shows.
+pub type PreviewOverlay = Arc<dyn Fn(&ContentPainterCx, CanvasTransform, Rect) + Send + Sync>;
 
 /// What a [`HostedParamDialog`] showed in its last pass: whether the Preview check box is held for comparing, and the
 /// picture point at the centre of the preview pane.
@@ -797,6 +831,7 @@ pub struct HostedParamDialog {
 struct ShownState {
     comparing: bool,
     centre: Option<Pos2>,
+    visible: Option<Rect>,
 }
 
 impl HostedParamDialog {
@@ -831,6 +866,7 @@ impl HostedParamDialog {
             hold: false,
             held: HeldAnswer::new(),
             centre: None,
+            overlay: None,
         }
     }
 
@@ -992,6 +1028,19 @@ impl HostedParamDialog {
         self.shown.centre
     }
 
+    /// The part of the picture the preview pane showed in the last pass, in the picture's units from its top-left
+    /// corner; `None` before the pane has shown a picture. A host with a large picture can build only this part (and
+    /// a margin, so a pan rarely outruns it).
+    pub fn preview_visible(&self) -> Option<Rect> {
+        self.shown.visible
+    }
+
+    /// Draws `overlay` over the preview picture from the next pass on, each pass the pane shows; `None` ends it. A host
+    /// that renders the preview itself (on its own GPU canvas, say) paints it here, through the pane's transform.
+    pub fn set_preview_overlay(&mut self, overlay: Option<PreviewOverlay>) {
+        self.overlay = overlay;
+    }
+
     /// Shows `color` as the live preview of the colour row `key` from the next pass on; `None` ends it. The dialog's
     /// values are left as they are.
     pub fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>) {
@@ -1110,6 +1159,9 @@ impl StackDialog for HostedParamDialog {
         if let Some(picture) = self.picture {
             dialog = dialog.preview(picture);
         }
+        if let Some(overlay) = self.overlay.clone() {
+            dialog = dialog.preview_overlay(move |painter: &ContentPainterCx, view, picture| overlay(painter, view, picture));
+        }
         let alert_title = dialog.alert_title.clone().unwrap_or_else(|| dialog.title.clone());
         let shown = dialog.show(ui);
         if let Some(mut rows) = shown.rows {
@@ -1125,7 +1177,7 @@ impl StackDialog for HostedParamDialog {
         if let Some(action) = shown.footer_action {
             self.requests.request_footer_action(action);
         }
-        self.shown = ShownState { comparing: shown.comparing, centre: shown.preview_centre };
+        self.shown = ShownState { comparing: shown.comparing, centre: shown.preview_centre, visible: shown.preview_visible };
         match (shown.result, shown.closed) {
             (Some(mut result), _) => {
                 result.id = self.id;
