@@ -426,3 +426,9 @@ Original src/avx2/fdct.rs opening notice
  * Based on the x86 SIMD extension for IJG JPEG library
  * Copyright (C) 1999-2006, MIYASAKA Masaru.
  */
+
+The .cdr reader (crates/cdr, moved from VectorCraft crates/cdr) reads the record layouts that the
+Kaitai Struct specification coreldraw_cdr.ksy (https://github.com/kaitai-io/coreldraw_cdr.ksy,
+MIT License) and its fork by Zach Wolfe (https://github.com/filestar/coreldraw_cdr.ksy, branch
+new_stuff, MIT License) describe. No part of either specification is copied into the crate; the
+license text is in crates/cdr/LICENSE-kaitai.txt.
