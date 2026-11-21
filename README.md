@@ -286,6 +286,13 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   (app menu, Window, Help, system-key clashes), a platform backend trait, and key equivalents
   fed back to egui as the input egui-winit would have made. Commands and their enabled state
   stay in each app.
+- [`craft-pathops`](crates/pathops/README.md): path operations on `kurbo::BezPath`, carved from
+  VectorCraft's `crates/pathops`: curve-preserving booleans, the Pathfinder set (unite, minus front, intersect,
+  exclude, divide, trim, merge, crop, outline, minus back), planar regions, offset path, outline stroke,
+  simplify and join, with bounded work and an error, not a panic, for hostile input (a panic inside
+  `linesweeper` is caught and becomes an error or an empty result only where panics unwind; with
+  `panic = "abort"`, as on WebAssembly, it ends the process: see the crate README).
+
 - [`craft-mesh`](crates/mesh/README.md): 3D mesh file formats behind one neutral model (meshes
   of polygons with per-corner indices, materials, a node hierarchy): STL, OBJ with MTL, PLY,
   glTF 2.0 / GLB, FBX and 3MF, one feature each. Readers are bounded by `Limits`, never open a file
