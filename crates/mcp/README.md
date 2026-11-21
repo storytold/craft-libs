@@ -10,7 +10,9 @@ initialization, initialization can occur in a batch, and client information need
 to be an object. `Policy::Strict` requires initialization first (except ping),
 rejects batched or repeated initialization, and requires client name and version.
 Both respond with the sole supported version, 2025-03-26, even if the client offered
-a different version. An initialized notification moves the session to `Ready`.
+a different version. Instructions set with `Session::set_instructions` are returned by
+every initialize response, in either policy and with or without legacy initialization.
+An initialized notification moves the session to `Ready`.
 This crate does not enforce every MCP lifecycle or capability rule; applications
 must validate any additional requirements they depend on.
 
