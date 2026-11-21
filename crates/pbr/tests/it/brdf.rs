@@ -4,7 +4,10 @@
 
 use std::f32::consts::PI;
 
-use craft_pbr::{EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, default_environment, ggx_distribution, hammersley, try_environment_brdf};
+use craft_pbr::{
+    EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, default_environment, ggx_distribution, ggx_distribution_between, hammersley,
+    try_environment_brdf,
+};
 
 use crate::reference::effectcraft as ec;
 
@@ -274,11 +277,11 @@ fn albedo(m: &Material, theta: f32, steps: u32) -> f64 {
                 let l = [2.0 * vh * hv[0] - v[0], 2.0 * vh * hv[1] - v[1], 2.0 * vh * hv[2] - v[2]];
                 if l[2] > 0.0 {
                     // The density at the half vector `try_direct` finds again from `v` and `l`,
-                    // rounded the same way: near `n·h` = 1 one `f32` step changes `D` of the
-                    // narrowest lobes by about 24%.
+                    // rounded the same way and with `D` taken from the same vectors.
                     let (uv, ul) = (crate_unit(v), crate_unit(l));
                     let h = crate_unit([uv[0] + ul[0], uv[1] + ul[1], uv[2] + ul[2]]);
-                    let pdf = ggx_distribution(h[2], m.roughness().max(MIN_DIRECT_ROUGHNESS)) * h[2] / (4.0 * dot(uv, h));
+                    let d = ggx_distribution_between(n, h, m.roughness().max(MIN_DIRECT_ROUGHNESS)).unwrap();
+                    let pdf = d * h[2] / (4.0 * dot(uv, h));
                     spec += f64::from(spec_only.try_direct(n, v, l).unwrap()[0] / PI / pdf);
                 }
             }
@@ -362,8 +365,8 @@ fn roughness_is_clamped_at_the_documented_floor() {
     assert!(at(MIN_DIRECT_ROUGHNESS + 0.01)[0] < floor[0], "a rougher surface has a lower peak");
 }
 
-/// `n·h` is taken as at most 1, so when rounding after normalization gives a dot product slightly
-/// over 1, the highlight is not above the head-on peak.
+/// When rounding after normalization gives a dot product slightly over 1, the highlight is not
+/// above the head-on peak.
 #[test]
 fn the_highlight_is_never_above_the_head_on_peak() {
     let m = material([1.0; 3], 1.0, 0.0);
@@ -371,6 +374,34 @@ fn the_highlight_is_never_above_the_head_on_peak() {
     for d in [[1.0, 1.0, 0.5], [0.3, -0.7, 0.2], [2.0, 3.0, 7.0], [-1.0, 0.1, 0.9], [0.6, 0.6, 0.6]] {
         let got = m.try_direct(d, d, d).unwrap()[0];
         assert!(got <= head_on * (1.0 + 1e-4), "{d:?}: {got} vs {head_on}");
+    }
+}
+
+/// With `n`, `v` and `l` all along one direction off the axes, the highlight at the roughness
+/// floor reaches the head-on peak. An `n·h` rounded to `f32` can be one step below 1 there, which
+/// gives a `D` about 20% low.
+#[test]
+fn the_highlight_reaches_the_head_on_peak_off_the_axes() {
+    let m = material([1.0; 3], 1.0, MIN_DIRECT_ROUGHNESS);
+    let head_on = m.try_direct([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]).unwrap()[0];
+    let d = norm([0.6, 0.6, 0.6]);
+    let got = m.try_direct(d, d, d).unwrap()[0];
+    assert!((got - head_on).abs() <= 1e-4 * head_on, "{got} vs {head_on}");
+}
+
+/// A view at least as far below the surface as the light is above it has `n·h` of 0 or less,
+/// where `D` is 0: a white metal, which reflects only its specular lobe, reflects nothing.
+/// EffectCraft took `n·h` as at least 0 and gave `D` its value at 0.
+#[test]
+fn a_view_with_no_half_vector_above_the_surface_sees_no_specular_lobe() {
+    let n = [0.0, 0.0, 1.0];
+    let m = material([1.0; 3], 1.0, 0.5);
+    let s = ec::BrdfSurface { base: [1.0; 3], metallic: 1.0, roughness: 0.5, specular: 1.0, diffuse: 1.0 };
+    for (v, l) in [([-1.0, 0.0, -0.5], [1.0, 0.0, 0.2]), ([0.0, 1.0, -0.4], [0.0, 1.0, 0.3]), ([0.2, -1.0, -0.9], [0.5, 0.5, 0.1])] {
+        let (v, l) = (norm(v), norm(l));
+        assert!(dot(n, v) + dot(n, l) <= 0.0, "{v:?} {l:?}");
+        assert_eq!(m.try_direct(n, v, l).unwrap(), [0.0; 3], "{v:?} {l:?}");
+        assert!(ec::brdf(s, n, v, l)[0] > 0.0, "{v:?} {l:?}");
     }
 }
 

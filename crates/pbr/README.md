@@ -52,14 +52,17 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metal-brdf-and-dielectric-brdf>):
   `f0` is 0.04 mixed toward the base color by metallic, `F` is Schlick's approximation at `v·h`
   (section B.3.4), the diffuse lobe is `(1 − F) (1 − metallic) base / π`, and the specular lobe
-  is `F D G / (4 (n·v) (n·l))` with the `D` of `ggx_distribution`.
+  is `F D G / (4 (n·v) (n·l))` with the `D` of `ggx_distribution_between` from the normal and the
+  half vector.
   - `G` is the Smith-Schlick term with `k = (roughness + 1)² / 8`, which Karis gives for analytic
     lights in the 2013 notes above. Section B.3.2 writes the separable Smith
     form. The two are equal at roughness 1; on smoother surfaces this `G` is darker at grazing
     angles.
   - Roughness is shaded as at least `MIN_DIRECT_ROUGHNESS` (0.032, `α` = 0.001024).
   - `n·v` is taken as at least `1e-4`, so a view at or below the surface sees it as at a
-    grazing angle. `n·h` is taken as at most 1, so rounding cannot raise `D` above its peak.
+    grazing angle. `D` is exact where `n·h` is close to 1, so the highlight peaks at its head-on
+    value. `D` is 0 where `n·h` is 0 or less, which happens when the view is at least as far
+    below the surface as the light is above it.
   - The specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`, as in EffectCraft.
     Where the product is smaller, at grazing angles, the specular lobe is below
     `F D G / (4 (n·v) (n·l))`: about 4% of it with `n·v` and `n·l` both 0.001.
@@ -128,14 +131,17 @@ The BRDF, the environment BRDF and the default environment come from EffectCraft
 - Material values, weights and directions are checked; NaN, infinity, values out of range and
   zero-length directions give an error instead of a NaN or negative color. Directions are
   normalized.
-- The distribution is `ggx_distribution`, evaluated in `f64`. EffectCraft evaluated it in `f32`,
-  which loses the narrow peak of smooth surfaces. From roughness 0.25 up, the direct light matches
-  within `1e-4` of `max(1, value)`.
+- The distribution is `ggx_distribution_between`, evaluated in `f64` from the normal and the half
+  vector. EffectCraft evaluated it in `f32` from `n·h`, which loses the narrow peak of smooth
+  surfaces. From roughness 0.25 up, with the view and the light above the surface, the direct
+  light matches within `1e-4` of `max(1, value)`.
 - Roughness is shaded as at least 0.032 instead of 0.03, so `α` stays above the 0.001 floor of
   `ggx_distribution`.
 - A view straight opposite the light gives 0 instead of using a fallback half vector.
-- `n·h` is taken as at most 1. EffectCraft took it only as at least 0, so rounding after
-  normalization could put `D` above its peak.
+- `D` is 0 where `n·h` is 0 or less, a view at least as far below the surface as the light is
+  above it, so such a view sees no specular lobe. EffectCraft took `n·h` as at least 0 there and
+  gave `D` its value at `n·h` = 0, `α² / π`. EffectCraft also did not keep `n·h` at most 1, so
+  rounding after normalization could put `D` above its peak.
 - The environment BRDF keeps `scale` and `bias` at least 0 with a sum of at most 1. The fit gives
   a negative scale for smooth surfaces at grazing angles (-0.044 with a bias of 1.044 at
   `n·v` = 0 and roughness 0), which made `f0 × scale + bias` greater than 1 and the diffuse

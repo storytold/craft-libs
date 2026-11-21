@@ -3,12 +3,12 @@
 use std::f32::consts::PI;
 
 use crate::PbrError;
-use crate::prefilter::ggx_distribution;
+use crate::prefilter::ggx_distribution_between;
 use crate::vec3::unit;
 
 /// The smallest roughness direct light is shaded with. Smaller values, 0 included, are shaded as
 /// this one, so a point light keeps a highlight of finite height. Its `α = roughness²` of
-/// 0.001024 is above the `α` floor of [`ggx_distribution`].
+/// 0.001024 is above the `α` floor of [`ggx_distribution`](crate::ggx_distribution).
 pub const MIN_DIRECT_ROUGHNESS: f32 = 0.032;
 
 /// Largest [`Material::specular`] weight: at 25 the dielectric reflectance at normal incidence,
@@ -102,13 +102,16 @@ impl Material {
     /// `n`, `v` and `l` are the surface normal, the direction to the viewer and the direction to
     /// the light; they are normalized here. The BRDF is the final form of glTF 2.0 section
     /// B.3.5: a Lambert lobe `(1 − F) (1 − metallic) base / π` plus `F D G / (4 (n·v) (n·l))`,
-    /// with Schlick's `F` (section B.3.4) at `v·h`, the GGX `D` of [`ggx_distribution`], and
-    /// the Smith-Schlick `G` with `k = (roughness + 1)² / 8` that Karis gives for analytic
-    /// lights, where section B.3.2 writes the separable Smith form. Roughness is shaded as at
-    /// least [`MIN_DIRECT_ROUGHNESS`]. A light at or below the surface gives 0, and so does a
-    /// view straight opposite the light, which has no half vector. `n·v` is taken as at least
-    /// `1e-4`, so a view at or below the surface sees the surface as at a grazing angle. `n·h` is
-    /// taken as at most 1. The specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`,
+    /// with Schlick's `F` (section B.3.4) at `v·h`, the GGX `D` of
+    /// [`ggx_distribution_between`] from `n` and the half vector, and the Smith-Schlick `G`
+    /// with `k = (roughness + 1)² / 8` that Karis gives for analytic lights, where section
+    /// B.3.2 writes the separable Smith form. Roughness is shaded as at least
+    /// [`MIN_DIRECT_ROUGHNESS`]. A light at or below the surface gives 0, and so does a view
+    /// straight opposite the light, which has no half vector. `n·v` is taken as at least `1e-4`,
+    /// so a view at or below the surface sees the surface as at a grazing angle. `D` is exact
+    /// where `n·h` is close to 1, so the highlight peaks at its head-on value. `D` is 0 where
+    /// `n·h` is 0 or less, which happens when the view is at least as far below the surface as
+    /// the light is above it. The specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`,
     /// as in EffectCraft, so where it is smaller the specular lobe is below the expression above.
     ///
     /// Returns [`PbrError::BadDirection`] when a direction is not finite or has zero length.
@@ -122,11 +125,11 @@ impl Material {
         }
         let Some(h) = unit((v + l).to_array()) else { return Ok([0.0; 3]) };
         let n_v = n.dot(v).max(MIN_N_DOT_V);
-        let n_h = n.dot(h).clamp(0.0, 1.0);
         let v_h = v.dot(h).max(0.0);
         let r = self.roughness.max(MIN_DIRECT_ROUGHNESS);
         let f = fresnel_schlick(self.f0(), v_h);
-        let spec = ggx_distribution(n_h, r) * smith_schlick_ggx(n_v, n_l, r) / (4.0 * n_v * n_l).max(1e-4);
+        let d = ggx_distribution_between(n.to_array(), h.to_array(), r)?;
+        let spec = d * smith_schlick_ggx(n_v, n_l, r) / (4.0 * n_v * n_l).max(1e-4);
         let mut out = [0.0; 3];
         for c in 0..3 {
             let kd = (1.0 - f[c]) * (1.0 - self.metallic);
