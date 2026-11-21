@@ -23,6 +23,9 @@ craft_ui::words! {
         bicubic: "transformBar.bicubic" = "Bicubic";
         bilinear: "transformBar.bilinear" = "Bilinear";
         nearest_neighbor: "transformBar.nearestNeighbor" = "Nearest Neighbor";
+        bicubic_smoother: "transformBar.bicubicSmoother" = "Bicubic Smoother";
+        bicubic_sharper: "transformBar.bicubicSharper" = "Bicubic Sharper";
+        bicubic_automatic: "transformBar.bicubicAutomatic" = "Bicubic Automatic";
         show_reference_point: "transformBar.showReferencePoint" = "Show Reference Point";
         commit_transform: "transformBar.commitTransform" = "Commit transform";
         cancel_transform: "transformBar.cancelTransform" = "Cancel transform";

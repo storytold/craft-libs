@@ -47,8 +47,8 @@ impl TransformPreset {
     }
 }
 
-/// How the transform resamples the moving pixels: PhotoCraft's three choices (LC11). The app maps
-/// them to its engine; [`id`](Self::id) gives PhotoCraft's ids.
+/// How the transform resamples the moving pixels: the six methods of the Interpolation menu (LC11), in
+/// its order. The app maps them to its engine; [`id`](Self::id) gives PhotoCraft's ids.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -60,19 +60,36 @@ pub enum Interpolation {
     Bilinear,
     /// Nearest-neighbour resampling: no smoothing.
     NearestNeighbor,
+    /// Bicubic Smoother: the bicubic made for enlarging.
+    BicubicSmoother,
+    /// Bicubic Sharper: the bicubic made for reducing.
+    BicubicSharper,
+    /// Bicubic Automatic: Smoother or Sharper, by whether the transform enlarges or reduces.
+    BicubicAutomatic,
 }
 
 impl Interpolation {
     /// Every choice, in the select's order.
-    pub const ALL: [Interpolation; 3] = [Interpolation::Bicubic, Interpolation::Bilinear, Interpolation::NearestNeighbor];
+    pub const ALL: [Interpolation; 6] = [
+        Interpolation::NearestNeighbor,
+        Interpolation::Bilinear,
+        Interpolation::Bicubic,
+        Interpolation::BicubicSmoother,
+        Interpolation::BicubicSharper,
+        Interpolation::BicubicAutomatic,
+    ];
 
-    /// PhotoCraft's id: "bicubic", "bilinear", "nearest".
+    /// PhotoCraft's id: "nearest", "bilinear", "bicubic", "bicubicSmoother", "bicubicSharper",
+    /// "bicubicAutomatic".
     pub fn id(self) -> &'static str {
         // pc: crates/ui-egui/src/tools/transform_tool/options_bar.rs:241 (the select's options).
         match self {
             Interpolation::Bicubic => "bicubic",
             Interpolation::Bilinear => "bilinear",
             Interpolation::NearestNeighbor => "nearest",
+            Interpolation::BicubicSmoother => "bicubicSmoother",
+            Interpolation::BicubicSharper => "bicubicSharper",
+            Interpolation::BicubicAutomatic => "bicubicAutomatic",
         }
     }
 
@@ -183,5 +200,40 @@ craft_ui::words! {
         rotate_90_counter_clockwise: "transformMenu.rotate90CounterClockwise" = "Rotate 90° Counter Clockwise";
         flip_horizontal: "transformMenu.flipHorizontal" = "Flip Horizontal";
         flip_vertical: "transformMenu.flipVertical" = "Flip Vertical";
+    }
+}
+
+#[cfg(all(test, feature = "screen-testing"))]
+mod tests {
+    use super::Interpolation;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn the_menu_lists_the_six_methods_in_order_and_each_id_reads_back() {
+        let ids: Vec<&str> = Interpolation::ALL.iter().map(|choice| choice.id()).collect();
+        assert_eq!(ids, ["nearest", "bilinear", "bicubic", "bicubicSmoother", "bicubicSharper", "bicubicAutomatic"]);
+        for choice in Interpolation::ALL {
+            assert_eq!(Interpolation::from_id(choice.id()), Some(choice));
+        }
+        for unknown in ["", "Bicubic", "lanczos", "preserveDetails"] {
+            assert_eq!(Interpolation::from_id(unknown), None, "{unknown:?}");
+        }
+        assert_eq!(Interpolation::default(), Interpolation::Bicubic);
+    }
+
+    #[trial]
+    fn saved_choices_keep_their_names() {
+        // The persisted settings store the serde name: the three earlier ones are unchanged.
+        for (choice, name) in [
+            (Interpolation::Bicubic, "\"bicubic\""),
+            (Interpolation::Bilinear, "\"bilinear\""),
+            (Interpolation::NearestNeighbor, "\"nearestNeighbor\""),
+            (Interpolation::BicubicSmoother, "\"bicubicSmoother\""),
+            (Interpolation::BicubicSharper, "\"bicubicSharper\""),
+            (Interpolation::BicubicAutomatic, "\"bicubicAutomatic\""),
+        ] {
+            assert_eq!(serde_json::to_string(&choice).ok().as_deref(), Some(name));
+            assert_eq!(serde_json::from_str::<Interpolation>(name).ok(), Some(choice));
+        }
     }
 }
