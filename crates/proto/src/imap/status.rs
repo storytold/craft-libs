@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 
 use super::parse::{Status, Value};
-use super::{Command, Imap, MAX_COMMAND_TEXT, MAX_QUOTED, Part, Response};
+use super::{Command, Imap, MAX_QUOTED, Part, Response};
 use crate::i18n::said;
 use crate::{ProtoError, for_trace};
 
