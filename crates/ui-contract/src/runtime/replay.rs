@@ -350,6 +350,10 @@ impl Record {
             // The display names a widget by its rect only; the difference may be in its sense, state or interact rect.
             Some(egui::PassRecordsDiff::Widget { index, left, right }) => found.push(format!("widget rect {index}: left {left:?} / right {right:?}")),
             // The display names a node by its bounds only; the difference may be in any other property.
+            // The display names a shape by its rects only; the difference may be in its colour, stroke, texture or text.
+            Some(egui::PassRecordsDiff::Shape { layer, index, left, right }) => {
+                found.push(format!("paint: shape {index} on {layer:?}: left {left:?} / right {right:?}"))
+            }
             Some(egui::PassRecordsDiff::Node { index, left, right }) => {
                 found.push(format!("AccessKit node {index}: left {left:?} / right {right:?}"))
             }
