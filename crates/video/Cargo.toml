@@ -38,6 +38,8 @@ mpeg4 = ["mpeg4-encode"]
 mpeg4-encode = ["craft-media/bitstream"]
 # FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
 ffv1 = []
+# Uncompressed packed pictures (UYVY, YUYV, YVYU, v210, r210, R10k): unpacking and packing.
+rawvideo = []
 # Hap (Vidvox): decoder and encoder, with Snappy and chunked second stages.
 hap = []
 # Motion JPEG: a frame-level decoder and encoder over `craft-jpeg`.
@@ -91,6 +93,10 @@ name = "track"
 [[test]]
 name = "vmd"
 required-features = ["vmd-decode"]
+
+[[test]]
+name = "rawvideo"
+required-features = ["rawvideo"]
 
 [[test]]
 name = "hap"
