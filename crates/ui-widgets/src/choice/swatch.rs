@@ -7,12 +7,12 @@ use crate::contract::{
     Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
     Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
+use crate::primitives::{Checker, ContentPainterCx, DataWidth, Draw, FacePaint, PaintShape, StrokeWidth};
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
 use craft_behavior::{Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
-use egui::{Color32, CornerRadius, Rect, Response, Vec2};
+use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -56,8 +56,10 @@ pub struct SwatchStyle {
     edge: Stateful<StyleColor>,
     /// The ring inside the outline of a selected or checked well; clear while it is off.
     ring: Stateful<StyleColor>,
-    /// The thin edge just inside the outline of a marked well.
+    /// The thin edge just inside the outline of a marked well, and the ink of the cell marks.
     mark: StyleColor,
+    /// The extent of a corner or centre cell mark: `size.icon.sm`.
+    mark_size: f32,
     /// The checkerboard behind a translucent colour: the colours of its corners and its other cells.
     checker: [Rgba; 2],
     /// The mixed well's colour, which `inner_edge` contrasts with.
@@ -122,8 +124,10 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 /// translucent) and whose colour value is the colour; a mixed well has the value "Mixed" and no colour value.
 /// `member` makes the swatch a member of the enclosing `RadioGroup`: a radio button, checked when the group holds its
 /// value, whose keys and focus are the group's. `cell` makes it a cell of a table of touching swatches, a list box
-/// option. The selected ring is `selected` or a checked radio. `marked` draws a thin edge in the text colour just inside
-/// the outline: a cell that stands out from its row, such as the harmony colour among its variations.
+/// option. The selected ring is `selected` or a checked radio. `marks` draws the cell marks (`CellMarks`): a thin edge
+/// in the text colour just inside the outline for a cell that stands out from its row, such as the harmony colour among
+/// its variations, and the locked, web-safe, transparent and source marks. `stroke` shows the colour as a ring and
+/// `face` replaces the colour with a host painter.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(content_painter, probe(Swatch<u8>))]
 pub struct Swatch<T: Value + 'static = ()> {
@@ -140,18 +144,15 @@ pub struct Swatch<T: Value + 'static = ()> {
     #[style_key]
     #[prop(flag)]
     well: bool,
-    /// A thin edge in the text colour just inside the outline.
-    #[prop(flag)]
-    marked: bool,
+    /// The marks drawn on the well.
+    marks: CellMarks,
     /// The well shows its colour as a ring: a band of the colour round the edge, open in the middle.
     #[style_key]
     #[prop(flag)]
-    #[allow(dead_code)] // P3(widgets-w6): cv.F40
     stroke: bool,
     /// The face the well shows over its checker instead of the colour; ring, mark and mixed look unchanged.
     #[prop]
-    #[allow(dead_code)] // P3(widgets-w6): wg.W33
-    face: Option<crate::primitives::FacePaint>,
+    face: Option<FacePaint>,
     /// The key of the `ColorRequest` a click files.
     #[prop(into)]
     picker: Option<String>,
@@ -168,7 +169,7 @@ impl Swatch<()> {
             member: None,
             cell: false,
             well: false,
-            marked: false,
+            marks: CellMarks::default(),
             stroke: false,
             face: None,
             picker: None,
@@ -188,7 +189,7 @@ impl<T: Value + 'static> Swatch<T> {
             member: Some(value),
             cell: self.cell,
             well: self.well,
-            marked: self.marked,
+            marks: self.marks,
             stroke: self.stroke,
             face: self.face,
             picker: self.picker,
@@ -201,8 +202,7 @@ impl<T: Value + 'static> Swatch<T> {
     /// transparent checker half and the source-colour corner triangle, each from tokens.
     #[must_use]
     pub fn marks(self, marks: CellMarks) -> Self {
-        let _ = marks;
-        todo!("ex.E19")
+        Self { marks, ..self }
     }
 }
 
@@ -227,36 +227,31 @@ impl CellMarks {
     /// Sets the edge mark.
     #[must_use]
     pub fn edge(self, on: bool) -> Self {
-        let _ = on;
-        todo!("ex.E19")
+        Self { edge: on, ..self }
     }
 
     /// Sets the locked mark.
     #[must_use]
     pub fn locked(self, on: bool) -> Self {
-        let _ = on;
-        todo!("ex.E19")
+        Self { locked: on, ..self }
     }
 
     /// Sets the web-safe mark.
     #[must_use]
     pub fn web_safe(self, on: bool) -> Self {
-        let _ = on;
-        todo!("ex.E19")
+        Self { web_safe: on, ..self }
     }
 
     /// Sets the transparent mark.
     #[must_use]
     pub fn transparent(self, on: bool) -> Self {
-        let _ = on;
-        todo!("ex.E19")
+        Self { transparent: on, ..self }
     }
 
     /// Sets the source-colour mark.
     #[must_use]
     pub fn source(self, color: Srgba) -> Self {
-        let _ = color;
-        todo!("ex.E19")
+        Self { source: Some(color), ..self }
     }
 }
 
@@ -266,8 +261,19 @@ pub const RING_SHARE: f32 = 0.3;
 /// Paints `color` as a ring in `well`: a band of the colour round the edge, open in the middle, each side with the
 /// edge and the inner edge (`SwatchStyle::inner_edge`) that stand out from the colour, in `state`.
 pub fn paint_ring(draw: &Draw<'_>, well: Rect, color: Srgba, style: &SwatchStyle, state: &StateSet, radius: CornerRadius) {
-    let _ = (draw, well, color, style, state, radius);
-    todo!("cv.F40")
+    let band = well.width() * RING_SHARE;
+    let line = draw.width(StrokeWidth::Thin);
+    let contrast = style.inner_edge(Some(color));
+    let edge = state.resolve(&style.edge);
+    let shape = PaintShape::Rect(well, radius);
+    draw.stroke(&shape, DataWidth::points(band), DataColor::new(Color32::from(color)));
+    draw.stroke(&shape, StrokeWidth::Thin, contrast);
+    draw.stroke(&PaintShape::Rect(well.expand(line), UiTokens::corner(f32::from(radius.nw) + line)), StrokeWidth::Thin, edge);
+    let hole = well.shrink(band);
+    // The hole's corners are concentric with the well's: square for a square well, round for a round one.
+    let corner = |grow: f32| UiTokens::corner((f32::from(radius.nw) - band + grow).max(0.0));
+    draw.stroke(&PaintShape::Rect(hole.expand(2.0 * line), corner(2.0 * line)), StrokeWidth::Thin, contrast);
+    draw.stroke(&PaintShape::Rect(hole.expand(line), corner(line)), StrokeWidth::Thin, edge);
 }
 
 impl<T: Value + 'static> Component for Swatch<T> {
@@ -293,6 +299,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
             edge: Stateful::new(rest),
             ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)),
             mark: cx.color(colors.text.normal),
+            mark_size: cx.tokens.size.icon.sm,
             checker: [colors.overlay.checker_light, colors.overlay.checker_dark],
             mixed_rgba: colors.surface.sunken,
         }
@@ -347,7 +354,9 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked);
+        let painter = ui.content_painter(cx);
+        let look = FaceLook { color: self.color, face: self.face.as_ref(), stroke: self.stroke, marks: self.marks, rtl: cx.flow.is_rtl() };
+        paint_face(&painter, cx.rect, cx.style, cx.state(), &look);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
@@ -357,17 +366,66 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 }
 
-/// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
-/// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool) {
+/// What a swatch face shows beyond its style and state.
+struct FaceLook<'a> {
+    color: Mixed<Srgba>,
+    face: Option<&'a FacePaint>,
+    stroke: bool,
+    marks: CellMarks,
+    rtl: bool,
+}
+
+/// The one swatch face painter: the well in `well` (the host's face over a checkerboard, a ring of the colour, or the
+/// colour over a checkerboard where it is translucent, the dash of a mixed one), then the outline, the cell marks and
+/// the selection ring, in `state`.
+fn paint_face(cx: &ContentPainterCx<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, look: &FaceLook<'_>) {
     let shape = PaintShape::Rect(well, style.radius);
-    draw.swatch_well(well, style.radius, color.same().copied());
-    draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge));
-    if marked {
+    let ring = look.color.same().copied().filter(|_| look.stroke && look.face.is_none());
+    match (look.face, ring) {
+        (Some(face), _) => {
+            cx.checker_with(&Checker::new(), well, style.radius);
+            face.paint(cx, well);
+        }
+        (None, Some(_)) => {}
+        (None, None) => cx.with_draw(|draw| draw.swatch_well(well, style.radius, look.color.same().copied())),
+    }
+    if look.marks.transparent {
+        let half = if look.rtl { Rect::from_min_max(well.min, pos2(well.center().x, well.max.y)) } else { Rect::from_min_max(pos2(well.center().x, well.min.y), well.max) };
+        cx.checker_with(&Checker::new(), half, CornerRadius::ZERO);
+    }
+    cx.with_draw(|draw| {
+        match ring {
+            // The ring's outline sits outside its well, so the well is taken in by one line to keep the outline in the rect.
+            Some(color) => paint_ring(draw, well.shrink(draw.width(StrokeWidth::Thin)), color, style, state, style.radius),
+            None => draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge)),
+        }
+        paint_marks(draw, well, style, &look.marks, look.rtl);
+        draw.stroke(&shape, StrokeWidth::Thick, state.resolve(&style.ring));
+    });
+}
+
+/// The marks of `marks` that `Draw` paints, with the corner marks at the start-top and end-bottom corners of the flow.
+fn paint_marks(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, marks: &CellMarks, rtl: bool) {
+    let side = style.mark_size;
+    if marks.edge {
         let inside = PaintShape::Rect(well.shrink(draw.width(StrokeWidth::Thin)), style.radius);
         draw.stroke(&inside, StrokeWidth::Thin, style.mark);
     }
-    draw.stroke(&shape, StrokeWidth::Thick, state.resolve(&style.ring));
+    if marks.locked {
+        let x = if rtl { well.max.x - side } else { well.min.x };
+        let square = Rect::from_min_size(pos2(x, well.min.y), Vec2::splat(side));
+        draw.fill(&PaintShape::Rect(square, CornerRadius::ZERO), style.mark);
+    }
+    if marks.web_safe {
+        let (c, h) = (well.center(), side / 2.0);
+        let diamond = vec![pos2(c.x, c.y - h), pos2(c.x + h, c.y), pos2(c.x, c.y + h), pos2(c.x - h, c.y)];
+        draw.stroke(&PaintShape::Polygon(diamond), StrokeWidth::Thin, style.mark);
+    }
+    if let Some(color) = marks.source {
+        let (x, step) = if rtl { (well.min.x, side) } else { (well.max.x, -side) };
+        let triangle = vec![pos2(x, well.max.y), pos2(x + step, well.max.y), pos2(x, well.max.y - side)];
+        draw.data_fill(&PaintShape::Polygon(triangle), DataColor::new(Color32::from(color)));
+    }
 }
 
 /// The face of a swatch outside a `Swatch`: a preset thumbnail of a colour (`PresetBrowser::thumb`). It paints
@@ -399,6 +457,7 @@ impl SwatchFace {
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false));
+        let look = FaceLook { color: self.color, face: None, stroke: false, marks: CellMarks::default(), rtl: false };
+        paint_face(cx, rect, &style, &state, &look);
     }
 }

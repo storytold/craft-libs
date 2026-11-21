@@ -6,17 +6,19 @@ use craft_ui::buttons::IconButton;
 use craft_ui::choice::{ChoiceWords, Swatch, SwatchMetrics, SwatchStyle};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Meta as _, Outcome, Overlay, OverlayUi,
-    Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    DragPreview, DropMark, DropOperation, DropTarget, Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
+    WordSetCx as _,
 };
-use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth};
+use craft_ui::primitives::{Glyph, IconSpec, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
-use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle, UiTokens};
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle, UiTokens};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 
+use super::paint_chip::{WellLook, paint_well};
 use super::popover::compact_picker;
-use super::{ColorPicker, Paint, PickedColor, ScreenPickGesture};
+use super::{ColorPicker, Paint, PaintWords, PickedColor, ScreenPickGesture};
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -27,8 +29,6 @@ const WELL: PartKey = PartKey::new("well");
 const DEFAULT: PartKey = PartKey::new("default");
 /// The Swap Colours button.
 const SWAP: PartKey = PartKey::new("swap");
-/// A ring well's band, as a share of the well's side.
-const RING_SHARE: f32 = 0.3;
 
 /// One of a [`SwatchPair`]'s wells. The primary one is at the start, top, the secondary one is
 /// offset towards the end and down: foreground and background, or fill and stroke.
@@ -86,17 +86,7 @@ impl PairWell {
     /// A well named `label` showing any paint through `paint_well`; `Mixed::Mixed` for a selection whose paints differ.
     /// A ring well clips the face to its band; the popover picker starts from the solid colour or the first stop.
     pub fn paint(label: impl Into<Label>, paint: impl Into<Mixed<Paint>>) -> Self {
-        let _ = (label, paint);
-        todo!("wg.W48")
-    }
-
-    /// The well's solid colour; `Mixed` for a paint that is not solid.
-    // P3(widgets-w6): wg.W48
-    fn color(&self) -> Mixed<Srgba> {
-        match &self.paint {
-            Mixed::Same(Paint::Solid(color)) => Mixed::Same(*color),
-            _ => Mixed::Mixed,
-        }
+        Self { label: label.into(), paint: paint.into(), ring: false }
     }
 
     /// Draws the well as a ring (a stroke, as DesignCraft's stroke well) instead of a filled square. The middle shows
@@ -138,10 +128,14 @@ pub struct SwatchPairStyle {
     mark: StyleColor,
     /// A swatch's look, for the lines that stand out from a ring well's colour.
     swatch: SwatchStyle,
+    /// The No Color well's fill: the paint chip's.
+    none_fill: StyleColor,
+    /// The No Color well's diagonal: the paint chip's.
+    none_mark: StyleColor,
 }
 
 /// What a [`SwatchPair`]'s wells take of a dragged payload: `SwatchPair::accepts`.
-pub struct DropAccepts<'a, P>(#[allow(dead_code)] Box<dyn Fn(Well, &P) -> bool + 'a>); // P3(widgets-w6): wg.W49
+pub struct DropAccepts<'a, P>(Box<dyn Fn(Well, &P) -> bool + 'a>);
 
 impl<'a, P> DropAccepts<'a, P> {
     /// A test that runs `accepts` on the well and the payload.
@@ -231,7 +225,7 @@ impl<P> Outcome for SwatchPairOutput<P> {
 /// - The wells are one roving group: Tab arrives at the active well; Left and Up go to the primary one, Right and
 ///   Down to the secondary one (mirrored right to left).
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
-#[component(overlay, probe(SwatchPair<'static, u8>))]
+#[component(overlay, content_painter, probe(SwatchPair<'static, u8>))]
 pub struct SwatchPair<'a, P: Clone + Send + Sync + 'static = ()> {
     #[common]
     common: Common,
@@ -260,11 +254,12 @@ pub struct SwatchPair<'a, P: Clone + Send + Sync + 'static = ()> {
     #[prop(func = "Fn(ColorPicker<'a>) -> ColorPicker<'a>")]
     picker: Option<PickerSetup<'a>>,
     /// The payload each well drags past the slop (`None`: that well drags nothing).
-    #[prop]
     drags: Option<[Option<P>; 2]>,
     /// What each well accepts of a dragged payload: the well is a drop target for the payloads this allows.
     #[prop(func = "Fn(Well, &P) -> bool")]
     accepts: Option<DropAccepts<'a, P>>,
+    dropped: Option<(Well, P)>,
+    over: Option<Well>,
     clicked: Option<Well>,
     double_clicked: Option<Well>,
     activated: bool,
@@ -275,7 +270,7 @@ pub struct SwatchPair<'a, P: Clone + Send + Sync + 'static = ()> {
     screen_pick: Option<ScreenPickGesture>,
 }
 
-impl<'a, P: Clone + Send + Sync + 'static> SwatchPair<'a, P> {
+impl<'a> SwatchPair<'a, ()> {
     /// A pair named `label` of `wells`, primary first; `active` is the well in front.
     pub fn new(label: impl Into<Label>, wells: [PairWell; 2], active: Bind<'a, Well>) -> Self {
         SwatchPair {
@@ -291,6 +286,8 @@ impl<'a, P: Clone + Send + Sync + 'static> SwatchPair<'a, P> {
             picker: None,
             drags: None,
             accepts: None,
+            dropped: None,
+            over: None,
             clicked: None,
             double_clicked: None,
             activated: false,
@@ -301,6 +298,42 @@ impl<'a, P: Clone + Send + Sync + 'static> SwatchPair<'a, P> {
             screen_pick: None,
         }
         .label(label)
+    }
+
+    /// The payload each well drags past the slop, primary first (`None`: that well drags nothing); a mixed well drags
+    /// nothing whatever it is given. Set before `accepts`, which is typed by the payload.
+    pub fn drags<Q: Clone + Send + Sync + 'static>(self, payloads: [Option<Q>; 2]) -> SwatchPair<'a, Q> {
+        SwatchPair {
+            common: self.common,
+            wells: self.wells,
+            active: self.active,
+            swap_button: self.swap_button,
+            default_button: self.default_button,
+            popover: self.popover,
+            click_activates: self.click_activates,
+            frame_active: self.frame_active,
+            sampled: self.sampled,
+            picker: self.picker,
+            drags: Some(payloads),
+            accepts: None,
+            dropped: None,
+            over: None,
+            clicked: self.clicked,
+            double_clicked: self.double_clicked,
+            activated: self.activated,
+            swap: self.swap,
+            defaults: self.defaults,
+            edit: self.edit,
+            edited: self.edited,
+            screen_pick: self.screen_pick,
+        }
+    }
+}
+
+impl<'a, P: Clone + Send + Sync + 'static> SwatchPair<'a, P> {
+    /// The payload well `i` drags: none for a well without one or a mixed one.
+    fn payload(&self, i: usize) -> Option<&P> {
+        self.drags.as_ref()?[i].as_ref().filter(|_| self.wells[i].paint.same().is_some())
     }
 
     fn has_buttons(&self) -> bool {
@@ -340,6 +373,12 @@ impl<'a, P: Clone + Send + Sync + 'static> SwatchPair<'a, P> {
         let secondary = Rect::from_min_size(pos2(end - style.well, top + style.step), square);
         [primary, secondary]
     }
+
+    /// The wells' rects inside `rect` on screen, primary first.
+    fn placed(&self, style: &SwatchPairStyle, rect: Rect, rtl: bool) -> [Rect; 2] {
+        let flow = Flow::new(rect, rtl);
+        self.well_rects(style, rect.size()).map(|logical| flow.to_physical(logical.translate(rect.min.to_vec2())))
+    }
 }
 
 impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
@@ -366,6 +405,8 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
             outline: cx.tokens.stroke.thin,
             frame: cx.color(colors.text.muted),
             mark: cx.color(colors.text.normal),
+            none_fill: cx.color(colors.surface.sunken),
+            none_mark: cx.color(colors.status.bad.solid),
             swatch: Swatch::style(cx, Swatch::new(Label::default(), Srgba::BLACK).style_key()),
         }
     }
@@ -386,20 +427,20 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let flow = Flow::new(rect, cx.flow.is_rtl());
-        let rects = self.well_rects(cx.style, rect.size());
+        let rects = self.placed(cx.style, rect, cx.flow.is_rtl());
         let active = cx.value().copied().unwrap_or_default();
         let on_top = self.front(active);
-        for (i, logical) in rects.into_iter().enumerate() {
+        for (i, at) in rects.into_iter().enumerate() {
             let well = Well::of(i as u64);
             let front = well == on_top;
-            let at = flow.to_physical(logical.translate(rect.min.to_vec2()));
+            let sense = if self.payload(i).is_some() { Sense::CLICK | Sense::FOCUS | Sense::DRAG } else { Sense::CLICK | Sense::FOCUS };
             let mut flags = Flags::empty();
-            flags.set(Flags::MIXED, self.wells[i].color().same().is_none());
+            flags.set(Flags::MIXED, self.wells[i].paint.same().is_none());
             flags.set(Flags::CHECKED, well == active);
             let shape = if cx.style.round { HitShape::circle(at.center(), at.width() / 2.0) } else { HitShape::Rect(at) };
             let part = cx
                 .part(WELL.at(i as u64), shape)
-                .sense(Sense::CLICK | Sense::FOCUS)
+                .sense(sense)
                 .priority(HitPriority::new(HitLevel::Body, u8::from(front)))
                 .flags(flags)
                 .focusable();
@@ -427,6 +468,11 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
         for i in 0..2u64 {
             let well = Well::of(i);
             let press = cx.part(WELL.at(i)).press;
+            if matches!(press.phase, PressPhase::DragStart { .. })
+                && let Some(payload) = self.payload(i as usize)
+            {
+                cx.start_drag(payload.clone(), DragPreview::None);
+            }
             if let PressPhase::Release { start, click: true, .. } = press.phase {
                 self.clicked = Some(well);
                 if start.clicks >= 2 {
@@ -472,6 +518,19 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
             cx.set(well);
             self.activated = true;
         }
+        if cx.resolved.enabled
+            && let Some(DropAccepts(accepts)) = &self.accepts
+        {
+            let target = WellsTarget {
+                rects: self.placed(cx.style, cx.rect, cx.flow.is_rtl()),
+                front: self.front(active),
+                round: cx.style.round,
+                mixed: [0, 1].map(|i| self.wells[i].paint.same().is_none()),
+                accepts: &**accepts,
+            };
+            self.over = cx.dragging::<P>().and_then(|(payload, at)| target.takes(&payload, at));
+            self.dropped = cx.drop_target(&target);
+        }
     }
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
@@ -482,7 +541,7 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
         let popup = cx.popup("picker");
         let opened = cx.memory::<Opened>().0.map_or(Well::Primary, Well::of);
         let well = &self.wells[opened.index() as usize];
-        let (color, name) = (*well.color().or(&Srgba::BLACK), well.label.clone());
+        let (color, name) = (solid_of(&well.paint), well.label.clone());
         let setup = self.picker.as_ref();
         let sampled = self.sampled;
         let shown = ui.show(popup, Overlay::popover(), |ui, _| {
@@ -501,8 +560,8 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         for (i, well) in self.wells.iter().enumerate() {
-            let value = match well.color().same() {
-                Some(color) => color.to_hex(),
+            let value = match well.paint.same() {
+                Some(paint) => paint_value(&cx.words::<PaintWords>(), paint),
                 None => cx.words::<ChoiceWords>().swatch_mixed.as_str().to_owned(),
             };
             // The two wells are a choice of the active colour: radios, the front one checked, with the colour as value.
@@ -512,10 +571,8 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let style = cx.style;
-        let flow = Flow::new(cx.rect, cx.flow.is_rtl());
-        let rects = self.well_rects(style, cx.rect.size());
+        let rects = self.placed(style, cx.rect, cx.flow.is_rtl());
         let active = cx.value().copied().unwrap_or_default();
-        let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
         // The back well first, then the front one with a gap round it: being in front, or the frame, shows the active well.
         // The gap is a patch of the surface the pair sits on (a panel, a tool rail's chrome), fill only. The back well's
         // frame is painted before the front well, which covers it where they overlap.
@@ -527,24 +584,36 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
                 shadow: None,
                 ..scope.surface(cx.env.surface())
             });
-            let draw = ui.draw();
             let front = self.front(active);
             for well in [front.other(), front] {
-                let at = place(rects[well.index() as usize]);
+                let at = rects[well.index() as usize];
                 let shown = &self.wells[well.index() as usize];
                 if well == front {
-                    draw.surface_styled(at.expand(style.gap), &ground);
+                    ui.draw().surface_styled(at.expand(style.gap), &ground);
                 }
-                match shown.color().same() {
-                    Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
-                    color => {
-                        draw.swatch_well(at, style.radius, color.copied());
-                        draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.mark);
-                        draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
+                match shown.paint.same() {
+                    Some(paint) => {
+                        let look = WellLook {
+                            none_fill: style.none_fill,
+                            none_mark: style.none_mark,
+                            edge: style.edge,
+                            height: style.well,
+                            radius: style.radius,
+                            ring: shown.ring,
+                            swatch: style.swatch.clone(),
+                        };
+                        paint_well(ui, cx, at, paint, &look);
                     }
+                    None => ui.draw().swatch_well(at, style.radius, None),
+                }
+                // A ring well draws its own outlines.
+                if shown.paint.same().is_none() || !shown.ring {
+                    let draw = ui.draw();
+                    draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.mark);
+                    draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
                 }
                 if self.frame_active && well == active {
-                    draw.stroke(&frame(at, style), StrokeWidth::Thin, style.frame);
+                    ui.draw().stroke(&frame(at, style), StrokeWidth::Thin, style.frame);
                 }
             }
         }
@@ -573,26 +642,67 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
             screen_pick: self.screen_pick,
             open,
             choice: cx.edit_response(),
-            dropped: None,
-            over: None,
+            dropped: self.dropped,
+            over: self.over,
         }
     }
 }
 
-/// A ring well: a band of the colour round the edge, the middle open to what is behind. Each side of the band has the
-/// outline and, inside it, a line that stands out from the colour.
-fn paint_ring(draw: &Draw<'_>, at: Rect, color: Srgba, style: &SwatchPairStyle) {
-    let band = at.width() * RING_SHARE;
-    let line = style.outline;
-    let contrast = style.swatch.inner_edge(Some(color));
-    draw.stroke(&PaintShape::Rect(at, style.radius), DataWidth::points(band), DataColor::new(Color32::from(color)));
-    draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, contrast);
-    draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
-    let hole = at.shrink(band);
-    // The hole's corners are concentric with the well's: square for a square well, round for a round one.
-    let corner = |grow: f32| UiTokens::corner((f32::from(style.radius.nw) - band + grow).max(0.0));
-    draw.stroke(&PaintShape::Rect(hole.expand(2.0 * line), corner(2.0 * line)), StrokeWidth::Thin, contrast);
-    draw.stroke(&PaintShape::Rect(hole.expand(line), corner(line)), StrokeWidth::Thin, style.edge);
+/// The one drop target of a pair: it takes a payload on the well under the pointer, the front well first where they
+/// overlap, unless that well is mixed or `accepts` refuses the payload.
+struct WellsTarget<'t, P> {
+    rects: [Rect; 2],
+    front: Well,
+    round: bool,
+    mixed: [bool; 2],
+    accepts: &'t dyn Fn(Well, &P) -> bool,
+}
+
+impl<P> WellsTarget<'_, P> {
+    fn well_at(&self, at: Pos2) -> Option<Well> {
+        [self.front, self.front.other()].into_iter().find(|well| {
+            let rect = self.rects[well.index() as usize];
+            if self.round { at.distance(rect.center()) <= rect.width() / 2.0 } else { rect.contains(at) }
+        })
+    }
+
+    /// The well that takes `payload` dropped at `at`.
+    fn takes(&self, payload: &P, at: Pos2) -> Option<Well> {
+        let well = self.well_at(at)?;
+        (!self.mixed[well.index() as usize] && (self.accepts)(well, payload)).then_some(well)
+    }
+}
+
+impl<P: Clone + Send + Sync + 'static> DropTarget<P> for WellsTarget<'_, P> {
+    type Drop = (Well, P);
+
+    fn accept(&self, payload: &P, at: Pos2, _: DropOperation) -> Option<(Well, P)> {
+        self.takes(payload, at).map(|well| (well, payload.clone()))
+    }
+
+    fn mark(&self, drop: &(Well, P)) -> DropMark {
+        DropMark::Into(self.rects[drop.0.index() as usize])
+    }
+}
+
+/// The colour a picker starts from for `paint`: a solid's colour, a gradient's first stop, else black.
+fn solid_of(paint: &Mixed<Paint>) -> Srgba {
+    match paint.same() {
+        Some(Paint::Solid(color)) => *color,
+        Some(Paint::Gradient(gradient)) => gradient.stops.first().map_or(Srgba::BLACK, |stop| stop.1),
+        _ => Srgba::BLACK,
+    }
+}
+
+/// A well's value for a screen reader: the hex of a solid, else the kind of paint.
+fn paint_value(words: &PaintWords, paint: &Paint) -> String {
+    match paint {
+        Paint::None => words.no_color.as_str().to_owned(),
+        Paint::Solid(color) => color.to_hex(),
+        Paint::Gradient(_) => words.gradient.as_str().to_owned(),
+        Paint::Pattern(_) => words.pattern.as_str().to_owned(),
+        Paint::Picture(_) => words.picture.as_str().to_owned(),
+    }
 }
 
 /// The frame round the active well `at`: a gap outside its outline, concentric with its corners.

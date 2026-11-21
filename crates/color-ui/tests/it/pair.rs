@@ -1,13 +1,14 @@
 //! `SwatchPair` wells take the theme's well shape (`shape.wells`): a round well is round to the pointer too.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_color_ui::ui::{PairWell, SwatchPair, Well};
+use craft_behavior::Mixed;
+use craft_color_ui::ui::{PairWell, SwatchPair, SwatchPairOutput, Well};
 use craft_theme::{Srgba, ThemeId};
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::testing::{Fixture, trial};
-use egui::{Vec2, vec2};
+use egui::{Rect, Ui, Vec2, vec2};
 
 /// Where a click lands on the primary well in theme `theme`: at the well's middle and just inside the corner of its
 /// square. Each is the well the click reached, if any.
@@ -16,9 +17,7 @@ fn clicks(theme: &str) -> [Option<Well>; 2] {
     let seen = clicked.clone();
     let mut fixture = Fixture::new(move |ui| {
         let wells = [PairWell::new("Foreground colour", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Background colour", Srgba::rgb(1.0, 1.0, 1.0))];
-        let shown = SwatchPair::<()>::new("Colours", wells, Bind::given(Well::Primary)) // P3(widgets-w6): wg.W49
-            .popover(false)
-            .show(ui);
+        let shown = SwatchPair::<()>::new("Colours", wells, Bind::given(Well::Primary)).popover(false).show(ui);
         if shown.clicked.is_some() {
             seen.set(shown.clicked);
         }
@@ -32,6 +31,82 @@ fn clicks(theme: &str) -> [Option<Well>; 2] {
         fixture.settle();
         clicked.get()
     })
+}
+
+/// What the two pairs of the drag trial reported.
+#[derive(Default)]
+struct Log {
+    first: Option<(Well, u8)>,
+    second: Option<(Well, u8)>,
+    over_second: Option<Well>,
+}
+
+/// A pair whose wells drag `first` and `first + 1`; it accepts every payload when `takes_all`, else only 2.
+fn draggable(ui: &mut Ui, name: &'static str, first: u8, back: Mixed<Srgba>, takes_all: bool) -> SwatchPairOutput<u8> {
+    let wells = [PairWell::new("Fore", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Back", back)];
+    SwatchPair::<()>::new(name, wells, Bind::given(Well::Primary))
+        .popover(false)
+        .drags([Some(first), Some(first + 1)])
+        .accepts(move |_, payload| takes_all || *payload == 2)
+        .show(ui)
+}
+
+/// A point on the primary well that the secondary one does not cover, and the reverse.
+fn in_primary(well: Rect) -> egui::Pos2 {
+    well.min + well.size() * vec2(0.15, 0.5)
+}
+
+fn in_secondary(well: Rect) -> egui::Pos2 {
+    well.min + well.size() * vec2(0.85, 0.5)
+}
+
+/// A well drags its payload past the slop and the well under the pointer takes it when `accepts` allows; a mixed well
+/// drags nothing and takes nothing.
+#[trial]
+fn a_pair_well_drags_its_payload_and_takes_a_drop_a_mixed_well_does_neither() {
+    let log = Rc::new(RefCell::new(Log::default()));
+    let seen = log.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let first = draggable(ui, "First", 1, Mixed::Same(Srgba::WHITE), false);
+        let second = draggable(ui, "Second", 3, Mixed::Mixed, true);
+        let mut log = seen.borrow_mut();
+        if first.dropped.is_some() {
+            log.first = first.dropped;
+        }
+        if second.dropped.is_some() {
+            log.second = second.dropped;
+        }
+        log.over_second = second.over;
+    });
+    fixture.room(vec2(240.0, 400.0));
+    fixture.settle();
+    let wells = fixture.by_role(Role::RADIO_BUTTON);
+    let [a_primary, a_secondary, b_primary, b_secondary] = [0, 1, 2, 3].map(|i| wells[i].rect);
+    let mut drag = |fixture: &mut Fixture, from: egui::Pos2, to: egui::Pos2| {
+        *log.borrow_mut() = Log::default();
+        fixture.drag_at(from, to - from);
+    };
+
+    drag(&mut fixture, in_primary(a_primary), in_secondary(a_secondary));
+    assert_eq!(log.borrow().first, None, "payload 1 is refused by the pair that accepts only 2");
+
+    drag(&mut fixture, in_secondary(a_secondary), in_primary(a_primary));
+    assert_eq!(log.borrow().first, Some((Well::Primary, 2)), "the secondary well's payload lands on the primary one");
+
+    drag(&mut fixture, in_primary(a_primary), in_primary(b_primary));
+    assert_eq!(log.borrow().second, Some((Well::Primary, 1)), "the primary well's payload lands on the other pair's well");
+
+    drag(&mut fixture, in_primary(a_primary), in_secondary(b_secondary));
+    assert_eq!(log.borrow().second, None, "a mixed well takes no drop");
+
+    *log.borrow_mut() = Log::default();
+    let over = Cell::new(None);
+    fixture.drag_at_pausing(in_primary(a_primary), in_primary(b_primary) - in_primary(a_primary), |_| over.set(log.borrow().over_second));
+    assert_eq!(over.get(), Some(Well::Primary), "the well a payload is over is reported while it is held");
+
+    drag(&mut fixture, in_secondary(b_secondary), in_primary(a_primary));
+    assert_eq!(log.borrow().first, None, "a mixed well drags nothing");
+    assert_eq!(log.borrow().over_second, None, "a mixed well starts no drag");
 }
 
 /// Adwaita's wells are round: a click in the corner of a well's square misses it. Pro's are square: it hits.

@@ -10,26 +10,23 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct FacePaint {
     key: u64,
-    #[allow(dead_code)] // P3(widgets-w6): wg.W04
     paint: Arc<dyn Fn(&ContentPainterCx<'_>, Rect) + Send + Sync>,
 }
 
 impl FacePaint {
     /// A face identified by `key` that paints with `paint`.
     pub fn new(key: u64, paint: impl Fn(&ContentPainterCx<'_>, Rect) + Send + Sync + 'static) -> Self {
-        let _ = (key, paint);
-        todo!("wg.W04")
+        FacePaint { key, paint: Arc::new(paint) }
     }
 
     /// The key that identifies the face.
     pub fn key(&self) -> u64 {
-        todo!("wg.W04")
+        self.key
     }
 
     /// Paints the face into `rect`.
     pub fn paint(&self, cx: &ContentPainterCx<'_>, rect: Rect) {
-        let _ = (cx, rect);
-        todo!("wg.W04")
+        (self.paint)(cx, rect);
     }
 }
 
