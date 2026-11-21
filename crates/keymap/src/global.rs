@@ -252,7 +252,9 @@ impl GlobalHotkeys {
         let keys = KeyMap::read(&self.session)?;
         let (hotkey, slot) = keys.grab(hotkey, chord)?;
         let _ = self.release(Some(&keys), []);
-        if self.entries.iter().any(|e| e.slot == slot) {
+        // global-hotkey reports each event with the id of the hotkey registered: an entry on another
+        // key with the same id (after a layout change) would take this chord's events.
+        if self.entries.iter().any(|e| e.slot == slot || e.hotkey.id() == hotkey.id()) {
             return Err(GlobalError::Duplicate(chord));
         }
         if self.stuck.iter().any(|(stuck, _)| stuck.id() == hotkey.id()) {
@@ -265,19 +267,24 @@ impl GlobalHotkeys {
 
     /// Unregisters `chord` and returns the command it ran. A chord that is held down gets its
     /// release from the next [`poll`](GlobalHotkeys::poll). The chord leaves the set also when
-    /// the system reports an error.
+    /// the system reports an error. On X11, when the keyboard mapping cannot be read, its grab
+    /// stays until a later change can release it, and the error is returned.
     pub fn unregister(&mut self, chord: &Chord) -> Result<CommandRef, GlobalError> {
         // Compared by the chord's own hotkey: the one registered may add Shift ([`KeyMap::grab`]).
         let id = |chord: Chord| hotkey(chord, self.platform).ok().map(|h| h.id());
         let Some(index) = id(*chord).and_then(|wanted| self.entries.iter().position(|e| id(e.chord) == Some(wanted))) else {
             return Err(GlobalError::NotRegistered(*chord));
         };
-        let keys = KeyMap::read(&self.session).ok();
+        let keys = KeyMap::read(&self.session);
         let grab = (self.entries[index].hotkey, self.entries[index].slot);
-        let result = self.release(keys.as_ref(), [grab]).map_err(|e| os_error(e, *chord));
+        let result = self.release(keys.as_ref().ok(), [grab]).map_err(|e| os_error(e, *chord)).and(keys.map(|_| ()));
         // Events the system sent until the chord was unregistered (on X11 the grab thread sends them
         // before `unregister` returns) still go to this command.
         self.flush();
+        // Found again by its slot: an entry before it may have left the set ([`GlobalHotkeys::regrab`]).
+        let Some(index) = self.entries.iter().position(|e| e.slot == grab.1) else {
+            return Err(GlobalError::NotRegistered(*chord));
+        };
         let entry = self.entries.remove(index);
         self.release_if_down(&entry);
         result.map(|()| entry.command)
@@ -286,7 +293,8 @@ impl GlobalHotkeys {
     /// Replaces the registered chords with `bindings`, and returns those that were refused. A
     /// binding that was already registered for the same command stays registered, so a chord held
     /// down through the change is not released. When the keyboard mapping cannot be read, every
-    /// binding is refused and the set stays as it is.
+    /// binding is refused and the set stays as it is, except that an empty `bindings` still clears
+    /// it; the grabs then stay until a later change can release them.
     pub fn replace(&mut self, bindings: impl IntoIterator<Item = (CommandRef, Chord)>) -> Vec<Refused> {
         let keys = KeyMap::read(&self.session);
         let (wanted, mut refused) = match resolve(bindings.into_iter().collect(), &keys, self.platform) {
@@ -296,6 +304,8 @@ impl GlobalHotkeys {
         let keep = kept(&self.entries, &wanted);
         let gone: Vec<(HotKey, u64)> = self.entries.iter().zip(&keep).filter(|(_, kept)| kept.is_none()).map(|(e, _)| (e.hotkey, e.slot)).collect();
         let _ = self.release(keys.as_ref().ok(), gone);
+        // Matched again: an entry may have left the set ([`GlobalHotkeys::regrab`]).
+        let keep = kept(&self.entries, &wanted);
         // Events the system sent for these chords until they were unregistered go to the
         // commands they ran.
         self.flush();
@@ -395,30 +405,87 @@ impl GlobalHotkeys {
     /// no hotkey for stays in `stuck`. global-hotkey looks each key code up again, so when the
     /// mapping has changed by the time it is read again, every grab sent stays in `stuck` too. A
     /// stuck grab whose slot an entry holds is dropped: the system let that entry grab the key, so
-    /// the old grab is gone. Without a mapping each hotkey is unregistered as it is.
+    /// the old grab is gone. Without a mapping (only on X11) nothing is sent and `grabs` go to
+    /// `stuck`: global-hotkey would look their key codes up in a mapping that may have changed.
+    /// When the mapping changed while the grabs were released, the stuck grabs are tried once more
+    /// in the new mapping, and then an entry whose grab a release may have removed is grabbed
+    /// again ([`GlobalHotkeys::regrab`]).
     fn release(&mut self, keys: Option<&KeyMap>, grabs: impl IntoIterator<Item = (HotKey, u64)>) -> Result<(), global_hotkey::Error> {
-        let Some(keys) = keys else {
-            let hotkeys: Vec<HotKey> = grabs.into_iter().map(|(hotkey, _)| hotkey).collect();
-            return self.unregister_many(&hotkeys);
-        };
-        let stuck = still_held(std::mem::take(&mut self.stuck), &self.entries);
-        let mut hotkeys = Vec::new();
-        let mut sent = Vec::new();
-        for (hotkey, slot) in stuck.into_iter().chain(grabs) {
-            match keys.release(hotkey, slot) {
-                Some(release) => {
-                    hotkeys.push(release);
-                    sent.push((hotkey, slot));
+        let grabs: Vec<(HotKey, u64)> = grabs.into_iter().collect();
+        let leaving: Vec<u64> = grabs.iter().map(|&(_, slot)| slot).collect();
+        let held: Vec<u64> = self.entries.iter().map(|e| e.slot).collect();
+        let (mut hotkeys, sent, stuck) = to_release(keys, std::mem::take(&mut self.stuck), grabs, &held);
+        self.stuck = stuck;
+        let Some(keys) = keys else { return Ok(()) };
+        let result = self.unregister_many(&hotkeys);
+        if sent.is_empty() {
+            return result;
+        }
+        let now = KeyMap::read(&self.session).ok();
+        self.stuck.extend(unconfirmed(sent, keys, now.as_ref()));
+        let Some(now) = now.filter(|now| now != keys) else { return result };
+        // The entries that stay hold their slots; those leaving may share a stuck grab's slot.
+        let staying: Vec<u64> = held.into_iter().filter(|slot| !leaving.contains(slot)).collect();
+        let (again, sent, stuck) = to_release(Some(&now), std::mem::take(&mut self.stuck), [], &staying);
+        self.stuck = stuck;
+        let mut after = None;
+        if !sent.is_empty() {
+            let _ = self.unregister_many(&again);
+            let read = KeyMap::read(&self.session).ok();
+            self.stuck.extend(unconfirmed(sent, &now, read.as_ref()));
+            after = read.filter(|after| *after != now);
+            hotkeys.extend(again);
+        }
+        // When the mapping changed again meanwhile, the releases may have been looked up in either.
+        let maps: Vec<&KeyMap> = std::iter::once(&now).chain(after.as_ref()).collect();
+        self.regrab(&maps, &hotkeys, &leaving);
+        result
+    }
+
+    /// Grabs again the entries (other than those whose slot is in `leaving`) whose grab one of
+    /// `released` leads to in one of the mappings `maps`: when global-hotkey looked a release up in
+    /// that mapping, it removed the entry's grab. Each is registered through the hotkey that leads
+    /// to its key in the last of `maps` ([`KeyMap::release`]), which becomes its hotkey. When the
+    /// release was looked up in another mapping, the grab is still there, global-hotkey refuses the
+    /// new one as registered, and the entry keeps its hotkey. global-hotkey gives the same error
+    /// when another client grabbed the key in between, which this cannot tell apart. An entry that
+    /// cannot be grabbed again (no key leads there, or its hotkey id is a staying entry's or a
+    /// stuck grab's) leaves the set, and its grab goes to `stuck`.
+    fn regrab(&mut self, maps: &[&KeyMap], released: &[HotKey], leaving: &[u64]) {
+        let Some(&now) = maps.last() else { return };
+        let mut hits: Vec<usize> = maps.iter().flat_map(|map| hit(&self.entries, released, leaving, map)).collect();
+        hits.sort_unstable();
+        hits.dedup();
+        if !hits.is_empty() {
+            // Events that came under the entries' hotkeys so far go to them before the ids change.
+            self.flush();
+        }
+        for i in hits.into_iter().rev() {
+            let entry = &self.entries[i];
+            let free = |id: u32| {
+                !self.stuck.iter().any(|(stuck, _)| stuck.id() == id)
+                    && !self.entries.iter().enumerate().any(|(j, e)| j != i && !leaving.contains(&e.slot) && e.hotkey.id() == id)
+            };
+            let hotkey = now.release(entry.hotkey, entry.slot).filter(|hotkey| free(hotkey.id()));
+            match hotkey.map(|hotkey| (hotkey, self.manager.register(hotkey))) {
+                Some((hotkey, Ok(()))) => {
+                    let entry = &mut self.entries[i];
+                    entry.hotkey = hotkey;
+                    // The removed grab sends no release of a press under the old hotkey.
+                    if entry.down {
+                        entry.down = false;
+                        let event = GlobalEvent { command: entry.command.clone(), chord: entry.chord, state: KeyState::Released };
+                        push_pending(&mut self.pending, event);
+                    }
                 }
-                None => self.stuck.push((hotkey, slot)),
+                Some((_, Err(global_hotkey::Error::AlreadyRegistered(_)))) => {}
+                _ => {
+                    let entry = self.entries.remove(i);
+                    self.stuck.push((entry.hotkey, entry.slot));
+                    self.release_if_down(&entry);
+                }
             }
         }
-        let result = self.unregister_many(&hotkeys);
-        if !sent.is_empty() {
-            let now = KeyMap::read(&self.session).ok();
-            self.stuck.extend(unconfirmed(sent, keys, now.as_ref()));
-        }
-        result
     }
 
     /// Unregisters `hotkeys` from the system, in one request on X11. The entries go whether or
@@ -526,7 +593,8 @@ impl KeyMap {
     /// modifiers global-hotkey grabs for it as one number. It grabs the first key code whose
     /// keysyms hold the key's keysym. The chord is refused when that key types the keysym only at
     /// a third or later level (AltGr): the grab would then go to another key than the one `chord`
-    /// names. A letter may also be in group 2. Letters and digits may be at level 2 (`A` is the
+    /// names. A letter may also be in group 2 when the key types no letter, digit or other key a
+    /// chord names in group 1. Letters and digits may be at level 2 (`A` is the
     /// shifted letter, and French AZERTY types digits with Shift). A symbol at level 2 is the
     /// press with Shift, which the keymap writes without Shift (Ctrl+. for Ctrl+Shift+; on French
     /// AZERTY): the hotkey adds Shift, and the chord is refused when it holds Shift itself. Other
@@ -539,8 +607,10 @@ impl KeyMap {
             Some(1) => 2,
             // The second pair is group 2 of a layout with two groups (US after Russian), or, in a
             // mapping set through the core protocol, the levels Mode_switch selects, as AltGr
-            // does. Only a Latin letter counts there: a second Latin layout types it.
-            Some(2 | 3) if chord.key.is_letter() => 1,
+            // does. Only a Latin letter counts there, on a key that types no key a chord names at
+            // levels 1 and 2 (a Cyrillic letter): the grab would otherwise take that key's chord
+            // (with US and French, A is on the US Q key).
+            Some(2 | 3) if chord.key.is_letter() && !keysyms.iter().take(2).any(|&k| names_a_key(k)) => 1,
             _ => return Err(GlobalError::Unbindable(chord)),
         };
         let grabbed = if level == 1 || chord.key.is_letter() || chord.key.is_digit() {
@@ -570,6 +640,13 @@ impl KeyMap {
             .map(|key| HotKey::new(Some(hotkey.mods), key))
     }
 
+    /// The slot global-hotkey registers or releases for `hotkey` as it is: the first key code whose
+    /// keysyms hold its key's keysym, and its modifiers.
+    fn lands(&self, hotkey: HotKey) -> Option<u64> {
+        let (keycode, _) = self.first_key(x11_keysym(hotkey.key)?)?;
+        Some((keycode << 32) | u64::from(hotkey.mods.bits()))
+    }
+
     /// The first key code whose keysyms hold `keysym`, as global-hotkey looks it up, and its keysyms.
     fn first_key(&self, keysym: u32) -> Option<(u64, &[u32])> {
         let (index, keysyms) = self.keysyms.chunks(self.per_keycode.max(1)).enumerate().find(|(_, k)| k.contains(&keysym))?;
@@ -594,6 +671,10 @@ impl KeyMap {
 
     fn release(&self, hotkey: HotKey, _slot: u64) -> Option<HotKey> {
         Some(hotkey)
+    }
+
+    fn lands(&self, hotkey: HotKey) -> Option<u64> {
+        Some(u64::from(hotkey.id()))
     }
 }
 
@@ -703,6 +784,13 @@ fn x11_keysym(code: Code) -> Option<u32> {
     })
 }
 
+/// Whether `keysym` is the keysym of a key a chord can name, or a lowercase Latin letter.
+#[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+fn names_a_key(keysym: u32) -> bool {
+    (0x61..=0x7a).contains(&keysym)
+        || Key::ALL.iter().filter_map(|&key| code(key).and_then(backend_code)).any(|code| x11_keysym(code) == Some(keysym))
+}
+
 /// Whether hotkeys are registered in batches: global-hotkey's X11 key-grab thread handles one
 /// request every 50 ms, while `RegisterHotKey` and the Carbon calls return at once.
 #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
@@ -717,6 +805,9 @@ const STALE_RELEASES: bool = cfg!(target_os = "windows");
 /// A binding [`GlobalHotkeys::replace`] can register: its command and chord, the hotkey to
 /// register and its slot ([`KeyMap::grab`]).
 type Wanted = (CommandRef, Chord, HotKey, u64);
+
+/// A registered hotkey and its slot ([`KeyMap::grab`]).
+type Grab = (HotKey, u64);
 
 /// Splits `bindings` into those `keys` can grab and the refused ones. When the keyboard mapping
 /// could not be read, `Err` holds every binding as refused, and the set is to stay as it is; an
@@ -742,9 +833,34 @@ fn resolve(
     Ok((wanted, refused))
 }
 
-/// The grabs of `stuck` that may still be held: those whose slot no entry holds.
-fn still_held(mut stuck: Vec<(HotKey, u64)>, entries: &[Entry]) -> Vec<(HotKey, u64)> {
-    stuck.retain(|(_, slot)| !entries.iter().any(|e| e.slot == *slot));
+/// The hotkeys [`GlobalHotkeys::release`] sends to release `grabs` and the grabs in `stuck`, the
+/// grabs they release, and the grabs that stay stuck. A stuck grab on a slot in `held` (the slots
+/// entries hold) is dropped ([`still_held`]). Without a mapping `keys`, nothing is sent.
+fn to_release(keys: Option<&KeyMap>, stuck: Vec<Grab>, grabs: impl IntoIterator<Item = Grab>, held: &[u64]) -> (Vec<HotKey>, Vec<Grab>, Vec<Grab>) {
+    let Some(keys) = keys else {
+        let mut stuck = stuck;
+        stuck.extend(grabs);
+        return (Vec::new(), Vec::new(), stuck);
+    };
+    let mut hotkeys = Vec::new();
+    let mut sent = Vec::new();
+    let mut left = Vec::new();
+    for (hotkey, slot) in still_held(stuck, held).into_iter().chain(grabs) {
+        match keys.release(hotkey, slot) {
+            Some(release) => {
+                hotkeys.push(release);
+                sent.push((hotkey, slot));
+            }
+            None => left.push((hotkey, slot)),
+        }
+    }
+    (hotkeys, sent, left)
+}
+
+/// The grabs of `stuck` that may still be held: those whose slot is not in `held`, the slots
+/// entries hold.
+fn still_held(mut stuck: Vec<(HotKey, u64)>, held: &[u64]) -> Vec<(HotKey, u64)> {
+    stuck.retain(|(_, slot)| !held.contains(slot));
     stuck
 }
 
@@ -755,21 +871,30 @@ fn unconfirmed(sent: Vec<(HotKey, u64)>, before: &KeyMap, after: Option<&KeyMap>
     if after == Some(before) { Vec::new() } else { sent }
 }
 
+/// The positions in `entries` of those whose slot one of the hotkeys in `released` leads to in
+/// the mapping `now`, other than those whose slot is in `leaving`.
+fn hit(entries: &[Entry], released: &[HotKey], leaving: &[u64], now: &KeyMap) -> Vec<usize> {
+    let slots: Vec<u64> = released.iter().filter_map(|&hotkey| now.lands(hotkey)).collect();
+    (0..entries.len()).filter(|&i| slots.contains(&entries[i].slot) && !leaving.contains(&entries[i].slot)).collect()
+}
+
 /// For each binding in `wanted` that has no kept entry in `slots`, a new entry, or
-/// [`GlobalError::Duplicate`] when a kept entry or an earlier binding grabs the same key. Also
-/// returns the slot of each.
+/// [`GlobalError::Duplicate`] when a kept entry or an earlier binding grabs the same key or
+/// registers the same hotkey id. Also returns the slot of each.
 fn new_entries(slots: &[Option<Entry>], wanted: &[Wanted]) -> (Vec<Result<Entry, GlobalError>>, Vec<u64>) {
     let mut taken: Vec<u64> = slots.iter().flatten().map(|e| e.slot).collect();
+    let mut hotkey_ids: Vec<u32> = slots.iter().flatten().map(|e| e.hotkey.id()).collect();
     let mut new = Vec::new();
     let mut new_ids = Vec::new();
     for (kept, (command, chord, hotkey, slot)) in slots.iter().zip(wanted) {
         if kept.is_some() {
             continue;
         }
-        let result = if taken.contains(slot) {
+        let result = if taken.contains(slot) || hotkey_ids.contains(&hotkey.id()) {
             Err(GlobalError::Duplicate(*chord))
         } else {
             taken.push(*slot);
+            hotkey_ids.push(hotkey.id());
             Ok(Entry { hotkey: *hotkey, chord: *chord, command: command.clone(), down: false, slot: *slot })
         };
         new.push(result);
@@ -1343,6 +1468,42 @@ mod tests {
     }
 
     #[test]
+    fn a_new_binding_with_the_hotkey_id_of_another_is_a_duplicate() {
+        // Ctrl+. was grabbed as Ctrl+Shift+. on one key; after a layout change Ctrl+Shift+. is the
+        // same hotkey on another key, and events carry only the id.
+        let mut dot = entry("Ctrl+Shift+.", "zoom.in");
+        dot.chord = chord("Ctrl+.");
+        dot.slot = 59;
+        let shift_dot = dot.hotkey;
+        let slots = vec![Some(dot), None, None, None, None];
+        let want = |command: &str, text: &str, slot| (CommandRef::from(command), chord(text), hk(text, Platform::Windows), slot);
+        let wanted = vec![
+            (CommandRef::from("zoom.in"), chord("Ctrl+."), shift_dot, 59),
+            want("view.big", "Ctrl+Shift+.", 60),
+            want("zoom.in", "Ctrl+F7", 61),
+            want("zoom.out", "Ctrl+F8", 62),
+            want("view.reset", "Ctrl+F8", 63),
+        ];
+        let (new, ids) = new_entries(&slots, &wanted);
+        assert_eq!(ids, [60, 61, 62, 63]);
+        assert!(matches!(&new[0], Err(GlobalError::Duplicate(c)) if *c == chord("Ctrl+Shift+.")), "{:?}", new[0].as_ref().err());
+        assert!(matches!(&new[1], Ok(e) if e.slot == 61));
+        assert!(matches!(&new[2], Ok(e) if e.slot == 62));
+        assert!(matches!(&new[3], Err(GlobalError::Duplicate(c)) if *c == chord("Ctrl+F8")));
+    }
+
+    #[test]
+    fn without_a_keyboard_mapping_grabs_stay_stuck_and_nothing_is_sent() {
+        let f9 = entry("Ctrl+F9", "record.toggle");
+        let f10 = entry("Ctrl+F10", "mic.mute");
+        let stuck = vec![(f10.hotkey, f10.slot)];
+        let (hotkeys, sent, left) = to_release(None, stuck, [(f9.hotkey, f9.slot)], &[]);
+        assert!(hotkeys.is_empty());
+        assert!(sent.is_empty());
+        assert_eq!(left, [(f10.hotkey, f10.slot), (f9.hotkey, f9.slot)]);
+    }
+
+    #[test]
     fn events_for_other_ids_are_ignored() {
         let mut entries = vec![entry("Ctrl+F9", "record.toggle")];
         let other = hk("Ctrl+F10", Platform::Windows);
@@ -1626,8 +1787,58 @@ mod tests {
         // A stuck grab whose slot an entry now holds is gone: the system let the entry grab it.
         let mut held = entry("Ctrl+A", "select.all");
         held.slot = sent[0].1;
-        assert!(still_held(sent.clone(), &[held]).is_empty());
-        assert_eq!(still_held(sent.clone(), &[entry("Ctrl+A", "select.all")]), sent);
+        assert!(still_held(sent.clone(), &[held.slot]).is_empty());
+        assert_eq!(still_held(sent.clone(), &[entry("Ctrl+A", "select.all").slot]), sent);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn x11_grabs_again_an_entry_a_release_looked_up_in_a_new_mapping_removed() {
+        // Ctrl+Q at key code 24 and Ctrl+A at 38 were grabbed on US. Ctrl+Q is released through
+        // Ctrl+Q, but by then AZERTY puts Q on key 38: the release removes Ctrl+A's grab.
+        let us = key_map(&[(24, [0x71, 0x51, 0x71, 0x51, 0, 0]), (38, [0x61, 0x41, 0x61, 0x41, 0, 0])]);
+        let fr = key_map(&[(24, [0x61, 0x41, 0x61, 0x41, 0, 0]), (38, [0x71, 0x51, 0x71, 0x51, 0, 0])]);
+        let (q, q_slot) = match grab(&us, "Ctrl+Q") {
+            Ok(grab) => grab,
+            Err(e) => panic!("Ctrl+Q: {e}"),
+        };
+        let (a, a_slot) = match grab(&us, "Ctrl+A") {
+            Ok(grab) => grab,
+            Err(e) => panic!("Ctrl+A: {e}"),
+        };
+        let mut select = entry("Ctrl+A", "select.all");
+        (select.hotkey, select.slot) = (a, a_slot);
+        let mut other = entry("Ctrl+F9", "record.toggle");
+        other.slot = (70 << 32) | u64::from(other.hotkey.mods.bits());
+        let entries = [other, select];
+        assert_eq!(us.release(q, q_slot), Some(q));
+        assert!(hit(&entries, &[q], &[q_slot], &us).is_empty());
+        assert_eq!(hit(&entries, &[q], &[q_slot], &fr), [1]);
+        // An entry that leaves the set itself is not grabbed again.
+        assert!(hit(&entries, &[q], &[q_slot, a_slot], &fr).is_empty());
+        // Ctrl+Q's own grab at 24 is then stuck; tried again on AZERTY, it goes through Ctrl+A. The
+        // slot of the leaving Ctrl+Q entry does not count as held.
+        let (again, retried, left) = to_release(Some(&fr), vec![(q, q_slot)], [], &[a_slot]);
+        assert_eq!((again, retried), (vec![a], vec![(q, q_slot)]));
+        assert!(left.is_empty());
+        // It is grabbed again through the key that leads to key code 38 on AZERTY.
+        assert_eq!(fr.release(a, a_slot), Some(q));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    #[test]
+    fn x11_refuses_a_second_group_letter_on_a_key_another_chord_names() {
+        // US as group 1 and French as group 2: A is first found on the US Q key, so a grab would
+        // take Ctrl+Q.
+        let us_fr = key_map(&[(24, [0x71, 0x51, 0x61, 0x41, 0, 0]), (38, [0x61, 0x41, 0x71, 0x51, 0, 0])]);
+        assert_eq!(slot(&us_fr, "Ctrl+A"), Err(GlobalError::Unbindable(chord("Ctrl+A"))));
+        assert_eq!(slot(&us_fr, "Ctrl+Q").map(|s| s >> 32), Ok(24));
+        // A core mapping with A at the Mode_switch level of the 8 key.
+        let mode_switch = key_map(&[(17, [0x38, PARENLEFT, 0x41, 0, 0, 0])]);
+        assert_eq!(slot(&mode_switch, "Ctrl+A"), Err(GlobalError::Unbindable(chord("Ctrl+A"))));
+        // A key without a symbol in group 1 still takes the letter.
+        let empty = key_map(&[(38, [0, 0, 0x61, 0x41, 0, 0])]);
+        assert_eq!(slot(&empty, "Ctrl+A").map(|s| s >> 32), Ok(38));
     }
 
     #[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]

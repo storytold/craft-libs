@@ -495,15 +495,22 @@ lists (hidden entries keep their keys and still count in conflicts).
     `Ctrl+[` would grab Ctrl+8. A symbol typed with Shift is written without Shift, as the keymap
     matches punctuation: with AZERTY, `Ctrl+.` grabs Ctrl+Shift on the key that types `.`, and
     `Ctrl+Shift+.` is refused (`GlobalError::Unbindable`). The Latin letters of a second layout
-    group count as that layout's own keys, so with Russian and US `Ctrl+A` grabs the key that
-    types A. Symbols of a second group are refused like AltGr ones.
+    group count as that layout's own keys when the key types no letter, digit or symbol in the
+    first group, so with Russian and US `Ctrl+A` grabs the key that types A. With US and French,
+    `Ctrl+A` is refused (`GlobalError::Unbindable`), since the grab would go to the US Q key.
+    Symbols of a second group are refused like AltGr ones.
     Two chords that land on one key and modifier set are one hotkey (`GlobalError::Duplicate`):
-    with AZERTY, `Ctrl+-` and `Ctrl+6`.
+    with AZERTY, `Ctrl+-` and `Ctrl+6`. So are two chords registered as the same hotkey on
+    different keys: `Ctrl+.` registered with AZERTY, then `Ctrl+Shift+.` after a switch to US.
   - On X11, when a layout change moves a chord's key, `replace`, `unregister` and `clear`
     release the key that was grabbed. A grab that no key of the current layout leads to stays
     until a later change can release it, and its chord is refused meanwhile (`GlobalError::Taken`).
+    When the layout changes while a grab is released, a binding whose grab that release removed
+    is grabbed again, or leaves the set when it cannot be grabbed again.
     When the keyboard mapping cannot be read, `replace` refuses every binding and keeps the set
-    as it is.
+    as it is, except that an empty `replace` still clears the set. The grabs of the chords that
+    leave the set then stay until a later change can release them, and `unregister` returns the
+    error.
   - On Windows and X11 a letter chord is grabbed at the key that types the letter, as the keymap
     matches letters on a Latin layout. On macOS it is grabbed at the letter's position on a US
     keyboard: with AZERTY, `Cmd+A` is the key that types Q.
