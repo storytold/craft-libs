@@ -54,4 +54,24 @@ fn hide_white_space_cuts_margins_and_keeps_coordinates() {
     assert!(!laid.on_page_gap(Point::new(centre, 1000.0)));
 }
 
+#[trial]
+fn columns_flow_from_the_right_when_rtl() {
+    let vp = Size::new(1300.0, 700.0);
+    let ltr_opts = LayoutOptions { min_columns: 2, ..LayoutOptions::WORD };
+    let rtl_opts = LayoutOptions { rtl: true, ..ltr_opts };
+    let ltr = place_pages(&[LETTER; 3], 0.7, vp, &ltr_opts, &SPACING);
+    let rtl = place_pages(&[LETTER; 3], 0.7, vp, &rtl_opts, &SPACING);
+    assert_eq!((ltr.columns, rtl.columns), (2, 2));
+    assert_eq!(rtl.size, ltr.size);
+    assert_eq!(rtl.rects[0].y0, rtl.rects[1].y0);
+    assert!(rtl.rects[0].x0 > rtl.rects[1].x1, "page 1 starts on the right: {:?}", rtl.rects);
+    assert_eq!((rtl.rects[0].x0, rtl.rects[1].x0), (ltr.rects[1].x0, ltr.rects[0].x0), "row is mirrored");
+    assert!(rtl.rects[2].y0 > rtl.rects[0].y1 && rtl.rects[2].x0 == rtl.rects[0].x0, "short last row sits under the right column: {:?}", rtl.rects);
+    for (page, rect) in rtl.rects.iter().enumerate() {
+        assert_eq!(page_at(&rtl, rect.center()), Some(page));
+    }
+    let bad = place_pages(&[Size::new(f64::NAN, f64::INFINITY), Size::new(-1.0, 0.0)], f64::NAN, Size::new(f64::NAN, -1.0), &rtl_opts, &SPACING);
+    assert!(bad.size.is_finite() && bad.rects.iter().all(|r| r.min_x().is_finite() && r.max_y().is_finite()), "{:?}", bad.rects);
+}
+
 // Every zoom the view offers lays out as shown: 6400 % is not cut to a smaller scale.

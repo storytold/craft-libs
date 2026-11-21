@@ -106,15 +106,18 @@ pub struct LayoutOptions {
     pub markup: f64,
     /// [`PageDisplay::Columns`]: at least this many pages across.
     pub min_columns: usize,
+    /// [`PageDisplay::Columns`]: rows run right to left (the first page in the right-hand slot,
+    /// and a short last row sits under it).
+    pub rtl: bool,
 }
 
 impl LayoutOptions {
     /// PdfCraft's: single page, continuous, page gaps.
     pub const ACROBAT: LayoutOptions =
-        LayoutOptions { display: PageDisplay::Single, cover: false, continuous: true, page_gaps: true, markup: 0.0, min_columns: 1 };
+        LayoutOptions { display: PageDisplay::Single, cover: false, continuous: true, page_gaps: true, markup: 0.0, min_columns: 1, rtl: false };
     /// WordCraft's: as many across as fit, continuous, page gaps.
     pub const WORD: LayoutOptions =
-        LayoutOptions { display: PageDisplay::Columns, cover: false, continuous: true, page_gaps: true, markup: 0.0, min_columns: 1 };
+        LayoutOptions { display: PageDisplay::Columns, cover: false, continuous: true, page_gaps: true, markup: 0.0, min_columns: 1, rtl: false };
 }
 
 /// The spacing of a page layout: screen points, except [`white_space_pad`](Self::white_space_pad),
@@ -230,8 +233,10 @@ pub fn place_pages(sizes: &[Size], scale: f64, viewport: Size, options: &LayoutO
             for row in shown.chunks(columns).zip(dims.chunks(columns)) {
                 let row_h = row.0.iter().map(|s| s.height).fold(0.0, f64::max);
                 for (i, (size, dim)) in row.0.iter().zip(row.1).enumerate() {
+                    // A short last row keeps the columns above it, starting from the first one.
+                    let col = if options.rtl { columns.saturating_sub(i + 1) } else { i };
                     let centred = ((widest - dim.width) * scale / 2.0).max(0.0);
-                    let x = (content_w - row_w) / 2.0 + i as f64 * (slot + gap) + centred;
+                    let x = (content_w - row_w) / 2.0 + col as f64 * (slot + gap) + centred;
                     rects.push(Rect::from_origin_size(Point::new(x, y), *size));
                 }
                 y += row_h + gap;
