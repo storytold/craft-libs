@@ -966,9 +966,8 @@ mod tests {
         let at_cap = page(&data, columns).unwrap();
         assert_eq!(decode(&plan(&at_cap, columns, rows, 1, None, None).unwrap()), unpack(&data, columns, rows));
         let cap = 63;
-        let capped_encode = |data: &[u8], columns, rows| {
-            super::super::encode_jbig2_capped(data, columns, rows, MAX_SYMBOLS, MAX_SYMBOL_PIXELS, cap).unwrap()
-        };
+        let capped_encode =
+            |data: &[u8], columns, rows| super::super::encode_jbig2_capped(data, columns, rows, MAX_SYMBOLS, MAX_SYMBOL_PIXELS, cap).unwrap();
         let (data, columns, rows) = codes(cap, 0);
         let at_cap = page(&data, columns).unwrap();
         assert_eq!(decode(&plan_with_cap(&at_cap, columns, rows, 1, None, None, cap).unwrap()), unpack(&data, columns, rows));
@@ -976,7 +975,9 @@ mod tests {
         // the generic stream unchanged.
         let (data, columns, rows) = codes(cap + 1, 0);
         let past = page(&data, columns).unwrap();
-        assert!(plan_with_cap(&past, columns, rows, 1, None, None, cap).is_none() && plan_with_cap(&past, columns, rows, 2, None, None, cap).is_none());
+        assert!(
+            plan_with_cap(&past, columns, rows, 1, None, None, cap).is_none() && plan_with_cap(&past, columns, rows, 2, None, None, cap).is_none()
+        );
         assert_eq!(capped_encode(&data, columns, rows), encode_jbig2_generic(&data, columns, rows).unwrap());
         // With two of them repeated, the second plan codes those two.
         let (data, columns, rows) = codes(cap + 1, 200);
