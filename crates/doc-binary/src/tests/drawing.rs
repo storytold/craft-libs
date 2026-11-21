@@ -505,9 +505,10 @@ fn store_entries_aliasing_one_delayed_metafile_decode_it_once() {
     pics.work = officeart::Decode::new(8 << 20);
     let keys: Vec<_> = (1..=store.len() as u32).map(|pib| pics.bse(pib, &store, &delay)).collect();
     assert!(keys.iter().all(|k| k.is_some() && *k == keys[0]), "every entry shares one picture");
-    // Its compressed bytes, what they inflated to and its placeable header, once.
+    // Its compressed bytes and what they inflated to, then the copy that puts its placeable
+    // header in front: once.
     let header = craft_officeart::wmf::PLACEABLE_HEADER;
-    assert_eq!(pics.work.left, (8 << 20) - wmf.len() - packed.len() - header, "inflated once");
+    assert_eq!(pics.work.left, (8 << 20) - packed.len() - wmf.len() - (wmf.len() + header), "inflated once");
 }
 
 /// #3711: distinct metafiles that fail to inflate are charged their declared size (and the bytes
