@@ -581,7 +581,15 @@ impl Writer {
                 Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
                 // ASK and SET show nothing (see `model::shows_nothing`).
                 Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
-                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => self.run(result, fmt, out),
+                // A field keeps its instruction beside its cached result, so a reader can
+                // update it — the same shape the HYPERLINK case above writes (#7129). A plain
+                // run lost the instruction, and `SEQ Probe` came back as the bare text "7".
+                Inline::Field { instr, result, fmt, .. } => {
+                    let mut r = String::new();
+                    self.run(result, fmt, &mut r);
+                    out.push_str(&format!("{{\\field{{\\*\\fldinst{{{}}}}}{{\\fldrslt{{{}}}}}}}", esc(instr), r));
+                }
+                Inline::Control { text: result, fmt, .. } => self.run(result, fmt, out),
                 Inline::Figure(_)
                 | Inline::Chart(_)
                 | Inline::Equation { .. }
@@ -900,7 +908,9 @@ pub fn export_with_generator(doc: &Document, generator: &str) -> String {
         None => (None, Vec::new()),
     };
     let doc = marked.as_ref().unwrap_or(doc);
-    let flow = model::from_doc_tracked(doc);
+    // Fields ride the flow as `Inline::Field`, so the writer can keep the instruction beside
+    // the result; the plain tracked flow would flatten every field to its cached text (#7129).
+    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, ..Default::default() });
     let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
     let mut w = Writer { marks, t: Tables::new(base_font), lists: Vec::new(), authors: None, base: Fmt::default(), sections: Vec::new(), sect_i: 0 };
     let mut body = String::new();

@@ -233,3 +233,17 @@ fn empty_page_fields_keep_insertion_and_deletion_marks() {
         assert!(if insertion { props.ins.is_some() } else { props.del.is_some() }, "{mark}: {props:?}");
     }
 }
+
+/// The export keeps a field's instruction beside its cached result, so a reader can update the
+/// number; writing only the result turned a field into its cached text (#7129). The field sits
+/// in the body: the export does not write headers and footers yet (a separate gap).
+#[test]
+fn export_writes_a_fields_instruction_with_its_result() {
+    let doc = import(br"{\rtf1\ansi\pard {\field{\*\fldinst{ PAGE }}{\fldrslt{2}}}\par}").unwrap();
+    let rtf = export(&doc);
+    assert!(rtf.contains("\\fldinst"), "the field's instruction is written: {rtf}");
+    assert!(rtf.contains("\\fldinst{PAGE}"), "the instruction survives: {rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let f = fields_of(&back.body);
+    assert!(f.iter().any(|(_, fs)| fs.iter().any(|(i, r, _)| i.trim() == "PAGE" && r.trim() == "2")), "the field round trips as a field: {f:?}");
+}
