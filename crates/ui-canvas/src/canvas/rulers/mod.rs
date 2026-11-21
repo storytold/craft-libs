@@ -604,7 +604,8 @@ pub struct RulersOutput {
     /// document's origin (a double click on the corner, the menu's Reset Zero Point).
     pub zero: EditResponse<Point>,
     /// The guide a drag from a strip is placing in this pass. The app forwards it to the guides control; it ends
-    /// with a `Commit` or a `Cancel`, and a position of `None` removes the guide.
+    /// with a `Commit` or a `Cancel`, and a position of `None` removes the guide. A double press on a strip reports
+    /// one in phase `Commit` without a `Begin` before it.
     pub guide: Option<GuideDrag>,
     /// A unit picked from the rulers' own menu ([`Rulers::units`]): the app keeps it as the ruler unit.
     pub unit_picked: Option<UnitKind>,

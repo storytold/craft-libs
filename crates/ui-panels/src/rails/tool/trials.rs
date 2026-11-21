@@ -4,8 +4,8 @@
 use super::stories::tools;
 use super::{LastUsed, ToolRail, ToolSlot};
 use crate::buttons::Button;
-use crate::contract::Props as _;
 use crate::contract::Show as _;
+use crate::contract::{Props as _, ThemeScope};
 use crate::testing::pointer::{moved, wheel};
 use crate::testing::relations::{above, grows_with};
 use crate::testing::{Fixture, trial};
@@ -61,7 +61,7 @@ fn rail_in(width: f32, height: f32) -> (Fixture, Rc<Cell<Vec2>>) {
 /// of them one fewer, and a wider one no more columns than the rail has cells.
 #[trial]
 fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), &ThemeScope::new(), LABELS.len()); // P3(chrome-w4): ch.K18
     for steps in 1..=3_u16 {
         let (fixture, _) = rail_in(grid.width(steps), 800.0);
         assert_eq!(columns_of(&fixture), usize::from(steps), "a width of {steps} steps shows {steps} columns");
@@ -80,7 +80,7 @@ fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
 /// and fewer columns need more rows.
 #[trial]
 fn a_tool_rail_measures_its_rows_plus_its_footer_at_a_width() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), &ThemeScope::new(), LABELS.len()); // P3(chrome-w4): ch.K18
     let mut heights = Vec::new();
     for steps in [1_u16, 2] {
         let (fixture, measured) = rail_in(grid.width(steps), 800.0);
@@ -99,7 +99,7 @@ fn a_tool_rail_measures_its_rows_plus_its_footer_at_a_width() {
 /// above it, down to a room smaller than one scroll region's usual least height.
 #[trial]
 fn in_a_short_room_the_rows_scroll_above_the_footer_that_stays_in_view() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), &ThemeScope::new(), LABELS.len()); // P3(chrome-w4): ch.K18
     for height in [160.0, 100.0] {
         let (mut fixture, measured) = rail_in(grid.width(1), height);
         let foot = rect(&fixture, "Foot");

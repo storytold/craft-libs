@@ -11,7 +11,7 @@ use crate::primitives::PaintSlot;
 use crate::runtime::env::{AppValues, EnvValue, EnvView, UnitKind, Units};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CanvasView, Intent, MoveMods, NavMove, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks};
+use craft_behavior::{Axis, CanvasView, Intent, MoveMods, NavMove, PartRef, PointerButton, PressPhase, PressState, RulerUnits, Ticks, ZoomScheme};
 use craft_keymap::Mods;
 use egui::{Pos2, Vec2};
 use std::ops::RangeInclusive;
@@ -37,6 +37,7 @@ pub struct CanvasSpace {
     canvas: Option<egui::Id>,
     pasteboard: PasteboardColor,
     precise: bool,
+    zoom_scheme: ZoomScheme,
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
@@ -59,6 +60,7 @@ impl CanvasSpace {
             canvas: None,
             pasteboard: PasteboardColor::Default,
             precise: false,
+            zoom_scheme: ZoomScheme::PHOTOSHOP,
             picture: None,
         }
     }
@@ -154,6 +156,19 @@ impl CanvasSpace {
         if let Some(slot) = self.picture {
             slot.extend(ctx, shapes);
         }
+    }
+
+    /// The zoom scheme of the root env, published for the body and the tool: the rungs, range and 100 % they zoom by.
+    pub fn zoom_scheme(&self) -> ZoomScheme {
+        self.zoom_scheme
+    }
+
+    /// This space with the root env's zoom `scheme`.
+    #[must_use]
+    #[allow(dead_code)] // P3(canvas-w1): cv.F6
+    pub(crate) fn with_zoom_scheme(mut self, scheme: ZoomScheme) -> Self {
+        self.zoom_scheme = scheme;
+        self
     }
 
     /// This space with the canvas's picture slot of this pass.

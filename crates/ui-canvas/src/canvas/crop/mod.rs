@@ -283,9 +283,7 @@ fn size_row(cx: &Cx<'_, CropOverlay<'_>>, space: &CanvasSpace, (w, h): (f64, f64
 }
 
 fn angle_row(cx: &Cx<'_, CropOverlay<'_>>, degrees: f64) -> Vec<(Label, String)> {
-    let words = cx.words::<CanvasWords>();
-    let number = cx.env.units().number_ungrouped(degrees, 1..=1);
-    vec![(Label::from(words.crop_angle.as_str().to_owned()), format!("{number}°"))]
+    readout::angle_row(&cx.words::<CanvasWords>(), &cx.env.units(), degrees) // P3(plugins-w1): cv.F8
 }
 
 impl CropOverlay<'_> {

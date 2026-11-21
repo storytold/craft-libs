@@ -8,6 +8,7 @@ mod stories;
 
 pub use self::dialogs::{ShellDialogsCx, WindowDialogs};
 use super::canvas_shell::slots as keys;
+use super::options_place::OptionsBarPlace;
 use super::regions::{Claim, SlotSize, layout};
 use super::reveal::{Aim, Reveal, Tracking};
 use super::screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeFollow};
@@ -29,7 +30,7 @@ use crate::runtime::windows::{WindowAction, WindowHost};
 use crate::shell::Slot;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::{Metrics, Sense};
-use egui::{Rect, Response, Ui};
+use egui::{Context, Rect, Response, Ui, ViewportId};
 use std::sync::Arc;
 
 /// The closure that fills a region.
@@ -236,6 +237,26 @@ pub struct AppShellOutput {
     pub screen_mode: ScreenMode,
 }
 
+/// What a window hides, as the last pass of its shell left it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ChromeState {
+    /// The user hid every panel, tool and bar.
+    pub hidden: bool,
+    /// The panels are hidden while the tools and bars stay.
+    pub panels_hidden: bool,
+    /// The edge whose slots a reveal shows, when one is on.
+    pub revealed: Option<RevealEdge>,
+}
+
+/// The hiding of the window `viewport` shows, as the last pass of its shell left it, read from the shell's one kept
+/// reveal. It serves code that runs outside the shell's pass and has no [`AppShellOutput`]: the window commands'
+/// handlers and the menu check refresh. A viewport with no shell reads `ChromeState::default()`.
+pub fn chrome_state(ctx: &Context, viewport: ViewportId) -> ChromeState {
+    let _ = (ctx, viewport);
+    todo!("ch.K6")
+}
+
 impl Outcome for AppShellOutput {
     type Value = NoValue;
 
@@ -367,6 +388,14 @@ impl<'a, S> AppShell<'a, S> {
         let slot = Slot::new(keys::OPTIONS).visible(visible).reveal();
         self.slots.push(Placed { slot, edge: PaneEdge::Top, title: false, named: Some(|words| words.options.clone()), add: Box::new(add) });
         self
+    }
+
+    /// The options bar follows `place`: the top or the bottom slot, or, while floating, a movable modeless layer over
+    /// the body that takes no room. A drag of a [`BarGrip`](super::BarGrip) writes the place on the release. Without the
+    /// call the bar is the top slot, as [`options_bar`](Self::options_bar) shows it.
+    pub fn options_place(self, place: Bind<'a, OptionsBarPlace>) -> Self {
+        let _ = place;
+        todo!("ch.K10")
     }
 
     /// The status bar, a bottom slot keyed `"status"` that never reveals.

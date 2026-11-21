@@ -73,7 +73,7 @@ impl<'a> NavigatorZoomRow<'a> {
         let shown = Row::new().show(ui, |ui, cx| {
             let Some(Mixed::Same(current)) = view.reborrow().read(cx) else { return };
             let device = zoom::device(&current, pixels_per_point);
-            let at = |device: f64| zoom::with_device(&current, device, document, pixels_per_point);
+            let at = |device: f64| zoom::with_device(&current, device, document, pixels_per_point, &craft_behavior::ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
             let mut edits: Vec<EditEvent<CanvasView>> = Vec::new();
 
             let field = ZoomField::new(zoom_label.clone(), Some(current), document).stepper(true).show(ui);

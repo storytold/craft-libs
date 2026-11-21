@@ -8,6 +8,7 @@ mod blocking;
 pub mod frame;
 mod held;
 mod host;
+mod job_progress;
 mod modal;
 mod prompt;
 mod prompts;
@@ -29,6 +30,7 @@ pub use held::{HeldAnswer, HeldOk};
 #[doc(hidden)]
 pub use host::dialog_probe;
 pub use host::{DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, StartupStage};
+pub use job_progress::{JobAnswer, JobProgress, JobProgressOutput};
 pub use modal::{ButtonPlace, Dialog, DialogStyle};
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};

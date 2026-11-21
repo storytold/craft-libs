@@ -5,17 +5,18 @@
 //! them to document units with the canvas's view ([`ToolContext::space`]), so it holds no copy of the view.
 
 use super::{CanvasSpace, MARCH_SECONDS, MARCH_TICK, Snap, ToolPath, march_shift};
-use crate::contract::{Pattern, PatternKind, PatternProbe};
+use crate::contract::{DragPreview, Pattern, PatternKind, PatternProbe};
 use crate::primitives::{ContentPainterCx, Draw};
 use crate::runtime::env::{Direction, Env, Label, MotionPolicy, PointSize, UnitWords, Units, WordSet, Words};
 use crate::runtime::motion::loop_phase;
 use crate::style::StyleCx;
 use craft_behavior::geometry::{SnapKinds, SnapLine};
 use craft_behavior::kurbo::{self, Point};
-use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GestureId, PointerButton, PointerSample};
+use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GestureId, PointerButton, PointerKind, PointerSample};
 use craft_i18n::{Digits, Format, Region};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Pos2, Rect, Vec2};
+use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
 /// A pointer sample delivered to a tool, in screen points, with the pen's reading. A mouse reports pressure 1, no
@@ -37,12 +38,14 @@ pub struct ToolPointer {
     /// The time of the sample, in seconds: the pass that took it. A press carries the time the button went down,
     /// and a drag or release sample the time of the pass it arrived in.
     pub time: f64,
+    /// Mouse, pen or touch, from the pass's pointer frame.
+    pub kind: PointerKind,
 }
 
 impl ToolPointer {
     /// A mouse sample of `button` at `pos` and `time`, with no modifiers and no press.
     pub const fn new(pos: Pos2, button: PointerButton, time: f64) -> Self {
-        ToolPointer { pos, mods: Mods::NONE, sample: PointerSample::new(1.0), button, clicks: 0, time }
+        ToolPointer { pos, mods: Mods::NONE, sample: PointerSample::new(1.0), button, clicks: 0, time, kind: PointerKind::Mouse }
     }
 
     /// The modifiers held.
@@ -56,6 +59,13 @@ impl ToolPointer {
     #[must_use]
     pub const fn sample(mut self, sample: PointerSample) -> Self {
         self.sample = sample;
+        self
+    }
+
+    /// The device kind of the sample.
+    #[must_use]
+    pub const fn kind(mut self, kind: PointerKind) -> Self {
+        self.kind = kind;
         self
     }
 
@@ -105,6 +115,8 @@ pub enum ToolKey {
     /// still run, but Enter, Escape, Delete and Backspace, which arrive as `Submit`, `Cancel` and `Delete`. It carries
     /// no release; [`ToolContext::held`] says whether the key is still down.
     Kept(Chord),
+    /// Alt (Option) pressed and let go with nothing between, while the tool claims it ([`ToolClaims::alt_tap`]).
+    AltTap,
 }
 
 impl ToolKey {
@@ -222,6 +234,18 @@ pub(crate) struct ToolRequests {
     pub(crate) pan: Option<bool>,
     /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`].
     pub(crate) hud: Option<Vec<(Label, String)>>,
+    /// The content a tool handed to a drag session, from [`ToolContext::start_drag`].
+    #[allow(dead_code)] // P3(canvas-w3): cv.F21
+    pub(crate) drag: Option<DragRequest>,
+}
+
+/// A drag session a tool asked for: the payload, the extra content some targets read, and the ghost.
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // P3(canvas-w3): cv.F21
+pub(crate) struct DragRequest {
+    pub(crate) payload: Arc<dyn Any + Send + Sync>,
+    pub(crate) also: Option<Arc<dyn Any + Send + Sync>>,
+    pub(crate) preview: DragPreview,
 }
 
 /// What a tool sees and may ask for during a call.
@@ -527,6 +551,24 @@ impl<'a> ToolContext<'a> {
         self.requests.hud = Some(rows);
     }
 
+    /// Hands `payload` to a drag session shown with `preview`: the content of the gesture the tool runs. The gesture
+    /// goes on; the tool keeps its `drag` calls until the release.
+    pub fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview) {
+        let _ = (payload, preview);
+        todo!("cv.F21")
+    }
+
+    /// [`start_drag`](Self::start_drag) with `also`, extra content that some targets read beside the payload.
+    pub fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn Any + Send + Sync>, preview: DragPreview) {
+        let _ = (payload, also, preview);
+        todo!("cv.F21")
+    }
+
+    /// While a drag session this tool started runs, whether a target would take it at the pointer now.
+    pub fn over_drop_target(&self) -> bool {
+        todo!("cv.F21")
+    }
+
     /// Asks for another pass (an animation, a held key that repeats).
     pub fn request_repaint(&mut self) {
         self.requests.repaint = true;
@@ -561,13 +603,15 @@ pub struct ToolClaims {
     /// Decrement on the tool's node and turns them into [`ToolKey::Nudge`], so a tool that claims the nudges
     /// describes what they move in [`CanvasTool::access`]. The arrows reach [`CanvasTool::key`] either way.
     pub nudges: bool,
+    /// The tool takes a lone Alt tap, delivered as [`ToolKey::AltTap`].
+    pub alt_tap: bool,
     /// Single chords the tool takes while the rest of the keyboard stays the app's, delivered as [`ToolKey::Kept`].
     pub keys: &'static [Chord],
 }
 
 impl ToolClaims {
     /// No keys: every key stays the app's.
-    pub const NONE: ToolClaims = ToolClaims { keyboard: false, deletes: false, nudges: false, keys: &[] };
+    pub const NONE: ToolClaims = ToolClaims { keyboard: false, deletes: false, nudges: false, alt_tap: false, keys: &[] };
 
     /// The same claims with the single chords `keys`.
     #[must_use]
@@ -594,6 +638,13 @@ impl ToolClaims {
     #[must_use]
     pub const fn nudges(mut self) -> Self {
         self.nudges = true;
+        self
+    }
+
+    /// The same claims with the lone Alt tap.
+    #[must_use]
+    pub const fn alt_tap(mut self) -> Self {
+        self.alt_tap = true;
         self
     }
 }

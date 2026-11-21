@@ -318,6 +318,15 @@ impl<'a> FloatingGroup<'a> {
         self
     }
 
+    /// The window takes over the held primary press in its first pass: its own move gesture begins from that press with
+    /// the pointer at `grab` inside the window, so the window follows the pointer and docks where it would dock on
+    /// release. Without a held press it does nothing.
+    #[must_use]
+    pub fn continue_move(self, grab: Vec2) -> Self {
+        let _ = grab;
+        todo!("ch.K16")
+    }
+
     /// The action parts at the end of the title row, in reading order.
     #[must_use]
     pub fn actions(mut self, actions: impl IntoIterator<Item = HeaderAction>) -> Self {

@@ -115,6 +115,11 @@ pub struct CanvasGrid {
     /// Draws nothing while the view's device zoom (1 is 100 percent) is below this (VectorCraft's pixel grid: 6).
     #[prop(quantity = "device zoom")]
     min_zoom: Option<f64>,
+    /// The grid's shapes go into the canvas picture slot in show order, so shown before the picture the grid lies
+    /// under the art; outside a slot it paints in place.
+    #[prop(flag, name = "picture")]
+    #[allow(dead_code)] // P3(canvas-w5): cv.F28
+    under_pictures: bool,
 }
 
 impl CanvasGrid {
@@ -129,6 +134,7 @@ impl CanvasGrid {
             color: None,
             line: GridLine::Solid,
             min_zoom: None,
+            under_pictures: false,
         }
         .label(label)
     }

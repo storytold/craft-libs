@@ -276,17 +276,26 @@ pub struct SelectionOutline<'a> {
     /// The line colour (a layer's colour); the overlay line colour by default.
     #[prop]
     color: Option<DataColor>,
+    /// The key outline, stroked after the paths at `stroke.medium`.
+    #[prop]
+    #[allow(dead_code)] // P3(canvas-w6): cv.F29
+    key: Option<&'a BezPath>,
+    /// The paths' revision: with it, the stroked shapes are kept in control memory and reused; without it, rebuilt
+    /// every pass.
+    #[prop]
+    #[allow(dead_code)] // P3(canvas-w6): cv.F29
+    revision: Option<u64>,
 }
 
 impl<'a> SelectionOutline<'a> {
     /// A solid outline of `paths` (document units), named `label`.
     pub fn solid(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
-        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Solid, color: None }.label(label)
+        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Solid, color: None, key: None, revision: None }.label(label)
     }
 
     /// A dashed outline of `paths` (document units), named `label`.
     pub fn dashed(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
-        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Dashed, color: None }.label(label)
+        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Dashed, color: None, key: None, revision: None }.label(label)
     }
 }
 

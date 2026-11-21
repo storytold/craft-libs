@@ -43,6 +43,7 @@ craft_ui::words! {
         recovery_message: template "recovery.message" = "“{name}” has unsaved changes from an earlier run, autosaved {age}.";
         recovery_recover: "recovery.recover" = "Recover";
         recovery_discard: "recovery.discard" = "Discard";
+        job_progress_hide: "jobProgress.hide" = "Continue in Background";
         // full-window parts
         full_window_title_zoom: template "fullWindowTitle.zoomed" = "{name} ({subject}, {zoom})";
         full_window_title_subject: template "fullWindowTitle.subject" = "{name} ({subject})";

@@ -8,7 +8,7 @@ use crate::contract::{
     Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, NoValue, Outcome, Pad, Props as _, Role, Scroll, Show as _,
     ShowContainer as _, Sizing, WordSetCx as _,
 };
-use crate::contract::{BodyCx, BodyLayout};
+use crate::contract::{BodyCx, BodyLayout, ThemeScope};
 use crate::docking::DockGrid;
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
@@ -16,6 +16,7 @@ use crate::runtime::access::Name;
 use crate::runtime::commands::Commands as _;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind};
+use crate::tabs::TornOff;
 use craft_behavior::overlay::Side;
 use craft_behavior::{IconId, Metrics, NavShape, Proposal, Roving, Sense, Value};
 use craft_theme::ControlSize;
@@ -29,7 +30,7 @@ pub(super) mod stories;
 mod trials;
 
 use data::row_groups;
-pub use data::{LastUsed, RailTool, SlotId, ToolSlot, remembered, shown_tool, visible_slots};
+pub use data::{LastUsed, RailTool, SlotId, ToolSlot, ToolTips, remembered, shown_tool, visible_slots};
 pub(crate) use drag::SlotDrop;
 pub use drag::{DropAt, ToolDrag, ToolDropped, drop_in_slot};
 
@@ -67,6 +68,8 @@ pub struct ToolRailOutput<T> {
     pub flyout: Option<SlotId>,
     /// A tool dropped on a slot while the toolbar is edited, and where it goes.
     pub dropped: Option<ToolDropped>,
+    /// A group torn off the rail: `keys` and `grabbed` the slot, `pointer` where it tore off.
+    pub torn_off: Option<TornOff<SlotId>>,
     /// The last-used tools after this pass, when the current tool moved a slot's remembered tool.
     pub last_used: Option<LastUsed<T>>,
 }
@@ -129,6 +132,26 @@ pub struct ToolRail<'a, T: Value + 'static> {
     /// The tools the user's toolbar settings hide.
     #[prop]
     hidden: &'a [T],
+    /// Whether each flyout shows a tear-off bar along its far side.
+    #[prop(flag)]
+    #[allow(dead_code)] // P3(chrome-w4): ch.K15
+    tear_off: bool,
+    /// Whether the slots' captions show above their row groups.
+    #[prop(flag)]
+    #[allow(dead_code)] // P3(chrome-w4): ch.K14
+    captions: bool,
+    /// The tool whose button, or whose row while that slot's flyout is open, wears the target mark.
+    #[prop]
+    #[allow(dead_code)] // P3(chrome-w4): dp.T1
+    mark: Option<&'a T>,
+    /// A request of the pass: scrolls the tool's slot into view and opens its flyout when the slot shows another tool.
+    #[prop]
+    #[allow(dead_code)] // P3(chrome-w4): dp.T1
+    reveal: Option<&'a T>,
+    /// The tips the tools' buttons show.
+    #[prop]
+    #[allow(dead_code)] // P3(chrome-w4): ch.K17
+    tips: Option<&'a dyn ToolTips<T>>,
     footer: Option<FooterFn<'a>>,
     /// The columns the rail lays out in this pass.
     columns: usize,
@@ -157,6 +180,11 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             edit_toolbar: None,
             editing: false,
             hidden: &[],
+            tear_off: false,
+            captions: false,
+            mark: None,
+            reveal: None,
+            tips: None,
             footer: None,
             columns: 1,
         }
@@ -166,7 +194,8 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// The grid of a rail of `cells` cells (its visible slots and the Edit Toolbar button) as its dock column sizes
     /// it ([`PanelSpec::grid`](crate::docking::PanelSpec::grid)): `first` is a button and the control padding on both
     /// sides, `step` a button and the tight gap before it, and `most` the cells.
-    pub fn dock_grid(ctx: &egui::Context, cells: usize) -> DockGrid {
+    pub fn dock_grid(ctx: &egui::Context, scope: &ThemeScope, cells: usize) -> DockGrid {
+        let _ = scope; // P3(chrome-w4): ch.K18
         StyleCx::with_root(ctx, |cx| {
             let button = cx.tokens.size.rail.button;
             let most = u16::try_from(cells).unwrap_or(u16::MAX).max(1);
@@ -182,7 +211,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// Sets up the pass for a rail `width` wide: its columns, its roving grid and its footer. Returns what the body
     /// draws from.
     fn prepare(&mut self, ctx: &egui::Context, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Draw<'a, T> {
-        self.columns = usize::from(Self::dock_grid(ctx, self.cells()).steps_within(width));
+        self.columns = usize::from(Self::dock_grid(ctx, &self.props.theme.clone().unwrap_or_default(), self.cells()).steps_within(width));
         self.props = std::mem::take(&mut self.props).roving(Roving::new(NavShape::wrapped_grid(self.columns)));
         self.footer = Some(Box::new(footer));
         Draw {
@@ -282,7 +311,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// Shows the rail one column wide, for a host that lays it at the start of a row (the full-window workspaces'
     /// tool strips): the width `ui` has left belongs to what follows it in the row.
     pub fn show_column(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
-        let one = Self::dock_grid(ui.ctx(), 1).first;
+        let one = Self::dock_grid(ui.ctx(), &self.props.theme.clone().unwrap_or_default(), 1).first; // P3(chrome-w4): ch.K18
         self.show_within(ui, one, footer)
     }
 
@@ -298,6 +327,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             edit_toolbar: collected.edit_toolbar,
             flyout: collected.flyout,
             dropped: collected.dropped,
+            torn_off: None,
             last_used: last,
             ..shown.output
         }
@@ -342,6 +372,7 @@ impl<T: Value + 'static> Component for ToolRail<'_, T> {
             edit_toolbar: None,
             flyout: None,
             dropped: None,
+            torn_off: None,
             last_used: None,
         }
     }

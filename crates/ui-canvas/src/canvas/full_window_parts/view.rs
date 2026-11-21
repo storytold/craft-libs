@@ -4,7 +4,7 @@
 use crate::canvas::{ViewCommands, ViewTarget};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, PixelSize, ZoomLadder};
+use craft_behavior::{CanvasView, PixelSize, ZoomLadder, ZoomScheme};
 use egui::Rect;
 
 /// Zooms closer than this are the same zoom (a round trip through points per unit and back differs in the last
@@ -91,7 +91,7 @@ impl FullWindowView {
     fn refit(&mut self) {
         if self.fit && self.size.width > 0.0 && self.size.height > 0.0 {
             let target = self.target();
-            ViewCommands::FitOnScreen.apply(&mut self.view, &target, None, self.pixels_per_point);
+            ViewCommands::FitOnScreen.apply(&mut self.view, &target, None, self.pixels_per_point, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F8
         }
     }
 
@@ -109,7 +109,7 @@ impl FullWindowView {
     /// Whether a zoom step in (`dir` > 0) or out would change the zoom.
     pub fn can_step(&self, dir: i32) -> bool {
         let command = if dir > 0 { ViewCommands::ZoomIn } else { ViewCommands::ZoomOut };
-        command.available(&self.view, &self.target(), None, self.pixels_per_point)
+        command.available(&self.view, &self.target(), None, self.pixels_per_point, &ZoomScheme::PHOTOSHOP) // P3(canvas-w1): cv.F8
     }
 
     /// Sets the device zoom (kept inside the ladder's range) about the view's centre and ends the fit. Returns whether
@@ -131,7 +131,7 @@ impl FullWindowView {
         match command {
             ViewCommands::ZoomIn | ViewCommands::ZoomOut => {
                 let target = self.target();
-                let changed = command.apply(&mut self.view, &target, None, self.pixels_per_point);
+                let changed = command.apply(&mut self.view, &target, None, self.pixels_per_point, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F8
                 self.fit &= !changed;
                 changed
             }
@@ -143,7 +143,7 @@ impl FullWindowView {
             }
             ViewCommands::ActualPixels => {
                 let target = self.target();
-                let changed = command.apply(&mut self.view, &target, None, self.pixels_per_point) || self.fit;
+                let changed = command.apply(&mut self.view, &target, None, self.pixels_per_point, &ZoomScheme::PHOTOSHOP) || self.fit; // P3(canvas-w1): cv.F8
                 self.fit = false;
                 changed
             }

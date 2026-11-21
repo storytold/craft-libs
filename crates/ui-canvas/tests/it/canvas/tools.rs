@@ -167,15 +167,18 @@ fn view_commands_run_with_their_facts_and_are_disabled_without() {
     ];
     for (command, owed) in rows {
         let mut view = start;
-        assert!(command.available(&start, &full, given, ppp), "{command:?} runs with its fact");
-        assert!(command.apply(&mut view, &full, given, ppp) && owed(&view), "{command:?} gives {view:?}");
+        assert!(command.available(&start, &full, given, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP), "{command:?} runs with its fact"); // P3(canvas-w1): cv.F8
+        assert!(command.apply(&mut view, &full, given, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP) && owed(&view), "{command:?} gives {view:?}"); // P3(canvas-w1): cv.F8
         if command == ViewCommands::TwoHundredPercent {
-            assert!(command.available(&start, &bare, None, ppp), "200% needs no fact");
+            assert!(command.available(&start, &bare, None, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP), "200% needs no fact"); // P3(canvas-w1): cv.F8
             continue;
         }
         let mut view = start;
-        assert!(!command.available(&start, &bare, None, ppp), "{command:?} is disabled without its fact");
-        assert!(!command.apply(&mut view, &bare, None, ppp) && view == start, "{command:?} leaves the view without its fact");
+        assert!(!command.available(&start, &bare, None, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP), "{command:?} is disabled without its fact"); // P3(canvas-w1): cv.F8
+        assert!(
+            !command.apply(&mut view, &bare, None, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP) && view == start,
+            "{command:?} leaves the view without its fact"
+        ); // P3(canvas-w1): cv.F8
     }
 }
 
@@ -298,7 +301,7 @@ fn the_rotate_commands_step_fifteen_degrees_on_screen_in_a_flipped_view_too() {
         for (command, screen_turn) in [(ViewCommands::RotateClockwise, 15.0), (ViewCommands::RotateCounterclockwise, -15.0)] {
             let before = turned(room, 20.0, flip_x);
             let mut view = before;
-            assert!(command.apply(&mut view, &target, None, 1.0), "{command:?} turns the view");
+            assert!(command.apply(&mut view, &target, None, 1.0, &craft_behavior::ZoomScheme::PHOTOSHOP), "{command:?} turns the view"); // P3(canvas-w1): cv.F8
             let turned_by = (angle(&view) - angle(&before) + 540.0).rem_euclid(360.0) - 180.0;
             assert!(
                 (turned_by - screen_turn).abs() < 0.01,

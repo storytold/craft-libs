@@ -76,7 +76,7 @@ pub fn zoom_to_document_rect(view: &mut CanvasView, doc_rect: DocRect, size: Siz
         view.zoom = CanvasView::points_per_unit(device, ppp);
         view.center = Point::new(x0 + width / 2.0, y0 + height / 2.0);
     } else {
-        zoom::fit_rect(view, DocRect::new(x0, y0, x1, y1), size, ppp, DocVec::ZERO);
+        zoom::fit_rect(view, DocRect::new(x0, y0, x1, y1), size, ppp, DocVec::ZERO, &craft_behavior::ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
     }
     *view != before
 }

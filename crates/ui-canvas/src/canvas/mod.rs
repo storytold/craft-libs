@@ -44,7 +44,7 @@ pub use raster_source::{PixelRect, RasterSource};
 
 mod pasteboard;
 mod split;
-pub use pasteboard::{PageBorder, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
+pub use pasteboard::{PageBorder, PageFill, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
 pub use split::{SplitAt, SplitLayout, SplitPane, SplitStyle, SplitViews, SplitViewsOutput};
 pub use words::SplitWords;
 
@@ -70,7 +70,7 @@ mod rotate;
 mod tools;
 mod zoom_motion;
 
-pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
+pub use momentary::{Momentary, MomentaryCommands, MomentaryShift, MomentaryTool};
 pub use navigate::{
     Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan,
 };
@@ -112,8 +112,8 @@ use crate::style::{ComponentStyle, Stateful, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
-    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState,
-    Sense, WheelNotch,
+    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, MultiTap, PartKey, PointerButton, PressPhase,
+    PressState, Sense, WheelNotch, ZoomScheme,
 };
 use egui::{Pos2, Rect, Response, Vec2};
 use zoom_motion::{Steer, ViewMotion};
@@ -345,9 +345,10 @@ impl<'a> Canvas<'a> {
     fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, CommandMotion)> {
         self.props.command_scope?;
         let pixels_per_point = cx.env.scale().0;
+        let scheme = ZoomScheme::PHOTOSHOP; // P3(canvas-w1): cv.F8
         let target = view.zip(self.document);
         for command in ViewCommands::ALL {
-            let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, self.layer_bounds, pixels_per_point));
+            let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, self.layer_bounds, pixels_per_point, &scheme));
             cx.publish(command, CommandState::new().enabled(enabled));
         }
         let (view, document) = target?;
@@ -355,14 +356,14 @@ impl<'a> Canvas<'a> {
         let queued = if measure::active(&cx.core.ctx) { &[][..] } else { self.queued };
         for request in queued {
             let command = request.command();
-            let changed = command.apply(&mut next, &document, self.layer_bounds, pixels_per_point);
+            let changed = command.apply(&mut next, &document, self.layer_bounds, pixels_per_point, &scheme);
             match request {
                 ViewRequest::Command(_) => zoomed |= changed && command.zooms(),
                 ViewRequest::Place(_) => placed |= changed,
             }
         }
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
-            zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point) && command.zooms();
+            zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point, &scheme) && command.zooms();
         }
         let motion = if placed {
             CommandMotion::Jump
@@ -392,13 +393,14 @@ impl<'a> Canvas<'a> {
         let mut motion = ViewMotion::take(&ctx, id);
         let pixels_per_point = cx.env.scale().0;
         let size = self.document_size().unwrap_or(Size::ZERO);
+        let scheme = ZoomScheme::PHOTOSHOP; // P3(canvas-w1): cv.F7
         let mut view = given;
         let area = self.view_rect(cx.content_rect, cx.style);
         if area.width() > 0.0 && area.height() > 0.0 {
             let never_shown = !(view.rect.width() > 0.0 && view.rect.height() > 0.0);
             view.rect = area;
             if never_shown && let Some(document) = self.document {
-                ViewCommands::FitOnScreen.apply(&mut view, &document, None, pixels_per_point);
+                ViewCommands::FitOnScreen.apply(&mut view, &document, None, pixels_per_point, &scheme);
             }
         }
         let mut jumped = false;
@@ -408,7 +410,7 @@ impl<'a> Canvas<'a> {
                 // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in its body
                 // covers it.
                 let at = wheel.at.unwrap_or_else(|| view.rect.center());
-                jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
+                jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point, &scheme);
             }
             // A trackpad rotation or a twist of two fingers turns the view; a mirrored view turns the other way.
             if let Some(degrees) = WheelNavigation::rotation(&WheelInput::of(&wheel, WheelNavigation::LINE, os), &self.navigation) {
@@ -583,6 +585,8 @@ pub struct CanvasOutput {
     /// target; the canvas shows the way there itself. [`ToolHost::run`] carries it in [`ToolHostResponse::view`]
     /// when no tool set a view, so an app with a tool host copies that one view.
     pub view: Option<CanvasView>,
+    /// The multi-finger tap this pass ended, from the pointer pass; `None` when there was none.
+    pub multi_tap: Option<MultiTap>,
 }
 
 impl CanvasOutput {
@@ -723,7 +727,7 @@ impl Component for Canvas<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
-        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view }
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, multi_tap: None }
     }
 }
 

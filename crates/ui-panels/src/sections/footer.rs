@@ -412,6 +412,15 @@ pub struct FooterButton {
 }
 
 impl FooterButton {
+    /// Until its footer has been shown in the focused window on every frame for `seconds`, the button takes no click,
+    /// letter, chord, Enter or Space, and it looks disabled; a frame that skips the footer, or an unfocused window,
+    /// starts the count over.
+    #[must_use]
+    pub fn armed_after(self, seconds: f64) -> Self {
+        let _ = seconds;
+        todo!("pl.F2")
+    }
+
     /// The meaning of the button.
     pub const fn role(&self) -> DialogRole {
         self.role

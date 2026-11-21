@@ -47,7 +47,7 @@ fn drag_first(fixture: &mut Fixture) {
 fn guides_over_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let guides = data.value("guides", guides());
     on_guides_canvas(ui, |ui, at, canvas| {
-        Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).selected_guide(GuideKey::new(2)).show_at(ui, at)
+        Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).selected_guides(&[GuideKey::new(2)]).show_at(ui, at) // P3(canvas-w5): cv.F27
     })
 }
 

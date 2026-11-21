@@ -30,7 +30,7 @@ fn split(ui: &mut Ui, layout: SplitLayout, count: usize, main: usize, at: Bind<'
     let views = SplitViews::new("Views", layout, at).count(count).active(main).show(ui, |ui, body| {
         for (pane, rect) in shown.placed(layout, count, body.rect, body.env.direction().is_rtl()).into_iter().enumerate() {
             let mut view = CanvasView::new(rect, document.centre(), 1.0);
-            zoom::fit(&mut view, Size::new(f64::from(size.width), f64::from(size.height)), ppp, 0.0);
+            zoom::fit(&mut view, Size::new(f64::from(size.width), f64::from(size.height)), ppp, 0.0, &craft_behavior::ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
             let name = if pane == main { "Main view" } else { "View" };
             Canvas::new(name).view(view).show_at(ui, rect, |ui, body| show_document(ui, body.rect, document));
         }

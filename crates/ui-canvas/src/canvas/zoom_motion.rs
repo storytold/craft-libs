@@ -11,7 +11,7 @@ use crate::runtime::frame;
 use crate::runtime::memory::{global, with_session};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, ZoomLadder};
+use craft_behavior::{CanvasView, ZoomLadder, ZoomScheme};
 use egui::{Context, Id, Pos2, Rect};
 
 /// How far the app's view may differ from the zoom anchor, in document units, before the anchor is dropped.
@@ -201,7 +201,7 @@ impl HoldZoom {
         }
         let dt = frame_step(time - self.last.unwrap_or(time));
         let current = zoom::device(view, pixels_per_point);
-        let next = Self::zoom_after(current, dt, out, size);
+        let next = Self::zoom_after(current, dt, out, size, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F12
         // At a limit the view stays as it is.
         if (next / current - 1.0).abs() > 1e-12 {
             zoom::anchor(view, self.anchor, self.doc, next, pixels_per_point);
@@ -222,7 +222,8 @@ impl HoldZoom {
 
     /// The zoom after holding for a frame step of `dt` seconds at `zoom`, within the document's range. A non-finite
     /// or negative `dt` changes nothing, and `dt` is capped at [`FRAME_STEP_MAX`](super::FRAME_STEP_MAX).
-    pub fn zoom_after(zoom: f64, dt: f64, out: bool, size: Size) -> f64 {
+    pub fn zoom_after(zoom: f64, dt: f64, out: bool, size: Size, scheme: &ZoomScheme) -> f64 {
+        let _ = scheme; // P3(canvas-w1): cv.F12
         let dt = frame_step(dt);
         let doublings = if out { -Self::RATE * dt } else { Self::RATE * dt };
         ZoomLadder::clamp(zoom * doublings.exp2(), size)
@@ -256,7 +257,7 @@ impl ZoomDrag {
         match self.corner.as_mut() {
             Some(corner) => *corner = pointer,
             None => {
-                let next = Self::scrub_zoom(self.zoom0, pointer.x - self.anchor.x, size);
+                let next = Self::scrub_zoom(self.zoom0, pointer.x - self.anchor.x, size, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F12
                 if (next / zoom::device(view, pixels_per_point) - 1.0).abs() > 1e-12 {
                     zoom::anchor(view, self.anchor, self.doc, next, pixels_per_point);
                 }
@@ -267,7 +268,8 @@ impl ZoomDrag {
     /// The button came up: a rectangle zooms `view` to fit it, or with `out` steps the zoom out about the press point;
     /// a scrub has nothing left to do. A rectangle narrower or shorter than `least` points is too small to zoom to:
     /// the view stays.
-    pub fn release(self, view: &mut CanvasView, out: bool, size: Size, pixels_per_point: f32, least: f32) {
+    pub fn release(self, view: &mut CanvasView, out: bool, size: Size, pixels_per_point: f32, least: f32, scheme: &ZoomScheme) {
+        let _ = scheme; // P3(canvas-w1): cv.F12
         let Some(corner) = self.corner else { return };
         let rect = Rect::from_two_pos(self.anchor, corner);
         if rect.width() < least || rect.height() < least || rect.width() <= 0.0 || rect.height() <= 0.0 {
@@ -293,7 +295,8 @@ impl ZoomDrag {
     }
 
     /// The scrubby zoom for a horizontal drag of `dx` points from a press at `zoom0`, within the document's range.
-    pub fn scrub_zoom(zoom0: f64, dx: f32, size: Size) -> f64 {
+    pub fn scrub_zoom(zoom0: f64, dx: f32, size: Size, scheme: &ZoomScheme) -> f64 {
+        let _ = scheme; // P3(canvas-w1): cv.F12
         // 40 doublings already span far more than the zoom range; the bound keeps the power finite.
         let doublings = if dx.is_finite() { f64::from(dx / Self::DOUBLING).clamp(-40.0, 40.0) } else { 0.0 };
         ZoomLadder::clamp(zoom0 * doublings.exp2(), size)

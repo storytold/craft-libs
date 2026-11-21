@@ -41,7 +41,7 @@ fn crop_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn placed_and_pinned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let corners = turned_frame();
     on_canvas(ui, |ui, area, _| {
-        let place = data.value("place", TaskBarPlace { pinned: true, at: Some([24.0, 24.0]) });
+        let place = data.value("place", TaskBarPlace { pinned: true, at: Some([24.0, 24.0]), offset: None });
         TaskBar::new("Crop", &corners, Bind::bound(place))
             .show(ui, area, |ui, _| {
                 let _ = Button::new("Done").show(ui);

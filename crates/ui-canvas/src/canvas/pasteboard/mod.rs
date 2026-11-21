@@ -7,14 +7,16 @@
 mod stories;
 
 use super::space::canvas_space;
+use crate::contract::Rename;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};
-use crate::primitives::{CheckerArea, PaintShape, PaintSlot, Rule, StrokeWidth, TextRun, paint_surround};
+use crate::primitives::{Checker, CheckerArea, PaintShape, PaintSlot, Rule, StrokeWidth, TextRun, paint_surround};
 use crate::runtime::env::Label;
 use crate::style::{
     ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, SurroundLook, TypeRole,
 };
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{CanvasView, HitLevel, HitPriority, HitShape, Metrics, PartKey, Sense};
+use craft_behavior::{CanvasView, EditEvent, HitLevel, HitPriority, HitShape, Metrics, PartKey, Sense};
+use craft_keymap::Mods;
 use craft_theme::Rgba;
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2};
 
@@ -70,6 +72,16 @@ pub enum PageBorder {
     None,
 }
 
+/// What fills a page under the document.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum PageFill {
+    /// A plain colour: an artboard's background.
+    Color(DataColor),
+    /// A transparency grid laid from the page's top-left.
+    Checker(Checker),
+}
+
 /// One page or artboard on the pasteboard, in document units.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -79,17 +91,19 @@ pub struct PageFrame {
     /// Shown above the page's top-left corner (artboards, spreads); `None` shows nothing.
     pub name: Option<String>,
     /// The page's own fill under the document (an artboard's background), or `None` for none.
-    pub fill: Option<DataColor>,
+    pub fill: Option<PageFill>,
     /// An artboard's edge: `Some(true)` for the active board (an accent edge, its name in the normal text colour),
     /// `Some(false)` for another board (a faint dark edge, its name muted); `None` for a plain page, which only the
     /// border shows.
     pub active: Option<bool>,
+    /// Whether a double press on the page's name renames the page.
+    pub renames: bool,
 }
 
 impl PageFrame {
     /// A page at `rect` with no name, fill or active mark.
     pub fn new(rect: DocRect) -> Self {
-        Self { rect, name: None, fill: None, active: None }
+        Self { rect, name: None, fill: None, active: None, renames: false }
     }
 
     /// Marks the frame as an artboard, the active one when `active`.
@@ -109,7 +123,21 @@ impl PageFrame {
     /// Sets the page's own fill under the document.
     #[must_use]
     pub fn fill(mut self, fill: DataColor) -> Self {
-        self.fill = Some(fill);
+        self.fill = Some(PageFill::Color(fill));
+        self
+    }
+
+    /// Fills the page with a transparency grid laid from its top-left, under the document.
+    #[must_use]
+    pub fn checker(mut self, checker: Checker) -> Self {
+        self.fill = Some(PageFill::Checker(checker));
+        self
+    }
+
+    /// Whether a double press on the page's name renames the page.
+    #[must_use]
+    pub fn renames(mut self, on: bool) -> Self {
+        self.renames = on;
         self
     }
 }
@@ -146,8 +174,11 @@ pub struct PasteboardStyle {
 pub struct PasteboardOutput {
     /// The pasteboard's response.
     pub response: Response,
-    /// A page name was clicked: the index of its frame. The app selects the artboard or page.
-    pub name_clicked: Option<usize>,
+    /// A page name was clicked: the index of its frame and the modifiers of the release. The app selects the artboard
+    /// or page.
+    pub name_clicked: Option<(usize, Mods)>,
+    /// The rename of a page's name: the draft edited, committed or cancelled.
+    pub rename: Option<EditEvent<Rename<usize>>>,
     /// The secondary button was released on the canvas background outside every page and name (a press no canvas
     /// control claimed), at this document point, or the Menu key or Shift+F10 reached the focused canvas (at the
     /// view's centre): the app opens its pasteboard menu there.
@@ -181,9 +212,14 @@ pub struct Pasteboard<'a> {
     /// Document rects the pasteboard does not cover, subtracted like the pages.
     #[prop]
     uncovered: &'a [DocRect],
+    /// The surround paints under the pictures while the frames keep `active` edges and names.
+    #[prop(flag)]
+    #[allow(dead_code)] // P3(canvas-w4): cv.F24
+    shows_outside: bool,
     /// The size of each page's name, measured in `parts`; zero for a page without one.
     name_sizes: Vec<Vec2>,
-    name_clicked: Option<usize>,
+    name_clicked: Option<(usize, Mods)>,
+    rename: Option<EditEvent<Rename<usize>>>,
     context_at: Option<Point>,
 }
 
@@ -195,8 +231,10 @@ impl<'a> Pasteboard<'a> {
             pages,
             border: PageBorder::DropShadow,
             uncovered: &[],
+            shows_outside: false,
             name_sizes: Vec::new(),
             name_clicked: None,
+            rename: None,
             context_at: None,
         }
         .label(label)
@@ -335,7 +373,7 @@ impl Component for Pasteboard<'_> {
                 continue;
             }
             if cx.part_activated(NAME.at(at as u64)).is_some() {
-                self.name_clicked = Some(at);
+                self.name_clicked = Some((at, Mods::NONE)); // P3(canvas-w4): cv.F24
             }
         }
         let background = space.background();
@@ -400,8 +438,10 @@ impl Component for Pasteboard<'_> {
                     draw.fill(&polygon(&quad.map(|corner| corner + style.shadow_offset)), style.turned_shadow);
                 }
             }
-            if let Some(color) = page.fill {
-                draw.data_fill(&polygon(&quad), color);
+            match page.fill {
+                Some(PageFill::Color(color)) => draw.data_fill(&polygon(&quad), color),
+                Some(PageFill::Checker(_)) => todo!("cv.F24"),
+                None => {}
             }
         }
         if let Some(under) = under {
@@ -439,6 +479,6 @@ impl Component for Pasteboard<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PasteboardOutput {
-        PasteboardOutput { response: cx.response.clone(), name_clicked: self.name_clicked, context_at: self.context_at }
+        PasteboardOutput { response: cx.response.clone(), name_clicked: self.name_clicked, rename: self.rename, context_at: self.context_at }
     }
 }

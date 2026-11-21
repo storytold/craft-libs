@@ -172,6 +172,9 @@ pub struct StartScreen<'a> {
     /// With no recent files, the Recent body is a drop card with this hint that opens a file on a click.
     #[prop(into)]
     drop_hint: Option<Label>,
+    /// One app section, drawn after Recent and Pinned Folders and before Templates.
+    #[allow(dead_code)] // P3(shell-w5): sh.K28
+    section: Option<(Label, RefCell<&'a mut dyn FnMut(&mut Ui)>)>,
 }
 
 /// A link on the start screen's rail.
@@ -222,7 +225,16 @@ impl<'a> StartScreen<'a> {
             thumbnails: None,
             links: &[],
             drop_hint: None,
+            section: None,
         }
+    }
+
+    /// One app section titled `title`, drawn as a fixed section after Recent and Pinned Folders and before Templates.
+    /// `body` may run more than once in a pass: the rail measures it.
+    #[must_use]
+    pub fn section(mut self, title: impl Into<Label>, body: &'a mut dyn FnMut(&mut Ui)) -> Self {
+        self.section = Some((title.into(), RefCell::new(body)));
+        self
     }
 
     /// Cards, rows and templates ask `thumbnails.state(..)` for what they show; `source` gives each key's revision.
@@ -341,7 +353,7 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint } = self;
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, .. } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();

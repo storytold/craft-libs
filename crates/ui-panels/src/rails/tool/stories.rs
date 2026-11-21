@@ -1,6 +1,7 @@
 //! Stories of `ToolRail`, and the commands its stories and the flyout's use as tools.
 
 use super::{LastUsed, RailTool, ToolRail, ToolSlot};
+use crate::contract::ThemeScope;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -52,7 +53,7 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         data.choice("hidden", Vec::<u8>::new(), &[("None", Vec::new()), ("Pencil", vec![2]), ("Stamp", vec![4]), ("Eraser", vec![3])]).clone();
     let slots = slots();
     let last = LastUsed::default();
-    let width = ToolRail::<u8>::dock_grid(ui.ctx(), slots.len() + 1).width(u16::from(columns));
+    let width = ToolRail::<u8>::dock_grid(ui.ctx(), &ThemeScope::new(), slots.len() + 1).width(u16::from(columns)); // P3(chrome-w4): ch.K18
     // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
     let out = ui
         .scope(|ui| {

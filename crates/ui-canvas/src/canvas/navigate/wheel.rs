@@ -8,7 +8,7 @@
 use super::NavigationOptions;
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomLadder};
+use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomLadder, ZoomScheme};
 use craft_keymap::{Mods, Platform};
 use egui::{Pos2, Vec2};
 
@@ -44,6 +44,8 @@ pub struct WheelInput {
     pub rotation: f32,
     /// The twist of a two-finger touch, in radians.
     pub touch_rotation: f32,
+    /// The pan of a multi-finger touch, in points.
+    pub touch_pan: Vec2,
 }
 
 impl WheelInput {
@@ -61,6 +63,7 @@ impl WheelInput {
             touch_zoom: wheel.touch_zoom,
             rotation: wheel.rotation,
             touch_rotation: wheel.touch_rotation,
+            touch_pan: wheel.touch_pan,
         }
     }
 
@@ -170,7 +173,8 @@ impl WheelNavigation {
     /// [`zoom::wheel_anchor`], a ladder step at the pointer, both clamped to the ladder; a pan moves the view. At a
     /// zoom limit the view stays put. With Overscroll off the canvas clamps the result to the document. Returns
     /// whether the view changed.
-    pub fn apply(view: &mut CanvasView, action: WheelAction, pointer: Pos2, size: Size, pixels_per_point: f32) -> bool {
+    pub fn apply(view: &mut CanvasView, action: WheelAction, pointer: Pos2, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
+        let _ = scheme; // P3(canvas-w1): cv.F11
         let before = *view;
         match action {
             WheelAction::Zoom(factor) => {

@@ -13,6 +13,7 @@ use serde_json::Value;
 use super::held::HeldOk;
 use super::stack::{DialogId, DialogStack};
 use crate::contract::{Pattern, PatternKind, PatternProbe};
+use crate::runtime::requests::ColorRequest;
 
 /// How a dialog on the [`DialogHost`] finished. `T` is the dialog's own answer type: a struct of
 /// values for a form, an enum for a prompt with three buttons.
@@ -121,6 +122,36 @@ pub trait StackDialog: Any + Send {
     fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>) {
         let _ = (key, color);
     }
+
+    /// A colour row's button press, once; the picked colour is written into row `key` next pass
+    /// ([`answer_color`](StackDialog::answer_color)). `None` (the default) for a dialog without colour rows.
+    fn take_color_request(&mut self) -> Option<ColorRequest> {
+        None
+    }
+
+    /// Writes the picked `color` into the colour row `key` a [`ColorRequest`] named. Does nothing by default.
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba) {
+        let _ = (key, color);
+    }
+
+    /// Sets every field of `fields` or none, as [`set_json_field`](StackDialog::set_json_field) sets one: the
+    /// default snapshots [`json_fields`](StackDialog::json_fields), sets each field in turn and, on the first
+    /// refusal, restores the snapshot and returns the refusal.
+    fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String> {
+        let _ = (ctx, fields);
+        todo!("sh.K23")
+    }
+
+    /// Whether the dialog has a Reset now. `false` by default.
+    fn can_reset(&self) -> bool {
+        false
+    }
+
+    /// Puts the values back as the dialog's Reset does; the dialog stays open. `false` when it has no Reset (the
+    /// default).
+    fn reset(&mut self, _ctx: &Context) -> bool {
+        false
+    }
 }
 
 /// Why a dialog refused `ui.dialog.set`; each has one wording, which every dialog's
@@ -198,6 +229,16 @@ trait AnyStackDialog: Send {
     /// [`StackDialog::cancelled`].
     fn release(&mut self, ctx: &Context);
     fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>);
+    #[allow(dead_code)] // P3(forms-w1): co.K13
+    fn take_color_request(&mut self) -> Option<ColorRequest>;
+    #[allow(dead_code)] // P3(forms-w1): co.K13
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba);
+    #[allow(dead_code)] // P3(forms-w1): sh.K23
+    fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String>;
+    #[allow(dead_code)] // P3(forms-w1): wg.W18
+    fn can_reset(&self) -> bool;
+    #[allow(dead_code)] // P3(forms-w1): wg.W18
+    fn reset(&mut self, ctx: &Context) -> bool;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -253,6 +294,26 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>) {
         StackDialog::preview_color(self, key, color);
+    }
+
+    fn take_color_request(&mut self) -> Option<ColorRequest> {
+        StackDialog::take_color_request(self)
+    }
+
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba) {
+        StackDialog::answer_color(self, key, color);
+    }
+
+    fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String> {
+        StackDialog::set_json_fields(self, ctx, fields)
+    }
+
+    fn can_reset(&self) -> bool {
+        StackDialog::can_reset(self)
+    }
+
+    fn reset(&mut self, ctx: &Context) -> bool {
+        StackDialog::reset(self, ctx)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -568,6 +629,36 @@ impl DialogHost {
             }
             None => Err("no such dialog".to_owned()),
         }
+    }
+
+    /// The top-most open dialog's pending [`ColorRequest`] with its id; the app opens a colour picker over it and
+    /// answers through [`answer_color`](DialogHost::answer_color).
+    pub fn take_color_request(&mut self) -> Option<(DialogId, ColorRequest)> {
+        todo!("co.K14")
+    }
+
+    /// Writes the picked `color` into colour row `key` of the open dialog `id`.
+    pub fn answer_color(&mut self, id: DialogId, key: &str, color: craft_theme::Srgba) {
+        let _ = (id, key, color);
+        todo!("co.K14")
+    }
+
+    /// Sets every field of `fields` on the open dialog `id` or none ([`StackDialog::set_json_fields`]).
+    pub fn set_json_fields(&mut self, ctx: &Context, id: DialogId, fields: &[(String, Value)]) -> Result<(), String> {
+        let _ = (ctx, id, fields);
+        todo!("sh.K24")
+    }
+
+    /// Runs the reset of the open dialog `id`; `false` for an unknown id or a dialog without a Reset.
+    pub fn reset_by_id(&mut self, ctx: &Context, id: DialogId) -> bool {
+        let _ = (ctx, id);
+        todo!("wg.W19")
+    }
+
+    /// Whether the open dialog `id` has a Reset now; `false` for an unknown id.
+    pub fn can_reset_by_id(&self, id: DialogId) -> bool {
+        let _ = id;
+        todo!("wg.W19")
     }
 
     /// The open dialog `id` ([`dialog_id`](super::dialog_id) of its key) as `Any`, for an app with

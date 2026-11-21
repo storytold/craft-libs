@@ -410,7 +410,7 @@ impl Component for Navigator<'_> {
             let action = cx.memory::<WheelNavigation>().read(&wheel, line, os, &options);
             if let Some(action @ (WheelAction::Zoom(_) | WheelAction::SnapZoom(_))) = action {
                 let before = next;
-                WheelNavigation::apply(&mut next, action, before.rect.center(), document, ppp);
+                WheelNavigation::apply(&mut next, action, before.rect.center(), document, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F11
                 next.center = before.center;
                 zoomed |= next.zoom != before.zoom;
             }
@@ -418,7 +418,7 @@ impl Component for Navigator<'_> {
         for (chord, dir) in ZOOM_KEYS {
             while cx.take_claimed(chord) {
                 if !running {
-                    zoomed |= zoom::step(&mut next, dir, document, ppp);
+                    zoomed |= zoom::step(&mut next, dir, document, ppp, &craft_behavior::ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
                 }
             }
             cx.claim(chord);

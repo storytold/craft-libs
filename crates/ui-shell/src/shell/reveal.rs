@@ -23,6 +23,10 @@ pub(crate) struct Reveal {
     tab: bool,
     edges: [bool; 3],
     shown: Vec<(RevealEdge, Rect)>,
+    /// The edge a reveal request pinned, with the pointer the pinning pass saw: the pin holds while the pointer stays
+    /// the same.
+    #[allow(dead_code)] // P3(chrome-w1): ch.K5
+    pinned: Option<(RevealEdge, Option<Option<Pos2>>)>,
 }
 
 /// What the reveal depends on in this pass.

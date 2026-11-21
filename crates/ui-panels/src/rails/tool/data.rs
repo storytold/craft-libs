@@ -1,6 +1,8 @@
 //! The data of a tool rail: tools, slots and the tool each slot showed last.
 
 use crate::runtime::commands::CommandRef;
+use crate::runtime::env::Label;
+use egui::Ui;
 
 /// Names a slot of the rail. The host numbers its slots; [`LastUsed`] remembers a tool under it.
 pub type SlotId = u32;
@@ -33,19 +35,38 @@ pub struct ToolSlot<T> {
     pub tools: Vec<RailTool<T>>,
     /// The slot ends a group of tools: the rail leaves a gap after it.
     pub group_end: bool,
+    /// The caption of the group the slot starts.
+    pub caption: Option<Label>,
 }
 
 impl<T> ToolSlot<T> {
     /// A slot that does not end a group.
     pub fn new(id: SlotId, tools: Vec<RailTool<T>>) -> Self {
-        ToolSlot { id, tools, group_end: false }
+        ToolSlot { id, tools, group_end: false, caption: None }
     }
 
     /// A slot that ends a group of tools: the rail leaves a gap after it, before the next slot. In two columns the
     /// gap follows the row that holds the slot.
     pub fn ending_group(id: SlotId, tools: Vec<RailTool<T>>) -> Self {
-        ToolSlot { id, tools, group_end: true }
+        ToolSlot { id, tools, group_end: true, caption: None }
     }
+
+    /// The slot starts a group captioned `caption`.
+    #[must_use]
+    pub fn captioned(mut self, caption: impl Into<Label>) -> Self {
+        self.caption = Some(caption.into());
+        self
+    }
+}
+
+/// The tips of a rail's tools: where a tool `has` one, its button (and the flyout's row) shows it in place of the
+/// command tooltip.
+pub trait ToolTips<T> {
+    /// Whether `tool` has a tip.
+    fn has(&self, tool: &T) -> bool;
+
+    /// Shows the tip of `tool`.
+    fn show(&self, tool: &T, ui: &mut Ui);
 }
 
 /// The tool each slot showed last. Plain data the host keeps with its workspace.

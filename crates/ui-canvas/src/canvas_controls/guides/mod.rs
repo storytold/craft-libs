@@ -146,9 +146,13 @@ pub struct Guides<'a> {
     #[common]
     common: Common,
     guides: Bind<'a, Vec<Guide>>,
-    /// The selected guide.
-    #[prop(name = "selected_guide")]
-    selected: Option<GuideKey>,
+    /// The selected guides.
+    #[prop(name = "selected_guides")]
+    selected: &'a [GuideKey],
+    /// The key guide, stroked at `stroke.medium`.
+    #[prop]
+    #[allow(dead_code)] // P3(canvas-w5): cv.F27
+    key_guide: Option<GuideKey>,
     /// Whether the pointer and the keyboard take guides (the Move tool, or the selection tools). Off, the guides only
     /// draw.
     #[prop]
@@ -185,7 +189,8 @@ impl<'a> Guides<'a> {
         Guides {
             common: Common::new(),
             guides,
-            selected: None,
+            selected: &[],
+            key_guide: None,
             interactive: false,
             moves_with_command: false,
             bounds: None,
@@ -209,6 +214,11 @@ impl<'a> Guides<'a> {
         } else {
             position
         }
+    }
+
+    /// The first selected guide, the one the keys and the pointer act on.
+    fn lead_selected(&self) -> Option<GuideKey> {
+        self.selected.first().copied() // P3(canvas-w5): cv.F27
     }
 
     /// The positions a guide may be moved to with the keyboard.
@@ -349,7 +359,7 @@ impl<'a> Guides<'a> {
     /// canvas's tool and the app's shortcuts (Edit > Clear) while such a guide is selected.
     fn run_canvas_delete(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, guides: &[Guide]) {
         let Some(canvas) = space.canvas() else { return };
-        if !self.selected.is_some_and(|key| guides.iter().any(|guide| guide.key == key && !guide.locked)) {
+        if !self.lead_selected().is_some_and(|key| guides.iter().any(|guide| guide.key == key && !guide.locked)) {
             return;
         }
         let mut delete = false;
@@ -360,7 +370,7 @@ impl<'a> Guides<'a> {
         let mut next = guides.to_vec();
         if delete
             && self.report.select.is_none()
-            && let Some(select) = GuideCommands::Delete.apply(&mut next, self.selected)
+            && let Some(select) = GuideCommands::Delete.apply(&mut next, self.lead_selected())
         {
             cx.set(next);
             self.report.select = Some(select);
@@ -494,7 +504,7 @@ impl Component for Guides<'_> {
                 .priority(HitPriority::new(HitLevel::Edge, 0))
                 .cursor(resize_cursor(&space.view, motion_across(guide.along)))
                 .focusable();
-            if self.selected == Some(guide.key) {
+            if self.lead_selected() == Some(guide.key) {
                 part.selected().flags(Flags::SELECTED);
             }
             any = true;
@@ -515,7 +525,7 @@ impl Component for Guides<'_> {
         if self.interactive {
             self.run_keys(cx, &space, &guides);
             self.run_canvas_delete(cx, &space, &guides);
-            if space.background().pressed.is_some() && self.selected.is_some() && self.report.select.is_none() {
+            if space.background().pressed.is_some() && !self.selected.is_empty() && self.report.select.is_none() {
                 self.report.select = Some(None);
             }
         }
@@ -528,7 +538,8 @@ impl Component for Guides<'_> {
         let focused = cx.focus_visible().then(|| cx.active_part()).flatten().filter(|part| part.key == GUIDE).and_then(|part| part.index);
         for guide in guides {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
-            let color = if self.selected == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let color =
+                if self.lead_selected() == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
             match guide.line {
                 GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(style.width) }, a, b, ppp)),
                 GuideLine::Dashed => painter.dashed(&[a, b], Dashes::new(style.dash, style.gap), StrokeWidth::Thin, color),

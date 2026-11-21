@@ -12,6 +12,7 @@ use crate::contract::{
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow, RowInk};
+use crate::menu::PanelRow;
 use crate::popover::Popover;
 use crate::primitives::IconSpec;
 use crate::runtime::commands::{self, ResolvedCommand};
@@ -35,12 +36,21 @@ pub struct DrawerGroup<T> {
     pub label: Label,
     /// The group's tools, in the order the drawer lists them.
     pub tools: Vec<RailTool<T>>,
+    /// Run lengths over `tools`: the rows of each slot, by position. Empty for a group without slots.
+    pub slots: Vec<usize>,
 }
 
 impl<T> DrawerGroup<T> {
     /// A group headed `label` that lists `tools`.
     pub fn new(label: impl Into<Label>, tools: Vec<RailTool<T>>) -> Self {
-        DrawerGroup { label: label.into(), tools }
+        DrawerGroup { label: label.into(), tools, slots: Vec::new() }
+    }
+
+    /// A group headed `label` that lists the tools of `slots` one after another; each row carries its slot's run by
+    /// position.
+    pub fn slotted(label: impl Into<Label>, slots: Vec<Vec<RailTool<T>>>) -> Self {
+        let _ = (label, slots);
+        todo!("ch.K23")
     }
 }
 
@@ -135,6 +145,14 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     /// The side of the rail the drawer opens on, as given to `ToolRail::opens`: the side of the canvas.
     #[prop]
     opens: Side,
+    /// The tool whose row wears the target mark.
+    #[prop]
+    #[allow(dead_code)] // P3(chrome-w6): dp.T3
+    mark: Option<&'a T>,
+    /// A request of the pass: scrolls the tool's row into the list's view.
+    #[prop]
+    #[allow(dead_code)] // P3(chrome-w6): dp.T3
+    reveal: Option<&'a T>,
     dropped: Option<ToolDropped>,
     opener: Option<Response>,
 }
@@ -143,7 +161,7 @@ impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
     /// A drawer beside `rail` (the rail's rect), listing `groups`, over a toolbar of `toolbar` slots. `dropped` is the
     /// drag the rail took in this pass (`ToolRailOutput::dropped`); the drawer turns it into an edit.
     pub fn new(rail: Rect, groups: &'a [DrawerGroup<T>], toolbar: &'a [ToolSlot<T>], dropped: Option<ToolDropped>) -> Self {
-        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped, opener: None }
+        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, mark: None, reveal: None, dropped, opener: None }
     }
 
     /// The control that opened the drawer, the rail's Edit Toolbar button (`ToolRailOutput::edit_toolbar`): the focus
@@ -214,9 +232,22 @@ fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
 }
 
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
+    /// With rows, an icon button after the title opens a menu of `rows`.
+    #[must_use]
+    pub fn menu(self, rows: Vec<PanelRow>) -> Self {
+        let _ = rows;
+        todo!("ch.K21")
+    }
+
+    /// [`show`](ToolbarDrawer::show) with `below` drawn in the footer above Restore Defaults.
+    pub fn show_with(self, ui: &mut Ui, below: impl FnMut(&mut Ui)) -> ToolbarDrawerOutput<T> {
+        let _ = (ui, below);
+        todo!("ch.K22")
+    }
+
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener } = self;
+        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener, .. } = self;
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
         let os = os_of(ui.ctx());

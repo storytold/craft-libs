@@ -1,6 +1,6 @@
 //! `FlyoutButton`: a rail button that stands for a group of tools and opens them as a flyout.
 
-use super::tool::{RailTool, SlotDrop, SlotId, ToolDrag, ToolDropped};
+use super::tool::{RailTool, SlotDrop, SlotId, ToolDrag, ToolDropped, ToolTips};
 use crate::buttons::{IconButton, PopupMark};
 use crate::contract::overlay::{Anchor, Place};
 use crate::contract::{
@@ -13,7 +13,7 @@ use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, GlyphRole, StyleCx};
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
-use egui::{Rect, Response, Vec2};
+use egui::{Pos2, Rect, Response, Vec2};
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -74,6 +74,8 @@ pub struct FlyoutOutput<T> {
     pub opened: bool,
     /// A drag dropped on the button while the toolbar is edited.
     pub dropped: Option<ToolDropped>,
+    /// The pointer where the flyout was torn off by its tear-off bar; `None` when it was not.
+    pub torn_off: Option<Pos2>,
 }
 
 impl<T: Value> Outcome for FlyoutOutput<T> {
@@ -123,6 +125,15 @@ pub struct FlyoutButton<'a, T: Value + 'static> {
     /// drag away, a right click or the Menu key.
     #[prop(into)]
     click: Option<CommandRef>,
+    /// A tear-off bar along the flyout's far side: a drag past slop, a click, or a hold-release over it closes the flyout
+    /// and reports the pointer.
+    #[prop(flag)]
+    #[allow(dead_code)] // P3(chrome-w4): ch.K15
+    tear_off: bool,
+    /// The tips of the tools: where one `has` a tip, the button and the flyout's row show it.
+    #[prop]
+    #[allow(dead_code)] // P3(chrome-w4): ch.K17
+    tips: Option<&'a dyn ToolTips<T>>,
     laid: Option<Laid>,
     picked: Option<T>,
     open: bool,
@@ -141,6 +152,8 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
             opens: Side::End,
             edit: None,
             click: None,
+            tear_off: false,
+            tips: None,
             laid: None,
             picked: None,
             open: false,
@@ -371,6 +384,13 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> FlyoutOutput<T> {
-        FlyoutOutput { response: cx.response.clone(), select: self.picked, double_clicked: self.double, opened: self.open, dropped: self.dropped }
+        FlyoutOutput {
+            response: cx.response.clone(),
+            select: self.picked,
+            double_clicked: self.double,
+            opened: self.open,
+            dropped: self.dropped,
+            torn_off: None,
+        }
     }
 }

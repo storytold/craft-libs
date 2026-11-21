@@ -15,7 +15,7 @@ use craft_behavior::PointerButton;
 use craft_behavior::canvas::zoom;
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Rect, Size, Vec2};
-use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, ZoomLadder};
+use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, ZoomLadder, ZoomScheme};
 use craft_keymap::Mods;
 use egui::Pos2;
 
@@ -179,7 +179,14 @@ impl ViewCommands {
 
     /// Applies the command to `view` for `target` and the layers' bounds `layers` at `pixels_per_point`. Returns whether
     /// the view changed: a command whose fact is absent changes nothing. Only Fit Layers asks `layers`.
-    pub fn apply(self, view: &mut CanvasView, target: &ViewTarget, layers: Option<LayerBounds<'_>>, pixels_per_point: f32) -> bool {
+    pub fn apply(
+        self,
+        view: &mut CanvasView,
+        target: &ViewTarget,
+        layers: Option<LayerBounds<'_>>,
+        pixels_per_point: f32,
+        scheme: &ZoomScheme,
+    ) -> bool {
         let before = *view;
         let size = target.document;
         let zoom_about_centre = |view: &mut CanvasView, device: f64| {
@@ -187,13 +194,13 @@ impl ViewCommands {
         };
         match self {
             ViewCommands::ZoomIn => {
-                zoom::step(view, 1, size, pixels_per_point);
+                zoom::step(view, 1, size, pixels_per_point, scheme);
             }
             ViewCommands::ZoomOut => {
-                zoom::step(view, -1, size, pixels_per_point);
+                zoom::step(view, -1, size, pixels_per_point, scheme);
             }
-            ViewCommands::FitOnScreen => zoom::fit_up_to(view, size, pixels_per_point, target.fit_ceiling, FIT_MARGIN),
-            ViewCommands::FillScreen => zoom::fill(view, size, pixels_per_point),
+            ViewCommands::FitOnScreen => zoom::fit_up_to(view, size, pixels_per_point, target.fit_ceiling, FIT_MARGIN, scheme),
+            ViewCommands::FillScreen => zoom::fill(view, size, pixels_per_point, scheme),
             ViewCommands::ActualPixels => zoom_about_centre(view, 1.0),
             ViewCommands::TwoHundredPercent => zoom_about_centre(view, 2.0),
             ViewCommands::PrintSize => {
@@ -203,12 +210,12 @@ impl ViewCommands {
             }
             ViewCommands::FitArtboard => {
                 if let Some(board) = with_area(target.artboard) {
-                    zoom::fit_rect(view, board, size, pixels_per_point, ARTBOARD_MARGIN);
+                    zoom::fit_rect(view, board, size, pixels_per_point, ARTBOARD_MARGIN, scheme);
                 }
             }
             ViewCommands::FitLayers => {
                 if let Some(bounds) = with_area(layers.and_then(|layers| layers())) {
-                    zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN);
+                    zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN, scheme);
                 }
             }
             ViewCommands::RotateClockwise => view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(ROTATE_STEP_DEG, view.flip_x)),
@@ -223,9 +230,16 @@ impl ViewCommands {
     /// Whether the command can run on `view` for `target` and the layers' bounds `layers`: Zoom In and Zoom Out stop at
     /// the ends of the zoom range, Print Size needs the document's resolution, Fit Artboard an artboard and Fit Layers
     /// the layers' bounds, which it does not ask for here.
-    pub fn available(self, view: &CanvasView, target: &ViewTarget, layers: Option<LayerBounds<'_>>, pixels_per_point: f32) -> bool {
+    pub fn available(
+        self,
+        view: &CanvasView,
+        target: &ViewTarget,
+        layers: Option<LayerBounds<'_>>,
+        pixels_per_point: f32,
+        scheme: &ZoomScheme,
+    ) -> bool {
         match self {
-            ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, None, pixels_per_point),
+            ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, None, pixels_per_point, scheme),
             ViewCommands::PrintSize => target.print_zoom().is_some(),
             ViewCommands::FitArtboard => with_area(target.artboard).is_some(),
             ViewCommands::FitLayers => layers.is_some(),
@@ -548,7 +562,7 @@ impl CanvasTool for ZoomTool {
         let mut view = space.view;
         let mut drag = drag;
         drag.drag(&mut view, pointer.pos, size, ppp);
-        drag.release(&mut view, out, size, ppp, cx.slop);
+        drag.release(&mut view, out, size, ppp, cx.slop, &space.zoom_scheme()); // P3(canvas-w1): cv.F12
         cx.set_view(view);
     }
 

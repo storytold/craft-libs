@@ -13,7 +13,7 @@ use crate::contract::{
     Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
 };
 use crate::display::Icon;
-use crate::menu::{Menu, MenuItem};
+use crate::menu::{Menu, MenuItem, PanelRow};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
@@ -34,12 +34,15 @@ pub struct TaskBarPlace {
     /// The bar's top left corner relative to the area's, once moved; `None` while it follows the anchor.
     #[serde(default)]
     pub at: Option<[f32; 2]>,
+    /// Where an unpinned bar sits relative to its anchor, once moved; the bar follows the anchor with this offset.
+    #[serde(default)]
+    pub offset: Option<[f32; 2]>,
 }
 
 impl TaskBarPlace {
     /// A place that is pinned or follows the anchor, with the top left corner `at` once moved.
     pub const fn new(pinned: bool, at: Option<[f32; 2]>) -> Self {
-        Self { pinned, at }
+        Self { pinned, at, offset: None }
     }
 
     /// The bar's top left in `area` while it has a place; `None` while it follows its anchor. A non-finite `at`
@@ -151,6 +154,29 @@ impl<'a> TaskBar<'a> {
         TaskBar { label: label.into(), anchor, place }
     }
 
+    /// Adds `rows` to the More menu after Hide, Pin and Reset and a divider: command rows take their label, chord, check
+    /// and enabled state from the command, and submenus show as in panel menus.
+    #[must_use]
+    pub fn more_rows(self, rows: Vec<PanelRow>) -> Self {
+        let _ = rows;
+        todo!("cv.F34")
+    }
+
+    /// Hangs the bar on `side` of the anchor's screen bounds, aligned by `align`, in place of below and centred.
+    #[must_use]
+    pub fn side(self, side: Side, align: Align) -> Self {
+        let _ = (side, align);
+        todo!("cv.F36")
+    }
+
+    /// A moved bar whose offset place would cover `point` (a document point, like the anchor) shows at its unmoved
+    /// place and keeps its offset.
+    #[must_use]
+    pub fn keep_clear(self, point: Point) -> Self {
+        let _ = point;
+        todo!("cv.F36")
+    }
+
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
         let TaskBar { label, anchor, mut place } = self;
@@ -236,7 +262,7 @@ fn settled(held: TaskBarPlace, shown: Rect, area: Rect, moved: Option<Rect>, pic
     }
     match pick {
         Some(MenuPick::Reset) => next = TaskBarPlace::default(),
-        Some(MenuPick::Pin) => next = TaskBarPlace { pinned: true, at: Some(offset(shown)) },
+        Some(MenuPick::Pin) => next = TaskBarPlace { pinned: true, at: Some(offset(shown)), offset: None },
         Some(MenuPick::Hide) | None => {}
     }
     if next.pinned && next.at.is_none() {

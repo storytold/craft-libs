@@ -11,7 +11,7 @@
 
 use super::CanvasTool;
 use super::navigate::NavigationOptions;
-use super::tools::{HandTool, ZoomTool};
+use super::tools::{HandTool, RotateViewTool, ZoomTool};
 use crate::runtime::commands::FirePhase;
 use craft_keymap::Mods;
 
@@ -32,6 +32,19 @@ pub enum MomentaryCommands {
     /// The Zoom tool, zooming out, while the keys are held.
     #[command(label = "Zoom Out (Hold)", kind = "momentary", modal = "in_dialogs", default = "Alt+Space")]
     ZoomOut,
+    /// The Rotate View tool while the key is held.
+    #[command(label = "Rotate View (Hold)", kind = "momentary", modal = "in_dialogs")]
+    RotateView,
+}
+
+/// What a held Shift does to the momentary Hand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MomentaryShift {
+    /// Shift changes nothing: the Hand stays the Hand.
+    #[default]
+    Hand,
+    /// Hand held with Shift (and no Cmd, Ctrl or Alt) is the Rotate View tool.
+    RotateView,
 }
 
 /// A tool in effect only while its keys are held.
@@ -44,6 +57,8 @@ pub enum MomentaryTool {
     ZoomIn,
     /// The Zoom tool, zooming out.
     ZoomOut,
+    /// The Rotate View tool.
+    RotateView,
 }
 
 impl MomentaryTool {
@@ -59,6 +74,7 @@ impl From<MomentaryCommands> for MomentaryTool {
             MomentaryCommands::Hand => MomentaryTool::Hand,
             MomentaryCommands::ZoomIn => MomentaryTool::ZoomIn,
             MomentaryCommands::ZoomOut => MomentaryTool::ZoomOut,
+            MomentaryCommands::RotateView => MomentaryTool::RotateView,
         }
     }
 }
@@ -74,6 +90,10 @@ pub struct Momentary {
     latched: Option<MomentaryTool>,
     hand: HandTool,
     zoom: ZoomTool,
+    rotate: RotateViewTool,
+    /// What a held Shift does to the Hand.
+    #[allow(dead_code)] // P3(canvas-w1): cv.F10
+    shift: MomentaryShift,
     /// The selected tool is the Hand: Cmd and Alt at a press then give Zoom In and Zoom Out.
     hand_selected: bool,
 }
@@ -81,7 +101,23 @@ pub struct Momentary {
 impl Momentary {
     /// The momentary tools under `options`. The Zoom tool reads the document's size from the canvas's space.
     pub fn new(options: NavigationOptions) -> Self {
-        Momentary { held: None, latched: None, hand: HandTool::new(options).lent(), zoom: ZoomTool::new(options).lent(), hand_selected: false }
+        Momentary {
+            held: None,
+            latched: None,
+            hand: HandTool::new(options).lent(),
+            zoom: ZoomTool::new(options).lent(),
+            rotate: RotateViewTool::default(),
+            shift: MomentaryShift::Hand,
+            hand_selected: false,
+        }
+    }
+
+    /// What a held Shift does to the momentary Hand: with [`MomentaryShift::RotateView`], Hand and Shift give the Rotate
+    /// View tool.
+    #[must_use]
+    pub fn shift(mut self, shift: MomentaryShift) -> Self {
+        self.shift = shift;
+        self
     }
 
     /// Tells the set whether the selected tool is the Hand: with the Hand selected and no Space held, Cmd and Alt at a
@@ -156,6 +192,7 @@ impl Momentary {
     pub(crate) fn run_as<'t>(&'t mut self, tool: Option<MomentaryTool>, selected: &'t mut dyn CanvasTool) -> &'t mut dyn CanvasTool {
         match tool {
             Some(MomentaryTool::Hand) => &mut self.hand,
+            Some(MomentaryTool::RotateView) => &mut self.rotate,
             Some(tool) => {
                 self.zoom.out = tool.zooms_out();
                 &mut self.zoom

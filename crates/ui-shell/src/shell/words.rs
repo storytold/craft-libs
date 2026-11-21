@@ -9,6 +9,8 @@ craft_ui::words! {
         document: "appShell.document" = "Document";
         document_tabs: "appShell.documentTabs" = "Document Tabs";
         options: "appShell.options" = "Options";
+        /// The access name of the options bar grip.
+        move_bar: "appShell.moveBar" = "Move bar";
         status: "appShell.status" = "Status";
         screen_mode: "appShell.screenMode" = "Screen Mode";
 
