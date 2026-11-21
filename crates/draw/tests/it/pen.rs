@@ -1,11 +1,14 @@
-//! The Pen and the Curvature Pen: anchors, handles, keys, Auto Add/Delete, the close cue and the tool's access
-//! node, driven through `ToolFixture`.
+//! The Pen and the Curvature Pen: anchors, handles, keys, Auto Add/Delete, the close cue, the tool's access node and
+//! the Path Options look (the rubber band, the thickness, the gear), driven through `ToolFixture`.
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CanvasView, EditEvent};
-use craft_draw::ui::pen::{EditSubpath, Knot, PenDraft, PenEnd, PenEvent, PenMode, PenTool};
-use craft_ui::testing::{ToolFixture, trial};
+use craft_draw::ui::pen::{EditSubpath, Knot, PathOptionsPopover, PathOptionsSettings, PenDraft, PenEnd, PenEvent, PenMode, PenTool};
+use craft_ui::contract::Bind;
+use craft_ui::testing::{Fixture, ToolFixture, trial};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, vec2};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// The document point drawn at the middle of the canvas: the canvas shows (0, 0) to (400, 300) at zoom 1.
 const MIDDLE: Point = Point::new(200.0, 150.0);
@@ -435,4 +438,170 @@ fn a_draft_the_host_ended_is_not_carried_on() {
     pen.log.clear();
     pen.click_doc(100.0, 200.0);
     assert_eq!(pen.draft().knots.len(), 1, "a new draft");
+}
+
+/// A pen with `options`, Rubber Band on and the given thickness.
+fn pen_with_options(rubber_band: bool, thickness: Option<f32>) -> Pen {
+    let options = PathOptionsSettings { rubber_band, thickness, ..PathOptionsSettings::default() };
+    let mut tool = PenTool::new();
+    tool.path_options(options);
+    pen_with(tool, view_of)
+}
+
+/// The end points of the dashes painted `width` points wide: the rubber band and the Curvature mode's preview.
+fn dashes(pen: &mut Pen, width: f32) -> Vec<Pos2> {
+    let shapes = pen.fixture.fixture().frame_shapes();
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::LineSegment { points, stroke } if stroke.width == width => Some(*points),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// The points of the cubic `[p0, p1, p2, p3]` (screen), finely sampled.
+fn cubic(p: [Pos2; 4]) -> Vec<Pos2> {
+    (0..=2000)
+        .map(|i| {
+            let t = i as f32 / 2000.0;
+            let u = 1.0 - t;
+            let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+            let x = w.iter().zip(p).map(|(w, q)| w * q.x).sum();
+            let y = w.iter().zip(p).map(|(w, q)| w * q.y).sum();
+            Pos2::new(x, y)
+        })
+        .collect()
+}
+
+fn nearest(points: &[Pos2], to: Pos2) -> f32 {
+    points.iter().map(|p| p.distance(to)).fold(f32::INFINITY, f32::min)
+}
+
+/// The rubber band is the segment the next click makes: after a dragged (smooth) anchor it leaves along that anchor's
+/// out handle and bends as the segment will, ends at the pointer, and has the Path Options' thickness. Off, nothing
+/// follows the pointer.
+#[trial]
+fn the_rubber_band_is_the_segment_the_next_click_makes() {
+    let mut pen = pen_with_options(true, Some(5.0));
+    pen.click_doc(60.0, 60.0);
+    // A smooth anchor at (160, 60) whose out handle points right, away from the pointer.
+    let (last, out, to) = (pen.at(160.0, 60.0), pen.at(210.0, 60.0), pen.at(100.0, 160.0));
+    pen.drag(last, out, Modifiers::NONE);
+    pen.move_to(to, Modifiers::NONE);
+    let band = dashes(&mut pen, 5.0);
+    assert!(band.len() > 10, "the dashed band, 5 points wide: {band:?}");
+    let curve = cubic([last, out, to, to]);
+    assert!(band.iter().all(|p| nearest(&curve, *p) < 0.6), "every dash lies on the segment the click makes");
+    assert!(nearest(&band, last) < 0.5 && nearest(&band, to) < 6.0, "from the last anchor to the pointer");
+    // A straight band would stay on the chord from the last anchor to the pointer.
+    let chord = |p: &Pos2| {
+        let (d, e) = (to - last, *p - last);
+        (d.x * e.y - d.y * e.x).abs() / d.length()
+    };
+    assert!(band.iter().map(chord).fold(0.0, f32::max) > 12.0, "bent by the out handle");
+
+    let mut off = pen_with_options(false, Some(5.0));
+    off.click_doc(60.0, 60.0);
+    off.drag(last, out, Modifiers::NONE);
+    off.move_to(to, Modifiers::NONE);
+    assert!(dashes(&mut off, 5.0).is_empty(), "no rubber band while it is off");
+}
+
+/// Over the first anchor the rubber band is the closing segment the click makes, which arrives along the first anchor's
+/// in handle rather than as a straight line.
+#[trial]
+fn over_the_first_anchor_the_rubber_band_is_the_closing_segment() {
+    let mut pen = pen_with_options(true, Some(5.0));
+    // A smooth first anchor at (60, 60): out handle up to (60, 20), in handle down to (60, 100).
+    let first = pen.at(60.0, 60.0);
+    pen.drag(first, pen.at(60.0, 20.0), Modifiers::NONE);
+    pen.click_doc(160.0, 60.0);
+    pen.move_to(first, Modifiers::NONE);
+    let band = dashes(&mut pen, 5.0);
+    assert!(band.len() > 10, "the dashed band: {band:?}");
+    let curve = cubic([pen.at(160.0, 60.0), pen.at(160.0, 60.0), pen.at(60.0, 100.0), first]);
+    assert!(band.iter().all(|p| nearest(&curve, *p) < 0.6), "every dash lies on the closing segment");
+    // Halfway the closing cubic passes (110, 75); a straight band would pass (110, 60).
+    assert!(nearest(&band, pen.at(110.0, 75.0)) < 1.5, "bent by the first anchor's in handle");
+    assert!(nearest(&band, pen.at(110.0, 60.0)) > 5.0, "not the straight line");
+}
+
+/// The draft line and the Curvature mode's preview take the Path Options' thickness; a thickness past the popover's
+/// range is kept to it, and one that is not a number leaves the theme's widths.
+#[trial]
+fn the_draft_and_the_curvature_preview_take_the_path_options_thickness() {
+    let draft_width = |thickness: Option<f32>| {
+        let mut pen = pen_with_options(false, thickness);
+        pen.click_doc(60.0, 60.0);
+        pen.click_doc(160.0, 60.0);
+        // The draft line runs from the first anchor to the second; a straight segment is drawn as its two ends.
+        let (a, b) = (pen.at(60.0, 60.0), pen.at(160.0, 60.0));
+        let spans = |points: &[Pos2]| points.iter().any(|p| p.distance(a) < 1.0) && points.iter().any(|p| p.distance(b) < 1.0);
+        let shapes = pen.fixture.fixture().frame_shapes();
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Path(path) if spans(&path.points) => Some(path.stroke.width),
+                egui::Shape::LineSegment { points, stroke } if spans(points) => Some(stroke.width),
+                _ => None,
+            })
+            .fold(0.0, f32::max)
+    };
+    assert_eq!(draft_width(Some(5.0)), 5.0, "the draft line is 5 points wide");
+    assert_eq!(draft_width(Some(99.0)), *PathOptionsSettings::THICKNESS_RANGE.end(), "kept to the popover's range");
+    let theme = draft_width(None);
+    assert!(theme > 0.0 && theme < 5.0, "the theme's line without a thickness: {theme}");
+    assert_eq!(draft_width(Some(f32::NAN)), theme, "a thickness that is not a number leaves the theme's line");
+
+    let mut curvature = pen_with_options(false, Some(5.0));
+    curvature.fixture.tool_mut().mode(PenMode::Curvature);
+    curvature.click_doc(60.0, 160.0);
+    curvature.click_doc(160.0, 60.0);
+    curvature.move_to(curvature.at(260.0, 160.0), Modifiers::NONE);
+    assert!(dashes(&mut curvature, 5.0).len() > 10, "the Curvature preview is 5 points wide, with Rubber Band off");
+}
+
+/// The gear of a path tool other than the Pen holds Thickness and Color and no Rubber Band; the Pen's holds all three.
+#[trial]
+fn only_the_pens_path_options_show_the_rubber_band() {
+    for pen in [true, false] {
+        let settings = PathOptionsSettings { rubber_band: true, ..PathOptionsSettings::default() };
+        let host = Rc::new(RefCell::new((settings, false)));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut held = shown.borrow_mut();
+            let (settings, open) = &mut *held;
+            let _ = PathOptionsPopover::new("Path Options", Bind::bound(settings)).rubber_band(pen).show(ui, open);
+        });
+        fixture.settle();
+        host.borrow_mut().1 = true;
+        fixture.idle(3);
+        assert!(fixture.by_label("Thickness").is_some() && fixture.by_label("Color").is_some(), "pen {pen}: Thickness and Color");
+        assert_eq!(fixture.by_label("Rubber Band").is_some(), pen, "pen {pen}: Rubber Band only on the Pen's gear");
+        assert!(host.borrow().0.rubber_band, "pen {pen}: the setting is left as it is");
+    }
+}
+
+/// A click on the gear opens the popover and a second click closes it, as the gear's own description says.
+#[trial]
+fn a_click_on_the_gear_opens_and_closes_the_path_options() {
+    let host = Rc::new(RefCell::new((PathOptionsSettings::default(), false)));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let (settings, open) = &mut *held;
+        let _ = PathOptionsPopover::new("Pen options", Bind::bound(settings)).show(ui, open);
+    });
+    fixture.settle();
+    let gear = fixture.by_label("Path Options").expect("the gear");
+    fixture.click(&gear);
+    fixture.idle(3);
+    assert!(host.borrow().1, "the click opens it");
+    assert!(fixture.by_label("Thickness").is_some(), "the popover shows");
+    let gear = fixture.by_label("Path Options").expect("the gear");
+    fixture.click(&gear);
+    fixture.idle(3);
+    assert!(!host.borrow().1, "a second click closes it");
 }
