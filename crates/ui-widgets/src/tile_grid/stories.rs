@@ -3,7 +3,7 @@
 use super::{
     BadgeKind, BadgeSlot, BadgeVisibility, CaptionPlace, ThumbnailSlider, Tile, TileBadge, TileFlag, TileMark, TilePartEvent, TileStatus, TileZoom,
 };
-use crate::contract::{Bind, Props as _, Show as _, Validity};
+use crate::contract::{Props as _, Show as _, Validity};
 use crate::list::{ThumbAspect, ToggleState};
 use crate::runtime::env::Message;
 use crate::testing::pictures::StoryPictures;
@@ -121,27 +121,27 @@ fn larger(fixture: &mut Fixture) {
 
 #[story(ThumbnailSlider<'static>, covers = [Default], drive = Drive::Custom(larger))]
 fn thumbnail_slider(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ThumbnailSlider::new("Thumbnail Size", Bind::bound(data.value("zoom", 1.0)), TileZoom::Ladder).show(ui).into()
+    ThumbnailSlider::new("Thumbnail Size", data.bind("zoom", 1.0), TileZoom::Ladder).show(ui).into()
 }
 
 #[story(ThumbnailSlider<'static>, covers = [], drive = Drive::Custom(larger))]
 fn thumbnail_slider_range(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ThumbnailSlider::new("Thumbnail Size", Bind::bound(data.value("zoom", 1.0)), ZOOM_RANGE).show(ui).into()
+    ThumbnailSlider::new("Thumbnail Size", data.bind("zoom", 1.0), ZOOM_RANGE).show(ui).into()
 }
 
 #[story(ThumbnailSlider<'static>, covers = [Mixed], drive = Drive::Never)]
 fn thumbnail_slider_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ThumbnailSlider::new("Thumbnail Size", Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), TileZoom::Ladder).show(ui).into()
+    ThumbnailSlider::new("Thumbnail Size", data.bind_mixed("mixed", Mixed::Mixed), TileZoom::Ladder).show(ui).into()
 }
 
 #[story(ThumbnailSlider<'static>, covers = [Invalid], drive = Drive::Never)]
 fn thumbnail_slider_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_over = |zoom: &f64| if *zoom > CAP { Validity::Refuse(Message::new("Too large for this grid")) } else { Validity::Ok };
-    ThumbnailSlider::new("Thumbnail Size", Bind::bound(data.value("over", 5.0)).check(refuse_over), TileZoom::Ladder).show(ui).into()
+    ThumbnailSlider::new("Thumbnail Size", data.bind("over", 5.0).check(refuse_over), TileZoom::Ladder).show(ui).into()
 }
 
 #[story(ThumbnailSlider<'static>, covers = [], disabled_text = "No tiles to size")]
 fn thumbnail_slider_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tooltip = data.tooltip("The size of the tiles");
-    ThumbnailSlider::new("Thumbnail Size", Bind::bound(data.value("zoom", 1.0)), TileZoom::Ladder).tooltip(tooltip).show(ui).into()
+    ThumbnailSlider::new("Thumbnail Size", data.bind("zoom", 1.0), TileZoom::Ladder).tooltip(tooltip).show(ui).into()
 }

@@ -150,6 +150,7 @@ pub(crate) fn analyze_file(src: &str, file: &syn::File, include_tests: bool) -> 
         imports: Vec::new(),
         fns: Vec::new(),
         scope: Vec::new(),
+        in_named_const: false,
         out: Analysis::default(),
         include_tests,
     };
@@ -184,6 +185,9 @@ struct ConstDef {
     line: usize,
     expr: Expr,
     value: Option<f64>,
+    /// A component constant: a module- or impl-level `const` with a doc comment. A name that resolves to it is not a
+    /// literal size, and its initializer is its definition, not a call site.
+    named: bool,
 }
 
 /// A `use` declaration: `alias` is the name it brings in, `None` for a glob (`path::*`).
@@ -202,6 +206,8 @@ struct Linter<'a> {
     fns: Vec<(Vec<Frame>, String)>,
     /// The modules and impl blocks around the item being visited.
     scope: Vec<Frame>,
+    /// Inside the initializer of a named const, where `literal-size/*` does not apply.
+    in_named_const: bool,
     out: Analysis,
     include_tests: bool,
 }
@@ -212,17 +218,21 @@ struct ConstCollector {
     imports: Vec<Import>,
     fns: Vec<(Vec<Frame>, String)>,
     scope: Vec<Frame>,
+    /// How many fn bodies enclose the item being visited.
+    fn_depth: usize,
     include_tests: bool,
 }
 
 impl ConstCollector {
-    fn add(&mut self, name: &syn::Ident, expr: &Expr) {
+    /// Records a const or static; `documented` is whether it is a `const` with a doc comment.
+    fn add(&mut self, name: &syn::Ident, expr: &Expr, documented: bool) {
         self.defs.push(ConstDef {
             scope: self.scope.clone(),
             name: name.to_string(),
             line: name.span().start().line,
             expr: expr.clone(),
             value: None,
+            named: documented && self.fn_depth == 0,
         });
     }
 
@@ -256,8 +266,20 @@ impl<'ast> Visit<'ast> for ConstCollector {
     fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
         if !self.skipped(&i.attrs) {
             self.fns.push((module_scope(&self.scope).to_vec(), i.sig.ident.to_string()));
+            self.fn_depth += 1;
             visit::visit_item_fn(self, i);
+            self.fn_depth -= 1;
         }
+    }
+    fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
+        self.fn_depth += 1;
+        visit::visit_impl_item_fn(self, i);
+        self.fn_depth -= 1;
+    }
+    fn visit_trait_item_fn(&mut self, i: &'ast syn::TraitItemFn) {
+        self.fn_depth += 1;
+        visit::visit_trait_item_fn(self, i);
+        self.fn_depth -= 1;
     }
     fn visit_item_use(&mut self, i: &'ast syn::ItemUse) {
         if !self.skipped(&i.attrs) {
@@ -268,15 +290,15 @@ impl<'ast> Visit<'ast> for ConstCollector {
         }
     }
     fn visit_item_const(&mut self, i: &'ast syn::ItemConst) {
-        self.add(&i.ident, &i.expr);
+        self.add(&i.ident, &i.expr, has_doc(&i.attrs));
         visit::visit_item_const(self, i);
     }
     fn visit_item_static(&mut self, i: &'ast syn::ItemStatic) {
-        self.add(&i.ident, &i.expr);
+        self.add(&i.ident, &i.expr, false);
         visit::visit_item_static(self, i);
     }
     fn visit_impl_item_const(&mut self, i: &'ast syn::ImplItemConst) {
-        self.add(&i.ident, &i.expr);
+        self.add(&i.ident, &i.expr, has_doc(&i.attrs));
         visit::visit_impl_item_const(self, i);
     }
 }
@@ -347,6 +369,11 @@ fn last_two(path: &syn::Path) -> Option<(String, String)> {
 
 fn last_ident(path: &syn::Path) -> Option<String> {
     path.segments.last().map(|s| s.ident.to_string())
+}
+
+/// Whether an item carries a doc comment (`///` or `#[doc = ...]`).
+fn has_doc(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("doc"))
 }
 
 fn cfg_is_test(meta: &Meta) -> bool {
@@ -420,8 +447,14 @@ impl Linter<'_> {
     }
 
     fn resolve_consts(&mut self, file: &syn::File) {
-        let mut collector =
-            ConstCollector { defs: Vec::new(), imports: Vec::new(), fns: Vec::new(), scope: Vec::new(), include_tests: self.include_tests };
+        let mut collector = ConstCollector {
+            defs: Vec::new(),
+            imports: Vec::new(),
+            fns: Vec::new(),
+            scope: Vec::new(),
+            fn_depth: 0,
+            include_tests: self.include_tests,
+        };
         collector.visit_file(file);
         self.defs = collector.defs;
         self.imports = collector.imports;
@@ -431,7 +464,8 @@ impl Linter<'_> {
                 .defs
                 .iter()
                 .enumerate()
-                .filter(|(_, d)| d.value.is_none())
+                // A named const keeps no literal value: a name that resolves to it reads like a token.
+                .filter(|(_, d)| d.value.is_none() && !d.named)
                 .filter_map(|(i, d)| self.eval_in(&d.expr, &d.scope).map(|v| (i, v)))
                 .collect();
             if resolved.is_empty() {
@@ -552,12 +586,21 @@ impl Linter<'_> {
         Some((shown, def.line))
     }
 
+    /// Whether the const item named `ident` is a named const (`ConstDef::named`).
+    fn is_named_const(&self, ident: &syn::Ident) -> bool {
+        let line = ident.span().start().line;
+        self.defs.iter().any(|d| d.named && d.line == line && *ident == d.name)
+    }
+
     fn is_flagged_size(&self, e: &Expr) -> bool {
         self.eval(e).is_some_and(|v| v != 0.0)
     }
 
     /// Reports `what` when any of `args` is a non-zero literal size.
     fn size_rule<'e>(&mut self, rule: &'static str, what: proc_macro2::Span, args: impl IntoIterator<Item = &'e Expr>) {
+        if self.in_named_const {
+            return;
+        }
         let args: Vec<&Expr> = args.into_iter().collect();
         // A vector of literal -1, 0 and 1 is a direction, not a size.
         if rule == VEC2 && args.iter().all(|a| is_unit_literal(a)) {
@@ -726,11 +769,21 @@ fn is_unit_literal(e: &Expr) -> bool {
 
 fn hint(rule: &str) -> &'static str {
     match rule {
-        VEC2 => "use a size token (`Tokens::of(ui).size.control.md`, `space.gap.inline`) or mark `// design: allow(<reason>)`",
-        ADD_SPACE => "use a spacing token (`Tokens::of(ui).space.gap.inline`) or mark `// design: allow(<reason>)`",
-        CORNER_RADIUS => "use a radius token from `Tokens::of(ui)` or mark `// design: allow(<reason>)`",
-        STROKE => "use a stroke width token from `Tokens::of(ui)` or mark `// design: allow(<reason>)`",
-        MARGIN => "use a spacing token (`Tokens::of(ui).space`) or mark `// design: allow(<reason>)`",
+        VEC2 => {
+            "use a size token (`Tokens::of(ui).size.control.md`, `space.gap.inline`), a documented module-level const for a dimension of the component's own drawing, or mark `// design: allow(<reason>)`"
+        }
+        ADD_SPACE => {
+            "use a spacing token (`Tokens::of(ui).space.gap.inline`), a documented module-level const for a dimension of the component's own drawing, or mark `// design: allow(<reason>)`"
+        }
+        CORNER_RADIUS => {
+            "use a radius token from `Tokens::of(ui)`, a documented module-level const for a dimension of the component's own drawing, or mark `// design: allow(<reason>)`"
+        }
+        STROKE => {
+            "use a stroke width token from `Tokens::of(ui)`, a documented module-level const for a dimension of the component's own drawing, or mark `// design: allow(<reason>)`"
+        }
+        MARGIN => {
+            "use a spacing token (`Tokens::of(ui).space`), a documented module-level const for a dimension of the component's own drawing, or mark `// design: allow(<reason>)`"
+        }
         TOOLTIP => "use `craft_ui::contract::Props::tooltip` or `craft_ui::contract::Show::show_with_tip` or mark `// design: allow(<reason>)`",
         STYLE_MUTATION => "set styles through the theme (craft-ui installs them from the tokens) or mark `// design: allow(<reason>)`",
         _ => "use a type-size token from `Tokens::of(ui)` or mark `// design: allow(<reason>)`",
@@ -774,8 +827,17 @@ impl<'ast> Visit<'ast> for Linter<'_> {
     }
     fn visit_item_const(&mut self, i: &'ast syn::ItemConst) {
         if !self.skips(&i.attrs, i.span()) {
+            let named = self.in_named_const || self.is_named_const(&i.ident);
+            let outer = std::mem::replace(&mut self.in_named_const, named);
             visit::visit_item_const(self, i);
+            self.in_named_const = outer;
         }
+    }
+    fn visit_impl_item_const(&mut self, i: &'ast syn::ImplItemConst) {
+        let named = self.in_named_const || self.is_named_const(&i.ident);
+        let outer = std::mem::replace(&mut self.in_named_const, named);
+        visit::visit_impl_item_const(self, i);
+        self.in_named_const = outer;
     }
     fn visit_item_static(&mut self, i: &'ast syn::ItemStatic) {
         if !self.skips(&i.attrs, i.span()) {

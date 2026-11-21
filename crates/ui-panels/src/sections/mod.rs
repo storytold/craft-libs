@@ -1,16 +1,16 @@
 //! Sections and title rows: `TitleRow`, `FooterBar`, `Section`, `GroupBox` and `Panel`.
 
 pub(crate) mod footer;
-mod group_box;
-#[cfg(feature = "testing")]
+pub(crate) mod group_box;
+#[cfg(feature = "suite")]
 mod sample;
-mod section;
-mod stack;
-mod title_row;
+pub(crate) mod section;
+pub(crate) mod stack;
+pub(crate) mod title_row;
 mod words;
 
 // Panel.
-mod panel;
+pub(crate) mod panel;
 
 pub use footer::{DialogRole, DropAction, DropActionOutput, DropActionStyle, FooterAction, FooterBar, FooterButton, FooterDrop, FooterOutput};
 pub use group_box::{GroupBox, GroupBoxStyle};
@@ -25,7 +25,7 @@ pub use panel::{Panel, PanelOutput, PanelStyle};
 
 // Reorderable sections.
 mod layout;
-mod reorderable;
+pub(crate) mod reorderable;
 
 pub use layout::{SectionEvent, SectionKey, SectionLayout, SectionState};
 pub use reorderable::{ReorderableSections, ReorderableSectionsOutput, SectionButton, SectionCommands, SectionSpec};

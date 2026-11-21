@@ -161,9 +161,9 @@ impl<K> Default for Pools<K> {
 ///   are dropped at the next frame that draws. Asked keys move to the priority they were last asked with.
 /// - **Failures.** A job returns a `LoadFailure`; the state carries it. A job that panics is stored as
 ///   `LoadFailure::Panicked`.
-/// - **Waking.** The queue asks for a pass when a job finishes; no timed repaint. A `Loading` answer notes the
-///   asking code as still moving (`runtime::replay`), so a settled region that shows a stand-in runs in that pass,
-///   asks again and shows the finished picture, and its asking keeps the job.
+/// - **Waking.** The queue asks for a pass when a job finishes; no timed repaint. A `Loading` answer notes the asking
+///   code as still moving (`runtime::replay`), so a settled memoized view that shows a stand-in runs in that pass, asks
+///   again and shows the finished picture, and its asking keeps the job.
 /// - **Without lanes** (`lanes == 0`) the first call in a frame runs one job inline.
 pub struct TextureLoader<K: TextureKey> {
     store: TextureStore<K>,

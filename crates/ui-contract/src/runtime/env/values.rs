@@ -1,4 +1,4 @@
-//! The library values the env carries: scale, motion policy and arena id.
+//! The library values the env carries: scale, motion policy, arena id and the component set.
 
 use super::EnvValue;
 use craft_behavior::{ColumnKey, MotionMode};
@@ -21,6 +21,53 @@ impl Scale {
 impl Default for Scale {
     fn default() -> Self {
         Scale(1.0)
+    }
+}
+
+/// The user's wheel multipliers: `line` for notches, `point` for touchpad deltas. Distinct from
+/// [`WheelScope`](super::WheelScope), which says who takes the wheel, not how far it moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct WheelSpeed {
+    /// The multiplier for line (notch) scrolling.
+    pub line: f32,
+    /// The multiplier for point (touchpad) scrolling.
+    pub point: f32,
+}
+
+impl WheelSpeed {
+    /// The multipliers for line (notch) and point (touchpad) scrolling.
+    pub const fn new(line: f32, point: f32) -> Self {
+        WheelSpeed { line, point }
+    }
+}
+
+impl Default for WheelSpeed {
+    fn default() -> Self {
+        WheelSpeed { line: 1.0, point: 1.0 }
+    }
+}
+
+/// Code pages that decode Alt+numpad codes; the app sets them from the system locale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AltCodePages {
+    /// The ANSI code page, for codes typed with a leading zero.
+    pub ansi: u16,
+    /// The OEM code page, for codes typed without one.
+    pub oem: u16,
+}
+
+impl AltCodePages {
+    /// The ANSI and OEM code pages.
+    pub const fn new(ansi: u16, oem: u16) -> Self {
+        AltCodePages { ansi, oem }
+    }
+}
+
+impl Default for AltCodePages {
+    fn default() -> Self {
+        AltCodePages { ansi: 1252, oem: 437 }
     }
 }
 
@@ -83,7 +130,7 @@ pub enum RowPressed {
 /// takes a box wider than its line, a select fits its widest entry up to a field length, a rule shows only with the
 /// member after it, and a row too long for its room narrows its last units first. A layer or pane opened from the bar
 /// starts without it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InBar(pub bool);
 
@@ -92,6 +139,27 @@ impl EnvValue for InBar {
         InBar(false)
     }
 }
+
+/// The component set: an app sets it on its root (`RootEnv::set`) and a container may set another for its subtree
+/// (`Overrides::values`); every window, layer and popup opened inside takes the scope's. A component with variants
+/// reads it in `style` (`StyleCx::set`) and maps it to one of them. It is in the style key, so a change restyles as a
+/// theme or density change does.
+impl EnvValue for craft_theme::ComponentSet {
+    const AFFECTS_STYLE: bool = true;
+
+    fn root() -> Self {
+        craft_theme::ComponentSet::default()
+    }
+
+    fn style_hash(&self) -> Option<u64> {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut hasher);
+        Some(hasher.finish())
+    }
+}
+
+impl super::StyleValue for craft_theme::ComponentSet {}
 
 /// Where a shell pane sits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

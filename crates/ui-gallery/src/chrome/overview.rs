@@ -1,14 +1,18 @@
 //! The centre tabs: the Overview (the cards of one level), a component's tab (a card per story group) and the Variants view
-//! that replaces the front one.
+//! that replaces the front one. Each tab's body is a memoized view around its cards, which are memoized views of their
+//! own.
 
 use super::card::{Card, CardEvents, CardStory, Look};
-use super::panels::Panels;
-use super::variants;
-use crate::viewer::{Catalog, ComponentInfo, PanelId, TreeKey, by_level, entry_of};
+use super::inspect::Inspected;
+use super::panels::{StoryOf, selected_of, target_story, view_id};
+use super::variants::{self, VariantsEvent, VariantsIn};
+use crate::viewer::{Catalog, Cells, ComponentInfo, PanelId, TreeKey, by_level, entry_of};
 use craft_behavior::{ColumnWidth, Selection};
 use craft_theme::variant::Tone;
 use craft_theme::{Tokens, TypeRole};
-use craft_ui::contract::{Bind, BodyCx, Entry, Gap, Lazy, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, StoryLayout};
+use craft_ui::contract::{
+    Bind, BodyCx, Entry, Gap, Lazy, MemoProps, MemoView, Outbox, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, StoryLayout, Tracked,
+};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::Notice;
@@ -16,7 +20,7 @@ use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, WindowKey};
 use craft_ui::shell::AppShell;
 use craft_ui::style::SurfaceKind;
-use craft_ui::testing::StoryRegistration;
+use craft_ui::testing::{StoryRegistration, least_stage_width};
 use egui::Ui;
 
 /// A card's story row before it ran, in standard control heights (120 at a 24 control).
@@ -24,7 +28,7 @@ const STORY_ROW_IN_CONTROLS: f32 = 5.0;
 
 /// The narrowest a card may be before the cards go to one column: a story at its least width inside the card's padding.
 fn card_min_width(tokens: &Tokens) -> f32 {
-    tokens.size.story.width_min + 2.0 * tokens.space.pad.regular
+    least_stage_width(tokens) + 2.0 * tokens.space.pad.regular
 }
 
 const ONE: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
@@ -36,7 +40,7 @@ pub struct SpecStory {
     /// The index of the story in the catalog.
     pub index: usize,
     /// The story's registration.
-    pub story: &'static StoryRegistration,
+    pub story: StoryRegistration,
     /// The story's caption.
     pub caption: String,
 }
@@ -125,18 +129,29 @@ pub(super) struct Reported {
     pub events: CardEvents,
 }
 
-/// The index in `catalog` of the story the component registered as `type_name` shows: the one picked for it, else its
-/// first.
-pub(super) fn target_story(p: &Panels<'_>, type_name: &'static str) -> Option<usize> {
-    p.catalog.pick(type_name, p.story_of.get(type_name).copied())
-}
-
-/// The selected component's registered name.
-pub(super) fn selected_type(p: &Panels<'_>) -> Option<&'static str> {
-    p.selection.items.iter().rev().find_map(|key| match key {
-        TreeKey::Component(type_name) => Some(*type_name),
-        _ => None,
-    })
+/// What a centre tab's view reads and edits besides its own values: the browser's state its cards show and change, and
+/// where its requests go.
+#[derive(MemoProps)]
+#[non_exhaustive]
+pub struct Centre<'a> {
+    /// What is listed.
+    pub catalog: &'a Catalog,
+    /// The selected row of the tree; a card press selects its component.
+    pub selection: &'a mut Tracked<Selection<TreeKey>>,
+    /// The story each component's card shows.
+    pub story_of: &'a mut Tracked<StoryOf>,
+    /// The shown stories' states.
+    pub cells: &'a mut Cells,
+    /// The reset count the cards' id scopes carry.
+    pub generation: u32,
+    /// How the tab's selected card is inspected, while the inspector is on and the tab is in front.
+    pub inspected: Option<Inspected>,
+    /// The Variants view open in this tab.
+    pub variants: Option<VariantsIn>,
+    /// The components whose tab a card asked to open.
+    pub opened: Outbox<'a, &'static str>,
+    /// What the Variants view asked for.
+    pub variants_out: Outbox<'a, VariantsEvent>,
 }
 
 /// The window's background (an embedded shell, which paints it and keeps its cards' dialogs in the tab) with the
@@ -150,22 +165,24 @@ pub(super) fn on_background(ui: &mut Ui, key: &str, mut add: impl FnMut(&mut Ui,
 }
 
 /// The cards in one or two columns, scrolling vertically; each row is as tall as its tallest card. A row out of view
-/// does not run (`Lazy`), and a settled card in view repaints its last run (`Lazy::settles`); the card of the component
-/// `reveal` names glides to the top of the view. The selected card of
-/// `tab` is inspected while the inspector is on. The cards report into `reported`.
+/// does not run (`Lazy`). Each card and each story in it is a memoized view that replays its last run until its inputs
+/// change (the story's data by its revision, the card's look and state, the room and place). The card of the component
+/// `reveal` names glides to the top of the view. The selected card is inspected as `inspected` says. The cards report
+/// into `reported`.
+#[expect(clippy::too_many_arguments, reason = "the grid's own values beside the shared cells; a struct would only rename them")]
 pub(super) fn grid(
     ui: &mut Ui,
     scroll_id: impl std::hash::Hash + std::fmt::Debug,
-    tab: Option<PanelId>,
+    inspected: Option<&Inspected>,
     cards: &[Spec],
-    p: &mut Panels<'_>,
+    cells: &mut Cells,
+    generation: u32,
     one_column: bool,
     reveal: Option<&'static str>,
 ) -> Vec<Reported> {
     let mut reported = Vec::new();
     let tokens = Env::of(ui).tokens.clone();
     let columns = if one_column || ui.available_width() < 2.0 * card_min_width(&tokens) { 1 } else { 2 };
-    let generation = p.generation;
     // A story that fills takes its content height, at most the view's, as on the old gallery's tiles.
     let room = ui.available_height();
     Stack::new().fill().scroll(Scroll::vertical()).gap(Gap::CardRow).id_salt(scroll_id).show(ui, |ui, _| {
@@ -179,13 +196,12 @@ pub(super) fn grid(
             Lazy::new((generation, columns, keys), estimate).reveal(revealed).show(ui, |ui| {
                 Grid::new(if columns == 1 { ONE } else { TWO }).gap(Gap::CardColumn).fill_width().show(ui, |ui, _| {
                     for (at, spec) in chunk.iter().enumerate() {
-                        // A settled card repaints its last run; a card that does not run reports nothing, as it took
-                        // no press and ran no command.
-                        Lazy::new((generation, spec.key.as_str()), spec.estimate(&tokens)).settles(true).show(ui, |ui| {
+                        // A card out of view does not run and reports nothing, as it took no press and ran no command.
+                        Lazy::new((generation, spec.key.as_str()), spec.estimate(&tokens)).show(ui, |ui| {
                             let stories = spec.card_stories();
                             let mut card = spec.card(&stories, format!("{}-{generation}", spec.key), room);
-                            card.inspect = p.inspect.of(tab, spec.selected);
-                            let events = card.show(ui, p.cells);
+                            card.inspect = inspected.filter(|_| spec.selected).cloned();
+                            let events = card.show(ui, cells);
                             reported.push(Reported { spec: row * columns + at, events });
                         });
                     }
@@ -197,52 +213,76 @@ pub(super) fn grid(
 }
 
 /// Applies what the cards reported: a press selects the card's component and picks the card's first story unless the
-/// picked one is on the card, Open opens its tab, Reset gives the card's stories their start values.
-pub(super) fn apply(p: &mut Panels<'_>, cards: &[Spec], reported: Vec<Reported>) {
+/// picked one is on the card, Open asks for its tab, Reset gives the card's stories their start values. A value is
+/// written only when it changes.
+pub(super) fn apply(c: &mut Centre<'_>, cards: &[Spec], reported: Vec<Reported>) {
     for Reported { spec, events } in reported {
         let Some(spec) = cards.get(spec) else { continue };
         if events.reset {
             for story in &spec.stories {
-                p.cells.entry(story.index).or_default().reset();
+                c.cells.state_of(story.index).reset();
             }
         }
         if events.opened {
-            *p.open_request = Some(spec.type_name);
+            c.opened.send(spec.type_name);
         }
         if events.pressed || events.opened {
-            *p.selection = Selection::single(TreeKey::Component(spec.type_name));
+            let single = Selection::single(TreeKey::Component(spec.type_name));
+            if **c.selection != single {
+                **c.selection = single;
+            }
             // The picked story stays while it is one of the card's; else the card's first story is picked.
-            let picked = target_story(p, spec.type_name);
+            let picked = target_story(c.catalog, c.story_of, spec.type_name);
             if let Some(first) = spec.stories.first()
                 && !spec.stories.iter().any(|story| Some(story.index) == picked)
             {
-                p.story_of.insert(spec.type_name, first.story.story.name);
+                c.story_of.insert(spec.type_name, first.story.story.name);
             }
         }
     }
 }
 
-/// The selection, when it changed since the Overview's cards last followed it, and its component's level as the shown
-/// one.
-fn follow_selection(p: &mut Panels<'_>) -> Option<Option<&'static str>> {
-    let selected = selected_type(p);
-    if *p.followed == Some(selected) {
-        return None;
-    }
-    if let Some(entry) = selected.and_then(entry_of) {
-        *p.level = entry.level.title().to_owned();
-    }
-    Some(selected)
+/// What the Overview reads and edits.
+#[derive(MemoProps)]
+struct OverviewProps<'a> {
+    centre: Centre<'a>,
+    /// The text that narrows the levels' components.
+    filter: &'a Tracked<String>,
+    /// The level shown, by its title.
+    level: &'a mut Tracked<String>,
+    /// The selection the cards last followed.
+    followed: &'a mut Tracked<Option<Option<&'static str>>>,
 }
 
 /// The Overview: the level select over the cards of the level's components.
-pub(super) fn overview(ui: &mut Ui, p: &mut Panels<'_>) {
-    if variants::show(ui, p, PanelId::Overview) {
+pub(super) fn overview(
+    ui: &mut Ui,
+    centre: Centre<'_>,
+    filter: &Tracked<String>,
+    level: &mut Tracked<String>,
+    followed: &mut Tracked<Option<Option<&'static str>>>,
+) {
+    let props = OverviewProps { centre, filter, level, followed };
+    let _ = MemoView::new(view_id(&PanelId::Overview), props, overview_view).show(ui);
+}
+
+fn overview_view(p: &mut OverviewProps<'_>, ui: &mut Ui) {
+    let OverviewProps { centre, filter, level: shown_level, followed } = p;
+    let (shown_level, followed) = (&mut **shown_level, &mut **followed);
+    if variants::show(ui, centre) {
         return;
     }
-    let follow = follow_selection(p);
-    let groups = by_level(p.catalog, p.filter);
-    let Some(shown) = groups.iter().position(|(level, _)| level.title() == p.level.as_str()).or(if groups.is_empty() { None } else { Some(0) })
+    // The selection, when it changed since the cards last followed it; its component's level becomes the shown one.
+    let selected = selected_of(centre.selection);
+    let follow = (**followed != Some(selected)).then_some(selected);
+    if follow.is_some()
+        && let Some(entry) = selected.and_then(entry_of)
+        && shown_level.as_str() != entry.level.title()
+    {
+        **shown_level = entry.level.title().to_owned();
+    }
+    let groups = by_level(centre.catalog, filter.as_str());
+    let Some(shown) = groups.iter().position(|(level, _)| level.title() == shown_level.as_str()).or(if groups.is_empty() { None } else { Some(0) })
     else {
         on_background(ui, "overview", |ui, _| {
             Notice::new(Tone::Info, "No components match the filter.").show(ui);
@@ -251,27 +291,28 @@ pub(super) fn overview(ui: &mut Ui, p: &mut Panels<'_>) {
     };
     let level = groups[shown].0;
     let entries: Vec<Entry<craft_ui::contract::Level>> = groups.iter().map(|(level, _)| Entry::new(*level, level.title())).collect();
-    let selected = selected_type(p);
-    let cards: Vec<Spec> = groups[shown].1.iter().filter_map(|component| component_card(p, component, selected)).collect();
+    let cards: Vec<Spec> =
+        groups[shown].1.iter().filter_map(|component| component_card(centre.catalog, centre.story_of, component, selected)).collect();
     let mut chosen = level;
     let mut reported = Vec::new();
     // The cards follow the selection in the pass they run: its card glides into view, and only then is it followed.
     let mut ran = false;
+    let (inspected, generation) = (centre.inspected.clone(), centre.generation);
     on_background(ui, "overview", |ui, _| {
         ran = true;
         Row::new().show(ui, |ui, _| {
             Text::new("Level:").shade(Shade::Muted).show(ui);
             Select::new("Level", Bind::bound(&mut chosen), &entries).sizing(Sizing::Content).show(ui);
         });
-        reported = grid(ui, level.title(), Some(PanelId::Overview), &cards, p, false, follow.flatten());
+        reported = grid(ui, level.title(), inspected.as_ref(), &cards, centre.cells, generation, false, follow.flatten());
     });
     if ran && let Some(selected) = follow {
-        *p.followed = Some(selected);
+        **followed = Some(selected);
     }
     if chosen != level {
-        *p.level = chosen.title().to_owned();
+        **shown_level = chosen.title().to_owned();
     }
-    apply(p, &cards, reported);
+    apply(centre, &cards, reported);
 }
 
 /// The stories of group `group` of the component registered as `type_name`, under their captions.
@@ -280,14 +321,14 @@ fn group_stories(catalog: &Catalog, type_name: &'static str, group: usize, name:
 }
 
 /// The group the component registered as `type_name` shows: the group of its picked story, else its first.
-fn target_group(p: &Panels<'_>, type_name: &'static str) -> usize {
-    target_story(p, type_name).and_then(|at| p.catalog.group_at(type_name, at)).unwrap_or(0)
+fn target_group(catalog: &Catalog, story_of: &StoryOf, type_name: &'static str) -> usize {
+    target_story(catalog, story_of, type_name).and_then(|at| catalog.group_at(type_name, at)).unwrap_or(0)
 }
 
 /// The Overview's card of `component`: the cases of the group of its picked story; selected when it is the selected
 /// component.
-fn component_card(p: &Panels<'_>, component: &ComponentInfo, selected: Option<&'static str>) -> Option<Spec> {
-    let mut spec = overview_card(p.catalog, component, target_group(p, component.type_name))?;
+fn component_card(catalog: &Catalog, story_of: &StoryOf, component: &ComponentInfo, selected: Option<&'static str>) -> Option<Spec> {
+    let mut spec = overview_card(catalog, component, target_group(catalog, story_of, component.type_name))?;
     spec.selected = selected == Some(component.type_name);
     Some(spec)
 }
@@ -317,19 +358,40 @@ pub fn overview_card(catalog: &Catalog, component: &ComponentInfo, group: usize)
     })
 }
 
+/// What a component's tab reads and edits.
+#[derive(MemoProps)]
+struct ComponentTabProps<'a> {
+    centre: Centre<'a>,
+    /// The tab.
+    tab: &'a PanelId,
+    /// The registered name of the tab's component, when the catalog lists it.
+    type_name: Option<&'static str>,
+}
+
 /// A component's tab: each story group of the component as a card in one column, titled with the group's name.
-pub(super) fn component_tab(ui: &mut Ui, p: &mut Panels<'_>, type_name: &'static str) {
-    if variants::show(ui, p, PanelId::Component(type_name)) {
+pub(super) fn component_tab(ui: &mut Ui, centre: Centre<'_>, tab: &PanelId) {
+    let type_name = match tab {
+        PanelId::Component(name) => centre.catalog.component_named(name),
+        _ => None,
+    };
+    let props = ComponentTabProps { centre, tab, type_name };
+    let _ = MemoView::new(view_id(tab), props, component_tab_view).show(ui);
+}
+
+fn component_tab_view(p: &mut ComponentTabProps<'_>, ui: &mut Ui) {
+    let ComponentTabProps { centre, type_name, .. } = p;
+    if variants::show(ui, centre) {
         return;
     }
-    let (Some(entry), Some(component)) = (entry_of(type_name), p.catalog.component(type_name)) else {
+    let found = type_name.and_then(|type_name| Some((type_name, entry_of(type_name)?, centre.catalog.component(type_name)?)));
+    let Some((type_name, entry, component)) = found else {
         on_background(ui, "component", |ui, _| {
             Notice::new(Tone::Info, "The component has no stories.").show(ui);
         });
         return;
     };
-    let target = target_group(p, type_name);
-    let chosen = selected_type(p) == Some(type_name);
+    let target = target_group(centre.catalog, centre.story_of, type_name);
+    let chosen = selected_of(centre.selection) == Some(type_name);
     let cards: Vec<Spec> = component
         .groups
         .iter()
@@ -339,7 +401,7 @@ pub(super) fn component_tab(ui: &mut Ui, p: &mut Panels<'_>, type_name: &'static
             type_name,
             title: group.name.clone(),
             note: None,
-            stories: group_stories(p.catalog, type_name, at, &entry.name),
+            stories: group_stories(centre.catalog, type_name, at, &entry.name),
             layout: entry.story_layout(&group.name),
             surface: entry.surface,
             open: false,
@@ -350,6 +412,9 @@ pub(super) fn component_tab(ui: &mut Ui, p: &mut Panels<'_>, type_name: &'static
         })
         .collect();
     let mut reported = Vec::new();
-    on_background(ui, "component", |ui, _| reported = grid(ui, ("component", type_name), Some(PanelId::Component(type_name)), &cards, p, true, None));
-    apply(p, &cards, reported);
+    let (inspected, generation) = (centre.inspected.clone(), centre.generation);
+    on_background(ui, "component", |ui, _| {
+        reported = grid(ui, ("component", type_name), inspected.as_ref(), &cards, centre.cells, generation, true, None);
+    });
+    apply(centre, &cards, reported);
 }

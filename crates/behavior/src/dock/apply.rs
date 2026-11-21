@@ -22,8 +22,8 @@ impl<P: Clone + Eq + Hash> Layout<P> {
     /// action closed (see [`Self::closed_by`]) so the application can release their state.
     /// The callback must be stable throughout one call. Registry validation remains with the
     /// application, particularly Open. The column rights ([`Permissions::collapses`],
-    /// [`Permissions::shares_column`]) are checked on the result: an action that leaves a panel breaking them,
-    /// which did not before, is refused, so a drag's dry run refuses it alike.
+    /// [`Permissions::shares_column`], [`Permissions::docks_outside_columns`]) are checked on the result: an action
+    /// that leaves a panel breaking them, which did not before, is refused, so a drag's dry run refuses it alike.
     pub fn apply_with_permissions(&mut self, action: Action<P>, permissions: impl Fn(&P) -> Permissions) -> Result<Vec<P>, DockError> {
         self.validate()?;
         let action = match action {
@@ -125,10 +125,12 @@ impl<P: Clone + Eq + Hash> Layout<P> {
     }
 
     /// The panels that break their column rights: a panel that does not collapse ([`Permissions::collapses`]) in
-    /// a collapsed column, and every panel of a column (or node of the docked tree) that holds a panel that does
-    /// not share it ([`Permissions::shares_column`]) beside another panel.
+    /// a collapsed column, every panel of a column (or node of the docked tree) that holds a panel that does
+    /// not share it ([`Permissions::shares_column`]) beside another panel, and a panel that docks only in dock
+    /// columns ([`Permissions::docks_outside_columns`]) in a frame of the docked tree.
     pub(super) fn column_breaches(&self, permissions: &impl Fn(&P) -> Permissions) -> HashSet<P> {
         let mut breaches = HashSet::new();
+        let mut framed = Vec::new();
         let mut check = |panels: Vec<&P>, iconic: bool| {
             if iconic {
                 breaches.extend(panels.iter().filter(|p| !permissions(p).collapses).map(|p| (*p).clone()));
@@ -147,9 +149,14 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                         check(column.panels().collect(), column.iconic);
                     }
                 }
-                leaf => check(tree_panels(leaf), false),
+                leaf => {
+                    let panels = tree_panels(leaf);
+                    framed.extend(panels.iter().filter(|p| !permissions(p).docks_outside_columns).map(|p| (*p).clone()));
+                    check(panels, false);
+                }
             }
         }
+        breaches.extend(framed);
         breaches
     }
 

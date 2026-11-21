@@ -351,6 +351,22 @@ impl CrossReferenceSource {
     }
 }
 
+/// Emits a `TextVariableInstance` element inside a story character range.
+pub fn text_variable_instance_el(self_id: &str, name: &str, result_text: &str, associated_var: &str) -> El {
+    El::new("TextVariableInstance")
+        .with_attr("Self", self_id)
+        .with_attr("Name", name)
+        .with_attr("ResultText", result_text)
+        .with_attr("AssociatedTextVariable", associated_var)
+}
+
+/// Emits a tracked-change `<Change>` element wrapping its story nodes.
+pub fn tracked_change_el(self_id: &str, change_type: &str, children: Vec<Node>) -> El {
+    let mut el = El::new("Change").with_attr("Self", self_id).with_attr("ChangeType", change_type);
+    el.children = children;
+    el
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SavedCrossReferencePart {
     Text(String),

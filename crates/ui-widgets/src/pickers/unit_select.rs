@@ -2,7 +2,8 @@
 
 use super::select::Select;
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, MeasureCx, Outcome, PaintUi, Props as _, Role, WordSetCx as _,
+    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, MeasureCx, Outcome, PaintUi, Props as _, Resolved, Role, Sizing,
+    WordSetCx as _,
 };
 use crate::runtime::env::{Label, UnitKind, Units};
 use crate::style::{ComponentStyle, StyleCx};
@@ -11,10 +12,10 @@ use craft_behavior::{EditEvents, Flow, Metrics, Mixed, NumberCodec, Proposal, Se
 use egui::{Rect, Response, Vec2, pos2};
 use std::ops::{Deref, RangeInclusive};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
-/// The style of a unit select: the gap between the field and the select, and the number field's width.
+/// The style of a unit select: the gap between the field and the select, and the number field's widths.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct UnitSelectStyle {
@@ -22,6 +23,8 @@ pub struct UnitSelectStyle {
     metrics: Metrics,
     /// The width of the number field; the select has the room after it.
     number: f32,
+    /// The width of the number field of a content-sized unit select: one number cell.
+    cell: f32,
 }
 
 /// The output of a unit select: the number's edit, the unit's edit when a unit was picked, and the number field's
@@ -63,6 +66,10 @@ impl Outcome for UnitSelectOutput {
 /// (its spellings: "12 mm") and shows its number with, and the kind sets the digits and the step of the number; the
 /// select names the unit, so the field shows the number alone. The number itself is the field's value, and the unit
 /// goes to its own binding, so the app converts the number when the unit changes.
+///
+/// Content-sized (`Sizing::Content`), the field is one number cell wide and the select as wide as its longest unit,
+/// as a compact form's rows show them (Image Size); otherwise the field takes a field's width and the select the room
+/// after it.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component]
 pub struct UnitSelect<'a> {
@@ -139,7 +146,7 @@ impl Component for UnitSelect<'_> {
 
     fn style(cx: &StyleCx<'_>, _: UnitSelectStyleKey) -> UnitSelectStyle {
         let control = cx.control();
-        UnitSelectStyle { metrics: Metrics::new().gap(control.gap), number: control.field }
+        UnitSelectStyle { metrics: Metrics::new().gap(control.gap), number: control.field, cell: control.number }
     }
 
     fn sense(&self) -> Sense {
@@ -149,10 +156,10 @@ impl Component for UnitSelect<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let group = cx.label();
         let mut number = self.number(group.clone(), shown_of(cx.value()), None);
-        let mut select = Select::new(self.select_name(&group), Bind::<UnitKind>::given(Mixed::Mixed), self.units);
+        let mut select = sized(Select::new(self.select_name(&group), Bind::<UnitKind>::given(Mixed::Mixed), self.units), cx.resolved);
         let number = cx.child("number", &mut number, Proposal::Ideal);
         let select = cx.child("unit", &mut select, Proposal::Ideal);
-        Vec2::new(cx.style.number + cx.gap() + select.x, number.y.max(select.y))
+        Vec2::new(number_width(cx.resolved, cx.style) + cx.gap() + select.x, number.y.max(select.y))
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Option<f64>>> {
@@ -164,7 +171,7 @@ impl Component for UnitSelect<'_> {
     /// is adopted as the component's own.
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let group = cx.label();
-        let (number_rect, select_rect) = arrange(cx.rect.size(), cx.style.metrics.gap, cx.style.number);
+        let (number_rect, select_rect) = arrange(cx.rect.size(), cx.style.metrics.gap, number_width(cx.resolved, cx.style));
         let flow = Flow::new(cx.rect, cx.flow.is_rtl());
         let place = |logical: Rect| flow.to_physical(logical.translate(cx.rect.min.to_vec2()));
         let kind = match self.unit.reborrow().get() {
@@ -177,13 +184,23 @@ impl Component for UnitSelect<'_> {
         let number = ui.child("number", place(number_rect), self.number(group.clone(), shown, kind.map(|kind| (kind, &units))));
         cx.adopt(&number, &start, |value, mine| *mine = *value);
         self.out_of_range = number.out_of_range;
-        let select = Select::new(self.select_name(&group), self.unit.reborrowed(), self.units);
+        let select = sized(Select::new(self.select_name(&group), self.unit.reborrowed(), self.units), cx.resolved);
         self.unit_event = ui.child("unit", place(select_rect), select).events;
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> UnitSelectOutput {
         UnitSelectOutput { edit: cx.edit_response(), unit: self.unit_event, out_of_range: self.out_of_range }
     }
+}
+
+/// The unit select's select, content-sized as the unit select is: as wide as its longest unit.
+fn sized<'s>(select: Select<'s, UnitKind>, resolved: &Resolved<'_>) -> Select<'s, UnitKind> {
+    if resolved.sizing() == Some(Sizing::Content) { select.sizing(Sizing::Content) } else { select }
+}
+
+/// The width of the number field: one number cell in a content-sized unit select, a field's width otherwise.
+fn number_width(resolved: &Resolved<'_>, style: &UnitSelectStyle) -> f32 {
+    if resolved.sizing() == Some(Sizing::Content) { style.cell } else { style.number }
 }
 
 /// The number field's and the select's rects in a room of `size`, in logical coordinates from the start edge: the

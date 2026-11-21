@@ -278,12 +278,15 @@ impl Outcome for PreferencesOutput {
     }
 }
 
-/// The app's side of the preferences window. The model keeps the saved settings and the draft; the window shows the
-/// pages [`pages`](PreferencesModel::pages) returns, filters them and reports edits through
-/// [`set`](PreferencesModel::set).
+/// The app's side of a preferences page. The page shows the pages [`pages`](PreferencesModel::pages) returns, filters
+/// them and reports each edit through [`set`](PreferencesModel::set) in the pass it lands in.
 ///
-/// The window reads its words and numbers from the scope's language. To preview a language while the window is open,
-/// install the host with the draft's language; the window follows on the next pass. [`cancel`](PreferencesModel::cancel)
+/// A [`PreferencesPage`](super::PreferencesPage) needs only this trait: its edits apply at once. A
+/// [`PreferencesWindow`](super::PreferencesWindow) also needs [`PreferencesDraft`]: there `set` edits a draft that OK
+/// or Apply commits and Cancel drops.
+///
+/// The page reads its words and numbers from the scope's language. To preview a language while the window is open,
+/// install the host with the draft's language; the page follows on the next pass. [`PreferencesDraft::cancel`]
 /// installs the saved language again.
 pub trait PreferencesModel {
     /// The pages, built from the draft.
@@ -299,6 +302,20 @@ pub trait PreferencesModel {
     fn custom_row(&mut self, ui: &mut Ui, key: &str);
     /// Draws a [`PageSpec::custom`] page.
     fn custom_page(&mut self, ui: &mut Ui, page: &str);
+    /// Resets the page's rows in the draft to their defaults.
+    fn reset_page(&mut self, page: &str);
+    /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in
+    /// every pass.
+    fn nested(&mut self, _ctx: &Context) {}
+    /// Whether a nested dialog is open: the window takes no keys then, and refuses OK.
+    fn nested_open(&self) -> bool {
+        false
+    }
+}
+
+/// The draft side of a [`PreferencesModel`]: what a [`PreferencesWindow`](super::PreferencesWindow) with OK, Cancel and
+/// Apply needs beyond the rows. A [`PreferencesPage`](super::PreferencesPage) never calls it.
+pub trait PreferencesDraft: PreferencesModel {
     /// Whether the draft differs from the saved settings: enables Apply.
     fn differs(&self) -> bool;
     /// Whether OK may close the window.
@@ -309,13 +326,4 @@ pub trait PreferencesModel {
     fn apply(&mut self) -> Result<(), String>;
     /// Drops the draft and undoes previews (the language).
     fn cancel(&mut self);
-    /// Resets the page's rows in the draft to their defaults.
-    fn reset_page(&mut self, page: &str);
-    /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in
-    /// every pass.
-    fn nested(&mut self, _ctx: &Context) {}
-    /// Whether a nested dialog is open: the window takes no keys then, and refuses OK.
-    fn nested_open(&self) -> bool {
-        false
-    }
 }

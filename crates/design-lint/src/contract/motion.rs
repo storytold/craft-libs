@@ -16,12 +16,18 @@ pub(super) fn check(cx: &Cx<'_>, out: &mut Vec<Finding>) {
         name.starts_with("animate_") || matches!(name, "request_repaint_after" | "animation_time" | "prefers_reduced_motion" | "reduced_motion")
     });
     for site in &cx.sites {
-        if let Kind::Path { path, call: true, .. } = &site.kind
+        if let Kind::Path { path, in_use: false, .. } = &site.kind
             && path.len() >= 2
             && matches!(path[path.len() - 2].as_str(), "Instant" | "SystemTime")
             && path[path.len() - 1] == "now"
         {
-            cx.flag(out, ID, CLOCK, site, format!("`{}` reads a clock; read the runtime's motion clock", path.join("::")));
+            cx.flag(
+                out,
+                ID,
+                CLOCK,
+                site,
+                format!("`{}` reads a clock, called or passed as a fn value; read the runtime's motion clock", path.join("::")),
+            );
         }
     }
 }

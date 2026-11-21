@@ -3,14 +3,13 @@
 
 use super::tool::ICON_BOX;
 use super::{PathTool, PenTool};
-use craft_behavior::{CancelReason, Cursor, CursorBadge, PaintedCursor, PointerButton};
+use craft_behavior::{CancelReason, Cursor, CursorBadge, CursorIcon, PaintedCursor, PointerButton};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, ToolIcon};
 use egui::Vec2;
 
 /// The apex of the Convert Point icon's caret, in the units of the icon's box.
-// design: allow[literal-size/vec2](the cursor art's hot spot offset in icon units, not a layout size)
 const CONVERT_TIP: Vec2 = Vec2::new(ICON_BOX / 2.0, 5.5);
 
 /// The canvas tool of Add Anchor Point, Delete Anchor Point, Convert Point and Direct Selection. Every press of these
@@ -22,7 +21,7 @@ const CONVERT_TIP: Vec2 = Vec2::new(ICON_BOX / 2.0, 5.5);
 ///   describes; it takes no press.
 /// - Cursor off the overlay's parts: the crosshair under the canvas's precise cursor
 ///   ([`CanvasSpace::precise`](craft_ui::canvas::CanvasSpace::precise)); with ⌘ Direct Selection's arrow; else Add
-///   Anchor the arrow (a click there adds nothing; with ⌥, Delete Anchor, the pen with "-"), Delete Anchor the pen
+///   Anchor the arrow (a click there adds nothing; with ⌥ the arrow with "+"), Delete Anchor the pen
 ///   with "-" (with ⌥, Add Anchor, the pen with "+"), Convert Point its icon, Direct Selection the arrow. Over a part
 ///   the overlay sets its own cursor.
 #[derive(Debug)]
@@ -53,7 +52,7 @@ pub(super) fn cursor_of(tool: PathTool, mods: Mods, precise: bool) -> PaintedCur
     match tool {
         _ if precise => PaintedCursor::Crosshair,
         _ if mods.cmd => PaintedCursor::arrow(false),
-        PathTool::AddAnchor if mods.alt => pen(CursorBadge::Subtract),
+        PathTool::AddAnchor if mods.alt => PaintedCursor::badged(CursorIcon::Default, CursorBadge::Add),
         PathTool::DeleteAnchor if mods.alt => pen(CursorBadge::Add),
         PathTool::DeleteAnchor => pen(CursorBadge::Subtract),
         PathTool::ConvertPoint => PaintedCursor::tool(ToolIcon::ConvertPoint.icon(), CONVERT_TIP, None),

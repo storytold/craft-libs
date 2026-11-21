@@ -429,7 +429,7 @@ pub fn gain_to_db(g: f64) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::fx::Standard;
     use crate::time::TimeRange;

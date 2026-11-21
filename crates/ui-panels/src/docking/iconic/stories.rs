@@ -75,9 +75,9 @@ fn open_first_flyout(fixture: &mut Fixture) {
 
 #[story(IconicColumn<'static, u8>, covers = [Open], drive = Drive::Custom(open_first_flyout))]
 fn icon_flyout_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let open = data.value("open", None::<u8>);
+    let (open, open_at) = data.value_at("open", None::<u8>);
     let column = Column::new(vec![Group::new(vec![0, 1], 0), Group::new(vec![2], 0)]);
-    let column = IconicColumn::new("Panels", global("iconic column", "open story"), &column, Bind::bound(open), &spec);
+    let column = IconicColumn::new("Panels", global("iconic column", "open story"), &column, open_at.bind(open), &spec);
     at_stage(ui, column, |group, at, ui, _| {
         let GroupAt::Show(rect) = at else { return None };
         let title = group.active_panel().map_or_else(String::new, |panel| spec(panel).label.as_str().to_owned());
@@ -115,16 +115,16 @@ fn flyout_of(ui: &mut Ui, open: Bind<'_, Option<u8>>) -> StoryOutput {
 
 #[story(IconicColumn<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn flyouts_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let open = data.value("open", Mixed::<Option<u8>>::Mixed);
-    flyout_of(ui, Bind::bound_mixed(open))
+    let (open, open_at) = data.value_at("open", Mixed::<Option<u8>>::Mixed);
+    flyout_of(ui, open_at.bind_mixed(open))
 }
 
 #[story(IconicColumn<'static, u8>, covers = [Invalid], drive = Drive::Never)]
 fn a_flyout_of_a_panel_not_in_the_column(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let open = data.value("open", Some(9u8));
+    let (open, open_at) = data.value_at("open", Some(9u8));
     let in_column = |open: &Option<u8>| match open {
         Some(panel) if *panel > 1 => Validity::Refuse(Message::new("The column has no such panel")),
         _ => Validity::Ok,
     };
-    flyout_of(ui, Bind::bound(open).check(in_column))
+    flyout_of(ui, open_at.bind(open).check(in_column))
 }

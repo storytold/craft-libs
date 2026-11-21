@@ -254,6 +254,11 @@ pub(crate) struct CoverLayer {
 /// left unpainted and unabsorbed, and the four bands around it paint and absorb.
 pub(crate) fn show_cover_layer(ctx: &Context, cover: CoverLayer) {
     let CoverLayer { id, tier, screen, scrim, through, absorbs } = cover;
+    // A cover shows over its whole screen from its first pass: with no size egui would make that pass a hidden sizing
+    // pass, which paints no scrim and absorbs nothing.
+    if layer_rect(ctx, id).is_none() {
+        seed_area(ctx, layer_of(tier, id), screen.min, screen.size());
+    }
     let covered: Vec<Rect> = match through.map(|through| through.intersect(screen)).filter(|through| through.is_positive()) {
         Some(clear) => bands(screen, clear).into_iter().filter(|band| band.is_positive()).collect(),
         None => vec![screen],
@@ -388,9 +393,8 @@ pub fn layer_order() -> LayerOrder {
     }
 }
 
-/// Gives a container layer's area a size before its first pass, so egui runs no hidden sizing pass for it. That pass
-/// shows no body, so nothing would be measured in it; the layer's first pass is a real one that records the sizes
-/// the discard pass places by.
+/// Gives a layer's area a size before its first pass, so egui runs no hidden sizing pass for it. That pass shows and
+/// absorbs nothing, so nothing would be measured in it; the layer's first pass is a real one.
 pub(crate) fn seed_area(ctx: &Context, layer: LayerId, at: Pos2, room: Vec2) {
     let state =
         egui::AreaState { pivot_pos: Some(at), pivot: egui::Align2::LEFT_TOP, size: Some(room), interactable: false, last_became_visible_at: None };
@@ -416,19 +420,19 @@ pub(crate) fn popup_open(ctx: &Context) -> bool {
 }
 
 /// A host's own egui popup `id` at `at`, shown while egui's memory holds it open.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
 }
 
 /// Opens the host's egui popup `id`.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn open_host_popup(ctx: &Context, id: egui::Id) {
     egui::Popup::open_id(ctx, id);
 }
 
 /// Whether the host's egui popup `id` is open.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn host_popup_open(ctx: &Context, id: egui::Id) -> bool {
     egui::Popup::is_id_open(ctx, id)
 }

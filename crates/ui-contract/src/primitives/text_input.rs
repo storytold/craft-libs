@@ -34,6 +34,21 @@ impl<V> TextKey<V> {
     }
 }
 
+/// What Tab does in a text field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TabKey {
+    /// Tab moves focus.
+    #[default]
+    Moves,
+    /// Tab inserts a tab.
+    Inserts,
+    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses).
+    Rewrites,
+    /// Tab keeps focus and is handed back as `EditResponse::tab`: `Some(true)` for Tab, `Some(false)` for Shift+Tab.
+    Reports,
+}
+
 /// How a text part behaves beyond its codec.
 #[derive(Clone)]
 pub struct TextOptions {
@@ -55,8 +70,10 @@ pub struct TextOptions {
     pub role: TypeRole,
     /// The text colour; `None` takes the surface's ink. A disabled part shows the disabled text colour whatever this is.
     pub ink: Option<Ink>,
-    /// Tab inserts a tab instead of moving focus.
-    pub tab_inserts: bool,
+    /// What Tab does in this field.
+    pub tab: TabKey,
+    /// The bound caret as a byte offset, read and written through its binding; the adapter keeps no caret of its own.
+    pub caret: Option<usize>,
     /// Candidates for the text before the caret.
     pub complete: Option<Arc<dyn Completer>>,
     /// Enter accepts the highlighted candidate, as Tab does; off, Enter stays the field's own (a cell commits on it).
@@ -91,9 +108,6 @@ pub struct TextOptions {
     /// The control's caller hangs a context menu of its own on it: a context request opens that menu, not the text
     /// part's edit menu.
     pub own_menu: bool,
-    /// Tab and Shift+Tab rewrite the draft (the text part selects it and refuses) instead of moving focus; with
-    /// `tab_inserts` it is a debug assertion.
-    pub tab_rewrites: bool,
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
@@ -111,7 +125,8 @@ impl Default for TextOptions {
             mono: false,
             role: TypeRole::Body,
             ink: None,
-            tab_inserts: false,
+            tab: TabKey::default(),
+            caret: None,
             complete: None,
             complete_on_enter: false,
             replace_selection: None,
@@ -125,7 +140,6 @@ impl Default for TextOptions {
             arrows_from_end: false,
             unparsed: None,
             own_menu: false,
-            tab_rewrites: false,
             holds_drafts: false,
         }
     }
@@ -149,7 +163,8 @@ impl std::fmt::Debug for TextOptions {
             .field("lines", &self.lines)
             .field("live", &self.live)
             .field("complete", &self.complete.is_some())
-            .field("tab_rewrites", &self.tab_rewrites)
+            .field("tab", &self.tab)
+            .field("caret", &self.caret)
             .field("holds_drafts", &self.holds_drafts)
             .finish_non_exhaustive()
     }
@@ -268,22 +283,60 @@ pub struct EditorState<'a> {
     /// text, a selection, an app edit over the marked text) reports `false` and the OS composition is interrupted;
     /// an editor that shows no marked text reports `false` throughout.
     pub composing: bool,
+    /// The editor draws the marked text of the pre-edits it is given ([`EditorState::marked`]). Such an editor that
+    /// reports `composing: false` while the input method still composes ended the composition itself, even in the pass
+    /// the pre-edit arrived in (a pre-edit and a refused deletion in one frame), and the OS composition is interrupted.
+    /// An editor that shows no marked text leaves it `false`, so the OS composes for it until the commit.
+    pub shows_marked: bool,
     /// Whether undo and redo have something to do; false sends them to the app command (11.3).
     pub can_undo: bool,
     /// Whether redo has something to do.
     pub can_redo: bool,
+    /// The committed text around the caret, or why there is none, with the input-method target's epoch.
+    pub surrounding: Option<(u64, EditorSurrounding<'a>)>,
 }
 
+pub use crate::runtime::ime::EditorSurrounding;
+
+/// The input method's mutation stamp, which an editor compares to tell its own edits from the input method's.
+pub use egui::ime_context::ImeMutationStamp as ImeStamp;
+
 impl<'a> EditorState<'a> {
+    /// Reports `s` as the committed text around the caret, for the input-method target at `epoch`.
+    #[must_use]
+    pub fn surrounding(mut self, epoch: u64, s: EditorSurrounding<'a>) -> Self {
+        self.surrounding = Some((epoch, s));
+        self
+    }
+
     /// A state with no selection, no marked text and nothing to undo.
     pub const fn new(caret: Rect, lines: &'a [EditorLine<'a>], caret_at: TextPos) -> Self {
-        EditorState { caret, lines, caret_at, selection: None, composing: false, can_undo: false, can_redo: false }
+        EditorState {
+            caret,
+            lines,
+            caret_at,
+            selection: None,
+            composing: false,
+            shows_marked: false,
+            can_undo: false,
+            can_redo: false,
+            surrounding: None,
+        }
+    }
+
+    /// Reports an editor that draws the input method's marked text, `composing` while it shows some
+    /// ([`EditorState::shows_marked`]).
+    #[must_use]
+    pub const fn marked(mut self, composing: bool) -> Self {
+        self.shows_marked = true;
+        self.composing = composing;
+        self
     }
 }
 
 impl TextLayout {
     /// The layout's runs as the borrowed runs an editor line takes.
     pub fn editor_runs(&self) -> Vec<EditorRun<'_>> {
-        self.runs.iter().map(|run| EditorRun::new(run.bytes.clone(), run.rtl, &run.positions, &run.widths)).collect()
+        self.runs().iter().map(|run| EditorRun::new(run.bytes.clone(), run.rtl, &run.positions, &run.widths)).collect()
     }
 }

@@ -20,6 +20,9 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     with:
       pdf-test-fonts: true
+      # The instrumented build runs without a dependency cache: its 1.2 GB entry does not fit the
+      # repository's 10 GB cache budget beside the Workspace gate's. It runs on main only.
+      build-cache: false
       # The codec and format code behind features that are off by default. Without these the
       # coverage build never compiles it, and new code there reads as untested.
       cargo-features: >-

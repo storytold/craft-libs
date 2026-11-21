@@ -59,6 +59,18 @@ impl Files for ScriptedFiles {
         Err(FileError::Unsupported)
     }
 
+    fn save(&self, request: PickRequest, _bytes: Vec<u8>) -> PickId {
+        self.pick(request)
+    }
+
+    fn can_pick(&self) -> bool {
+        true
+    }
+
+    fn browser_saves(&self) -> bool {
+        false
+    }
+
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
         None
     }

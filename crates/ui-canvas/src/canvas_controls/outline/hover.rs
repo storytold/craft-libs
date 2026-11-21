@@ -1,8 +1,8 @@
 //! `HoverMask`: an object's coverage, reduced for the hover tint.
 
+use crate::primitives::Serials;
 use craft_behavior::kurbo::Rect;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// An object's coverage reduced for the hover tint: at most [`HoverMask::MAX_TEXELS`] texels on its long side,
 /// sampled once when the mask is made. Cheap to clone (the texels are shared) and `Send + Sync`, so a lookup job can
@@ -16,7 +16,7 @@ pub struct HoverMask {
     size: [usize; 2],
     /// Coverage 0..=255 per texel, row by row.
     coverage: Arc<[u8]>,
-    /// Unique per mask made, for the texture store.
+    /// Unique per mask made by one `Serials`, for the texture store.
     generation: u64,
 }
 
@@ -35,9 +35,8 @@ impl HoverMask {
     /// corner of each texel's cell, with one texel per document unit until the long side passes
     /// [`MAX_TEXELS`](Self::MAX_TEXELS), then `ceil(long side / 768)` units per texel. Coverage outside 0..=1 is
     /// clamped; one that is not finite reads as 0. Empty or non-finite `bounds` give a 1 × 1 mask with no coverage.
-    pub fn sampled(bounds: Rect, coverage: impl Fn(f64, f64) -> f32) -> HoverMask {
-        static GENERATIONS: AtomicU64 = AtomicU64::new(0);
-        let generation = GENERATIONS.fetch_add(1, Ordering::Relaxed);
+    pub fn sampled(serials: &mut Serials, bounds: Rect, coverage: impl Fn(f64, f64) -> f32) -> HoverMask {
+        let generation = serials.mint();
         let finite = bounds.x0.is_finite() && bounds.y0.is_finite() && bounds.x1.is_finite() && bounds.y1.is_finite();
         if !finite || bounds.width() <= 0.0 || bounds.height() <= 0.0 {
             return HoverMask { bounds, size: [1, 1], coverage: Arc::from(vec![0u8]), generation };

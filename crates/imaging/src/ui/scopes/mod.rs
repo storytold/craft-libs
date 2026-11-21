@@ -24,15 +24,15 @@
 //! | Clipping | [`ClipWarning`], [`ClippingOverlay`], [`ClippingMode`], [`ClippingWarnings`], [`ClippingDiagnostic`] |
 //! | Vectorscope alone | [`VectorscopePlot`], [`scope_point`] |
 
-mod clipping;
+pub(crate) mod clipping;
 mod menu;
-mod panel;
+pub(crate) mod panel;
 mod plot;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
-mod vectorscope;
+pub(crate) mod vectorscope;
 mod words;
-mod zones;
+pub(crate) mod zones;
 
 pub use clipping::{ClipWarning, ClippingDiagnostic, ClippingFrame, ClippingMode, ClippingOverlay, ClippingWarnings};
 pub use menu::{ScopeCommand, ScopeMenuAction};

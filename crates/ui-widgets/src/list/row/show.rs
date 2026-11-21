@@ -154,7 +154,7 @@ impl Component for ListRow<'_> {
         if cx.proposal == Proposal::Min {
             return Vec2::new(probe_min, height);
         }
-        let label = cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().x;
+        let label = cx.layout(&self.label_run(cx.resolved.label).role(cx.style.text.role)).size().x;
         // The label band holds the detail line under the label, so it is as wide as the wider of the two.
         let label = match self.detail.as_ref().filter(|_| self.detail_line()) {
             Some(detail) => label.max(cx.layout(&TextRun::new(detail.as_str()).role(cx.style.detail.role)).size().x),
@@ -336,7 +336,7 @@ impl Component for ListRow<'_> {
             let phase = result.press.phase;
             if let (PressPhase::DragStart { .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target))) {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
-                crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
+                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
                 self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
             } else if let Some(source) = cx.part_activated(target.part()) {
                 let clicks = part_clicks(source, phase);
@@ -358,7 +358,7 @@ impl Component for ListRow<'_> {
                     && matches!(result.press.phase, PressPhase::DragStart { .. })
                 {
                     let preview = DragPreview::frame(result.rect.size(), None);
-                    crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
+                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
                     self.event = Some(RowEvent::PartDrag(RowDragSpot::Trailing(*part)));
                 }
                 continue;

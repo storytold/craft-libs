@@ -9,8 +9,9 @@ use crate::runtime::pass_state;
 use crate::runtime::wheel;
 
 /// Step 15, settle: child edits adopted with `cx.adopt` join the pass's events and are applied, and the open state of the
-/// component's popups is written. A reveal request goes to the nearest scroll owner; anything queued for the next pass requests a repaint.
-pub(crate) fn settle<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> ValueEdit {
+/// component's popups is written. A reveal request goes to the nearest scroll owner, from a component `in_flow` (one that
+/// takes room in its parent's flow); anything queued for the next pass requests a repaint.
+pub(crate) fn settle<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>, in_flow: bool) -> ValueEdit {
     let adopted = std::mem::take(&mut cx.core.paint.borrow_mut().adopted);
     for event in adopted.into_iter().filter_map(|adopted| adopted.take::<ValueOf<C>>()) {
         if let Some(event) = cx.absorb(event) {
@@ -28,8 +29,10 @@ pub(crate) fn settle<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> ValueEdi
         cx.core.reveal.get_or_insert(rect);
     }
     // The nearest scroll owner under the rect may be the component itself (a collection takes the wheel): a reveal it
-    // passes on goes to the owner around it, never back to itself.
+    // passes on goes to the owner around it, never back to itself. A component on its own layer or window is not inside
+    // the scroll regions of its opener's flow, nor of what lies under it on screen: its reveals end at it.
     if let Some(rect) = cx.core.reveal.take()
+        && in_flow
         && let Some(owner) = cx.core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&cx.core.ctx, rect).filter(|&found| found != id))
     {
         pass_state::with::<Reveals, _>(&cx.core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(rect) }));

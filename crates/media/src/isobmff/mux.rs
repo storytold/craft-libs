@@ -29,12 +29,14 @@ pub struct WriterOptions {
     /// chapter track (`tref/chap` → disabled text track) and as a Nero `udta/chpl` list;
     /// [`FragmentedWriter`] writes only `chpl`. See [`crate::isobmff::chapters`] for the formats and limits.
     pub chapters: Vec<Chapter>,
+    /// Additional compatible brands appended to the `ftyp` box (for example `*b"av01"`).
+    pub compatible_brands: Vec<[u8; 4]>,
 }
 
 impl WriterOptions {
     /// Options for `brand` with a 1000 ticks-per-second movie timescale and no metadata.
     pub fn new(brand: Brand) -> Self {
-        WriterOptions { brand, movie_timescale: 1000, metadata: Vec::new(), chapters: Vec::new() }
+        WriterOptions { brand, movie_timescale: 1000, metadata: Vec::new(), chapters: Vec::new(), compatible_brands: Vec::new() }
     }
 }
 
@@ -449,5 +451,21 @@ mod tests {
             }
             assert_eq!(f.read_sample(plain.as_slice(), 1, 0).unwrap(), 7u32.to_be_bytes());
         }
+    }
+
+    #[test]
+    fn ftyp_appends_custom_compatible_brands_without_duplicates() {
+        let mut opts = WriterOptions::new(Brand::Mp4);
+        opts.compatible_brands = vec![*b"av01", *b"isom", *b"av01"];
+        let mut w = Mp4Writer::new(Cursor::new(Vec::new()), opts).unwrap();
+        let v = w.add_track(TrackConfig::new(avc_entry(), 1000)).unwrap();
+        w.write_sample(v, WriteSample { data: &[1; 4], duration: 40, composition_offset: 0, is_sync: true }).unwrap();
+        let out = w.finish().unwrap().into_inner();
+        let size = u32::from_be_bytes(out[0..4].try_into().unwrap()) as usize;
+        assert_eq!(&out[4..8], b"ftyp");
+        let (brands, rest) = out[16..size].as_chunks::<4>();
+        assert!(rest.is_empty());
+        assert!(brands.contains(b"av01"), "missing av01 in {brands:?}");
+        assert_eq!(brands.iter().filter(|&&b| b == *b"isom").count(), 1);
     }
 }

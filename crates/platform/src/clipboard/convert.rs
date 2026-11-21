@@ -2,18 +2,9 @@
 
 use std::path::PathBuf;
 
-use super::types::{ClipboardImage, Flavor, RGBA8};
+use super::types::ClipboardImage;
 
-/// `image` as an [`RGBA8`] flavor.
-pub(crate) fn rgba8_flavor(image: &ClipboardImage) -> Flavor {
-    let mut data = Vec::with_capacity(8 + image.rgba.len());
-    data.extend_from_slice(&image.width.to_le_bytes());
-    data.extend_from_slice(&image.height.to_le_bytes());
-    data.extend_from_slice(&image.rgba);
-    Flavor::new(RGBA8, data)
-}
-
-/// The bitmap in an [`RGBA8`] flavor's bytes; `None` without the two-word header.
+/// The bitmap in an [`RGBA8`](super::types::RGBA8) flavor's bytes; `None` without the two-word header.
 pub(crate) fn rgba8_image(data: &[u8]) -> Option<ClipboardImage> {
     let (header, rgba) = data.split_first_chunk::<8>()?;
     let width = u32::from_le_bytes(header[..4].try_into().ok()?);
@@ -62,7 +53,7 @@ pub(super) fn percent_decode(text: &str) -> String {
 
 /// `files` as a `text/uri-list` (CRLF line ends, RFC 2483). With `windows`, paths are drive paths
 /// and become `file:///C:/Users/…` (the drive kept, separators turned to `/`).
-#[cfg(all(feature = "clipboard", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "clipboard-system", not(target_arch = "wasm32")))]
 pub(crate) fn uri_list(files: &[PathBuf], windows: bool) -> String {
     let mut list = String::new();
     for file in files {
@@ -81,7 +72,7 @@ pub(crate) fn uri_list(files: &[PathBuf], windows: bool) -> String {
     list
 }
 
-#[cfg(all(feature = "clipboard", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "clipboard-system", not(target_arch = "wasm32")))]
 pub(super) fn trim_cr(path: PathBuf) -> PathBuf {
     match path.to_str() {
         Some(text) if text.ends_with('\r') => PathBuf::from(text.trim_end_matches('\r')),

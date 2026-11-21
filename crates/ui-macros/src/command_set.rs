@@ -42,7 +42,7 @@ fn command_attrs(attrs: &[Attribute], mut read: impl FnMut(&syn::meta::ParseNest
     Ok(())
 }
 
-fn snake(name: &str) -> String {
+pub(crate) fn snake(name: &str) -> String {
     let mut out = String::new();
     for (i, c) in name.chars().enumerate() {
         if c.is_ascii_uppercase() {
@@ -227,7 +227,26 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         }
         Ok(true)
     })?;
-    let register = if set.story { quote!(#k::__register_command_set!(#ident, story);) } else { quote!(#k::__register_command_set!(#ident);) };
+    let register = if set.story {
+        let helper = quote::format_ident!("__registry_command_{}", snake(&ident.to_string()));
+        quote! {
+            pub(crate) fn #helper() -> #k::runtime::commands::SetEntry {
+                #k::runtime::commands::SetEntry::new(
+                    ::std::any::type_name::<#ident>,
+                    <#ident as #k::runtime::commands::CommandSet>::defs,
+                    <#ident as #k::runtime::commands::CommandSet>::no_default_on,
+                    <#ident as #k::runtime::commands::CommandSet>::edits,
+                    <#ident as #k::runtime::commands::CommandSet>::holds,
+                    if <#ident as #k::runtime::commands::CommandSet>::TYPING {
+                        Some(<#ident as #k::runtime::commands::CommandSet>::SCOPE)
+                    } else { None },
+                    <#ident as #k::runtime::commands::CommandSet>::platform_defaults,
+                )
+            }
+        }
+    } else {
+        quote!(#k::__register_command_set!(#ident);)
+    };
     let prefix = set.prefix.ok_or_else(|| syn::Error::new_spanned(ident, "a command set names its id prefix: `#[command(prefix = \"..\")]`"))?;
     check_prefix(&prefix)?;
     if let Some(scope) = &set.scope {
@@ -280,12 +299,15 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             holds.push(quote!((#id, #k::runtime::commands::CommandScope::new(#held))));
         }
         arms.push(quote!(#id => ::core::option::Option::Some(Self::#name)));
+        // One non-capturing closure per variant, collected in a table of function pointers: `defs`
+        // loops over the table, so its frame does not grow with the number of variants (a closure's
+        // frame is released when it returns) and the push code exists once.
         defs.push(quote! {
-            {
+            || {
                 let scope = Self::SCOPE.scope().ok_or_else(|| #k::runtime::commands::CommandDefError::scope(#id))?;
                 let mut def = #k::runtime::commands::CommandDef::new(#k::runtime::commands::CommandRef::new(#id), #label, scope) #chain;
                 #(#defaults)*
-                out.push(def);
+                ::core::result::Result::Ok(def)
             }
         });
         ids.push(id);
@@ -310,9 +332,9 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             }
 
             fn defs() -> ::core::result::Result<::std::vec::Vec<#k::runtime::commands::CommandDef>, #k::runtime::commands::CommandDefError> {
-                let mut out = ::std::vec::Vec::new();
-                #(#defs)*
-                ::core::result::Result::Ok(out)
+                type Build = fn() -> ::core::result::Result<#k::runtime::commands::CommandDef, #k::runtime::commands::CommandDefError>;
+                let table: &[Build] = &[#(#defs),*];
+                table.iter().map(|build| build()).collect()
             }
 
             fn no_default_on() -> ::std::vec::Vec<(&'static str, #k::runtime::commands::Platform)> {
@@ -343,8 +365,6 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             }
         }
 
-        const _: () = {
-            #register
-        };
+        #register
     })
 }

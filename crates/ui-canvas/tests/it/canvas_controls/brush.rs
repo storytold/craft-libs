@@ -2,10 +2,11 @@
 
 use craft_behavior::kurbo::{Point, Rect};
 use craft_ui::canvas_controls::brush::CoverageMask;
+use craft_ui::primitives::Serials;
 use craft_ui::testing::trial;
 
 fn mask() -> CoverageMask {
-    CoverageMask::new(Rect::new(0.0, 0.0, 100.0, 100.0), 100)
+    CoverageMask::new(&mut Serials::default(), Rect::new(0.0, 0.0, 100.0, 100.0), 100)
 }
 
 #[trial]
@@ -44,7 +45,7 @@ fn a_restamp_keeps_earlier_strokes_and_stays_inside_its_rect() {
 
 #[trial]
 fn a_thin_stamp_on_a_large_document_still_shows() {
-    let mut mask = CoverageMask::new(Rect::new(0.0, 0.0, 20_000.0, 20_000.0), 1000);
+    let mut mask = CoverageMask::new(&mut Serials::default(), Rect::new(0.0, 0.0, 20_000.0, 20_000.0), 1000);
     assert_eq!((mask.scale(), mask.size()), (20.0, (1000, 1000)));
     // A one-unit line on a texel's edge, away from every texel centre.
     mask.restamp(Rect::new(5000.0, 5000.0, 5200.0, 5020.0), |at| if (at.y - 5000.5).abs() <= 0.5 { 1.0 } else { 0.0 });

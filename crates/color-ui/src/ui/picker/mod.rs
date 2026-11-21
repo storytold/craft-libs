@@ -2,12 +2,12 @@
 //! host adds. A container: its body lays the parts out with the form layouts, the "Field shows" choice is a
 //! `RadioGroup` and the channel rows share one label column.
 
-mod channel;
+pub(crate) mod channel;
 mod compact;
 mod full;
-mod screen_pick;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod screen_pick;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod value;
 
 use std::sync::Arc;
@@ -158,7 +158,7 @@ craft_ui::words! {
 /// What the picker keeps between passes.
 #[derive(Clone, Default)]
 struct Memo {
-    /// The model of the Compact rows.
+    /// The model of the Compact rows while the host binds none ([`ColorPicker::shown_model`]).
     model: Option<&'static str>,
     /// What the area and strip show while the host holds no mode.
     mode: AreaMode,
@@ -308,6 +308,9 @@ pub struct ColorPicker<'a> {
     /// The host's answer to a screen or canvas pick, for this pass; a `Set` that keeps the picker's alpha.
     #[prop]
     sampled: Option<Srgba>,
+    /// The Compact rows' model, held by the host; kept per picker without it.
+    #[prop]
+    shown_model: Option<Bind<'a, Option<&'static str>>>,
 }
 
 impl<'a> ColorPicker<'a> {
@@ -328,6 +331,7 @@ impl<'a> ColorPicker<'a> {
             warnings: Vec::new(),
             constrain: None,
             sampled: None,
+            shown_model: None,
         }
     }
 
@@ -385,11 +389,21 @@ impl<'a> ColorPicker<'a> {
             warnings,
             constrain,
             sampled,
+            mut shown_model,
         } = self;
         let full = layout == ColorPickerLayout::Full;
         let models: Vec<&'a dyn ColorModel> = models
             .unwrap_or_else(|| builtin_models().into_iter().filter(|m| if full { m.default_on().full } else { m.default_on().compact }).collect());
-        let parts = compact::Body { layout, models: models.clone(), warnings, alpha, dynamic_tracks, eyedropper, eyedropper_busy };
+        let parts = compact::Body {
+            layout,
+            models: models.clone(),
+            warnings,
+            compare: compare.is_some(),
+            alpha,
+            dynamic_tracks,
+            eyedropper,
+            eyedropper_busy,
+        };
         let mut run = Run {
             name: Arc::from(label.as_str()),
             full,
@@ -397,6 +411,7 @@ impl<'a> ColorPicker<'a> {
             value: value.reborrow(),
             mode: mode.as_mut().map(|held| held.reborrow()),
             web: web_colors.as_mut().map(|held| held.reborrow()),
+            shown_model: shown_model.as_mut().map(|held| held.reborrow()),
             constrain,
             sampled,
             compare,
@@ -421,6 +436,8 @@ struct Run<'s, 'a> {
     value: BindMut<'s, PickedColor>,
     mode: Option<BindMut<'s, AreaMode>>,
     web: Option<BindMut<'s, bool>>,
+    /// The host's model of the Compact rows; without it `Memo.model` holds it.
+    shown_model: Option<BindMut<'s, Option<&'static str>>>,
     constrain: Option<ColorConstraint<'a>>,
     sampled: Option<Srgba>,
     /// The host's compare colour.
@@ -456,14 +473,18 @@ impl<'a> Run<'_, 'a> {
         }
 
         let first_show = !memo.opened;
-        let model = memo.model.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
+        let held_model = self.shown_model.as_ref().and_then(|held| held.read(&mut *body)).and_then(|held| held.same().copied()).flatten();
+        let wanted = if self.shown_model.is_some() { held_model } else { memo.model };
+        let model = wanted.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
         let focus_hex = first_show && body.resolved.enabled;
         let held = self.value.read(&mut *body).and_then(|held| held.same().copied());
         let first = if first_show { held } else { memo.first };
         {
             let memo = body.memory::<Memo>();
             memo.mode = mode;
-            memo.model = model;
+            if self.shown_model.is_none() {
+                memo.model = model;
+            }
             memo.opened = true;
             memo.first = first;
         }
@@ -507,8 +528,14 @@ impl<'a> Run<'_, 'a> {
                 }
             }
         }
-        if let Some(model) = got.model_pick {
-            body.memory::<Memo>().model = Some(model);
+        if let Some(next) = got.model_pick {
+            match self.shown_model.as_mut() {
+                Some(held) => {
+                    let event = EditEvent::set(Mixed::Same(model), Some(next), Arc::from("Color model"), None);
+                    let _ = held.write(&mut *body, &event);
+                }
+                None => body.memory::<Memo>().model = Some(next),
+            }
         }
         (std::mem::take(&mut self.events), got.screen_pick)
     }

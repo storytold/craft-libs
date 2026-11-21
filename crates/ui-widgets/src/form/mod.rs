@@ -1,10 +1,10 @@
 //! Form rows: `Field`, `FieldGroup` and `SliderField`.
 
-mod field;
-mod group;
-mod slider_field;
-#[cfg(feature = "testing")]
-mod stories;
+pub(crate) mod field;
+pub(crate) mod group;
+pub(crate) mod slider_field;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use field::{Field, FieldRowStyle, Help};

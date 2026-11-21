@@ -8,8 +8,8 @@ use craft_behavior::kurbo::Size;
 use craft_behavior::{CanvasView, EditEvents};
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What the Navigator panel reports.
 #[derive(Debug)]

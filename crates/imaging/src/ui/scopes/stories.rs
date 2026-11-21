@@ -208,12 +208,12 @@ fn first_values() -> ZoneValues {
 #[story(ScopePanel<'static>, covers = [Default], drive = Drive::Never)]
 fn tone_zones(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = (ScopePanelState { settings: view(ScopeView::Expanded), ..ScopePanelState::default() }, first_values());
-    let (state, values) = data.value("zones", start);
+    let ((state, values), zones_at) = data.value_at("zones", start);
     let curves = curves(Mode::Rgb, 0.0);
     let channels = scope_channels(&curves);
     let frame = ScopeFrame::histogram(HistogramSet::new(&channels));
     let (zones, scales, texts) = (ToneZone::CAMERA_RAW, zone_scales(), zone_texts(Some(&*values)));
-    ScopePanel::new(state).frame(&frame).zones(&zones, &scales, &texts, Bind::bound(values)).show(ui).into()
+    ScopePanel::new(state).frame(&frame).zones(&zones, &scales, &texts, zones_at.bind(values)).show(ui).into()
 }
 
 /// Generated pixels in a skin cluster, a sky and some foliage, with a few saturated ones.
@@ -315,21 +315,21 @@ fn clipping_warnings_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ClipWarning<'static>, covers = [Default], drive = Drive::Activate)]
 fn clip_warning(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let on = data.value("on", true);
-    ClipWarning::new("Highlight Clipping Warning (O)", Bind::bound(on), ChannelMask::R).show(ui).into()
+    let (on, on_at) = data.value_at("on", true);
+    ClipWarning::new("Highlight Clipping Warning (O)", on_at.bind(on), ChannelMask::R).show(ui).into()
 }
 
 #[story(ClipWarning<'static>, covers = [Mixed], drive = Drive::Never)]
 fn clip_warning_that_differs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let on = data.value("mixed", Mixed::<bool>::Mixed);
-    ClipWarning::new("Highlight Clipping Warning (O)", Bind::bound_mixed(on), ChannelMask::R).show(ui).into()
+    let (on, on_at) = data.value_at("mixed", Mixed::<bool>::Mixed);
+    ClipWarning::new("Highlight Clipping Warning (O)", on_at.bind_mixed(on), ChannelMask::R).show(ui).into()
 }
 
 #[story(ClipWarning<'static>, covers = [Invalid], drive = Drive::Never)]
 fn clip_warning_that_is_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let on = data.value("refused", false);
+    let (on, on_at) = data.value_at("refused", false);
     let refuse = |_: &bool| Validity::Refuse(Message::new("Not available"));
-    ClipWarning::new("Highlight Clipping Warning (O)", Bind::bound(on).check(refuse), ChannelMask::R).show(ui).into()
+    ClipWarning::new("Highlight Clipping Warning (O)", on_at.bind(on).check(refuse), ChannelMask::R).show(ui).into()
 }
 
 /// The zones of a story over a picture, with each zone's scale and value text, and the story's canvas.
@@ -343,23 +343,23 @@ fn zones_story(ui: &mut Ui, mut value: Bind<'_, ZoneValues>, texts: &[Label]) ->
 
 #[story(ToneZones<'static>, covers = [Default], drive = Drive::Drag(Grip::part(ZONE.at(1)).toward(vec2(1.0, 0.0))))]
 fn zones_over_a_plot(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("values", first_values());
+    let (values, values_at) = data.value_at("values", first_values());
     let texts = zone_texts(Some(&*values));
-    zones_story(ui, Bind::bound(values), &texts)
+    zones_story(ui, values_at.bind(values), &texts)
 }
 
 #[story(ToneZones<'static>, covers = [Mixed], drive = Drive::Never)]
 fn zones_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("mixed", Mixed::<ZoneValues>::Mixed);
-    zones_story(ui, Bind::bound_mixed(values), &zone_texts(None))
+    let (values, values_at) = data.value_at("mixed", Mixed::<ZoneValues>::Mixed);
+    zones_story(ui, values_at.bind_mixed(values), &zone_texts(None))
 }
 
 #[story(ToneZones<'static>, covers = [Invalid], drive = Drive::Never)]
 fn zones_that_are_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("refused", first_values());
+    let (values, values_at) = data.value_at("refused", first_values());
     let texts = zone_texts(Some(&*values));
     let refuse = |_: &ZoneValues| Validity::Refuse(Message::new("Not available"));
-    zones_story(ui, Bind::bound(values).check(refuse), &texts)
+    zones_story(ui, values_at.bind(values).check(refuse), &texts)
 }
 
 #[story(ClippingOverlay<'static>, covers = [Default], drive = Drive::Never)]

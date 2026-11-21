@@ -22,3 +22,15 @@ fn reading_nav(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let state = data.value("state", ReadingState { column: 1, ..ReadingState::default() });
     ReadingNav::new(state, PAGES).show(ui).into()
 }
+
+#[story(ReadingNav<'static>, covers = [], drive = Drive::Never)]
+fn with_position(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = data.value("state", ReadingState { column: 1, ..ReadingState::default() });
+    ReadingNav::new(state, PAGES).position(true).show(ui).into()
+}
+
+#[story(ReadingNav<'static>, covers = [], drive = Drive::Never)]
+fn with_action(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = data.value("state", ReadingState { column: 1, ..ReadingState::default() });
+    ReadingNav::new(state, PAGES).action("Done").show(ui).into()
+}

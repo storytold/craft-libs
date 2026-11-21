@@ -10,8 +10,11 @@
 //! The probe only ever explains an empty answer; it never stops a dialog from opening. Anything
 //! it can't tell counts as present, so a working system never sees the cause.
 
-// Only Linux probes; the types and helpers stay testable on every platform.
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+// Only Linux and the BSDs probe; the types and helpers stay testable on every platform.
+#![cfg_attr(
+    not(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd")),
+    allow(dead_code)
+)]
 
 use std::sync::OnceLock;
 
@@ -52,10 +55,10 @@ fn on_path(program: &str, path: &std::ffi::OsStr) -> bool {
 }
 
 /// Looks for the file dialog backends on a helper thread (the portal call can take a moment).
-/// Runs once per process, and only on Linux.
+/// Runs once per process, and only on Linux and the BSDs.
 // pc: apps/photocraft/src/file_dialog_probe.rs:56 start
 pub(crate) fn start() {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
     {
         use std::sync::Once;
         static STARTED: Once = Once::new();
@@ -112,7 +115,7 @@ fn ldconfig_output_is_valid(output: &str) -> bool {
 /// Whether the linker cache lists `soname`; `None` when the cache can't be read, which proves
 /// nothing (musl, NixOS, some containers).
 // pc: apps/photocraft/src/linux_libs.rs:247 read_ldconfig, :270 cached
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 fn linker_cache_has(soname: &str) -> Option<bool> {
     // `/sbin` isn't on a normal user's PATH on Debian. The listing is parsed, so it must be the
     // untranslated one.
@@ -131,7 +134,7 @@ fn linker_cache_has(soname: &str) -> Option<bool> {
 /// one a property read fails with `InvalidArgs` ("No such interface"). The interface list answers
 /// the question directly.
 // pc: apps/photocraft/src/file_dialog_probe.rs:79 file_chooser_portal
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 fn file_chooser_portal() -> Option<bool> {
     const REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let Ok(conn) = zbus::blocking::connection::Builder::session().and_then(|b| b.method_timeout(REPLY_TIMEOUT).build()) else {
@@ -153,7 +156,7 @@ fn file_chooser_portal() -> Option<bool> {
 /// Whether introspection XML lists the portal's `FileChooser` interface (not a longer name such as
 /// `FileChooser2`).
 // pc: apps/photocraft/src/file_dialog_probe.rs:102 interface_listed
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 fn interface_listed(xml: &str) -> bool {
     ["\"", "'"].iter().any(|quote| xml.contains(&format!("<interface name={quote}org.freedesktop.portal.FileChooser{quote}")))
 }
@@ -162,7 +165,7 @@ fn interface_listed(xml: &str) -> bool {
 /// service, object or interface isn't there, `None` for anything else (a timeout, a dropped
 /// connection, an unknown error), which counts as present.
 // pc: apps/photocraft/src/file_dialog_probe.rs:110 classify_error
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
 fn classify_error(e: &zbus::Error) -> Option<bool> {
     use zbus::fdo::Error as Fdo;
     // Names a bus daemon or portal answers with when the thing asked about is absent.
@@ -186,4 +189,4 @@ fn classify_error(e: &zbus::Error) -> Option<bool> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

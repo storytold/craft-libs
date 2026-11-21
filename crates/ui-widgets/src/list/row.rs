@@ -10,7 +10,7 @@
 use super::toggle::ToggleCell;
 use super::words::ListWords;
 use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show};
-use crate::primitives::{ContentPainterCx, HAlign, IconSpec};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span};
 use crate::runtime::env::Label;
 use craft_behavior::{ColumnKey, Cursor};
 use craft_theme::variant::Tone;
@@ -23,7 +23,7 @@ mod paint;
 mod placement;
 mod show;
 mod style;
-mod thumb;
+pub(crate) mod thumb;
 mod trailing;
 
 use crate::contract::Hosting;
@@ -166,6 +166,11 @@ pub struct ListRow<'a> {
     /// The label in italics.
     #[prop]
     pub(super) italic: bool,
+    /// The label drawn from styled spans, as `Text::styled` draws them: a search result's match in the theme's
+    /// highlight look (`Span::highlight`). The label given to `new` is their joined text, which is also what a screen
+    /// reader reads. Empty for a plain label.
+    #[prop]
+    pub(super) label_spans: Vec<Span<'static>>,
     /// The hover look without the pointer (the canvas hovers the layer).
     #[prop]
     pub(super) highlight: bool,
@@ -301,6 +306,7 @@ impl<'a> ListRow<'a> {
             sub_steps: 0,
             divider_below: true,
             italic: false,
+            label_spans: Vec::new(),
             highlight: false,
             clipped: false,
             rule: false,
