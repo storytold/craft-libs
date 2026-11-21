@@ -167,6 +167,13 @@ pub(crate) fn pass_through(ctx: &Context, id: Id) {
     });
 }
 
+/// Marks the node of `id` modal, when the pass has written it.
+pub(crate) fn set_modal(ctx: &Context, id: Id) {
+    if ctx.has_accesskit_node(id) {
+        ctx.accesskit_node_builder(id, accesskit::Node::set_modal);
+    }
+}
+
 /// Reports `id` as the focused node of this pass. A replay of the run that reported it reports it again: a view that
 /// holds focus replays while nothing reaches it.
 pub(crate) fn set_focus(ctx: &Context, id: Id) {

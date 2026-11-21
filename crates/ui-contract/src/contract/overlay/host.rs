@@ -176,7 +176,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     // A popup's or a modal's layer, and any layer while it fades out, has a root node, made before its `Area` shows so
     // egui hangs the layer's content below it. A sizing pass of the `Area` reports nothing.
     if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
-        spec.root = areas::content_rect(ctx, &spec).map(|rect| access::report_layer(ctx, layer.id, rect, overlay.rank.is_modal(), layer.exiting));
+        spec.root = areas::content_rect(ctx, &spec).map(|rect| access::report_layer(ctx, layer.id, rect, layer.exiting));
     }
     // The opener of the layer's scope is the stop focused when the layer first appears: egui's modal gate takes focus
     // from the widgets below a modal layer by the first pass that shows the layer. A dropdown that keeps its anchor's key
@@ -222,6 +222,9 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         // checks them. Without the boundary a tooltip's text was checked against the body's kept transcript, which
         // asked for a discard pass every other frame while the tooltip showed.
         access::scope::outside(ctx, || layout_memory::boundary(ctx, true, || body(ui)));
+        if real && overlay.rank.is_modal() {
+            access::report_modal(ctx, layer.id);
+        }
         if real {
             focus::pop_scope(ctx);
         }

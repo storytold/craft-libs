@@ -426,17 +426,23 @@ pub fn layer_root(id: Id) -> Id {
 }
 
 /// Writes the root node of the overlay layer `id`, whose content takes `rect`, and returns its id. The layer's content
-/// hangs below it, and a modal layer's root is modal. An exiting layer's root is hidden from the first pass it fades
-/// out, so nothing under it is reported while it still paints; the ids stay the same if the layer reopens. Called
-/// before the layer's `Area` shows, which egui hangs below the root.
-pub(crate) fn report_layer(ctx: &Context, id: Id, rect: Rect, modal: bool, exiting: bool) -> Id {
+/// hangs below it. An exiting layer's root is hidden from the first pass it fades out, so nothing under it is reported
+/// while it still paints; the ids stay the same if the layer reopens. Called before the layer's `Area` shows, which
+/// egui hangs below the root. The root is a plain container: a modal layer's flag sits on its container component's
+/// node ([`report_modal`]), which carries the role, since screen readers drop a container without one.
+pub(crate) fn report_layer(ctx: &Context, id: Id, rect: Rect, exiting: bool) -> Id {
     let root = layer_root(id);
     let mut spec = NodeSpec::layer_root();
     spec.rect = Some(rect);
-    spec.modal = modal;
     spec.hidden = exiting;
     write_node(ctx, root, &spec);
     root
+}
+
+/// Marks the node of the modal overlay layer `id` modal: the node its container component wrote with the layer's id
+/// and its role. Called after the layer's body ran, so the node exists when the component reported it.
+pub(crate) fn report_modal(ctx: &Context, id: Id) {
+    adapter::set_modal(ctx, id);
 }
 
 /// Hides the node of the content `Ui` of an exiting overlay layer: a popup body that names its own parent can hang

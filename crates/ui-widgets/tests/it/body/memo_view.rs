@@ -14,6 +14,7 @@ use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
+use craft_ui::runtime::overlay::{Backdrop, Rank};
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::access::{NodeKey, layer_root};
 use craft_ui::testing::in_audit_run;
@@ -1446,9 +1447,22 @@ fn events_sent_to_a_replaying_focused_field_reach_it_in_their_frame() {
     }
 }
 
+/// A popover the rooted view shows, open, and whether its layer is modal.
+#[derive(MemoProps)]
+struct Rooted<'a> {
+    open: Bind<'a, bool>,
+    modal: bool,
+}
+
 /// A popover the view shows, holding a line of text; returns the popover's id.
-fn rooted(props: &mut Hint<'_>, ui: &mut Ui) -> Option<Id> {
-    let popover = Popover::new("Rooted", props.open.reborrowed()).at_point(POPOVER_AT).initial_focus(Initial::KeepAnchor);
+fn rooted(props: &mut Rooted<'_>, ui: &mut Ui) -> Option<Id> {
+    let modal = props.modal;
+    let popover = Popover::new("Rooted", props.open.reborrowed()).at_point(POPOVER_AT).initial_focus(Initial::KeepAnchor).overlay(|mut overlay| {
+        if modal {
+            overlay.rank = Rank::modal(Backdrop::None);
+        }
+        overlay
+    });
     let shown = popover.show(ui, |ui, _| Text::new("Rooted").show(ui));
     shown.output.open.then_some(shown.output.response.id)
 }
@@ -1467,27 +1481,33 @@ fn ancestors(tree: &craft_ui::testing::access::AccessTree, key: NodeKey) -> Vec<
 
 /// A popover in a view hangs below its layer's root node, which has its own id, in the run and in each replay: the
 /// pass's AccessKit parents hold no cycle (every trial's pass-end check), and a replay adds the nodes where the run did.
+/// A modal layer's flag sits on the popover's own node, which carries its role, never on the root, a plain container.
 #[trial]
 fn a_popover_in_a_view_hangs_below_its_layer_root() {
-    let mut frames = still_frames();
-    let mut open = true;
-    let mut popover = None;
-    let mut frame = |frames: &mut Frames| {
-        frames.frame(vec![], |ui| popover = MemoView::new("rooted", Hint { open: Bind::bound(&mut open) }, rooted).show(ui).flatten());
-        let ran = last_frame_memo_runs(&frames.ctx).into_iter().any(|(_, _, run)| run == MemoRun::Ran);
-        let id = popover.expect("the popover is open");
-        let tree = frames.tree();
-        (ran, ancestors(&tree, NodeKey::of(id)), NodeKey::of(layer_root(id)))
-    };
-    let (ran, above, root) = frame(&mut frames);
-    assert!(ran, "the first frame runs the view");
-    assert!(above.contains(&root), "the popover hangs below its layer's root: {above:?}, root {root:?}");
-    for _ in 0..SETTLE {
-        frame(&mut frames);
+    for modal in [false, true] {
+        let mut frames = still_frames();
+        let mut open = true;
+        let mut popover = None;
+        let mut frame = |frames: &mut Frames| {
+            frames.frame(vec![], |ui| popover = MemoView::new("rooted", Rooted { open: Bind::bound(&mut open), modal }, rooted).show(ui).flatten());
+            let ran = last_frame_memo_runs(&frames.ctx).into_iter().any(|(_, _, run)| run == MemoRun::Ran);
+            let id = popover.expect("the popover is open");
+            let tree = frames.tree();
+            let (node, root) = (NodeKey::of(id), NodeKey::of(layer_root(id)));
+            (ran, ancestors(&tree, node), root, (tree.is_modal(node), tree.is_modal(root)))
+        };
+        let (ran, above, root, flags) = frame(&mut frames);
+        assert!(ran, "the first frame runs the view");
+        assert!(above.contains(&root), "the popover hangs below its layer's root: {above:?}, root {root:?}");
+        assert_eq!(flags, (modal, false), "the modal flag sits on the popover's node only (modal {modal})");
+        for _ in 0..SETTLE {
+            frame(&mut frames);
+        }
+        let (ran, replayed, _, flags) = frame(&mut frames);
+        assert!(!ran, "an idle frame replays the view (modal {modal})");
+        assert_eq!(replayed, above, "the replay adds the popover's node where the run did");
+        assert_eq!(flags, (modal, false), "the replay keeps the modal flag on the popover's node (modal {modal})");
     }
-    let (ran, replayed, _) = frame(&mut frames);
-    assert!(!ran, "an idle frame replays the view");
-    assert_eq!(replayed, above, "the replay adds the popover's node where the run did");
 }
 
 /// What the toast view shows: the main window's toasts, over the view's room.

@@ -27,7 +27,7 @@ pub use emit::layer_root;
 pub use emit::report_sub;
 #[doc(hidden)]
 pub use emit::sub_node_id;
-pub(crate) use emit::{FaceFacts, Own, PopupShown, hide_exiting_content, report, report_layer};
+pub(crate) use emit::{FaceFacts, Own, PopupShown, hide_exiting_content, report, report_layer, report_modal};
 pub use live::announce;
 pub(crate) use live::{begin_pass as begin_live_pass, end_pass as end_live_pass};
 pub use scope::{FieldLabel, FieldLabelRole};
