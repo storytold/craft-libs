@@ -104,8 +104,15 @@ impl Filter {
         limit: usize,
         control: Option<&crate::cancel::Control>,
         rows: Option<usize>,
-    ) -> Result<FilterResult<'static>, DecodeFailure> {
+    ) -> Result<(FilterResult<'static>, bool), DecodeFailure> {
         crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
+        // PdfCraft patch (55): Flate and LZW say whether they stopped at the limit before their
+        // predictor was undone; the caller tells a cut from the output's length for the others.
+        let mut cut = false;
+        let reported = |(data, stopped): (Vec<u8>, bool)| {
+            cut = stopped;
+            FilterResult::from_data(data)
+        };
         let res = match self {
             Self::AsciiHexDecode => (if control.is_some() { ascii_hex::decode_into_controlled(data, control) } else { ascii_hex::decode(data) })
                 .map(FilterResult::from_data)
@@ -116,15 +123,11 @@ impl Filter {
             Self::RunLengthDecode => (if control.is_some() { run_length::decode_controlled(data, limit, control) } else { run_length::decode(data, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::LzwDecode => (if control.is_some() { lzw_flate::lzw::decode_controlled(data, params, limit, control) } else { lzw_flate::lzw::decode(data, params, limit) })
-                .map(FilterResult::from_data)
+            Self::LzwDecode => lzw_flate::lzw::decode_controlled(data, params, limit, control)
+                .map(reported)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => (if control.is_some() {
-                lzw_flate::flate::decode_controlled(data, params, limit, control, rows)
-            } else {
-                lzw_flate::flate::decode(data, params, limit, rows)
-            })
-                .map(FilterResult::from_data)
+            Self::FlateDecode => lzw_flate::flate::decode_controlled(data, params, limit, control, rows)
+                .map(reported)
                 .ok_or(DecodeFailure::StreamDecode),
             #[cfg(feature = "images")]
             Self::DctDecode => dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode),
@@ -148,7 +151,7 @@ impl Filter {
             warn!("failed to apply filter {}", self.debug_name());
         }
 
-        res
+        res.map(|r| (r, cut))
     }
 }
 
