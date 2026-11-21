@@ -11,6 +11,11 @@ keeps them. Each function returns a Promise that resolves with the method's `res
 an `Error` carrying `error`. Every call has a timeout (30 s by default, `PageApi::with_timeout`);
 when the app does not answer in time, the error says so and the app's request future is dropped, so an app that releases a request when its future goes away (the desktop `ControlRequest` has `abandon`) never runs a call the page was told had failed.
 
+Params are a plain object; `undefined` and `null` mean `{}`. Anything else (a number, a string,
+`NaN`, an array, a function, an invalid `Date`, an object `JSON.stringify` can't write or writes as
+anything but an object) rejects with an `Error` and never reaches the app: as `{}` it would run the
+method with its defaults.
+
 At most 64 calls may wait for the app at once (`PageApi::with_max_in_flight`); a call made while that many are waiting rejects at once with a `busy` error and never reaches the app, so a script that calls in a loop without awaiting cannot grow the app's queue without bound. The size of a call's params is not capped here: opening a file passes the file's bytes in them, and each app already limits the files it opens.
 
 ## Who can call it
