@@ -1,14 +1,17 @@
-//! The contextual task bar (N6): hung centred under its anchor's screen bounds, following the anchor until the grip
-//! moves it, reset and pinned from its More menu, and kept inside the canvas area whatever place it is given.
+//! The contextual task bar (N6): hung centred under its anchor's screen bounds, following the anchor with the offset
+//! the grip gave it, reset and pinned from its More menu, and kept inside the canvas area whatever place it is given.
 
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
+use craft_behavior::overlay::{Align, Side};
 use craft_ui::buttons::Button;
 use craft_ui::canvas_controls::{TaskBar, TaskBarPlace};
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::menu::PanelRow;
+use craft_ui::runtime::commands::{CommandRef, EditCommands};
 use craft_ui::testing::canvas_story::on_canvas;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const SLACK: f32 = 1.5;
@@ -27,14 +30,26 @@ struct Scene {
     rect: Rect,
 }
 
+/// A scene with the frame at its start and no place.
+fn scene() -> Rc<RefCell<Scene>> {
+    Rc::new(RefCell::new(Scene {
+        anchor: frame(DocVec::ZERO),
+        place: TaskBarPlace::default(),
+        bounds: Rect::NOTHING,
+        area: Rect::NOTHING,
+        rect: Rect::NOTHING,
+    }))
+}
+
 /// A frame of the story document, moved by `by` document points. It lies high on the story canvas (360 points tall),
 /// so the bar hangs below it after every move and drop the trial makes.
 fn frame(by: DocVec) -> Vec<Point> {
     [(120.0, 40.0), (520.0, 40.0), (520.0, 200.0), (120.0, 200.0)].into_iter().map(|(x, y)| Point::new(x, y) + by).collect()
 }
 
-/// A canvas that shows the bar for the scene's anchor and place, with the More menu before a Done button.
-fn fixture(scene: &Rc<RefCell<Scene>>) -> Fixture {
+/// A canvas that shows the bar for the scene's anchor and place, set up by `configure`, with the More menu before a
+/// Done button.
+fn fixture_with(scene: &Rc<RefCell<Scene>>, configure: impl for<'a> Fn(TaskBar<'a>) -> TaskBar<'a> + 'static) -> Fixture {
     let shared = Rc::clone(scene);
     let mut fixture = Fixture::new(move |ui| {
         let _ = on_canvas(ui, |ui, area, view| {
@@ -42,7 +57,7 @@ fn fixture(scene: &Rc<RefCell<Scene>>) -> Fixture {
             let scene = &mut *held;
             scene.bounds = Rect::from_points(&scene.anchor.iter().map(|point| view.to_screen(*point)).collect::<Vec<_>>());
             scene.area = area;
-            let shown = TaskBar::new("Crop", &scene.anchor, Bind::bound(&mut scene.place)).show(ui, area, |ui, cx| {
+            let shown = configure(TaskBar::new("Crop", &scene.anchor, Bind::bound(&mut scene.place))).show(ui, area, |ui, cx| {
                 cx.more_menu(ui);
                 let _ = Button::new("Done").show(ui);
             });
@@ -52,6 +67,10 @@ fn fixture(scene: &Rc<RefCell<Scene>>) -> Fixture {
     });
     fixture.room(Vec2::new(1120.0, 720.0));
     fixture
+}
+
+fn fixture(scene: &Rc<RefCell<Scene>>) -> Fixture {
+    fixture_with(scene, |bar| bar)
 }
 
 fn seen(scene: &Rc<RefCell<Scene>>) -> Scene {
@@ -76,13 +95,7 @@ fn pick(fixture: &mut Fixture, row: &str) {
 
 #[trial]
 fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
-    let scene = Rc::new(RefCell::new(Scene {
-        anchor: frame(DocVec::ZERO),
-        place: TaskBarPlace::default(),
-        bounds: Rect::NOTHING,
-        area: Rect::NOTHING,
-        rect: Rect::NOTHING,
-    }));
+    let scene = scene();
     let mut fixture = fixture(&scene);
     fixture.settle();
     let first = seen(&scene);
@@ -104,13 +117,20 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     let by = Vec2::new(-120.0, 60.0);
     fixture.drag(&grip, by).settle();
     let dropped = seen(&scene);
-    assert!(dropped.place.at.is_some(), "the drag gave the bar a place");
-    assert!((dropped.rect.min - (followed.rect.min + by)).length() < 2.0 * SLACK, "the bar stays where it was dropped: {:?}", dropped.rect);
+    assert!(dropped.place.offset.is_some() && dropped.place.at.is_none(), "the drag gave the bar an offset: {:?}", dropped.place);
+    assert!((dropped.rect.min - (followed.rect.min + by)).length() < 2.0 * SLACK, "the bar sits where it was dropped: {:?}", dropped.rect);
 
     scene.borrow_mut().anchor = frame(DocVec::new(90.0, 10.0));
     fixture.settle();
     let kept = seen(&scene);
-    assert!((kept.rect.min - dropped.rect.min).length() < SLACK, "a moved bar keeps its left edge while the anchor moves: {:?}", kept.rect);
+    let shift = kept.bounds.min - dropped.bounds.min;
+    assert!(shift.length() > SLACK, "the anchor moved on screen");
+    assert!(
+        (kept.rect.min - dropped.rect.min - shift).length() < SLACK,
+        "a moved bar follows its anchor with its offset: anchor shifted {shift:?}, bar {:?} to {:?}",
+        dropped.rect,
+        kept.rect
+    );
 
     pick(&mut fixture, "Reset bar position");
     let reset = seen(&scene);
@@ -119,10 +139,21 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
 
     pick(&mut fixture, "Pin bar position");
     let pinned = seen(&scene);
-    assert!(pinned.place.pinned && pinned.place.at.is_some(), "Pin keeps the place: {:?}", pinned.place);
+    assert!(pinned.place.pinned && pinned.place.at.is_some() && pinned.place.offset.is_none(), "Pin keeps the place: {:?}", pinned.place);
     scene.borrow_mut().anchor = frame(DocVec::new(-60.0, -40.0));
     fixture.settle();
-    assert!((seen(&scene).rect.min - pinned.rect.min).length() < SLACK, "a pinned bar stays while the anchor moves");
+    let held = seen(&scene);
+    assert!((held.rect.min - pinned.rect.min).length() < SLACK, "a pinned bar stays while the anchor moves");
+
+    pick(&mut fixture, "Pin bar position");
+    let unpinned = seen(&scene);
+    assert!(!unpinned.place.pinned && unpinned.place.at.is_none() && unpinned.place.offset.is_some(), "Pin again unpins: {:?}", unpinned.place);
+    assert!((unpinned.rect.min - held.rect.min).length() < SLACK, "the bar jumped when it was unpinned: {:?}", unpinned.rect);
+    scene.borrow_mut().anchor = frame(DocVec::new(-20.0, -40.0));
+    fixture.settle();
+    let after = seen(&scene);
+    let shift = after.bounds.min - unpinned.bounds.min;
+    assert!((after.rect.min - unpinned.rect.min - shift).length() < SLACK, "an unpinned bar follows its anchor again");
 
     scene.borrow_mut().place = TaskBarPlace::new(false, Some([f32::NAN, 0.0]));
     fixture.settle();
@@ -135,17 +166,79 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     assert!(inside_area(&far), "a place far outside comes back inside {:?}: {:?}", far.area, far.rect);
 }
 
+/// The More menu lists Hide, Pin and Reset, then the host's rows in the order given; a submenu opens.
+#[trial]
+fn the_more_menu_lists_the_hosts_rows_after_its_own_and_runs_them() {
+    let scene = scene();
+    let mut fixture = fixture_with(&scene, |bar| {
+        bar.more_rows(vec![
+            PanelRow::Command(CommandRef::from(EditCommands::Undo)),
+            PanelRow::Submenu("Arrange".into(), vec![PanelRow::Command(CommandRef::from(EditCommands::Cut))]),
+        ])
+    });
+    fixture.settle();
+    let more = fixture.by_label("More options").expect("the bar has its More button");
+    fixture.click(&more).settle();
+    let tops: Vec<f32> = ["Hide bar", "Pin bar position", "Reset bar position", "Undo", "Arrange"]
+        .into_iter()
+        .map(|label| fixture.by_label(label).unwrap_or_else(|| panic!("the More menu lists {label}")).rect.top())
+        .collect();
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "the rows are not in order, the bar's own first: {tops:?}");
+    assert!(fixture.by_label("Cut").is_none(), "the submenu is closed");
+    let arrange = fixture.by_label("Arrange").expect("the submenu row");
+    fixture.click(&arrange).settle();
+    assert!(fixture.by_label("Cut").is_some(), "the submenu opens");
+}
+
+/// Beside the anchor near the canvas's right edge the bar flips to the anchor's other side, and a moved bar whose
+/// offset place would cover the kept-clear point shows at its unmoved place with its offset kept.
+#[trial]
+fn a_bar_beside_a_point_flips_and_keeps_clear_of_it() {
+    let scene = scene();
+    let clear = Rc::new(Cell::new(None));
+    let kept = Rc::clone(&clear);
+    let mut fixture = fixture_with(&scene, move |bar| {
+        let bar = bar.side(Side::End, Align::Start);
+        match kept.get() {
+            Some(point) => bar.keep_clear(point),
+            None => bar,
+        }
+    });
+    fixture.settle();
+    let origin = seen(&scene);
+    // How far a document point moves on screen, to put the anchor at the canvas's right edge.
+    scene.borrow_mut().anchor = frame(DocVec::new(100.0, 0.0));
+    fixture.settle();
+    let probed = seen(&scene);
+    let scale = f64::from(probed.bounds.min.x - origin.bounds.min.x) / 100.0;
+    let far = 100.0 + f64::from(probed.area.max.x - probed.bounds.max.x - 8.0) / scale;
+    scene.borrow_mut().anchor = frame(DocVec::new(far, 0.0));
+    fixture.settle();
+    let flipped = seen(&scene);
+    assert!(flipped.rect.right() <= flipped.bounds.left() + SLACK, "the bar flipped to the left of the anchor {:?}: {:?}", flipped.bounds, flipped.rect);
+
+    // A point a little to the bar's right: a bar moved by 60 points would cover it.
+    let at = egui::pos2(flipped.rect.max.x + 20.0, flipped.rect.center().y);
+    let corner = frame(DocVec::new(far, 0.0))[0];
+    clear.set(Some(corner + DocVec::new(f64::from(at.x - flipped.bounds.min.x) / scale, f64::from(at.y - flipped.bounds.min.y) / scale)));
+    fixture.settle();
+    assert!((seen(&scene).rect.min - flipped.rect.min).length() < SLACK, "the bar stays at its unmoved place until moved");
+
+    let grip = fixture.by_label("Move bar").expect("the grip is named");
+    fixture.drag(&grip, Vec2::new(60.0, 0.0)).settle();
+    let dropped = seen(&scene);
+    let offset = dropped.place.offset.expect("the drag gave the bar an offset");
+    assert!((offset[0] - 60.0).abs() < 2.0 * SLACK && offset[1].abs() < 2.0 * SLACK, "the offset is the drag: {offset:?}");
+    assert!((dropped.rect.min - flipped.rect.min).length() < SLACK, "the bar covers the point at its offset place: {:?}", dropped.rect);
+    fixture.settle();
+    assert_eq!(seen(&scene).place.offset, dropped.place.offset, "the offset is kept on the next pass");
+}
+
 /// The grip is one of the bar's members: it sits on the members' line, centred with them, inside the bar's padding,
 /// and a drag on it still moves the bar.
 #[trial]
 fn the_grip_sits_on_the_members_line() {
-    let scene = Rc::new(RefCell::new(Scene {
-        anchor: frame(DocVec::ZERO),
-        place: TaskBarPlace::default(),
-        bounds: Rect::NOTHING,
-        area: Rect::NOTHING,
-        rect: Rect::NOTHING,
-    }));
+    let scene = scene();
     let mut fixture = fixture(&scene);
     fixture.settle();
     let bar = seen(&scene).rect;

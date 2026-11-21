@@ -1,4 +1,4 @@
-//! `TaskBar`: the contextual task bar over a canvas, hung below its anchor until the user moves it.
+//! `TaskBar`: the contextual task bar over a canvas, hung beside its anchor until the user moves it.
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -12,26 +12,28 @@ use crate::contract::{
     Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad, PopupKind,
     Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
 };
-use crate::display::Icon;
-use crate::menu::{Menu, MenuItem, PanelRow};
+use crate::display::{Divider, Icon};
+use crate::menu::{Menu, MenuItem, PanelMenu, PanelRow};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::kurbo::Point;
-use craft_behavior::overlay::{Align, Side};
+use craft_behavior::overlay::{Align, PlaceRequest, Side};
 use craft_behavior::{EditEvent, IconId, Metrics, Mixed, Sense};
-use egui::{Pos2, Rect, Response, Ui};
+use egui::{Pos2, Rect, Response, Ui, Vec2};
 use std::sync::Arc;
 
 /// Where the task bar sits: pinned or following its anchor, and where the user moved it. The one owner of the bar's
-/// place; the serde shape is PhotoCraft's, so saved preferences load unchanged, and a non-finite `at` counts as unset.
+/// place; the serde shape is PhotoCraft's, so saved preferences load unchanged, and a non-finite `at` or `offset`
+/// counts as unset.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TaskBarPlace {
     /// The bar keeps its place instead of following the anchor.
     #[serde(default)]
     pub pinned: bool,
-    /// The bar's top left corner relative to the area's, once moved; `None` while it follows the anchor.
+    /// The bar's top left corner relative to the area's while it is pinned; an unpinned place that holds it turns it
+    /// into `offset` at once.
     #[serde(default)]
     pub at: Option<[f32; 2]>,
     /// Where an unpinned bar sits relative to its anchor, once moved; the bar follows the anchor with this offset.
@@ -51,19 +53,28 @@ impl TaskBarPlace {
         let [x, y] = self.at.filter(|at| at.iter().all(|v| v.is_finite()))?;
         Some(Pos2::new(area.min.x + x, area.min.y + y))
     }
+
+    /// How far the bar sits from its unmoved place; `None` while it sits there. A non-finite `offset` counts as unset.
+    fn offset_in(&self) -> Option<Vec2> {
+        let [x, y] = self.offset.filter(|offset| offset.iter().all(|v| v.is_finite()))?;
+        Some(Vec2::new(x, y))
+    }
 }
 
-/// The contextual task bar: a movable modeless layer hung below the screen bounds of `anchor` while its place is
-/// unset, with a body of members and a More menu (Hide, Reset, Pin). One place, pin and Hide setting for Crop and
+/// The contextual task bar: a movable modeless layer hung on a side of the screen bounds of `anchor`, with a body of
+/// members and a More menu (Hide, Pin, Reset, then the host's rows). One place, pin and Hide setting for Crop and
 /// Frame.
 ///
-/// - Place: centred under the anchor's bounds on screen, a section gap below them, following the anchor each pass.
-///   Dragged by its grip (any free point of the bar), it stays where it is dropped and keeps its left edge while the
-///   anchor moves or the bar grows; a press with no drag changes nothing. Pinned, it stays where it shows.
+/// - Place: on `side` of the anchor's bounds on screen (below, centred, by default), a section gap away, following the
+///   anchor each pass; it flips to the other side when there is no room. Dragged by its grip (any free point of the
+///   bar), it keeps its offset from that place while the anchor moves or the bar grows; a press with no drag changes
+///   nothing. A moved bar whose offset place would cover the `keep_clear` point shows at its unmoved place and keeps
+///   its offset. Pinned, it stays where it shows.
 /// - Area: the bar shows inside `area` (the canvas rect): a move stays inside it, and a stored place outside it comes
-///   back inside, its left and top edges winning where the bar does not fit.
+///   back inside, its left and top edges winning where the bar does not fit. Its members continue on a new line when
+///   the area is too narrow for them.
 /// - Menu: Hide bar reports `hide`; Reset bar position clears the place, so the bar follows its anchor again; Pin bar
-///   position keeps it where it shows.
+///   position keeps it where it shows and, picked again, lets it follow its anchor from where it shows.
 /// - Nothing shows outside a canvas, or while the anchor's bounds or `area` is not finite or `area` has no size.
 /// - `place` is the caller's value (`Bind::bound`): the bar reads it before it shows and writes the pass's change
 ///   after.
@@ -73,6 +84,10 @@ pub struct TaskBar<'a> {
     label: Label,
     anchor: &'a [Point],
     place: Bind<'a, TaskBarPlace>,
+    rows: Vec<PanelRow>,
+    side: Side,
+    align: Align,
+    keep_clear: Option<Point>,
 }
 
 /// What the task bar reports.
@@ -119,6 +134,10 @@ enum MenuPick {
 /// The More button and its menu, placed once per run of the bar's body.
 struct MoreMenu {
     words: Arc<CanvasControlWords>,
+    /// Whether the bar is pinned: the Pin row shows a check mark.
+    pinned: bool,
+    /// The host's rows, after the bar's own.
+    rows: Vec<PanelRow>,
     placed: bool,
     pick: Option<MenuPick>,
 }
@@ -133,74 +152,97 @@ impl MoreMenu {
         let more = IconButton::new(IconId::new("more")).popup(PopupKind::Menu).label(words.task_bar_more.clone()).show(ui);
         let mut pick = None;
         let rows = [
-            (MenuPick::Hide, "eye_off", &words.task_bar_hide),
-            (MenuPick::Reset, "reset", &words.task_bar_reset),
-            (MenuPick::Pin, "pin", &words.task_bar_pin),
+            (MenuPick::Hide, "eye_off", &words.task_bar_hide, false),
+            (MenuPick::Pin, "pin", &words.task_bar_pin, self.pinned),
+            (MenuPick::Reset, "reset", &words.task_bar_reset, false),
         ];
+        let host = &self.rows;
         let _ = Menu::new(words.task_bar_more.clone()).opened_by(&more, Trigger::Click).show(ui, |ui, _| {
-            for (row, icon, name) in rows {
-                if MenuItem::new(name.clone()).icon(IconSpec::svg(IconId::new(icon))).show(ui).ran {
+            for (row, icon, name, checked) in rows {
+                if MenuItem::new(name.clone()).icon(IconSpec::svg(IconId::new(icon))).check(checked).show(ui).ran {
                     pick = Some(row);
                 }
+            }
+            if !host.is_empty() {
+                Divider::horizontal().show(ui);
+                let _ = PanelMenu::new(host.clone(), Vec::new()).show(ui);
             }
         });
         self.pick = pick.or(self.pick);
     }
 }
 
+/// Whether the More menu offers `row`: a dock row (`PanelRow::Item`), which only a dock reads, does not belong in it.
+fn offered(row: &PanelRow) -> bool {
+    match row {
+        PanelRow::Item(_) => false,
+        PanelRow::Submenu(_, rows) => rows.iter().all(offered),
+        _ => true,
+    }
+}
+
 impl<'a> TaskBar<'a> {
     /// A bar named `label` hung below the screen bounds of `anchor` (document points) until `place` moves it.
     pub fn new(label: impl Into<Label>, anchor: &'a [Point], place: Bind<'a, TaskBarPlace>) -> Self {
-        TaskBar { label: label.into(), anchor, place }
+        TaskBar { label: label.into(), anchor, place, rows: Vec::new(), side: Side::Below, align: Align::Center, keep_clear: None }
     }
 
     /// Adds `rows` to the More menu after Hide, Pin and Reset and a divider: command rows take their label, chord, check
-    /// and enabled state from the command, and submenus show as in panel menus.
+    /// and enabled state from the command, and submenus show as in panel menus. A dock row (`PanelRow::Item`) is not
+    /// offered.
     #[must_use]
-    pub fn more_rows(self, rows: Vec<PanelRow>) -> Self {
-        let _ = rows;
-        todo!("cv.F34")
+    pub fn more_rows(mut self, rows: Vec<PanelRow>) -> Self {
+        debug_assert!(rows.iter().all(offered), "the task bar's More menu offers no dock rows");
+        self.rows = rows;
+        self
     }
 
     /// Hangs the bar on `side` of the anchor's screen bounds, aligned by `align`, in place of below and centred.
     #[must_use]
-    pub fn side(self, side: Side, align: Align) -> Self {
-        let _ = (side, align);
-        todo!("cv.F36")
+    pub fn side(mut self, side: Side, align: Align) -> Self {
+        self.side = side;
+        self.align = align;
+        self
     }
 
     /// A moved bar whose offset place would cover `point` (a document point, like the anchor) shows at its unmoved
     /// place and keeps its offset.
     #[must_use]
-    pub fn keep_clear(self, point: Point) -> Self {
-        let _ = point;
-        todo!("cv.F36")
+    pub fn keep_clear(mut self, point: Point) -> Self {
+        self.keep_clear = Some(point);
+        self
     }
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, anchor, mut place } = self;
+        let TaskBar { label, anchor, mut place, rows, side, align, keep_clear } = self;
         let env = Env::of(ui);
         let words = env.words::<CanvasControlWords>();
         // The anchor maps through this pass's view, so the bar follows a scroll or zoom in the same pass.
-        let bounds = canvas_space(&env.view()).map_or(Rect::NOTHING, |space| {
-            anchor.iter().fold(Rect::NOTHING, |mut bounds, point| {
-                bounds.extend_with(space.view.to_screen(*point));
-                bounds
-            })
+        let space = canvas_space(&env.view());
+        let to_screen = |point: Point| space.as_ref().map(|space| space.view.to_screen(point));
+        let bounds = anchor.iter().filter_map(|point| to_screen(*point)).fold(Rect::NOTHING, |mut bounds, at| {
+            bounds.extend_with(at);
+            bounds
         });
         let shows = bounds.is_finite() && area.is_finite() && area.is_positive();
         let held = match place.reborrow().get() {
             Some(Mixed::Same(held)) => held,
             _ => TaskBarPlace::default(),
         };
-        let hang = shows.then(|| hang_rect(bounds, env.tokens.space.gap.section));
-        let layer = TaskBarLayer::new(label, layer_overlay(&held, hang, area), shows);
-        let mut menu = MoreMenu { words: Arc::clone(&words), placed: false, pick: None };
+        let rtl = env.direction.is_rtl();
+        let hang = shows.then(|| Hang {
+            rect: hang_for(bounds, side, rtl, env.tokens.space.gap.section),
+            side,
+            align,
+            clear: keep_clear.and_then(to_screen).map(|at| Rect::from_min_max(at, at)),
+        });
+        let layer = TaskBarLayer::new(label, layer_overlay(&held, hang.as_ref(), area), shows);
+        let mut menu = MoreMenu { words: Arc::clone(&words), pinned: held.pinned, rows, placed: false, pick: None };
         let grip = words.task_bar_move.clone();
         let mut shown = layer.show(ui, |ui, _| {
             // The bar is the one surface: the grip is its first member, on the members' line inside its padding.
-            Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+            Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating).wrap().show(ui, |ui, _| {
                 let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
                 menu.placed = false;
                 let inner = body(ui, &mut TaskBarCx { menu: &mut menu });
@@ -210,9 +252,9 @@ impl<'a> TaskBar<'a> {
         });
         let rect = shown.output.response.rect;
         let pick = menu.pick;
-        if shows {
+        if let Some(hang) = &hang {
             let moved = shown.output.moved.filter(|moved| moved.min != rect.min);
-            let next = settled(held, rect, area, moved, pick);
+            let next = settled(held, rect, area, moved, pick, hang.unmoved(rect.size(), area, rtl));
             if next != held {
                 let word = match pick {
                     Some(MenuPick::Reset) => &words.task_bar_reset,
@@ -231,42 +273,83 @@ impl<'a> TaskBar<'a> {
     }
 }
 
-/// The rect the bar hangs below: the anchor's screen `bounds` grown by `gap` at the bottom. The overlay host keeps the
-/// layer inside `Overlay::bounds`.
-fn hang_rect(bounds: Rect, gap: f32) -> Rect {
-    Rect::from_min_max(bounds.min, Pos2::new(bounds.max.x, bounds.max.y + gap))
+/// What the bar hangs from, in screen space.
+struct Hang {
+    /// The anchor's bounds grown by the section gap on the hanging side. The overlay host keeps the layer inside
+    /// `Overlay::bounds`.
+    rect: Rect,
+    side: Side,
+    align: Align,
+    /// A rect the bar keeps clear of while it is offset.
+    clear: Option<Rect>,
 }
 
-/// The layer the bar shows in: hung below `hang` while `held` has no place, at its place once it has one. A move stays
-/// inside `area`. A bar that does not show (`hang` is `None`) gets a closed layer with no place.
-fn layer_overlay(held: &TaskBarPlace, hang: Option<Rect>, area: Rect) -> Overlay {
+impl Hang {
+    /// Where a bar of `size` hangs inside `area` before any offset: the place the overlay host computes for the
+    /// anchored layer, taken from the one placement rule.
+    fn unmoved(&self, size: Vec2, area: Rect, rtl: bool) -> Rect {
+        let request = PlaceRequest::new(self.rect, size, area).side(self.side).align(self.align).rtl(rtl).flips_across(true);
+        craft_behavior::overlay::place(&request).rect
+    }
+}
+
+/// The rect the bar hangs from: the anchor's screen `bounds` grown by `gap` on `side`.
+fn hang_for(bounds: Rect, side: Side, rtl: bool, gap: f32) -> Rect {
+    let mut rect = bounds;
+    match (side, rtl) {
+        (Side::Below, _) => rect.max.y += gap,
+        (Side::Above, _) => rect.min.y -= gap,
+        (Side::Start, false) | (Side::End, true) => rect.min.x -= gap,
+        _ => rect.max.x += gap,
+    }
+    rect
+}
+
+/// The layer the bar shows in: at its place while `held` has one, else hung from `hang` with its offset, keeping clear
+/// of `hang.clear`. A move stays inside `area`. A bar that does not show (`hang` is `None`) gets a closed layer with no
+/// place.
+fn layer_overlay(held: &TaskBarPlace, hang: Option<&Hang>, area: Rect) -> Overlay {
     let overlay = Overlay::floating().modeless().movable(true).body_scroll(false);
     let Some(hang) = hang else { return overlay };
     let overlay = overlay.bounds(area);
-    match held.placed_in(area) {
-        Some(at) => overlay.placed_at(at),
-        None => overlay.place(Place::anchored(Anchor::Rect(hang), Side::Below, Align::Center)),
+    if let Some(at) = held.placed_in(area) {
+        return overlay.placed_at(at);
     }
+    let hung = Place::anchored(Anchor::Rect(hang.rect), hang.side, hang.align).flipping_across().offset(held.offset_in().unwrap_or(Vec2::ZERO));
+    overlay.place(match hang.clear {
+        Some(clear) => hung.clear_of(clear),
+        None => hung,
+    })
 }
 
-/// The place after a pass that showed the bar at `shown`. A move (`moved`, a rect other than `shown`) keeps the bar
-/// where it was dropped; Reset clears the place; Pin, and a pinned bar with no place, keep the bar at `shown`. A
-/// non-finite place is cleared. With no move and no pick, the place stays unchanged; the overlay host keeps the layer
-/// inside the area.
-fn settled(held: TaskBarPlace, shown: Rect, area: Rect, moved: Option<Rect>, pick: Option<MenuPick>) -> TaskBarPlace {
-    let offset = |rect: Rect| -> [f32; 2] { (rect.min - area.min).into() };
-    let placed = held.placed_in(area).is_some();
-    let mut next = TaskBarPlace { at: held.at.filter(|_| placed), ..held };
-    if let Some(moved) = moved {
-        next.at = Some(offset(moved));
+/// The place after a pass that showed the bar at `shown`, whose unmoved place is `unmoved`. A move (`moved`, a rect
+/// other than `shown`) of an unpinned bar adds its distance to the offset, of a pinned bar sets `at`; Reset gives the
+/// default place; Pin pins the bar where it shows, and picked while pinned unpins it, the bar keeping where it shows.
+/// An unpinned place that holds `at` turns it into the offset that keeps the bar where it shows. With no move and no
+/// pick the place stays unchanged; the overlay host keeps the layer inside the area.
+fn settled(held: TaskBarPlace, shown: Rect, area: Rect, moved: Option<Rect>, pick: Option<MenuPick>, unmoved: Rect) -> TaskBarPlace {
+    if pick == Some(MenuPick::Reset) {
+        return TaskBarPlace::default();
     }
-    match pick {
-        Some(MenuPick::Reset) => next = TaskBarPlace::default(),
-        Some(MenuPick::Pin) => next = TaskBarPlace { pinned: true, at: Some(offset(shown)), offset: None },
-        Some(MenuPick::Hide) | None => {}
+    let at = |rect: Rect| -> [f32; 2] { (rect.min - area.min).into() };
+    let placed = held.placed_in(area).is_some();
+    let mut next = TaskBarPlace { pinned: held.pinned, at: held.at.filter(|_| placed), offset: held.offset_in().map(<[f32; 2]>::from) };
+    if pick == Some(MenuPick::Pin) {
+        next = TaskBarPlace { pinned: !held.pinned, at: Some(at(shown)), offset: None };
     }
     if next.pinned && next.at.is_none() {
-        next.at = Some(offset(shown));
+        next.at = Some(at(shown));
+    }
+    if !next.pinned && next.at.is_some() {
+        next.at = None;
+        next.offset = Some((shown.min - unmoved.min).into());
+    }
+    if let Some(moved) = moved {
+        if next.pinned {
+            next.at = Some(at(moved));
+        } else {
+            next.offset = Some((next.offset.map_or(Vec2::ZERO, Vec2::from) + (moved.min - shown.min)).into());
+        }
     }
     next
 }

@@ -198,8 +198,14 @@ impl Overlay {
         mapped.placed = mapped.placed.map(|rect| to_screen * rect);
         mapped.placed_at = mapped.placed_at.map(|pos| to_screen * pos);
         mapped.bounds = mapped.bounds.map(|rect| to_screen * rect);
-        if let Place::Float(FloatPlace { pos: Some(pos) }) = &mut mapped.place {
-            *pos = to_screen * *pos;
+        match &mut mapped.place {
+            Place::Float(FloatPlace { pos: Some(pos) }) => *pos = to_screen * *pos,
+            // An offset is a vector: it scales with the layer's space and does not translate.
+            Place::Anchored { offset, clear, .. } => {
+                *offset = to_screen.scaling * *offset;
+                *clear = clear.map(|rect| to_screen * rect);
+            }
+            _ => {}
         }
         Cow::Owned(mapped)
     }

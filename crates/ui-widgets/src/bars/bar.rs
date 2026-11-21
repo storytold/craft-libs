@@ -88,7 +88,7 @@ impl Outcome for BarOutput {
 /// left-to-right. A select in a bar fits its widest entry, up to a field length. A rule between groups of members is a
 /// `Divider::vertical()`; it shows only with the member after it. A bar with `commit_cancel` ends with a
 /// cancel and a commit button in its end region, outside the scroll, `space.gap.stack` from the body and on the
-/// members' line; they run `BarCommands`.
+/// members' line; they run `BarCommands`. A bar made [`wrap`](Bar::wrap) continues on a new line instead of scrolling.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {
@@ -148,8 +148,10 @@ impl<'a> Bar<'a> {
     /// Lays out the members as a row that wraps instead of scrolling under an overlay bar: no horizontal scroll, no row
     /// cap; a member wider than the bar narrows and elides by the shared rules.
     #[must_use]
-    pub fn wrap(self) -> Self {
-        todo!("cv.F37")
+    pub fn wrap(mut self) -> Self {
+        self.props.layout = self.props.layout.clone().wrap(true);
+        self.props.scroll = None;
+        self
     }
 
     /// Makes each member its own Tab stop, in reading order, as media controls are; the arrows no longer move between

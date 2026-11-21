@@ -80,15 +80,19 @@ impl Place {
     }
 
     /// The place shifted by `by` from where it would sit; no change off `Anchored`.
-    pub fn offset(self, by: egui::Vec2) -> Self {
-        let _ = by;
-        todo!("cv.F38")
+    pub fn offset(mut self, by: egui::Vec2) -> Self {
+        if let Place::Anchored { offset, .. } = &mut self {
+            *offset = by;
+        }
+        self
     }
 
     /// The place keeping clear of `rect`; no change off `Anchored`.
-    pub fn clear_of(self, rect: egui::Rect) -> Self {
-        let _ = rect;
-        todo!("cv.F38")
+    pub fn clear_of(mut self, rect: egui::Rect) -> Self {
+        if let Place::Anchored { clear, .. } = &mut self {
+            *clear = Some(rect);
+        }
+        self
     }
 }
 

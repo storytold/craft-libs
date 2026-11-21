@@ -220,7 +220,7 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec
     let rtl = layer.env.direction.is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
     match &layer.overlay.place {
-        Place::Anchored { side, align, flips_across, .. } => {
+        Place::Anchored { side, align, flips_across, offset, clear, .. } => {
             let kept = layer_bounds(layer, bounds);
             let Some(size) = size else {
                 let room = content_room(layer.overlay, bounds, kept, anchor, rtl);
@@ -234,7 +234,9 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec
                 .align(*align)
                 .rtl(rtl)
                 .min_width(layer.overlay.min_width)
-                .flips_across(*flips_across);
+                .flips_across(*flips_across)
+                .offset(*offset)
+                .clear(*clear);
             let placed = craft_behavior::overlay::place(&request);
             // The room is what the side the layer took leaves for a body as large as the cap.
             let room = craft_behavior::overlay::place(&request.kept(Some(placed.side)).size(cap)).rect.size();

@@ -1,12 +1,13 @@
 //! Stories of the bars.
 
 use super::{Bar, BarHome, BarItem, BarItems, BarKind, BarTool, ItemDisplay, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
-use crate::buttons::Link;
+use crate::buttons::{Button, Link};
 use crate::choice::{Checkbox, Segmented};
 use crate::contract::{Bind, Entry, Props as _};
 use crate::contract::{Show as _, ShowContainer as _};
 use crate::display::{Divider, Shade, Text};
 use crate::form::Field;
+use crate::layout_components::Row;
 use crate::menu::{Menu, MenuItem};
 use crate::pickers::Select;
 use crate::runtime::commands::EditCommands;
@@ -22,6 +23,8 @@ const NARROW: f32 = 80.0;
 /// The widths of the old status bar stories.
 const STATUS_WIDTH: f32 = 640.0;
 const STATUS_NARROW: f32 = 480.0;
+/// A width that holds two or three of the tool buttons of a row and not all of them.
+const TOOLS_NARROW: f32 = 220.0;
 /// The document the status readout zooms, in document units.
 const DOCUMENT: Size = Size::new(2000.0, 1500.0);
 
@@ -42,6 +45,46 @@ fn bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             BarItems::new(items()).show(ui);
         })
         .into()
+}
+
+/// A bar made to wrap: its members continue on a new line in a narrow stage instead of scrolling.
+#[story(Bar<'static>, covers = [], drive = Drive::Never)]
+fn bar_wrapping(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(TOOLS_NARROW);
+        Bar::new("Tools", BarKind::Tool)
+            .wrap()
+            .show(ui, |ui, _| {
+                for name in ["Undo", "Redo", "Cut", "Copy", "Paste", "Delete"] {
+                    Button::new(name).show(ui);
+                }
+            })
+            .output
+    })
+    .into()
+}
+
+/// A bar whose members sit in ranked rows in a narrow stage: the row of the lowest rank leaves first, the unranked row
+/// stays.
+#[story(Bar<'static>, covers = [], drive = Drive::Never)]
+fn ranked_row_in_a_narrow_bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    crate::testing::memory::scoped(ui, |ui| {
+        ui.set_max_width(TOOLS_NARROW);
+        Bar::new("Tools", BarKind::Tool)
+            .show(ui, |ui, _| {
+                Row::new().fit_rank(1).show(ui, |ui, _| {
+                    Button::new("Low").show(ui);
+                });
+                Row::new().fit_rank(2).show(ui, |ui, _| {
+                    Button::new("Mid").show(ui);
+                });
+                Row::new().show(ui, |ui, _| {
+                    Button::new("Keep").show(ui);
+                });
+            })
+            .output
+    })
+    .into()
 }
 
 /// The brush tool's bar: Home and the tool, the brush cells, a rule, the sampling group and its hint, then commit

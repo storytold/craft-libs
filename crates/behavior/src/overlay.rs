@@ -220,7 +220,8 @@ fn room(anchor: Rect, bounds: Rect, side: Side, rtl: bool, gap: f32) -> f32 {
 /// Places an overlay: the preferred side unless the other has more room and the content does not fit, shifted to
 /// stay inside the bounds, its height (or width, beside the anchor) capped to the room. Beside the anchor, a request that
 /// flips across lines up with the anchor's other end when it runs past the bounds from the aligned end and fits from the
-/// other. The rect is always finite and inside the bounds.
+/// other. The rect is then shifted by the request's `offset` and clamped again, unless the shifted rect would cover
+/// `clear`, in which case the unshifted one stays. The rect is always finite and inside the bounds.
 pub fn place(request: &PlaceRequest) -> Placement {
     let anchor = clean(request.anchor);
     let bounds = clean(request.bounds);
@@ -265,7 +266,11 @@ pub fn place(request: &PlaceRequest) -> Placement {
         (Side::Start, true) | (Side::End, false) => Pos2::new(anchor.right() + gap, across_y),
     };
     let max_min = Pos2::new((bounds.right() - size.x).max(bounds.left()), (bounds.bottom() - size.y).max(bounds.top()));
-    let min = Pos2::new(min.x.clamp(bounds.left(), max_min.x), min.y.clamp(bounds.top(), max_min.y));
+    let keep = |min: Pos2| Pos2::new(min.x.clamp(bounds.left(), max_min.x), min.y.clamp(bounds.top(), max_min.y));
+    let min = keep(min);
+    let shifted = keep(min + Vec2::new(finite(request.offset.x), finite(request.offset.y)));
+    let covers = request.clear.map(clean).is_some_and(|clear| clear.intersects(Rect::from_min_size(shifted, size)));
+    let min = if covers { min } else { shifted };
     Placement { rect: Rect::from_min_size(min, size), side }
 }
 
@@ -302,6 +307,22 @@ mod tests {
     }
 
     #[test]
+    fn an_offset_overlay_moves_unless_it_would_cover_its_clear_rect() {
+        let request = PlaceRequest::new(rect(100.0, 100.0, 200.0, 24.0), Vec2::new(100.0, 40.0), BOUNDS);
+        let home = place(&request).rect;
+        assert_eq!(home.min, Pos2::new(100.0, 124.0), "below the anchor, aligned to its start");
+        let by = Vec2::new(50.0, 30.0);
+        let moved = request.offset(by);
+        assert_eq!(place(&moved).rect.min, home.min + by, "shifted by the offset");
+        let point = Rect::from_min_max(Pos2::new(160.0, 170.0), Pos2::new(160.0, 170.0));
+        assert_eq!(place(&moved.clear(Some(point))).rect, home, "the shifted rect would cover the point: the unshifted one stays");
+        let aside = rect(600.0, 500.0, 10.0, 10.0);
+        assert_eq!(place(&moved.clear(Some(aside))).rect.min, home.min + by, "a clear rect off to the side changes nothing");
+        let far = place(&request.offset(Vec2::new(10_000.0, 0.0))).rect;
+        assert_eq!(far.right(), BOUNDS.right(), "the shifted rect is clamped inside the bounds");
+    }
+
+    #[test]
     fn rect_is_finite_and_inside_the_bounds_for_any_request() {
         let sides = [Side::Below, Side::Above, Side::Start, Side::End];
         let aligns = [Align::Start, Align::Center, Align::End];
@@ -316,7 +337,9 @@ mod tests {
                                     .side(side)
                                     .align(align)
                                     .rtl(i % 2 == 0)
-                                    .gap(if i == 1 { 4.0 } else { 0.0 });
+                                    .gap(if i == 1 { 4.0 } else { 0.0 })
+                                    .offset(Vec2::new(w, y))
+                                    .clear(Some(rect(h, x, w.abs(), y.abs())));
                                 let placed = place(&request).rect;
                                 assert!(placed.min.is_finite() && placed.max.is_finite(), "{request:?}");
                                 assert!(BOUNDS.contains_rect(placed), "{request:?} gave {placed:?}");
