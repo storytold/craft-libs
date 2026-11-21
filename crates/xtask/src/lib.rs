@@ -12,6 +12,9 @@
 //! - [`assets`]: the asset attribution check. The app supplies its attribution document, folders
 //!   and extra extensions as an [`assets::Policy`]; [`assets::run`] lists the files through Git and
 //!   reports each asset without a row.
+//! - [`layers`]: the crate-layer check. The app supplies its table of packages and layers as a
+//!   [`layers::Policy`]; [`layers::check`] reports each dependency the policy does not allow, and
+//!   [`layers::wasm_set`] picks the packages the app's wasm step builds.
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
@@ -39,6 +42,7 @@
 //! ```
 
 pub mod assets;
+pub mod layers;
 #[cfg(feature = "lock")]
 pub mod lock;
 #[cfg(feature = "report")]
