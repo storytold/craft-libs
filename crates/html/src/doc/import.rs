@@ -1,4 +1,4 @@
-use super::builder::{Builder, ImageLoader, parse_sheet};
+use super::builder::{Builder, ImageFallback, ImageLoader, parse_sheet};
 use super::lexer::{Lexer, Tok};
 use super::math_ruby::{read_math, read_ruby};
 use super::{Document, Flow, Inline, model};
@@ -13,7 +13,31 @@ pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
     parse_in(s, images, false)
 }
 
+/// [`parse_with`] without collapsing source whitespace or splitting `<pre>` on line breaks.
+/// HTML input newline normalization still applies. This is useful to callers extracting source
+/// text; it does not preserve skipped elements, markup, or source block boundaries exactly.
+pub fn parse_with_source_whitespace(s: &str, images: ImageLoader) -> Flow {
+    parse_in_mode(s, images, false, true, None)
+}
+
+/// [`parse_with`], with an opt-in fallback for loaded image formats the raster reader does not
+/// recognize. The callback must validate the bytes and return a flow image only when the caller
+/// can safely handle that format. This retains bytes; it does not add rendering support.
+pub fn parse_with_image_fallback<'a>(s: &str, images: ImageLoader<'a>, fallback: ImageFallback<'a>) -> Flow {
+    parse_in_mode(s, images, false, false, Some(fallback))
+}
+
+/// Preserve source whitespace and use a caller-validated image fallback in the same import.
+/// HTML newline normalization still applies; the fallback does not add rendering support.
+pub fn parse_with_source_whitespace_and_image_fallback<'a>(s: &str, images: ImageLoader<'a>, fallback: ImageFallback<'a>) -> Flow {
+    parse_in_mode(s, images, false, true, Some(fallback))
+}
+
 pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
+    parse_in_mode(s, images, page, false, None)
+}
+
+fn parse_in_mode<'a>(s: &str, images: ImageLoader<'a>, page: bool, source_whitespace: bool, fallback: Option<ImageFallback<'a>>) -> Flow {
     // HTML normalizes input newlines before tokenization, not after decoding character references.
     let normalized = if s.contains('\r') {
         let mut out = String::with_capacity(s.len());
@@ -30,7 +54,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     // The lexer's offsets (a style element's text is cut out by them) are into the normalized text.
     let s: &str = &normalized;
     let mut lx = Lexer::new(s);
-    let mut b = Builder::new(images, page);
+    let mut b = Builder::new(images, page, source_whitespace, fallback);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
         guard += 1;
