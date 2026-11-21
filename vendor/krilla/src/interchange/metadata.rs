@@ -211,6 +211,10 @@ impl Metadata {
 
         if let Some(date) = self.modified().map(xmp_date) {
             xmp.modify_date(date);
+
+            // The metadata last changed when the file did, so it carries the
+            // same instant as the modification date.
+            xmp.metadata_date(date);
         }
 
         if let Some(date) = self.creation_date.map(xmp_date) {
