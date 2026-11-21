@@ -268,8 +268,8 @@ fn a_lost_page_is_silence_and_the_audio_after_it_stays_in_place() {
 /// A granule position that jumps far past what the file could hold (here by 2^40 frames) is
 /// damage, not a lost page: the jump counts as one damaged packet, no silence is made for it, and
 /// the audio after it follows on, in the length, the decode and a seek. That holds whether the
-/// pages after the jump keep it or come back down. A packet after a jump that is damaged too
-/// counts once.
+/// pages after the jump keep it or come back down, and when the first page jumps. A packet after a
+/// jump that is damaged too counts once.
 #[test]
 fn a_granule_jump_past_what_the_file_holds_is_damage() {
     let ogg = encode(44_100, 2, 60_000, 5.0);
@@ -294,9 +294,9 @@ fn a_granule_jump_past_what_the_file_holds_is_damage() {
         file
     };
     // the page of packets 16 to 23 jumps, and every page after it too, or none, or every page but
-    // the last
+    // the last; or the first page jumps and none after it does
     let last_page = 8 * ((p.packets.len() - 1) / 8);
-    for jumped in [16..usize::MAX, 16..24, 16..last_page] {
+    for jumped in [16..usize::MAX, 16..24, 16..last_page, 0..8] {
         let file = file(&p.packets, &jumped);
         let mut dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).expect("open");
         assert_eq!(dec.info().frames, p.last_granule as u64, "jump on packets {jumped:?}");
@@ -306,6 +306,11 @@ fn a_granule_jump_past_what_the_file_holds_is_damage() {
         assert_eq!((info.frames, info.damaged), (p.last_granule as u64, 1), "jump on packets {jumped:?}");
         assert_eq!(buf.channels, clean, "jump on packets {jumped:?}");
     }
+    // every page `jump` higher is a stream cut from a longer one: presented from its first packet,
+    // with nothing damaged
+    let (info, buf) = decode(&file(&p.packets, &(0..usize::MAX)), None).expect("decode");
+    assert_eq!((info.frames, info.damaged), (p.last_granule as u64, 0));
+    assert_eq!(buf.channels, clean);
     let mut packets = p.packets.clone();
     packets[16][0] |= 1; // not an audio packet any more
     let (info, _) = decode(&file(&packets, &(16..usize::MAX)), None).expect("decode");

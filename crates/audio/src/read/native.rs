@@ -1142,8 +1142,12 @@ fn open_ogg_vorbis<'a>(src: &Src<'a>, file: ogg::OggFile, stream: usize) -> Opti
         Err(e) => return Some(Err(e)),
     };
     let durations = vorbis_durations(&dec, &s.packets);
-    let (mut starts, mut total) = granule_starts(s, &durations);
-    let jumps = bound_gaps(&mut starts, &durations, &mut total, src.size());
+    let (mut starts, mut total, first_damaged) = granule_starts(s, &durations);
+    let mut jumps = bound_gaps(&mut starts, &durations, &mut total, src.size());
+    // a damaged first granule position counts as damage at the first packet
+    if let Some(first) = jumps.first_mut() {
+        *first |= first_damaged;
+    }
     let primers = s.packets.iter().map(|p| dec.vorbis_mode_readable(vorbis_head(p))).collect();
     // Decoded frames before the first page's granule position are not presented.
     let skip = u64::try_from(starts.first().copied().unwrap_or(0).saturating_neg()).unwrap_or(0);
@@ -1183,8 +1187,10 @@ const MAX_GRANULE: i64 = ogg::MAX_OPUS_GRANULE;
 /// the frames presented, from the pages' granule positions: the presented timeline starts at 0,
 /// and decoded frames before it (a first page whose granule position is below the frames it
 /// decodes to) have negative places. A last page whose granule position is below its frames trims
-/// the end. A granule position outside `0..=MAX_GRANULE` is treated as missing.
-fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64) {
+/// the end. A granule position outside `0..=MAX_GRANULE` is treated as missing. The third value
+/// is true when the first page's granule position is above where the next page places its end;
+/// that page is then placed to end where the next one starts.
+fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64, bool) {
     let n = durations.len().min(stream.packets.len());
     let dur = |k: usize| i64::try_from(durations[k]).unwrap_or(i64::MAX);
     let granule_of = |k: usize| stream.packets.get(k).and_then(|p| p.granule).filter(|g| (0..=MAX_GRANULE).contains(g));
@@ -1229,12 +1235,24 @@ fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64) {
         cursor = Some(end);
         i = j + 1;
     }
+    // A first page placed after where the next page starts (the granule positions come back down
+    // after it) has a damaged granule position: it ends where the next page starts.
+    let mut first_damaged = false;
+    if let Some(j) = (0..n).find(|&k| granule_of(k).is_some()).filter(|&j| j + 1 < n) {
+        let back = ends[j].saturating_sub(ends[j + 1].saturating_sub(dur(j + 1)));
+        if back > 0 {
+            for end in &mut ends[..=j] {
+                *end = end.saturating_sub(back);
+            }
+            first_damaged = true;
+        }
+    }
     let starts: Vec<i64> = (0..n).map(|k| ends[k].saturating_sub(dur(k))).collect();
     // a stream that starts later than 0 (cut from a longer one) is presented from its first packet
     let base = starts.first().copied().unwrap_or(0).max(0);
     let starts = starts.into_iter().map(|s| s.saturating_sub(base)).collect();
     let total = trimmed_end.or(cursor).unwrap_or(0).saturating_sub(base).max(0);
-    (starts, total)
+    (starts, total, first_damaged)
 }
 
 /// Bounds the silence that gaps between Ogg packets' places leave (lost pages, filled by
