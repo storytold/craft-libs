@@ -277,6 +277,60 @@ fn installed_and_removed_fonts_are_seen_without_a_restart() {
 }
 
 #[test]
+fn a_font_store_install_shows_in_the_change_list() {
+    let root = temp("store-watch");
+    let store = root.join("home/.local/share/craft-fonts");
+    // As the font store installs: a staged `.part` file moved into the family's folder.
+    let staging = store.join(".staging/1");
+    let install = |dest: &str, family: &'static str, style: &'static str| {
+        let part = staging.join("face.part");
+        write(&part, font(&spec(family, style, 400)));
+        let dest = store.join(dest);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::rename(&part, dest).unwrap();
+    };
+    install("ofl/storeone/StoreOne-Regular.ttf", "Store One", "Regular");
+    let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false));
+    let start = cat.generation();
+    cat.rescan();
+    assert_eq!(cat.changes_since(start).added, ["Store One"]);
+    assert!(!cat.store_changed());
+
+    let (tx, rx) = mpsc::channel();
+    let on_change: app::OnChange = Arc::new(move |_| {
+        let _ = tx.send(());
+    });
+    let refresh = Arc::new(app::Refresh::new(Arc::clone(&cat), Duration::MAX, Some(on_change)));
+    refresh.watch_store(Duration::from_millis(20));
+    let wait_for = |since: u64, added: &[&str], removed: &[&str], changed: &[&str]| loop {
+        rx.recv_timeout(Duration::from_secs(10)).expect("a store change wakes the app");
+        let c = cat.changes_since(since);
+        if c.added == added && c.removed == removed && c.changed == changed {
+            return c.generation;
+        }
+    };
+
+    let before = cat.generation();
+    install("ofl/storetwo/StoreTwo-Regular.ttf", "Store Two", "Regular");
+    let two = wait_for(before, &["Store Two"], &[], &[]);
+    assert_eq!(cat.styles("Store Two")[0].source, Source::Store);
+    install("ofl/storeone/StoreOne-Bold.ttf", "Store One", "Bold");
+    std::fs::remove_dir_all(store.join("ofl/storetwo")).unwrap();
+    wait_for(two, &[], &["Store Two"], &["Store One"]);
+    assert!(cat.changes_since(cat.generation()).is_empty());
+
+    // The history keeps the last 64 changes of the family set; older generations get `full`.
+    let bytes = font(&spec("Churn", "Regular", 400));
+    for _ in 0..40 {
+        cat.add_bytes(bytes.clone(), Source::User, &Limits::default()).unwrap();
+        cat.remove_added(Source::User);
+    }
+    let changes = cat.changes_since(before);
+    assert!(changes.full && changes.added.is_empty() && !changes.is_empty());
+    assert!(!cat.changes_since(cat.generation() - 10).full);
+}
+
+#[test]
 fn a_family_loads_once_for_every_thread() {
     let root = temp("load");
     let cat = system(&root);
