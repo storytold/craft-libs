@@ -1,5 +1,5 @@
-//! Malformed image paint filters are skipped with a warning, and image hashes too long to name
-//! an image aren't spelled out.
+//! Malformed image paint filters are skipped with a warning, image hashes too long to name
+//! an image aren't spelled out, and pattern paints keep the layer they tile.
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
@@ -36,4 +36,28 @@ fn an_oversized_image_hash_is_not_spelled_out() {
     assert_eq!(image_ref(20), Some(Value::String("ab".repeat(20))));
     assert_eq!(image_ref(crate::MAX_IMAGE_HASH), Some(Value::String("ab".repeat(crate::MAX_IMAGE_HASH))));
     assert_eq!(image_ref(crate::MAX_IMAGE_HASH + 1), Some(Value::String(String::new())));
+}
+
+#[test]
+fn a_pattern_paint_keeps_its_source_layer_and_tiling() {
+    let gap = Kv::Object(vec![("x", Kv::Float(4.0)), ("y", Kv::Float(2.0))]);
+    let source = Kv::Object(vec![("sessionID", Kv::Uint(13)), ("localID", Kv::Uint(100))]);
+    let paint = Kv::Object(vec![
+        ("type", Kv::Enum("PATTERN")),
+        ("opacity", Kv::Float(0.07)),
+        ("sourceNodeId", source),
+        ("patternTileType", Kv::Enum("HORIZONTAL_HEXAGONAL")),
+        ("scale", Kv::Float(0.5)),
+        ("patternSpacing", gap),
+        ("horizontalAlignment", Kv::Enum("CENTER")),
+    ]);
+    let value = super::paint(&paint, &mut |w| panic!("{w}")).unwrap();
+    assert_eq!(value["sourceNodeId"], "13:100");
+    assert_eq!(value["tileType"], "HORIZONTAL_HEXAGONAL");
+    assert_eq!(value["scalingFactor"], 0.5);
+    assert_eq!(value["spacing"], json!({"x": 4.0, "y": 2.0}));
+    assert_eq!(value["horizontalAlignment"], "CENTER");
+    // Without them it is the bare paint, as before.
+    let bare = super::paint(&Kv::Object(vec![("type", Kv::Enum("PATTERN"))]), &mut |_| {}).unwrap();
+    assert_eq!(bare, json!({"type": "PATTERN"}));
 }
