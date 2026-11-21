@@ -10,7 +10,7 @@ pub mod target;
 
 use std::sync::Arc;
 
-use craft_i18n::{I18n, Lang};
+use craft_i18n::{I18n, Lang, Words};
 
 pub use files::{FileError, FileFilter, Files, NoPickFiles, PendingPick, PickAnswer, PickId, PickKind, PickRequest, Picked, ScriptedFiles};
 #[cfg(not(target_arch = "wasm32"))]
@@ -82,6 +82,21 @@ impl Host {
     /// The interface language.
     pub fn lang(&self) -> Lang {
         self.lang
+    }
+
+    /// The catalogs' words in the interface language, English without catalogs: the words craft-ui's env shows, for
+    /// code that runs without a `Ui` (a command, a file export).
+    pub fn words(&self) -> Words {
+        match &self.i18n {
+            Some(i18n) => Words::from_i18n(Arc::clone(i18n), self.lang),
+            None => Words::english(),
+        }
+    }
+
+    /// The interface language's code, lowercase BCP 47 (`"en"` without catalogs): what picks its text folding and sort
+    /// order.
+    pub fn language_code(&self) -> &str {
+        self.i18n.as_ref().map_or("en", |i18n| i18n.code(self.lang))
     }
 
     /// The store of library features' settings sections.

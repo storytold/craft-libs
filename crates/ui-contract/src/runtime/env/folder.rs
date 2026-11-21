@@ -8,8 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 impl Scoped {
     /// The language code of the host's interface language, English without a host or a catalog.
     fn language_code(&self) -> String {
-        let code = self.host.as_ref().and_then(|host| host.i18n_shared().map(|i18n| i18n.code(host.lang())));
-        code.unwrap_or("en").to_owned()
+        self.host.as_ref().map_or("en", |host| host.language_code()).to_owned()
     }
 
     /// The folder of the host's interface language.
