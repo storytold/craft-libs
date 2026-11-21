@@ -1,17 +1,17 @@
 //! What New Document needs of an app's settings: [`DocumentSettings`], the cards and the details rows built from it,
-//! and the raster implementation's setup.
+//! and the raster implementation's setup and session memory.
 
-use super::NewDocumentWords;
 use super::presets::{ColorProfiles, DocumentOptions, DocumentPreset, NewDocumentPresetWords, Orientation, PresetCategory};
+use super::{NewDocumentWords, cards, details, restore_all};
+use crate::patterns::form_dialogs::LinkedSize;
 use crate::patterns::presets::PresetId;
-use crate::runtime::env::{Label, Units};
+use crate::runtime::env::{Label, UnitKind, Units};
 use crate::runtime::requests::{ColorRequest, HostAnswer};
 use craft_behavior::PixelSize;
 use egui::Ui;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 
 /// What New Document needs of an app's settings: its cards, its details rows and how a card fills it. `fitted` runs
 /// after every edit and every `set_json_field`; `Memory` lives in the dialog's session.
@@ -75,15 +75,14 @@ pub struct DocumentCard<S> {
 impl<S> DocumentCard<S> {
     /// A card titled `title` with the second `line`, applying `settings`.
     pub fn new(title: impl Into<Label>, line: impl Into<String>, settings: S, source: CardSource) -> Self {
-        let _ = (title, line, settings, source);
-        todo!("fl.F23")
+        DocumentCard { title: title.into(), line: line.into(), tooltip: None, settings, source }
     }
 
     /// The card's hover text.
     #[must_use]
-    pub fn tooltip(self, text: impl Into<String>) -> Self {
-        let _ = (self, text);
-        todo!("fl.F23")
+    pub fn tooltip(mut self, text: impl Into<String>) -> Self {
+        self.tooltip = Some(text.into());
+        self
     }
 }
 
@@ -127,68 +126,83 @@ pub struct CardCx<'a, S: DocumentSettings> {
 
 /// What the details rows can do.
 pub struct DetailsCx<'a, S: DocumentSettings> {
-    _marker: PhantomData<&'a S>,
+    setup: &'a S::Setup,
+    memory: &'a mut S::Memory,
+    units: &'a Units,
+    words: &'a NewDocumentWords,
+    orientation: &'a mut Option<Orientation>,
+    card: &'a mut Option<usize>,
+    answers: Vec<HostAnswer>,
+    colors: Vec<ColorRequest>,
+    actions: Vec<String>,
 }
 
-impl<S: DocumentSettings> DetailsCx<'_, S> {
+impl<'a, S: DocumentSettings> DetailsCx<'a, S> {
+    pub(super) fn new(
+        setup: &'a S::Setup,
+        memory: &'a mut S::Memory,
+        units: &'a Units,
+        words: &'a NewDocumentWords,
+        orientation: &'a mut Option<Orientation>,
+        card: &'a mut Option<usize>,
+        answers: Vec<HostAnswer>,
+    ) -> Self {
+        DetailsCx { setup, memory, units, words, orientation, card, answers, colors: Vec::new(), actions: Vec::new() }
+    }
+
+    /// What the rows asked of the host: the colour requests and the action ids.
+    pub(super) fn into_requests(self) -> (Vec<ColorRequest>, Vec<String>) {
+        (self.colors, self.actions)
+    }
+
     /// What the dialog is set up with.
-    pub fn setup(&self) -> &S::Setup {
-        let _ = self;
-        todo!("fl.F25")
+    pub fn setup(&self) -> &'a S::Setup {
+        self.setup
     }
 
     /// What the session keeps for the rows.
     pub fn memory(&mut self) -> &mut S::Memory {
-        let _ = self;
-        todo!("fl.F25")
+        self.memory
     }
 
     /// The units sizes are shown in.
-    pub fn units(&self) -> &Units {
-        let _ = self;
-        todo!("fl.F25")
+    pub fn units(&self) -> &'a Units {
+        self.units
     }
 
     /// The dialog's words.
-    pub fn words(&self) -> &NewDocumentWords {
-        let _ = self;
-        todo!("fl.F25")
+    pub fn words(&self) -> &'a NewDocumentWords {
+        self.words
     }
 
     /// The orientation the control picked.
     pub fn orientation(&self) -> Option<Orientation> {
-        let _ = self;
-        todo!("fl.F25")
+        *self.orientation
     }
 
     /// Sets the orientation, which built-in cards turn with.
     pub fn set_orientation(&mut self, orientation: Orientation) {
-        let _ = (self, orientation);
-        todo!("fl.F25")
+        *self.orientation = Some(orientation);
     }
 
     /// Asks the host's colour picker for a colour.
     pub fn request_color(&mut self, request: ColorRequest) {
-        let _ = (self, request);
-        todo!("fl.F25")
+        self.colors.push(request);
     }
 
     /// Asks the host to run the action `id`; it comes back in `NewDocumentOutput::actions`.
     pub fn request_action(&mut self, id: impl Into<String>) {
-        let _ = (self, id);
-        todo!("fl.F25")
+        self.actions.push(id.into());
     }
 
     /// This pass's host answers, once, as `FormCx::take_answers`.
     pub fn take_answers(&mut self) -> Vec<HostAnswer> {
-        let _ = self;
-        todo!("fl.F25")
+        std::mem::take(&mut self.answers)
     }
 
     /// Drops the card the settings were last filled from, as an edit of the details does.
     pub fn drop_card(&mut self) {
-        let _ = self;
-        todo!("fl.F25")
+        *self.card = None;
     }
 }
 
@@ -229,60 +243,112 @@ impl Default for RasterSetup {
     }
 }
 
+/// What the raster details rows keep in the dialog's session: the fields that show the size, the start of a running
+/// edit of them, and whether a Web or Mobile card turned Artboards on.
+#[derive(Clone)]
+pub struct RasterMemory {
+    /// The width, height and resolution fields of the settings.
+    pub(super) size: LinkedSize,
+    /// The size before a running edit of a size field, for putting it back when the edit is cancelled.
+    pub(super) gesture: Option<LinkedSize>,
+    /// A Web or Mobile card turned Artboards on, so a card of another tab turns it off again; the user's own tick ends
+    /// it.
+    pub(super) preset_artboard: bool,
+    /// The fields must be made again from the settings: a card replaced them.
+    pub(super) relink: bool,
+}
+
+impl Default for RasterMemory {
+    fn default() -> Self {
+        RasterMemory { size: LinkedSize::new(PixelSize::new(1, 1)), gesture: None, preset_artboard: false, relink: true }
+    }
+}
+
 impl DocumentSettings for DocumentOptions {
     type Preset = DocumentPreset;
     type Setup = RasterSetup;
-    type Memory = ();
+    type Memory = RasterMemory;
 
     fn name(&self) -> &str {
-        todo!("fl.F22")
+        &self.name
     }
 
     fn set_name(&mut self, name: String) {
-        let _ = name;
-        todo!("fl.F22")
+        self.name = name;
     }
 
     fn page(&self) -> (f64, f64) {
-        todo!("fl.F22")
+        (f64::from(self.size.width), f64::from(self.size.height))
     }
 
     fn same_document(&self, other: &Self) -> bool {
-        let _ = other;
-        todo!("fl.F22")
+        DocumentOptions::same_document(self, other)
     }
 
     fn fits(&self) -> bool {
-        todo!("fl.F22")
+        DocumentOptions::fits(self)
+    }
+
+    fn fitted(self) -> Self {
+        DocumentOptions::fitted(self)
     }
 
     fn open(&mut self, setup: &Self::Setup, untitled: &str) {
-        let _ = (setup, untitled);
-        todo!("fl.F22")
+        if let Some(size) = setup.clipboard {
+            self.size = size;
+            self.unit = UnitKind::Pixels;
+            self.pixels_per_inch = setup.screen_ppi;
+        }
+        if self.name.is_empty() {
+            untitled.clone_into(&mut self.name);
+        }
     }
 
     fn preset_card(preset: &Self::Preset, cx: &CardCx<'_, Self>) -> DocumentCard<Self> {
-        let _ = (preset, cx);
-        todo!("fl.F22")
+        cards::raster_preset_card(preset, cx)
     }
 
     fn recent_cards(cx: &CardCx<'_, Self>) -> Vec<DocumentCard<Self>> {
-        let _ = cx;
-        todo!("fl.F22")
+        cards::raster_recent_cards(cx)
     }
 
     fn saved_card(name: &str, saved: &Self, cx: &CardCx<'_, Self>) -> DocumentCard<Self> {
-        let _ = (name, saved, cx);
-        todo!("fl.F22")
+        cards::raster_saved_card(name, saved, cx)
     }
 
-    fn apply_card(&mut self, card: &DocumentCard<Self>, setup: &Self::Setup, memory: &mut Self::Memory) {
-        let _ = (card, setup, memory);
-        todo!("fl.F22")
+    /// A recent document or saved preset restores everything but the name, a built-in card sets the size and unit.
+    fn apply_card(&mut self, card: &DocumentCard<Self>, _setup: &Self::Setup, memory: &mut Self::Memory) {
+        match &card.source {
+            CardSource::Recent | CardSource::Saved(_) => {
+                restore_all(self, &card.settings);
+                memory.preset_artboard = false;
+            }
+            source => {
+                self.size = card.settings.size;
+                self.pixels_per_inch = card.settings.pixels_per_inch;
+                self.unit = card.settings.unit;
+                let artboard = match source {
+                    CardSource::Preset { artboard } => *artboard,
+                    _ => None,
+                };
+                match artboard {
+                    Some(true) if !self.artboard => {
+                        self.artboard = true;
+                        memory.preset_artboard = true;
+                    }
+                    Some(false) if memory.preset_artboard => {
+                        self.artboard = false;
+                        memory.preset_artboard = false;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        memory.relink = true;
+        memory.gesture = None;
     }
 
     fn details(ui: &mut Ui, values: &mut Self, cx: &mut DetailsCx<'_, Self>) {
-        let _ = (ui, values, cx);
-        todo!("fl.F22")
+        details::raster_details(ui, values, cx);
     }
 }

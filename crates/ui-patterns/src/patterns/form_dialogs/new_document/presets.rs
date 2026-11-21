@@ -7,7 +7,7 @@ use craft_behavior::PixelSize;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
-use super::NewDocumentWords;
+use super::{DocumentSettings, NewDocumentWords};
 
 /// The most documents Recent keeps.
 pub(super) const MAX_RECENT: usize = 20;
@@ -443,7 +443,7 @@ impl ColorProfiles {
 
 /// The recent list after creating `settings`: equal settings move to the front instead of repeating, and the list
 /// keeps at most `max` entries (20 in the dialog).
-pub(crate) fn push_recent(recent: &mut Vec<DocumentOptions>, settings: DocumentOptions, max: usize) {
+pub(crate) fn push_recent<S: DocumentSettings>(recent: &mut Vec<S>, settings: S, max: usize) {
     recent.retain(|held| !held.same_document(&settings));
     recent.insert(0, settings);
     recent.truncate(max);
