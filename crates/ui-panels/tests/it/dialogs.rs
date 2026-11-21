@@ -7,8 +7,8 @@ use craft_ui::contract::overlay::{Dismiss, Outside};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, PromptKind, RecoveredDocument,
-    RecoveryAnswer, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog, dialog_id,
+    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, PromptChoice, PromptKind,
+    RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog, dialog_id,
 };
 use craft_ui::display::Text;
 use craft_ui::popover::Popover;
@@ -784,4 +784,30 @@ fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
     }
     // Typing replaced the first field's text: the text field first, then the number field first.
     assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
+}
+
+/// A prompt's readers give the title, message, paragraphs and buttons it shows under the same host, without a `Ui`.
+#[trial]
+fn a_prompts_readers_give_what_it_shows() {
+    let host = Arc::new(craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).build());
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| {
+        shown.borrow_mut().run(ui);
+    });
+    fixture.host(Arc::clone(&host));
+    let prompt = StandardPrompt::confirm_delete(["Layer 1"], 1).paragraph("It can't be undone.");
+    let (title, message, paragraphs, buttons) =
+        (prompt.shown_title(&host), prompt.shown_message(&host), prompt.shown_paragraphs(&host), prompt.shown_buttons(&host));
+    dialogs.borrow_mut().open(prompt);
+    fixture.idle(6);
+    assert!(message.contains("Layer 1"), "the message names what it deletes: {message}");
+    let painted: Vec<String> = fixture.texts().iter().map(|text| text.text.clone()).collect();
+    for text in std::iter::once(&title).chain([&message]).chain(&paragraphs) {
+        assert!(painted.contains(text), "{text:?} is shown: {painted:?}");
+    }
+    assert_eq!(buttons.iter().map(|(choice, _)| *choice).collect::<Vec<_>>(), [PromptChoice::Proceed, PromptChoice::Cancel]);
+    for (_, label) in &buttons {
+        assert!(fixture.by_label(label).is_some(), "the {label:?} button is shown");
+    }
 }

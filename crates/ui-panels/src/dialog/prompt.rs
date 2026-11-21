@@ -34,6 +34,11 @@ impl Reply {
         Reply { label: label.into(), role, lettered: true, chord: None, enabled: true, reason: None }
     }
 
+    /// The answer's label.
+    pub(super) fn label(&self) -> &Label {
+        &self.label
+    }
+
     /// An answer without a letter.
     pub(super) fn plain(label: impl Into<Label>, role: DialogRole) -> Self {
         Reply { lettered: false, ..Reply::new(label, role) }
