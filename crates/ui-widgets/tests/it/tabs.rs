@@ -507,7 +507,7 @@ fn the_ribbon_underline_retargets_from_its_shown_position_mid_motion() {
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).wheel_selects().shown(now.get());
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 now.set(*key);
@@ -698,7 +698,7 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(now.get()).roles(ribbon_role);
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
         for event in &out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.last()
             {
                 seen.borrow_mut().push(*key);

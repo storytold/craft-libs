@@ -10,8 +10,8 @@ use craft_behavior::{ItemSource, Selection, SelectionChange};
 use egui::Ui;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What a section list draws under its list, in the list's column.
 type Foot<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
