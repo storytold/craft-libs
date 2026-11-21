@@ -244,8 +244,8 @@ fn locate(data: &[u8], fc_pic: u32, pics: &mut Pictures) -> Option<Found> {
 fn inline_shape(buf: &[u8], data: &[u8], pics: &mut Pictures) -> Option<(Option<String>, officeart::Props)> {
     let mut budget = 10_000usize;
     let recs = officeart::children(buf, &mut budget);
-    let sp = recs.iter().find(|r| r.typ == officeart::rt::SP_CONTAINER).map(|r| officeart::shape(r.body, &mut budget))?;
-    let fbses: Vec<&[u8]> = recs.iter().filter(|r| r.typ == officeart::rt::FBSE).map(|r| r.body).collect();
+    let sp = recs.iter().find(|r| r.kind == officeart::rt::SP_CONTAINER).map(|r| officeart::shape(r.data, &mut budget))?;
+    let fbses: Vec<&[u8]> = recs.iter().filter(|r| r.kind == officeart::rt::FBSE).map(|r| r.data).collect();
     let fbse = sp.props.pib.and_then(|p| fbses.get((p as usize).checked_sub(1)?)).or(fbses.first())?;
     let key = pics.decode_bse(fbse, data);
     Some((key, sp.props))
