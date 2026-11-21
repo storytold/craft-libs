@@ -1,5 +1,6 @@
 //! The screen tests of craft-color-ui, folded into the lib's test target.
 
+mod area_gamut;
 mod color_parts;
 mod gradient_bar;
 mod paint_list;
