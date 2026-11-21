@@ -625,3 +625,21 @@ fn fleet_discovery_keeps_absolute_resource_limits() {
     body.push(3);
     assert!(parse_reply_with_limit(&body, MAX_DISCOVERY_QUEUES).is_err());
 }
+
+/// CUPS has no actual-size choice: an actual-size job asks for `auto-fit`, as `lp` does, and an
+/// exact one for `none`.
+#[test]
+fn a_print_job_asks_for_the_scaling_cups_has() {
+    for (scaling, want) in [(spool::Scaling::ActualSize, &b"auto-fit"[..]), (spool::Scaling::Exact, &b"none"[..])] {
+        let job = spool::Job { printer: Some("Office".into()), scaling, ..Job::default() };
+        let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(
+            0x0000,
+            &[&group(0x01), &group(0x02), &attr(0x21, "job-id", &12u32.to_be_bytes()), &attr(0x23, "job-state", &[3u8])],
+        ))])
+        .unwrap();
+        ipp::print_job_at(fake.endpoint(), b"%PDF-1.7 fake", &job).unwrap();
+        let taken = fake.request().unwrap();
+        let request = ipp_body(&taken).unwrap();
+        assert!(has(request, &attr(0x44, "print-scaling", want)), "{scaling:?}");
+    }
+}

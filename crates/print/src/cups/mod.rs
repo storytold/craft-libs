@@ -797,7 +797,8 @@ fn print_job_request_for(authority: &str, path: &str, pdf: &[u8], job: &Job, use
         "print-scaling",
         match job.scaling {
             Scaling::Exact => "none",
-            Scaling::ShrinkToFit => "auto-fit",
+            // CUPS has no actual-size choice: it shrinks only oversized sheets, as with ShrinkToFit.
+            Scaling::ShrinkToFit | Scaling::ActualSize => "auto-fit",
         }
         .as_bytes(),
     );
