@@ -340,7 +340,7 @@ impl Harness {
 
     fn press_at(&mut self, at: Pos2) {
         self.fixture.frame(vec![pointer::moved(at)]);
-        self.fixture.frame(vec![pointer::press(at)]);
+        self.fixture.frame_held(vec![pointer::press(at)]);
     }
 
     fn move_to(&mut self, at: Pos2) {
@@ -348,7 +348,7 @@ impl Harness {
     }
 
     fn release_at(&mut self, at: Pos2) {
-        self.fixture.frame(vec![pointer::release(at)]);
+        self.fixture.frame_held(vec![pointer::release(at)]);
         self.fixture.frame(Vec::new());
     }
 

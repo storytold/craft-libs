@@ -466,6 +466,12 @@ pub(crate) fn run<C: Component>(
     let commit_now = (step.commit_now || (was_focused && left_for_part)) && !window_blur;
     // Focus back from the edit menu finds the selection the part held for it, which the adapter put back.
     let back_from_menu = menu_held && state.held_selection.is_none();
+    // A caller can request focus after showing the field. Retry the selection in the next pass so that focus gain
+    // cannot replace it with the default caret, while still selecting before typing in this pass.
+    if decl.options.select_all && select_all && !out.focused {
+        state.select_all = true;
+        crate::runtime::egui::repaint::request(&ctx);
+    }
     // A select asked for in the pass that brings focus (`Cx::select_all_text`) is kept, as `select_on_focus` keeps it.
     if out.focused && !left_for_part && !was_focused && !back_from_menu {
         let len = decl.shown.chars().count();
