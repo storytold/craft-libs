@@ -34,7 +34,7 @@ struct Card<'a> {
 
 /// What a card's sample is drawn in.
 pub(crate) enum Face {
-    Local(Owner, FaceInfo),
+    Local(Owner, Box<FaceInfo>),
     /// A subset from the font preview service, and its decoded font.
     Subset(PreviewKey, Arc<Vec<u8>>),
 }
@@ -541,8 +541,8 @@ impl FontsPanel {
         let meta = [tn(style_count(family) as u64, "{n} style", "{n} styles"), category_label(family), source.to_owned()].join(" · ");
         let sample = self.sample_for(samples::of_family(index, family), family.scripts.iter().map(String::as_str));
         let face = match (installed, previewed) {
-            (Some(face), _) => Some(Face::Local(Owner::Installed, face)),
-            (None, Some(face)) => Some(Face::Local(Owner::Preview, face)),
+            (Some(face), _) => Some(Face::Local(Owner::Installed, Box::new(face))),
+            (None, Some(face)) => Some(Face::Local(Owner::Preview, Box::new(face))),
             (None, None) => self.subsets.font(index, &Row { family, text: sample.clone() }).map(|(key, font)| Face::Subset(key, font)),
         };
         let card = Card { key: &key, name: &family.family, meta: &meta, sample: &sample, curated, index_position: Some(i) };
@@ -565,7 +565,7 @@ impl FontsPanel {
                 None => CardState::System,
             },
         };
-        let face = regular(&family.faces).cloned().map(|f| Face::Local(Owner::Installed, f));
+        let face = regular(&family.faces).cloned().map(|f| Face::Local(Owner::Installed, Box::new(f)));
         let index = self.index();
         let in_index = index.as_deref().and_then(|index| index.family(&family.name).map(|f| (index, f)));
         let own = in_index.and_then(|(index, f)| samples::of_family(index, f));
