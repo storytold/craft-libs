@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn entry(id: &str, label: &str) -> HelpEntry {
-    HelpEntry::new(CommandRef::new(id), label)
+    HelpEntry::new(CommandRef::new(id), label.to_owned())
 }
 
 fn english() -> Synonyms {

@@ -1,7 +1,7 @@
 //! Popups: the dismissal rules.
 
 use crate::overlay::kit::{Leaf, Opened, Opener, Seen};
-use craft_ui::contract::{Bind, Overlay, Props as _, Role, Show as _, Trigger};
+use craft_ui::contract::{Bind, Overlay, Props as _, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::popover::Popover;
 use craft_ui::testing::pointer::{click, moved, press, release};
 use craft_ui::testing::{Fixture, Frames, trial};

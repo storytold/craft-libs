@@ -31,7 +31,7 @@ const LABEL: &str = "Show where this tool is now";
 const AFTER: &str = " to find it again later on.";
 
 /// A paragraph with the link in it, narrow enough that the sentence and the link wrap.
-fn sentence(frames: &mut Frames) -> (Rect, impl FnMut(&mut egui::Ui)) {
+fn sentence(frames: &mut Frames) -> (Rect, impl FnMut(&mut egui::Ui) + use<>) {
     let shown = std::rc::Rc::new(Cell::new(Rect::NOTHING));
     let seen = shown.clone();
     let mut show = move |ui: &mut egui::Ui| {
