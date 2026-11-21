@@ -1,6 +1,6 @@
 #![cfg(feature = "egui")]
 
-use craft_keymap::egui::{Dispatcher, Hit, matches, platform};
+use craft_keymap::egui::{Dispatcher, Hit, Phase, matches, platform};
 use craft_keymap::{Active, Bindable, Binding, Chord, CommandRef, Key, KeyInput, Keymap, Kind, Layout, Mods, Platform, Scope, Scopes, Trigger};
 use egui::{Event, InputState, Key as EguiKey, Modifiers};
 
@@ -454,6 +454,169 @@ fn key_repeats_run_only_when_turned_on() {
     let (ran, left) = run(&mut Dispatcher::new(), &km, &Active::NONE, frame(1.0, Modifiers::NONE, events()));
     assert_eq!(ran, ["nudge.right"]);
     assert_eq!(left, [held(true), held(true)]);
+}
+
+fn hold_keymap() -> Keymap {
+    let app = |id: &str, key: &str| Bindable::new(id, id, Scope::app()).with_default(Binding::parse(key).unwrap());
+    Keymap::new(
+        vec![app("view.pan", "Space"), app("tool.brush", "B"), app("help.find", "Shift+;"), app("edit.paste", "Cmd+V")],
+        Scopes::new(),
+        Platform::Windows,
+    )
+}
+
+fn release(key: EguiKey, physical: EguiKey, modifiers: Modifiers) -> Event {
+    Event::Key { key, physical_key: Some(physical), pressed: false, repeat: false, modifiers }
+}
+
+/// Dispatches one frame and returns each hit's id and phase; the events left stay in `input`.
+fn run_phases(d: &mut Dispatcher, km: &Keymap, input: &mut InputState) -> Vec<(String, Phase)> {
+    d.dispatch(input, km, &Active::NONE).into_iter().map(|h| (h.command.id, h.phase)).collect()
+}
+
+fn ids<'a>(hits: impl Iterator<Item = &'a Hit>) -> Vec<String> {
+    hits.map(|h| h.command.id.clone()).collect()
+}
+
+#[test]
+fn a_held_key_reports_its_release_when_holds_are_on() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true);
+    let space = EguiKey::Space;
+    let repeat = Event::Key { key: space, physical_key: Some(space), pressed: true, repeat: true, modifiers: Modifiers::NONE };
+
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(space, Modifiers::NONE)]);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [("view.pan".to_owned(), Phase::Press)]);
+    assert_eq!(ids(d.held()), ["view.pan"]);
+
+    let mut input = frame(1.5, Modifiers::NONE, vec![repeat.clone(), release(space, space, Modifiers::NONE)]);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [("view.pan".to_owned(), Phase::Release)]);
+    // The release that ended the hold is removed like its press; the repeat that ran nothing stays.
+    assert_eq!(input.events, [repeat]);
+    assert_eq!(d.held().count(), 0);
+
+    // A release with no hold in progress runs nothing and stays.
+    let mut input = frame(2.0, Modifiers::NONE, vec![release(space, space, Modifiers::NONE)]);
+    assert!(run_phases(&mut d, &km, &mut input).is_empty());
+    assert_eq!(input.events.len(), 1);
+
+    // Off by default: the press runs, and its release stays in egui's input.
+    let mut off = Dispatcher::new();
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(space, Modifiers::NONE), release(space, space, Modifiers::NONE)]);
+    assert_eq!(run_phases(&mut off, &km, &mut input), [("view.pan".to_owned(), Phase::Press)]);
+    assert_eq!(input.events, [release(space, space, Modifiers::NONE)]);
+    assert_eq!(off.held().count(), 0);
+}
+
+#[test]
+fn a_release_ends_the_hold_of_its_physical_key_whatever_the_modifiers() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true);
+    let shift = Modifiers::SHIFT;
+    let colon = Event::Key { key: EguiKey::Colon, physical_key: Some(EguiKey::Semicolon), pressed: true, repeat: false, modifiers: shift };
+    let mut input = frame(1.0, shift, vec![colon, Event::Text(":".into())]);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [("help.find".to_owned(), Phase::Press)]);
+
+    // Shift comes up first, so the key comes up as `;` with no modifiers. Another key's release
+    // ends nothing.
+    let mut input = frame(
+        1.2,
+        Modifiers::NONE,
+        vec![release(EguiKey::B, EguiKey::B, Modifiers::NONE), release(EguiKey::Semicolon, EguiKey::Semicolon, Modifiers::NONE)],
+    );
+    let hits = d.dispatch(&mut input, &km, &Active::NONE);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].phase, Phase::Release);
+    assert_eq!(hits[0].command.id, "help.find");
+    assert_eq!(hits[0].trigger.chord, chord("Shift+;"), "the release carries the press's trigger");
+    assert_eq!(input.events, [release(EguiKey::B, EguiKey::B, Modifiers::NONE)]);
+}
+
+#[test]
+fn losing_focus_ends_every_hold_in_press_order() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true);
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(EguiKey::Space, Modifiers::NONE), press(EguiKey::B, Modifiers::NONE)]);
+    assert_eq!(run_phases(&mut d, &km, &mut input).len(), 2);
+    assert_eq!(ids(d.held()), ["view.pan", "tool.brush"]);
+
+    let mut input = frame(2.0, Modifiers::NONE, vec![Event::WindowFocused(false)]);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [("view.pan".to_owned(), Phase::Release), ("tool.brush".to_owned(), Phase::Release)]);
+    assert_eq!(input.events, [Event::WindowFocused(false)], "the focus event stays for the app");
+    assert_eq!(d.held().count(), 0);
+
+    // A release that arrives after focus came back ends nothing a second time.
+    let mut input = frame(3.0, Modifiers::NONE, vec![Event::WindowFocused(true), release(EguiKey::Space, EguiKey::Space, Modifiers::NONE)]);
+    assert!(run_phases(&mut d, &km, &mut input).is_empty());
+    assert_eq!(input.events.len(), 2);
+}
+
+#[test]
+fn a_press_whose_release_was_lost_ends_the_earlier_hold_first() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true);
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(EguiKey::Space, Modifiers::NONE)]);
+    run_phases(&mut d, &km, &mut input);
+    let mut input = frame(5.0, Modifiers::NONE, vec![press(EguiKey::Space, Modifiers::NONE)]);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [("view.pan".to_owned(), Phase::Release), ("view.pan".to_owned(), Phase::Press)]);
+    assert_eq!(ids(d.held()), ["view.pan"]);
+}
+
+#[test]
+fn declined_presses_and_desktop_clipboard_events_start_no_hold() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true).with_clipboard_events(true);
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(EguiKey::B, Modifiers::NONE), press(EguiKey::Space, Modifiers::NONE)]);
+    let hits = d.dispatch_filtered(&mut input, &km, &Active::NONE, |h| h.command.id != "tool.brush");
+    assert_eq!(ids(hits.iter()), ["view.pan"]);
+    assert_eq!(ids(d.held()), ["view.pan"]);
+
+    // egui-winit sends Paste in place of the Ctrl+V press: the command runs, and no hold starts.
+    let mut input = frame(2.0, CTRL, vec![Event::Paste("x".into())]);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [("edit.paste".to_owned(), Phase::Press)]);
+    assert_eq!(ids(d.held()), ["view.pan"]);
+
+    // The declined press's release stays in egui's input.
+    let mut input = frame(3.0, Modifiers::NONE, vec![release(EguiKey::B, EguiKey::B, Modifiers::NONE)]);
+    assert!(run_phases(&mut d, &km, &mut input).is_empty());
+    assert_eq!(input.events.len(), 1);
+}
+
+#[test]
+fn release_all_ends_the_holds_an_app_will_not_see_released() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true);
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(EguiKey::Space, Modifiers::NONE)]);
+    run_phases(&mut d, &km, &mut input);
+    let released = d.release_all();
+    assert_eq!(released.len(), 1);
+    assert_eq!((released[0].command.id.as_str(), released[0].phase), ("view.pan", Phase::Release));
+    assert!(d.release_all().is_empty());
+}
+
+#[test]
+fn repeats_of_a_held_key_are_marked_and_start_no_hold() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true).with_repeat(true);
+    let space = EguiKey::Space;
+    let repeat = Event::Key { key: space, physical_key: Some(space), pressed: true, repeat: true, modifiers: Modifiers::NONE };
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(space, Modifiers::NONE), repeat.clone(), repeat, release(space, space, Modifiers::NONE)]);
+    let pan = |phase| ("view.pan".to_owned(), phase);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [pan(Phase::Press), pan(Phase::Repeat), pan(Phase::Repeat), pan(Phase::Release)]);
+    assert!(input.events.is_empty());
+    assert_eq!(d.held().count(), 0);
+}
+
+#[test]
+fn turning_holds_off_still_ends_the_holds_in_progress() {
+    let km = hold_keymap();
+    let mut d = Dispatcher::new().with_holds(true);
+    let mut input = frame(1.0, Modifiers::NONE, vec![press(EguiKey::Space, Modifiers::NONE)]);
+    run_phases(&mut d, &km, &mut input);
+    let mut d = d.with_holds(false);
+    let mut input = frame(1.2, Modifiers::NONE, vec![press(EguiKey::B, Modifiers::NONE), release(EguiKey::Space, EguiKey::Space, Modifiers::NONE)]);
+    assert_eq!(run_phases(&mut d, &km, &mut input), [("tool.brush".to_owned(), Phase::Press), ("view.pan".to_owned(), Phase::Release)]);
+    assert_eq!(d.held().count(), 0, "the B press started no hold");
 }
 
 #[test]
