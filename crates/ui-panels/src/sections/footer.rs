@@ -376,7 +376,8 @@ impl FooterDrop {
 pub enum DialogRole {
     /// The default outcome: the primary look, last in the row (first on Windows).
     Accept,
-    /// An outcome that destroys something: the danger look.
+    /// An outcome that destroys something (Delete, Replace): the danger look. It proceeds, so Windows puts it with the
+    /// accepting button, before Cancel.
     Destructive,
     /// Leaves without an outcome.
     Cancel,
@@ -388,8 +389,9 @@ pub enum DialogRole {
 }
 
 impl DialogRole {
-    /// The position in the row: later roles stand nearer the end. Windows puts the accepting button first and the
-    /// answers that close the question after it, before Cancel; macOS and Linux put the accepting button last.
+    /// The position in the row: later roles stand nearer the end. Windows puts the committing buttons first (the
+    /// accepting one, then a destructive proceed) and the answers that close the question after them, before Cancel;
+    /// macOS and Linux put the accepting button last.
     fn rank(self, windows: bool) -> u8 {
         match (windows, self) {
             (false, DialogRole::Other | DialogRole::Alternate) => 0,
@@ -397,9 +399,9 @@ impl DialogRole {
             (false, DialogRole::Cancel) => 2,
             (false, DialogRole::Accept) => 3,
             (true, DialogRole::Accept) => 0,
-            (true, DialogRole::Alternate) => 1,
-            (true, DialogRole::Cancel) => 2,
-            (true, DialogRole::Destructive) => 3,
+            (true, DialogRole::Destructive) => 1,
+            (true, DialogRole::Alternate) => 2,
+            (true, DialogRole::Cancel) => 3,
             (true, DialogRole::Other) => 4,
         }
     }
@@ -554,7 +556,7 @@ impl FooterBar {
     }
 
     /// The members stand in a column at the top of the bar, each as wide as the widest: the buttons of a dialog whose
-    /// footer stands beside the body. Buttons go `Accept`, `Cancel`, then the others in the given order.
+    /// footer stands beside the body. Buttons go `Accept`, `Alternate`, `Cancel`, then the others in the given order.
     #[must_use]
     pub fn column(mut self) -> Self {
         self.props = self.props.layout(BodyLayout::stack());

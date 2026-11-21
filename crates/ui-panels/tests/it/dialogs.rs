@@ -415,6 +415,25 @@ fn windows_puts_an_auxiliary_apply_after_cancel() {
     assert!(left("OK") < left("Cancel") && left("Cancel") < left("Apply"), "OK, Cancel, Apply from the start edge");
 }
 
+/// A destructive proceed is a committing button: Windows puts it first, before Cancel; macOS keeps Cancel nearer the
+/// end edge than Delete.
+#[trial]
+fn a_delete_prompt_reads_delete_then_cancel_on_windows() {
+    for os in [Os::Windows, Os::Mac] {
+        let mut fixture = Fixture::new(|ui| {
+            let mut open = true;
+            Dialog::new("Delete Layer")
+                .opened(Bind::bound(&mut open))
+                .buttons([FooterButton::new("Cancel", DialogRole::Cancel), FooterButton::new("Delete", DialogRole::Destructive)])
+                .show(ui, |_, _| {});
+        });
+        fixture.os(os);
+        fixture.idle(30);
+        let left = |name: &str| fixture.by_label(name).expect("the button shows").rect.left();
+        assert!(left("Delete") < left("Cancel"), "{os:?}: Delete, then Cancel, from the start edge");
+    }
+}
+
 /// Each open of a dialog has its own serial, kept while it stays open, though its id is the same at every open: a
 /// reopened dialog is told apart from the one cancelled before it.
 #[trial]
