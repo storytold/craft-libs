@@ -13,10 +13,13 @@
 //!   have the same format and the same text before and after the number, and nothing broke the
 //!   run between them. A plain paragraph, a heading, or entering or leaving a table breaks it; a
 //!   bullet, a skipped paragraph or a section break doesn't. The start of a paragraph that
-//!   continues is ignored. In a table each column counts on its own, down the rows.
+//!   continues is ignored. In a table each column counts on its own, down the rows; with the
+//!   `ANLD`'s `fNumberAcross`, each row counts along its cells, from 1 in every row; with
+//!   `fNumber1`, only a cell's first numbered paragraph has a number (the others don't count).
 //! - **The number's own formatting** (font, size, colour, bold) can change within a run: Word 95
 //!   keeps counting and shows each paragraph's. Word 2016 restarts there; this follows Word 95.
-//! - **Headings:** one list per distinct `OLST`, so the count carries across sections. A level
+//! - **Headings:** one list per distinct `OLST`, so the count carries across sections, unless the
+//!   section's `OLST` has `fRestartHdr`: then it starts again there. A level
 //!   with `fPrev` shows the levels above it first, as Word 95 does (`I.A.1.`; Word 2016 shows
 //!   `A.1.`).
 
@@ -70,6 +73,17 @@ pub(crate) struct Anlv {
     indent: i16,
     /// An `ANLD`'s `fNumber1`: in a table, only a cell's first numbered paragraph has a number.
     number1: bool,
+    /// An `ANLD`'s `fNumberAcross`: in a table, the count runs along each row, from 1 in every
+    /// row, instead of down each column.
+    across: bool,
+}
+
+/// A section's heading numbering: its nine levels, and whether it starts again at the section
+/// (`fRestartHdr`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Olst {
+    levels: Vec<Anlv>,
+    restart: bool,
 }
 
 impl Anlv {
@@ -97,6 +111,7 @@ impl Anlv {
             start: u16_at(10),
             indent: i16::from_le_bytes([b[12], b[13]]),
             number1: false,
+            across: false,
         })
     }
 
@@ -198,16 +213,18 @@ fn parse_anld(v: &[u8]) -> Option<Anlv> {
     let b = v.get(1..)?;
     let anlv = Anlv::parse(b, b.get(ANLV_LEN + 4..).unwrap_or_default(), &mut 0)?;
     // The four bytes after the ANLV: fNumber1, fNumberAcross, fRestartHdn and a spare.
-    Some(Anlv { number1: b.get(ANLV_LEN).is_some_and(|&f| f != 0), ..anlv })
+    let flag = |i: usize| b.get(ANLV_LEN + i).is_some_and(|&f| f != 0);
+    Some(Anlv { number1: flag(0), across: flag(1), ..anlv })
 }
 
-/// An `OLST` operand (a count byte, then nine [`Anlv`]s, 4 flag bytes and 64 bytes of text that
-/// the levels take from in turn).
-pub(crate) fn parse_olst(v: &[u8]) -> Option<Vec<Anlv>> {
+/// An `OLST` operand (a count byte, then nine [`Anlv`]s, 4 flag bytes, the first `fRestartHdr`,
+/// and 64 bytes of text that the levels take from in turn).
+pub(crate) fn parse_olst(v: &[u8]) -> Option<Olst> {
     let b = v.get(1..)?;
     let text = b.get(9 * ANLV_LEN + 4..).unwrap_or_default();
     let mut at = 0;
-    (0..9).map(|k| Anlv::parse(b.get(k * ANLV_LEN..)?, text, &mut at)).collect()
+    let levels = (0..9).map(|k| Anlv::parse(b.get(k * ANLV_LEN..)?, text, &mut at)).collect::<Option<Vec<Anlv>>>()?;
+    Some(Olst { levels, restart: b.get(9 * ANLV_LEN).is_some_and(|&f| f != 0) })
 }
 
 /// A paragraph's or a style's own numbering sprms.
@@ -364,7 +381,8 @@ impl Builder<'_> {
 
     /// The num for a heading at zero-based `level` in a section with `olst`; `own` is the
     /// paragraph's `ANLD`, its level where the section has no `OLST`.
-    fn heading(&mut self, olst: Option<&Vec<Anlv>>, level: u8, own: Option<&Anlv>) -> u32 {
+    fn heading(&mut self, olst: Option<&Olst>, level: u8, own: Option<&Anlv>) -> u32 {
+        let olst = olst.map(|o| &o.levels);
         let key = olst.cloned();
         let (abstract_id, num, levels) = match self.headings.get(&key) {
             Some((a, n, l)) => (*a, *n, l.clone()),
@@ -413,7 +431,7 @@ impl Builder<'_> {
 pub(crate) fn number<'l>(
     paras: &mut [ParaOut],
     own_of: impl Fn(&ParaOut) -> (u8, Option<&'l Anlv>),
-    olst_of: impl Fn(&ParaOut) -> Option<&'l Vec<Anlv>>,
+    olst_of: impl Fn(&ParaOut) -> Option<&'l Olst>,
     section_mark: impl Fn(&ParaOut) -> bool,
     fonts: &[String],
     code_page: u16,
@@ -432,8 +450,12 @@ pub(crate) fn number<'l>(
     let mut in_table = false;
     let mut column = 0usize;
     let mut columns: HashMap<usize, Run> = HashMap::new();
-    // Whether the current cell has a numbered paragraph, for `fNumber1`.
+    // Whether the current cell has a numbered paragraph, for `fNumber1`; the row's run, for
+    // `fNumberAcross`.
     let mut cell_numbered = false;
+    let mut row_run: Option<Run> = None;
+    // The section whose headings were numbered last, for `fRestartHdr`.
+    let mut heading_section: Option<&Olst> = None;
     for p in paras.iter_mut() {
         let row = p.row.as_deref();
         let table = row.is_some_and(|r| r.in_table || r.ttp || r.cell_mark);
@@ -443,17 +465,24 @@ pub(crate) fn number<'l>(
             columns.clear();
             column = 0;
             cell_numbered = false;
+            row_run = None;
             in_table = table;
         }
         if row.is_some_and(|r| r.ttp) {
             column = 0;
             cell_numbered = false;
+            row_run = None;
             continue;
         }
         let cell_end = row.is_some_and(|r| r.cell_mark);
         if !section_mark(p) && !b.full() {
             let (nlvl, anld) = own_of(p);
-            let mut slot = if table { columns.remove(&column) } else { body.take() };
+            let across = table && anld.is_some_and(|a| a.across);
+            let mut slot = match (table, across) {
+                (false, _) => body.take(),
+                (true, true) => row_run.take(),
+                (true, false) => columns.remove(&column),
+            };
             let num = match (nlvl, anld) {
                 // One number per cell: the cell's later numbered paragraphs have none and don't
                 // count, and the column's run goes on past them.
@@ -466,7 +495,15 @@ pub(crate) fn number<'l>(
                 (12, _) => None,
                 (1..=9, _) => {
                     slot = None;
-                    Some((b.heading(olst_of(p), nlvl - 1, anld), nlvl - 1))
+                    let olst = olst_of(p);
+                    // A section that restarts its heading numbering counts from its start.
+                    if let Some(o) = olst {
+                        if o.restart && heading_section.is_some_and(|h| !std::ptr::eq(h, o)) {
+                            b.headings.remove(&Some(o.levels.clone()));
+                        }
+                        heading_section = Some(o);
+                    }
+                    Some((b.heading(olst, nlvl - 1, anld), nlvl - 1))
                 }
                 _ => {
                     slot = None;
@@ -477,6 +514,7 @@ pub(crate) fn number<'l>(
                 p.para.props.numbering = Some(craft_wordmodel::props::NumRef { num, level });
             }
             match (table, slot) {
+                (true, Some(r)) if across => row_run = Some(r),
                 (true, Some(r)) => {
                     columns.insert(column, r);
                 }
@@ -536,7 +574,7 @@ mod tests {
         v.resize(1 + 9 * 16 + 4, 0);
         v.extend_from_slice(b"...)()");
         v.resize(213, 0);
-        let olst = parse_olst(&v).expect("olst");
+        let olst = parse_olst(&v).expect("olst").levels;
         let texts: Vec<String> = olst.iter().take(5).enumerate().map(|(k, a)| a.level(k, &olst, false, &[], 1252).text).collect();
         assert_eq!(texts, ["%1.", "%2.", "%1.%2.%3.", "%4)", "(%5)"]);
     }

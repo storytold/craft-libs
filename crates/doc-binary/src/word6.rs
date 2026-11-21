@@ -841,7 +841,7 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
 }
 
 /// The heading numbering (`OLST`) of a section's Word 6 grpprl, if it has one.
-pub(crate) fn olst(grpprl: &[u8]) -> Option<Vec<crate::anld::Anlv>> {
+pub(crate) fn olst(grpprl: &[u8]) -> Option<crate::anld::Olst> {
     sprms(grpprl).filter(|(op, _)| *op == crate::anld::OLST).last().and_then(|(_, v)| crate::anld::parse_olst(v))
 }
 
