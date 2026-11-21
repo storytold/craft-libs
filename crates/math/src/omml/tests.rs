@@ -189,3 +189,21 @@ proptest::proptest! {
         let _ = crate::mathml::parse(&s).map(|e| crate::mathml::to_tree(&e));
     }
 }
+
+/// An n-ary operator's `m:grow` keeps what the file said, including an explicit off, and a file
+/// that says nothing stays that way: Word then grows a display operator to its operand.
+#[test]
+fn nary_grow_keeps_on_off_and_unsaid() {
+    let nary = |pr: &str| format!("<m:nary><m:naryPr>{pr}</m:naryPr><m:sub/><m:sup/><m:e>{}</m:e></m:nary>", t("x"));
+    let x = format!(
+        r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">{}{}{}</m:oMath>"#,
+        nary(r#"<m:grow m:val="1"/>"#),
+        nary(r#"<m:grow m:val="0"/>"#),
+        nary("")
+    );
+    let grows = |m: &Math| m.nodes.iter().map(|n| if let MNode::Nary { grow, .. } = n { *grow } else { Some(true) }).collect::<Vec<_>>();
+    let m = read_str(&x).unwrap();
+    assert_eq!(grows(&m), [Some(true), Some(false), None]);
+    let back = read_str(&write_str("", true, &m, None)).unwrap();
+    assert_eq!(grows(&back), [Some(true), Some(false), None]);
+}
