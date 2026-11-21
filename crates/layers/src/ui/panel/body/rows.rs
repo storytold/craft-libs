@@ -31,11 +31,49 @@ pub(in crate::ui::panel) struct DisplayRow<Id> {
 /// What the display order derives from: the tree's tracked revision, the filter and the groups a reveal opens. A
 /// change of any of them builds the rows again; nothing else does.
 #[derive(MemoProps)]
-pub(in crate::ui::panel) struct RowsKey<'a, Id> {
+pub(in crate::ui::panel) struct RowsKey<'a> {
     pub(in crate::ui::panel) tree: Revision,
     pub(in crate::ui::panel) filter: &'a LayerFilter,
-    #[memo_props(hash = "tree ids are plain model ids (LayerTree::Id: PlainData); Hash covers them")]
-    pub(in crate::ui::panel) opened: &'a [Id],
+    pub(in crate::ui::panel) opened: Vec<usize>,
+}
+
+/// The deepest opened ancestor's ordinal path identifies its closed-ancestor prefix in a fixed tree.
+/// An inconsistent parent/children relation or duplicate sibling is not a stable identity.
+/// Empty opens return without a tree read; a reveal scans only the siblings along its ancestor path.
+fn opened_path<Id: Clone + Eq>(
+    opened: &[Id],
+    parent: impl Fn(&Id) -> Option<Id>,
+    children: impl Fn(Option<&Id>) -> Vec<Id>,
+    is_open: impl Fn(&Id) -> bool,
+) -> Option<Vec<usize>> {
+    let Some(last) = opened.last() else { return Some(Vec::new()) };
+    let mut chain = Vec::new();
+    let mut current = Some(last.clone());
+    while let Some(id) = current {
+        if chain.contains(&id) {
+            return None;
+        }
+        current = parent(&id);
+        chain.push(id);
+    }
+    chain.reverse();
+    let closed: Vec<_> = chain.iter().filter(|id| !is_open(id)).cloned().collect();
+    if closed != opened {
+        return None;
+    }
+    let mut path = Vec::with_capacity(chain.len());
+    let mut previous = None;
+    for id in &chain {
+        let siblings = children(previous);
+        let mut matches = siblings.iter().enumerate().filter(|(_, sibling)| *sibling == id);
+        let ordinal = matches.next()?.0;
+        if matches.next().is_some() {
+            return None;
+        }
+        path.push(ordinal);
+        previous = Some(id);
+    }
+    Some(path)
 }
 
 /// The display order of the tree, derived from a [`RowsKey`] and kept across passes.
@@ -71,10 +109,18 @@ pub(in crate::ui::panel) struct LayerRows<'t, T: LayerTree> {
 impl<'t, T: LayerTree> LayerRows<'t, T> {
     /// The rows for `filter` and `opened`, derived by the body `cx` from the tracked `tree`.
     pub(in crate::ui::panel) fn new(cx: &BodyCx<'_>, tree: &'t Tracked<T>, filter: &LayerFilter, opened: &[T::Id]) -> Self {
-        let key = RowsKey { tree: tree.revision(), filter, opened };
-        // The low half of the key's hash tells the list when the order changed.
-        let revision = MemoKey::of(&key) as u64;
-        let model = cx.derived(&key, || RowsModel::walk(&**tree, filter, opened, revision));
+        let path = opened_path(opened, |id| tree.parent(id), |parent| tree.children(parent), |id| tree.is_open(id));
+        let model = if let Some(opened_path) = path {
+            let key = RowsKey { tree: tree.revision(), filter, opened: opened_path };
+            // The low half of the key's hash tells the list when the order changed.
+            let revision = MemoKey::of(&key) as u64;
+            cx.derived(&key, || RowsModel::walk(&**tree, filter, opened, revision))
+        } else {
+            // An omitted or inconsistent ancestor cannot name a stable path. Rebuild directly,
+            // without evicting the regular derived value, and give the list a fresh revision.
+            let revision = Tracked::new(()).revision().source;
+            Arc::new(RowsModel::walk(&**tree, filter, opened, revision))
+        };
         LayerRows { tree: &**tree, model }
     }
 
@@ -312,5 +358,45 @@ impl ToggleSweeps {
     /// The sweep reader of `column`.
     pub(super) fn of(&mut self, column: LayerColumn) -> &mut SweepApply {
         if column == LayerColumn::Visibility { &mut self.eye } else { &mut self.lock }
+    }
+}
+
+#[cfg(test)]
+mod opened_path_tests {
+    use super::*;
+    use std::hash::{Hash, Hasher};
+    #[derive(Clone, Debug, PartialEq, Eq, craft_ui::contract::PlainData)]
+    struct Id(u8);
+    impl Hash for Id {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            0_u8.hash(state);
+        }
+    }
+
+    #[test]
+    fn colliding_ids_get_distinct_structural_paths_and_revisions() {
+        let parent = |id: &Id| match id.0 {
+            2 | 3 => Some(Id(1)),
+            _ => None,
+        };
+        let children = |id: Option<&Id>| match id.map(|id| id.0) {
+            None => vec![Id(1)],
+            Some(1) => vec![Id(2), Id(3)],
+            _ => vec![],
+        };
+        let path = |opened: &[Id]| opened_path(opened, parent, children, |_| false).unwrap();
+        let first = path(&[Id(1), Id(2)]);
+        let second = path(&[Id(1), Id(3)]);
+        assert_ne!(first, second);
+        assert_eq!(first, path(&[Id(1), Id(2)]), "same opens have a stable key in sizing and real passes");
+        let tree = Tracked::new(());
+        let filter = LayerFilter::default();
+        let key = |opened| MemoKey::of(&RowsKey { tree: tree.revision(), filter: &filter, opened });
+        assert_ne!(key(first.clone()), key(second.clone()));
+        assert_ne!(key(first) as u64, key(second) as u64, "list display revision changes too");
+        assert!(opened_path(&[Id(3)], parent, children, |_| false).is_none(), "an incomplete closed prefix must fall back");
+        assert!(opened_path(&[Id(1), Id(2)], parent, |_| vec![], |_| false).is_none(), "an omitted ancestor must fall back");
+        assert!(opened_path(&[Id(1)], |_| None, |_| vec![Id(1), Id(1)], |_| false).is_none(), "duplicate sibling must fall back");
+        assert_eq!(opened_path::<Id>(&[], |_| panic!("no scan"), |_| panic!("no scan"), |_| panic!("no scan")), Some(vec![]));
     }
 }

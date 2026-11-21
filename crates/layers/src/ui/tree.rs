@@ -40,8 +40,7 @@ use super::panel::MenuTarget;
 /// tracked revision, the filter or a reveal's opens changed.
 pub trait LayerTree: PlainData {
     /// The app's layer id: the key of a row, of its thumbnails and of every event. It is plain model data
-    /// (`#[derive(PlainData)]`), so the panel keys it by its `Hash`, including in the memo key of the display order
-    /// when a reveal opens groups.
+    /// (`#[derive(PlainData)]`); its `Hash` keys rows and their UI state.
     type Id: Clone + Eq + Hash + Debug + Send + Sync + PlainData + 'static;
 
     /// Children of `parent` (`None`: the top level), topmost first. The app leaves out what the
