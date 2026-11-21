@@ -21,15 +21,13 @@ pub enum SwatchKey {
     Swatch(String),
 }
 
-/// What the Swatches panel keeps between passes, owned by the host: the browser's view, the selected row, the row to
+/// What the Swatches panel keeps between passes, owned by the host: the browser's view, the selected rows, the row to
 /// rename in place next, and the notes of an export in flight.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SwatchesState {
     /// The browser's view settings: thumbnail size, open groups.
     pub browser: PresetState<SwatchKey>,
-    /// The selected row.
-    pub selected: Option<SwatchKey>,
     /// The selected rows, with the lead.
     pub selection: Selection<SwatchKey>,
     /// A row to open the rename on in the next pass.
@@ -40,7 +38,7 @@ pub struct SwatchesState {
 
 impl Default for SwatchesState {
     fn default() -> Self {
-        SwatchesState { browser: PresetState::new(), selected: None, selection: Selection::default(), rename: None, export_notes: None }
+        SwatchesState { browser: PresetState::new(), selection: Selection::default(), rename: None, export_notes: None }
     }
 }
 
@@ -246,6 +244,11 @@ impl SwatchLibrary {
     /// where it went, or `None` when the library holds [`MAX_SWATCHES`].
     // pc: crates/engine/src/cmd/swatch_cmds.rs:150-171 (`swatches.add`: the cap, the name, group 0).
     pub fn add(&mut self, color: SwatchColor, name: Option<&str>, group: Option<usize>) -> Option<SwatchAt> {
+        self.add_entry(color.into(), name, group)
+    }
+
+    /// [`add`](Self::add) for any paint.
+    fn add_entry(&mut self, paint: SwatchPaint, name: Option<&str>, group: Option<usize>) -> Option<SwatchAt> {
         if swatches_full(&self.groups) {
             return None;
         }
@@ -258,7 +261,7 @@ impl SwatchLibrary {
         }
         let group = group.unwrap_or(0).min(self.groups.len() - 1);
         let entries = &mut self.groups[group].entries;
-        entries.push(SwatchEntry::new(name, color));
+        entries.push(SwatchEntry::with_paint(name, paint));
         Some(SwatchAt { group, index: entries.len() - 1 })
     }
 
@@ -405,7 +408,7 @@ pub(super) fn value_text(color: &SwatchColor, book: &str) -> String {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum SwatchEdit {
-    /// Adds `color` named `name` to `group`, or the first group.
+    /// Adds `paint` named `name` to `group`, or the first group.
     #[non_exhaustive]
     Add {
         /// The group's name, `None` for the first group.
@@ -480,7 +483,7 @@ pub enum SwatchEdit {
 }
 
 impl SwatchEdit {
-    /// Adds `color` named `name` to `group`, or the first group.
+    /// Adds `paint` named `name` to `group`, or the first group.
     pub fn add(group: Option<String>, name: String, paint: impl Into<SwatchPaint>) -> Self {
         SwatchEdit::Add { group, name, paint: paint.into() }
     }
@@ -502,8 +505,6 @@ impl SwatchLibrary {
     pub fn apply(&mut self, edit: &SwatchEdit) -> bool {
         match edit {
             SwatchEdit::Add { group, name, paint } => {
-                // P3(color-w5): co.K29
-                let SwatchPaint::Color(color) = paint else { return false };
                 let group = match group {
                     Some(g) => match self.groups.iter().position(|x| x.name == *g) {
                         Some(index) => Some(index),
@@ -511,7 +512,7 @@ impl SwatchLibrary {
                     },
                     None => None,
                 };
-                self.add(*color, Some(name), group).is_some()
+                self.add_entry(paint.clone(), Some(name), group).is_some()
             }
             SwatchEdit::NewGroup { name } => self.new_group(name).is_some(),
             SwatchEdit::Rename { swatch, name } => self.find(swatch).is_some_and(|at| self.rename(at, name)),
@@ -560,15 +561,17 @@ impl SwatchLibrary {
 }
 
 /// The rows of the swatch list: each group at depth 0 with its count, each swatch at depth 1 with "name, value" as its
-/// tooltip and accessible name. `SwatchesPanel` and `PaintChip`'s swatches list build their rows with it.
+/// tooltip and accessible name (the name alone for a swatch without a colour). `SwatchesPanel` and `PaintChip`'s
+/// swatches list build their rows with it.
 pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetRow<SwatchKey>> {
     let mut rows = Vec::with_capacity(groups.len() + groups.iter().map(|g| g.entries.len()).sum::<usize>());
     for group in groups {
         rows.push(PresetRow::group(SwatchKey::Group(group.name.clone()), group.name.as_str(), 0).count(group.entries.len()));
         for entry in &group.entries {
-            // P3(color-w5): co.K28
-            let Some(color) = entry.color() else { continue };
-            let named = format!("{}, {}", entry.name, value_text(color, words.book_color.as_str()));
+            let named = match entry.color() {
+                Some(color) => format!("{}, {}", entry.name, value_text(color, words.book_color.as_str())),
+                None => entry.name.clone(),
+            };
             rows.push(PresetRow::item(SwatchKey::Swatch(entry.name.clone()), entry.name.as_str(), 1).tooltip(named.clone()).accessible_name(named));
         }
     }
