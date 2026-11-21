@@ -862,6 +862,21 @@ pub fn glyph_name_numbers(name: &str) -> impl Iterator<Item = u32> + '_ {
     })
 }
 
+/// PdfCraft patch (107): the text the Adobe Glyph List gives glyph name `name` (`Asmall` is
+/// U+F761), as this crate reads names through the list: no `uni`/`u` forms
+/// ([`agl_unicode_from_name`]), no suffixes or ligature components, and no warning for a name
+/// the list doesn't have. For readers that recover text from glyph names.
+pub fn glyph_list_text(name: &str) -> Option<&'static str> {
+    glyph_names::get(name)
+}
+
+/// PdfCraft patch (107): the name the Adobe Glyph List gives character `c`, as this crate
+/// names a character when it looks one up by name (one name for each character the list
+/// names). For readers that recover text from glyph names or widths by name.
+pub fn glyph_list_name(c: char) -> Option<&'static str> {
+    glyph_names::get_reverse(c)
+}
+
 /// PdfCraft patch (107): the glyph name the Symbol font's built-in encoding (ISO 32000-2
 /// Annex D.5) gives `code`, as this crate reads it.
 pub fn symbol_encoding_name(code: u8) -> Option<&'static str> {
@@ -923,7 +938,10 @@ pub(crate) fn numbered_glyph_name_at_its_code(name: &str, code: u8) -> Option<Bf
 /// `u` and four to six; a value in the surrogate range or past U+10FFFF is no character. The
 /// text of a glyph goes by this rule, so `uni65`, `uni20ac` and `u41` read as nothing, as they
 /// do in [`glyph_name_to_text`].
-pub(crate) fn agl_unicode_from_name(name: &str) -> Option<char> {
+///
+/// PdfCraft patch (107): public, for readers that recover text from glyph names as this crate
+/// reads them.
+pub fn agl_unicode_from_name(name: &str) -> Option<char> {
     let upper_hex = |d: &str| d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F'));
     let digits = name
         .strip_prefix("uni")

@@ -785,3 +785,24 @@ fn glyph_names_read_as_the_strict_text_reads_them() {
     assert_eq!(symbol_encoding_name(0x61), Some("alpha"));
     assert_eq!(symbol_encoding_name(0x80), None);
 }
+
+/// The glyph list read both ways, as the strict text reads names: an expert font's small
+/// capital names a private use character and that character names it back; the `uni`/`u` forms
+/// are read by the Adobe Glyph List Specification's rule alone, upper-case hex of the right
+/// length.
+#[test]
+fn the_glyph_list_reads_names_and_characters() {
+    use crate::font::{agl_unicode_from_name, glyph_list_name, glyph_list_text};
+    assert_eq!(glyph_list_text("Asmall"), Some("\u{F761}"));
+    assert_eq!(glyph_list_text("zerooldstyle"), Some("\u{F730}"));
+    assert_eq!(glyph_list_name('\u{F761}'), Some("Asmall"));
+    assert_eq!(glyph_list_name('A'), Some("A"));
+    assert_eq!(glyph_list_text("uni0041"), None, "not a list name");
+    assert_eq!(glyph_list_text("a.sc"), None, "no suffixes");
+    assert_eq!(glyph_list_name('\u{E000}'), None);
+    assert_eq!(agl_unicode_from_name("uni0041"), Some('A'));
+    assert_eq!(agl_unicode_from_name("u1F600"), Some('\u{1F600}'));
+    assert_eq!(agl_unicode_from_name("uni65"), None);
+    assert_eq!(agl_unicode_from_name("uni20ac"), None);
+    assert_eq!(agl_unicode_from_name("uD800"), None);
+}
