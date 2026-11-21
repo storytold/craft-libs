@@ -25,6 +25,9 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! On targets other than `wasm32`, [`temp::TempDir`] is a new, private test folder that is removed
+//! with its contents when dropped, also when the test panics.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -40,6 +43,8 @@ pub mod deadline;
 pub mod guards;
 pub mod hostile;
 pub mod sample_damage;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod temp;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};
@@ -47,3 +52,5 @@ pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use guards::{SourceLimits, rust_sources, rust_sources_with_limits};
+#[cfg(not(target_arch = "wasm32"))]
+pub use temp::TempDir;

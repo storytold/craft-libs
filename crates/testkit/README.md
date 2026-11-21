@@ -216,6 +216,15 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## temp
+
+`TempDir::new(tag)` makes a new, empty folder `craft-testkit-<tag>-<random characters>` in the system temporary directory and returns an error instead of panicking. Dropping it removes the folder with its contents, also when the test panics; `close()` removes it and returns the error. A folder with a name that is already taken is skipped and left as it is. On Unix the folder has mode 0o700, and `new` returns an error when the folder it made is a link, is open to other users or is owned by another user. `path()` returns the canonical path (`/private/var/...` on macOS, `\\?\...` on Windows). `file(name)` returns the path of `name` in the folder and returns `InvalidInput` for an empty name, `.`, `..`, or a name with `/`, `\`, `:` or NUL. The module is not built for `wasm32`.
+
+```rust
+let dir = craft_testkit::TempDir::new("export")?;
+std::fs::write(dir.file("out.png")?, &png)?;
+```
+
 ## Origin
 
 ### guards
@@ -242,6 +251,15 @@ Changes from `craft-media-testkit`'s `hammer`:
 | Code | Repository | Path | SHA |
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
+
+### temp
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `temp_dir`, `TempDir` | storytold/vectorcraft | `crates/testkit/src/lib.rs` | `bada8e1710` |
+| `ScratchDir` | storytold/pdfcraft#6124 | `crates/testkit/src/scratch.rs` | `92e2071199` |
+| `private_dir` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` | `75a654f4f8` |
+| `TempDir` | storytold/cadcraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | `8e69890223` |
 
 ## Migration
 
@@ -276,3 +294,12 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### temp
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| VectorCraft | `temp_dir` and `TempDir` in `crates/testkit/src/lib.rs` | Pending. `temp_dir(tag)` shares one folder per tag in a process; its test of that is not moved. |
+| PdfCraft | `ScratchDir` in `crates/testkit/src/scratch.rs` (#6124) | Pending. `ScratchFile` has no counterpart; `TempDir::file` returns a path in a `TempDir`. |
+| CADCraft | `crates/engine/tests/support/temp_dir.rs`, `crates/ui-egui/tests/support/temp_dir.rs` | Pending. Its `TempDir` empties a leftover folder of the same name; `temp` makes a new one. |
+| `craft-media-testkit` | `private_dir()` in `crates/media-testkit/src/lib.rs` | Pending. `private_dir()` is unchanged. |
