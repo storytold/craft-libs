@@ -49,6 +49,11 @@ impl HeldInput {
         self.events = events;
     }
 
+    /// Holds `events` for the next frame behind the events held already: they arrive after them.
+    pub(crate) fn hold_behind(&mut self, events: impl IntoIterator<Item = Arrived>) {
+        self.events.extend(events);
+    }
+
     /// Gives the events this frame's input hook held the frame's input time `now`, which the begin hook reads.
     pub(crate) fn stamp(&mut self, now: f64) {
         for arrived in &mut self.events {
@@ -56,6 +61,13 @@ impl HeldInput {
                 arrived.at = Some(now);
             }
         }
+    }
+
+    /// Whether a primary release at `at` waits for the next frame.
+    pub(crate) fn holds_release_at(&self, at: egui::Pos2) -> bool {
+        self.events.iter().any(
+            |arrived| matches!(arrived.event, Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } if pos == at),
+        )
     }
 
     /// Whether events wait for the next frame.
