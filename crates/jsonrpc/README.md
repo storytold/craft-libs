@@ -26,6 +26,8 @@ object or array parameters are valid for each method.
 The caller may inspect the bounded parsed value before `process` to support an existing legacy
 protocol. Parse failures and limit failures are returned explicitly so each transport can choose
 its error and connection policy; `parse_error_response` builds the JSON-RPC parse error.
+`ParseError::error_response` builds a response for any of these failures: `-32700` for invalid
+JSON and `-32600` for a message or batch over its limit, each with a null ID.
 
 The envelope behavior is extracted from StencilCraft's JSON-lines MCP/control server. App-specific
 method routing, legacy control requests, and MCP lifecycle policy stay with the app.

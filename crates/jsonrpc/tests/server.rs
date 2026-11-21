@@ -114,6 +114,23 @@ fn parse_and_batch_limits_apply_before_dispatch() {
 }
 
 #[test]
+fn parse_failures_map_to_error_responses() {
+    assert_eq!(ParseError::InvalidJson.error_response(), parse_error_response());
+    for error in [ParseError::MessageTooLarge, ParseError::BatchTooLarge] {
+        let reply = error.error_response();
+        assert_eq!(reply["jsonrpc"], "2.0");
+        assert_eq!(reply["id"], Value::Null);
+        assert_eq!(reply["error"]["code"], -32600);
+        assert_eq!(reply["error"]["message"], error.to_string());
+        assert_eq!(RpcError::from(error), error.rpc_error());
+    }
+    let limits = Limits { max_batch_items: 0, ..Limits::default() };
+    let input = json!([{"jsonrpc":"2.0", "id":1, "method":"ping"}]);
+    let error = process(&input, limits, |_| Ok(json!({})), |_| {}).unwrap_err();
+    assert_eq!(error.error_response()["error"]["code"], -32600);
+}
+
+#[test]
 fn invalid_utf8_and_excessive_nesting_are_rejected() {
     assert_eq!(parse_json(&[0xff], Limits::default()), Err(ParseError::InvalidJson));
     let nested = format!("{}0{}", "[".repeat(200), "]".repeat(200));
