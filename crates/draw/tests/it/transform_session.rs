@@ -185,3 +185,30 @@ fn a_warp_with_its_own_frame_takes_the_frame_and_gives_it_back() {
     s.apply(TransformEdit::LeaveWarp, 1.0);
     assert_eq!((s.rect(), s.state().quad), (FRAME, BoxState::from_rect(FRAME).quad));
 }
+
+// The revision moves with every change to what Undo, Redo and the Warp phase report, and stays through a drag's moves
+// and the view-like edits, so an app keys its Edit menu on it.
+#[trial]
+fn the_revision_follows_the_undo_steps_and_the_warp_phase() {
+    let mut s = session();
+    let start = s.revision();
+    let id = GestureId::new(1);
+    s.apply(TransformEdit::Box(begin(id)), 0.0);
+    s.apply(TransformEdit::Box(update(id, moved(doc(5.0, 0.0)))), 0.0);
+    s.apply(TransformEdit::Box(update(id, moved(doc(9.0, 0.0)))), 0.0);
+    assert_eq!(s.revision(), start, "a drag's moves record no step");
+    s.apply(TransformEdit::Box(commit(id, moved(doc(9.0, 0.0)))), 0.0);
+    s.settle(0.0, false);
+    let recorded = s.revision();
+    assert!(recorded != start && s.can_undo());
+    assert!(s.undo());
+    let undone = s.revision();
+    assert!(undone != recorded && s.can_redo());
+    s.apply(TransformEdit::Warp(Warp(false)), 0.0);
+    let warped = s.revision();
+    assert!(warped != undone && s.warp().is_some());
+    s.apply(TransformEdit::Warp(Warp(true)), 0.0);
+    assert_eq!(s.revision(), warped, "a warp edit inside the phase opens no phase");
+    s.apply(TransformEdit::LeaveWarp, 0.0);
+    assert!(s.revision() != warped && s.warp().is_none());
+}

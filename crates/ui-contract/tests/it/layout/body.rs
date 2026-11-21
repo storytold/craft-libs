@@ -3,7 +3,8 @@
 
 use craft_behavior::{ColumnWidth, Proposal, Sense};
 use craft_ui::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, Sizing,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, MeasureCx, MemoProps, MemoView, Props as _, Role, Show as _,
+    ShowContainer as _, Sizing,
 };
 use craft_ui::layout::{BodyLayout, RowAlign};
 use craft_ui::runtime::env::{Direction, with_env};
@@ -320,6 +321,39 @@ fn the_end_region_shares_the_members_line() {
     fixture.room(Vec2::splat(400.0)).settle();
     let (member, end) = (member.borrow().rect, end.borrow().rect);
     assert!((end.center().y - member.center().y).abs() < SLACK, "the end region's probe {end:?} is off the members' line {member:?}");
+}
+
+/// A memoized view of one short block.
+#[derive(MemoProps)]
+struct Short {}
+
+fn short(_: &mut Short, ui: &mut Ui) -> Rect {
+    Block::new(Vec2::new(40.0, 10.0)).show(ui).rect
+}
+
+/// A memoized view in a row sits on the row's line, as the one-line child beside it does, also while it replays. Its
+/// content starts a layout room of its own, which left it at the row's top (a menu bar beside an app icon,
+/// storytold/photocraft#16113).
+#[trial]
+fn a_memoized_view_sits_on_the_rows_line() {
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        Panel::new().layout(BodyLayout::row()).id_salt("row").show(ui, |ui, _| {
+            let tall = Block::new(Vec2::new(20.0, 30.0)).show(ui).rect;
+            let view = MemoView::new("short", Short {}, short).show(ui);
+            if !is_measuring(ui.ctx()) {
+                shown.set((tall, view.unwrap_or(Rect::NOTHING)));
+            }
+        });
+    });
+    fixture.room(Vec2::splat(400.0)).settle();
+    for frame in 0..3 {
+        let (tall, view) = seen.get();
+        assert!(view.height() > 0.0, "frame {frame}: the view showed: {view:?}");
+        assert!((view.center().y - tall.center().y).abs() < SLACK, "frame {frame}: the view {view:?} is off the line of {tall:?}");
+        fixture.settle();
+    }
 }
 
 /// A Row in right-to-left holding a vertically scrolling container (content-sized, then filling its height) beside a
