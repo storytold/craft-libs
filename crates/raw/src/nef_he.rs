@@ -123,12 +123,19 @@ fn header(src: &[u8]) -> Result<Header> {
     Ok(Header { width, height, weights, body: p })
 }
 
+/// The 13 bytes every measured picture header carries past its usual end (Z f, Z 8, Z 9; HE and HE★). Their
+/// meaning is unknown; the square-root scale, luma offset and chroma exponents were measured with these, so other
+/// values may need other constants.
+const PICTURE_HEADER_EXTENSION: [u8; 13] = [0x50, 0x88, 0x70, 0x83, 0xf0, 0x15, 0x23, 0xd1, 0x49, 0xcd, 0x3f, 0x7f, 0x07];
+
 /// Picture header: the sizes, and the coding choices this decoder implements.
 fn picture_header(b: &[u8]) -> Result<(usize, usize)> {
-    let b = b.get(..24).ok_or_else(|| corrupt("short picture header"))?;
-    // Nc, Ng, Ss, (Cpih, Nlx/Nly), (Qpih, Fs, Rm)
-    let layout = (b[16], b[17], b[18], b[21] & 0x0f, b[22], b[23] & 0x3f);
-    if layout != (4, 4, 8, 0, 0x51, 0x14) {
+    if b.len() != 24 + PICTURE_HEADER_EXTENSION.len() {
+        return Err(unsupported("picture header length differs from the measured one"));
+    }
+    // Nc, Ng, Ss, Bw, (Fq, Br), (Cpih, Nlx/Nly), (Qpih, Fs, Rm)
+    let layout = (b[16], b[17], b[18], b[19], b[20], b[21] & 0x0f, b[22], b[23] & 0x3f);
+    if layout != (4, 4, 8, 0x12, 0x44, 0, 0x51, 0x14) || b[24..] != PICTURE_HEADER_EXTENSION {
         return Err(unsupported("coding options differ from the measured ones"));
     }
     Ok((be(&b[8..10]) as usize, be(&b[10..12]) as usize))
@@ -576,6 +583,18 @@ mod tests {
         assert!(decode(&codestream(256, 32, &body), 256, 32, 32, 1008.0, &limits).is_err());
         // a size the codestream does not state is refused as the unsupported variant
         assert!(matches!(decode(&codestream(256, 32, &[]), 512, 32, 32, 1008.0, &limits), Err(RawError::Unsupported(m)) if m == UNSUPPORTED));
+    }
+
+    /// The constants were measured with one picture header extension; another one keeps the preview fallback.
+    #[test]
+    fn other_picture_header_extension_is_unsupported() {
+        let limits = Limits::default();
+        let s = codestream(256, 32, &[]);
+        assert!(!matches!(decode(&s, 256, 32, 32, 1008.0, &limits), Err(RawError::Unsupported(_))));
+        let at = s.windows(PICTURE_HEADER_EXTENSION.len()).position(|w| w == PICTURE_HEADER_EXTENSION).unwrap_or(0);
+        let mut changed = s.clone();
+        changed[at + 4] ^= 0x01;
+        assert!(matches!(decode(&changed, 256, 32, 32, 1008.0, &limits), Err(RawError::Unsupported(m)) if m == UNSUPPORTED));
     }
 
     /// A damaged precinct header (Q = 255) made the truncation shift overflow, and a negative intermediate never
