@@ -17,10 +17,10 @@ use crate::contract::{
     ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
-use crate::display::{Divider, Shade, Text};
+use crate::display::{Divider, Picture, PictureSize, Shade, Text};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
-use crate::list::ListRow;
+use crate::list::{ListRow, ThumbSize};
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -275,6 +275,9 @@ impl<'a> AboutDialog<'a> {
     }
 }
 
+/// The texture key of the app's mark; the dialog shows one mark.
+const ICON_KEY: u64 = 0xAB07_1C0E;
+
 /// What the tabs read while the dialog shows them.
 struct Shown<'s> {
     words: &'s AboutWords,
@@ -312,6 +315,13 @@ impl Shown<'_> {
     fn about(&self, ui: &mut Ui, link: &RefCell<Option<String>>) {
         let (words, info) = (self.words, self.info);
         Stack::new().show(ui, |ui, _| {
+            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
+                if let Some(icon) = &info.icon {
+                    let image = || (**icon).clone();
+                    Picture::new(info.app_name.clone(), ICON_KEY, &image).extent(PictureSize::Thumb(ThumbSize::Medium)).show(ui);
+                }
+                Text::new(info.app_name.clone()).role(TypeRole::Title).show(ui);
+            });
             Text::new(info.blurb.clone()).show(ui);
             Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
             Row::new().align(RowAlign::Center).show(ui, |ui, _| {

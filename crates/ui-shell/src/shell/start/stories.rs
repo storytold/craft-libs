@@ -1,7 +1,8 @@
 //! Stories of `StartScreen`.
 
 use super::{StartLink, StartScreen};
-use crate::contract::Bind;
+use crate::buttons::Button;
+use crate::contract::{Bind, Show as _};
 use crate::primitives::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use crate::runtime::env::Label;
 use crate::shell::{RecentFile, RecentSort, RecentView, ScreenModeCommands, Template, ThumbKey};
@@ -84,6 +85,7 @@ struct Extras<'a> {
     source: Option<&'a FakeThumbSource<ThumbKey>>,
     links: &'a [StartLink],
     drop_hint: Option<&'a str>,
+    section: Option<(&'a str, &'a mut dyn FnMut(&mut Ui))>,
 }
 
 fn screen(
@@ -108,6 +110,9 @@ fn screen(
     if let Some(hint) = extras.drop_hint {
         start = start.drop_hint(Label::from(hint.to_owned()));
     }
+    if let Some((title, body)) = extras.section {
+        start = start.section(Label::from(title.to_owned()), body);
+    }
     let shown = start.show(ui).into();
     *data.value("choice", Choice::default()) = choice;
     shown
@@ -117,6 +122,18 @@ fn screen(
 fn start_screen(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pinned = [PathBuf::from("/home/user/Pictures"), PathBuf::from("/home/user/Projects")];
     screen(ui, data, Choice::default(), &plain_files(), &pinned, &plain_templates(), Extras::default())
+}
+
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_with_app_section(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let pinned = [PathBuf::from("/home/user/Pictures")];
+    let mut buttons = |ui: &mut Ui| {
+        let _ = Button::new(Label::from("Browse Tutorials".to_owned())).id_salt("tutorials").show(ui);
+        let _ = Button::new(Label::from("What's New".to_owned())).id_salt("whats-new").show(ui);
+    };
+    let body: &mut dyn FnMut(&mut Ui) = &mut buttons;
+    let extras = Extras { section: Some(("Learn", body)), ..Extras::default() };
+    screen(ui, data, Choice::default(), &plain_files(), &pinned, &plain_templates(), extras)
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]

@@ -246,9 +246,11 @@ impl<'a> RowKind<'a> {
     /// A translated unit shown after an integer or number field, for quantities with no `UnitKind`; other kinds
     /// ignore it.
     #[must_use]
-    pub fn unit_text(self, text: &'a str) -> Self {
-        let _ = (self, text);
-        todo!("sh.K32")
+    pub fn unit_text(mut self, text: &'a str) -> Self {
+        if let RowKind::Int { unit_text, .. } | RowKind::Float { unit_text, .. } = &mut self {
+            *unit_text = Some(text);
+        }
+        self
     }
 
     /// What an integer or number field counts, shown after it, or what the ids of a choice count (the choice labels its

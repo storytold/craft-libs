@@ -128,7 +128,8 @@ impl Outcome for StartOutput {
 /// The start screen, shown in a shell's body when no document is open.
 ///
 /// - **Layout.** New and Open (the first Tab stops), then Recent with the view switch and the sort, Pinned Folders
-///   when the app gives the list (even an empty one) and Templates when it gives any. The page scrolls as a whole, and each grid and list takes the height of its rows.
+///   when the app gives the list (even an empty one), the app's own [`section`](StartScreen::section) when it gives one
+///   and Templates when it gives any. The page scrolls as a whole, and each grid and list takes the height of its rows.
 /// - **Recent files.** A grid of cards or a list, by the `view` binding, in the order of the `sort` binding. A click or
 ///   Enter opens a file; arrows move; the context menu (secondary click, the menu key or Shift+F10) and the
 ///   [`StartRecentCommands`] remove it from the list, clear the list or show it in its folder.
@@ -173,7 +174,6 @@ pub struct StartScreen<'a> {
     #[prop(into)]
     drop_hint: Option<Label>,
     /// One app section, drawn after Recent and Pinned Folders and before Templates.
-    #[allow(dead_code)] // P3(shell-w5): sh.K28
     section: Option<(Label, RefCell<&'a mut dyn FnMut(&mut Ui)>)>,
 }
 
@@ -354,7 +354,7 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, .. } = self;
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, section } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
@@ -388,6 +388,12 @@ impl StartScreen<'_> {
             recent_section(&page, ui, &view, &sort, current_view, &files);
             if let Some(pinned) = pinned {
                 pinned_section(&page, ui, pinned);
+            }
+            if let Some((title, body)) = &section {
+                let _ = Section::fixed(title.clone()).header_gap(Gap::Section).show(ui, |ui, _| {
+                    let mut body = body.borrow_mut();
+                    (*body)(ui);
+                });
             }
             if !templates.is_empty() {
                 templates_section(&page, ui, templates);

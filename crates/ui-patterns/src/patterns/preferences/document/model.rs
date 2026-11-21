@@ -161,7 +161,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
     }
 
     fn nested(&mut self, ui: &mut Ui) {
-        self.custom.nested(ui, &mut self.draft); // P3(shell-w5): sh.K30
+        self.custom.nested(ui, &mut self.draft);
     }
 
     fn nested_open(&self) -> bool {

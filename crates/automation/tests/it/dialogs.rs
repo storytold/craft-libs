@@ -1,6 +1,6 @@
 //! `ui.dialog.*` on typed dialogs through one generic path.
 
-use craft_automation::dialogs::{dialog_method, inspect};
+use craft_automation::dialogs::{MAX_DIALOG_FIELDS, dialog_method, inspect};
 use craft_ui::contract::{Bind, SaveKey};
 use craft_ui::dialog::{DialogHost, DialogResult, PromptChoice, PromptKind, StandardPrompt};
 use craft_ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
@@ -122,6 +122,41 @@ fn param_dialog_automation_follows_its_rows() {
         panic!("the reopened dialog answers OK")
     };
     assert_eq!((reopened.fields.number("radius"), reopened.fields.text("method")), (Some(7.0), Some("zoom")));
+}
+
+/// A `fields` list sets every field or none: a refused field in the middle leaves the dialog as it was and gives that
+/// refusal; a list over the limit, an item without a string `field` and `field` beside `fields` are refused unread.
+#[trial]
+fn a_field_list_sets_every_field_or_none_and_has_a_limit() {
+    let ctx = Context::default();
+    let mut host = DialogHost::new();
+    host.open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), |fields| {
+        ParamDialog::new("blur", "Blur", Param::parse_list(r#"{"radius":0.1..1000=1,"method":"spin|zoom"}"#)).values(Bind::bound(fields))
+    }));
+    let id = inspect(&host)[0]["id"].clone();
+    let fields = |host: &DialogHost| inspect(host)[0]["fields"].clone();
+    let set = |host: &mut DialogHost, params: Value| call(host, &ctx, "ui.dialog.set", params);
+
+    let listed = json!([{"field": "radius", "value": 4.5}, {"field": "method", "value": "zoom"}]);
+    assert_eq!(set(&mut host, json!({"dialog": id, "fields": listed})), Ok(Value::Null));
+    let settled = fields(&host);
+    assert_eq!((settled["radius"].as_f64(), &settled["method"]), (Some(4.5), &json!("zoom")));
+
+    let refused = json!([{"field": "radius", "value": 9}, {"field": "radius", "value": 5000}, {"field": "method", "value": "spin"}]);
+    assert!(set(&mut host, json!({"dialog": id, "fields": refused})).is_err_and(|e| e.contains("radius")));
+    assert_eq!(fields(&host), settled, "a refusal in the middle sets nothing");
+
+    let too_many: Vec<Value> = (0..=MAX_DIALOG_FIELDS).map(|_| json!({"field": "radius", "value": 2})).collect();
+    assert!(set(&mut host, json!({"dialog": id, "fields": too_many})).is_err());
+    assert_eq!(fields(&host), settled, "a list over the limit sets nothing");
+
+    let unnamed = json!([{"field": "radius", "value": 9}, {"value": 1}]);
+    assert!(set(&mut host, json!({"dialog": id, "fields": unnamed})).is_err());
+    assert_eq!(fields(&host), settled, "an item without a field sets nothing");
+
+    let both = json!({"dialog": id, "field": "radius", "value": 9, "fields": [{"field": "radius", "value": 8}]});
+    assert!(set(&mut host, both).is_err());
+    assert_eq!(fields(&host), settled, "`field` beside `fields` sets nothing");
 }
 
 /// `"top"` names the top dialog of the stack: a child over its parent takes the field, the parent keeps its own; with

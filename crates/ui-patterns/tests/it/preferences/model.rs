@@ -261,7 +261,6 @@ struct TurnOff;
 
 impl CustomSettings<MemoryPrefs> for TurnOff {
     fn nested(&mut self, _: &mut egui::Ui, draft: &mut SettingsDraft) {
-        // P3(shell-w5): sh.K30
         draft.remove("memory.percent");
     }
 }
@@ -271,7 +270,6 @@ impl CustomSettings<MemoryPrefs> for TurnOff {
 fn a_removed_draft_value_applies_as_no_value() {
     let saved = MemoryPrefs { memory: Memory { percent: Some(70) } };
     let mut doc = SettingsDocument::new(saved).expect("serializes").custom(TurnOff);
-    // P3(shell-w5): sh.K29
     let _ = egui::Context::default().run_ui(egui::RawInput::default(), |ui| doc.nested(ui));
     doc.apply().expect("the draft fits the struct");
     let edits = doc.take_applied_edits().expect("applied");

@@ -3,7 +3,7 @@
 use super::{PreferencesState, PreferencesWindow};
 use crate::contract::{Bind, Entry};
 use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
-use crate::runtime::env::UnitKind;
+use crate::runtime::env::{LengthUnits, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
 use egui::Ui;
@@ -17,11 +17,15 @@ struct Values {
     size: i64,
     opacity: f64,
     tint: Rgba,
+    /// In points, shown in millimetres.
+    margin: f64,
+    /// In seconds.
+    delay: f64,
 }
 
 impl Default for Values {
     fn default() -> Self {
-        Values { snap: true, language: "en".to_owned(), name: "Poster".to_owned(), size: 24, opacity: 0.5, tint: Rgba([0xff, 0x88, 0x00, 0xff]) }
+        Values { snap: true, language: "en".to_owned(), name: "Poster".to_owned(), size: 24, opacity: 0.5, tint: Rgba([0xff, 0x88, 0x00, 0xff]), margin: 36.0, delay: 0.5 }
     }
 }
 
@@ -54,6 +58,12 @@ impl PreferencesModel for Demo {
                     RowSpec::new("canvas.size", "Brush size", RowKind::int(draft.size, 1..=64).counting(UnitKind::Pixels)),
                     RowSpec::new("canvas.opacity", "Opacity", RowKind::float(draft.opacity, 0.0..=1.0, 2)),
                     RowSpec::new("canvas.tint", "Tint", RowKind::Color(draft.tint)),
+                    RowSpec::new(
+                        "canvas.margin",
+                        "Margin",
+                        RowKind::length(draft.margin, 0.0..=720.0, LengthUnits::new(UnitKind::Points, UnitKind::Millimetres, 72.0)),
+                    ),
+                    RowSpec::new("canvas.delay", "Preview delay", RowKind::float(draft.delay, 0.0..=10.0, 1).unit_text("s")),
                 ],
             )
             .footnote("Canvas settings apply to new documents."),
@@ -69,6 +79,8 @@ impl PreferencesModel for Demo {
             ("canvas.size", PrefValue::Int(size)) => self.draft.size = size,
             ("canvas.opacity", PrefValue::Float(opacity)) => self.draft.opacity = opacity,
             ("canvas.tint", PrefValue::Color(tint)) => self.draft.tint = tint,
+            ("canvas.margin", PrefValue::Float(margin)) => self.draft.margin = margin,
+            ("canvas.delay", PrefValue::Float(delay)) => self.draft.delay = delay,
             _ => {}
         }
     }
@@ -97,12 +109,15 @@ impl PreferencesModel for Demo {
         let defaults = Values::default();
         match page {
             "general" => (self.draft.snap, self.draft.language, self.draft.name) = (defaults.snap, defaults.language, defaults.name),
-            "canvas" => (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint),
+            "canvas" => {
+                (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint);
+                (self.draft.margin, self.draft.delay) = (defaults.margin, defaults.delay);
+            }
             _ => {}
         }
     }
 
-    fn nested(&mut self, _: &mut Ui) {} // P3(shell-w5): sh.K29
+    fn nested(&mut self, _: &mut Ui) {}
 }
 
 fn window(ui: &mut Ui, data: &mut StoryData, state: PreferencesState, demo: Demo) -> StoryOutput {

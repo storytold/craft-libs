@@ -79,9 +79,9 @@ impl AboutInfo {
 
     /// The application's mark, shown at the start of the About tab's header row.
     #[must_use]
-    pub fn icon(self, image: Arc<egui::ColorImage>) -> Self {
-        let _ = (self, image);
-        todo!("sh.K26")
+    pub fn icon(mut self, image: Arc<egui::ColorImage>) -> Self {
+        self.icon = Some(image);
+        self
     }
 }
 
