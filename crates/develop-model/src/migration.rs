@@ -3,7 +3,9 @@
 //! The first supported field is `exposure` (EV) → `light.exposure` (EV). This is a
 //! settings mapping, not a promise that two renderers produce the same pixels.
 
-use serde_json::{Error, Value};
+use std::{error::Error, fmt};
+
+use serde_json::Value;
 
 use crate::{DevelopSettings, controls};
 
@@ -17,6 +19,33 @@ pub struct Migration {
     pub unmapped_fields: Vec<String>,
 }
 
+/// Why a PhotoCraft Camera Raw settings object could not be migrated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MigrationError {
+    /// The supplied settings are not a JSON object.
+    InvalidSettingsObject,
+    /// The supplied exposure is not a finite number in EV.
+    InvalidExposure,
+    /// The supplied exposure is outside the develop model's control range.
+    ExposureOutOfRange,
+    /// The develop model does not define its exposure control.
+    MissingExposureControl,
+}
+
+impl fmt::Display for MigrationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidSettingsObject => "Camera Raw edit fields must be an object",
+            Self::InvalidExposure => "exposure must be a finite number in EV",
+            Self::ExposureOutOfRange => "exposure is outside the develop control range",
+            Self::MissingExposureControl => "the develop model has no exposure control",
+        })
+    }
+}
+
+impl Error for MigrationError {}
+
 /// Apply supported fields from a PhotoCraft Camera Raw settings object to an explicit base.
 ///
 /// Supply edit fields only, not a PSD descriptor or transport metadata. Missing fields
@@ -27,18 +56,14 @@ pub struct Migration {
 ///
 /// A non-object or an explicit exposure that is not a finite number within the shared
 /// control range is rejected rather than silently replaced or clipped.
-pub fn migrate_camera_raw(base: &DevelopSettings, fields: &Value) -> Result<Migration, Error> {
-    fn invalid(message: &str) -> Error {
-        <Error as serde::de::Error>::custom(message)
-    }
-
-    let fields = fields.as_object().ok_or_else(|| invalid("Camera Raw edit fields must be an object"))?;
+pub fn migrate_camera_raw(base: &DevelopSettings, fields: &Value) -> Result<Migration, MigrationError> {
+    let fields = fields.as_object().ok_or(MigrationError::InvalidSettingsObject)?;
     let mut settings = base.clone();
     if let Some(value) = fields.get("exposure") {
-        let valid = value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| invalid("exposure must be a finite number in EV"))?;
-        let spec = controls::find("light.exposure").ok_or_else(|| invalid("the develop model has no exposure control"))?;
+        let valid = value.as_f64().filter(|v| v.is_finite()).ok_or(MigrationError::InvalidExposure)?;
+        let spec = controls::find("light.exposure").ok_or(MigrationError::MissingExposureControl)?;
         if !(spec.min..=spec.max).contains(&valid) {
-            return Err(invalid("exposure is outside the develop control range"));
+            return Err(MigrationError::ExposureOutOfRange);
         }
         settings.light.exposure = valid;
     }
@@ -54,7 +79,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn camera_raw_exposure_replaces_only_one_field_and_reports_the_rest() -> Result<(), Error> {
+    fn camera_raw_exposure_replaces_only_one_field_and_reports_the_rest() -> Result<(), MigrationError> {
         // V7 is not the default: detect an accidental restamp to the latest process.
         for process in [Process::V8, Process::V7] {
             let mut base = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
@@ -72,19 +97,20 @@ mod tests {
     }
 
     #[test]
-    fn camera_raw_exposure_absent_is_distinct_from_invalid() -> Result<(), Error> {
+    fn camera_raw_exposure_absent_is_distinct_from_invalid() -> Result<(), MigrationError> {
         let mut base = DevelopSettings::default();
         base.light.exposure = -0.75;
         let result = migrate_camera_raw(&base, &json!({ "contrast": -38 }))?;
         assert_eq!(result.settings, base);
         assert_eq!(result.unmapped_fields, ["contrast"]);
 
+        assert_eq!(migrate_camera_raw(&base, &json!([])).err(), Some(MigrationError::InvalidSettingsObject));
+
         // JSON cannot represent a non-finite number; serde_json serializes it to null.
-        for invalid in
-            [json!([]), json!({ "exposure": null }), json!({ "exposure": "NaN" }), json!({ "exposure": f64::INFINITY }), json!({ "exposure": 5.1 })]
-        {
-            assert!(migrate_camera_raw(&base, &invalid).is_err());
+        for invalid in [json!({ "exposure": null }), json!({ "exposure": "NaN" }), json!({ "exposure": f64::INFINITY })] {
+            assert_eq!(migrate_camera_raw(&base, &invalid).err(), Some(MigrationError::InvalidExposure));
         }
+        assert_eq!(migrate_camera_raw(&base, &json!({ "exposure": 5.1 })).err(), Some(MigrationError::ExposureOutOfRange));
         Ok(())
     }
 }
