@@ -1018,6 +1018,13 @@ impl Renderer {
         }
     }
 
+    /// PdfCraft patch: the widest a stroke is drawn, in device pixels: a stroke far wider than
+    /// the canvas looks the same as one a few canvases wide, but its geometry grows with the
+    /// width: a fuzzed `/LW 9223372036854775807` allocated 10 GB in stroke expansion.
+    fn widest_stroke(&self) -> f32 {
+        4.0 * (f32::from(self.ctx.width()) + f32::from(self.ctx.height()))
+    }
+
     /// PdfCraft patch: returns the stroke's reach for [`may_paint_canvas`].
     fn set_stroke_properties(
         &mut self,
@@ -1040,10 +1047,8 @@ impl Renderer {
             line_width *= threshold;
         }
 
-        // PdfCraft patch: a stroke far wider than the canvas looks the same as one a few canvases
-        // wide, but its geometry grows with the width: a fuzzed `/LW 9223372036854775807`
-        // allocated 10 GB in stroke expansion.
-        let widest = 4.0 * (f32::from(self.ctx.width()) + f32::from(self.ctx.height()));
+        // PdfCraft patch: see `widest_stroke`.
+        let widest = self.widest_stroke();
         if min_factor.is_finite() && min_factor > 0.0 && line_width * min_factor > widest {
             line_width = widest / min_factor;
         }
@@ -2131,7 +2136,8 @@ impl Renderer {
         let pen = if self.inside_pattern || self.in_type3_glyph {
             None
         } else {
-            thin_stroke_pen(transform, stroke_props.line_width, thinnest_stroke(is_text))
+            let threshold = thinnest_stroke(is_text);
+            thin_stroke_pen(transform, stroke_props.line_width, threshold, self.widest_stroke())
         };
         let (user_path, user_props) = (path, stroke_props);
         // The pen's route dashes in user space, where the pattern is measured, and strokes the
@@ -3083,7 +3089,14 @@ fn thinnest_stroke(is_text: bool) -> f32 {
 /// direction needs, so a direction that is already wide enough keeps its width. Widening by the
 /// larger scale alone left a line that ran along the shrunk direction too thin (a quarter of a
 /// pixel under `1 0 0 0.25 cm`), and by the smaller one, every other line too wide.
-fn thin_stroke_pen(transform: Affine, line_width: f32, threshold: f32) -> Option<(Affine, Affine)> {
+///
+/// The pen is sized for the width drawn: `set_stroke_properties` caps a stroke at `widest`
+/// device pixels along its widest direction, which is the matrix's, so a stroke over the cap
+/// is widened as if it were that wide. Sized for the width given, a line 1000 pixels wide one
+/// way and 0.1 the other came out 0.32 pixels thick after the cap.
+///
+/// The pen also turns its space so that `transform × A` is symmetric (see `settle`).
+fn thin_stroke_pen(transform: Affine, line_width: f32, threshold: f32, widest: f32) -> Option<(Affine, Affine)> {
     let [a, b, c, d, _, _] = transform.as_coeffs();
     // `transformᵀ × transform`, whose eigenvalues are the squared singular values.
     let (p, q, r) = (a * a + b * b, a * c + b * d, c * c + d * d);
@@ -3095,7 +3108,9 @@ fn thin_stroke_pen(transform: Affine, line_width: f32, threshold: f32) -> Option
     let narrow = if wide > 0.0 { (a * d - b * c).abs() / wide } else { 0.0 };
     // The principal direction of the larger scale; the other is perpendicular to it.
     let angle = 0.5 * (2.0 * q).atan2(p - r);
-    let width = f64::from(line_width.max(0.01));
+    // `min` passes over a NaN `wide`, which the check below refuses; a `wide` of 0 divides to
+    // infinity.
+    let width = f64::from(line_width.max(0.01)).min(f64::from(widest) / wide);
     let threshold = f64::from(threshold);
     let stretch = |scale: f64| (threshold / (width * scale)).max(1.0);
     let (along, across) = (stretch(wide), stretch(narrow));
@@ -3116,7 +3131,29 @@ fn thin_stroke_pen(transform: Affine, line_width: f32, threshold: f32) -> Option
     let turn = Affine::rotate(angle);
     let pen = turn * Affine::scale_non_uniform(along, across) * turn.inverse();
     let to_pen = turn * Affine::scale_non_uniform(1.0 / along, 1.0 / across) * turn.inverse();
-    Some((pen, to_pen))
+    let settle = settle(transform * pen);
+    Some((pen * settle.inverse(), settle * to_pen))
+}
+
+/// PdfCraft patch (#5643): the rotation or reflection `Q` nearest to `m` (its polar factor,
+/// `m = Q × P` with `P` symmetric and positive), so that `m × Q⁻¹ = Q × P × Q⁻¹` is symmetric
+/// and positive, with each diagonal entry between `m`'s smallest and largest scales.
+///
+/// vello sets the tolerance kurbo strokes with from the matrix's diagonal alone (a stroke under
+/// a matrix whose diagonal is 0 is stroked as if unscaled), and kurbo leaves out a join that
+/// turns by less than the tolerance allows for over the line's width. A thin-stroke pen keeps a
+/// small width under a large scale, so under a matrix turned a quarter every join that turned
+/// by less than a right angle was left out. Turning or mirroring the pen's space by `Q` keeps
+/// the pen round and the stroke where it was, and gives vello a diagonal at least the smaller
+/// scale.
+fn settle(m: Affine) -> Affine {
+    let [a, b, c, d, _, _] = m.as_coeffs();
+    if a * d - b * c >= 0.0 {
+        Affine::rotate((b - c).atan2(a + d))
+    } else {
+        // `FLIP_Y × m` turns the other way: `m = FLIP_Y × R × P` for its nearest rotation `R`.
+        Affine::FLIP_Y * Affine::rotate((-b - c).atan2(a - d))
+    }
 }
 
 /// PdfCraft patch (#5643): the miter limit that strokes `to_pen × path` with the joins `props`
@@ -3180,10 +3217,8 @@ impl PenJoins {
         }
         let limit_sq = f64::from(limit) * f64::from(limit);
         let (mut mitered, mut bevelled) = (0.0_f64, f64::INFINITY);
-        // `to_pen` has no translation, so it maps a direction as it maps a point.
-        let in_pen = |v: Vec2| (to_pen * v.to_point()).to_vec2();
-        for_each_join(path, |incoming, outgoing| {
-            let pen_ratio = miter_ratio_sq(in_pen(incoming), in_pen(outgoing));
+        for_each_join(path, to_pen, |[incoming, pen_incoming], [outgoing, pen_outgoing]| {
+            let pen_ratio = miter_ratio_sq(pen_incoming, pen_outgoing);
             // kurbo mitres when the ratio is under the limit.
             if miter_ratio_sq(incoming, outgoing) < limit_sq {
                 mitered = mitered.max(pen_ratio);
@@ -3216,38 +3251,26 @@ fn miter_ratio_sq(incoming: Vec2, outgoing: Vec2) -> f64 {
 
 /// PdfCraft patch (#5643): calls `join` with the tangents at each join of `path`: the direction the
 /// path arrives in and the one it leaves in, at every vertex inside a subpath and where a closed
-/// subpath meets its start. A segment of zero length makes no join.
-fn for_each_join(path: &BezPath, mut join: impl FnMut(Vec2, Vec2)) {
-    let nonzero = |v: Vec2| (v.hypot2() > 0.0).then_some(v);
-    let (mut start, mut last) = (Point::ORIGIN, Point::ORIGIN);
+/// subpath meets its start, each as `[user space, pen space]`. The pen's tangents are those of
+/// `to_pen × path`, which kurbo strokes: a pen can shrink a control vector short enough for
+/// kurbo to take the next one instead (see `end_tangents`), so they aren't always the user
+/// space's mapped by `to_pen`. A segment of zero length makes no join.
+fn for_each_join(path: &BezPath, to_pen: Affine, mut join: impl FnMut([Vec2; 2], [Vec2; 2])) {
+    let pen_path = to_pen * path.clone();
+    let nonzero = |v: [Vec2; 2]| (v[0].hypot2() > 0.0 && v[1].hypot2() > 0.0).then_some(v);
+    let (mut start, mut last) = ([Point::ORIGIN; 2], [Point::ORIGIN; 2]);
     // The subpath's first tangent, and the tangent it arrives at its current point in.
-    let (mut first, mut arriving): (Option<Vec2>, Option<Vec2>) = (None, None);
-    for el in path.elements() {
-        let (starting, ending) = match *el {
+    let (mut first, mut arriving): (Option<[Vec2; 2]>, Option<[Vec2; 2]>) = (None, None);
+    for (&el, &pen_el) in path.elements().iter().zip(pen_path.elements()) {
+        let (starting, ending) = match el {
             kurbo::PathEl::MoveTo(p) => {
-                (start, last) = (p, p);
+                start = [p, pen_el.end_point().unwrap_or(p)];
+                last = start;
                 (first, arriving) = (None, None);
                 continue;
             }
-            kurbo::PathEl::LineTo(p) => {
-                let t = nonzero(p - last);
-                last = p;
-                (t, t)
-            }
-            kurbo::PathEl::QuadTo(c, p) => {
-                let starting = nonzero(c - last).or(nonzero(p - last));
-                let ending = nonzero(p - c).or(nonzero(p - last));
-                last = p;
-                (starting, ending)
-            }
-            kurbo::PathEl::CurveTo(c1, c2, p) => {
-                let starting = nonzero(c1 - last).or(nonzero(c2 - last)).or(nonzero(p - last));
-                let ending = nonzero(p - c2).or(nonzero(p - c1)).or(nonzero(p - last));
-                last = p;
-                (starting, ending)
-            }
             kurbo::PathEl::ClosePath => {
-                let t = nonzero(start - last);
+                let t = nonzero([start[0] - last[0], start[1] - last[1]]);
                 if let Some(t) = t {
                     if let Some(previous) = arriving {
                         join(previous, t);
@@ -3263,6 +3286,13 @@ fn for_each_join(path: &BezPath, mut join: impl FnMut(Vec2, Vec2)) {
                 (first, arriving) = (None, None);
                 continue;
             }
+            _ => {
+                let user = end_tangents(last[0], el);
+                let pen = end_tangents(last[1], pen_el);
+                last = [el.end_point().unwrap_or(last[0]), pen_el.end_point().unwrap_or(last[1])];
+                let Some(([u_start, u_end], [p_start, p_end])) = user.zip(pen) else { continue };
+                (nonzero([u_start, p_start]), nonzero([u_end, p_end]))
+            }
         };
         let (Some(starting), Some(ending)) = (starting, ending) else { continue };
         if let Some(previous) = arriving {
@@ -3271,6 +3301,24 @@ fn for_each_join(path: &BezPath, mut join: impl FnMut(Vec2, Vec2)) {
             first = Some(starting);
         }
         arriving = Some(ending);
+    }
+}
+
+/// PdfCraft patch (#5643): the tangents kurbo's stroker takes at the start and end of a segment
+/// drawn from `from` (`PathSeg::tangents`): a curve's control vector at an end when its square
+/// is over 1e-12, otherwise the next vector along, down to the chord. `None` for a move or a
+/// close, which have none.
+fn end_tangents(from: Point, el: kurbo::PathEl) -> Option<[Vec2; 2]> {
+    const EPS: f64 = 1e-12;
+    let or_next = |v: Vec2, next: Vec2| if v.hypot2() > EPS { v } else { next };
+    match el {
+        kurbo::PathEl::LineTo(p) => Some([p - from, p - from]),
+        kurbo::PathEl::QuadTo(c, p) => Some([or_next(c - from, p - from), or_next(p - c, p - from)]),
+        kurbo::PathEl::CurveTo(c1, c2, p) => Some([
+            or_next(c1 - from, or_next(c2 - from, p - from)),
+            or_next(p - c2, or_next(p - c1, p - from)),
+        ]),
+        kurbo::PathEl::MoveTo(_) | kurbo::PathEl::ClosePath => None,
     }
 }
 
@@ -3713,7 +3761,7 @@ mod thin_stroke_pen_tests {
                 let (wide, narrow) = scales(m);
                 let w = f64::from(width.max(0.01));
                 let t = f64::from(threshold);
-                let Some((pen, to_pen)) = thin_stroke_pen(m, width, threshold) else {
+                let Some((pen, to_pen)) = thin_stroke_pen(m, width, threshold, f32::INFINITY) else {
                     assert!(narrow * w >= t - 1e-9, "{m:?} at {width}: {narrow} needs a pen");
                     continue;
                 };
@@ -3723,6 +3771,10 @@ mod thin_stroke_pen_tests {
                 }
                 let (pen_wide, pen_narrow) = scales(m * pen);
                 assert!(pen_narrow * w >= t * (1.0 - 1e-6), "{m:?} at {width}: {pen_narrow}");
+                // Symmetric, with a diagonal at least the smaller scale (see `settle`).
+                let [a, b, c, d, _, _] = (m * pen).as_coeffs();
+                assert!((b - c).abs() <= 1e-9 * pen_wide, "{m:?} at {width}: {:?}", m * pen);
+                assert!(a.min(d) >= pen_narrow * (1.0 - 1e-6), "{m:?} at {width}: {:?}", m * pen);
                 let want = (wide * w).max(t);
                 assert!((pen_wide * w - want).abs() <= 1e-6 * want, "{m:?} at {width}: {pen_wide} × {w} for {want}");
             }
@@ -3734,16 +3786,16 @@ mod thin_stroke_pen_tests {
     #[test]
     fn no_pen_when_uniform_or_unusable() {
         for m in [Affine::IDENTITY, Affine::scale(0.2), Affine::rotate(1.1) * Affine::scale(0.3), Affine::new([0.0, 0.5, -0.5, 0.0, 0.0, 0.0])] {
-            assert!(thin_stroke_pen(m, 0.1, 1.0).is_none(), "{m:?}");
+            assert!(thin_stroke_pen(m, 0.1, 1.0, f32::INFINITY).is_none(), "{m:?}");
         }
-        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), 8.0, 1.0).is_none());
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), 8.0, 1.0, f32::INFINITY).is_none());
         for m in [Affine::new([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]), Affine::new([1.0, 2.0, 2.0, 4.0, 0.0, 0.0]), Affine::new([f64::NAN, 0.0, 0.0, 1.0, 0.0, 0.0]), Affine::new([f64::INFINITY, 0.0, 0.0, 1.0, 0.0, 0.0]), Affine::new([1.0, 0.0, 0.0, 1e-300, 0.0, 0.0])] {
-            assert!(thin_stroke_pen(m, 0.3, 1.0).is_none(), "{m:?}");
+            assert!(thin_stroke_pen(m, 0.3, 1.0, f32::INFINITY).is_none(), "{m:?}");
         }
-        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), f32::NAN, 1.0).is_some());
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), f32::NAN, 1.0, f32::INFINITY).is_some());
         // One direction shrunk over a billion times more than the other.
-        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 1e-10, 0.0, 0.0]), 1.0, 1.0).is_none());
-        assert!(thin_stroke_pen(Affine::new([1e-6, 0.0, 0.0, 1e-16, 0.0, 0.0]), 1.0, 1.0).is_none());
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 1e-10, 0.0, 0.0]), 1.0, 1.0, f32::INFINITY).is_none());
+        assert!(thin_stroke_pen(Affine::new([1e-6, 0.0, 0.0, 1e-16, 0.0, 0.0]), 1.0, 1.0, f32::INFINITY).is_none());
     }
 
     /// PdfCraft patch (#5643), from its review: a nearly singular matrix turned off the axes gets a pen as wide
@@ -3751,9 +3803,28 @@ mod thin_stroke_pen_tests {
     #[test]
     fn a_nearly_singular_turned_matrix_gets_a_pen() {
         let m = Affine::rotate(0.7) * Affine::new([1.0, 0.0, 0.0, 3e-9, 0.0, 0.0]) * Affine::rotate(-1.9);
-        let Some((pen, _)) = thin_stroke_pen(m, 1.0, 1.0) else { panic!("{m:?} needs a pen") };
+        let Some((pen, _)) = thin_stroke_pen(m, 1.0, 1.0, f32::INFINITY) else { panic!("{m:?} needs a pen") };
         let (pen_wide, pen_narrow) = scales(m * pen);
         assert!((pen_narrow - 1.0).abs() < 1e-6 && (pen_wide - 1.0).abs() < 1e-6, "{pen_wide} {pen_narrow}");
+    }
+
+    /// PdfCraft patch (#5643), from craft-libs#2679's review: kurbo strokes `to_pen × path` and
+    /// takes a curve's tangent at an end from the control vector there only when it is longer
+    /// than 1e-6, and otherwise from the next. A pen can shrink a control vector under that
+    /// length. Here the curve leaves along x in user space (a ratio of 1.08, mitered under a
+    /// limit of 2), but its first control vector is 4e-7 long in the pen's space, so kurbo
+    /// leaves along the second, `(0, -8)`: a ratio of 10.2, which the limit kept at 2 bevelled.
+    #[test]
+    fn a_join_has_the_tangents_kurbo_strokes_in_the_pens_space() {
+        let squeeze_x = Affine::scale_non_uniform(0.2, 1.0);
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((8.0, 8.0));
+        path.curve_to((8.000002, 8.0), (8.0, 0.0), (9.0, 0.0));
+        assert!(ratio(Vec2::new(8.0, 8.0), Vec2::new(1.0, 0.0)) < 2.0);
+        let pen = ratio(Vec2::new(1.6, 8.0), Vec2::new(0.0, -8.0));
+        let limit = pen_miter_limit(&path, squeeze_x, &miter(2.0));
+        assert!(f64::from(limit) > pen, "a limit of {limit} bevels a join of {pen}");
     }
 
     /// The miter ratio `1 / sin(θ / 2)` of a join between a segment arriving in `incoming`'s

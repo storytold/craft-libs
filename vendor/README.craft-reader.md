@@ -350,10 +350,14 @@ bevelled rather than bevelled ones mitered. Only the joins a dashed stroke's das
 and a stroke off the canvas is skipped before it is dashed (under `pen_miter_bound`, which
 bounds the dashes' limit). A matrix that shrinks one direction over 10^9 times more than the
 other gets no pen and is drawn as before, since the pen's matrix would be off by that many
-rounding errors. Before, the width floor went by the larger axis scale alone, so a horizontal
-hairline under `1 0 0 0.25 cm` drew a quarter of a pixel thick. Tests: `thin_stroke_pen_tests`
-in hayro, and the `thin_strokes` module of `crates/pdf/tests/upstream_raster.rs`, which fails
-without the change.
+rounding errors. The pen is sized for the width drawn after the cap on strokes far wider than
+the canvas, and its space is turned or mirrored (`settle`) so that the matrix vello strokes
+under is symmetric: vello takes kurbo's tolerance from the matrix's diagonal alone, which a
+quarter turn makes 0, and kurbo then left out joins. A join's pen-space tangents are those
+kurbo takes from `to_pen × path`. Before, the width floor went by the larger axis scale alone,
+so a horizontal hairline under `1 0 0 0.25 cm` drew a quarter of a pixel thick. Tests:
+`thin_stroke_pen_tests` in hayro, and the `thin_strokes` module of
+`crates/pdf/tests/upstream_raster.rs`, which fails without the change.
 
 Local fixes on top of these ports, marked `Craft patch` or in the comments of the ported
 code: an inflated patch-mesh triangle is rebuilt with `Triangle::new`, so its stored dot

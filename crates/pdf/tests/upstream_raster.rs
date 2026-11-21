@@ -1162,7 +1162,12 @@ mod thin_strokes {
     /// The ink of each pixel of `content` drawn on a 40 × 40 pt page at 72 dpi, row by row
     /// (0 white, 1 black), and the page's width in pixels.
     fn ink_page(content: &str) -> (usize, Vec<f32>) {
-        let page = render(&one_page("/MediaBox [0 0 40 40]", content.as_bytes(), b""));
+        ink_on("/MediaBox [0 0 40 40]", content)
+    }
+
+    /// The ink of each pixel of `content` drawn on a page with the entries `page` at 72 dpi.
+    fn ink_on(page: &str, content: &str) -> (usize, Vec<f32>) {
+        let page = render(&one_page(page, content.as_bytes(), b""));
         let ink = page.rgba.as_chunks::<4>().0.iter().map(|px| f32::from(255 - px[0]) / 255.0).collect();
         (page.width as usize, ink)
     }
@@ -1233,5 +1238,36 @@ mod thin_strokes {
         assert!(dashed > 1.0, "the dashed right angle's miter tip has {dashed} px of ink");
         let solid = tip(&format!("q 0.1 0 0 1 0 0 cm 2 w 4 M {path}"));
         assert!(solid < 0.3, "with the spike drawn the right angle is bevelled: {solid} px of ink");
+    }
+
+    /// A stroke far wider than the canvas one way is drawn a few canvases wide, and its pen is
+    /// sized for the width drawn. Under `100 0 0 0.01 cm` a 10-unit line is 1000 pixels wide
+    /// across x, which is capped at 320 on a 40 × 40 canvas, and 0.1 across y. The pen was sized
+    /// for the uncapped width, so the cap took a horizontal line down to 0.32 pixels thick.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn a_thin_stroke_capped_for_its_other_width_is_still_one_pixel_thick() {
+        // Device y = 40 - 0.01 × 1950 = 20.5, the middle of row 20.
+        let (width, ink) = ink_page("q 100 0 0 0.01 0 0 cm 10 w 0.04 1950 m 0.36 1950 l S Q");
+        let across = ink.iter().skip(20).step_by(width).sum::<f32>();
+        assert!((0.85..=1.3).contains(&across), "a capped horizontal line is {across} px of ink thick");
+    }
+
+    /// A thin stroke keeps its joins when its matrix turns a quarter. vello sets how closely
+    /// kurbo strokes from the matrix's diagonal alone, which a quarter turn makes 0, and kurbo
+    /// leaves out a join that turns by less than that tolerance allows for. Under
+    /// `300 0 0 1 cm` a 0.1-unit line is 30 pixels wide across x and widened to 1 across y; the
+    /// corner below turns by 85° in the pen's space. Turned, the join was left out, which cut
+    /// about 14 pixels of ink off the corner.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn a_thin_stroke_keeps_its_joins_under_a_quarter_turn() {
+        let corner = "300 0 0 1 60 20 cm 0.1 w 0 0 m 0 20 l 0.1 20.087 l S";
+        let total = |content: String| ink_on("/MediaBox [0 0 100 100]", &content).1.iter().sum::<f32>();
+        let plain = total(format!("q {corner} Q"));
+        // Turned a quarter about the page's centre.
+        let turned = total(format!("q 0 1 -1 0 100 0 cm {corner} Q"));
+        assert!(plain > 100.0, "the corner has {plain} px of ink");
+        assert!((plain - turned).abs() < 0.5, "the corner has {plain} px of ink, turned {turned}");
     }
 }
