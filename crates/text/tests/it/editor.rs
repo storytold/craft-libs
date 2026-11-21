@@ -381,6 +381,18 @@ fn field(mode: EditorMode, masked: bool) -> Session {
     editor
 }
 
+#[trial]
+fn a_form_editor_commits_when_a_press_focuses_another_editor() {
+    for mode in [EditorMode::FieldLine, EditorMode::FieldLines] {
+        let mut editor = session_on(Host { text: "abc".to_owned(), ..Host::default() }, None, true, mode, false);
+        editor.focus();
+        editor.fixture.frame(vec![Event::Text("d".to_owned())]).settle();
+        editor.fixture.click_at(pos2(20.0, 50.0)).settle();
+        assert_eq!(*editor.ends.borrow(), [EditorEnd::Commit], "the form session ends on a press in the other editor ({mode:?})");
+        assert_eq!(editor.text(), "abcd", "the committed text is kept");
+    }
+}
+
 /// A one-line field ends its session on Enter (commit), Tab (next) and Shift+Tab (previous) and pastes line breaks as
 /// spaces; a multi-line field takes Enter as a line break and ends on Tab; while a composition is open no key ends a
 /// field's session; the canvas editor still types Tab as a tab character.

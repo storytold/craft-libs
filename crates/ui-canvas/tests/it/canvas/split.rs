@@ -2,7 +2,7 @@
 //! bounds and spans as the pointer drags them, and the document tabs dropped on the views.
 
 use craft_behavior::PartKey;
-use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews, TabDrop, TabDropTarget};
+use craft_ui::canvas::{PanePress, SplitAt, SplitLayout, SplitViews, TabDrop, TabDropTarget};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Direction;
 use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
@@ -23,6 +23,35 @@ const TOLERANCE: f32 = 0.5;
 
 const PANE: PartKey = PartKey::new("pane");
 const DIVIDER: PartKey = PartKey::new("divider");
+
+#[trial]
+fn clicking_a_control_in_an_inactive_pane_activates_both() {
+    use craft_ui::buttons::Button;
+    let seen = Rc::new(RefCell::new((Vec::new(), 0)));
+    let held = seen.clone();
+    let mut at = SplitAt::default();
+    let mut active = 0;
+    let mut fixture = Fixture::new(move |ui| {
+        let views = SplitViews::new("Views", SplitLayout::TwoUpVertical, Bind::bound(&mut at))
+            .active(active)
+            .pane_press(PanePress::Interact)
+            .show_panes(ui, |ui, _, pane| {
+                if pane.index == 1 && Button::new("Pane action").show(ui).clicked() {
+                    held.borrow_mut().1 += 1;
+                }
+            });
+        if let Some(pane) = views.output.activated {
+            active = pane;
+            held.borrow_mut().0.push(pane);
+        }
+    });
+    fixture.room(ROOM).settle();
+    let button = fixture.by_label("Pane action").unwrap_or_else(|| panic!("the pane action is shown"));
+    fixture.click(&button).settle();
+    let seen = seen.borrow();
+    assert_eq!(seen.0, [1], "the inactive pane becomes active");
+    assert_eq!(seen.1, 1, "the same click operates the control");
+}
 
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() <= TOLERANCE

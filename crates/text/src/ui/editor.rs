@@ -411,7 +411,7 @@ impl Outcome for TextEditorOutput {
 ///   them. Backspace and Delete by char, Alt by word, Cmd+Backspace to the line start. Cmd+A all, Cmd+C, Cmd+X and
 ///   Cmd+V the clipboard. Enter a line break; Cmd+Enter commits; Esc commits or cancels; Cmd+. cancels;
 ///   Cmd+T asks the host for its Character panel. In a form field ([`mode`](Self::mode)) Tab and Shift+Tab end the
-///   session toward the next or previous field, and in a one-line field Enter commits. The
+///   session toward the next or previous field, a press that moves focus away commits, and in a one-line field Enter commits. The
 ///   [`TextEditorCommand`]s format. In vertical text the arrows turn with the flow, the formatting keys too: Alt+Up
 ///   and Alt+Down track, Alt+Left and Alt+Right set the leading. A formatting key the host does not take moves the
 ///   caret as its arrow does: a line, a word, or with Cmd to the text's start or end; Shift extends.
@@ -670,6 +670,11 @@ impl Component for TextEditor<'_> {
         // A primary press elsewhere on the canvas keeps the marked text as typed, as a press on the text does. A
         // secondary press leaves the session open: the canvas menu it opens acts on the live edit.
         if canvas_space(&cx.env).is_some_and(|space| space.background().pressed == Some(craft_behavior::PointerButton::Primary)) {
+            edits.end_composition();
+            edits.session.dragging = None;
+            edits.done.commit = true;
+        }
+        if mode != EditorMode::Canvas && cx.editor_commit_requested() {
             edits.end_composition();
             edits.session.dragging = None;
             edits.done.commit = true;

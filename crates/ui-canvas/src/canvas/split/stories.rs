@@ -1,6 +1,6 @@
 //! Stories of the split views.
 
-use super::{DIVIDER, PANE, SplitAt, SplitLayout, SplitPaneAt, SplitViews};
+use super::{DIVIDER, PANE, PanePress, SplitAt, SplitLayout, SplitPaneAt, SplitViews};
 use crate::canvas::Canvas;
 use crate::canvas::RasterSource as _;
 use crate::canvas::testing::canvas_story::{StoryDocument, show_document};
@@ -108,6 +108,17 @@ fn stacked_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn another_view_clicked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = data.value("split", SplitAt::default());
     split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound(at))
+}
+
+#[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(click_inactive_pane))]
+fn interactive_panes(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let at = data.value("split", SplitAt::default());
+    SplitViews::new("Views", SplitLayout::TwoUpVertical, Bind::bound(at))
+        .active(MAIN_OF_TWO)
+        .pane_press(PanePress::Interact)
+        .show_panes(ui, |ui, _, pane| show_pane(ui, pane))
+        .output
+        .into()
 }
 
 #[story(SplitViews<'static>, covers = [Mixed], drive = Drive::Custom(drag_divider))]

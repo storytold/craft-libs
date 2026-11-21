@@ -26,6 +26,7 @@ pub(crate) struct EditorInfo {
     pub purpose: EditorPurpose,
     pub focused: bool,
     pub read_only: bool,
+    pub commit_now: bool,
 }
 
 impl<C: Component> PartsCx<'_, C> {
@@ -82,11 +83,16 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
             can
         });
     }
-    cx.core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only });
+    cx.core.editor = Some(EditorInfo { widget, rect: decl.rect, purpose: decl.purpose, focused, read_only, commit_now: step.commit_now });
     cx.core.editor_inputs = inputs;
 }
 
 impl<C: Component> Cx<'_, C> {
+    /// Whether a press moved focus away from the editor and asks it to commit its session in this pass.
+    pub fn editor_commit_requested(&self) -> bool {
+        self.core.editor.as_ref().is_some_and(|editor| editor.commit_now)
+    }
+
     /// The editor part's inputs of this pass in the order they arrived; call it in `update`. The editor applies them
     /// to its own document.
     pub fn editor_input(&mut self) -> impl Iterator<Item = EditorInput> + '_ {

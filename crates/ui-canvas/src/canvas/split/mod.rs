@@ -1,6 +1,7 @@
 //! `SplitViews`: one canvas area shown as views of one document, or a grid of panes the caller fills (one document
 //! each). One view is active and is the full interactive view (tools, overlays, keys); the others show their document
-//! from their own view and become active on a click. The dividers between panes move with the pointer and, when
+//! from their own view and become active on a click. [`PanePress`] chooses whether that click also reaches the view.
+//! The dividers between panes move with the pointer and, when
 //! focused, with the arrow keys.
 //!
 //! The panes are the cells [`arrange_rects`] gives for the arrangement the caller names, with the dividers moved to
@@ -36,6 +37,16 @@ const PANE: PartKey = PartKey::new("pane");
 /// in the reading order [`arrange_rects`] gives (pane 0 at the top start corner); any other entry, or fewer than two
 /// panes, shows one pane over the whole area.
 pub use craft_behavior::dock::Arrangement as SplitLayout;
+
+/// How a pointer press in an inactive pane activates it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PanePress {
+    /// The first press selects the pane; its contents receive later presses.
+    #[default]
+    Select,
+    /// The press selects the pane and also reaches its contents.
+    Interact,
+}
 
 /// Where the dividers lie, as fractions of the area counted from its start edge and its top: one entry per column line
 /// and per row line of the layout, in order. A list that does not fit the layout (the wrong length, not ascending, or
@@ -349,9 +360,9 @@ impl<D> Outcome for SplitViewsOutput<D> {
 
 /// One canvas area shown as views of one document, or a grid of panes the caller fills (one document each), in the
 /// panes of a [`SplitLayout`]. The active pane is the app's: it routes tools and keys there. An inactive pane is a
-/// Tab stop over its view: a press, Enter or Space on it reports it in [`SplitViewsOutput::activated`] and its view
-/// gets no press. With [`takes_tabs`](SplitViews::takes_tabs) a document strip tab dropped on the views is reported in
-/// [`SplitViewsOutput::tab_drop`].
+/// Tab stop: a press, Enter or Space reports it in [`SplitViewsOutput::activated`]. By default the first press selects
+/// the pane; [`PanePress::Interact`] also sends it to the view. With [`takes_tabs`](SplitViews::takes_tabs) a document
+/// strip tab dropped on the views is reported in [`SplitViewsOutput::tab_drop`].
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, probe(SplitViews<'static, ()>))]
 pub struct SplitViews<'a, D: Clone + Send + Sync + 'static = ()> {
@@ -361,9 +372,12 @@ pub struct SplitViews<'a, D: Clone + Send + Sync + 'static = ()> {
     props: ContainerProps,
     layout: SplitLayout,
     at: Bind<'a, SplitAt>,
-    /// The active pane: the full interactive view (0 by default). The other panes are display-only until clicked.
+    /// The active pane: the full interactive view (0 by default).
     #[prop]
     active: usize,
+    /// How a press in an inactive pane selects it.
+    #[prop]
+    pane_press: PanePress,
     /// The documents a tile arrangement shows, one pane each (0 by default); the n-up arrangements show their own
     /// number of panes. [`show_panes`](Self::show_panes) gives each of them a body.
     #[prop]
@@ -379,15 +393,18 @@ impl<'a> SplitViews<'a> {
     /// active until [`active`](Self::active) says otherwise.
     pub fn new(label: impl Into<Label>, layout: SplitLayout, at: Bind<'a, SplitAt>) -> Self {
         let props = ContainerProps::new().arena(true).sizing(Sizing::Fill).pad(Pad::None);
-        SplitViews { common: Common::new(), props, layout, at, active: 0, count: 0, activated: None, accepts: None, tab_drop: None }.label(label)
+        SplitViews {
+            common: Common::new(), props, layout, at, active: 0, pane_press: PanePress::default(), count: 0, activated: None, accepts: None,
+            tab_drop: None,
+        }.label(label)
     }
 
     /// Takes a dragged document strip tab over the views: an unsplit body offers its reading-end half, a split body
     /// each whole pane, each only when `accepts` returns true.
     #[must_use]
     pub fn takes_tabs<D: Clone + Send + Sync + 'static>(self, accepts: impl Fn(&[D], TabDropTarget) -> bool + 'a) -> SplitViews<'a, D> {
-        let SplitViews { common, props, layout, at, active, count, activated, accepts: _, tab_drop: _ } = self;
-        SplitViews { common, props, layout, at, active, count, activated, accepts: Some(Box::new(accepts)), tab_drop: None }
+        let SplitViews { common, props, layout, at, active, pane_press, count, activated, accepts: _, tab_drop: _ } = self;
+        SplitViews { common, props, layout, at, active, pane_press, count, activated, accepts: Some(Box::new(accepts)), tab_drop: None }
     }
 
     /// Copies the main view's centre and zoom into the linked panes, each keeping its own rect and rotation.
@@ -469,9 +486,9 @@ impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
         Some(self.at.reborrow())
     }
 
-    /// The panes and the dividers. An inactive pane is a click and Tab stop above its view; the active one is an inert
-    /// part under its view, so every pane has an accessible node. A divider is an edge part above the panes, its own
-    /// Tab stop that the arrow keys move.
+    /// The panes and the dividers. An inactive pane is a click and Tab stop; its press policy decides whether it sits
+    /// above or below its view. The active one is inert under its view, so every pane has an accessible node. A divider
+    /// is an edge part above the panes, its own Tab stop that the arrow keys move.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let at = cx.value().cloned().unwrap_or_default();
         let active = self.active_pane();
@@ -481,11 +498,14 @@ impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
             if pane == active {
                 cx.part(PANE.at(pane as u64), pane_rect).priority(HitPriority::new(HitLevel::Background, 0));
             } else {
-                cx.part(PANE.at(pane as u64), pane_rect)
+                let part = cx.part(PANE.at(pane as u64), pane_rect)
                     .sense(Sense::CLICK | Sense::TAKE_FOCUS)
-                    .priority(HitPriority::new(HitLevel::Body, 0))
-                    .focusable()
-                    .over();
+                    .priority(HitPriority::new(if self.pane_press == PanePress::Select { HitLevel::Body } else { HitLevel::Background }, 0));
+                if self.pane_press == PanePress::Select {
+                    part.focusable().over();
+                } else {
+                    part.focusable();
+                }
             }
         }
         if cx.value().is_none() {
@@ -506,10 +526,24 @@ impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
         }
         let active = self.active_pane();
         // A press chooses the pane, as in Photoshop; Enter, Space and assistive technology activate it too.
+        let pointer_pane = if self.pane_press == PanePress::Interact {
+            let press = crate::runtime::pointer::frame(&cx.ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary);
+            press.and_then(|press| {
+                let shapes = crate::runtime::pointer::shapes_at(&cx.ctx, press.origin);
+                // A divider spans both panes; resizing it must not select either one.
+                if shapes.iter().any(|(owner, part)| *owner == cx.id && part.is_some_and(|part| part.key == DIVIDER)) {
+                    return None;
+                }
+                (0..pane_count(self.layout, self.count)).find(|pane| shapes.contains(&(cx.id, Some(PANE.at(*pane as u64)))))
+            })
+        } else {
+            None
+        };
         let chosen = |pane: &usize| {
             let part = PANE.at(*pane as u64);
             cx.part_if_declared(part).is_some_and(|result| matches!(result.press.phase, craft_behavior::PressPhase::Down { .. }))
                 || cx.part_activated(part).is_some()
+                || pointer_pane == Some(*pane)
         };
         self.activated = (0..pane_count(self.layout, self.count)).filter(|&pane| pane != active).find(chosen);
         // The views' own target over their rect; it ranks above a strip's tear-off, which takes the window.
