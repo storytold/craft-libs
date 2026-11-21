@@ -1538,7 +1538,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             // The sides of a collapsed window set its column's width, as a docked collapsed column's inner edge does.
             if let Some(width) = output.collapsed_width {
-                let work = ColumnWork { iconic: None, picked: None, resized: Vec::new(), width: Some(width), flyout: None };
+                let work = ColumnWork { iconic: None, picked: None, icon_picked: None, resized: Vec::new(), width: Some(width), flyout: None };
                 self.column_work(&window.column, work);
             }
             // The OS close of a native window arrives here as well, also where the title row offers no Close.
