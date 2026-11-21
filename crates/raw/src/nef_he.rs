@@ -14,8 +14,9 @@
 //! - Bitplane counts are unary. A slice's first precinct codes them as is; later lines predict them from the line
 //!   above (see [`residual`]). WGT lists one gain and priority per band in packet order; a band's truncation is
 //!   `Q - gain - (priority < R)`.
-//! - The components are a lifting transform of `24.24 * sqrt(sample - black)` over the mosaic (see [`mosaic`]); the
-//!   scale and the luma offset are measured on the CC0 Z 9 Lossless / HE★ pair.
+//! - The components are the Star-Tetrix lifting transform (Richter et al., IEEE TIP 30, 2021) of
+//!   `24.24 * sqrt(sample - black)` over the mosaic (see [`mosaic`]); the scale and the luma offset are measured on
+//!   the CC0 Z 9 Lossless / HE★ pair.
 //!
 //! Open: the meaning of the 13 bytes PIH carries past its usual end, the exact luma offset, and other bodies.
 //! Variants that differ from the measured layout are refused as [`HIGH_EFFICIENCY`](crate::nef) so their
@@ -453,12 +454,12 @@ fn components(packets: &[Packet], lines: &[Vec<i32>], cw: usize, precincts: usiz
 
 /// Components to RGGB samples: undo the colour transform, then the square-root coding.
 ///
-/// The transform is a lifting scheme on the mosaic (cell `(y, x)` holds R, G1 above-right, G2 below-left, B):
-/// the third component is G2 less the mean of its four diagonal G1 neighbours, the second and fourth are R and B
-/// less the mean of their four adjacent greens, and the first is G1 plus half the mean of its four diagonal
-/// differences and half the mean of its two R and two B differences. Each component's high-frequency signature
-/// against the lossless twin picks this over a per-cell transform; the halves are the usual lifting update
-/// weights (the measurements cannot tell them from a quarter).
+/// The transform is the Star-Tetrix lifting scheme of Richter et al., "Bayer CFA Pattern Compression With JPEG XS",
+/// IEEE TIP 30 (2021), section VI, on the mosaic (cell `(y, x)` holds R, G1 above-right, G2 below-left, B): R and B
+/// less the mean of their four adjacent greens (second and fourth components); each green plus an eighth of its two
+/// R and two B differences, a luma; the third component is the G2 luma less the mean of its four diagonal G1 lumas,
+/// and the first the G1 luma plus an eighth of its four diagonal differences. The chroma exponents are 0 (an
+/// eighth each): on the Z 9 pair, 1 or 2 move the levels by 8 % or more.
 fn mosaic(planes: &[Vec<i32>], cw: usize, rows: usize, black: f64) -> Vec<u16> {
     let width = 2 * cw;
     let cells_h = planes.first().map_or(0, |p| p.len() / cw.max(1));
@@ -473,31 +474,39 @@ fn mosaic(planes: &[Vec<i32>], cw: usize, rows: usize, black: f64) -> Vec<u16> {
         planes.get(c).and_then(|p| p.get(y * cw + x)).copied().unwrap_or(0) as f64
     };
     let (luma, cr, delta, cb) = (0, 1, 2, 3);
-    let g1_at = |y: isize, x: isize| {
-        let d = (at(delta, y, x) + at(delta, y, x + 1) + at(delta, y - 1, x) + at(delta, y - 1, x + 1)) / 4.0;
-        let c = (at(cr, y, x) + at(cr, y, x + 1) + at(cb, y - 1, x) + at(cb, y, x)) / 4.0;
-        (at(luma, y, x) - LUMA_OFFSET - d / 2.0 - c / 2.0) as f32
-    };
     let rows_c = rows.div_ceil(2).min(cells_h);
-    // G1 and G2 once for every cell the rows read (one row past them), then the samples
+    // the G1 luma, G1 and G2 once for every cell the rows read (one row past them), then the samples
     let needed = (rows_c + 1).min(cells_h);
-    let g1_plane: Vec<f32> = (0..needed * cw).map(|i| g1_at((i / cw) as isize, (i % cw) as isize)).collect();
-    let g1 = |y: isize, x: isize| -> f64 {
+    let cell = |i: usize| ((i / cw) as isize, (i % cw) as isize);
+    let plane_at = |plane: &[f32], y: isize, x: isize| -> f64 {
         let y = y.clamp(0, needed as isize - 1) as usize;
         let x = x.clamp(0, cw as isize - 1) as usize;
-        f64::from(g1_plane.get(y * cw + x).copied().unwrap_or(0.0))
+        f64::from(plane.get(y * cw + x).copied().unwrap_or(0.0))
     };
-    let g2_plane: Vec<f32> = (0..needed * cw)
+    let luma1: Vec<f32> = (0..needed * cw)
         .map(|i| {
-            let (y, x) = ((i / cw) as isize, (i % cw) as isize);
-            (at(delta, y, x) + (g1(y, x) + g1(y, x - 1) + g1(y + 1, x) + g1(y + 1, x - 1)) / 4.0) as f32
+            let (y, x) = cell(i);
+            let d = at(delta, y, x) + at(delta, y, x + 1) + at(delta, y - 1, x) + at(delta, y - 1, x + 1);
+            (at(luma, y, x) - LUMA_OFFSET - d / 8.0) as f32
         })
         .collect();
-    let g2 = |y: isize, x: isize| -> f64 {
-        let y = y.clamp(0, needed as isize - 1) as usize;
-        let x = x.clamp(0, cw as isize - 1) as usize;
-        f64::from(g2_plane.get(y * cw + x).copied().unwrap_or(0.0))
-    };
+    let g1_plane: Vec<f32> = (0..needed * cw)
+        .map(|i| {
+            let (y, x) = cell(i);
+            let c = at(cr, y, x) + at(cr, y, x + 1) + at(cb, y - 1, x) + at(cb, y, x);
+            (plane_at(&luma1, y, x) - c / 8.0) as f32
+        })
+        .collect();
+    let g2_plane: Vec<f32> = (0..needed * cw)
+        .map(|i| {
+            let (y, x) = cell(i);
+            let l = plane_at(&luma1, y, x) + plane_at(&luma1, y, x - 1) + plane_at(&luma1, y + 1, x) + plane_at(&luma1, y + 1, x - 1);
+            let c = at(cr, y, x) + at(cr, y + 1, x) + at(cb, y, x - 1) + at(cb, y, x);
+            (at(delta, y, x) + l / 4.0 - c / 8.0) as f32
+        })
+        .collect();
+    let g1 = |y: isize, x: isize| plane_at(&g1_plane, y, x);
+    let g2 = |y: isize, x: isize| plane_at(&g2_plane, y, x);
     let linear = |e: f64| {
         let s = (e / SCALE).max(0.0);
         (s * s + black).round().clamp(0.0, 16383.0) as u16
