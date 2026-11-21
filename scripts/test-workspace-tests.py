@@ -55,7 +55,11 @@ cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TE
 """
 FINAL_TESTS = """
 cargo test --workspace --doc --all-features --locked
-cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+if [[ "$CRAFT_TESTS" != some || ! "$CRAFT_TEST_FILTER" =~ $package_filter ||
+    "$CRAFT_TEST_FILTER" == *"package(=craft-image-codecs)"* ||
+    "$CRAFT_TEST_FILTER" == *"package(=craft-text)"* ]]; then
+  cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+fi
 """
 TEST_RUN = PRIMARY_TEST + EXAMPLE_TESTS + FINAL_TESTS
 TEST_SOURCE = SELECT_GUARD + PRIMARY_TEST + EXAMPLE_TESTS + """
@@ -160,18 +164,19 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_a_selection_filters_every_nextest_run_and_none_runs_nothing(self):
-        selected = "package(=craft-geom) | package(=craft-svg)"
-        result = commands("Linux", tests="some", test_filter=selected)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        expected = linux_test_commands(selected)
-        del expected[1]  # Neither example package was selected.
-        self.assertEqual(result.stdout.splitlines(), expected)
-        # The doctests stay whole-workspace; every nextest run carries the filter, and the replay
-        # audit runs only the selected UI crates.
-        self.assertIn("test --workspace --doc --all-features --locked", result.stdout.splitlines())
-        filters = [re.search(r" -E (.*) --no-tests=warn ", line)[1]
-                   for line in result.stdout.splitlines() if line.startswith("nextest")]
-        self.assertEqual(filters, [selected, f"({selected}) & ({AUDIT_PACKAGES})", selected])
+        for selected in ("package(=craft-geom) | package(=craft-svg)",
+                         "package(=craft-image-codecs-tools) | package(=craft-text-tools)"):
+            with self.subTest(filter=selected):
+                result = commands("Linux", tests="some", test_filter=selected)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = linux_test_commands(selected)[:-1]
+                del expected[1]  # Neither optional phase has a selected package.
+                self.assertEqual(result.stdout.splitlines(), expected)
+                # The doctests stay whole-workspace; replay retains the selected UI crates.
+                self.assertIn("test --workspace --doc --all-features --locked", result.stdout.splitlines())
+                filters = [re.search(r" -E (.*) --no-tests=warn ", line)[1]
+                           for line in result.stdout.splitlines() if line.startswith("nextest")]
+                self.assertEqual(filters, [selected, f"({selected}) & ({AUDIT_PACKAGES})"])
         result = commands("Linux", tests="none", test_filter="none()")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["No crate changed: no tests to run."])
@@ -181,10 +186,20 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(filter=selected):
                 result = commands("Linux", tests="some", test_filter=selected)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), linux_test_commands(selected))
+                self.assertEqual(result.stdout.splitlines(), linux_test_commands(selected)[:-1])
 
-    def test_unfamiliar_selection_filters_leave_examples_enabled(self):
-        for selected in ("all()", "package(craft-video)", "package(=craft-geom) & all()"):
+    def test_default_feature_tests_run_when_either_package_is_selected(self):
+        for selected in ("package(=craft-image-codecs)", "package(=craft-text)",
+                         "package(=craft-image-codecs) | package(=craft-text)"):
+            with self.subTest(filter=selected):
+                result = commands("Linux", tests="some", test_filter=selected)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = linux_test_commands(selected)
+                del expected[1]  # Neither example package was selected.
+                self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_unfamiliar_selection_filters_leave_optional_phases_enabled(self):
+        for selected in ("all()", "package(craft-video)", "package(=craft-geom) & all()", "package(=craft-text"):
             with self.subTest(filter=selected):
                 result = commands("Linux", tests="some", test_filter=selected)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -277,4 +292,3 @@ class WorkspaceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
