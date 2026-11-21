@@ -166,8 +166,8 @@ pub(crate) struct Measured {
     pub(crate) room: Rect,
 }
 
-/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, opacity and environment, and
-/// its record moves with the room's position (`Place::shift_to`).
+/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, opacity, fit and
+/// environment, and its record moves with the room's position (`Place::shift_to`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
     /// The region its parent offered it.
@@ -185,6 +185,9 @@ pub(crate) struct Place {
     /// The scope's environment (`Env::key`): its tokens (theme, density), scale, direction, language and whether the
     /// window is active.
     pub(crate) env: EnvKey,
+    /// Whether the leaves of the view's content fit the view's room, as in a `Stack` or a shrinking `Row`
+    /// (`Scoped::view_fits`).
+    pub(crate) fits: bool,
 }
 
 /// How a kept run replays at another place: the shift its record moves by, and whether the clip moved with the room.
@@ -196,9 +199,9 @@ struct Moved {
 
 impl Place {
     /// How a run at this place that took `rect` replays at `now`, or `None` when it cannot. The room may have moved; its
-    /// size, the layer, layout, scale, font atlas, opacity and environment are the ones the run had. A record that shows
-    /// an overlay replays only at the room and clip of its run (`Record::pinned`). Any other record moves by the room's move
-    /// when that keeps where a run places content (`keeps_placement`, so a moved record is what a run there gives) and,
+    /// size, the layer, layout, scale, font atlas, opacity, fit and environment are the ones the run had. A record that
+    /// shows an overlay replays only at the room and clip of its run (`Record::pinned`). Any other record moves by the
+    /// room's move when that keeps where a run places content (`keeps_placement`, so a moved record is what a run there gives) and,
     /// for a move, the record holds nothing a move cannot place (`Record::movable`: no paint callback) on an
     /// untransformed layer (`transformed`: egui's AccessKit bounds are layer space only there). Its clip rects follow
     /// the clip when either:
@@ -216,7 +219,8 @@ impl Place {
             && now.pixels_per_point == self.pixels_per_point
             && now.atlas == self.atlas
             && now.opacity == self.opacity
-            && now.env == self.env;
+            && now.env == self.env
+            && now.fits == self.fits;
         let placeable = if record.pinned() {
             offset == Vec2::ZERO && now.clip == self.clip
         } else {
@@ -460,10 +464,12 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// Whether the memoized view `id` adds its last real run to this pass in place of running, the extent that run took in
 /// a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass), the rect the kept real
 /// run takes now and the shift its record moves by. The first run of a pass decides from what changed since that run; a
-/// real run also needs a `place` the run can move to (`Place::shift_to`), which a measuring run cannot tell. A sizing
-/// run of a pass that replays takes the extent the last sizing run measured of the content the kept run showed (its
-/// key) in the room it offers now; when that sizing run showed other content or had another room, or there was none, it
-/// runs once as a measuring run, which keeps no record and leaves the decision of the pass alone, so the real run still
+/// real run also needs a `place` the run can move to (`Place::shift_to`), which a measuring run cannot tell. Each call
+/// also needs the key of the kept run: any other call with another key (a row's counting sweep shows the content
+/// unbounded, and the scope key holds that) runs, and leaves the decision of the pass alone for the calls after it. A
+/// sizing run of a pass that replays takes the extent the last sizing run measured of the content it shows (its key) in
+/// the room it offers now; when that sizing run showed other content or had another room, or there was none, it runs
+/// once as a measuring run, which keeps no record and leaves the decision of the pass alone, so the real run still
 /// replays.
 ///
 /// It replays when its last run was in an earlier pass, of this frame or an earlier one, and since then:
@@ -477,8 +483,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes);
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`), or,
 ///   replaying a run of this frame, after that run started;
-/// - its key is the one of its last run (its props key after that run), and its environment (theme, density, scale,
-///   language, window active) the one it ran in;
+/// - the call's key is the one of its last run (its props key after that run), and its environment (theme, density,
+///   scale, language, window active) the one it ran in;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`) and asked for no discard pass: what it added is
 ///   what the pass was thrown away for;
 /// - the shown life of no component it showed ended (`memory::ended_since`): a replay would show memory state that is
@@ -506,6 +512,10 @@ pub(crate) fn settled(
         // Usually `None`: only the values written this frame.
         let edited = changes.edited_in(frame);
         let entry = store.touch(owner, id, frame);
+        // The decision of the pass covers the kept run; the key is the call's own. A call that shows other content (a
+        // row's counting sweep, which shows it unbounded) leaves the decision alone for the calls after it: a sizing call
+        // takes the extent the last sizing run measured of its own content, and any other runs.
+        let keyed = entry.settled.as_ref().is_some_and(|settled| settled.key == key) || sizing.is_some();
         let replays = match entry.replays {
             Some((decided_in, replays)) if decided_in == pass_nr => replays,
             _ => {
@@ -514,7 +524,6 @@ pub(crate) fn settled(
                     // A run of this frame read the values edited before it started.
                     let edited = edited_since(edited.as_ref(), if settled.frame < frame { 0 } else { settled.edits });
                     (settled.frame < frame || settled.pass < pass_nr)
-                        && settled.key == key
                         && !settled.engaged
                         && !facts.blocked
                         && !facts.discards
@@ -533,14 +542,14 @@ pub(crate) fn settled(
             Some(place) => settled.place.shift_to(settled.rect, place, &settled.record, transformed),
             None => Some(Moved { shift: RecordShift::none(settled.place.clip), with_clip: true }),
         };
-        let settled = entry.settled.clone().filter(|_| replays).and_then(|settled| Some((moved(&settled)?, settled)));
-        if replays && settled.is_none() {
+        let settled = entry.settled.clone().filter(|_| replays && keyed).and_then(|settled| Some((moved(&settled)?, settled)));
+        if replays && keyed && settled.is_none() {
             entry.replays = Some((pass_nr, false));
         }
         settled.and_then(|(moved, settled)| {
             // An extent depends on the room's size, not on where the room is.
             let size = match sizing {
-                Some(room) => entry.sizes[0].filter(|measured| measured.key == settled.key && measured.room.size() == room.size())?.size,
+                Some(room) => entry.sizes[0].filter(|measured| measured.key == key && measured.room.size() == room.size())?.size,
                 None => entry.sizes[1].filter(|measured| measured.key == settled.key).map_or(settled.rect.size(), |measured| measured.size),
             };
             Some((size, moved, settled))

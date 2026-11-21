@@ -495,6 +495,11 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::rule::Rule::shapes(look, from, to, self.painter.pixels_per_point()));
     }
 
+    /// Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a grip's dotted line.
+    pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32) {
+        self.painter.extend(super::rule::Rule::dotted(look, from, to, gap, self.painter.pixels_per_point()));
+    }
+
     /// Paints a surface of `kind` (tracks, plot wells).
     pub fn surface(&self, rect: Rect, kind: SurfaceKind, corners: Corners) {
         let style = surface_style(self.env.tokens, kind);

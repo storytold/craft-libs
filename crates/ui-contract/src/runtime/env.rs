@@ -284,9 +284,9 @@ pub(crate) enum ColumnSweep {
     /// The first sweep of the measuring run of the column `Id`: each held fill-width child reports the width it
     /// measured at (`layout::report_held`).
     Count(Id),
-    /// The width the column settled on, in its second sweep and in the real run after one: a held fill-width child
-    /// measures and shows across it.
-    Column(f32),
+    /// The width the content-sized `Stack` column `Id` settled on, in its second sweep and in the real run after one:
+    /// a held fill-width child measures and shows across it, and a held picture measures in it.
+    Column(Id, f32),
 }
 
 /// The line of an unwrapped `Row` body, as its direct children placed in flow see it: a child of one line sits with
@@ -409,14 +409,32 @@ impl Scoped {
         self.offered = None;
     }
 
-    /// Starts a memoized view's layout room (`start_room`), keeping whether the enclosing body is a content-sized or a
-    /// given column, as `start_room` keeps the content axes. The view's content then measures and fills as it would
-    /// shown without the view: a child that fills takes its measured size where the body sizes from content, never the
-    /// open room.
+    /// Starts the layout room of a memoized view's content (`start_room`), keeping whether the enclosing body is a
+    /// content-sized or a given column, as `start_room` keeps the content axes. The view's content then measures and
+    /// fills as it would shown without the view: a child that fills takes its measured size where the body sizes from
+    /// content, never the open room. Where a leaf shown here would fit its room (`view_fits`), the leaves of the view's
+    /// content fit the room the view is given (`Shrink::Fit`). A view that is a unit of a shrinking `Row` sizes from its
+    /// content along x, as the row counted it: a child that fills there takes its measured width, not the row's flow
+    /// region a view the row does not narrow is shown in.
     pub(crate) fn start_view_room(&mut self) {
+        let fits = self.view_fits();
+        let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
         let (content_column, given_column) = (self.content_column, self.given_column);
         self.start_room();
         (self.content_column, self.given_column) = (content_column, given_column);
+        if fits {
+            self.shrink = Some(Shrink::Fit);
+        }
+        if row_unit {
+            self.content.0 = true;
+        }
+    }
+
+    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body,
+    /// whose leaves show at most its room, and as one of the units a shrinking `Row` narrows. In a `Grid` cell, a
+    /// wrapping `Row` or a `Ui` with no body around it a leaf keeps its measured width, and so does the view's content.
+    pub(crate) const fn view_fits(&self) -> bool {
+        matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_) | Shrink::Fit))
     }
 
     /// The key of everything a memoized view shown in this scope inherits beyond `key` (the style inputs, which its
@@ -691,9 +709,12 @@ impl Env {
         Env { scoped: Arc::new(scoped) }
     }
 
-    /// Reuse a sweep's scope while it is uniquely held. A captured child env keeps its snapshot.
+    /// Reuse a sweep's scope while it is uniquely held. A captured child env keeps its snapshot. The scope key is
+    /// computed again by the first view that asks after the edit.
     pub(crate) fn local_mut(&mut self) -> &mut Scoped {
-        Arc::make_mut(&mut self.scoped)
+        let scoped = Arc::make_mut(&mut self.scoped);
+        scoped.scope_key = std::sync::OnceLock::new();
+        scoped
     }
 
     /// This env's container scope on top of `root`, the root env of the viewport the scope now runs in: the scale,

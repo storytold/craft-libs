@@ -58,6 +58,14 @@ impl<'a> EnvView<'a> {
         self.scoped.measure
     }
 
+    /// The content-sized `Stack` column whose first sweep runs now, if the scope is a direct child of it in flow.
+    pub(crate) fn column_first_sweep(&self) -> Option<Id> {
+        match self.scoped.column {
+            Some(super::ColumnSweep::Count(column)) => Some(column),
+            _ => None,
+        }
+    }
+
     /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).
     pub(crate) fn inside_held(&self) -> Option<&'a Held> {
         self.scoped.inside_label.as_ref()

@@ -105,7 +105,7 @@ impl RecoveryDialog {
         let message = words.recovery_message.fill(&[("name", self.document.name.as_str()), ("age", age.as_str())]);
         let reason = self.document.blocked.clone().map(|reason| Label::from_cow(reason.into()));
         let replies = vec![
-            Reply::plain(words.recovery_discard.clone(), DialogRole::Other),
+            Reply::plain(words.recovery_discard.clone(), DialogRole::Alternate),
             Reply::plain(words.recovery_recover.clone(), DialogRole::Accept).enabled(reason.is_none(), reason),
         ];
         let mut prompt = Prompt::new(words.recovery_title.clone(), message).answers(buttons(&env, replies));

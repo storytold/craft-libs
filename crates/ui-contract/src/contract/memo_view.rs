@@ -3,7 +3,7 @@
 
 use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
-use crate::runtime::env::{Env, Scoped};
+use crate::runtime::env::{Env, Scoped, Shrink};
 use crate::runtime::shift::Shift;
 use egui::Ui;
 use std::fmt;
@@ -56,9 +56,13 @@ use std::sync::Arc;
 /// - the clock, read through `frame::stepped_clock`: the view runs at the next step;
 /// - commands sent to a command scope instance inside it: it runs while one waits.
 ///
-/// Its content is a layout room of its own, as a pane's is: the flow of the body around it (a row's shrink, a column's
-/// sweep, a grid's cursor) does not reach in, so the room it is given reaches it only through its place. To the body
-/// around it the view is one unit, sized by its content's measure.
+/// Its content is a layout room of its own, as a pane's is: the flow of the body around it (a column's sweep, a grid's
+/// cursor) does not reach in, so the room it is given reaches it only through its place. To the body
+/// around it the view is one unit, sized by its content's measure. In a shrinking `Row` it is a unit the row narrows
+/// as it narrows a body unit: from what its content takes in no room down to what it takes with every leaf at its
+/// least. When the row narrows it, the width the row gives it is the room of its place; otherwise it shows as in no
+/// room, in the row's flow region. Its content sizes from its content along x, and its leaves fit the view's room, as
+/// they fit the room of a `Stack` the view is shown in.
 ///
 /// What `show` returns holds layout facts only (a size, a rect, which part took the room). A replay returns the kept
 /// value again, moved with the record when the room moved (`Shift`), so an event returned through it would arrive once
@@ -107,12 +111,15 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
     pub fn show(self, ui: &mut Ui) -> Option<R> {
         let MemoView { lazy, mut props, show } = self;
         let ctx = ui.ctx().clone();
+        // In the counting sweep of a shrinking row the view reports what it takes in no room, as a leaf there does.
+        let counting = matches!(Env::of(ui).shrink, Some(Shrink::Count(_)));
+        let unbounded = counting.then(|| Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.unbounded.0 = true)));
         let env = Env::of(ui);
         let key = Self::key(&ctx, &env, &props, show);
         let shown = lazy.run_keyed(ui, std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
             // The content is a layout room of its own: the flow of the body around it does not reach in. It keeps how
-            // that body sizes from its content, so the view takes what its content used there, as the same content
-            // shown without the view would.
+            // that body sizes from its content and whether its leaves fit their room (`Scoped::start_view_room`), so
+            // the view takes what its content used there, as the same content shown without the view would.
             let installed = Env::install_for(ui, env.derive_local(Scoped::start_view_room));
             let out = show(&mut props, ui);
             Env::restore(&ctx, installed);
@@ -123,6 +130,9 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
             }
             out
         });
+        if let Some(installed) = unbounded {
+            Env::restore(&ctx, installed);
+        }
         match shown {
             Shown::Ran(out) => Some(out),
             // A replay at another place moves what the run returned with its record.
