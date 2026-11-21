@@ -361,7 +361,8 @@ pub(crate) fn stroke_path_impl<'a>(
     }
 }
 
-/// Craft patch (flatten): passes the graphics state's `op`, `OP` and `OPM` to the device.
+/// Craft patch (flatten): passes the graphics state's `op`, `OP` and `OPM` to the device, and
+/// its rendering intent (Craft patch (rendering intent)).
 pub(crate) fn set_overprint<'a>(context: &Context<'a>, device: &mut impl Device<'a>) {
     let state = &context.get().graphics_state;
     device.set_overprint(
@@ -369,6 +370,7 @@ pub(crate) fn set_overprint<'a>(context: &Context<'a>, device: &mut impl Device<
         state.overprint_stroke,
         state.overprint_mode,
     );
+    device.set_rendering_intent(state.rendering_intent);
 }
 
 /// PdfCraft patch (61): `path` as `S` strokes it, by ISO 32000-2 §8.5.3.2: "If a subpath is
