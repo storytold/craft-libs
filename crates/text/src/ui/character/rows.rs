@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use crate::ui::length::{DocUnit, length_field, shown};
-use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec, Preview};
+use craft_behavior::{DocKey, EditEvent, EditEvents, IconId, Mixed, NumberCodec, Preview, Value};
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{
     Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec,
@@ -12,14 +12,17 @@ use craft_ui::contract::{
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
+use craft_ui::primitives::{Glyph, IconSpec};
 use craft_ui::runtime::env::{Label, UnitKind, Units};
+use craft_ui::style::UiTokens;
 use craft_ui::text::{NamedOr, NumberField, NumberPick};
-use egui::Ui;
+use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, vec2};
 
 #[cfg(feature = "font-picker")]
 use super::FontPickerSource;
 use super::{
-    AUTO_LEADING, AUTO_ROW, CharacterChange, CharacterValues, CharacterWords, KerningName, LEADING_RANGE, Leading, PRESET_DECIMALS, SIZE_PRESETS,
+    AUTO_LEADING, AUTO_ROW, CharacterChange, CharacterValues, CharacterWords, FontHeightReference, KerningName, LEADING_RANGE, Leading, PRESET_DECIMALS,
+    SIZE_PRESETS,
     TRACKING_RANGE,
 };
 #[cfg(feature = "font-picker")]
@@ -54,11 +57,20 @@ impl Lengths<'_> {
     /// A field over a length in points, shown in the unit: its event in points and the preset row picked. The field
     /// fills its grid cell.
     pub(crate) fn row(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
+        self.row_keyed(ui, spec, None)
+    }
+
+    /// As [`row`](Self::row), the field carrying the document `key` a host focuses it by.
+    pub(crate) fn row_keyed(&self, ui: &mut Ui, spec: LengthRow<'_>, key: Option<DocKey>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
         let LengthRow { label, side, value, range, presets } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
         let field = Field::new(label.clone()).side(side).show(ui, |ui, _| {
-            let out =
-                length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth).show(ui);
+            let field = length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth);
+            let out = match key {
+                Some(key) => field.doc_key(key),
+                None => field,
+            }
+            .show(ui);
             (out.edit.events, out.preset)
         });
         field.inner.unwrap_or_default()
@@ -73,17 +85,30 @@ impl Lengths<'_> {
         hint: Label,
         value: Option<NamedOr<KerningName>>,
         presets: &[Entry<NumberPick>],
+        key: Option<DocKey>,
     ) -> EditEvents<NamedOr<KerningName>> {
         let units = self.units;
         let shown = Field::new(label.clone()).side(mark(glyph, Some(hint), FieldLayout::Beside)).show(ui, |ui, _| {
             let field = NumberField::named(label.clone(), Bind::given(mixed(value))).range(TRACKING_RANGE).presets(presets).scrub_by_label();
-            field.codec(NumberCodec::new(units.reader(None), 0)).show(ui).edit.events
+            let field = field.codec(NumberCodec::new(units.reader(None), 0));
+            match key {
+                Some(key) => field.doc_key(key),
+                None => field,
+            }
+            .show(ui)
+            .edit
+            .events
         });
         shown.inner.unwrap_or_default()
     }
 
     /// A field over a number that is not a length: its event and the preset row picked.
     pub(crate) fn plain(&self, ui: &mut Ui, spec: PlainRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
+        self.plain_keyed(ui, spec, None)
+    }
+
+    /// As [`plain`](Self::plain), the field carrying the document `key` a host focuses it by.
+    pub(crate) fn plain_keyed(&self, ui: &mut Ui, spec: PlainRow<'_>, key: Option<DocKey>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
         let PlainRow { label, side, value, range, percent, presets } = spec;
         let units = self.units;
         let shown = Field::new(label.clone()).side(side).show(ui, |ui, _| {
@@ -93,7 +118,11 @@ impl Lengths<'_> {
             } else {
                 field.codec(NumberCodec::new(units.reader(None), 0))
             };
-            let out = field.show(ui);
+            let out = match key {
+                Some(key) => field.doc_key(key),
+                None => field,
+            }
+            .show(ui);
             (out.edit.events, out.preset)
         });
         shown.inner.unwrap_or_default()
@@ -178,13 +207,28 @@ pub(crate) fn leading_row(
     size: Option<f32>,
     presets: &[Entry<NumberPick>],
 ) -> Vec<EditEvent<CharacterChange>> {
+    leading_row_keyed(lengths, ui, words, side, leading, size, presets, None)
+}
+
+/// As [`leading_row`], the field carrying the document `key` a host focuses it by.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn leading_row_keyed(
+    lengths: &Lengths<'_>,
+    ui: &mut Ui,
+    words: &CharacterWords,
+    side: SideLabel,
+    leading: Option<Leading>,
+    size: Option<f32>,
+    presets: &[Entry<NumberPick>],
+    key: Option<DocKey>,
+) -> Vec<EditEvent<CharacterChange>> {
     let value = match leading {
         Some(Leading::Fixed(points)) => Some(points),
         Some(Leading::Auto) => size.map(|size| size * AUTO_LEADING),
         None => None,
     };
     let row = LengthRow { label: words.leading.clone(), side, value, range: LEADING_RANGE, presets };
-    let (event, picked) = lengths.row(ui, row);
+    let (event, picked) = lengths.row_keyed(ui, row, key);
     let mut edits: Vec<_> = number_change(event, |points| CharacterChange::Leading(Leading::Fixed(points))).into_iter().collect();
     if picked == Some(NumberPick::Choice(AUTO_ROW)) {
         edits.push(picked_event(CharacterChange::Leading(Leading::Auto), words.leading.as_str()));
@@ -198,13 +242,13 @@ pub(crate) fn string_entries(pairs: impl Iterator<Item = (String, String)>) -> V
 }
 
 /// A row with a select over `entries`; its pick as a change.
-pub(crate) fn select_row<C>(
+pub(crate) fn select_row<V: Value + 'static, C>(
     ui: &mut Ui,
     label: &Label,
     side: SideLabel,
-    value: Mixed<String>,
-    entries: &[Entry<String>],
-    change: impl Fn(String) -> C,
+    value: Mixed<V>,
+    entries: &[Entry<V>],
+    change: impl Fn(V) -> C,
 ) -> EditEvents<C> {
     let shown = Field::new(label.clone())
         .side(side)
@@ -265,15 +309,37 @@ pub(crate) struct FamilyField {
     pub preview: Preview<String>,
     /// The family the pointer or keyboard rested on in the open list.
     pub rested: Option<String>,
+    /// The picker's id this pass; `None` without a picker.
+    pub picker: Option<egui::Id>,
 }
 
 /// The family field of the character controls, the style options and the type bar: the font picker in a
 /// hidden-label field when a `picker` source is given, else a select over `families`.
+#[cfg(feature = "font-picker")]
 pub(crate) fn family_field(
     ui: &mut Ui,
     words: &CharacterWords,
     values: &CharacterValues,
     families: &[String],
+    picker: Option<&mut FontPickerSource<'_>>,
+) -> FamilyField {
+    family_field_keyed(ui, words, values, families, None, picker)
+}
+
+/// [`family_field`] without a picker.
+#[cfg(not(feature = "font-picker"))]
+pub(crate) fn family_field(ui: &mut Ui, words: &CharacterWords, values: &CharacterValues, families: &[String]) -> FamilyField {
+    family_field_keyed(ui, words, values, families, None)
+}
+
+/// As [`family_field`], the picker carrying the document `key` a host focuses it by (the plain select has none).
+pub(crate) fn family_field_keyed(
+    ui: &mut Ui,
+    words: &CharacterWords,
+    values: &CharacterValues,
+    families: &[String],
+    #[cfg(feature = "font-picker")] key: Option<DocKey>,
+    #[cfg(not(feature = "font-picker"))] _key: Option<DocKey>,
     #[cfg(feature = "font-picker")] picker: Option<&mut FontPickerSource<'_>>,
 ) -> FamilyField {
     let value = mixed(values.family.clone());
@@ -283,13 +349,20 @@ pub(crate) fn family_field(
             let mut field = FontPicker::new(words.family.clone(), Bind::given(value.clone()), source.catalog)
                 .settings(source.settings.reborrowed())
                 .filters(source.filters.reborrowed())
-                .served(source.served);
+                .served(source.served)
+                .sets(source.sets)
+                .scripts(source.scripts)
+                .filter_layout(source.filter_layout);
             if let Some(text) = source.preview_text {
                 field = field.preview_text(text);
+            }
+            if let Some(key) = key {
+                field = field.doc_key(key);
             }
             field.show(ui)
         });
         let Some(out) = shown.inner else { return FamilyField::default() };
+        let id = craft_ui::contract::Outcome::response(&out).id;
         let mut edits: Vec<EditEvent<CharacterChange>> = out
             .edit
             .events
@@ -300,7 +373,7 @@ pub(crate) fn family_field(
         if let Some(style) = out.picked_style {
             edits.push(picked_event(CharacterChange::Style(style), words.style.as_str()));
         }
-        return FamilyField { edits, preview: out.preview, rested: out.rested };
+        return FamilyField { edits, preview: out.preview, rested: out.rested, picker: Some(id) };
     }
     let entries = string_entries(families.iter().map(|name| (name.clone(), name.clone())));
     let edits = select_row(ui, &words.family, hidden_side(), value, &entries, CharacterChange::Family).into_iter().collect();
@@ -310,4 +383,53 @@ pub(crate) fn family_field(
 /// Where two selections' optional values agree: that value, else `None` (mixed).
 pub(crate) fn agree<T: Clone + PartialEq>(a: &Option<T>, b: &Option<T>) -> Option<T> {
     if a == b { a.clone() } else { None }
+}
+
+/// The share of a glyph's side its stroke may take.
+const STROKE_SHARE: f32 = 0.2;
+
+/// The mark of a Font Height Reference value: the box or the guide lines the value measures from.
+struct FontHeightGlyph(FontHeightReference);
+
+static EM_BOX: FontHeightGlyph = FontHeightGlyph(FontHeightReference::EmBox);
+static CAP_HEIGHT: FontHeightGlyph = FontHeightGlyph(FontHeightReference::CapHeight);
+static X_HEIGHT: FontHeightGlyph = FontHeightGlyph(FontHeightReference::XHeight);
+static ICF_BOX: FontHeightGlyph = FontHeightGlyph(FontHeightReference::IcfBox);
+
+impl Glyph for FontHeightGlyph {
+    fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
+        let side = rect.width().min(rect.height());
+        if !rect.is_finite() || side <= 0.0 {
+            return;
+        }
+        let thin = tokens.stroke.thin;
+        let stroke = Stroke::new(if thin.is_finite() { thin.clamp(0.0, side * STROKE_SHARE) } else { 0.0 }, color);
+        let at = |(x, y): (f32, f32)| rect.center() + vec2(x - 0.5, y - 0.5) * side;
+        let boxed = |left: f32, top: f32, right: f32, bottom: f32| {
+            Shape::closed_line([(left, top), (right, top), (right, bottom), (left, bottom)].map(at).to_vec(), stroke)
+        };
+        let line = |from: (f32, f32), to: (f32, f32)| Shape::line_segment([at(from), at(to)], stroke);
+        // A letter between a top guide and the baseline: the guide's height is what the value measures.
+        let guided = |top: f32| vec![line((0.1, top), (0.9, top)), line((0.1, 0.8), (0.9, 0.8)), line((0.5, top), (0.5, 0.8))];
+        let shapes = match self.0 {
+            FontHeightReference::EmBox => vec![boxed(0.1, 0.1, 0.9, 0.9), line((0.1, 0.75), (0.9, 0.75))],
+            FontHeightReference::CapHeight => guided(0.2),
+            FontHeightReference::XHeight => guided(0.45),
+            FontHeightReference::IcfBox => vec![boxed(0.2, 0.2, 0.8, 0.8)],
+        };
+        painter.extend(shapes);
+    }
+}
+
+/// The Set Font Height Reference select's entries, each with the mark of its value.
+pub(crate) fn font_height_entries(words: &CharacterWords) -> Vec<Entry<FontHeightReference>> {
+    [
+        (FontHeightReference::EmBox, &words.em_box, &EM_BOX),
+        (FontHeightReference::CapHeight, &words.cap_height, &CAP_HEIGHT),
+        (FontHeightReference::XHeight, &words.x_height, &X_HEIGHT),
+        (FontHeightReference::IcfBox, &words.icf_box, &ICF_BOX),
+    ]
+    .into_iter()
+    .map(|(value, name, glyph)| Entry::new(value, name.clone()).icon(IconSpec::glyph(glyph)))
+    .collect()
 }

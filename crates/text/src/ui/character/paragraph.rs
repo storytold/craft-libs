@@ -223,16 +223,16 @@ impl<'a> ParagraphControls<'a> {
         }
     }
 
-    /// Draws the host's rows after the alignment and direction rows, before the indents, and returns the changes the
-    /// user made.
-    pub fn show_with(self, ui: &mut Ui, between: impl FnOnce(&mut Ui)) -> ParagraphControlsOutput {
-        let _ = (self, ui, between);
-        todo!("ty.X38")
-    }
-
     /// Shows the controls and returns the changes the user made.
     pub fn show(self, ui: &mut Ui) -> ParagraphControlsOutput {
-        let _ = (self.direction_row,); // P3(type-w3): ty.X37
+        self.show_with(ui, |_| {})
+    }
+
+    /// As [`show`](Self::show), with the host's rows drawn by `between` after the alignment and direction rows and
+    /// before the indents.
+    pub fn show_with(self, ui: &mut Ui, between: impl FnOnce(&mut Ui)) -> ParagraphControlsOutput {
+        let mut between = Some(between);
+        let direction_row = self.direction_row;
         let values = self.values;
         let point_text = self.point_text;
         let vertical = self.vertical;
@@ -244,12 +244,21 @@ impl<'a> ParagraphControls<'a> {
 
         let aligns: Vec<Toggle<ParagraphChange>> =
             align_toggles(values, &words, vertical).into_iter().chain(justify_toggles(values, &words, point_text)).collect();
-        let directions = direction_toggles(values, &words);
+        let directions = match direction_row {
+            DirectionRow::Automatic => direction_toggles(values, &words),
+            DirectionRow::Explicit => explicit_toggles(values, &words),
+            DirectionRow::Hidden => Vec::new(),
+        };
 
         let mut edits: Vec<EditEvent<ParagraphChange>> = Vec::new();
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             edits.extend(toggle_row(ui, Some(&words.alignment), &aligns));
-            edits.extend(toggle_row(ui, Some(&words.direction), &directions));
+            if direction_row != DirectionRow::Hidden {
+                edits.extend(toggle_row(ui, Some(&words.direction), &directions));
+            }
+            if let Some(between) = between.take() {
+                between(ui);
+            }
 
             Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
                 let start = LengthRow {
@@ -349,14 +358,19 @@ pub(crate) fn justify_toggles(values: &ParagraphValues, words: &ParagraphWords, 
 
 /// The three direction toggles.
 pub(crate) fn direction_toggles(values: &ParagraphValues, words: &ParagraphWords) -> Vec<Toggle<ParagraphChange>> {
-    [
-        (ParagraphDirection::Automatic, "pilcrow", &words.direction_auto),
-        (ParagraphDirection::LeftToRight, "pilcrow_right", &words.direction_ltr),
-        (ParagraphDirection::RightToLeft, "pilcrow_left", &words.direction_rtl),
+    std::iter::once(direction_toggle(values, ParagraphDirection::Automatic, "pilcrow", &words.direction_auto))
+        .chain(explicit_toggles(values, words))
+        .collect()
+}
+
+/// The Left to Right and Right to Left toggles: the row of [`DirectionRow::Explicit`].
+fn explicit_toggles(values: &ParagraphValues, words: &ParagraphWords) -> Vec<Toggle<ParagraphChange>> {
+    vec![
+        direction_toggle(values, ParagraphDirection::LeftToRight, "pilcrow_right", &words.direction_ltr),
+        direction_toggle(values, ParagraphDirection::RightToLeft, "pilcrow_left", &words.direction_rtl),
     ]
-    .into_iter()
-    .map(|(direction, icon, name)| {
-        Toggle::new(name, icon, Some(values.direction == Some(direction)), Box::new(move |_| ParagraphChange::Direction(direction)))
-    })
-    .collect()
+}
+
+fn direction_toggle(values: &ParagraphValues, direction: ParagraphDirection, icon: &'static str, name: &Label) -> Toggle<ParagraphChange> {
+    Toggle::new(name, icon, Some(values.direction == Some(direction)), Box::new(move |_| ParagraphChange::Direction(direction)))
 }
