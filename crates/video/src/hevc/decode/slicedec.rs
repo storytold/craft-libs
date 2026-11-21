@@ -147,13 +147,14 @@ pub struct SliceMeta {
 /// without a preceding slice).
 pub fn prepare_slices<S: Sample>(pic: &mut PicState<S>, jobs: &[SliceJob]) -> Vec<Option<SliceMeta>> {
     let mut out = Vec::with_capacity(jobs.len());
+    let infos = Arc::make_mut(&mut pic.slices);
     for job in jobs {
         let sh = &job.sh;
         if !sh.dependent {
             let ids = |l: usize| job.refs[l].iter().map(|r| r.frame.id).collect::<Vec<_>>();
             let pocs = |l: usize| job.refs[l].iter().map(|r| r.poc).collect::<Vec<_>>();
             let lts = |l: usize| job.refs[l].iter().map(|r| r.long_term).collect::<Vec<_>>();
-            pic.slices.push(SliceInfo {
+            infos.push(SliceInfo {
                 addr_rs: sh.segment_address,
                 deblock_disabled: sh.deblocking_disabled,
                 beta_offset: sh.beta_offset_div2 * 2,
@@ -169,7 +170,7 @@ pub fn prepare_slices<S: Sample>(pic: &mut PicState<S>, jobs: &[SliceJob]) -> Ve
                 pic.deblocking_enabled_anywhere = true;
             }
         }
-        out.push(pic.slices.len().checked_sub(1).and_then(|i| Some(SliceMeta { idx: i as u32, addr: pic.slices.get(i)?.addr_rs })));
+        out.push(infos.len().checked_sub(1).and_then(|i| Some(SliceMeta { idx: i as u32, addr: infos.get(i)?.addr_rs })));
     }
     out
 }
@@ -222,6 +223,45 @@ pub struct WinBufs<S> {
     mvf: Vec<MvField>,
 }
 
+/// Maximum allocation sizes of the resizable buffers in a worker's window.
+#[cfg(feature = "threads")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct WindowSizes {
+    pub(super) planes: [usize; 3],
+    pub(super) blocks: usize,
+}
+
+#[cfg(feature = "threads")]
+impl WindowSizes {
+    pub(super) fn bytes<S>(self) -> Option<usize> {
+        let [y, cb, cr] = self.planes;
+        let samples = y.checked_add(cb)?.checked_add(cr)?.checked_mul(size_of::<S>())?;
+        let blocks = self.blocks.checked_mul(size_of::<Blk>() + size_of::<MvField>())?;
+        samples.checked_add(blocks)
+    }
+}
+
+#[cfg(feature = "threads")]
+impl<S> WinBufs<S> {
+    pub(super) fn with_sizes(sizes: WindowSizes) -> Self {
+        Self { planes: sizes.planes.map(Vec::with_capacity), blk: Vec::with_capacity(sizes.blocks), mvf: Vec::with_capacity(sizes.blocks) }
+    }
+
+    pub(super) fn matches(&self, sizes: WindowSizes) -> bool {
+        self.planes.iter().zip(sizes.planes).all(|(plane, len)| plane.capacity() == len)
+            && self.blk.capacity() == sizes.blocks
+            && self.mvf.capacity() == sizes.blocks
+    }
+
+    pub(super) fn allocated_bytes(&self) -> Option<usize> {
+        let samples = self.planes.iter().try_fold(0usize, |total, plane| total.checked_add(plane.capacity()))?;
+        samples
+            .checked_mul(size_of::<S>())?
+            .checked_add(self.blk.capacity().checked_mul(size_of::<Blk>())?)?
+            .checked_add(self.mvf.capacity().checked_mul(size_of::<MvField>())?)
+    }
+}
+
 /// Per-picture decoding state.
 pub struct PicState<S> {
     pub frame: FrameRef,
@@ -255,7 +295,7 @@ pub struct PicState<S> {
     /// SliceAddrRs per CTB (u32::MAX = not decoded).
     pub ctb_addr: Vec<u32>,
     pub sao: Vec<SaoParams>,
-    pub slices: Vec<SliceInfo>,
+    pub slices: Arc<Vec<SliceInfo>>,
     pub row_done: Vec<u32>,
     pub rows_complete: usize,
     pub rows_deblocked: usize,
@@ -323,7 +363,7 @@ impl<S: Sample> PicState<S> {
             ctb_slice: vec![u32::MAX; wctb * hctb],
             ctb_addr: vec![u32::MAX; wctb * hctb],
             sao: vec![SaoParams::default(); wctb * hctb],
-            slices: Vec::new(),
+            slices: Arc::default(),
             row_done: vec![0; hctb],
             rows_complete: 0,
             rows_deblocked: 0,
@@ -345,9 +385,8 @@ impl<S: Sample> PicState<S> {
     /// neighbour read is gated by [`PicState::zavail`] or the CTB slice index, and only decoded
     /// CTBs leave a window).
     pub fn reset_window(&mut self, r0: usize, r1: usize, fresh: bool) {
-        let ctb = 1usize << self.log2_ctb;
-        let y_end = r1.saturating_mul(ctb).min(self.height);
-        self.y_base = if r0 > 0 { (r0 * ctb).saturating_sub(4).min(y_end) } else { 0 };
+        let (y_base, y_end) = self.window_lines(r0, r1);
+        self.y_base = y_base;
         let lines = y_end - self.y_base;
         let gy = S::from_u16(1u16 << (self.bd_y - 1));
         let gc = S::from_u16(1u16 << (self.bd_c - 1));
@@ -377,6 +416,21 @@ impl<S: Sample> PicState<S> {
         }
         self.wpp_ctx = None;
         self.ds_ctx = None;
+    }
+
+    fn window_lines(&self, r0: usize, r1: usize) -> (usize, usize) {
+        let ctb = 1usize << self.log2_ctb;
+        let end = r1.saturating_mul(ctb).min(self.height);
+        let base = r0.saturating_mul(ctb).saturating_sub(4).min(end);
+        (base, end)
+    }
+
+    #[cfg(feature = "threads")]
+    pub(super) fn window_sizes(&self, r0: usize, r1: usize) -> Option<WindowSizes> {
+        let (base, end) = self.window_lines(r0, r1);
+        let lines = end - base;
+        let chroma = self.cwidth.checked_mul(lines >> self.chroma.shifts().1)?;
+        Some(WindowSizes { planes: [self.width.checked_mul(lines)?, chroma, chroma], blocks: self.w4.checked_mul(end.div_ceil(4) - base / 4)? })
     }
 
     /// Move the sample planes and block arrays out (leaving them empty), to re-use them.

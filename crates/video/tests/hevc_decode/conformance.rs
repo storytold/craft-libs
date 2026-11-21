@@ -202,6 +202,31 @@ fn intra_picture_parallel_matches_single_thread() {
     }
 }
 
+#[test]
+#[cfg(feature = "threads")]
+fn wpp_uses_serial_decode_when_scratch_budget_is_too_small() {
+    use craft_video::hevc::decode::Decoder;
+
+    let Some((hevc, _)) = common::ensure(common::fixture("medium")) else {
+        eprintln!("skipped medium");
+        return;
+    };
+    let (parallel, stats) = common::decode_file_cfg(&hevc, 4, false, Some(true)).unwrap_or_else(|(au, e, _)| panic!("error at {au}: {e}"));
+    assert_eq!(stats.wpp_pictures, stats.pictures);
+    assert!(stats.parallel_pictures > 0);
+
+    let mut decoder = Decoder::with_threads(4);
+    decoder.set_intra_picture_parallel(Some(true));
+    decoder.set_parallel_scratch_budget(64 * 1024);
+    let (serial, stats) = common::decode_file_with_decoder(&hevc, decoder).unwrap_or_else(|(au, e, _)| panic!("error at {au}: {e}"));
+    assert_eq!(stats.wpp_pictures, stats.pictures);
+    assert_eq!(stats.parallel_pictures, 0);
+    assert_eq!(serial.len(), parallel.len());
+    for (i, (a, b)) in serial.iter().zip(&parallel).enumerate() {
+        assert!(a.y == b.y && a.u == b.u && a.v == b.v && a.pts == b.pts, "picture {i} differs under the scratch cap");
+    }
+}
+
 /// Rewrites slice segment headers of an Annex-B stream so they signal only the first `keep` entry
 /// points (`keep = 0`: none), leaving the slice data untouched. Returns the new stream and the
 /// number of headers changed.

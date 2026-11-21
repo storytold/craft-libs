@@ -291,10 +291,14 @@ pub fn decode_file_cfg(
     draft: bool,
     intra: Option<bool>,
 ) -> Result<(Vec<Picture>, craft_video::hevc::decode::DecodeStats), DecodeFailure> {
-    let data = std::fs::read(path).unwrap();
     let mut dec = if threads == 0 { Decoder::new() } else { Decoder::with_threads(threads) };
     dec.set_draft(draft);
     dec.set_intra_picture_parallel(intra);
+    decode_file_with_decoder(path, dec)
+}
+
+pub fn decode_file_with_decoder(path: &Path, mut dec: Decoder) -> Result<(Vec<Picture>, craft_video::hevc::decode::DecodeStats), DecodeFailure> {
+    let data = std::fs::read(path).unwrap();
     let mut out = Vec::new();
     for (i, au) in split_access_units(&data).into_iter().enumerate() {
         match dec.decode(au, i as i64) {

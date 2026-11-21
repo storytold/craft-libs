@@ -31,6 +31,8 @@ mod intra;
 mod mvpred;
 #[cfg(feature = "threads")]
 mod parallel;
+#[cfg(feature = "threads")]
+mod parallel_scratch;
 pub mod params;
 mod picture;
 pub mod slice;

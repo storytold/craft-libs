@@ -22,9 +22,12 @@ use crate::hevc::decode::cabac::Contexts;
 use crate::hevc::decode::decoder::Shared;
 use crate::hevc::decode::error::Error;
 use crate::hevc::decode::filter::StageDeblock;
+use crate::hevc::decode::parallel_scratch::{Reservation, ScratchBudget};
 use crate::hevc::decode::params::{Layout, Pps, Sps};
 use crate::hevc::decode::picture::{FrameRef, Sample};
-use crate::hevc::decode::slicedec::{Blk, CtuHooks, Mode, MvField, PicState, Resume, SaoParams, SliceDecoder, SliceInfo, SliceJob, SliceMeta, Start};
+use crate::hevc::decode::slicedec::{
+    Blk, CtuHooks, Mode, MvField, PicState, Resume, SaoParams, SliceDecoder, SliceInfo, SliceJob, SliceMeta, Start, WinBufs, WindowSizes,
+};
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -111,6 +114,42 @@ impl Plan {
         }
         assign_entries(&mut units, unit_of, &segments)?;
         Some(Plan { units, wpp, serial: false })
+    }
+
+    pub(super) fn reserve_scratch<S: Sample>(&self, pic: &PicState<S>, budget: &Arc<ScratchBudget>) -> Option<(WindowSizes, Reservation)> {
+        let mut sizes = WindowSizes::default();
+        for unit in &self.units {
+            let window = pic.window_sizes(unit.rows.0, unit.rows.1)?;
+            for (max, plane) in sizes.planes.iter_mut().zip(window.planes) {
+                *max = (*max).max(plane);
+            }
+            sizes.blocks = sizes.blocks.max(window.blocks);
+        }
+
+        // Parked and completed windows can outlive their workers, so budget one full window
+        // per unit, including each window's picture-wide CTB arrays. Pre-sizing the resizable
+        // buffers also bounds capacity when a taller unit reuses a window from a shorter one.
+        let ctbs = pic.wctb.checked_mul(pic.hctb)?;
+        let ctb_arrays = ctbs.checked_mul(2 * size_of::<u32>() + size_of::<SaoParams>())?;
+        let row_done = pic.hctb.checked_mul(size_of::<u32>())?;
+        let window_bytes = sizes.bytes::<S>()?.checked_add(ctb_arrays)?.checked_add(row_done)?.checked_add(3 * size_of::<Contexts>())?;
+        let windows = self.units.len().checked_mul(window_bytes)?;
+
+        // One free list and up to two pending batches (one detached by transfer_pending).
+        // Allow for spare capacity and overlap when a Vec backing allocation grows.
+        let slots = self.units.len().checked_mul(4)?.max(4);
+        let slot_size = size_of::<PicState<S>>() + 2 * size_of::<(usize, Option<PicState<S>>)>();
+        let queues = slots.checked_mul(slot_size)?;
+        let stage = pic.hctb.checked_mul(size_of::<usize>())?;
+        let mut bytes = windows.checked_add(queues)?.checked_add(stage)?;
+        if self.wpp {
+            let samples = pic.cwidth.checked_mul(2)?.checked_add(pic.width)?.checked_mul(size_of::<S>())?;
+            let blocks = pic.w4.checked_mul(size_of::<Blk>() + size_of::<MvField>())?;
+            let ctbs = pic.wctb.checked_mul(size_of::<(u32, u32, SaoParams)>())?;
+            let edge = samples.checked_add(blocks)?.checked_add(ctbs)?.checked_add(size_of::<Mutex<Edge<S>>>() + size_of::<Contexts>())?;
+            bytes = bytes.checked_add(pic.hctb.checked_mul(edge)?)?;
+        }
+        Some((sizes, budget.reserve(bytes)?))
     }
 }
 
@@ -220,7 +259,7 @@ pub struct Job<S> {
     layout: Arc<Layout>,
     scaling: Option<Arc<Vec<Vec<u8>>>>,
     /// Slices of the picture, deblocking anywhere, draft mode (for deblocking in the windows).
-    info: Vec<SliceInfo>,
+    info: Arc<Vec<SliceInfo>>,
     deblocking: bool,
     draft: bool,
     /// Units deblock their own edges ([`crate::hevc::decode::filter::deblock_unit`]).
@@ -228,6 +267,7 @@ pub struct Job<S> {
     slices: Vec<SliceJob>,
     metas: Vec<Option<SliceMeta>>,
     plan: Plan,
+    sizes: WindowSizes,
     /// Next unit to claim.
     next: AtomicUsize,
     /// Units not finished yet.
@@ -243,6 +283,8 @@ pub struct Job<S> {
     error: Mutex<Option<Error>>,
     panicked: AtomicBool,
     shared: Arc<Shared>,
+    // Drop only after all the windows and edges owned by this job.
+    scratch: Mutex<Reservation>,
 }
 
 impl<S: Sample> Job<S> {
@@ -250,7 +292,15 @@ impl<S: Sample> Job<S> {
     /// in the units of `plan`, on this thread and up to `helpers` threads of the current rayon
     /// pool. Returns once this thread finds no unit left to decode (the picture may still be
     /// finishing on another thread).
-    pub fn run(mut pic: PicState<S>, slices: Vec<SliceJob>, metas: Vec<Option<SliceMeta>>, plan: Plan, helpers: usize, shared: Arc<Shared>) {
+    pub(super) fn run(
+        mut pic: PicState<S>,
+        slices: Vec<SliceJob>,
+        metas: Vec<Option<SliceMeta>>,
+        plan: Plan,
+        helpers: usize,
+        shared: Arc<Shared>,
+        (sizes, scratch): (WindowSizes, Reservation),
+    ) {
         let rows = pic.hctb;
         // WPP rows deblock all but their top edges; tiles everything when no edge crosses a
         // tile boundary, else the whole picture is deblocked after the units
@@ -276,6 +326,7 @@ impl<S: Sample> Job<S> {
             slices,
             metas,
             plan,
+            sizes,
             next: AtomicUsize::new(0),
             left: AtomicUsize::new(n),
             helpers: AtomicUsize::new(helpers.min(n.saturating_sub(1))),
@@ -286,6 +337,7 @@ impl<S: Sample> Job<S> {
             error: Mutex::new(None),
             panicked: AtomicBool::new(false),
             shared,
+            scratch: Mutex::new(scratch),
         });
         // Tiles are independent: start the helpers now. A WPP row starts one once its second CTB
         // is decoded, i.e. when the next row can run (a helper started earlier would only wait).
@@ -521,9 +573,8 @@ impl<S: Sample> Job<S> {
 
     fn new_window(&self, unit: &Unit) -> PicState<S> {
         let mut w = PicState::window(self.frame.clone(), self.sps.clone(), self.pps.clone(), self.layout.clone(), self.scaling.clone(), 0, 0);
-        if let Some(b) = self.shared.take_bufs::<S>() {
-            w.put_bufs(b);
-        }
+        let buffers = self.shared.scratch.take_bufs::<S>(self.sizes).unwrap_or_else(|| WinBufs::with_sizes(self.sizes));
+        w.put_bufs(buffers);
         w.reset_window(unit.rows.0, unit.rows.1, false);
         w.slices = self.info.clone();
         w.deblocking_enabled_anywhere = self.deblocking;
@@ -585,8 +636,11 @@ impl<S: Sample> Job<S> {
             // make sure readers never block on this frame
             stage.pic.frame.publish_gray();
         }
-        for mut w in lock(&self.free).drain(..) {
-            self.shared.put_bufs(w.take_bufs());
+        {
+            let mut scratch = lock(&self.scratch);
+            for mut w in lock(&self.free).drain(..) {
+                scratch.put_bufs(w.take_bufs());
+            }
         }
         let err = lock(&self.error).take();
         self.shared.report(Some(&stage.pic), err, true);

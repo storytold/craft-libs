@@ -7,6 +7,8 @@
 
 use crate::hevc::decode::dpb::{Dpb, Output, OutputMeta, PocState, RefPicSet, build_ref_lists};
 use crate::hevc::decode::error::{Error, Result, ensure, invalid, unsupported};
+#[cfg(feature = "threads")]
+use crate::hevc::decode::parallel_scratch::ScratchBudget;
 use crate::hevc::decode::params::{Layout, Pps, Sps, Vps};
 use crate::hevc::decode::picture::{Frame, FrameRef, Sample, stores_u8};
 use crate::hevc::decode::slice::{NalHeader, SliceHeader, nal_type};
@@ -69,36 +71,17 @@ pub struct DecodeStats {
 }
 
 /// State shared by the decoder and its decoding jobs.
-#[derive(Default)]
 pub(crate) struct Shared {
     error: Mutex<Option<Error>>,
     stats: Mutex<DecodeStats>,
-    /// Window buffers ([`crate::hevc::decode::slicedec::WinBufs`] of either sample type) of finished pictures,
-    /// for the next ones, at most `max_bufs`.
-    bufs: Mutex<Vec<Box<dyn std::any::Any + Send>>>,
-    max_bufs: usize,
+    #[cfg(feature = "threads")]
+    pub(super) scratch: Arc<ScratchBudget>,
     /// Picture jobs dispatched but not yet reported; [`Shared::wait_reports`] waits for zero.
     jobs: Mutex<usize>,
     reported: std::sync::Condvar,
 }
 
 impl Shared {
-    /// Window buffers of sample type `S` to re-use, if any.
-    #[cfg_attr(not(feature = "threads"), allow(dead_code))]
-    pub(crate) fn take_bufs<S: Sample>(&self) -> Option<crate::hevc::decode::slicedec::WinBufs<S>> {
-        let b = self.bufs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop()?;
-        b.downcast().ok().map(|b| *b)
-    }
-
-    /// Keep window buffers for later pictures.
-    #[cfg_attr(not(feature = "threads"), allow(dead_code))]
-    pub(crate) fn put_bufs<S: Sample>(&self, b: crate::hevc::decode::slicedec::WinBufs<S>) {
-        let mut bufs = self.bufs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if bufs.len() < self.max_bufs {
-            bufs.push(Box::new(b));
-        }
-    }
-
     /// A picture job is about to be dispatched; its [`Shared::report`] is expected.
     fn job_started(&self) {
         *self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
@@ -231,7 +214,14 @@ impl Decoder {
             skip_rasl: false,
             layout_cache: Vec::new(),
             out_queue: VecDeque::new(),
-            shared: Arc::new(Shared { max_bufs: 2 * threads.min(64), ..Shared::default() }),
+            shared: Arc::new(Shared {
+                error: Mutex::default(),
+                stats: Mutex::default(),
+                #[cfg(feature = "threads")]
+                scratch: Arc::new(ScratchBudget::new(2 * threads.min(64))),
+                jobs: Mutex::default(),
+                reported: std::sync::Condvar::new(),
+            }),
             #[cfg(feature = "threads")]
             pool,
             in_flight: VecDeque::new(),
@@ -354,7 +344,8 @@ impl Decoder {
         }
         self.shared.wait_reports();
         // no picture is in flight now; the cache refills with the next picture
-        self.shared.bufs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        #[cfg(feature = "threads")]
+        self.shared.scratch.clear_cache();
         self.first_picture = true;
         self.gray_reference = None;
         pics
@@ -528,6 +519,15 @@ impl Decoder {
     /// Cap the bytes of decoded pictures (current, references, in flight) this decoder may hold.
     pub fn set_memory_budget(&mut self, bytes: u64) {
         self.memory_budget = bytes;
+    }
+
+    /// Cap worker-window scratch and cached window buffers, separately from the decoded
+    /// picture store. Defaults to 512 MiB on 64-bit and 128 MiB on 32-bit targets.
+    /// Pictures that cannot reserve their scratch use the full-picture serial path.
+    /// Lowering the cap evicts idle buffers and applies to subsequent reservations.
+    #[cfg(feature = "threads")]
+    pub fn set_parallel_scratch_budget(&mut self, bytes: u64) {
+        self.shared.scratch.set_limit(bytes);
     }
 
     /// Refuse an SPS whose pictures would not fit the memory budget, before anything is allocated.
@@ -769,8 +769,10 @@ fn run_job_as<S: Sample>(job: PicJob, shared: &Arc<Shared>) {
             let (wpp, tiles) = (pic.pps.entropy_coding_sync, pic.pps.tiles_enabled);
             let plan = crate::hevc::decode::parallel::Plan::new(&pic.layout, wpp, tiles, &slices)
                 .or_else(|| crate::hevc::decode::parallel::Plan::serial(&pic.layout, tiles));
-            if let Some(plan) = plan {
-                crate::hevc::decode::parallel::Job::run(pic, slices, metas, plan, helpers, shared.clone());
+            if let Some(plan) = plan
+                && let Some(scratch) = plan.reserve_scratch(&pic, &shared.scratch)
+            {
+                crate::hevc::decode::parallel::Job::run(pic, slices, metas, plan, helpers, shared.clone(), scratch);
                 return None;
             }
         }
@@ -982,11 +984,21 @@ mod tests {
 
     /// `flush` drops the cached window buffers, so memory of a large parallel picture is not kept.
     #[test]
+    #[cfg(feature = "threads")]
     fn flush_releases_cached_window_buffers() {
+        use crate::hevc::decode::slicedec::{WinBufs, WindowSizes};
+
         let mut decoder = Decoder::with_threads(4);
-        decoder.shared.bufs.lock().unwrap().push(Box::new(0u8));
+        let sizes = WindowSizes { planes: [8, 4, 4], blocks: 2 };
+        let mut reservation = decoder.shared.scratch.reserve(sizes.bytes::<u8>().unwrap()).unwrap();
+        reservation.put_bufs(WinBufs::<u8>::with_sizes(sizes));
+        let buffer = decoder.shared.scratch.take_bufs::<u8>(sizes).unwrap();
+        drop(reservation);
+        let mut reservation = decoder.shared.scratch.reserve(sizes.bytes::<u8>().unwrap()).unwrap();
+        reservation.put_bufs(buffer);
+        drop(reservation);
         decoder.flush();
-        assert!(decoder.shared.bufs.lock().unwrap().is_empty());
+        assert!(decoder.shared.scratch.take_bufs::<u8>(sizes).is_none());
     }
 
     /// `flush` returns only after every dispatched picture job has reported its statistics and
