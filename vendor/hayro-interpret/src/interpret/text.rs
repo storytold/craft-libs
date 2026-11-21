@@ -245,21 +245,21 @@ fn show_glyph<'a>(
 pub(crate) fn clip_glyph(context: &mut Context<'_>, glyph: &Glyph<'_>, transform: Affine) {
     // PdfCraft patch: this glyph is shown in a clipping mode, so the text object clips at `ET`
     // whether or not the glyph has an outline to clip to.
-    context.get_mut().text_state.clip_shown = true;
+    context.text_clip.shown = true;
     match glyph {
         Glyph::Outline(o) => {
-            let outline = transform * o.outline();
+            let outline = (context.get().ctm * transform) * o.outline();
             let has_outline = outline.segments().next().is_some();
 
             if has_outline {
-                context.get_mut().text_state.clip_paths.extend(outline);
+                context.text_clip.path.extend(outline);
             }
         }
         Glyph::Type3(_) => {
             warn!("text rendering mode clip not implemented for shape glyphs");
             // PdfCraft patch: the clip this glyph belongs to cannot be built, so `ET` leaves what
             // follows unclipped rather than applying an empty clip and hiding it.
-            context.get_mut().text_state.clip_unsupported = true;
+            context.text_clip.unsupported = true;
         }
     }
 }
