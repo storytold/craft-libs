@@ -398,19 +398,30 @@ pub fn plan_levels(units: &[Vec<f32>], room: f32) -> Vec<usize> {
 /// continuous units leave at their least), and the continuous units narrow by their own rule in what is left. The level
 /// is kept with the row's measuring run, so a pass without one (nothing the row measures changed) shows each unit once,
 /// at its kept level. Outside a shrinking row the unit shows at level 0.
+///
+/// The unit shows on the row's line: a child of it that fills its height takes the line's height, as a direct child of
+/// the row does (`fill_size`).
 pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&mut Ui, usize)) {
     let ctx = ui.ctx().clone();
     let shrink = Env::of(ui).shrink;
-    // The unit's content is no unit of the row: it runs in a room of its own.
-    let own_room = Env::of(ui).derive_local(|scoped| scoped.start_room());
+    // The unit's content is no unit of the row: it runs in a room of its own, on the row's line.
+    let line = Env::of(ui).row_line;
+    let own_room = Env::of(ui).derive_local(|scoped| {
+        scoped.start_room();
+        scoped.row_line = line;
+    });
     match shrink {
         Some(Shrink::Count(row)) => {
             let rtl = Env::of(ui).direction.is_rtl();
             let mut widths = Vec::with_capacity(levels);
             let mut widest = Vec2::ZERO;
-            // Each level measures at what it takes in no room: unbounded along x, in a region as wide as the row's.
-            // An infinite egui region would put right-to-left content's start edge at infinity.
-            let no_room = own_room.derive_local(|scoped| scoped.unbounded.0 = true);
+            // Each level measures at what it takes in no room: unbounded along x, in a region as wide as the row's,
+            // and off the row's line, which a probe is not placed on. An infinite egui region would put
+            // right-to-left content's start edge at infinity.
+            let no_room = own_room.derive_local(|scoped| {
+                scoped.unbounded.0 = true;
+                scoped.row_line = None;
+            });
             let width = ui.max_rect().width();
             for level in 0..levels.max(1) {
                 let installed = Env::install_for(ui, no_room.clone());
