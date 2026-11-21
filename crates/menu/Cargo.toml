@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-quit = { workspace = true, features = ["egui"] }
+craft-ui = { workspace = true }
 egui = { workspace = true }
 
 # Already in the apps' Cargo.lock: muda through craft-quit's `menu` feature, objc2 and objc2-app-kit

@@ -229,12 +229,18 @@ impl<'a> MenuBarUi<'a> {
         ui.allocate_ui(egui::vec2(width, ui.available_height()), |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             egui::MenuBar::new().ui(ui, |ui| {
+                // The fork's `MenuBar::ui` re-pins a left-to-right row; a right-to-left
+                // interface starts the bar at the right edge, so the titles go into a
+                // mirrored child.
+                let layout = craft_ui::direction::row(ui);
+                let mut mirrored = craft_ui::direction::is_rtl(ui).then(|| ui.new_child(egui::UiBuilder::new().layout(layout)));
+                let ui = mirrored.as_mut().unwrap_or(ui);
                 ctx.accesskit_node_builder(ui.unique_id(), |n| n.set_role(Role::MenuBar));
                 ui.spacing_mut().button_padding = style.title_padding;
                 nav.bar_bottom = Some(ui.max_rect().bottom());
                 let tops = self.tops(ui, &draw);
                 let names: Vec<(&str, Name<'_>)> = tops.iter().map(Top::name).collect();
-                let (titles, title_keys) = draw.mnemonics(&names);
+                let (titles, title_keys) = draw.mnemonics(ui, &names);
                 let mut buttons = Vec::with_capacity(tops.len());
                 for (k, top) in tops.iter().enumerate() {
                     let shown = titles.get(k).map_or(top.title(), String::as_str);
@@ -272,18 +278,23 @@ impl<'a> MenuBarUi<'a> {
                     let opening = title.clicked() && ctx.data(|d| d.get_temp::<bool>(draw.press)).unwrap_or(false);
                     let close = if opening { PopupCloseBehavior::IgnoreClicks } else { config.close_behavior };
                     egui::Popup::menu(&title)
+                        // Under the title's reading-start edge (explicit, decoupled from the
+                        // fork's default, which the flag already gives under right-to-left).
+                        .align(craft_ui::direction::below(ui))
                         .open_memory(open)
                         .close_behavior(close)
                         .style(config.style.clone())
                         .info(UiStackInfo::new(UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
                         .show(|ui| {
                             ctx.accesskit_node_builder(ui.unique_id(), |n| n.set_role(Role::Menu));
-                            ui.set_min_width(style.menu_width);
-                            let rows = match top {
-                                Top::Menu(m) => entries(&m.children),
-                                Top::Group(_, _, menus) => menus.iter().map(|m| Entry::Sub(&m.title, &m.children)).collect(),
-                            };
-                            draw.level(ui, 1, &rows, &mut nav);
+                            craft_ui::direction::popup_body(ui, |ui| {
+                                ui.set_min_width(style.menu_width);
+                                let rows = match top {
+                                    Top::Menu(m) => entries(&m.children),
+                                    Top::Group(_, _, menus) => menus.iter().map(|m| Entry::Sub(&m.title, &m.children)).collect(),
+                                };
+                                draw.level(ui, 1, &rows, &mut nav);
+                            });
                         });
                     buttons.push(title);
                 }
@@ -318,7 +329,7 @@ impl<'a> MenuBarUi<'a> {
     fn title_widths(&self, ui: &Ui, draw: &Draw<'_>, pad: f32) -> Vec<f32> {
         let font = TextStyle::Button.resolve(ui.style());
         let names: Vec<(&str, Name<'_>)> = self.bar.menus.iter().map(|m| (m.title.as_str(), Name::App(Labeled::Title(&m.title)))).collect();
-        draw.mnemonics(&names)
+        draw.mnemonics(ui, &names)
             .0
             .iter()
             .map(|t| ui.painter().layout_no_wrap(t.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x + 2.0 * pad)
@@ -439,7 +450,7 @@ impl Draw<'_> {
     /// The labels to show for one menu level (or the titles) and their mnemonics, from the
     /// labels as the app shows them ([`keys::localized`]). On a Mac target, the labels as they
     /// are and no mnemonics.
-    fn mnemonics(&self, rows: &[(&str, Name<'_>)]) -> (Vec<String>, Vec<Option<char>>) {
+    fn mnemonics(&self, ui: &Ui, rows: &[(&str, Name<'_>)]) -> (Vec<String>, Vec<Option<char>>) {
         if !self.mnemonics {
             return (rows.iter().map(|(l, _)| (*l).to_owned()).collect(), vec![None; rows.len()]);
         }
@@ -462,7 +473,7 @@ impl Draw<'_> {
                 self.preferred.iter().find(|(k, _)| *k == key).map(|(_, c)| *c)
             })
             .collect();
-        keys::localized(&labels, &english, &preferred)
+        keys::localized(&labels, &english, &preferred, craft_ui::direction::is_rtl(ui))
     }
 
     /// One level of a menu, scrolling when taller than the window.
@@ -486,7 +497,7 @@ impl Draw<'_> {
                 Entry::Separator => None,
             })
             .collect();
-        let (shown, mnemonics) = self.mnemonics(&names);
+        let (shown, mnemonics) = self.mnemonics(ui, &names);
         let mut next = 0;
         let mut last_was_sep = true;
         for (i, row) in rows.iter().enumerate() {
@@ -528,10 +539,9 @@ impl Draw<'_> {
         };
         let shortcut = it.shortcut.map(|c| c.display(self.platform));
         let underline = mnemonic.filter(|_| nav.underline);
-        let mut button = egui::Button::new(marks.text(ui, mark, label, underline));
-        if let Some(s) = &shortcut {
-            button = button.shortcut_text(s.as_str());
-        }
+        // The row's atoms in reading order: under a right-to-left interface the shortcut sits at
+        // the row's far end (the physical left); left-to-right it is the stock `shortcut_text`.
+        let button = crate::rtl::menu_row_button(marks.text(ui, mark, label, underline), shortcut.as_deref(), craft_ui::direction::is_rtl(ui));
         let press = self.press;
         let hit = nav.row(ui, depth - 1, enabled, Some(&it.command), mnemonic, |ui, _| {
             let r = ui.add_enabled(enabled, button);
@@ -593,6 +603,12 @@ impl Marks {
         let plain = TextFormat { font_id: self.font.clone(), color: Color32::PLACEHOLDER, ..Default::default() };
         let mut job = LayoutJob::default();
         job.wrap.max_width = f32::INFINITY;
+        // A right-to-left row reads from the right: pin the base direction so the mark column
+        // stays on the reading-start edge whatever script the label starts with (a Latin or
+        // digit-first label would infer a left-to-right paragraph and move it back).
+        if craft_ui::direction::is_rtl(ui) {
+            job.direction = egui::epaint::text::TextDirection::RightToLeft;
+        }
         let mut lead = self.gutter;
         if let Some(mark) = mark {
             let w = ui.painter().layout_no_wrap(mark.to_owned(), self.font.clone(), Color32::PLACEHOLDER).size().x;
@@ -637,7 +653,8 @@ fn submenu_row(ui: &mut Ui, title: WidgetText, content: impl FnOnce(&mut Ui)) ->
     if open {
         ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
     }
-    let response = ui.add(egui::Button::new(title).right_text(SubMenuButton::arrow_atom(None)));
+    // The arrow sits at the row's reading end; the glyph's rotation stays the fork's.
+    let response = ui.add(crate::rtl::menu_row_button_atom(title, Some(SubMenuButton::arrow_atom(None)), craft_ui::direction::is_rtl(ui)));
     ui.style_mut().visuals.widgets.inactive = inactive;
     // The rect egui tests the pointer against (`SubMenu::show`), against the part that can be seen.
     let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
@@ -645,7 +662,7 @@ fn submenu_row(ui: &mut Ui, title: WidgetText, content: impl FnOnce(&mut Ui)) ->
     if hidden && !open {
         return (response, false);
     }
-    let shown = SubMenu::new().show(ui, &response, content).is_some();
+    let shown = SubMenu::new().show(ui, &response, |ui| craft_ui::direction::popup_body(ui, content)).is_some();
     (response, shown)
 }
 

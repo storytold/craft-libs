@@ -102,9 +102,14 @@ pub(crate) fn key_char(key: Key) -> Option<char> {
 
 /// Mnemonics for `labels`, unique within the group: the preferred letter when the label has it,
 /// else the first unused ASCII letter or digit, trying the first character of each word before
-/// the others. Compared case-insensitively; the returned letter is upper case.
+/// the others. Compared case-insensitively; the returned letter is upper case. `reserved`
+/// letters are taken already (keys shown by other rows).
 pub(crate) fn assign(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<char>> {
-    let mut used: Vec<char> = Vec::new();
+    assign_reserved(labels, preferred, &[])
+}
+
+fn assign_reserved(labels: &[&str], preferred: &[Option<char>], reserved: &[char]) -> Vec<Option<char>> {
+    let mut used: Vec<char> = reserved.to_vec();
     let mut out = Vec::with_capacity(labels.len());
     for (i, label) in labels.iter().enumerate() {
         let upper: Vec<char> = label.chars().map(|c| c.to_ascii_uppercase()).collect();
@@ -123,19 +128,28 @@ pub(crate) fn assign(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<
     out
 }
 
+/// Splits a trailing ellipsis off a label, where a key or transient mark goes before it:
+/// `("فتح", "…")`, `("Open", "...")`, or `("Open", "")` when there is none.
+fn split_trailing_ellipsis(label: &str) -> (&str, &str) {
+    label.strip_suffix('…').map(|base| (base, "…")).or_else(|| label.strip_suffix("...").map(|base| (base, "..."))).unwrap_or((label, ""))
+}
+
 /// The labels to show and their mnemonics for `labels` as the app shows them, whose English
 /// originals are `english` (same order; `None` when the app gave none). A label with an ASCII
 /// letter or digit keeps its text and is assigned as [`assign`] does. One without (Chinese,
 /// Japanese, Korean…) can't be typed on its own, so it shows its English label's letter after it
-/// in parentheses and takes that letter, as Windows menus do in those languages ("文件(F)").
-/// Without an English label it keeps its text and gets no mnemonic. Mnemonics stay unique within
-/// the group, and a shown "(F)" is always the row's key.
-pub(crate) fn localized(labels: &[&str], english: &[Option<String>], preferred: &[Option<char>]) -> (Vec<String>, Vec<Option<char>>) {
+/// in parentheses and takes that letter, as Windows menus do in those languages ("文件(F)") —
+/// unless the interface is right-to-left (`rtl`), where the label renders unchanged and the
+/// English letter stays the row's mnemonic, shown only while the mnemonics show (as a transient
+/// mark in the row text, [`append_underlined`]). Without an English label a row keeps its text and
+/// gets no mnemonic. Mnemonics stay unique within the group, and a shown "(F)" is always the row's
+/// key.
+pub(crate) fn localized(labels: &[&str], english: &[Option<String>], preferred: &[Option<char>], rtl: bool) -> (Vec<String>, Vec<Option<char>>) {
     let typed = |l: &str| l.chars().any(|c| c.is_ascii_alphanumeric());
     // The key goes before a trailing ellipsis, as Windows writes it: "新建(N)…".
-    let with_key = |l: &str, k: char| match l.strip_suffix('…').map(|b| (b, "…")).or_else(|| l.strip_suffix("...").map(|b| (b, "..."))) {
-        Some((base, tail)) => format!("{base}({k}){tail}"),
-        None => format!("{l}({k})"),
+    let with_key = |l: &str, k: char| {
+        let (base, tail) = split_trailing_ellipsis(l);
+        format!("{base}({k}){tail}")
     };
     // Labels without an English one take part with a letterless stand-in, so the others keep
     // their places.
@@ -145,6 +159,12 @@ pub(crate) fn localized(labels: &[&str], english: &[Option<String>], preferred: 
     let mut pref = Vec::with_capacity(labels.len());
     for (i, label) in labels.iter().enumerate() {
         match english_keys.get(i).copied().flatten().filter(|_| !typed(label)) {
+            Some(k) if rtl => {
+                // The label renders unchanged; the English key stays the row's mnemonic, just
+                // never written into the label.
+                shown.push((*label).to_owned());
+                pref.push(Some(k));
+            }
             Some(k) => {
                 shown.push(with_key(label, k));
                 pref.push(Some(k));
@@ -155,14 +175,16 @@ pub(crate) fn localized(labels: &[&str], english: &[Option<String>], preferred: 
             }
         }
     }
-    // The suffixed labels take their keys first: a label with letters of its own must not take
-    // the key a suffix shows ("Camera Raw 滤镜…" before "转换为智能滤镜(C)" leaves C to the latter).
-    let suffixed = |i: &usize| shown.get(*i).map(String::as_str) != labels.get(*i).copied();
-    let order: Vec<usize> = (0..shown.len()).filter(suffixed).chain((0..shown.len()).filter(|i| !suffixed(i))).collect();
-    let ordered: Vec<&str> = order.iter().map(|&i| shown.get(i).map_or("", String::as_str)).collect();
-    let ordered_pref: Vec<Option<char>> = order.iter().map(|&i| pref.get(i).copied().flatten()).collect();
-    let mut keys = vec![None; shown.len()];
-    for (&i, key) in order.iter().zip(assign(&ordered, &ordered_pref)) {
+    // Letter-less rows take their English key first (reserved), so a lettered row cannot steal it
+    // ("Camera Raw 滤镜…" before "转换为智能滤镜(C)" leaves C to the latter); the others assign as
+    // `assign` does.
+    let mut keys: Vec<Option<char>> =
+        labels.iter().enumerate().map(|(i, l)| (!typed(l)).then(|| english_keys.get(i).copied().flatten()).flatten()).collect();
+    let reserved: Vec<char> = keys.iter().flatten().copied().collect();
+    let rest: Vec<usize> = (0..shown.len()).filter(|&i| keys.get(i).copied().flatten().is_none()).collect();
+    let ordered: Vec<&str> = rest.iter().map(|&i| shown.get(i).map_or("", String::as_str)).collect();
+    let ordered_pref: Vec<Option<char>> = rest.iter().map(|&i| pref.get(i).copied().flatten()).collect();
+    for (&i, key) in rest.iter().zip(assign_reserved(&ordered, &ordered_pref, &reserved)) {
         if let Some(slot) = keys.get_mut(i) {
             *slot = key;
         }
@@ -171,12 +193,23 @@ pub(crate) fn localized(labels: &[&str], english: &[Option<String>], preferred: 
 }
 
 /// Append `label` to `job` after `lead` points, with the first occurrence of `mnemonic`
-/// (case-insensitively) underlined.
+/// (case-insensitively) underlined. A label without its mnemonic letter (a right-to-left label
+/// keeps the English key as its mnemonic) shows the key as a transient `" (M)"` mark, before a
+/// trailing ellipsis; `mnemonic` is the visible one, so the mark only appears while the
+/// mnemonics show.
 pub(crate) fn append_underlined(job: &mut egui::text::LayoutJob, label: &str, mut lead: f32, mnemonic: Option<char>, format: &TextFormat) {
     let at = mnemonic.and_then(|m| label.char_indices().find(|(_, c)| c.to_ascii_uppercase() == m).map(|(i, c)| (i, c.len_utf8())));
     let parts = match at {
         Some((i, len)) => [label.get(..i), label.get(i..i + len), label.get(i + len..)],
-        None => [Some(label), None, None],
+        None => match mnemonic {
+            Some(m) => {
+                let (base, tail) = split_trailing_ellipsis(label);
+                job.append(base, lead, format.clone());
+                job.append(&format!(" ({m}){tail}"), 0.0, format.clone());
+                return;
+            }
+            None => [Some(label), None, None],
+        },
     };
     let mut any = false;
     for (k, part) in parts.into_iter().enumerate() {
@@ -392,10 +425,13 @@ impl Keys {
         let press = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
         if press(Key::Escape) {
             self.focus = None;
-        } else if press(Key::ArrowRight) {
-            self.focus = Some((focus + 1) % n);
-        } else if press(Key::ArrowLeft) {
-            self.focus = Some((focus + n - 1) % n);
+        } else if let Some(step) = [Key::ArrowLeft, Key::ArrowRight].into_iter().find(|&k| press(k)).and_then(|k| craft_ui::direction::step(ctx, k)) {
+            // The focus index is logical (the titles' order); only the physical key flips:
+            // right to left, ArrowLeft moves to the next title in reading order.
+            match step {
+                craft_ui::direction::Step::Next => self.focus = Some((focus + 1) % n),
+                craft_ui::direction::Step::Previous => self.focus = Some((focus + n - 1) % n),
+            }
         } else if press(Key::ArrowDown) || press(Key::Enter) || press(Key::Space) {
             open_top(focus, self);
         } else if let Some((key, c)) = letter() {

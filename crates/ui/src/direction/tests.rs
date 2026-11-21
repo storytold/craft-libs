@@ -205,3 +205,55 @@ fn apply_mirrors_egui_chrome_where_egui_can() {
         assert_eq!(style_rtl(&ctx, theme), patched.then_some(false), "{theme:?}");
     }
 }
+
+/// A popup body measures the same width in both directions: the right-to-left sizing pass runs
+/// left-to-right, so rows anchored to the reading end don't measure against the wide default
+/// area and lock the popup at that width.
+#[test]
+fn popup_body_keeps_popup_width_parity() {
+    let width = |dir: Direction| {
+        let ctx = context(dir);
+        let mut id = egui::Id::NULL;
+        for _ in 0..3 {
+            frame(&ctx, |ui| {
+                let btn = ui.button("Menu");
+                id = egui::Popup::default_response_id(&btn);
+                egui::Popup::menu(&btn).open_memory(Some(egui::SetOpenCommand::Bool(true))).show(|ui| {
+                    popup_body(ui, |ui| {
+                        ui.set_min_width(220.0);
+                        ui.add(egui::Button::new((egui::Atom::grow(), egui::RichText::new("Open…"))));
+                        ui.add(egui::Button::new((egui::Atom::grow(), egui::RichText::new("Close"))));
+                    })
+                });
+            });
+        }
+        egui::AreaState::load(&ctx, id).map(|s| s.rect().width()).unwrap_or(0.0)
+    };
+    let (ltr, rtl) = (width(Direction::Ltr), width(Direction::Rtl));
+    assert!((ltr - rtl).abs() < 1.0, "popup width differs: ltr {ltr}, rtl {rtl}");
+}
+
+/// Inside `popup_body`'s sizing pass the contents see a left-to-right scope; in the real pass
+/// they see the interface direction, re-scoped over the parent's `max_rect`. Left-to-right the
+/// stock call runs, sizing pass included.
+#[test]
+fn popup_body_scopes_the_sizing_pass_left_to_right() {
+    let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(300.0, 200.0));
+    let ctx = context(Direction::Rtl);
+    let (mut sizing, mut real) = ((true, 0.0), (false, 0.0));
+    frame(&ctx, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect).sizing_pass(), |ui| {
+            popup_body(ui, |ui| sizing = (is_rtl(ui), ui.max_rect().width()));
+        });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            popup_body(ui, |ui| real = (is_rtl(ui), ui.max_rect().width()));
+        });
+    });
+    assert_eq!(sizing, (false, 300.0), "the sizing pass runs left-to-right");
+    assert_eq!(real, (true, 300.0), "the real pass keeps the direction, pinned to the max_rect");
+
+    let ctx = context(Direction::Ltr);
+    frame(&ctx, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| popup_body(ui, |ui| assert!(!is_rtl(ui))));
+    });
+}
