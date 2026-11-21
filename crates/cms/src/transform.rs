@@ -20,7 +20,12 @@ pub enum SampleKind {
 }
 
 /// Options for building a [`Transform`].
+///
+/// With the `serde` feature: field names in kebab-case, every field optional and filled from
+/// [`Default`], so `{}` and `{"bpc": false}` both read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, rename_all = "kebab-case"))]
 pub struct TransformOptions {
     pub intent: Intent,
     /// Adobe-style black point compensation (ignored for absolute colorimetric).
