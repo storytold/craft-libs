@@ -630,6 +630,46 @@ fn a_cid_cff_fonts_facts_give_its_charset() {
     assert_eq!((a.id, seen[1].facts.id), (Some(34), Some(66)));
 }
 
+/// The charset hook builds a Type 0 font from its dictionary and gives the CIDs its facts give
+/// (`FontFacts::ids`); a Type 0 font over a TrueType program has no charset.
+#[test]
+fn a_built_cid_fonts_charset_is_what_its_facts_give() {
+    use crate::font::built_cid_font_charset;
+    let program = cid_keyed_cff(&[34, 66, 7]);
+    let truetype_program = truetype(3, &[]);
+    let pdf = document(
+        "/F1 5 0 R /F2 9 0 R",
+        "BT /F1 10 Tf <0022> Tj ET",
+        &[
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Synthetic /Encoding /Identity-H \
+               /DescendantFonts [6 0 R] >>"
+                .to_vec(),
+            b"<< /Type /Font /Subtype /CIDFontType0 /BaseFont /Synthetic \
+               /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
+               /FontDescriptor 7 0 R >>"
+                .to_vec(),
+            b"<< /Type /FontDescriptor /Flags 4 /FontFile3 8 0 R >>".to_vec(),
+            stream(&program, "/Subtype /CIDFontType0C"),
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /Shapes /Encoding /Identity-H \
+               /DescendantFonts [10 0 R] >>"
+                .to_vec(),
+            b"<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Shapes \
+               /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
+               /FontDescriptor 11 0 R >>"
+                .to_vec(),
+            b"<< /Type /FontDescriptor /Flags 4 /FontFile2 12 0 R >>".to_vec(),
+            stream(&truetype_program, ""),
+        ],
+    );
+    let seen = glyphs(&pdf);
+    let fonts = page_fonts(&pdf);
+    let settings = InterpreterSettings::default();
+    let charset = built_cid_font_charset(&fonts[0], &settings);
+    assert_eq!(charset, Some(vec![0, 34, 66, 7]));
+    assert_eq!(charset, seen[0].facts.ids);
+    assert_eq!(built_cid_font_charset(&fonts[1], &settings), None, "a TrueType program");
+}
+
 /// A Type 0 font without a program draws with a substitute, whose glyph ids are its own: no
 /// program is given, and the font is of no kind a reader reads by number.
 #[test]

@@ -992,6 +992,21 @@ pub fn built_cid_font_numbers(
     })
 }
 
+/// PdfCraft patch (107), a verification hook: Type 0 font `dict` built as a page draws it, and
+/// the CIDs of its CID-keyed CFF program's charset in glyph order, as its facts give them
+/// ([`FontFacts::ids`]); `None` for a font that can't be built or isn't a CID-keyed CFF font
+/// ([`FontKind::CidCff`]). For a reader's report on fonts its document survey counts without
+/// building them ([`CidFontProbe`] reads no charset).
+#[doc(hidden)]
+pub fn built_cid_font_charset(
+    dict: &Dict<'_>,
+    settings: &crate::InterpreterSettings,
+) -> Option<Vec<u32>> {
+    let font = Type0Font::new(dict, &settings.font_resolver, &settings.cmap_resolver)?;
+    let (_, cid_cff) = font.facts_program();
+    cid_cff.map(|c| c.charset_cids())
+}
+
 #[derive(Debug, Default)]
 enum CidToGIdMap {
     #[default]

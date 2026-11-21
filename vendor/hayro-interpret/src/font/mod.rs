@@ -70,7 +70,7 @@ use hayro_cmap::{BfString, CMap, CMapName, CharacterCollection};
 pub use outline::OutlineFontData;
 pub use cid::{CidFontProbe, CidProbeCache};
 #[doc(hidden)]
-pub use cid::built_cid_font_numbers;
+pub use cid::{built_cid_font_charset, built_cid_font_numbers};
 pub use facts::{FontFacts, FontKind, GlyphFacts, font_object_key};
 pub use standard_font::StandardFont;
 
