@@ -57,7 +57,11 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
     angles.
   - Roughness is shaded as at least `MIN_DIRECT_ROUGHNESS` (0.032, `α` = 0.001024).
   - `n·v` is taken as at least `1e-4`, so a view at or below the surface sees it as at a
-    grazing angle. A light at or below the surface, or a view straight opposite the light, gives
+    grazing angle. `n·h` is taken as at most 1, so rounding cannot raise `D` above its peak.
+  - The specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`, as in EffectCraft.
+    Where the product is smaller, at grazing angles, the specular lobe is below
+    `F D G / (4 (n·v) (n·l))`: about 4% of it with `n·v` and `n·l` both 0.001.
+  - A light at or below the surface, or a view straight opposite the light, gives
     0. Directions are normalized; one that is not finite or has zero length gives
     `PbrError::BadDirection`.
   - A white metal reflects at most the light it receives. As section B.3.6.3 notes, the Fresnel
@@ -124,6 +128,8 @@ The BRDF, the environment BRDF and the default environment come from EffectCraft
 - Roughness is shaded as at least 0.032 instead of 0.03, so `α` stays above the 0.001 floor of
   `ggx_distribution`.
 - A view straight opposite the light gives 0 instead of using a fallback half vector.
+- `n·h` is taken as at most 1. EffectCraft took it only as at least 0, so rounding after
+  normalization could put `D` above its peak.
 - The environment BRDF keeps `scale` and `bias` at least 0 with a sum of at most 1. The fit gives
   a negative scale for smooth surfaces at grazing angles (-0.044 with a bias of 1.044 at
   `n·v` = 0 and roughness 0), which made `f0 × scale + bias` greater than 1 and the diffuse

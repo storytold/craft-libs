@@ -107,7 +107,9 @@ impl Material {
     /// lights, where section B.3.2 writes the separable Smith form. Roughness is shaded as at
     /// least [`MIN_DIRECT_ROUGHNESS`]. A light at or below the surface gives 0, and so does a
     /// view straight opposite the light, which has no half vector. `n·v` is taken as at least
-    /// `1e-4`, so a view at or below the surface sees the surface as at a grazing angle.
+    /// `1e-4`, so a view at or below the surface sees the surface as at a grazing angle. `n·h` is
+    /// taken as at most 1. The specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`,
+    /// as in EffectCraft, so where it is smaller the specular lobe is below the expression above.
     ///
     /// Returns [`PbrError::BadDirection`] when a direction is not finite or has zero length.
     pub fn try_direct(&self, n: [f32; 3], v: [f32; 3], l: [f32; 3]) -> Result<[f32; 3], PbrError> {
@@ -120,7 +122,7 @@ impl Material {
         }
         let Some(h) = unit((v + l).to_array()) else { return Ok([0.0; 3]) };
         let n_v = n.dot(v).max(MIN_N_DOT_V);
-        let n_h = n.dot(h).max(0.0);
+        let n_h = n.dot(h).clamp(0.0, 1.0);
         let v_h = v.dot(h).max(0.0);
         let r = self.roughness.max(MIN_DIRECT_ROUGHNESS);
         let f = fresnel_schlick(self.f0(), v_h);

@@ -362,6 +362,37 @@ fn roughness_is_clamped_at_the_documented_floor() {
     assert!(at(MIN_DIRECT_ROUGHNESS + 0.01)[0] < floor[0], "a rougher surface has a lower peak");
 }
 
+/// `n·h` is taken as at most 1, so when rounding after normalization gives a dot product slightly
+/// over 1, the highlight is not above the head-on peak.
+#[test]
+fn the_highlight_is_never_above_the_head_on_peak() {
+    let m = material([1.0; 3], 1.0, 0.0);
+    let head_on = m.try_direct([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]).unwrap()[0];
+    for d in [[1.0, 1.0, 0.5], [0.3, -0.7, 0.2], [2.0, 3.0, 7.0], [-1.0, 0.1, 0.9], [0.6, 0.6, 0.6]] {
+        let got = m.try_direct(d, d, d).unwrap()[0];
+        assert!(got <= head_on * (1.0 + 1e-4), "{d:?}: {got} vs {head_on}");
+    }
+}
+
+/// The specular lobe divides by `4 (n·v) (n·l)` taken as at least `1e-4`, as EffectCraft does,
+/// so at grazing angles it is lower than the expression without that floor.
+#[test]
+fn the_specular_denominator_is_floored_at_grazing_angles() {
+    let n = [0.0, 0.0, 1.0];
+    let v = norm([1.0, 0.0, 0.001]);
+    let r = 0.5f32;
+    // A white metal: F is 1 and the diffuse lobe is 0.
+    let got = material([1.0; 3], 1.0, r).try_direct(n, v, v).unwrap()[0];
+    let nv = dot(n, v);
+    let k = (r + 1.0).powi(2) / 8.0;
+    let g = (nv / (nv * (1.0 - k) + k)).powi(2);
+    let d = ggx_distribution(nv, r);
+    let floored = d * g / (4.0 * nv * nv).max(1e-4) * nv * PI;
+    let unfloored = d * g / (4.0 * nv * nv) * nv * PI;
+    assert!((got - floored).abs() <= 1e-3 * floored, "{got} vs {floored}");
+    assert!(got < 0.05 * unfloored, "{got} vs {unfloored}");
+}
+
 #[test]
 fn the_environment_brdf_keeps_reflectance_between_0_and_1() {
     for i in 0..=60 {
