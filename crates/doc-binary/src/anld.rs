@@ -68,6 +68,8 @@ pub(crate) struct Anlv {
     start: u16,
     /// The space the number takes, in twips (with `fHang`, a hanging indent).
     indent: i16,
+    /// An `ANLD`'s `fNumber1`: in a table, only a cell's first numbered paragraph has a number.
+    number1: bool,
 }
 
 impl Anlv {
@@ -94,6 +96,7 @@ impl Anlv {
             hps: u16_at(8),
             start: u16_at(10),
             indent: i16::from_le_bytes([b[12], b[13]]),
+            number1: false,
         })
     }
 
@@ -193,7 +196,9 @@ impl Anlv {
 /// An `ANLD` operand (a count byte, then an [`Anlv`], 4 flag bytes and 32 bytes of text).
 fn parse_anld(v: &[u8]) -> Option<Anlv> {
     let b = v.get(1..)?;
-    Anlv::parse(b, b.get(ANLV_LEN + 4..).unwrap_or_default(), &mut 0)
+    let anlv = Anlv::parse(b, b.get(ANLV_LEN + 4..).unwrap_or_default(), &mut 0)?;
+    // The four bytes after the ANLV: fNumber1, fNumberAcross, fRestartHdn and a spare.
+    Some(Anlv { number1: b.get(ANLV_LEN).is_some_and(|&f| f != 0), ..anlv })
 }
 
 /// An `OLST` operand (a count byte, then nine [`Anlv`]s, 4 flag bytes and 64 bytes of text that
@@ -427,6 +432,8 @@ pub(crate) fn number<'l>(
     let mut in_table = false;
     let mut column = 0usize;
     let mut columns: HashMap<usize, Run> = HashMap::new();
+    // Whether the current cell has a numbered paragraph, for `fNumber1`.
+    let mut cell_numbered = false;
     for p in paras.iter_mut() {
         let row = p.row.as_deref();
         let table = row.is_some_and(|r| r.in_table || r.ttp || r.cell_mark);
@@ -435,10 +442,12 @@ pub(crate) fn number<'l>(
             body = None;
             columns.clear();
             column = 0;
+            cell_numbered = false;
             in_table = table;
         }
         if row.is_some_and(|r| r.ttp) {
             column = 0;
+            cell_numbered = false;
             continue;
         }
         let cell_end = row.is_some_and(|r| r.cell_mark);
@@ -446,7 +455,13 @@ pub(crate) fn number<'l>(
             let (nlvl, anld) = own_of(p);
             let mut slot = if table { columns.remove(&column) } else { body.take() };
             let num = match (nlvl, anld) {
-                (10, Some(a)) => Some((b.numbered(&mut slot, a), 0)),
+                // One number per cell: the cell's later numbered paragraphs have none and don't
+                // count, and the column's run goes on past them.
+                (10, Some(a)) if table && a.number1 && cell_numbered => None,
+                (10, Some(a)) => {
+                    cell_numbered = true;
+                    Some((b.numbered(&mut slot, a), 0))
+                }
                 (11, Some(a)) => Some((b.bullet(a), 0)),
                 (12, _) => None,
                 (1..=9, _) => {
@@ -471,6 +486,7 @@ pub(crate) fn number<'l>(
         }
         if cell_end {
             column += 1;
+            cell_numbered = false;
         }
     }
     b.numbering

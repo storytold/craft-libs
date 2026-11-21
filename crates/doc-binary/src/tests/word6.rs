@@ -1518,6 +1518,67 @@ fn numbered_and_bulleted_paragraphs_count_as_word_95_does() {
     assert_eq!(labels(&doc), ["1. a", "2. b", "\u{2022} x", "3. c", " s", "4. d", " p", "1. e", "1) f"]);
 }
 
+/// Each paragraph's list label and text in reading order, table cells included, each cell as
+/// `[...]`.
+fn labels_with_cells(doc: &craft_wordmodel::Document) -> Vec<String> {
+    let mut counters = craft_wordmodel::numbering::Counters::default();
+    let mut label = |p: &craft_wordmodel::para::Paragraph| {
+        let l = p.props.numbering.as_ref().and_then(|n| counters.next_label(&doc.numbering, n.num, n.level)).map(|(l, _)| l).unwrap_or_default();
+        format!("{l} {}", p.text)
+    };
+    let mut out = Vec::new();
+    for b in &doc.body {
+        match b.as_ref() {
+            craft_wordmodel::Block::Para(p) => out.push(label(p)),
+            craft_wordmodel::Block::Table(t) => {
+                for c in t.rows.iter().flat_map(|r| &r.cells) {
+                    let texts: Vec<String> = c.blocks.iter().filter_map(|b| b.as_para()).map(&mut label).collect();
+                    out.push(format!("[{}]", texts.join("|")));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn one_number_per_cell_numbers_only_a_cells_first_paragraph() {
+    // ANLD fNumber1 (the byte after the ANLV), two rows of two cells with two numbered
+    // paragraphs each. As Word 95 shows it: a cell's second paragraph has no number and doesn't
+    // count; each column goes on 1., 2. down the rows. Without the flag every paragraph counts.
+    let text = b"a\rb\x07c\rd\x07\x07e\rf\x07g\rh\x07\x07after\r";
+    let mut row = vec![0x18, 1, 0x19, 1];
+    row.extend(def_table(&[0, 1440, 2880], &[0, 0]));
+    let read_with = |number1: u8| {
+        // The numbering comes from the paragraphs' style, so that each FKP entry stays small.
+        let mut num = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 1)].concat();
+        num[2 + 2 + 16] = number1;
+        let styles = &[
+            Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", ..Default::default() }),
+            Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name: "Numbered", papx: &num, chpx: &[] }),
+        ];
+        let cell: &[u8] = &[0x18, 1];
+        let paras: &[(u32, u32, &[u8])] = &[
+            (0, 2, cell),
+            (2, 4, cell),
+            (4, 6, cell),
+            (6, 8, cell),
+            (8, 9, &row),
+            (9, 11, cell),
+            (11, 13, cell),
+            (13, 15, cell),
+            (15, 17, cell),
+            (17, 18, &row),
+            (18, 24, &[]),
+        ];
+        let para_styles = &[1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0];
+        let doc = read(&word6_file(&Doc6 { text, paras, para_styles, styles, ..Default::default() })).expect("opens");
+        labels_with_cells(&doc)
+    };
+    assert_eq!(read_with(1), ["[1. a| b]", "[1. c| d]", "[2. e| f]", "[2. g| h]", " after"]);
+    assert_eq!(read_with(0), ["[1. a|2. b]", "[1. c|2. d]", "[3. e|4. f]", "[3. g|4. h]", " after"]);
+}
+
 #[test]
 fn headings_without_an_olst_show_the_levels_above_in_their_own_formats() {
     // No OLST: each heading's own ANLD sets its level, upper roman at level 1, decimal with
