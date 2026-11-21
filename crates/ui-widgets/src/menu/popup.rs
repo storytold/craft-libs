@@ -109,8 +109,36 @@ impl<T> From<Entry<T>> for MenuRow<T> {
 /// Shows `rows` as `entry_rows` shows entries, a submenu as `Menu::submenu_row_enabled`, and returns the value picked at
 /// any depth.
 pub fn menu_rows<T: Clone>(ui: &mut Ui, rows: &[MenuRow<T>]) -> Option<T> {
-    let _ = (ui, rows);
-    todo!("dp.C7")
+    let mut picked = None;
+    for row in rows {
+        match row {
+            MenuRow::Entry(entry) => {
+                if entry_rows(ui, std::slice::from_ref(entry)).is_some() {
+                    picked = entry.value().cloned();
+                }
+            }
+            MenuRow::Submenu(label, inner) => {
+                let mut chosen = None;
+                Menu::submenu_row_enabled(ui, label.clone(), has_enabled(inner), |ui, _| {
+                    if let Some(value) = menu_rows(ui, inner) {
+                        chosen = Some(value);
+                    }
+                });
+                if chosen.is_some() {
+                    picked = chosen;
+                }
+            }
+        }
+    }
+    picked
+}
+
+/// Whether any row of `rows`, at any depth, is an enabled entry.
+fn has_enabled<T>(rows: &[MenuRow<T>]) -> bool {
+    rows.iter().any(|row| match row {
+        MenuRow::Entry(entry) => entry.is_enabled() && !entry.is_separator() && !entry.is_heading(),
+        MenuRow::Submenu(_, inner) => has_enabled(inner),
+    })
 }
 
 /// Shows one row per entry, a caption for a heading, a rule for a separator, and returns the index of the entry that

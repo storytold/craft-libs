@@ -195,18 +195,22 @@ pub struct ListRow<'a> {
     pub(super) italic: bool,
     /// The line under the row's label: `Solid` underlines the label span, `Dashed` draws a dashed line under it.
     #[prop]
-    #[allow(dead_code)] // P3(document-panels-w1): dp.C2
     pub(super) underline: LabelUnderline,
     /// A filled right triangle in the row's trailing top corner, in the label's ink: it marks the list's current row
     /// and mirrors.
     #[prop]
-    #[allow(dead_code)] // P3(document-panels-w1): dp.C4
     pub(super) corner_mark: bool,
     /// The row is its thumbnails and their link glyphs, with no label band, and as wide and high as they are. The label
     /// stays the accessible name.
     #[prop(flag)]
-    #[allow(dead_code)] // P3(document-panels-w1): ap.AP13
     pub(super) thumbnails_only: bool,
+    /// The full-height bar at the start of the row's content (`stripe`).
+    pub(super) stripe: Option<(crate::style::DataColor, crate::primitives::StrokeWidth)>,
+    /// The row's place in a run of rows that share one outline (`run`).
+    pub(super) run: Option<RowRun>,
+    /// The row is the divider that sets a group off (`GroupHeads::Rule`): a rule across the row, no title, no disclosure
+    /// and no focus stop; the label stays its accessible name.
+    pub(super) rule_head: bool,
     /// The hover look without the pointer (the canvas hovers the layer).
     #[prop]
     pub(super) highlight: bool,
@@ -324,25 +328,33 @@ impl<'a> ListRow<'a> {
     /// One outline per run in the divider stroke and `radius.control`, inside each row's rect, for the row at `run`'s
     /// place in a run of rows.
     #[must_use]
-    pub fn run(self, run: RowRun) -> Self {
-        let _ = run;
-        todo!("ch.K24")
+    pub fn run(mut self, run: RowRun) -> Self {
+        self.run = Some(run);
+        self
     }
 
     /// A full-height bar at the start of the row's content, after its toggle cells and before the indent. It takes no
     /// room from the label and mirrors in right-to-left. It is not the `striped` list tint.
     #[must_use]
-    pub fn stripe(self, color: crate::style::DataColor, width: crate::primitives::StrokeWidth) -> Self {
-        let _ = (color, width);
-        todo!("dp.C3")
+    pub fn stripe(mut self, color: crate::style::DataColor, width: crate::primitives::StrokeWidth) -> Self {
+        self.stripe = Some((color, width));
+        self
     }
 
     /// The row is as tall as a row with a `size` thumbnail and draws no thumbnail; its icon stands in the thumbnail's
     /// place.
     #[must_use]
-    pub fn thumb_height(self, size: ThumbSize) -> Self {
-        let _ = size;
-        todo!("dp.C5")
+    pub fn thumb_height(mut self, size: ThumbSize) -> Self {
+        // Without a first thumbnail nothing is placed or painted, but the row's height follows `thumb`.
+        self.thumb = size;
+        self
+    }
+
+    /// Makes the row the divider of a group head under `GroupHeads::Rule`.
+    #[must_use]
+    pub(super) fn rule_head(mut self) -> Self {
+        self.rule_head = true;
+        self
     }
 
     /// A row showing `label`, which also names it for a screen reader.
@@ -369,6 +381,9 @@ impl<'a> ListRow<'a> {
             underline: LabelUnderline::None,
             corner_mark: false,
             thumbnails_only: false,
+            stripe: None,
+            run: None,
+            rule_head: false,
             highlight: false,
             clipped: false,
             rule: false,

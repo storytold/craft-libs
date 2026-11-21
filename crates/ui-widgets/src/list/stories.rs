@@ -1,11 +1,12 @@
 //! Stories of the row types of the list family: `ListRow`.
 
-use super::{ListRow, RowInk, TrailingFace, TrailingPart};
+use super::{LabelUnderline, ListRow, RowInk, RowRun, ThumbSize, TrailingFace, TrailingPart};
 use crate::contract::Show as _;
-use crate::primitives::IconSpec;
+use crate::primitives::{ContentPainterCx, IconSpec, StrokeWidth};
+use crate::style::{Corners, DataColor, SurfaceKind};
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::{ColumnKey, IconId};
-use egui::{Pos2, Rect, Ui};
+use egui::{Color32, Pos2, Rect, Ui};
 
 #[story(ListRow<'static>, covers = [Default], drive = Drive::Activate)]
 fn list_row(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -67,4 +68,84 @@ fn list_row_clamped_description_with_rail(ui: &mut Ui, _: &mut StoryData) -> Sto
         cx.painter.circle_filled(rect.center(), rect.width() / 4.0, cx.ink());
     });
     show_as_only_item(ui, row).into()
+}
+
+/// Shows `rows` one under the other and reports the last one's output.
+fn show_rows(ui: &mut Ui, rows: Vec<ListRow<'static>>) -> StoryOutput {
+    let mut shown = StoryOutput::default();
+    for row in rows {
+        shown = row.show(ui).into();
+    }
+    shown
+}
+
+fn thumb(cx: &ContentPainterCx, rect: Rect) {
+    cx.surface(rect, SurfaceKind::Raised, Corners::None);
+}
+
+const STRIPE: DataColor = DataColor::new(Color32::from_rgb(0x2e, 0x7d, 0xd1));
+
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_label_emphasis(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    show_rows(
+        ui,
+        vec![
+            ListRow::new("Italic").italic(true),
+            ListRow::new("Solid underline").underline(LabelUnderline::Solid),
+            ListRow::new("Dashed underline").underline(LabelUnderline::Dashed),
+            ListRow::new("Italic and dashed").italic(true).underline(LabelUnderline::Dashed),
+            ListRow::new("A dashed label far longer than the room its row gives it").underline(LabelUnderline::Dashed),
+        ],
+    )
+}
+
+/// The stripe in the two widths, the current row's corner mark, a stripe on a nested row. The suite shows it in
+/// right-to-left too.
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_stripe_and_corner_mark(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    show_rows(
+        ui,
+        vec![
+            ListRow::new("Thick").stripe(STRIPE, StrokeWidth::Thick),
+            ListRow::new("Heavy").stripe(STRIPE, StrokeWidth::Heavy),
+            ListRow::new("Heavy with corner mark").stripe(STRIPE, StrokeWidth::Heavy).corner_mark(true),
+            ListRow::new("Nested").depth(1).stripe(STRIPE, StrokeWidth::Heavy),
+        ],
+    )
+}
+
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_runs(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    show_rows(
+        ui,
+        vec![
+            ListRow::new("Alone").run(RowRun::Alone),
+            ListRow::new("First").run(RowRun::First),
+            ListRow::new("Middle").run(RowRun::Middle),
+            ListRow::new("Last").run(RowRun::Last),
+        ],
+    )
+}
+
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_thumbnails_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let row = ListRow::new("Layer mask")
+        .thumbnails_only()
+        .thumb(ThumbSize::Medium, thumb)
+        .extra_thumb(thumb)
+        .thumb_link(true, "Link the mask to {row}");
+    row.show(ui).into()
+}
+
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_thumb_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let icon = || IconSpec::svg(IconId::new("eye"));
+    show_rows(
+        ui,
+        vec![
+            ListRow::new("Small").thumb_height(ThumbSize::Small).icon(icon()),
+            ListRow::new("Medium").thumb_height(ThumbSize::Medium).icon(icon()),
+            ListRow::new("Large").thumb_height(ThumbSize::Large).icon(icon()),
+        ],
+    )
 }

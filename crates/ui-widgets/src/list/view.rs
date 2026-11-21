@@ -11,6 +11,7 @@ use crate::contract::{
 };
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx};
+use crate::tile_grid::GroupHeads;
 use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Metrics, Selection, SizeHint, SpanLayout};
 use craft_i18n::matcher::Matcher;
 use egui::{Rect, Ui};
@@ -246,8 +247,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 
     fn dress<'r>(&self, row: Self::Item<'r>, state: &RowState) -> Self::Item<'r> {
+        // Under `Rule` every top-level group after the first is a divider row, not a titled one.
+        let rule = self.group_heads == GroupHeads::Rule && row.group.is_some() && row.depth == Some(0) && !state.first;
         let row = row.rows(self.items.row_height).sub_row(state);
-        let row = if self.group_heads == crate::tile_grid::GroupHeads::Rule && row.group.is_some() { row.rule(true) } else { row };
+        let row = if rule { row.rule_head() } else { row };
         if self.row_menu { row.row_menu() } else { row }
     }
 

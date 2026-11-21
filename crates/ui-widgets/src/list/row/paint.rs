@@ -1,7 +1,7 @@
 //! Painting a row's trailing items, toggles, thumbnails, text and cells.
 
-use super::ListRow;
 use super::placement::Placed;
+use super::{LabelUnderline, ListRow, RowRun};
 use super::show::{LINK, TEXT_CELL, TOGGLE};
 use super::style::ListRowStyle;
 use super::thumb::{RowThumb, target_at};
@@ -11,7 +11,7 @@ use crate::choice::Checkbox;
 use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
-use crate::primitives::{Draw, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
+use crate::primitives::{Draw, IconSpec, PaintShape, RectSide, RuleKind, Span, StrokeWidth, TextRun, Wrap};
 use crate::style::{Flags, GlyphRole, Ink, StateMix, StateSet, StyleColor};
 use craft_behavior::{Flow, IconId, Mixed, PartRef};
 use craft_theme::ControlSize;
@@ -153,6 +153,35 @@ impl ListRow<'_> {
         }
     }
 
+    /// Paints the stripe at the start of the content, the corner mark in the trailing top corner (in `ink`) and the
+    /// outline of the row's run.
+    pub(super) fn paint_marks(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, placed: &Placed, ink: StyleColor) {
+        let rtl = cx.env.direction().is_rtl();
+        let rect = cx.rect;
+        if let Some((color, width)) = self.stripe {
+            let bar = Flow::new(placed.band, rtl).span(0.0, draw.width(width));
+            draw.data_fill(&PaintShape::Rect(bar, CornerRadius::ZERO), color);
+        }
+        if self.corner_mark {
+            let side = cx.style.sizes.handle;
+            let (edge, inward) = if rtl { (rect.left(), 1.0) } else { (rect.right(), -1.0) };
+            let corner = vec![Pos2::new(edge, rect.top()), Pos2::new(edge + inward * side, rect.top()), Pos2::new(edge, rect.top() + side)];
+            draw.fill(&PaintShape::Polygon(corner), ink);
+        }
+        if let Some(run) = self.run {
+            // PLAN: `ListRowStyle` (style.rs) holds no outline radius, so the run's ends are square, not `radius.control`.
+            let sides: &[RectSide] = match run {
+                RowRun::Alone => &[RectSide::Top, RectSide::Bottom, RectSide::Left, RectSide::Right],
+                RowRun::First => &[RectSide::Top, RectSide::Left, RectSide::Right],
+                RowRun::Middle => &[RectSide::Left, RectSide::Right],
+                RowRun::Last => &[RectSide::Bottom, RectSide::Left, RectSide::Right],
+            };
+            for side in sides {
+                draw.edge_rule(RuleKind::Divider, rect, *side);
+            }
+        }
+    }
+
     /// Paints the label, detail and wrapped lines in the label band; returns the bottom of the text, where the component
     /// under it (`below`) starts after a gap.
     pub(super) fn paint_text(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, label: Rect) -> f32 {
@@ -181,8 +210,19 @@ impl ListRow<'_> {
             let look = if muted { &style.cell_muted } else { &style.text };
             let mut span = Span::new(cx.resolved.label);
             span.italic = self.italic;
+            span.underline = self.underline == LabelUnderline::Solid;
             let run = TextRun::spans(vec![span]).role(look.role).color(cx.resolve(&look.color)).elide();
-            draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new((label.width() - beside).max(0.0), sizes.label_line)), &run);
+            let room = Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new((label.width() - beside).max(0.0), sizes.label_line));
+            if self.underline == LabelUnderline::Dashed {
+                // The line runs under the shown (elided) text only.
+                let shown = draw.layout(&run, room.width());
+                let x = draw.text_x(room, &run, &shown);
+                draw.galley(Pos2::new(x, room.top()), &shown);
+                let y = room.top() + shown.size().y;
+                draw.dashed(&[Pos2::new(x, y), Pos2::new(x + shown.size().x, y)], draw.dashes(), StrokeWidth::Thin, cx.resolve(&look.color));
+            } else {
+                draw.text(room, &run);
+            }
         }
         top += sizes.label_line;
         if let Some(detail) = self.detail.as_ref().filter(|_| !self.heading) {
