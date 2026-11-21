@@ -6,9 +6,10 @@
 //! left out, and a query with a non-finite origin, direction or point, a zero direction, a NaN
 //! distance or a NaN box finds nothing.
 //!
-//! Ray casts find hits on triangles with coordinates between about 1e-12 and 1e12. Outside that
-//! range the products in the triangle test overflow or underflow `f32`, and a ray can miss a
-//! triangle it crosses.
+//! Ray casts and nearest-point queries are worked out in `f64`, where the products of finite
+//! `f32` coordinates neither overflow nor round to zero. The ray test is watertight: a ray
+//! through an edge shared by two triangles hits at least one of them, and the test has no
+//! slack around the edges.
 
 use glam::{DVec3, Vec3, Vec3A};
 
@@ -24,7 +25,8 @@ struct Node {
     count: u32,
 }
 
-/// A ray hit: distance, triangle and barycentrics (weights of vertices 1 and 2).
+/// A ray hit: distance, triangle and barycentrics (weights of vertices 1 and 2). A positive
+/// distance under the `f32` range is the least positive `f32`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hit {
     pub t: f32,
@@ -48,21 +50,22 @@ const LEAF: usize = 4;
 pub const MAX_BVH_TRIANGLES: usize = (u32::MAX / 2) as usize;
 
 /// Traversal stack of (node, entry distance): inline for typical depths (no allocation per
-/// ray), spilling to the heap for degenerate trees.
-struct Stack {
-    inline: [(u32, f32); 64],
+/// ray), spilling to the heap for degenerate trees. Ray casts store `f32` distances and
+/// nearest-point queries `f64` squared distances.
+struct Stack<T> {
+    inline: [(u32, T); 64],
     len: usize,
-    spill: Vec<(u32, f32)>,
+    spill: Vec<(u32, T)>,
 }
 
-impl Default for Stack {
+impl<T: Copy + Default> Default for Stack<T> {
     fn default() -> Self {
-        Stack { inline: [(0, 0.0); 64], len: 0, spill: Vec::new() }
+        Stack { inline: [(0, T::default()); 64], len: 0, spill: Vec::new() }
     }
 }
 
-impl Stack {
-    fn push(&mut self, v: (u32, f32)) {
+impl<T: Copy> Stack<T> {
+    fn push(&mut self, v: (u32, T)) {
         match self.inline.get_mut(self.len) {
             Some(slot) if self.spill.is_empty() => {
                 *slot = v;
@@ -72,7 +75,7 @@ impl Stack {
         }
     }
 
-    fn pop(&mut self) -> Option<(u32, f32)> {
+    fn pop(&mut self) -> Option<(u32, T)> {
         self.spill.pop().or_else(|| {
             self.len = self.len.checked_sub(1)?;
             self.inline.get(self.len).copied()
@@ -152,7 +155,8 @@ impl Bvh {
     /// Without triangles the tree has no nodes.
     fn build(tris: Vec<[Vec3; 3]>, ids: Vec<u32>) -> Result<Bvh> {
         if tris.is_empty() {
-            return Ok(Bvh { nodes: Vec::new(), tris, order: Vec::new() });
+            // A fresh vector: `tris` may hold capacity for every triangle that was left out.
+            return Ok(Bvh { nodes: Vec::new(), tris: Vec::new(), order: Vec::new() });
         }
         let out_of_memory = |_| MeshOpsError::OutOfMemory("BVH nodes");
         let mut order: Vec<u32> = try_vec(tris.len(), "BVH triangles")?;
@@ -318,55 +322,71 @@ impl Bvh {
         (&self.tris, &self.order)
     }
 
-    fn slab(lo: Vec3A, hi: Vec3A, o: Vec3A, inv: Vec3A, tmax: f32) -> Option<f32> {
-        let t0 = (lo - o) * inv;
-        let t1 = (hi - o) * inv;
+    /// The distance at which the ray from `o` with reciprocal direction `inv` (both `f64`, so
+    /// the reciprocal of a nonzero `f32` component is finite) enters the box, if it does before
+    /// `tmax`.
+    fn slab(lo: Vec3A, hi: Vec3A, o: DVec3, inv: DVec3, tmax: f64) -> Option<f64> {
+        let t0 = (lo.as_dvec3() - o) * inv;
+        let t1 = (hi.as_dvec3() - o) * inv;
         // A ray lying in a slab plane gives 0·∞ = NaN: it is inside that slab, so the axis does
-        // not bound the hit.
+        // not bound the hit. A ray parallel to a slab outside it gives ±∞ on both sides.
         let open = t0.is_nan_mask() | t1.is_nan_mask();
-        let tn = Vec3A::select(open, Vec3A::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
-        let tf = Vec3A::select(open, Vec3A::INFINITY, t0.max(t1)).min_element().min(tmax);
-        // A box whose entry distance is +∞ (where 1/d overflows) is not reached, even when `tmax`
-        // is unbounded; no triangle can be hit at that distance.
-        (tn <= tf && tn.is_finite()).then_some(tn)
+        let tn = DVec3::select(open, DVec3::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
+        let tf = DVec3::select(open, DVec3::INFINITY, t0.max(t1)).min_element().min(tmax);
+        // An entry distance past the `f32` range cannot be a hit distance.
+        (tn <= tf && (tn as f32).is_finite()).then_some(tn)
     }
 
-    /// Möller–Trumbore, double sided.
-    fn hit_tri(t: &[Vec3; 3], o: Vec3, d: Vec3) -> Option<(f32, f32, f32)> {
-        let e1 = t[1] - t[0];
-        let e2 = t[2] - t[0];
-        let p = d.cross(e2);
-        let det = e1.dot(p);
-        // A ray in the triangle's plane, or a triangle without area. The determinant is the
-        // product of the two edge lengths, the direction's length and the sines of the angles
-        // between them, so the cutoff shrinks with that product for small triangles.
-        if det.abs() < 1e-12 && (det == 0.0 || det.abs() < 1e-12 * (e1.length() * e2.length() * d.length()).min(1.0)) {
+    /// The watertight ray-triangle test of Woop, Benthin and Wald (2013), double sided, in
+    /// `f64`: a shear turns the ray into the +z axis, and the signs of the triangle's three edge
+    /// functions in that plane decide the hit. Each edge function is computed from the edge's
+    /// two vertices alone, and the same edge seen from its other triangle gives the exact
+    /// negation, so the two triangles of a shared edge cannot both miss a ray through it. A ray
+    /// in the triangle's plane and a triangle without area give no hit. Returns the distance in
+    /// `f64` (positive, and finite in `f32`) and the weights of vertices 1 and 2.
+    fn hit_tri(t: &[Vec3; 3], o: Vec3, d: Vec3) -> Option<(f64, f32, f32)> {
+        let (o, d) = (o.as_dvec3(), d.as_dvec3());
+        let a = d.abs();
+        let kz = if a.x >= a.y && a.x >= a.z {
+            0
+        } else if a.y >= a.z {
+            1
+        } else {
+            2
+        };
+        let (mut kx, mut ky) = ((kz + 1) % 3, (kz + 2) % 3);
+        if d[kz] < 0.0 {
+            std::mem::swap(&mut kx, &mut ky);
+        }
+        let (sx, sy, sz) = (d[kx] / d[kz], d[ky] / d[kz], 1.0 / d[kz]);
+        let shear = |v: Vec3| {
+            let p = v.as_dvec3() - o;
+            (p[kx] - sx * p[kz], p[ky] - sy * p[kz], sz * p[kz])
+        };
+        let ((ax, ay, az), (bx, by, bz), (cx, cy, cz)) = (shear(t[0]), shear(t[1]), shear(t[2]));
+        let u = cx * by - cy * bx;
+        let v = ax * cy - ay * cx;
+        let w = bx * ay - by * ax;
+        if (u < 0.0 || v < 0.0 || w < 0.0) && (u > 0.0 || v > 0.0 || w > 0.0) {
             return None;
         }
-        let inv = 1.0 / det;
-        let s = o - t[0];
-        // A little slack on the edges: rays through a shared edge must not slip between its
-        // two triangles to a surface behind.
-        const EDGE: f32 = 1e-5;
-        let u = s.dot(p) * inv;
-        if !(-EDGE..=1.0 + EDGE).contains(&u) {
+        let det = u + v + w;
+        if det == 0.0 || !det.is_finite() {
             return None;
         }
-        let q = s.cross(e1);
-        let v = d.dot(q) * inv;
-        if v < -EDGE || u + v > 1.0 + EDGE {
-            return None;
-        }
-        let tt = e2.dot(q) * inv;
-        (tt > 0.0).then_some((tt, u, v))
+        let t = (u * az + v * bz + w * cz) / det;
+        (t > 0.0 && (t as f32).is_finite()).then_some((t, (v / det) as f32, (w / det) as f32))
     }
 
-    fn traverse(&self, o: Vec3, d: Vec3, mut tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
+    fn traverse(&self, o: Vec3, d: Vec3, tmax: f32, any: bool, filter: &dyn Fn(u32) -> bool) -> Option<Hit> {
         if !o.is_finite() || !d.is_finite() || d == Vec3::ZERO || tmax.is_nan() {
             return None;
         }
+        // Distances are compared in `f64`. A positive distance under the `f32` range is reported
+        // as the least positive `f32`.
+        let mut tmax = f64::from(tmax);
         let root = self.nodes.first().filter(|_| !self.tris.is_empty())?;
-        let (oa, inv) = (Vec3A::from(o), Vec3A::ONE / Vec3A::from(d));
+        let (oa, inv) = (o.as_dvec3(), DVec3::ONE / d.as_dvec3());
         let mut best = None;
         let mut stack = Stack::default();
         stack.push((0, Self::slab(root.lo, root.hi, oa, inv, tmax)?));
@@ -382,7 +402,7 @@ impl Bvh {
                         && filter(orig)
                     {
                         tmax = t;
-                        best = Some(Hit { t, tri: orig, u, v });
+                        best = Some(Hit { t: (t as f32).max(f32::from_bits(1)), tri: orig, u, v });
                         if any {
                             return best;
                         }
@@ -435,9 +455,12 @@ impl Bvh {
             return None;
         }
         let root = self.nodes.first().filter(|_| !self.tris.is_empty() && p.is_finite())?;
-        let pa = Vec3A::from(p);
-        let box_d2 = |n: &Node| (n.lo - pa).max(pa - n.hi).max(Vec3A::ZERO).length_squared();
-        let (mut best_d2, mut best) = (max_dist * max_dist, None);
+        // Distances are compared in `f64`, where a small separation does not square to zero and
+        // the projected point is not rounded back onto `p`.
+        let pd = p.as_dvec3();
+        let box_d2 = |n: &Node| (n.lo.as_dvec3() - pd).max(pd - n.hi.as_dvec3()).max(DVec3::ZERO).length_squared();
+        let max_d2 = f64::from(max_dist) * f64::from(max_dist);
+        let (mut best_d2, mut best) = (max_d2, None);
         let mut stack = Stack::default();
         stack.push((0, box_d2(root)));
         while let Some((ni, d2)) = stack.pop() {
@@ -448,13 +471,13 @@ impl Bvh {
                     if !filter(orig) {
                         continue;
                     }
-                    let (q, u, v) = closest_on_triangle(p, tri);
-                    let dd = (q - p).length_squared();
-                    // The first point found may lie exactly at `max_dist`. A squared distance that
-                    // overflows is not comparable with a squared `max_dist` that overflows too.
-                    if dd.is_finite() && (dd < best_d2 || (best.is_none() && dd <= best_d2)) {
+                    let (q, u, v) = closest_on_triangle_f64(pd, tri.map(|c| c.as_dvec3()));
+                    let dd = (q - pd).length_squared();
+                    // The first point found may lie exactly at `max_dist`. A squared distance past
+                    // the `f32` range is not found.
+                    if dd <= f64::from(f32::MAX) && (dd < best_d2 || (best.is_none() && dd <= best_d2)) {
                         best_d2 = dd;
-                        best = Some(Hit { t: dd.sqrt(), tri: orig, u, v });
+                        best = Some(Hit { t: dd.sqrt() as f32, tri: orig, u: u as f32, v: v as f32 });
                     }
                 }
             } else {
@@ -498,18 +521,28 @@ impl Bvh {
     }
 }
 
-/// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
+/// The point of triangle `[a, b, c]` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
 /// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5), in `f64`: in `f32` the
 /// region tests round to zero inside thin triangles. A triangle without area is measured as the
 /// point or segment it is, and can be the nearest. An edge of zero length is skipped: the
 /// denominator of its parameter is its squared length.
-fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
-    let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), t.map(|c| c.as_dvec3()));
-    (q.as_vec3(), v as f32, w as f32)
-}
-
+///
+/// A point whose projection lies inside the triangle or on its edges is found first by the
+/// signed areas of the three triangles it makes with the edges, each a cross product of vectors
+/// from the point. These keep the triangle's thin side, where the region tests' dot products
+/// round to equal values even in `f64` and would send the point to an edge.
 fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64) {
     let (ab, ac, ap) = (b - a, c - a, p - a);
+    let n = ab.cross(ac);
+    let nn = n.length_squared();
+    if nn > 0.0 {
+        let (pa, pb, pc) = (a - p, b - p, c - p);
+        let (va, vb, vc) = (n.dot(pb.cross(pc)), n.dot(pc.cross(pa)), n.dot(pa.cross(pb)));
+        let sum = va + vb + vc;
+        if va >= 0.0 && vb >= 0.0 && vc >= 0.0 && sum > 0.0 {
+            return (p - n * (n.dot(ap) / nn), vb / sum, vc / sum);
+        }
+    }
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
         return (a, 0.0, 0.0);
@@ -569,21 +602,114 @@ mod tests {
     use crate::primitives;
 
     #[test]
-    fn a_box_first_reached_at_infinity_is_missed() {
+    fn a_box_first_reached_past_the_f32_range_is_missed() {
         let (lo, hi) = (Vec3A::ZERO, Vec3A::ONE);
-        // 1/d overflows on every axis: x, where the direction is subnormal, as well as y and z.
-        for d in [Vec3A::new(1e-39, 0.0, 0.0), Vec3A::new(1e-39, -0.0, -0.0)] {
-            let inv = Vec3A::ONE / d;
-            for o in [Vec3A::new(0.5, -1.0, 0.5), Vec3A::new(0.5, 2.0, 0.5), Vec3A::new(-1.0, 0.5, 0.5)] {
-                assert_eq!(Bvh::slab(lo, hi, o, inv, f32::INFINITY), None, "d {d}, origin {o}");
+        // The direction is subnormal on x and zero on y and z: the box is reached at 1e39 from
+        // -x, past the f32 range, and never from beside it on y.
+        for d in [DVec3::new(1e-39, 0.0, 0.0), DVec3::new(1e-39, -0.0, -0.0)] {
+            let inv = DVec3::ONE / d;
+            for o in [DVec3::new(0.5, -1.0, 0.5), DVec3::new(0.5, 2.0, 0.5), DVec3::new(-1.0, 0.5, 0.5)] {
+                assert_eq!(Bvh::slab(lo, hi, o, inv, f64::INFINITY), None, "d {d}, origin {o}");
             }
-            assert_eq!(Bvh::slab(lo, hi, Vec3A::splat(0.5), inv, f32::INFINITY), Some(0.0), "d {d}, inside");
+            assert_eq!(Bvh::slab(lo, hi, DVec3::splat(0.5), inv, f64::INFINITY), Some(0.0), "d {d}, inside");
         }
         // A ray parallel to a slab outside it, with a finite exit on another axis.
-        let inv = Vec3A::ONE / Vec3A::new(1.0, 0.0, 0.0);
-        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(0.5, -1.0, 0.5), inv, f32::INFINITY), None);
-        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(-1.0, 0.5, 0.5), inv, f32::INFINITY), Some(1.0));
-        assert_eq!(Bvh::slab(lo, hi, Vec3A::new(0.5, 0.0, 0.5), inv, f32::INFINITY), Some(0.0), "in the plane");
+        let inv = DVec3::ONE / DVec3::new(1.0, 0.0, 0.0);
+        assert_eq!(Bvh::slab(lo, hi, DVec3::new(0.5, -1.0, 0.5), inv, f64::INFINITY), None);
+        assert_eq!(Bvh::slab(lo, hi, DVec3::new(-1.0, 0.5, 0.5), inv, f64::INFINITY), Some(1.0));
+        assert_eq!(Bvh::slab(lo, hi, DVec3::new(0.5, 0.0, 0.5), inv, f64::INFINITY), Some(0.0), "in the plane");
+    }
+
+    #[test]
+    fn a_ray_whose_direction_reciprocal_overflows_f32_still_hits() {
+        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 100.0, 0.0]], &[0, 1, 2], &Limits::default()).unwrap();
+        // 2^-130, whose reciprocal overflows f32.
+        let d = Vec3::new(0.0, 0.0, -(2f64.powi(-130) as f32));
+        let hit = bvh.closest(Vec3::new(25.0, 25.0, 0.125), d, f32::MAX).unwrap();
+        assert_eq!(hit.t, 2f32.powi(127));
+        assert!((hit.u - 0.25).abs() < 1e-6 && (hit.v - 0.25).abs() < 1e-6, "{hit:?}");
+    }
+
+    #[test]
+    fn a_hit_closer_than_the_f32_range_is_found() {
+        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 100.0, 0.0]], &[0, 1, 2], &Limits::default()).unwrap();
+        // One subnormal step above the triangle, moving 3e38 per unit: the hit is at about 5e-84.
+        let (o, d) = (Vec3::new(25.0, 25.0, f32::from_bits(1)), Vec3::new(0.0, 0.0, -3e38));
+        let hit = bvh.closest(o, d, 1.0).unwrap();
+        assert_eq!(hit.t, f32::from_bits(1));
+        assert!(bvh.occluded(o, d, 1.0));
+        // Moving away still misses.
+        assert!(bvh.closest(o, -d, 1.0).is_none());
+        // A limit of the least positive f32 still holds a hit closer than it.
+        assert!(bvh.closest(o, d, f32::from_bits(1)).is_some());
+        // Two such hits are told apart: triangle 1 is one step nearer than triangle 0, which is
+        // listed first.
+        let s = f32::from_bits(1);
+        let two = Bvh::from_slices(
+            &[[0.0, 0.0, -s], [100.0, 0.0, -s], [0.0, 100.0, -s], [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 100.0, 0.0]],
+            &[0, 1, 2, 3, 4, 5],
+            &Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(two.closest(o, d, 1.0).map(|h| h.tri), Some(1));
+    }
+
+    #[test]
+    fn a_ray_just_outside_an_edge_misses_and_a_shared_edge_is_closed() {
+        let l = Limits::default();
+        let one = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], &[0, 1, 2], &l).unwrap();
+        let o = Vec3::new(0.5, 0.500_005, 1.0);
+        assert!(one.closest(o, Vec3::NEG_Z, 10.0).is_none());
+        assert!(!one.occluded(o, Vec3::NEG_Z, 10.0));
+        // Two triangles share the diagonal of a square: every ray down through it hits one.
+        let square = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]], &[0, 1, 2, 1, 3, 2], &l).unwrap();
+        for k in 0..=1000 {
+            let x = k as f32 / 1000.0;
+            let o = Vec3::new(x, 1.0 - x, 1.0);
+            assert!(square.closest(o, Vec3::NEG_Z, 10.0).is_some(), "ray through ({x}, {})", 1.0 - x);
+        }
+    }
+
+    #[test]
+    fn a_shallow_ray_across_a_triangle_hits() {
+        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], &[0, 1, 2], &Limits::default()).unwrap();
+        let (o, d) = (Vec3::new(-0.25, 0.25, 5e-14), Vec3::new(1.0, 0.0, -1e-13));
+        let hit = bvh.closest(o, d, 1.0).unwrap();
+        assert!((hit.t - 0.5).abs() < 1e-6, "{hit:?}");
+        assert!(bvh.occluded(o, d, 1.0));
+        // A ray in the triangle's plane still misses.
+        assert!(bvh.closest(Vec3::new(-0.25, 0.25, 0.0), Vec3::X, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_tree_with_every_triangle_left_out_keeps_no_triangle_memory() {
+        let nan = Vec3::new(f32::NAN, 0.0, 0.0);
+        let rejected = Mesh { positions: vec![Vec3::ZERO, Vec3::X, nan], indices: [0, 1, 2].repeat(1000), ..Mesh::default() };
+        let bvh = Bvh::try_new(&rejected).unwrap();
+        assert!(bvh.is_empty());
+        assert_eq!(bvh.tris.capacity(), 0);
+    }
+
+    #[test]
+    fn nearest_keeps_the_thin_side_of_a_triangle() {
+        let l = Limits::default();
+        let s = 2f32.powi(-32);
+        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, s, 0.0]], &[0, 1, 2], &l).unwrap();
+        // Inside the face, and on the edge from vertex 0 to vertex 1.
+        for p in [Vec3::new(0.75, 2f32.powi(-34), 0.0), Vec3::new(0.75, 0.0, 0.0)] {
+            let hit = bvh.nearest(p, 0.0, &|_| true).unwrap_or_else(|| panic!("{p}: not found"));
+            assert_eq!(hit.t, 0.0, "{p}");
+        }
+    }
+
+    #[test]
+    fn nearest_does_not_square_a_small_separation_to_zero() {
+        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], &[0, 1, 2], &Limits::default()).unwrap();
+        // 1e-23 above the face: its square, 1e-46, is 0 in f32.
+        let p = Vec3::new(0.25, 0.25, 1e-23);
+        assert!(bvh.nearest(p, 0.0, &|_| true).is_none());
+        let hit = bvh.nearest(p, 1e-22, &|_| true).unwrap();
+        assert!((hit.t - 1e-23).abs() < 1e-28, "{hit:?}");
     }
 
     #[test]
@@ -601,7 +727,7 @@ mod tests {
             let brute = (0..m.triangle_count())
                 .map(|t| {
                     let [a, b, c] = m.tri(t).unwrap().map(|i| m.positions[i]);
-                    (closest_on_triangle(p, &[a, b, c]).0 - p).length()
+                    (closest_on_triangle_f64(p.as_dvec3(), [a, b, c].map(|c| c.as_dvec3())).0 - p.as_dvec3()).length() as f32
                 })
                 .fold(f32::MAX, f32::min);
             assert!((hit.t - brute).abs() < 1e-5, "{} vs {brute}", hit.t);
@@ -718,6 +844,7 @@ mod tests {
             for t in 0..m.triangle_count() {
                 let [x, y, z] = m.tri(t).unwrap();
                 if let Some((tt, _, _)) = Bvh::hit_tri(&[m.positions[x], m.positions[y], m.positions[z]], o, d) {
+                    let tt = tt as f32;
                     slow = Some(slow.map_or(tt, |s: f32| s.min(tt)));
                 }
             }

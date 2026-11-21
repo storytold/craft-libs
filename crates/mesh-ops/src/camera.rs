@@ -87,18 +87,31 @@ impl OrbitCamera {
         }
     }
 
-    pub fn orbit(&mut self, dx: f32, dy: f32) {
-        self.yaw -= dx;
-        self.pitch = (self.pitch + dy).clamp(-89f32.to_radians(), 89f32.to_radians());
+    /// Whether the eye is apart from the target and the view-projection at aspect 1 is finite.
+    fn usable(&self) -> bool {
+        self.eye() != self.target && self.view_proj(1.0).is_finite()
     }
 
-    /// Pan by a screen fraction (dx, dy in viewport heights).
+    /// Turn around the target. Angles at which the eye rounds to the target (a target far from
+    /// the origin) leave the camera unchanged.
+    pub fn orbit(&mut self, dx: f32, dy: f32) {
+        let turned = OrbitCamera { yaw: self.yaw - dx, pitch: (self.pitch + dy).clamp(-89f32.to_radians(), 89f32.to_radians()), ..*self };
+        if turned.usable() {
+            *self = turned;
+        }
+    }
+
+    /// Pan by a screen fraction (dx, dy in viewport heights). A target at which the eye rounds to
+    /// the target leaves the camera unchanged.
     pub fn pan(&mut self, dx: f32, dy: f32) {
         let f = self.forward();
         let right = f.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
         let up = right.cross(f);
         let scale = self.distance * (self.fov_radians() * 0.5).tan() * 2.0;
-        self.target += (-right * dx + up * dy) * scale;
+        let panned = OrbitCamera { target: self.target + (-right * dx + up * dy) * scale, ..*self };
+        if panned.usable() {
+            *self = panned;
+        }
     }
 
     /// Dolly by a factor exponent (positive zooms in). A distance whose view-projection at aspect 1
@@ -108,17 +121,18 @@ impl OrbitCamera {
         let r = self.scene_radius.max(1e-3);
         let distance = (self.distance * (-amount).exp()).clamp(r * 0.05, r * 200.0);
         let zoomed = OrbitCamera { distance, ..*self };
-        if zoomed.eye() != zoomed.target && zoomed.view_proj(1.0).is_finite() {
+        if zoomed.usable() {
             *self = zoomed;
         }
     }
 
     /// Ray through a viewport point given in normalized device coordinates (-1..1, y up). It
     /// starts on the near plane: [`OrbitCamera::proj`] has a depth range of 0 to 1. The
-    /// view-projection is inverted and the points unprojected in `f64`, where the determinant of
-    /// a large scene's matrix and the squared length of the ray do not leave the range.
+    /// projection and view matrices are multiplied and inverted and the points unprojected in
+    /// `f64`, where the near-plane term of a camera far from the origin, the determinant of a large
+    /// scene's matrix and the squared length of the ray do not leave the range.
     pub fn ray(&self, ndc: Vec2, aspect: f32) -> Ray {
-        let inv = self.view_proj(aspect).as_dmat4().inverse();
+        let inv = (self.proj(aspect).as_dmat4() * self.view().as_dmat4()).inverse();
         let (x, y) = (f64::from(ndc.x), f64::from(ndc.y));
         let a = inv * DVec4::new(x, y, 0.0, 1.0);
         let b = inv * DVec4::new(x, y, 1.0, 1.0);
@@ -275,5 +289,28 @@ mod tests {
         assert!(r.dir.dot(c.forward()) < 0.999, "{r:?}");
         let ndc = c.project(r.origin + r.dir * c.distance, 1.0).unwrap();
         assert!((ndc.x - 0.5).abs() < 1e-3 && ndc.y.abs() < 1e-3, "{ndc}");
+    }
+
+    #[test]
+    fn the_center_ray_of_a_camera_far_from_the_origin_points_forward() {
+        // Multiplied in f32, the view-projection loses its near-plane term at this distance.
+        let c = OrbitCamera { target: Vec3::new(0.0, 0.0, 100_000_176.0), pitch: 0.0, ..OrbitCamera::default() };
+        let r = c.ray(Vec2::ZERO, 1.0);
+        assert!(r.dir.dot(c.forward()) > 0.9999, "{r:?} forward {}", c.forward());
+    }
+
+    #[test]
+    fn orbit_and_pan_leave_the_camera_unchanged_when_the_eye_would_round_to_the_target() {
+        // At 1e8, f32 steps by 8; offsets of about 3.5 on both x and z round away.
+        let mut c = OrbitCamera { target: Vec3::splat(1e8), yaw: 0.0, pitch: 0.0, distance: 5.0, ..OrbitCamera::default() };
+        assert!(c.view().is_finite());
+        let before = c;
+        c.orbit(-std::f32::consts::FRAC_PI_4, 0.0);
+        assert_eq!(c, before);
+        assert!(c.view().is_finite());
+        // A usable orbit still turns the camera.
+        c.orbit(0.5, 0.0);
+        assert_ne!(c.yaw, before.yaw);
+        assert!(c.view().is_finite());
     }
 }

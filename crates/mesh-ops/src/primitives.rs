@@ -82,9 +82,21 @@ impl Builder {
     }
 
     /// A grid of (rows+1)×(cols+1) vertices from `f(row, col)`, rows going "down" the texture.
-    fn grid(&mut self, rows: usize, cols: usize, mut f: impl FnMut(usize, usize) -> (Vec3, Vec3, Vec2)) {
+    fn grid(&mut self, rows: usize, cols: usize, f: impl FnMut(usize, usize) -> (Vec3, Vec3, Vec2)) {
+        self.grid_cells(rows, cols, false, f);
+    }
+
+    /// [`Builder::grid`] for a surface whose first and last rows of vertices each lie at one
+    /// point (the poles of a sphere), with two rows or more: the cells at the poles get one
+    /// triangle each instead of two, the second of which would have no area.
+    fn grid_poles(&mut self, rows: usize, cols: usize, f: impl FnMut(usize, usize) -> (Vec3, Vec3, Vec2)) {
+        self.grid_cells(rows, cols, rows >= 2, f);
+    }
+
+    fn grid_cells(&mut self, rows: usize, cols: usize, poles: bool, mut f: impl FnMut(usize, usize) -> (Vec3, Vec3, Vec2)) {
         let vertices = rows.checked_add(1).zip(cols.checked_add(1)).and_then(|(r, c)| r.checked_mul(c));
-        if !self.room(vertices, rows.checked_mul(cols).and_then(|q| q.checked_mul(2))) {
+        let cells = if poles { rows.checked_mul(2).and_then(|r| r.checked_sub(2)) } else { rows.checked_mul(2) };
+        if !self.room(vertices, cells.and_then(|q| q.checked_mul(cols))) {
             return;
         }
         let base = self.p.len() as u32;
@@ -99,9 +111,19 @@ impl Builder {
             for j in 0..cols as u32 {
                 let a = base + i * w + j;
                 let (b, c, d) = (a + 1, a + w, a + w + 1);
-                self.idx.extend_from_slice(&[a, c, d, a, d, b]);
-                // Edge d-a of the first triangle and a-d of the second split the quad.
-                self.diag.extend_from_slice(&[0b100, 0b001]);
+                if poles && i == 0 {
+                    // a and b lie on the top pole.
+                    self.idx.extend_from_slice(&[a, c, d]);
+                    self.diag.push(0);
+                } else if poles && i + 1 == rows as u32 {
+                    // c and d lie on the bottom pole.
+                    self.idx.extend_from_slice(&[a, d, b]);
+                    self.diag.push(0);
+                } else {
+                    self.idx.extend_from_slice(&[a, c, d, a, d, b]);
+                    // Edge d-a of the first triangle and a-d of the second split the quad.
+                    self.diag.extend_from_slice(&[0b100, 0b001]);
+                }
             }
         }
     }
@@ -181,11 +203,18 @@ pub fn try_sphere(radius: f32, segs: usize, rings: usize, limits: &Limits) -> Re
     b.finish("Sphere")
 }
 
+/// A UV sphere whose poles are exact, with one triangle per cell in the rows at the poles.
 fn sphere_into(b: &mut Builder, center: Vec3, radius: f32, segs: usize, rings: usize, r: UvRect) {
-    b.grid(rings, segs, |i, j| {
+    b.grid_poles(rings, segs, |i, j| {
         let (u, v) = (j as f32 / segs as f32, i as f32 / rings as f32);
-        let (theta, phi) = (v * PI, u * TAU + PI * 1.5);
-        let n = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
+        let (st, ct) = if i == 0 {
+            (0.0, 1.0)
+        } else if i == rings {
+            (0.0, -1.0)
+        } else {
+            (v * PI).sin_cos()
+        };
+        let n = around(j, segs) * st + Vec3::Y * ct;
         (center + n * radius, n, r.map(u, v))
     });
 }
@@ -240,18 +269,20 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
         (-Vec3::Y, Vec3::X, -Vec3::Z),
     ];
     let (kb, kc) = box_segments(bevel);
-    // Coordinates along one face axis from -h to h, dense in the bevels.
+    // Coordinates along one face axis from -h to h, dense in the bevels, worked out in `f64` so
+    // that the steps do not overflow for a half size near `f32::MAX`.
     let coords = |h: f32| -> Vec<f32> {
+        let (h, bevel) = (f64::from(h), f64::from(bevel));
         let inner = h - bevel;
         let mut v = Vec::new();
         for i in 0..kb {
-            v.push(-h + bevel * i as f32 / kb as f32);
+            v.push((-h + bevel * i as f64 / kb as f64) as f32);
         }
         for i in 0..=kc {
-            v.push(-inner + 2.0 * inner * i as f32 / kc as f32);
+            v.push((-inner + 2.0 * inner * i as f64 / kc as f64) as f32);
         }
         for i in 1..=kb {
-            v.push(inner + bevel * i as f32 / kb as f32);
+            v.push((inner + bevel * i as f64 / kb as f64) as f32);
         }
         v
     };
@@ -270,9 +301,17 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
             let dir = unit(q - clamped).unwrap_or(*n);
             let p = if bevel > 0.0 { clamped + dir * bevel } else { q };
             let nn = if bevel > 0.0 { dir } else { *n };
-            (center + p, nn, cell.map((a + hu) / (2.0 * hu), (c + hv) / (2.0 * hv)))
+            let along = |x: f32, h: f32| ((f64::from(x) + f64::from(h)) / (2.0 * f64::from(h))) as f32;
+            (center + p, nn, cell.map(along(a, hu), along(c, hv)))
         });
     }
+}
+
+/// The unit direction in the XZ plane of column `j` of `segs` around Y, the same for column
+/// `segs` as for column 0, so a lathe, its seam and a disk on its rim share positions exactly.
+fn around(j: usize, segs: usize) -> Vec3 {
+    let phi = (j % segs) as f32 / segs as f32 * TAU + PI * 1.5;
+    Vec3::new(phi.cos(), 0.0, -phi.sin())
 }
 
 /// Surface of revolution of a profile `(radius, y)` listed top → bottom, mapped into `r`
@@ -300,8 +339,7 @@ fn lathe_into(b: &mut Builder, center: Vec3, profile: &[(f32, f32)], segs: usize
         let t = (point(next) - point(prev)).try_normalize().map_or(Vec2::NEG_Y, |t| t.as_vec2());
         let n2 = Vec2::new(-t.y, t.x);
         let u = j as f32 / segs as f32;
-        let phi = u * TAU + PI * 1.5;
-        let dir = Vec3::new(phi.cos(), 0.0, -phi.sin());
+        let dir = around(j, segs);
         let p = center + dir * rad + Vec3::Y * y;
         let n = dir * n2.x + Vec3::Y * n2.y;
         (p, n, r.map(u, (len[i] / total) as f32))
@@ -444,18 +482,19 @@ fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, 
     let c = b.vert(center, n, r.map(0.5, 0.5));
     let first = b.p.len() as u32;
     for j in 0..segs {
-        let a = j as f32 / segs as f32 * TAU;
-        let (x, z) = (a.cos(), a.sin());
+        // The rim points of a lathe of `segs` columns, so the disk closes it.
+        let dir = around(j, segs);
+        let (x, z) = (dir.x, dir.z);
         // Top view: +X right, +Z down the texture; bottom view mirrors X.
         let uv = if up { r.map(0.5 + x * 0.5, 0.5 + z * 0.5) } else { r.map(0.5 + x * 0.5, 0.5 - z * 0.5) };
-        b.vert(center + Vec3::new(x, 0.0, z) * radius, n, uv);
+        b.vert(center + dir * radius, n, uv);
     }
     for j in 0..segs as u32 {
         let (a, bb) = (first + j, first + (j + 1) % segs as u32);
         if up {
-            b.idx.extend_from_slice(&[c, bb, a]);
-        } else {
             b.idx.extend_from_slice(&[c, a, bb]);
+        } else {
+            b.idx.extend_from_slice(&[c, bb, a]);
         }
         b.diag.push(0);
     }
@@ -466,12 +505,12 @@ pub fn cylinder(radius: f32, height: f32, segs: usize) -> Mesh {
     try_cylinder(radius, height, clamped(segs), &Limits::default()).unwrap_or_else(|_| empty("Cylinder"))
 }
 
-/// [`cylinder`] with its parameters checked.
+/// [`cylinder`] with its parameters checked. A height whose half is 0 in `f32` is an `Invalid`
+/// error.
 pub fn try_cylinder(radius: f32, height: f32, segs: usize, limits: &Limits) -> Result<Mesh> {
-    let (radius, height) = (positive("cylinder radius", radius)?, positive("cylinder height", height)?);
+    let (radius, h) = (positive("cylinder radius", radius)?, half("cylinder height", height)?);
     let segs = segments("cylinder segments", segs, 3, limits)?;
     let mut b = Builder::new(limits);
-    let h = height * 0.5;
     lathe_into(&mut b, Vec3::ZERO, &[(radius, h), (radius, -h)], segs, UvRect { o: Vec2::ZERO, s: Vec2::new(1.0, 0.5) }.inset(0.01));
     disk_into(&mut b, Vec3::Y * h, radius, true, segs, UvRect { o: Vec2::new(0.0, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
     disk_into(&mut b, -Vec3::Y * h, radius, false, segs, UvRect { o: Vec2::new(0.5, 0.5), s: Vec2::splat(0.5) }.inset(0.01));
@@ -483,7 +522,8 @@ pub fn torus(major: f32, minor: f32, segs: usize, sides: usize) -> Mesh {
     try_torus(major, minor, clamped(segs), clamped(sides), &Limits::default()).unwrap_or_else(|_| empty("Torus"))
 }
 
-/// [`torus`] with its parameters checked.
+/// [`torus`] with its parameters checked. A minor radius so small next to the major radius that
+/// the tube's cross-section rounds flat in `f32` is an `Invalid` error.
 pub fn try_torus(major: f32, minor: f32, segs: usize, sides: usize, limits: &Limits) -> Result<Mesh> {
     let (major, minor) = (positive("torus major radius", major)?, positive("torus minor radius", minor)?);
     let (segs, sides) = (segments("torus segments", segs, 3, limits)?, segments("torus sides", sides, 3, limits)?);
@@ -496,6 +536,7 @@ pub fn try_torus(major: f32, minor: f32, segs: usize, sides: usize, limits: &Lim
         let n = dir * theta.cos() - Vec3::Y * theta.sin();
         (dir * major + n * minor, n, Vec2::new(u, v))
     });
+    b.check_tube(0, segs + 1, sides)?;
     b.finish("Torus")
 }
 
@@ -582,7 +623,8 @@ impl Default for ShapeParams {
 ///
 /// Errors: `Invalid` for a size, radius, tube or height the shape reads that is not finite and
 /// positive, a size or height whose half is 0 in `f32`, a torus tube that is not smaller than
-/// its radius, coordinates that overflow `f32`, and a shape so small that corners of a triangle
+/// its radius, a torus tube so thin next to its radius that its cross-section rounds flat in
+/// `f32`, coordinates that overflow `f32`, and a shape so small that corners of a triangle
 /// round to one `f32` position; `TooLarge` for a segment or ring count over [`Limits::max_segments`] and for vertex or
 /// triangle counts over the limits.
 pub fn try_shape(kind: ShapeKind, p: &ShapeParams, limits: &Limits) -> Result<Mesh> {
@@ -601,7 +643,9 @@ pub fn try_shape(kind: ShapeKind, p: &ShapeParams, limits: &Limits) -> Result<Me
             if tube >= radius {
                 return Err(MeshOpsError::Invalid(format!("torus tube {tube} is not smaller than its radius {radius}")));
             }
-            ring_torus_into(&mut b, radius, tube, segs()?, rings(3)?);
+            let (segs, rings) = (segs()?, rings(3)?);
+            ring_torus_into(&mut b, radius, tube, segs, rings);
+            b.check_tube(0, segs + 1, rings)?;
         }
         ShapeKind::Cone | ShapeKind::Cylinder => {
             let (radius, half_height) = (positive("shape radius", p.radius)?, half("shape height", p.height)?);
@@ -626,6 +670,27 @@ fn half(what: &str, value: f32) -> Result<f32> {
 }
 
 impl Builder {
+    /// An `Invalid` error when the cross-section of a torus is no longer a convex polygon once
+    /// its points are rounded to `f32`, as when the tube is so thin next to the radius that the
+    /// tube's points round onto one line and the surface folds flat. The cross-section is the
+    /// first column of the vertex grid at `base`: `count` vertices `stride` apart, which lie in
+    /// the YZ plane with Z the signed distance from the axis.
+    fn check_tube(&self, base: usize, stride: usize, count: usize) -> Result<()> {
+        if self.error.is_some() || count < 3 {
+            return Ok(());
+        }
+        let q = |k: usize| self.p.get(base + (k % count) * stride).map(|v| DVec2::new(f64::from(v.z), f64::from(v.y)));
+        let turn = |k: usize| match (q(k), q(k + 1), q(k + 2)) {
+            (Some(a), Some(b), Some(c)) => (b - a).perp_dot(c - b),
+            _ => 0.0,
+        };
+        if (0..count).all(|k| turn(k) > 0.0) || (0..count).all(|k| turn(k) < 0.0) {
+            Ok(())
+        } else {
+            Err(MeshOpsError::Invalid("torus tube too thin for its radius: its cross-section rounds flat in f32".into()))
+        }
+    }
+
     fn tri(&mut self, a: u32, b: u32, c: u32) {
         self.idx.extend_from_slice(&[a, b, c]);
         self.diag.push(0);
@@ -999,9 +1064,13 @@ mod tests {
     #[test]
     fn primitives_reject_sizes_that_overflow() {
         let l = Limits::default();
-        // The torus's two radii and the box's doubled half size pass f32::MAX.
+        // The torus's two radii pass f32::MAX.
         assert!(try_torus(3e38, 3e38, 16, 8, &l).is_err());
-        assert!(try_rounded_box(Vec3::splat(3e38), 0.0, &l).is_err());
+        // The box's coordinates stay within ±3e38, though its doubled half size passes f32::MAX:
+        // its steps are worked out in f64.
+        let wide = try_rounded_box(Vec3::splat(3e38), 0.0, &l).unwrap();
+        assert!(wide.positions.iter().chain(&wide.normals).all(|v| v.is_finite()));
+        assert!(wide.uvs.iter().all(|uv| uv.is_finite()) && wide.tangents.iter().all(|t| t.is_finite()));
         assert_eq!(torus(3e38, 3e38, 16, 8).triangle_count(), 0);
         // The cylinder's profile length is measured on the divided profile, so a height whose
         // length alone would pass f32::MAX builds.
@@ -1310,5 +1379,55 @@ mod tests {
                 assert!(f.dot(m.normals[i].as_dvec3()) > 0.999, "side normal {:?} against face {f:?}", m.normals[i]);
             }
         }
+    }
+
+    #[test]
+    fn a_cylinder_is_closed_where_its_caps_meet_the_side() {
+        let m = try_cylinder(1.0, 2.0, 3, &Limits::default()).unwrap();
+        assert_watertight(&m);
+        // Every cap triangle faces away from the cylinder.
+        for t in 0..m.triangle_count() {
+            let [a, b, c] = m.tri(t).unwrap().map(|i| m.positions[i]);
+            let f = (b - a).cross(c - a);
+            if a.y.abs() == 1.0 && b.y == a.y && c.y == a.y {
+                assert!(f.y * a.y > 0.0, "cap triangle {t} faces {f:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_poles_have_one_triangle_per_cell() {
+        let m = try_sphere(1.0, 16, 8, &Limits::default()).unwrap();
+        assert_eq!(m.triangle_count(), 16 * 8 * 2 - 2 * 16);
+        for t in 0..m.triangle_count() {
+            let [a, b, c] = m.tri(t).unwrap().map(|i| m.positions[i]);
+            assert!(a != b && b != c && a != c, "triangle {t} repeats a corner: {a} {b} {c}");
+        }
+        assert_watertight(&m);
+    }
+
+    #[test]
+    fn a_cylinder_height_with_no_half_is_invalid() {
+        let r = try_cylinder(1.0, f32::from_bits(1), 8, &Limits::default());
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("half")), "{r:?}");
+    }
+
+    #[test]
+    fn a_torus_tube_that_rounds_flat_is_invalid() {
+        let l = Limits::default();
+        let p = ShapeParams { radius: 1.0, tube: 1e-10, segments: 8, rings: 3, ..ShapeParams::default() };
+        let r = try_shape(ShapeKind::Torus, &p, &l);
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("tube")), "{r:?}");
+        let r = try_torus(1.0, 1e-10, 8, 3, &l);
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("tube")), "{r:?}");
+        // A tube thicker than the radius folds through the axis but keeps a round cross-section.
+        try_torus(0.5, 2.0, 8, 3, &l).unwrap();
+    }
+
+    #[test]
+    fn a_cube_near_the_f32_limit_builds() {
+        let m = try_cube(2e38, &Limits::default()).unwrap();
+        assert!(m.positions.iter().all(|p| p.is_finite()));
+        assert!(m.uvs.iter().all(|uv| uv.is_finite()));
     }
 }

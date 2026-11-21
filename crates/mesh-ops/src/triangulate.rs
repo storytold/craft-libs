@@ -6,8 +6,9 @@
 //! Contours are closed polylines in a plane, the last point not repeated. [`triangulate`] checks
 //! that the outer contour and every hole are simple (no edge crosses or touches another edge, and
 //! no point repeats), that every hole lies inside the outer contour and outside every other hole,
-//! and that the work stays within [`Limits::max_outline_work`]. Coordinates are taken relative to
-//! the corner of the input's bounding box, so a contour far from the origin keeps its shape.
+//! and that the work stays within [`Limits::max_outline_work`]. Every geometric test works on
+//! differences of the coordinates as given, so a contour far from the origin keeps its shape and
+//! points far apart in scale stay apart.
 
 use crate::{Limits, MeshOpsError, Result, check_limit, try_vec};
 
@@ -81,7 +82,7 @@ pub(crate) fn point_in(p: P, c: &[P]) -> bool {
     let mut j = n - 1;
     for i in 0..n {
         let (a, b) = (c[i], c[j]);
-        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] - a[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) {
             inside = !inside;
         }
         j = i;
@@ -92,6 +93,18 @@ pub(crate) fn point_in(p: P, c: &[P]) -> bool {
 /// Whether `p`, on the line through `a` and `b`, lies on the segment between them.
 fn on_segment(a: P, b: P, p: P) -> bool {
     a[0].min(b[0]) <= p[0] && p[0] <= a[0].max(b[0]) && a[1].min(b[1]) <= p[1] && p[1] <= a[1].max(b[1])
+}
+
+/// Whether `p` lies on the segment `a`-`b`.
+pub(crate) fn on_edge(a: P, b: P, p: P) -> bool {
+    cross(a, b, p) == 0.0 && on_segment(a, b, p)
+}
+
+/// Whether segments `a`-`b` and `c`-`d` cross at a point inside both: each one's endpoints lie
+/// strictly on opposite sides of the other's line.
+pub(crate) fn segments_cross(a: P, b: P, c: P, d: P) -> bool {
+    let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+    ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
 }
 
 /// Whether segments `a`-`b` and `c`-`d` share at least one point.
@@ -106,7 +119,7 @@ fn segments_meet(a: P, b: P, c: P, d: P) -> bool {
         || (d4 == 0.0 && on_segment(a, b, d))
 }
 
-/// The contours of one polygon, concatenated and moved so the bounding box starts at the origin.
+/// The contours of one polygon, concatenated, with their coordinates as given.
 pub(crate) struct Polygon {
     pub(crate) pts: Vec<P>,
     /// Start of each contour in `pts`, outer first, and `pts.len()` at the end.
@@ -156,9 +169,6 @@ fn gather(outer: &[P], holes: &[&[P]], limits: &Limits) -> Result<Polygon> {
     let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]);
     if extent > MAX_OUTLINE_EXTENT {
         return Err(MeshOpsError::Invalid(format!("the outline spans {extent}, over {MAX_OUTLINE_EXTENT}")));
-    }
-    for p in &mut pts {
-        *p = [p[0] - lo[0], p[1] - lo[1]];
     }
     Ok(Polygon { pts, starts })
 }
@@ -273,7 +283,9 @@ pub(crate) fn triangulate_counted(outer: &[P], holes: &[&[P]], limits: &Limits, 
         hs.push(r);
     }
     let right = |r: &Vec<usize>| r.iter().map(|&i| pts[i][0]).fold(f64::NEG_INFINITY, f64::max);
-    hs.sort_by(|a, b| right(b).total_cmp(&right(a)));
+    // Rightmost first, holes with the same rightmost x in input order (each hole's indices start
+    // after the previous hole's); an unstable sort allocates nothing.
+    hs.sort_unstable_by(|a, b| right(b).total_cmp(&right(a)).then_with(|| a.first().cmp(&b.first())));
     for h in hs {
         bridge(pts, &mut ring, &h, work)?;
     }
@@ -315,9 +327,13 @@ fn bridge(pts: &[P], ring: &mut Vec<usize>, h: &[usize], work: &mut Work) -> Res
     // Reflex ring vertices inside triangle (M, I, P) block the view: take the one with the
     // smallest angle to the ray (closest on ties).
     let pp = pts[cand.1];
-    let (t0, t1, t2) = if cross(mp, ip, pp) >= 0.0 { (mp, ip, pp) } else { (mp, pp, ip) };
+    let side = cross(mp, ip, pp);
+    let (t0, t1, t2) = if side >= 0.0 { (mp, ip, pp) } else { (mp, pp, ip) };
     let mut best_ang = f64::INFINITY;
-    for k in 0..n {
+    // When the ray reaches P itself (P on the ray), the triangle collapses to a segment of the
+    // ray and nothing between M and P blocks the view: every point of the line would pass the
+    // three cross-product tests, those behind M included.
+    for k in (0..n).filter(|_| side != 0.0) {
         let v = ring[k];
         if v == cand.1 {
             continue;
@@ -354,15 +370,14 @@ fn bridge(pts: &[P], ring: &mut Vec<usize>, h: &[usize], work: &mut Work) -> Res
 fn is_ear(pts: &[P], ring: &[usize], [a, b, c]: [usize; 3]) -> bool {
     let (pa, pb, pc) = (pts[a], pts[b], pts[c]);
     let cr = cross(pa, pb, pc);
-    let (u, v) = ([pa[0] - pb[0], pa[1] - pb[1]], [pc[0] - pb[0], pc[1] - pb[1]]);
-    // A straight-through vertex (the edges at it turn left by less than 1e-12 radians, or not at
-    // all) is clipped as a triangle without area, which keeps every contour edge in the
-    // triangulation, so caps meet walls without T-junctions. A turn to the right is reflex.
-    let straight = cr >= 0.0 && cr <= 1e-12 * u[0].hypot(u[1]) * v[0].hypot(v[1]) && u[0] * v[0] + u[1] * v[1] <= 0.0;
-    if straight {
-        return true;
+    // A straight-through vertex (the cross product is exactly zero and the ring goes on rather
+    // than back) is clipped as a triangle without area, which keeps every contour edge in the
+    // triangulation, so caps meet walls without T-junctions. A turn to the right is reflex. Every
+    // turn to the left, however shallow, needs the blocker test.
+    if cr == 0.0 {
+        return (pa[0] - pb[0]) * (pc[0] - pb[0]) + (pa[1] - pb[1]) * (pc[1] - pb[1]) <= 0.0;
     }
-    if cr <= 0.0 {
+    if cr < 0.0 {
         return false;
     }
     !ring.iter().any(|&v| {
@@ -486,6 +501,36 @@ mod tests {
         let at = |i: u32| shallow[i as usize];
         assert!(tris.iter().all(|t| signed_area(&[at(t[0]), at(t[1]), at(t[2])]) >= 0.0), "{tris:?}");
         assert_edges_covered(&shallow, &[&shallow], &tris);
+    }
+
+    #[test]
+    fn a_hole_whose_ray_reaches_a_ring_vertex_bridges_to_it() {
+        // The ray from the hole's rightmost point (5, 5) reaches the vertex (10, 5); the reflex
+        // vertex (1, 5) lies on the same line behind the hole.
+        let outer = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [10.0, 10.0], [0.0, 10.0], [0.0, 6.0], [1.0, 5.0], [0.0, 4.0]];
+        let hole = vec![[3.0, 4.0], [3.0, 6.0], [5.0, 5.0]];
+        let tris = triangulate(&outer, &[&hole], &Limits::default()).unwrap();
+        let pts: Vec<P> = outer.iter().chain(&hole).copied().collect();
+        assert!(tris.iter().all(|t| signed_area(&[pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]]) >= 0.0), "{tris:?}");
+        assert!((area_of(&pts, &tris) - (signed_area(&outer).abs() - signed_area(&hole).abs()) * 0.5).abs() < 1e-9);
+        assert_edges_covered(&pts, &[&outer, &hole], &tris);
+    }
+
+    #[test]
+    fn a_shallow_convex_corner_with_a_vertex_inside_is_not_clipped() {
+        // The first corner turns left by about 1e-13 and its triangle holds (1, -5e-14).
+        let c = vec![[1.0, -1e-13], [2.0, 0.0], [1.0, -5e-14], [0.0, 0.0]];
+        let tris = triangulate(&c, &[], &Limits::default()).unwrap();
+        assert!(tris.iter().all(|t| signed_area(&[c[t[0] as usize], c[t[1] as usize], c[t[2] as usize]]) >= 0.0), "{tris:?}");
+        assert_edges_covered(&c, &[&c], &tris);
+    }
+
+    #[test]
+    fn points_far_apart_in_scale_stay_apart() {
+        // Subtracting the smallest x, -1e20, would round (0, 1) and (1, 1) to one point.
+        let c = vec![[-1e20, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [-1e20, 1.0]];
+        let tris = triangulate(&c, &[], &Limits::default()).unwrap();
+        assert_edges_covered(&c, &[&c], &tris);
     }
 
     #[test]

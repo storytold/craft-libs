@@ -250,13 +250,13 @@ fn height(t: &Flat) -> f64 {
 }
 
 /// Whether the interiors of two triangles in a plane overlap: no edge direction of either
-/// separates them (separating axis test). Projections that overlap by no more than a tolerance
-/// only touch, as faces that share an edge or a corner do: 1e-5 of the smaller of the two
-/// triangles' heights, so a thin triangle's own width counts, plus the `f64` rounding of
-/// coordinates of their magnitude.
+/// separates them (separating axis test). Faces that share an edge or a corner have that edge
+/// or corner at the same projected points, so their spans meet with no overlap but the `f64`
+/// rounding of the projections on an axis: spans that overlap by no more than that rounding at
+/// the coordinates' magnitude only touch, and any larger overlap, however thin, is an overlap.
 fn interiors_overlap(a: &Flat, b: &Flat) -> bool {
     let magnitude = a.iter().chain(b).map(|p| p.abs().max_element()).fold(0.0f64, f64::max);
-    let tol = 1e-5 * height(a).min(height(b)) + 8.0 * f64::EPSILON * magnitude;
+    let tol = 16.0 * f64::EPSILON * magnitude;
     let span = |t: &Flat, axis: DVec2| t.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.dot(axis)), hi.max(p.dot(axis))));
     for tri in [a, b] {
         for k in 0..3 {
@@ -272,14 +272,17 @@ fn interiors_overlap(a: &Flat, b: &Flat) -> bool {
 
 /// Replace the UVs of `mesh` with an automatic non-overlapping layout: each material gets its
 /// own 0..1 space with charts at least `padding_texels` (minimum 1, which a NaN counts as) away
-/// from each other and the borders at `resolution`. Vertices are split at chart borders;
-/// tangents are recomputed.
+/// from each other and the borders. The padding is counted in texels of the square the charts
+/// are packed into: `resolution` (at least 16), doubled while the padding leaves no room for the
+/// charts, so at a doubled size the padding is narrower than `padding_texels` at `resolution`.
+/// Vertices are split at chart borders; tangents are recomputed.
 /// Returns the number of charts. A mesh that fails the checks (indices, submesh ranges and
 /// materials, no triangle in submeshes of two materials, finite positions, finite normals and
 /// colors when it has them, at least one
 /// triangle that is not degenerate, and the default [`Limits`] that [`unwrap_core`] applies) is
-/// left unchanged, as is one whose layout runs out of memory; running out of memory for the
-/// tangents comes after the new layout is in place.
+/// left unchanged, as is one whose layout runs out of memory or gives a face with area no area
+/// in the stored UVs; running out of memory for the tangents comes after the new layout is in
+/// place.
 pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Result<usize> {
     let (charts, _) = unwrap_core(mesh, padding_texels, resolution, &Limits::default())?;
     mesh.try_compute_tangents()?;
@@ -316,13 +319,13 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     let wid = |v: usize| weld.get(v).copied().unwrap_or(u32::MAX);
 
     // Face normals (None for degenerate faces) and materials. The cross products are taken in
-    // `f64` from the positions as given, where they neither overflow nor round to zero, so a
-    // small face far from the origin keeps its plane.
+    // `f64` from the positions as given, as the mesh's face normals take them, so a small face
+    // far from the origin keeps its plane and a thin face keeps its side.
     let mut normal: Vec<Option<Vec3>> = try_vec(n, "unwrap faces")?;
     let mut area = try_vec(n, "unwrap faces")?;
     for t in 0..n {
         let [a, b, c] = mesh.tri(t).unwrap_or([0; 3]).map(|v| original(v).as_dvec3());
-        let cr = (b - a).cross(c - a);
+        let cr = crate::mesh::face_cross(a, b, c);
         area.push(cr.length() * 0.5);
         normal.push(cr.try_normalize().map(|n| n.as_vec3()));
     }
@@ -471,6 +474,18 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
             indices.push(idx);
         }
         check_limit("vertex count", positions.len(), limits.max_vertices)?;
+    }
+    // A face with area whose stored UVs have none (a chart far smaller than the largest one of
+    // its material, whose corners round to one `f32` point) would cover no texel. The products
+    // of the `f32` differences are exact in `f64`, so a layout with area is never read as none.
+    for (t, tri) in indices.as_chunks::<3>().0.iter().enumerate() {
+        if normal.get(t).copied().flatten().is_none() {
+            continue;
+        }
+        let [a, b, c] = tri.map(|v| uvs.get(v as usize).copied().unwrap_or_default().as_dvec2());
+        if (b - a).perp_dot(c - a) == 0.0 {
+            return Err(MeshOpsError::Invalid(format!("triangle {t} has no area in the UV layout at this resolution")));
+        }
     }
     mesh.positions = positions;
     mesh.normals = normals;
@@ -952,6 +967,32 @@ mod tests {
             let out = crate::unwrap_uvs(&positions, &indices, 1.0, 256, &crate::Limits::default()).unwrap();
             assert!(out.charts >= 2, "squash {squash}: {} charts", out.charts);
         }
+    }
+
+    #[test]
+    fn faces_that_overlap_by_less_than_their_heights_start_another_chart() {
+        // A flat fan through +X, +Y, -X, -Y and (1, 2^-20): the last face overlaps the first in
+        // a sliver 2^-20 high near +X.
+        let positions = [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [1.0, 2f32.powi(-20), 0.0]];
+        let indices = [0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5];
+        let out = crate::unwrap_uvs(&positions, &indices, 4.0, 256, &crate::Limits::default()).unwrap();
+        assert!(out.charts >= 2, "{} charts", out.charts);
+        let uv = |t: usize| [0, 1, 2].map(|k| Vec2::from_array(out.uvs[out.indices[t * 3 + k] as usize]).as_dvec2());
+        assert!(!interiors_overlap(&uv(0), &uv(3)), "{:?} {:?}", uv(0), uv(3));
+    }
+
+    #[test]
+    fn a_layout_whose_stored_uvs_lose_a_face_is_refused() {
+        // The unit triangle sets the scale; the triangle with sides of 1e-10 packs to about 1e-10
+        // of the square, and its corners round to one f32 point.
+        let positions = [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1e-10, 0.0, 1.0], [0.0, 1e-10, 1.0]];
+        let l = crate::Limits::default();
+        let r = crate::unwrap_uvs(&positions, &[0, 1, 2, 3, 4, 5], 4.0, 256, &l);
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("no area in the UV layout")), "{r:?}");
+        let mut m = Mesh::from_slices(&positions, None, None, &[0, 1, 2, 3, 4, 5], &l).unwrap();
+        let before = m.clone();
+        assert!(auto_unwrap(&mut m, 4.0, 256).is_err());
+        assert_eq!(m, before);
     }
 
     #[test]

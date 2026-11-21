@@ -6,7 +6,7 @@ use glam::{DVec2, Vec2, Vec3, Vec4};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-use crate::mesh::unit;
+use crate::mesh::{face_cross, submesh_range, unit};
 use crate::{Limits, Mesh, MeshOpsError, Result, check_limit, try_vec};
 
 /// Texel not covered by any triangle.
@@ -16,7 +16,7 @@ const BAND: u32 = 32;
 
 /// A triangle with a corner farther than this many texels from the UV origin is not rasterized:
 /// within it, the products of two texel coordinates in the edge functions stay finite.
-const MAX_TEXEL_COORDINATE: f32 = 1e18;
+const MAX_TEXEL_COORDINATE: f64 = 1e18;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct UvGBuffer {
@@ -26,8 +26,9 @@ pub struct UvGBuffer {
     pub tri: Vec<u32>,
     /// Barycentric weights of the triangle's second and third vertices.
     pub bary: Vec<[f32; 2]>,
-    /// Texels written by more than one triangle (overlapping UVs). A texel whose center lies on
-    /// an edge two triangles share is written by both and counts; the later triangle keeps it.
+    /// Texel writes over a texel another triangle already wrote (overlapping UVs): a texel under
+    /// three triangles counts twice. A texel whose center lies on an edge two triangles share is
+    /// written by both and counts; the later triangle keeps it.
     pub overlaps: u32,
 }
 
@@ -93,8 +94,8 @@ fn texels(width: u32, height: u32, limits: &Limits) -> Result<usize> {
 impl UvGBuffer {
     /// Rasterize the triangles of material `material` at `width × height`, each side clamped to
     /// `1..=8192` (the default [`Limits::max_gbuffer_side`]). When the mesh is over another
-    /// default [`Limits`] field or the memory for that size cannot be reserved, the buffer is
-    /// 1 × 1 and uncovered.
+    /// default [`Limits`] field, is invalid ([`UvGBuffer::try_new`]) or the memory for that size
+    /// cannot be reserved, the buffer is 1 × 1 and uncovered.
     pub fn new(mesh: &Mesh, material: usize, width: u32, height: u32) -> UvGBuffer {
         let side = Limits::default().max_gbuffer_side;
         let (w, h) = (width.clamp(1, side), height.clamp(1, side));
@@ -109,11 +110,36 @@ impl UvGBuffer {
 
     /// [`UvGBuffer::new`] with the size checked against `limits` instead of clamped: a zero
     /// side is an error. The mesh's vertex and triangle counts and the rasterizer's work and band
-    /// lists are checked before the texel buffers are reserved.
+    /// lists are checked before the texel buffers are reserved. An index count that is not a
+    /// multiple of 3, a submesh of the material that does not start and end on a triangle
+    /// boundary inside the index buffer, and a corner of the material's triangles without a
+    /// vertex or a finite UV are `Invalid`.
     pub fn try_new(mesh: &Mesh, material: usize, width: u32, height: u32, limits: &Limits) -> Result<UvGBuffer> {
         let n = texels(width, height, limits)?;
         check_limit("vertex count", mesh.positions.len(), limits.max_vertices)?;
         check_limit("triangle count", mesh.triangle_count(), limits.max_triangles)?;
+        if !mesh.indices.len().is_multiple_of(3) {
+            return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
+        }
+        if let Some(s) = mesh.submeshes.iter().find(|s| s.material == material && submesh_range(s, mesh.indices.len()).is_none()) {
+            return Err(MeshOpsError::Invalid(format!("submesh {} is out of range", s.name)));
+        }
+        // Every corner of the material's triangles needs a vertex and a finite UV. The visits are
+        // counted against `max_triangles` as the rasterizer counts them.
+        for (visited, t) in mesh.triangles_of(material).enumerate() {
+            check_limit("triangle count", visited.saturating_add(1), limits.max_triangles)?;
+            let Some(c) = corners(&mesh.indices, t) else {
+                return Err(MeshOpsError::Invalid(format!("triangle {t} is out of range")));
+            };
+            for v in c {
+                if v >= mesh.positions.len() {
+                    return Err(MeshOpsError::Invalid(format!("index {v} out of range ({} vertices)", mesh.positions.len())));
+                }
+                if !mesh.uvs.get(v).is_some_and(|uv| uv.is_finite()) {
+                    return Err(MeshOpsError::Invalid(format!("vertex {v} has no finite UV")));
+                }
+            }
+        }
         let bins = Bins::new(&mesh.uvs, &mesh.indices, || mesh.triangles_of(material), (width, height), limits)?;
         UvGBuffer::rasterize(&mesh.uvs, &mesh.indices, &bins, (width, height), n)
     }
@@ -162,7 +188,10 @@ impl UvGBuffer {
         self.tri.iter().filter(|t| **t != NO_TRI).count()
     }
 
-    /// Surface attributes at texel index `i` (None when uncovered).
+    /// Surface attributes at texel index `i` (None when uncovered). The buffer stores triangle
+    /// numbers and barycentrics, so it reads `mesh` as it was when the buffer was built: after a
+    /// change to the UVs, the triangle order or the order of a triangle's corners, build the
+    /// buffer again.
     pub fn surface(&self, mesh: &Mesh, i: usize) -> Option<Surface> {
         let t = *self.tri.get(i)?;
         if t == NO_TRI {
@@ -180,25 +209,26 @@ fn add_within(what: &'static str, total: u64, add: u64, limit: u64) -> Result<u6
     if got > limit { Err(MeshOpsError::TooLarge { what, got, limit }) } else { Ok(got) }
 }
 
-/// Triangle `t` in the texels of a `size` buffer: its corners (in `f64`), its signed doubled
-/// area and its bounding box clipped to the buffer as `[x0, x1, y0, y1]` (ends exclusive).
-/// `None` when a corner is missing, not finite or farther than [`MAX_TEXEL_COORDINATE`], when
-/// the triangle has no area or when the clipped box is empty.
-fn texel_triangle(uvs: &[Vec2], indices: &[u32], t: usize, size: Vec2) -> Option<([DVec2; 3], f64, [u32; 4])> {
+/// Triangle `t` in the texels of a `size` buffer: its corners, its signed doubled area and its
+/// bounding box clipped to the buffer as `[x0, x1, y0, y1]` (ends exclusive). The UVs are scaled
+/// to texels in `f64`, where the product of an `f32` UV and a side up to 2^24 is exact, so a
+/// corner just left of a texel center stays left of it. `None` when a corner is missing, not
+/// finite or farther than [`MAX_TEXEL_COORDINATE`], when the triangle's doubled area (exact to
+/// one rounding) is zero or when the clipped box is empty.
+fn texel_triangle(uvs: &[Vec2], indices: &[u32], t: usize, size: DVec2) -> Option<([DVec2; 3], f64, [u32; 4])> {
     let [a, b, c] = corners(indices, t)?;
-    let p = [*uvs.get(a)? * size, *uvs.get(b)? * size, *uvs.get(c)? * size];
+    let p = [uvs.get(a)?.as_dvec2() * size, uvs.get(b)?.as_dvec2() * size, uvs.get(c)?.as_dvec2() * size];
     if !p.iter().all(|q| q.is_finite() && q.abs().max_element() <= MAX_TEXEL_COORDINATE) {
         return None;
     }
-    let corners = p.map(|q| q.as_dvec2());
-    let area = edge(corners[0], corners[1], corners[2]);
-    if area.abs() < 1e-12 {
+    let area = edge(p[0], p[1], p[2]);
+    if area == 0.0 {
         return None;
     }
-    let lo = p[0].min(p[1]).min(p[2]).floor().clamp(Vec2::ZERO, size);
-    let hi = p[0].max(p[1]).max(p[2]).ceil().clamp(Vec2::ZERO, size);
+    let lo = p[0].min(p[1]).min(p[2]).floor().clamp(DVec2::ZERO, size);
+    let hi = p[0].max(p[1]).max(p[2]).ceil().clamp(DVec2::ZERO, size);
     let [x0, x1, y0, y1] = [lo.x as u32, hi.x as u32, lo.y as u32, hi.y as u32];
-    (x1 > x0 && y1 > y0).then_some((corners, area, [x0, x1, y0, y1]))
+    (x1 > x0 && y1 > y0).then_some((p, area, [x0, x1, y0, y1]))
 }
 
 /// The bands of rows of a G-buffer (each [`BAND`] rows high), each with the triangles whose
@@ -216,7 +246,7 @@ impl Bins {
     /// [`Limits::max_gbuffer_bin_entries`] and reserves nothing. A second pass counts each band's
     /// entries, so the lists are reserved in one piece before a third pass fills them.
     fn new<I: Iterator<Item = usize>>(uvs: &[Vec2], indices: &[u32], triangles: impl Fn() -> I, (w, h): (u32, u32), limits: &Limits) -> Result<Bins> {
-        let size = Vec2::new(w as f32, h as f32);
+        let size = DVec2::new(f64::from(w), f64::from(h));
         let bands = h.div_ceil(BAND) as usize;
         // NO_TRI marks an uncovered texel, so it cannot name a triangle.
         let triangles = || triangles().take_while(|t| *t < NO_TRI as usize);
@@ -270,7 +300,7 @@ impl Bins {
     /// Write the triangle and barycentrics under each texel center of `w × h` buffers (`tri`
     /// and `bary` hold `w × h` entries) for the binned triangles; returns the overlap count.
     fn draw(&self, uvs: &[Vec2], indices: &[u32], (w, h): (u32, u32), tri: &mut [u32], bary: &mut [[f32; 2]]) -> u32 {
-        let size = Vec2::new(w as f32, h as f32);
+        let size = DVec2::new(f64::from(w), f64::from(h));
         let band_len = band_texels(w, tri.len());
         let band = |(bi, (tri, bary)): (usize, (&mut [u32], &mut [[f32; 2]]))| {
             let mut overlaps = 0u32;
@@ -299,7 +329,7 @@ impl Bins {
                 let step = edges.map(|(a, b)| DVec2::new(a.y - b.y, b.x - a.x) * area.signum());
                 let lengths = edges.map(|(a, b)| (b - a).length());
                 let lowest = area.abs() / lengths.iter().copied().fold(0.0, f64::max);
-                let slack = (1e-6 + 8.0 * f64::EPSILON * f64::from(size.max_element())).min(1e-3 * lowest);
+                let slack = (1e-6 + 8.0 * f64::EPSILON * size.max_element()).min(1e-3 * lowest);
                 let eps = lengths.map(|length| -slack * length);
                 for y in y0..y1 {
                     for x in x0..x1 {
@@ -360,9 +390,9 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     // `unit` divides by the largest component first, so a long finite vector keeps its direction.
     let nrm = unit(p(&mesh.normals)?).unwrap_or(Vec3::Y);
     let (pa, pb, pc) = (mesh.positions.get(a)?.as_dvec3(), mesh.positions.get(b)?.as_dvec3(), mesh.positions.get(c)?.as_dvec3());
-    // The edges and their cross product are taken in `f64`, where the difference and the cross
-    // product of any two finite `f32` positions neither overflow nor round to zero.
-    let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().map_or(nrm, |n| n.as_vec3());
+    // The cross product of the edges is taken in `f64` as the mesh's face normals take it, with
+    // the shortest edges and the exact products where those round to zero.
+    let geo_nrm = face_cross(pa, pb, pc).try_normalize().map_or(nrm, |n| n.as_vec3());
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
     let tdir = unit(tan.truncate()).unwrap_or_else(|| nrm.any_orthonormal_vector());
@@ -654,5 +684,69 @@ mod tests {
             assert!(matches!(UvGBuffer::from_slices(&[], &[], w, h, &huge), Err(MeshOpsError::OutOfMemory("G-buffer"))), "{w} × {h}");
             assert!(matches!(UvGBuffer::try_new(&m, 0, w, h, &huge), Err(MeshOpsError::OutOfMemory("G-buffer"))), "{w} × {h}");
         }
+    }
+
+    #[test]
+    fn a_sliver_with_a_tiny_area_still_covers_the_center_on_its_edge() {
+        // Doubled area 2^-42 texels, below the old cutoff of 1e-12, with the center (0.5, 0.5)
+        // strictly inside; and a sliver of doubled area 2^-41 with the center on its edge from
+        // (0, 0) to (1, 1).
+        let d = 2f32.powi(-22);
+        let g = UvGBuffer::from_slices(&[[0.5 - d, 0.5 - d], [0.5 + d, 0.5 - d], [0.5, 0.5 + d]], &[0, 1, 2], 1, 1, &Limits::default()).unwrap();
+        assert_eq!(g.covered_count(), 1);
+        let g = UvGBuffer::from_slices(&[[0.0, 0.0], [1.0, 1.0], [0.0, 2f32.powi(-41)]], &[0, 1, 2], 1, 1, &Limits::default()).unwrap();
+        assert_eq!(g.covered_count(), 1);
+    }
+
+    #[test]
+    fn texel_coordinates_do_not_round_onto_a_texel_center() {
+        // u = 0.250091552734375, and u × 8191 is 2048.4999084 texels, which rounds to the center
+        // 2048.5 in f32.
+        let u = 0.25 + 3.0 * 2f32.powi(-15);
+        let g = UvGBuffer::from_slices(&[[0.0, 0.0], [u, 0.0], [u, 1.0]], &[0, 1, 2], 8191, 1, &Limits::default()).unwrap();
+        assert!(!g.covered(2048));
+        assert!(g.covered(2047));
+    }
+
+    #[test]
+    fn try_new_rejects_a_submesh_that_does_not_start_on_a_triangle() {
+        let m = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::ONE],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE],
+            indices: vec![0, 1, 2, 1, 3, 2],
+            submeshes: vec![crate::SubMesh { name: "a".into(), material: 0, start: 1, count: 3 }],
+            materials: vec!["a".into()],
+            ..Mesh::default()
+        };
+        let r = UvGBuffer::try_new(&m, 0, 8, 8, &Limits::default());
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e == "submesh a is out of range"), "{r:?}");
+        // A missing or non-finite UV, an index past the vertices and a trailing index are
+        // errors, not triangles left out of the buffer.
+        let whole = Mesh { submeshes: vec![crate::SubMesh { name: "a".into(), material: 0, start: 0, count: 6 }], ..m.clone() };
+        assert!(UvGBuffer::try_new(&whole, 0, 8, 8, &Limits::default()).unwrap().covered_count() > 0);
+        let broken = |f: &dyn Fn(&mut Mesh)| {
+            let mut b = whole.clone();
+            f(&mut b);
+            UvGBuffer::try_new(&b, 0, 8, 8, &Limits::default())
+        };
+        for (what, r) in [
+            ("missing UV", broken(&|b| b.uvs.truncate(3))),
+            ("NaN UV", broken(&|b| b.uvs[3].x = f32::NAN)),
+            ("index past the vertices", broken(&|b| b.indices[4] = 9)),
+            ("trailing index", broken(&|b| b.indices.push(0))),
+        ] {
+            assert!(matches!(r, Err(MeshOpsError::Invalid(_))), "{what}: {r:?}");
+        }
+        // Repeated listings stop at the triangle limit before every corner is checked: the
+        // seventh visit, past a limit of 6, has a NaN UV.
+        let mut repeated = whole.clone();
+        repeated.submeshes = vec![crate::SubMesh { name: "a".into(), material: 0, start: 0, count: 6 }; 3];
+        repeated.positions.push(Vec3::ONE);
+        repeated.uvs.push(Vec2::new(f32::NAN, 0.0));
+        repeated.indices.extend([0, 1, 4]);
+        repeated.submeshes.push(crate::SubMesh { name: "b".into(), material: 0, start: 6, count: 3 });
+        let few = Limits { max_triangles: 6, ..Limits::default() };
+        let r = UvGBuffer::try_new(&repeated, 0, 8, 8, &few);
+        assert!(matches!(r, Err(MeshOpsError::TooLarge { what: "triangle count", .. })), "{r:?}");
     }
 }

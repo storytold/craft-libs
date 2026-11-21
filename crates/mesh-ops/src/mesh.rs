@@ -116,7 +116,7 @@ fn divisor_into(largest: Option<f32>, limit: f32) -> f32 {
 
 /// The index range of a submesh, when it starts and ends on a triangle boundary inside `len`
 /// indices.
-fn submesh_range(s: &SubMesh, len: usize) -> Option<std::ops::Range<usize>> {
+pub(crate) fn submesh_range(s: &SubMesh, len: usize) -> Option<std::ops::Range<usize>> {
     let end = u64::from(s.start) + u64::from(s.count);
     (s.start.is_multiple_of(3) && s.count.is_multiple_of(3) && end <= len as u64).then_some(s.start as usize..end as usize)
 }
@@ -241,17 +241,67 @@ pub(crate) fn check_triangles(positions: &[Vec3], indices: &[u32]) -> Result<()>
 /// the corner opposite the longest edge, so the two shorter edges keep their direction when a
 /// difference of corners far apart rounds: for corners `(2^80, 2^80, 0)`, `(0, 0, 0)` and
 /// `(0, 1, 0)` the edges from the first corner round to one direction, and the edges from the
-/// third corner give -Z.
+/// third corner give -Z. A component no larger than the rounding the edges can carry (a thin
+/// triangle whose short edges both round, such as corners `(2^80, 2^80, 0)`, `(0, -1, 0)` and
+/// `(-2^80, -2^80, 0)`) is computed again from the exact products of the corners.
 pub(crate) fn face_cross(a: DVec3, b: DVec3, c: DVec3) -> DVec3 {
     let (ab, bc, ca) = (b - a, c - b, a - c);
     let (ab2, bc2, ca2) = (ab.length_squared(), bc.length_squared(), ca.length_squared());
-    if ab2 >= bc2 && ab2 >= ca2 {
-        ca.cross(-bc)
+    let (u, v) = if ab2 >= bc2 && ab2 >= ca2 {
+        (ca, -bc)
     } else if bc2 >= ca2 {
-        ab.cross(-ca)
+        (ab, -ca)
     } else {
-        bc.cross(-ab)
+        (bc, -ab)
+    };
+    let fast = u.cross(v);
+    // Component k is u_i v_j - u_j v_i. Each edge difference rounds once, and each product and
+    // their difference once more, so its error stays below a few `f64` steps of
+    // |u_i v_j| + |u_j v_i|. A bound of zero means both products are exactly zero.
+    let component = |k: usize| {
+        let (i, j) = ((k + 1) % 3, (k + 2) % 3);
+        let bound = 8.0 * f64::EPSILON * ((u[i] * v[j]).abs() + (u[j] * v[i]).abs());
+        if bound > 0.0 && fast[k].abs() <= bound { exact_cross_component([a[i], a[j]], [b[i], b[j]], [c[i], c[j]]) } else { fast[k] }
+    };
+    DVec3::new(component(0), component(1), component(2))
+}
+
+/// `(b - a) × (c - a)` of three points in a plane, as `a × b + b × c + c × a`: each of the six
+/// products is split into its rounded value and its rounding error, and the twelve parts are
+/// added exactly ([`exact_sum`]), so the sign is exact and the value rounds about once.
+fn exact_cross_component(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    let products = [(a[0], b[1]), (-a[1], b[0]), (b[0], c[1]), (-b[1], c[0]), (c[0], a[1]), (-c[1], a[0])];
+    let mut terms = [0.0f64; 12];
+    for (k, (x, y)) in products.into_iter().enumerate() {
+        let p = x * y;
+        terms[2 * k] = p;
+        terms[2 * k + 1] = x.mul_add(y, -p);
     }
+    exact_sum(&terms)
+}
+
+/// `a + b` and the rounding error of that sum (Knuth's two-sum).
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let s = a + b;
+    let bb = s - a;
+    (s, (a - (s - bb)) + (b - bb))
+}
+
+/// The sum of at most 12 terms, kept exactly as an expansion of non-overlapping parts (Shewchuk's
+/// grow-expansion, <https://people.eecs.berkeley.edu/~jrs/papers/robustr.pdf>) and added from the
+/// smallest part up: the sign is exact and the value is the exact sum rounded about once.
+fn exact_sum(terms: &[f64; 12]) -> f64 {
+    let mut parts = [0.0f64; 12];
+    for (len, &t) in terms.iter().enumerate() {
+        let mut q = t;
+        for p in &mut parts[..len] {
+            let (s, e) = two_sum(q, *p);
+            *p = e;
+            q = s;
+        }
+        parts[len] = q;
+    }
+    parts.iter().sum()
 }
 
 /// The unit normal of the triangle `a, b, c`, on the side from which its corners run
@@ -724,10 +774,7 @@ impl Mesh {
         let mut g = Mikk { positions: &self.positions, normals, uvs, indices: &self.indices, scales, corners: &mut corners };
         usable = usable && g.affordable()?;
         if !usable || !mikktspace::generate_tangents(&mut g) {
-            let per_vertex = simple_tangents(&self.positions, normals, uvs, &self.indices, scales)?;
-            for (corner, v) in corners.iter_mut().zip(&self.indices) {
-                *corner = per_vertex.get(*v as usize).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0));
-            }
+            corners = simple_tangents(&self.positions, normals, uvs, &self.indices, scales)?;
         }
         // Orthonormalize a tangent against the normal of vertex `v`; repair degenerate results.
         let frame = |v: usize, t: Vec4| {
@@ -832,19 +879,36 @@ impl Mesh {
     }
 
     /// The UV tiles material `m` covers: integer parts of its triangles' UV centroids (v down),
-    /// ascending. Non-finite UVs are skipped. The triangles the material's submeshes list (a
-    /// triangle counts again for each submesh that lists it) over [`Limits::max_triangles`] are
-    /// `TooLarge`.
-    pub fn uv_tiles(&self, m: usize, limits: &Limits) -> Result<std::collections::BTreeSet<(i32, i32)>> {
-        self.listed_of(m, limits)?;
-        Ok(self
-            .triangles_of(m)
-            .filter_map(|t| {
-                let [a, b, c] = self.tri(t)?;
-                let uv = uv_centroid([*self.uvs.get(a)?, *self.uvs.get(b)?, *self.uvs.get(c)?]);
-                uv.is_finite().then(|| (uv.x.floor() as i32, uv.y.floor() as i32))
-            })
-            .collect())
+    /// ascending, each once. Non-finite UVs are skipped, and a tile outside the `i32` range is
+    /// `Invalid`. The triangles the material's submeshes
+    /// list (a triangle counts again for each submesh that lists it) over
+    /// [`Limits::max_triangles`] are `TooLarge`, and a reservation that fails is `OutOfMemory`.
+    pub fn uv_tiles(&self, m: usize, limits: &Limits) -> Result<Vec<(i32, i32)>> {
+        let listed = self.listed_of(m, limits)?;
+        let mut tiles = try_vec(listed, "UV tiles")?;
+        // The tile is the floor of the f32 centroid that `map_material_uvs_with` passes, so a
+        // caller that maps each tile with it sees the same tiles. -2^31 and 2^31 are exact in
+        // f32; a floor in [-2^31, 2^31) fits in i32.
+        let tile = |x: f32| {
+            let f = x.floor();
+            (-2_147_483_648.0..2_147_483_648.0).contains(&f).then_some(f as i32)
+        };
+        for t in self.triangles_of(m) {
+            let Some(uv) = self.tri(t).and_then(|[a, b, c]| Some(uv_centroid([*self.uvs.get(a)?, *self.uvs.get(b)?, *self.uvs.get(c)?]))) else {
+                continue;
+            };
+            if !uv.is_finite() {
+                continue;
+            }
+            let (Some(x), Some(y)) = (tile(uv.x), tile(uv.y)) else {
+                return Err(MeshOpsError::Invalid(format!("UV centroid {uv} is outside the i32 tile range")));
+            };
+            tiles.push((x, y));
+        }
+        // Sorting in place allocates nothing.
+        tiles.sort_unstable();
+        tiles.dedup();
+        Ok(tiles)
     }
 
     /// Remap the UVs of material `m`'s triangles with `f`. Vertices they share with other
@@ -859,14 +923,16 @@ impl Mesh {
     /// place a vertex on a tile border with its own triangle's tile.
     ///
     /// The triangles the material's submeshes list (a triangle counts again for each submesh that
-    /// lists it) over [`Limits::max_triangles`] are `TooLarge`, as are the mesh's vertices and
-    /// the copies of its shared ones over [`Limits::max_vertices`]. A triangle that a submesh of
+    /// lists it), or the mesh's triangles, over [`Limits::max_triangles`] are `TooLarge`, as are
+    /// the mesh's vertices and the copies of its shared ones over [`Limits::max_vertices`]. A triangle that a submesh of
     /// another material also lists is `Invalid`, and a reservation that fails is `OutOfMemory`.
     /// Every error leaves the mesh unchanged and does not call `f`.
     pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2, limits: &Limits) -> Result<()> {
         let listed = self.listed_of(m, limits)?;
         let n = self.positions.len();
         check_limit("vertex count", n, limits.max_vertices)?;
+        // The per-triangle mask below has one entry for every triangle of the mesh.
+        check_limit("triangle count", self.triangle_count(), limits.max_triangles)?;
         if self.listed_by_other(m)? {
             return Err(MeshOpsError::Invalid("triangle belongs to more than one material".into()));
         }
@@ -990,16 +1056,24 @@ impl Mesh {
         let _ = self.try_append(other);
     }
 
-    /// [`Mesh::append`], or an error when an index of `other` is out of range or a rebased
-    /// index or submesh range would not fit in `u32`. When only one side has normals, UVs or
+    /// [`Mesh::append`], or an error when `other` has an index count that is not a multiple of 3,
+    /// an index out of range or a submesh that does not start and end on a triangle inside its
+    /// indices, or when a rebased index or submesh range would not fit in `u32`. When only one
+    /// side has normals, UVs or
     /// tangents for every vertex, the other side gets them (computed normals and tangents, zero
     /// UVs), so the attribute arrays stay as long as the positions; computing tangents can split
     /// vertices ([`Mesh::compute_tangents`]). A side with submeshes and no material list gets
     /// one unnamed material. A reservation that fails is `OutOfMemory`. Every error leaves this
     /// mesh unchanged.
     pub fn try_append(&mut self, other: &Mesh) -> Result<()> {
+        if !other.indices.len().is_multiple_of(3) {
+            return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
+        }
         if let Some(bad) = other.indices.iter().find(|&&i| i as usize >= other.positions.len()) {
             return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
+        }
+        if let Some(s) = other.submeshes.iter().find(|s| submesh_range(s, other.indices.len()).is_none()) {
+            return Err(MeshOpsError::Invalid(format!("submesh {} is out of range", s.name)));
         }
         let too_large = |what| MeshOpsError::Invalid(format!("the appended {what} do not fit in u32"));
         u32::try_from(self.positions.len()).map_err(|_| too_large("vertices"))?;
@@ -1156,41 +1230,28 @@ impl Mesh {
 
     /// Uniformly scale and translate so the mesh is centered with the given bounding radius. A
     /// radius that is not a finite positive number, or is so large that a corner of the bounds
-    /// would pass `f32::MAX`, leaves the mesh unchanged.
+    /// would pass `f32::MAX`, leaves the mesh unchanged. The center, the scale and each moved
+    /// position are computed in `f64` and rounded once, so the bounds of the result are the
+    /// requested radius around the origin to `f32` precision even where the center or the size
+    /// is not exact in `f32` (corners at x = 16777216 and 16777218 go to -1 and 1).
     pub fn normalize_to(&mut self, radius: f32) {
         if !(radius.is_finite() && radius > 0.0) {
             return;
         }
         let (lo, hi) = self.bounds();
-        // `Mesh::radius` is the real radius above its floor; a smaller mesh, or a scale past
-        // f32::MAX, takes the second form.
-        let r = self.radius();
-        let s = radius / r;
-        if lo.abs().max(hi.abs()).max_element() <= SAFE_MAGNITUDE && r > MIN_RADIUS && s.is_finite() {
-            let c = (lo + hi) * 0.5;
-            if !(((lo - c) * s).is_finite() && ((hi - c) * s).is_finite()) {
-                return;
-            }
-            for p in &mut self.positions {
-                *p = (*p - c) * s;
-            }
-            return;
-        }
-        // Half-sums and a divided length keep every intermediate value finite near f32::MAX and
-        // nonzero for a mesh far smaller than the floor.
-        let c = lo * 0.5 + hi * 0.5;
-        let half = hi * 0.5 - lo * 0.5;
-        let largest = half.abs().max_element();
-        if largest == 0.0 {
+        let (lo, hi) = (lo.as_dvec3(), hi.as_dvec3());
+        let c = (lo + hi) * 0.5;
+        let length = ((hi - lo) * 0.5).length();
+        if length == 0.0 {
             // Every finite position is the center.
             for p in &mut self.positions {
-                *p = *p * 0.5 - c * 0.5;
+                *p = (p.as_dvec3() - c).as_vec3();
             }
             return;
         }
-        let s = radius / (half / largest).length();
-        let moved = |p: Vec3| (p * 0.5 - c * 0.5) / largest * s * 2.0;
-        if !(moved(lo).is_finite() && moved(hi).is_finite()) {
+        let s = f64::from(radius) / length;
+        let moved = |p: Vec3| ((p.as_dvec3() - c) * s).as_vec3();
+        if !(moved(lo.as_vec3()).is_finite() && moved(hi.as_vec3()).is_finite()) {
             return;
         }
         for p in &mut self.positions {
@@ -1198,7 +1259,8 @@ impl Mesh {
         }
     }
 
-    /// A single-material mesh from raw attributes; computes missing normals and tangents.
+    /// A single-material mesh from raw attributes; computes missing normals and tangents. `uvs`
+    /// may be empty; UVs or normals given with another length than `positions` are `Invalid`.
     pub fn from_parts(positions: Vec<Vec3>, normals: Option<Vec<Vec3>>, uvs: Vec<Vec2>, indices: Vec<u32>, material: &str) -> Result<Mesh> {
         Self::from_parts_capped(positions, normals, uvs, indices, material, MAX_TRIANGLES)
     }
@@ -1215,6 +1277,12 @@ impl Mesh {
     ) -> Result<Mesh> {
         if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
             return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
+        }
+        let n = positions.len();
+        for (what, len) in [("normals", normals.as_ref().map(Vec::len)), ("UVs", Some(uvs.len()).filter(|len| *len != 0))] {
+            if let Some(len) = len.filter(|len| *len != n) {
+                return Err(MeshOpsError::Invalid(format!("{len} {what} for {n} vertices")));
+            }
         }
         let count = u32::try_from(indices.len()).map_err(|_| MeshOpsError::Invalid("index count does not fit in u32".into()))?;
         // The triangle cap of `validate`, checked before the normals and tangents are computed.
@@ -1347,11 +1415,12 @@ impl Mesh {
         let has = |len: usize| len == n;
         let (has_n, has_t, has_uv, has_c) = (has(self.normals.len()), has(self.tangents.len()), has(self.uvs.len()), has(self.colors.len()));
         let mut mids: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
-        // Half-sums: (a + b) * 0.5 overflows for coordinates near f32::MAX.
+        // Midpoints in f64, rounded once: (a + b) * 0.5 overflows in f32 for coordinates near
+        // f32::MAX, and a * 0.5 + b * 0.5 rounds each half of a subnormal coordinate away.
         let mid = |m: &mut Mesh, mids: &mut std::collections::HashMap<(u32, u32), u32>, a: u32, b: u32| -> u32 {
             *mids.entry((a.min(b), a.max(b))).or_insert_with(|| {
                 let (i, j) = (a as usize, b as usize);
-                let half = |x: Vec3, y: Vec3| x * 0.5 + y * 0.5;
+                let half = |x: Vec3, y: Vec3| ((x.as_dvec3() + y.as_dvec3()) * 0.5).as_vec3();
                 m.positions.push(half(self.positions[i], self.positions[j]));
                 if has_n {
                     m.normals.push(unit(half(self.normals[i], self.normals[j])).unwrap_or(Vec3::ZERO));
@@ -1361,10 +1430,10 @@ impl Mesh {
                     m.tangents.push(unit(half(ti.truncate(), tj.truncate())).unwrap_or(Vec3::ZERO).extend(ti.w));
                 }
                 if has_uv {
-                    m.uvs.push(self.uvs[i] * 0.5 + self.uvs[j] * 0.5);
+                    m.uvs.push(((self.uvs[i].as_dvec2() + self.uvs[j].as_dvec2()) * 0.5).as_vec2());
                 }
                 if has_c {
-                    m.colors.push(self.colors[i] * 0.5 + self.colors[j] * 0.5);
+                    m.colors.push(((self.colors[i].as_dvec4() + self.colors[j].as_dvec4()) * 0.5).as_vec4());
                 }
                 // At most n + 3 × triangles vertices, checked to fit above.
                 (m.positions.len() - 1) as u32
@@ -1434,15 +1503,24 @@ impl Scales {
     }
 }
 
-/// Per-vertex tangents from the UV gradients of the triangles around each vertex: the fallback
-/// when MikkTSpace does not run or fails. `w` is -1 where the summed direction up the image
-/// (toward smaller v) lies against `cross(normal, tangent)`, and +1 otherwise, as MikkTSpace
-/// sets it. Edges, UV differences and sums are taken in `f64`, so an edge too small to survive
-/// division by the position scale in `f32` still sets the direction.
+/// Tangents from the UV gradients of the triangles around each vertex, one per triangle corner:
+/// the fallback when MikkTSpace does not run or fails. At each vertex the triangles are summed
+/// in two groups by the handedness of their own frame at that vertex (whether their direction up
+/// the image, toward smaller v, lies against `cross(normal, tangent)`), and a corner takes the
+/// sum of its triangle's group with `w` -1 for the mirrored group and +1 otherwise, as MikkTSpace
+/// sets it. A vertex whose triangles are mirrored against each other so gets two frames, which
+/// [`Mesh::try_compute_tangents_splitting`] splits or refuses. A corner of a triangle without UV
+/// area takes the group that has a direction, +1 first. Edges, UV differences and sums are taken
+/// in `f64`, so an edge too small to survive division by the position scale in `f32` still sets
+/// the direction.
 fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: &[u32], scales: Scales) -> Result<Vec<Vec4>> {
-    let mut sums = try_filled(positions.len(), (DVec3::ZERO, DVec3::ZERO), "tangents")?;
+    // Per vertex: (tangent, up) sums of the triangles whose frame has w = +1, then w = -1.
+    let mut sums = try_filled(positions.len(), [(DVec3::ZERO, DVec3::ZERO); 2], "tangents")?;
+    // Per corner: the group of its triangle's frame at its vertex, None without UV area.
+    let mut groups = try_filled(indices.len(), None::<usize>, "tangents")?;
     let (position_scale, uv_scale) = (f64::from(scales.position), f64::from(scales.uv));
-    for &[a, b, c] in indices.as_chunks::<3>().0 {
+    let normal = |v: usize| normals.get(v).copied().and_then(unit).unwrap_or(Vec3::Y).as_dvec3();
+    for (t, &[a, b, c]) in indices.as_chunks::<3>().0.iter().enumerate() {
         let (a, b, c) = (a as usize, b as usize, c as usize);
         let (Some(pa), Some(pb), Some(pc)) = (positions.get(a), positions.get(b), positions.get(c)) else { continue };
         let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
@@ -1458,21 +1536,31 @@ fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: 
         let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
         // The direction in which v shrinks, which is up the image.
         let up = (e1 * d2.x - e2 * d1.x) / determinant;
-        for v in [a, b, c] {
-            if let Some((t, u)) = sums.get_mut(v) {
-                *t += tangent;
-                *u += up;
+        for (k, v) in [a, b, c].into_iter().enumerate() {
+            let group = usize::from(normal(v).cross(tangent).dot(up) < 0.0);
+            if let Some(pair) = sums.get_mut(v) {
+                pair[group].0 += tangent;
+                pair[group].1 += up;
+            }
+            if let Some(g) = groups.get_mut(t * 3 + k) {
+                *g = Some(group);
             }
         }
     }
 
-    let mut tangents = try_vec(sums.len(), "tangents")?;
-    tangents.extend(sums.into_iter().enumerate().map(|(v, (t, up))| {
+    let frame = |v: usize, group: usize| -> Vec4 {
+        let t = sums.get(v).map_or(DVec3::ZERO, |pair| pair[group].0);
         let t = t.try_normalize().map(|t| t.as_vec3()).and_then(unit).unwrap_or(Vec3::X);
-        let up = up.try_normalize().map(|up| up.as_vec3()).unwrap_or(Vec3::ZERO);
-        let n = normals.get(v).copied().and_then(unit).unwrap_or(Vec3::Y);
-        let w = if n.cross(t).dot(up) < 0.0 { -1.0 } else { 1.0 };
-        t.extend(w)
+        t.extend(if group == 1 { -1.0 } else { 1.0 })
+    };
+    let mut tangents = try_vec(indices.len(), "tangents")?;
+    tangents.extend(indices.iter().zip(&groups).map(|(&v, group)| {
+        let v = v as usize;
+        let group = group.unwrap_or_else(|| {
+            let has = |g: usize| sums.get(v).is_some_and(|pair| pair[g].0 != DVec3::ZERO);
+            if !has(0) && has(1) { 1 } else { 0 }
+        });
+        frame(v, group)
     }));
     Ok(tangents)
 }
@@ -1781,9 +1869,21 @@ mod tests {
         let big = Vec2::splat(1.5e38);
         let mut m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![big; 3], vec![0, 1, 2], "a").unwrap();
         let l = Limits::default();
-        assert_eq!(m.uv_tiles(0, &l).unwrap().into_iter().collect::<Vec<_>>(), vec![(i32::MAX, i32::MAX)]);
+        // Its tile is past i32, so it is an error rather than a saturated tile.
+        assert!(matches!(m.uv_tiles(0, &l), Err(MeshOpsError::Invalid(_))));
         m.map_material_uvs_with(0, |c, _| c, &l).unwrap();
         assert_eq!(m.uvs, vec![big; 3]);
+        // -2^31 is the lowest tile that fits; 2^31 is past the highest.
+        let edge = |uv: Vec2| Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, vec![uv; 3], vec![0, 1, 2], "a").unwrap();
+        assert_eq!(edge(Vec2::new(-2_147_483_648.0, 0.0)).uv_tiles(0, &l).unwrap(), vec![(i32::MIN, 0)]);
+        assert!(matches!(edge(Vec2::new(0.0, 2_147_483_648.0)).uv_tiles(0, &l), Err(MeshOpsError::Invalid(_))));
+        // Tiles come from the f32 centroid the mapping callback sees: 1 - 2^-24, 1 and 1 average
+        // just under 1, which rounds to 1 in both.
+        let near = vec![Vec2::new(1.0 - 2f32.powi(-24), 0.0), Vec2::X, Vec2::X];
+        let mut m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, near, vec![0, 1, 2], "a").unwrap();
+        assert_eq!(m.uv_tiles(0, &l).unwrap(), vec![(1, 0)]);
+        m.map_material_uvs_with(0, |c, _| c.floor(), &l).unwrap();
+        assert_eq!(m.uvs, vec![Vec2::new(1.0, 0.0); 3]);
     }
 
     /// One triangle in UV tile (0, 0) that `listings` submeshes of material 0 all list.
@@ -2613,6 +2713,21 @@ mod tests {
         let mut broken = quad();
         broken.indices[0] = 4;
         assert!(quad().try_append(&broken).is_err());
+        // A trailing index, and a submesh that does not end on a triangle, leave this mesh as it
+        // was.
+        let mut trailing = quad();
+        trailing.indices.push(0);
+        let mut m = quad();
+        assert!(matches!(m.try_append(&trailing), Err(MeshOpsError::Invalid(_))));
+        assert_eq!(m, quad());
+        let mut ragged = quad();
+        if let Some(s) = ragged.submeshes.first_mut() {
+            s.count = 4;
+        } else {
+            ragged.submeshes.push(SubMesh { name: "a".into(), material: 0, start: 0, count: 4 });
+        }
+        assert!(matches!(m.try_append(&ragged), Err(MeshOpsError::Invalid(_))));
+        assert_eq!(m, quad());
     }
 
     #[test]
@@ -3062,5 +3177,92 @@ mod tests {
         let mut m = Mesh { positions, normals, uvs, indices, ..Mesh::default() };
         m.try_compute_tangents().unwrap();
         assert!(m.tangents.iter().all(|t| (*t - Vec4::new(1.0, 0.0, 0.0, -1.0)).length() < 1e-5));
+    }
+
+    #[test]
+    fn fallback_tangents_split_vertices_shared_by_opposite_frames() {
+        // The first triangle of `opposite_handedness` repeated past the valence limit sends the
+        // mesh to the fallback; the mirrored second triangle still needs its own frame.
+        let (positions, normals, uvs, pair) = opposite_handedness();
+        let mut indices: Vec<u32> = pair[..3].repeat(MAX_MIKKTSPACE_VALENCE + 1);
+        indices.extend_from_slice(&pair[3..]);
+        assert!(matches!(crate::tangents(&positions, &normals, &uvs, &indices, &Limits::default()), Err(MeshOpsError::Invalid(_))));
+        let mut m = Mesh::from_slices(&positions, Some(&normals), Some(&uvs), &indices, &Limits::default()).unwrap();
+        m.try_compute_tangents().unwrap();
+        m.validate().unwrap();
+        let last = m.triangle_count() - 1;
+        for (t, w) in [(0, -1.0), (last, 1.0)] {
+            for v in m.tri(t).unwrap() {
+                let tangent = m.tangents[v];
+                assert!((tangent - Vec3::X.extend(w)).length() < 1e-5, "triangle {t}, vertex {v}: {tangent}");
+            }
+        }
+    }
+
+    #[test]
+    fn normals_of_a_thin_triangle_whose_short_edges_round_keep_their_side() {
+        // (b - a) × (c - a) has z = -2^81, but -1 - 2^80 rounds to -2^80 and the f64 cross of the
+        // rounded edges is 0.
+        let m = 2f32.powi(80);
+        let positions = [[m, m, 0.0], [0.0, -1.0, 0.0], [-m, -m, 0.0]];
+        let indices = [0, 1, 2];
+        for n in flat(&positions, &indices).normals {
+            assert_eq!(n, [0.0, 0.0, -1.0]);
+        }
+        for n in smooth(&positions, &indices) {
+            assert_eq!(n, Vec3::NEG_Z);
+        }
+        assert_eq!(face_normal(Vec3::from_array(positions[0]), Vec3::from_array(positions[1]), Vec3::from_array(positions[2])), Vec3::NEG_Z);
+    }
+
+    #[test]
+    fn normalize_reaches_the_radius_where_the_center_rounds_in_f32() {
+        // The center x = 16777217 is not an f32: rounded, the corners would go to -1 and 3 or -3
+        // and 1.
+        let mut m = Mesh { positions: vec![Vec3::new(16_777_216.0, 0.0, 0.0), Vec3::new(16_777_218.0, 0.0, 0.0)], ..Mesh::default() };
+        m.normalize_to(1.0);
+        assert_eq!(m.positions, vec![Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)]);
+    }
+
+    #[test]
+    fn material_mapping_checks_the_mesh_triangle_count() {
+        // Material 0 lists one of the mesh's five triangles; the mask covers all five.
+        let mut m = listed_triangle(1);
+        m.indices = [0u32, 1, 2].repeat(5);
+        m.submeshes[0].count = 3;
+        let before = m.clone();
+        assert_eq!(m.map_material_uvs(0, |uv| uv, &at_most(4)), Err(too_many(5, 4)));
+        assert_eq!(m, before);
+        m.map_material_uvs(0, |uv| uv, &at_most(5)).unwrap();
+    }
+
+    #[test]
+    fn from_parts_rejects_attributes_of_another_length() {
+        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
+        let short_uvs = Mesh::from_parts(positions.clone(), None, vec![Vec2::ZERO; 2], vec![0, 1, 2], "m");
+        assert!(matches!(short_uvs, Err(MeshOpsError::Invalid(ref e)) if e == "2 UVs for 3 vertices"), "{short_uvs:?}");
+        let long_normals = Mesh::from_parts(positions.clone(), Some(vec![Vec3::Z; 4]), Vec::new(), vec![0, 1, 2], "m");
+        assert!(matches!(long_normals, Err(MeshOpsError::Invalid(ref e)) if e == "4 normals for 3 vertices"), "{long_normals:?}");
+        // Empty UVs and omitted normals are allowed.
+        Mesh::from_parts(positions, None, Vec::new(), vec![0, 1, 2], "m").unwrap();
+    }
+
+    #[test]
+    fn subdivision_keeps_subnormal_coordinates() {
+        // An edge at the smallest positive x: halving each end rounds it to zero.
+        let x = f32::from_bits(1);
+        let m = Mesh {
+            positions: vec![Vec3::new(x, 0.0, 0.0), Vec3::new(x, 1.0, 0.0), Vec3::new(x, 0.0, 1.0)],
+            uvs: vec![Vec2::new(x, 0.0), Vec2::new(x, 1.0), Vec2::new(x, 0.5)],
+            colors: vec![Vec4::splat(x); 3],
+            indices: vec![0, 1, 2],
+            submeshes: vec![SubMesh { name: "m".into(), material: 0, start: 0, count: 3 }],
+            materials: vec!["m".into()],
+            ..Mesh::default()
+        };
+        let s = m.try_subdivided(&Limits::default()).unwrap();
+        assert!(s.positions.iter().all(|p| p.x == x), "{:?}", s.positions);
+        assert!(s.uvs.iter().all(|uv| uv.x == x), "{:?}", s.uvs);
+        assert!(s.colors.iter().all(|c| *c == Vec4::splat(x)), "{:?}", s.colors);
     }
 }

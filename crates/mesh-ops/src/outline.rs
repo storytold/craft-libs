@@ -9,7 +9,9 @@
 //! exactly, so the mesh is closed when its vertices are welded by position. Positions are `f32`
 //! in the outline's own coordinates.
 
-use crate::triangulate::{MAX_OUTLINE_EXTENT, Work, checked_polygon, point_in, signed_area, triangulate_counted, try_collect};
+use crate::triangulate::{
+    MAX_OUTLINE_EXTENT, Work, checked_polygon, on_edge, point_in, segments_cross, signed_area, triangulate_counted, try_collect,
+};
 use crate::{Limits, MeshOpsError, Result, check_limit, try_filled, try_vec};
 
 type P = [f64; 2];
@@ -95,8 +97,9 @@ pub struct Outline {
 
 /// Groups closed contours into outlines by nesting depth: a contour inside an even number of
 /// larger contours is an outer contour, and one inside an odd number is a hole of the innermost
-/// containing outer contour. Overlapping contours that do not nest each count as a container of
-/// what lies inside them. Repeated consecutive points and a last point equal to the first are
+/// containing outer contour. A larger contour counts as a container only when the whole contour
+/// lies inside it or on its edges; overlapping contours that do not nest each count as a
+/// container of what lies wholly inside them. Repeated consecutive points and a last point equal to the first are
 /// removed, and contours left with fewer than three points or an area of 1e-9 or less are dropped.
 ///
 /// Errors: `Invalid` for a non-finite point and for contours that together span more than 1e150
@@ -131,14 +134,21 @@ fn cleaned<C: AsRef<[P]>>(contours: &[C], limits: &Limits) -> Result<Vec<Vec<P>>
         while c.len() > 1 && c.first() == c.last() {
             c.pop();
         }
-        if c.len() >= 3 && signed_area(&c).abs() > 1e-9 {
+        if c.len() < 3 {
+            continue;
+        }
+        // The extent of each contour is checked before its area, whose products overflow to NaN
+        // for a contour wider than the limit.
+        let (lo, hi) = bounds_of(&c);
+        let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+        if extent > MAX_OUTLINE_EXTENT {
+            return Err(MeshOpsError::Invalid(format!("the contours span {extent:e}, over {MAX_OUTLINE_EXTENT:e}")));
+        }
+        if signed_area(&c).abs() > 1e-9 {
             cs.push(c);
         }
     }
-    let (lo, hi) = cs
-        .iter()
-        .flatten()
-        .fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+    let (lo, hi) = bounds_of(cs.iter().flatten());
     let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]);
     if extent > MAX_OUTLINE_EXTENT {
         return Err(MeshOpsError::Invalid(format!("the contours span {extent:e}, over {MAX_OUTLINE_EXTENT:e}")));
@@ -146,11 +156,19 @@ fn cleaned<C: AsRef<[P]>>(contours: &[C], limits: &Limits) -> Result<Vec<Vec<P>>
     Ok(cs)
 }
 
+/// The lowest and highest x and y of `points` (infinite for none).
+fn bounds_of<'a>(points: impl IntoIterator<Item = &'a P>) -> (P, P) {
+    points
+        .into_iter()
+        .fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]))
+}
+
 /// The `keep` largest of `cs`, in their order.
 fn largest(cs: Vec<Vec<P>>, keep: usize) -> Result<Vec<Vec<P>>> {
     let area = try_collect(cs.iter().map(|c| signed_area(c).abs()), "contour areas")?;
     let mut order = try_collect(0..cs.len(), "contour order")?;
-    order.sort_by(|&a, &b| area[b].total_cmp(&area[a]));
+    // Largest first, equal areas in input order; an unstable sort allocates nothing.
+    order.sort_unstable_by(|&a, &b| area[b].total_cmp(&area[a]).then(a.cmp(&b)));
     order.truncate(keep);
     order.sort_unstable();
     let mut cs = try_collect(cs.into_iter().map(Some), "contours")?;
@@ -167,25 +185,48 @@ struct Nest {
 }
 
 impl Nest {
-    /// The larger contours holding the first point of contour `i` (nested contours do not cross)
-    /// that `only` accepts; the bounding box has to hold the point first.
+    /// The larger contours that hold all of contour `i` and that `only` accepts: every point of
+    /// `i` and the middle of every edge of `i` lie inside or on the larger contour, and no edge of
+    /// `i` crosses one of its edges. None of these tests depends on where `i` starts. The larger
+    /// contour's bounding box has to hold `i`'s bounding box first.
     fn containers(&self, i: usize, only: impl Fn(usize) -> bool, work: &mut Work) -> Result<Vec<usize>> {
-        let p = self.cs[i][0];
+        let c = &self.cs[i];
+        let [ilo, ihi] = self.bounds[i];
         work.add(self.cs.len() as u64)?;
         let mut out = Vec::new();
         for j in 0..self.cs.len() {
             let [lo, hi] = self.bounds[j];
-            if j == i || self.area[j] <= self.area[i] || !only(j) || !(lo[0]..=hi[0]).contains(&p[0]) || !(lo[1]..=hi[1]).contains(&p[1]) {
+            if j == i || self.area[j] <= self.area[i] || !only(j) || ilo[0] < lo[0] || ilo[1] < lo[1] || ihi[0] > hi[0] || ihi[1] > hi[1] {
                 continue;
             }
-            work.add(self.cs[j].len() as u64)?;
-            if point_in(p, &self.cs[j]) {
+            let d = &self.cs[j];
+            // Each point and each edge middle of `i` against every edge of `d`, and each edge of
+            // `i` against every edge of `d`.
+            work.add((c.len() as u64).saturating_mul(d.len() as u64).saturating_mul(3))?;
+            if holds(d, c) {
                 out.try_reserve(1).map_err(|_| MeshOpsError::OutOfMemory("contour containers"))?;
                 out.push(j);
             }
         }
         Ok(out)
     }
+}
+
+/// Whether `p` lies inside the closed contour `c` or on one of its edges.
+fn inside_or_on(p: P, c: &[P]) -> bool {
+    let n = c.len();
+    point_in(p, c) || (0..n).any(|k| on_edge(c[k], c[(k + 1) % n], p))
+}
+
+/// Whether contour `outer` holds all of contour `inner`, as [`Nest::containers`] tests it.
+fn holds(outer: &[P], inner: &[P]) -> bool {
+    let (n, m) = (inner.len(), outer.len());
+    (0..n).all(|k| {
+        let (a, b) = (inner[k], inner[(k + 1) % n]);
+        inside_or_on(a, outer)
+            && inside_or_on([a[0] * 0.5 + b[0] * 0.5, a[1] * 0.5 + b[1] * 0.5], outer)
+            && !(0..m).any(|e| segments_cross(a, b, outer[e], outer[(e + 1) % m]))
+    })
 }
 
 fn group<C: AsRef<[P]>>(contours: &[C], limits: &Limits, keep_largest: bool) -> Result<Vec<Outline>> {
@@ -226,10 +267,10 @@ fn group<C: AsRef<[P]>>(contours: &[C], limits: &Limits, keep_largest: bool) -> 
     let mut outlines: Vec<Outline> = try_vec(n, "outlines")?;
     let mut slot = try_filled(n, usize::MAX, "outline slots")?;
     let mut order = try_collect(0..n, "contour order")?;
-    order.sort_by_key(|&i| depth[i]);
+    // By depth, equal depths in input order; an unstable sort allocates nothing.
+    order.sort_unstable_by_key(|&i| (depth[i], i));
     let mut cs = try_collect(nest.cs.into_iter().map(Some), "contours")?;
-    // Every outline gets its slot before any hole is attached: with overlapping paths a hole's
-    // parent can be deeper than the hole itself.
+    // Every outline gets its slot before any hole is attached.
     for &i in order.iter().filter(|&&i| even(i)) {
         slot[i] = outlines.len();
         outlines.push(Outline { outer: cs[i].take().unwrap_or_default(), holes: vec![] });
@@ -511,12 +552,13 @@ fn emit(out: &mut [OutlineMesh], split: bool, plan: &Plan, p: &ExtrudeParams, li
         ring_pos.push(rings);
     }
     let beveled = plan.rings.iter().any(|rs| rs[0].0 > 0.0);
-    let tris = cap_triangles(&plan.cs, &ring_pos, limits, work).map_err(|e| match e {
+    check_caps(&plan.cs, &ring_pos, beveled, limits, work).map_err(|e| match e {
         MeshOpsError::Invalid(why) if beveled => MeshOpsError::Invalid(format!("the bevel is too wide for the outline: {why}")),
         e => e,
     })?;
-    check_f32_edges(&ring_pos)?;
-    check_f32_contours(&plan.rings, &ring_pos, limits, work)?;
+    check_f32_edges(&plan.rings, &ring_pos)?;
+    let tris = cap_triangles(&ring_pos, limits, work)?;
+    check_f32_walls(&plan.rings, &ring_pos, limits, work)?;
     let curved = matches!(p.bevel, BevelStyle::Concave | BevelStyle::Convex);
     for ((c, rs), pos) in plan.cs.iter().zip(&plan.rings).zip(&ring_pos) {
         for k in 0..rs.len() - 1 {
@@ -544,17 +586,23 @@ fn emit(out: &mut [OutlineMesh], split: bool, plan: &Plan, p: &ExtrudeParams, li
 }
 
 /// Rejects rings whose neighboring points round to one `f32` position, where the mesh would lose
-/// an edge of the outline, caps whose planes round to one `f32` depth, and bevel steps that move a
-/// point by less than the `f32` step at its position.
-fn check_f32_edges(ring_pos: &[Vec<Vec<[f64; 3]>>]) -> Result<()> {
-    for rings in ring_pos {
-        let z = |r: Option<&Vec<[f64; 3]>>| r.and_then(|r| r.first()).map(|q| q[2] as f32);
-        if z(rings.first()) == z(rings.last()) {
+/// an edge of the outline, caps whose planes round to one `f32` depth, two consecutive rings
+/// whose points round to the same `f32` positions, and bevel steps (`rings` changes the inset)
+/// in which a point does not move in x or y once rounded to `f32`, whether or not it moved
+/// before rounding. A wall step keeps its x and y.
+fn check_f32_edges(rings: &[Vec<(f64, f64)>], ring_pos: &[Vec<Vec<[f64; 3]>>]) -> Result<()> {
+    let f = |v: f64| v as f32;
+    for (rs, pos) in rings.iter().zip(ring_pos) {
+        let z = |r: Option<&Vec<[f64; 3]>>| r.and_then(|r| r.first()).map(|q| f(q[2]));
+        if z(pos.first()) == z(pos.last()) {
             return Err(MeshOpsError::Invalid("the extrusion depth rounds to 0 in f32".into()));
         }
-        for pair in rings.windows(2) {
-            let moved = |a: &[f64; 3], b: &[f64; 3], f: fn(f64) -> f64| f(a[0]) != f(b[0]) || f(a[1]) != f(b[1]);
-            if pair[0].iter().zip(&pair[1]).any(|(a, b)| moved(a, b, |v| v) && !moved(a, b, |v| f64::from(v as f32))) {
+        for (k, pair) in pos.windows(2).enumerate() {
+            let flat = |a: &[f64; 3], b: &[f64; 3]| f(a[0]) == f(b[0]) && f(a[1]) == f(b[1]);
+            if pair[0].iter().zip(&pair[1]).all(|(a, b)| flat(a, b) && f(a[2]) == f(b[2])) {
+                return Err(MeshOpsError::Invalid("two rings of the profile round to one f32 position".into()));
+            }
+            if k + 1 < rs.len() && !is_wall(rs, k) && pair[0].iter().zip(&pair[1]).any(|(a, b)| flat(a, b)) {
                 return Err(MeshOpsError::Invalid("the bevel rounds to no width in f32".into()));
             }
         }
@@ -571,38 +619,58 @@ fn check_f32_edges(ring_pos: &[Vec<Vec<[f64; 3]>>]) -> Result<()> {
     Ok(())
 }
 
-/// Rejects an outline whose cap contours or wall contours cross or touch once rounded to `f32`.
-fn check_f32_contours(rings: &[Vec<(f64, f64)>], ring_pos: &[Vec<Vec<[f64; 3]>>], limits: &Limits, work: &mut Work) -> Result<()> {
-    let round = |v: f64| f64::from(v as f32);
-    // The front ring (the caps) and the ring with the least inset (the walls).
-    let wall = |rs: &[(f64, f64)]| rs.iter().enumerate().min_by(|a, b| a.1.0.total_cmp(&b.1.0)).map_or(0, |(k, _)| k);
-    for walls in [false, true] {
-        let mut contours: Vec<Vec<P>> = try_vec(ring_pos.len(), "rounded contours")?;
-        for (rs, pos) in rings.iter().zip(ring_pos) {
-            let k = if walls { wall(rs) } else { 0 };
-            let ring = pos.get(k).map_or(&[][..], Vec::as_slice);
-            contours.push(try_collect(ring.iter().map(|q| [round(q[0]), round(q[1])]), "rounded contour")?);
-        }
-        let Some((outer, holes)) = contours.split_first() else { return Ok(()) };
-        let mut refs = try_vec(holes.len(), "rounded holes")?;
-        refs.extend(holes.iter().map(Vec::as_slice));
-        checked_polygon(outer, &refs, limits, work).map_err(|e| match e {
-            MeshOpsError::Invalid(why) => MeshOpsError::Invalid(format!("the outline's contours meet once rounded to f32: {why}")),
-            e => e,
-        })?;
+/// The x and y of ring `k` of every contour (the last ring for a contour with fewer), rounded to
+/// `f32` when `round` is set.
+fn ring_contours(ring_pos: &[Vec<Vec<[f64; 3]>>], k: impl Fn(usize) -> usize, round: bool) -> Result<Vec<Vec<P>>> {
+    let r = |v: f64| if round { f64::from(v as f32) } else { v };
+    let mut contours: Vec<Vec<P>> = try_vec(ring_pos.len(), "contour rings")?;
+    for (c, pos) in ring_pos.iter().enumerate() {
+        let ring = pos.get(k(c)).or(pos.last()).map_or(&[][..], Vec::as_slice);
+        contours.push(try_collect(ring.iter().map(|q| [r(q[0]), r(q[1])]), "contour ring")?);
     }
+    Ok(contours)
+}
+
+/// An `Invalid` error from checking or triangulating the rounded contours, worded to say that
+/// they meet once rounded to `f32`.
+fn rounded_error(e: MeshOpsError) -> MeshOpsError {
+    match e {
+        MeshOpsError::Invalid(why) => MeshOpsError::Invalid(format!("the outline's contours meet once rounded to f32: {why}")),
+        e => e,
+    }
+}
+
+/// Rejects an outline whose wall contours (the ring with the least inset) cross or touch once
+/// rounded to `f32`. When that ring is the front ring of every contour, [`cap_triangles`] has
+/// checked it.
+fn check_f32_walls(rings: &[Vec<(f64, f64)>], ring_pos: &[Vec<Vec<[f64; 3]>>], limits: &Limits, work: &mut Work) -> Result<()> {
+    let wall = |c: usize| rings.get(c).and_then(|rs| rs.iter().enumerate().min_by(|a, b| a.1.0.total_cmp(&b.1.0))).map_or(0, |(k, _)| k);
+    if (0..rings.len()).all(|c| wall(c) == 0) {
+        return Ok(());
+    }
+    let contours = ring_contours(ring_pos, wall, true)?;
+    let Some((outer, holes)) = contours.split_first() else { return Ok(()) };
+    let mut refs = try_vec(holes.len(), "rounded holes")?;
+    refs.extend(holes.iter().map(Vec::as_slice));
+    checked_polygon(outer, &refs, limits, work).map_err(rounded_error)?;
     Ok(())
 }
 
-/// The triangles of the caps, from the innermost (front) ring of every contour. An inset edge
-/// that is reversed or has no length (the bevel turns the contour inside out or collapses it) is
-/// an error.
-fn cap_triangles(cs: &[Contour], ring_pos: &[Vec<Vec<[f64; 3]>>], limits: &Limits, work: &mut Work) -> Result<Vec<[u32; 3]>> {
-    let mut contours: Vec<Vec<P>> = try_vec(ring_pos.len(), "cap contours")?;
-    for pos in ring_pos {
-        let ring = pos.first().map_or(&[][..], Vec::as_slice);
-        contours.push(try_collect(ring.iter().map(|q| [q[0], q[1]]), "cap contour")?);
-    }
+/// The triangles of the caps, from the front ring of every contour rounded to `f32`, the
+/// positions the mesh stores, so every cap triangle faces the way its cap does once stored.
+fn cap_triangles(ring_pos: &[Vec<Vec<[f64; 3]>>], limits: &Limits, work: &mut Work) -> Result<Vec<[u32; 3]>> {
+    let contours = ring_contours(ring_pos, |_| 0, true)?;
+    let Some((outer, holes)) = contours.split_first() else { return Ok(Vec::new()) };
+    let mut refs = try_vec(holes.len(), "cap holes")?;
+    refs.extend(holes.iter().map(Vec::as_slice));
+    triangulate_counted(outer, &refs, limits, work).map_err(rounded_error)
+}
+
+/// Checks the caps at the outline's own precision: an inset edge that is reversed or has no
+/// length (the bevel turns the contour inside out or collapses it) is an error, and with a bevel
+/// the inset contours must not cross or touch.
+fn check_caps(cs: &[Contour], ring_pos: &[Vec<Vec<[f64; 3]>>], beveled: bool, limits: &Limits, work: &mut Work) -> Result<()> {
+    let contours = ring_contours(ring_pos, |_| 0, false)?;
     for (c, ring) in cs.iter().zip(&contours) {
         let n = c.pts.len();
         let turned = (0..n).any(|i| {
@@ -613,13 +681,16 @@ fn cap_triangles(cs: &[Contour], ring_pos: &[Vec<Vec<[f64; 3]>>], limits: &Limit
             return Err(MeshOpsError::Invalid("a cap contour turns inside out".into()));
         }
     }
-    let Some((outer, holes)) = contours.split_first() else { return Ok(Vec::new()) };
+    let Some((outer, holes)) = contours.split_first() else { return Ok(()) };
     if signed_area(outer) <= 0.0 || holes.iter().any(|h| signed_area(h) >= 0.0) {
         return Err(MeshOpsError::Invalid("a cap contour turns inside out".into()));
     }
-    let mut refs = try_vec(holes.len(), "cap holes")?;
-    refs.extend(holes.iter().map(Vec::as_slice));
-    triangulate_counted(outer, &refs, limits, work)
+    if beveled {
+        let mut refs = try_vec(holes.len(), "cap holes")?;
+        refs.extend(holes.iter().map(Vec::as_slice));
+        checked_polygon(outer, &refs, limits, work)?;
+    }
+    Ok(())
 }
 
 /// The quads of one profile segment (ring `k` to ring `k + 1`) around contour `c`.
@@ -987,11 +1058,68 @@ mod tests {
     #[test]
     fn overlapping_contours_keep_every_container_in_their_depth() {
         let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-        // C's first vertex lies inside both A and B, which overlap without nesting: C is two deep,
-        // an outer contour, not a hole cut out of B.
-        let g = group_contours(&[rect(0.0, 0.0, 10.0, 10.0), rect(5.0, -2.0, 13.0, 8.0), rect(9.0, 1.0, 12.0, 2.0)], &Limits::default()).unwrap();
+        // A and B overlap without nesting; C crosses A and lies wholly inside B, so only B holds
+        // it: C is a hole of B, wherever C starts.
+        let (a, b) = (rect(0.0, 0.0, 10.0, 10.0), rect(5.0, -2.0, 13.0, 8.0));
+        let c = rect(9.0, 1.0, 12.0, 2.0);
+        for start in 0..c.len() {
+            let mut rotated = c.clone();
+            rotated.rotate_left(start);
+            let g = group_contours(&[a.clone(), b.clone(), rotated.clone()], &Limits::default()).unwrap();
+            assert_eq!(g.len(), 2, "start {start}");
+            let o = g.iter().find(|o| o.outer == b).unwrap();
+            assert_eq!(o.holes, vec![rotated], "start {start}");
+        }
+        // A square whose first point lies inside an L but which crosses its notch, inside the
+        // L's bounding box: the L does not hold it, so both are outer contours.
+        let l_shape = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 4.0], [4.0, 4.0], [4.0, 10.0], [0.0, 10.0]];
+        let g = group_contours(&[l_shape, rect(3.0, 3.0, 6.0, 6.0)], &Limits::default()).unwrap();
+        assert_eq!(g.len(), 2);
+        assert!(g.iter().all(|o| o.holes.is_empty()));
+        // A contour that lies inside both of two overlapping contours is two deep: an outer
+        // contour, not a hole.
+        let d = rect(6.0, 1.0, 8.0, 2.0);
+        let g = group_contours(&[a, b, d], &Limits::default()).unwrap();
         assert_eq!(g.len(), 3);
         assert_eq!(g.iter().map(|o| o.holes.len()).sum::<usize>(), 0);
+    }
+
+    #[test]
+    fn a_contour_wider_than_the_limit_is_invalid_before_its_area_is_taken() {
+        // The products of one shoelace term overflow, so the area is NaN.
+        let r = group_contours(&[vec![[0.0, 0.0], [1e160, 1e160], [1e160, 2e160]]], &Limits::default());
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("span")), "{r:?}");
+    }
+
+    #[test]
+    fn caps_face_their_way_once_rounded_to_f32() {
+        // The first ear turns left in f64 and right once its x near 1e8 is rounded to f32.
+        let outer = vec![[100_000_011.0, 1.0], [100_000_021.0, 2.0], [100_000_000.0, 4.0], [100_000_000.0, 0.0]];
+        let m = extrude(&[Outline { outer, holes: vec![] }], &ExtrudeParams::default(), &Limits::default()).unwrap();
+        assert_normals_outward(&m);
+    }
+
+    #[test]
+    fn rings_that_round_to_one_position_are_invalid() {
+        // At stacking level 1000 the two wall rings, at depths 1 and 1.0000001, both round to
+        // -19.
+        let sq = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let p = ExtrudeParams { bevel: BevelStyle::Angular, bevel_depth: 1.0, depth: 2.000_000_1, ..ExtrudeParams::default() };
+        let o = [Outline { outer: sq.clone(), holes: vec![] }];
+        let r = extrude_stacked(&o, &p, 1000, &Limits::default());
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("round to one f32 position")), "{r:?}");
+        // At level 0 the depths stay apart.
+        extrude_stacked(&o, &p, 0, &Limits::default()).unwrap();
+    }
+
+    #[test]
+    fn a_bevel_lost_before_rounding_is_invalid() {
+        // At 1e8 an inset of 1e-10 is lost in f64, while the bevel's depth step survives in f32.
+        let (x, s) = (1e8, 64.0);
+        let sq = vec![[x, x], [x + s, x], [x + s, x + s], [x, x + s]];
+        let p = ExtrudeParams { bevel: BevelStyle::Angular, bevel_depth: 1e-10, depth: 1e-8, ..ExtrudeParams::default() };
+        let r = extrude(&[Outline { outer: sq, holes: vec![] }], &p, &Limits::default());
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("no width")), "{r:?}");
     }
 
     #[test]
@@ -1011,7 +1139,8 @@ mod tests {
     #[test]
     fn a_hole_whose_outline_is_deeper_than_it_is_still_attached() {
         let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-        // D is three deep and its innermost outline A four deep: A's slot must exist before D is attached.
+        // D is three deep and goes to its innermost outline A. The large square and the long strip
+        // cross A without holding it, so A is two deep.
         let a = rect(0.0, 0.0, 10.0, 10.0);
         let g = group_contours(
             &[

@@ -2,7 +2,7 @@
 //!
 //! Operations on triangle meshes: area-weighted smooth normals, flat normals, MikkTSpace
 //! tangents, welding, automatic UV unwrapping, the UV-space [`UvGBuffer`] that maps texels to surface points,
-//! built-in [`primitives`] with UVs, a [`Bvh`] for ray casts and box queries (feature `bvh`),
+//! built-in [`primitives`] with UVs, a `Bvh` for ray casts and box queries (feature `bvh`),
 //! the [`OrbitCamera`], [`triangulate`] for polygons with holes and [`outline`] for grouping 2D
 //! contours into outlines and extruding them with bevels.
 //!
@@ -51,7 +51,8 @@ pub enum MeshOpsError {
 pub type Result<T> = std::result::Result<T, MeshOpsError>;
 
 /// Caps on the work one call does. Every slice function and `try_` constructor checks its input
-/// against these before allocating. A UV G-buffer has three budgets: the texels it outputs, the
+/// against these before allocating, except [`bounds`], which takes no `Limits` and allocates
+/// nothing. A UV G-buffer has three budgets: the texels it outputs, the
 /// texels its rasterizer visits and the entries of its per-band triangle lists. The defaults
 /// follow `craft-mesh` for whole meshes and are this crate's own values for the rest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,6 +194,16 @@ pub fn flat_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) ->
     check_limit("vertex count", positions.len(), limits.max_vertices)?;
     check_limit("triangle count", indices.len() / 3, limits.max_triangles)?;
     check_limit("vertex count", indices.len(), limits.max_vertices)?;
+    // The checks of `flat_corners`, made before the positions are copied.
+    if !indices.len().is_multiple_of(3) {
+        return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
+    }
+    if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
+        return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
+    }
+    if !positions.iter().flatten().all(|v| v.is_finite()) {
+        return Err(MeshOpsError::Invalid("non-finite position".into()));
+    }
     let mut input = try_vec(positions.len(), "positions")?;
     input.extend(positions.iter().map(|p| Vec3::from_array(*p)));
     let corners = mesh::flat_corners(&input, indices, limits)?;
@@ -226,14 +237,11 @@ pub fn tangents(positions: &[[f32; 3]], normals: &[[f32; 3]], uvs: &[[f32; 2]], 
 /// Welded vertex id per vertex, as [`unwrap::weld_ids`] gives it, for finite positions.
 pub fn weld(positions: &[[f32; 3]], limits: &Limits) -> Result<Vec<u32>> {
     check_limit("vertex count", positions.len(), limits.max_vertices)?;
-    let mut p = try_vec(positions.len(), "positions")?;
-    for q in positions {
-        let q = Vec3::from_array(*q);
-        if !q.is_finite() {
-            return Err(MeshOpsError::Invalid("non-finite position".into()));
-        }
-        p.push(q);
+    if !positions.iter().flatten().all(|v| v.is_finite()) {
+        return Err(MeshOpsError::Invalid("non-finite position".into()));
     }
+    let mut p = try_vec(positions.len(), "positions")?;
+    p.extend(positions.iter().map(|q| Vec3::from_array(*q)));
     unwrap::weld_ids(&p)
 }
 

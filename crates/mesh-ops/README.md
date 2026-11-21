@@ -69,11 +69,12 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   centroid axis when no split beats a leaf. Closest-hit, any-hit and filtered ray casts, the
   nearest point within a distance, and box queries. Triangles with a non-finite corner are left
   out of the tree. A ray with a non-finite origin or direction, a zero direction or a NaN
-  distance, a NaN box and a negative or NaN search distance find nothing. Ray casts find hits on
-  triangles with coordinates between about 1e-12 and 1e12; outside that range the products in
-  the triangle test overflow or underflow `f32`. The nearest-point
-  search does not find a point more than about 1.8e19 away, where the squared distance overflows
-  `f32`.
+  distance, a NaN box and a negative or NaN search distance find nothing. Ray casts and the
+  nearest-point search work in `f64` at any finite `f32` coordinates. The ray test is watertight
+  (Woop, Benthin and Wald, 2013): a ray through an edge that two triangles share hits at least
+  one of them, and the test has no slack around the edges. A hit closer than the least positive
+  `f32` is reported at that distance. The nearest-point search does not
+  find a point more than about 1.8e19 away, where the squared distance overflows `f32`.
 - **`Mesh`.** Positions, normals, tangents, UVs, vertex colors, indices, per-material submeshes
   and polygon-diagonal flags, with `validate`, `append` and `try_append`, `subdivided` and
   `try_subdivided`, wireframe and UV-seam edges, and UV-tile helpers. `OrbitCamera` and `Ray`
@@ -176,6 +177,12 @@ limits allow.
 
 MikkTSpace comes from the `mikktspace` crate; its notice is in [ATTRIBUTION.md](ATTRIBUTION.md).
 
+The crate takes `mikktspace` with `default-features = false, features = ["glam"]`. The `glam`
+and `nalgebra` features of `mikktspace` 0.3 do not build together, and Cargo merges the features
+that every crate in a build asks for. An app that also depends on `mikktspace` itself must ask
+for the same features; TextureCraft and MaterialCraft already do. `cargo tree -e features -i
+mikktspace` in the app lists the `glam` feature and no `nalgebra` or `default` feature.
+
 ## Migration
 
 | App | Status |
@@ -195,12 +202,35 @@ For both apps:
 | `Mesh::bounds` with a NaN position | NaN positions are left out of the box |
 | `Mesh::append` with a mismatched attribute | the missing normals, UVs or tangents are filled in; `try_append` returns an error on overflow or a bad index |
 | `Mesh::append` with submeshes and no material list on either side | that side gets one unnamed material |
+| `Mesh::uv_tiles` with a UV centroid whose tile is outside the `i32` range | `Invalid`, not a saturated tile |
+| `UvGBuffer::try_new` with a trailing index, or a corner of the material's triangles without a vertex or a finite UV | `Invalid`, not a buffer without those triangles; `UvGBuffer::new` returns the 1 × 1 uncovered buffer |
+| `Mesh::append` with a trailing index or a submesh that does not start and end on a triangle | `try_append` returns `Invalid`, and `append` leaves the mesh unchanged |
 | `Mesh::validate` | also rejects a submesh that does not start and end on a triangle, and a non-finite normal, UV, tangent or color |
 | `Mesh::subdivided` with an invalid mesh | returns a copy; `try_subdivided` returns the error |
 | `primitives::*` with a NaN or negative size | an empty mesh; the `try_` forms return the error |
 | `auto_unwrap` with a non-finite position, normal or color, a bad submesh or colors for some vertices only | an error, with the mesh unchanged |
 | `Bvh::nearest` skips a point exactly `max_dist` away | the point is found |
-| Rays miss a triangle whose two edge lengths multiply to under 1e-12 | the cutoff follows the triangle's size, so the ray hits |
+| Rays miss a triangle whose two edge lengths multiply to under 1e-12, and a shallow ray across a triangle | the watertight test in `f64` has no cutoff, so the ray hits |
+| The ray test accepts points up to 1e-5 outside each edge | it accepts no point outside the triangle; a ray through an edge two triangles share still hits one of them |
+| The slab test treats a direction component whose `f32` reciprocal overflows as never reaching the box | the reciprocal is taken in `f64`, and the hit is found |
+| `Bvh::nearest` rounds the projected point and the squared distance to `f32`, and picks an edge for a point inside a very thin triangle | both stay in `f64`; the region of an inside point comes from cross products |
+| A tree with every triangle left out keeps the memory reserved for them | the memory is released |
+| The cylinder's caps start at +X while its side starts at +Z, leaving gaps at the rim | the caps use the side's rim points, and the cylinder is closed |
+| The sphere and the material ball emit a triangle without area in each cell at a pole | one triangle per pole cell |
+| `try_cylinder` accepts a height whose half is 0 in `f32` | an `Invalid` error |
+| `try_torus` builds a tube so thin that its cross-section rounds flat in `f32` | an `Invalid` error; `try_shape` checks its torus the same way |
+| The rounded box overflows `f32` while stepping across a face with a half size above about 1.4e37 | the steps are taken in `f64`; the box builds while its coordinates fit `f32` |
+| `OrbitCamera::orbit` and `pan` can move the eye onto the target far from the origin | the camera is unchanged |
+| `OrbitCamera::ray` inverts the view-projection in `f32`, which loses the direction far from the origin | it inverts it in `f64` |
+| `Mesh::normalize_to` subtracts the center in `f32` | the center and scale are applied in `f64` |
+| `Mesh::subdivided` adds the halves of two coordinates in `f32`, which rounds subnormal coordinates away | the midpoints are taken in `f64` |
+| `Mesh::from_parts` accepts normals or UVs of another length than the positions | an `Invalid` error |
+| `Mesh::map_material_uvs` checks the vertex count only | it also checks the triangle count |
+| Face normals take the cross product in `f32` after subtracting one corner, which loses a short edge next to a long one | the cross product uses exact arithmetic where the fast one is within its rounding bound |
+| The per-vertex tangent fallback sums every corner into one frame | corners whose UVs face opposite ways get separate frames, and their vertices are split |
+| The UV G-buffer scales UVs in `f32` and drops triangles whose doubled area is under a fixed cutoff | it scales in `f64` and drops only triangles with no area; a submesh that does not start and end on a triangle is `Invalid` |
+| `auto_unwrap` treats an overlap smaller than a face's height as contact | only the rounding at the coordinates' magnitude counts as contact |
+| `auto_unwrap` returns a layout in which a face's stored `f32` UVs have no area | an `Invalid` error, with the mesh unchanged |
 | `Mesh::normalize_to` with a radius that overflows a coordinate | the mesh is unchanged |
 | `Mesh::normalize_to` leaves a mesh with a radius under 1e-4 too small | the mesh gets the requested radius |
 | `weld_ids` on a grid of 1e-12 when the bounding diagonal is under 1e-6 | a grid of 1e-6 of the diagonal at every size |
@@ -246,6 +276,13 @@ For EffectCraft:
 | `mesh(PrimitiveKind, &PrimParams)` takes absolute values of negative sizes and clamps segments to 3..=512 and rings to 2..=512 | `try_shape(ShapeKind, &ShapeParams, &Limits)` returns `Invalid` for a size that is not finite and positive or whose half is 0 in `f32` and for a shape whose triangle corners round to one `f32` position, and `TooLarge` past `max_segments`; counts under 3 segments, 2 sphere rings or 3 torus tube sides are raised to them |
 | `PrimitiveKind::Cube` | `ShapeKind::Cuboid` |
 | A torus whose tube is as wide as its radius or wider | an `Invalid` error |
+| A torus whose tube is so thin that its cross-section rounds flat in `f32` | an `Invalid` error |
+| `group_contours` counts a larger contour as a container when it holds a contour's first point, so the result depends on where the contour starts | a larger contour is a container only when the whole contour lies inside it or on its edges |
+| `group_contours` drops a contour whose area overflows to NaN | a contour wider than 1e150 is `Invalid` before its area is taken |
+| `triangulate` shifts the points by their lowest corner, which can merge points of an outline that spans very different scales | the points are used as given |
+| `triangulate` treats a turn whose cross product is under 1e-12 as straight | only an exact zero is straight |
+| `triangulate` can fail to bridge a hole whose ray reaches a ring vertex exactly | the hole bridges to that vertex |
+| `extrude` triangulates the caps at `f64` precision, so a cap triangle can face the wrong way once stored | the caps are triangulated from the `f32` positions the mesh stores; profile rings that round to one position, and bevel steps without `f32` width, are `Invalid` |
 | The cone's side normal divides by at least 1e-6, so a cone lower than that tilts its normal | the slope is taken from the real height in `f64` |
 | `compute_tangents` gives one tangent per vertex | MikkTSpace tangents; the cone's 15 inner base vertices (at 16 segments) are split where the two side triangles get different frames |
 | `model` marks the plane's material double-sided, and `PrimitiveKind::label` and `parse` name the kinds | not moved; they stay in the app |

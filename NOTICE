@@ -239,6 +239,11 @@ The mesh operations in crates/mesh-ops are moved from:
   The index check before tangent generation and its two tests are from TextureCraft pull
   request #386 by simonhull, revision faa4548a6f34bb61d43f56b3500edb73dd71981b
   (https://github.com/storytold/texturecraft/pull/386).
+- EffectCraft, crates/model (src/triangulate.rs, extrude.rs, prim.rs and tests.rs; the
+  polygon triangulation, outline extrusion and shapes, and their tests), revision
+  fae7ad76412f29b104a4f070373020f70bd9b479.
+  https://github.com/storytold/effectcraft
+  Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
   All licensed MIT OR Apache-2.0.
 
 Optional PDF writer
