@@ -1290,7 +1290,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 while let Some((command, _)) = body.take_command::<DockCommands>() {
                     commands.push(command);
                 }
-                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within: scene.bounds, open: open.clone() };
+                // An OS window's flyouts and other layers take the room around the window (`overlay::layer_room`); an
+                // in-app window's stay in the float area.
+                let within = if opening.spec.is_some() { Rect::NOTHING } else { scene.bounds };
+                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within, open: open.clone() };
                 self.column(ui, body, &window.column, at);
             });
             self.dock = area_dock;

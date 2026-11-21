@@ -95,6 +95,8 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         resizable: open.resizable,
         taskbar: spec.taskbar,
         hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint),
+        active: spec.takes_focus,
+        passes_pointer: spec.passes_pointer,
         app_id: &app,
     };
     viewports::show_immediate(ctx, viewport, &opens, |ui| {
@@ -130,6 +132,66 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         viewports::set_visible(ctx, viewport, false);
     } else if !hidden && reveal {
         viewports::set_visible(ctx, viewport, true);
+    }
+}
+
+/// What a layer shown in a popup window asks for ([`show_popup`]).
+pub(crate) struct PopupOpen<'a> {
+    /// The layer's id; the popup's viewport derives from it.
+    pub id: Id,
+    /// How the window opens: a [`WindowSpec::popup`].
+    pub spec: &'a WindowSpec,
+    /// The window's place in desktop points (outer top-left corner and inner size) when the layer's size is known
+    /// before its pass; otherwise the caller places it after the pass ([`place_popup`]).
+    pub rect: Option<Rect>,
+}
+
+/// Opens the popup window of a layer opened in the running viewport (its opener) and runs `body` in its pass. The
+/// window is a viewport mount without a container: it opens at `open.rect` and follows it, and the opener gets the OS
+/// focus back when it closes ([`close_popup`]).
+pub(crate) fn show_popup(ctx: &Context, open: &PopupOpen<'_>, body: impl FnMut(&mut Ui)) {
+    let opener = crate::runtime::egui::pass::current_viewport(ctx);
+    PerViewport::<Record>::with(ctx, viewports::viewport_id(open.id), |record| record.opener = Some(opener));
+    let mount = ViewportOpen {
+        id: open.id,
+        title: "",
+        size: open.rect.map(|rect| rect.size()),
+        follows_size: true,
+        save: None,
+        spec: open.spec,
+        limits: (None, None),
+        position: open.rect.map(|rect| rect.min),
+        resizable: false,
+        moved_by_app: false,
+    };
+    show_viewport(ctx, &mount, body);
+}
+
+/// Sends the popup window of layer `id` to `rect` (desktop points) where it is not there already: a layer whose size
+/// its pass measured is placed once that pass ran.
+pub(crate) fn place_popup(ctx: &Context, id: Id, rect: Rect) {
+    let viewport = viewports::viewport_id(id);
+    let known = PerViewport::<Record>::with(ctx, viewport, |record| record.known);
+    let differs = |delta: Vec2| delta.x.abs() > ROUNDING || delta.y.abs() > ROUNDING;
+    if known.is_none_or(|known| differs(rect.min - known.min)) {
+        act(ctx, viewport, WindowAction::SetOuterPosition(rect.min));
+    }
+    if known.is_none_or(|known| differs(rect.size() - known.size())) {
+        act(ctx, viewport, WindowAction::SetInnerSize(rect.size()));
+    }
+    PerViewport::<Record>::with(ctx, viewport, |record| record.known = Some(rect));
+}
+
+/// The layer `id` is hidden: when it showed in a popup window that still has the OS focus, the window it was opened
+/// from takes the focus back. Once per close; a layer that never showed in a popup does nothing.
+pub(crate) fn close_popup(ctx: &Context, id: Id) {
+    let viewport = viewports::viewport_id(id);
+    let closed = PerViewport::<Record>::with_existing(ctx, viewport, |record| {
+        let focused = record.facts.is_some_and(|facts| facts.focus_reported);
+        record.opener.take().filter(|_| focused)
+    });
+    if let Some(opener) = closed.flatten() {
+        act(ctx, opener, WindowAction::Focus);
     }
 }
 

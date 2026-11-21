@@ -35,8 +35,12 @@ pub(crate) struct Spec<'a> {
     pub resizable: bool,
     /// Whether the window has a taskbar or Dock entry.
     pub taskbar: bool,
-    /// Whether the window opens hidden; [`show`] reveals it.
+    /// Whether the window opens hidden; [`set_visible`] reveals it.
     pub hidden: bool,
+    /// Whether the window takes OS focus when it opens.
+    pub active: bool,
+    /// Whether pointer input passes through the window.
+    pub passes_pointer: bool,
     /// The app id the OS window carries (dock icon, Wayland compositor rules); empty carries none.
     pub app_id: &'a str,
 }
@@ -47,6 +51,12 @@ pub(crate) fn show_immediate<T>(ctx: &Context, id: ViewportId, spec: &Spec<'_>, 
         ViewportBuilder::default().with_title(spec.title).with_resizable(spec.resizable).with_taskbar(spec.taskbar).with_window_level(spec.level);
     if spec.hidden {
         builder = builder.with_visible(false);
+    }
+    if !spec.active {
+        builder = builder.with_active(false);
+    }
+    if spec.passes_pointer {
+        builder = builder.with_mouse_passthrough(true);
     }
     if !spec.app_id.is_empty() {
         builder = builder.with_app_id(spec.app_id);

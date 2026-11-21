@@ -85,6 +85,10 @@ pub struct WindowSpec {
     pub taskbar: bool,
     /// Whether the window opens hidden and appears once its first pass has been laid out and painted.
     pub shown_after_first_paint: bool,
+    /// Whether the window takes OS focus when it opens.
+    pub takes_focus: bool,
+    /// Whether pointer input passes through the window to the window below it.
+    pub passes_pointer: bool,
 }
 
 impl WindowSpec {
@@ -92,6 +96,13 @@ impl WindowSpec {
     /// (`craft_window::policy::tool_frame`), no caption buttons, a palette level, no taskbar entry.
     pub fn tool() -> Self {
         WindowSpec { kind: WindowKind::Tool, level: WindowLevel::Palette, taskbar: false, ..Self::dialog() }
+    }
+
+    /// A popup window: a layer opened from a palette window (a flyout, menu or tooltip) in an OS window of its own. It
+    /// has no frame, no taskbar entry and a palette level, and appears once its first pass ran, at the size and place
+    /// its layer took in that pass.
+    pub fn popup() -> Self {
+        WindowSpec { chrome: Some(WindowChrome::Integrated), shown_after_first_paint: true, ..Self::tool() }
     }
 
     /// A document window with the installed decision's frame.
@@ -108,6 +119,8 @@ impl WindowSpec {
             level: WindowLevel::Normal,
             taskbar: true,
             shown_after_first_paint: false,
+            takes_focus: true,
+            passes_pointer: false,
         }
     }
 
@@ -154,6 +167,20 @@ impl WindowSpec {
     #[must_use]
     pub fn taskbar(mut self, taskbar: bool) -> Self {
         self.taskbar = taskbar;
+        self
+    }
+
+    /// Sets whether the window takes OS focus when it opens.
+    #[must_use]
+    pub fn takes_focus(mut self, takes_focus: bool) -> Self {
+        self.takes_focus = takes_focus;
+        self
+    }
+
+    /// Sets whether pointer input passes through the window to the window below it (a tooltip's).
+    #[must_use]
+    pub fn passes_pointer(mut self, passes_pointer: bool) -> Self {
+        self.passes_pointer = passes_pointer;
         self
     }
 
