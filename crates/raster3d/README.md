@@ -186,7 +186,10 @@ files:
   without a base texture tests its material's alpha as a textured caster tests a texel's. An
   opaque-mode caster with an opacity below 0.5 casts no shadow. EffectCraft tested every textured
   caster against 0.5 and drew untextured and opaque-mode casters whole, so a shadow could differ
-  from the visible surface. With the default cutoff of 0.5 the maps are the same.
+  from the visible surface. With a cutoff of 0.5, textured masked and blended casters cast the
+  same shadows as EffectCraft's. Two kinds of caster still differ at that cutoff: an opaque-mode
+  caster with an opacity below 0.5, and an untextured masked or blended caster whose alpha is
+  below 0.5. EffectCraft drew both whole, and here they cast no shadow.
 - A spot light whose inner cone cosine is below its outer one is `BadLight`. EffectCraft's lights
   always have the inner cosine at or above the outer one.
 - A material whose metallic, roughness or occlusion strength is outside 0 to 1 is `BadMaterial`.
