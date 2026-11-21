@@ -36,8 +36,9 @@ a person's own Google Drive directly, with no service in between and no OAuth cl
   a sign-in lasts until the app quits. **Sign out** removes the token first, even during a
   transfer.
 - **Limits.** 256 MB per document; a folder lists its first 5,000 entries.
-- **Logging.** `ureq` logs the wire at `TRACE` level without redacting it, bearer tokens
-  included. Don't enable `TRACE` for the `ureq` and `ureq_proto` log targets.
+- **Logging.** `ureq_proto` dumps the wire at `TRACE` level without redacting it, tokens
+  included. While a host's logger has that on, the backend sends nothing and says why, so a
+  token never reaches a log.
 - **Desktop only.** On the web the crate compiles to nothing: a browser can't receive Google's
   loopback redirect.
 

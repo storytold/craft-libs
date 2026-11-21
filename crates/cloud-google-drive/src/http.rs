@@ -124,9 +124,9 @@ pub trait Transport: Send + Sync {
 /// `ureq` with rustls and the platform's certificate verifier; HTTP error statuses are returned
 /// as responses so [`Response::api_error`] can read Google's message.
 ///
-/// `ureq` logs requests on the wire at `TRACE` level, unredacted: bearer tokens and the token
-/// endpoint's form bodies with them. A host must not enable `TRACE` for the `ureq` and
-/// `ureq_proto` log targets.
+/// `ureq_proto` dumps every byte on the wire at `TRACE` level, unredacted: bearer tokens, the
+/// token endpoint's form bodies and its answers. While a host's logger has that enabled,
+/// [`Ureq`] sends nothing and says why, so no credential reaches a log.
 pub struct Ureq {
     agent: ureq::Agent,
 }
@@ -150,8 +150,24 @@ impl Ureq {
     }
 }
 
+/// Whether the host's logger would record `ureq_proto`'s wire dump.
+pub fn wire_traced() -> bool {
+    WIRE_TARGETS.iter().any(|t| log::log_enabled!(target: t, log::Level::Trace))
+}
+
+/// Where `ureq_proto` logs the bytes it sends and receives (its `util` module), and the crate as
+/// a whole, which a filter can name instead.
+const WIRE_TARGETS: [&str; 2] = ["ureq_proto::util", "ureq_proto"];
+
 impl Transport for Ureq {
     fn send(&self, req: Request) -> Result<Response> {
+        // Checked on every call: a host can change its log level while running.
+        if wire_traced() {
+            return Err(Error::Invalid(
+                "Google Drive is off while TRACE logging is on for ureq_proto: it would record sign-in tokens. Lower that log level to use Google Drive"
+                    .into(),
+            ));
+        }
         let mut b = ureq::http::Request::builder().method(req.method.as_str()).uri(&req.url);
         for (k, v) in &req.headers {
             b = b.header(k.as_str(), v.as_str());
