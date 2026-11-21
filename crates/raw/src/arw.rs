@@ -630,6 +630,27 @@ fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
         .max_by_key(|i| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0)))
 }
 
+/// The ILCE-7RM6's lateral CA as the pre-demosaic map, within the same validated scope as its distortion (CFA data,
+/// 3:2 image and reference crops; [`crate::arw_lens_rm6::lateral_ca`], only for the lenses it measurably improves),
+/// centred on the tables' `reference` crop. Marks the CA record applied when there is one.
+fn rm6_lateral_ca(
+    raw: &Ifd,
+    model: &str,
+    lens: Option<&str>,
+    (crop, reference): (Rect, Rect),
+    linear_rgb: bool,
+    sony_lens: &mut Option<crate::lens_metadata::SonyLensCorrections>,
+) -> Option<crate::LateralCa> {
+    let in_scope = !linear_rgb && crate::arw_lens::is_3_2(crop) && crate::arw_lens::is_3_2(reference);
+    let map = in_scope.then(|| crate::arw_lens_rm6::lateral_ca(raw, model, lens, reference)).flatten();
+    if map.is_some()
+        && let Some(record) = sony_lens.as_mut()
+    {
+        record.chromatic_aberration.status = crate::lens_metadata::SonyLensStatus::Applied;
+    }
+    map
+}
+
 fn valid_arw2_curve(curve: &[u64]) -> bool {
     curve.len() == 4 && curve.iter().all(|&v| v <= 16383) && curve.windows(2).all(|v| (v[0] >> 2) < (v[1] >> 2))
 }
@@ -819,21 +840,22 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // The ILCE-7RM6's tables follow other conventions, measured against its camera JPEGs ([`crate::arw_lens_rm6`]);
     // its allowlist and `arw_lens`'s are disjoint, so at most one of them produces an opcode. Both the image framing
     // and the table geometry must stay within the validated 3:2 scope.
+    // The lens and focal length as Exif states them (LensModel, FocalLength in the Exif IFD or IFD0).
+    let exif = tiff.exif();
+    let lens = exif.and_then(|e| e.string(t::LENS_MODEL)).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
     let rm6: Vec<crate::Opcode> = if linear_rgb || !crate::arw_lens::is_3_2(crop) {
         Vec::new()
     } else {
-        // the lens and focal length as Exif states them (LensModel, FocalLength in the Exif IFD or IFD0)
-        let exif = tiff.exif();
-        let lens = exif.and_then(|e| e.string(t::LENS_MODEL)).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
         let focal = exif.and_then(|e| e.f64(t::FOCAL_LENGTH)).or_else(|| ifd0.f64(t::FOCAL_LENGTH)).filter(|f| *f > 0.0 && f.is_finite());
         crate::arw_lens_rm6::lens_opcodes(raw, &model, lens.as_deref(), focal, Rect::new(0, 0, w, h), reference)
     };
     if !rm6.is_empty()
         && let Some(record) = sony_lens.as_mut()
     {
-        // distortion only: its lateral CA planes are off (see `arw_lens_rm6::lens_opcodes`)
+        // distortion only: its lateral CA is the pre-demosaic map below, not warp planes (see `arw_lens_rm6::lens_opcodes`)
         record.distortion.status = crate::lens_metadata::SonyLensStatus::Applied;
     }
+    let lateral_ca = rm6_lateral_ca(raw, &model, lens.as_deref(), (crop, reference), linear_rgb, &mut sony_lens);
     let img = RawImage {
         format: RawFormat::Arw,
         width: w,
@@ -855,8 +877,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         linearized: false,
         linearization_table: None,
         pixel_aspect: 1.0,
-        // only validated components become opcodes (see `arw_lens`, and `arw_lens_rm6` for the ILCE-7RM6)
-        opcodes: OpcodeLists { list3: warp.into_iter().chain(rm6).collect(), ..Default::default() },
+        // only validated components become opcodes (see `arw_lens`, and `arw_lens_rm6` for the ILCE-7RM6); the
+        // ILCE-7RM6's lateral CA is a map on the mosaic, corrected before demosaic whatever the developer's lens
+        // corrections say, so only for the lenses it measurably improves
+        opcodes: OpcodeLists { list3: warp.into_iter().chain(rm6).collect(), lateral_ca, ..Default::default() },
         camera: Camera::from_ifd0(ifd0),
         cinema: Default::default(),
         lens_metadata: LensMetadata { sony: sony_lens },
@@ -876,7 +900,19 @@ mod tests {
         use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
-        raw.set(t::MODEL, Value::Ascii("ILCE-7M4".into()));
+        // A supported body, lens and 3:2 crop would produce a CA map for Bayer data.
+        raw.set(t::MODEL, Value::Ascii("ILCE-7RM6".into()));
+        raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::LENS_MODEL, Value::Ascii("FE 24-70mm F2.8 GM II".into())));
+        raw.set(crate::arw_lens_rm6::DISTORTION_PARAMS, Value::SShort(vec![16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479]));
+        raw.set(
+            crate::arw_lens_rm6::CA_PARAMS,
+            Value::SShort(vec![
+                32, 242, 234, 224, 212, 196, 176, 154, 132, 108, 86, 66, 46, 30, 16, 8, 4, -276, -258, -238, -212, -184, -148, -114, -74, -40, -6,
+                20, 42, 56, 60, 54, 32,
+            ]),
+        );
+        raw.set(CROP_TOP_LEFT, Value::Long(vec![0, 0]));
+        raw.set(CROP_SIZE, Value::Long(vec![3, 2]));
         raw.set(t::IMAGE_WIDTH, Value::Long(vec![4]));
         raw.set(t::IMAGE_LENGTH, Value::Long(vec![4]));
         raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![15, 15, 15]));
@@ -905,7 +941,8 @@ mod tests {
             panic!("integer ARW");
         };
         assert_eq!(&pixels[..3], &[1140, 929, 1000]);
-        assert_eq!(full.info().developed_size(), (4, 4));
+        assert_eq!(full.info().developed_size(), (3, 2));
+        assert!(full.opcodes.lateral_ca.is_none() && full.opcodes.list3.is_empty(), "linear data: no CFA to correct");
     }
 
     #[test]
@@ -988,23 +1025,28 @@ mod tests {
     }
 
     /// The ILCE-7RM6's distortion table reaches `OpcodeList3`, in the headers-only probe and in the full decode, as
-    /// one plane, also with a CA table (lateral CA is off by default); another body's tables don't (see
-    /// [`crate::arw_lens_rm6`]).
+    /// one plane, and the CA table becomes the pre-demosaic map (`OpcodeLists::lateral_ca`) centred on the crop;
+    /// another body's tables don't (see [`crate::arw_lens_rm6`]), nor does a frame that isn't 3:2.
     #[test]
     fn lens_tables_reach_opcode_list3() {
         use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
-        let file = |model: &str, ca: bool| {
+        let file_lens = |model: &str, ca: bool, height: u32, reference_height: u32, lens: &str| {
             let mut raw = IfdBuilder::new();
+            raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::LENS_MODEL, Value::Ascii(lens.into())));
             raw.set(t::MAKE, Value::Ascii("SONY".into()));
             raw.set(t::MODEL, Value::Ascii(model.into()));
-            // 3:2, the aspect the opcode is limited to
             raw.set(t::IMAGE_WIDTH, Value::Long(vec![96]));
-            raw.set(t::IMAGE_LENGTH, Value::Long(vec![64]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![height]));
             raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
             raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
             raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
             raw.set(t::COMPRESSION, Value::Short(vec![32767]));
             raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+            // Sony's image crop is the whole frame; the tables are centred on DefaultCrop, off-centre on both axes
+            raw.set(CROP_TOP_LEFT, Value::Long(vec![0, 0]));
+            raw.set(CROP_SIZE, Value::Long(vec![96, height]));
+            raw.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![2, 1]));
+            raw.set(t::DEFAULT_CROP_SIZE, Value::Long(vec![90, reference_height]));
             let table = vec![16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479];
             raw.set(crate::arw_lens_rm6::DISTORTION_PARAMS, Value::SShort(table));
             if ca {
@@ -1014,17 +1056,45 @@ mod tests {
                 ];
                 raw.set(crate::arw_lens_rm6::CA_PARAMS, Value::SShort(table));
             }
-            raw.set_image(ImageData::Strips { rows_per_strip: 64, strips: vec![vec![0u8; 96 * 64]] });
+            raw.set_image(ImageData::Strips { rows_per_strip: height, strips: vec![vec![0u8; 96 * height as usize]] });
             TiffWriter::default().write(&[raw]).unwrap()
         };
+        // a lens the pre-demosaic map measurably improves (`arw_lens_rm6::CA_IMPROVES`)
+        let file_sized = |model: &str, ca: bool, height: u32| file_lens(model, ca, height, 60, "FE 24-70mm F2.8 GM II");
+        // 3:2, the aspect the corrections are limited to
+        let file = |model: &str, ca: bool| file_sized(model, ca, 64);
+        let decoded = |file: &[u8], mode| decode(file, mode, &Limits::default()).unwrap();
         for mode in [Mode::Header, Mode::Full] {
             for ca in [false, true] {
-                let list3 = |model| decode(&file(model, ca), mode, &Limits::default()).unwrap().opcodes.list3;
-                let ops = list3("ILCE-7RM6");
-                assert!(matches!(ops.as_slice(), [crate::Opcode::WarpRectilinear { planes, .. }] if planes.len() == 1), "{mode:?} {ca}: {ops:?}");
-                assert!(list3("ILCE-7M4").is_empty(), "{mode:?} {ca}");
+                let img = decoded(&file("ILCE-7RM6", ca), mode);
+                assert_eq!(img.crop, Rect::new(0, 0, 96, 64));
+                let ops = &img.opcodes.list3;
+                let [crate::Opcode::WarpRectilinear { planes, center }] = ops.as_slice() else { panic!("{mode:?} {ca}: {ops:?}") };
+                assert_eq!(planes.len(), 1, "{mode:?} {ca}");
+                assert_eq!(img.opcodes.lateral_ca.is_some(), ca, "{mode:?} {ca}");
+                let ca_status = img.lens_metadata.sony.as_ref().map(|s| s.chromatic_aberration.status);
+                assert_eq!(ca_status == Some(crate::lens_metadata::SonyLensStatus::Applied), ca, "{mode:?} {ca}: {ca_status:?}");
+                if let Some(m) = &img.opcodes.lateral_ca {
+                    // one optical centre for CA and distortion: DefaultCrop's, not the image crop's (47.5, 31.5)
+                    assert_eq!(m.center, [2.0 + 89.0 / 2.0, 1.0 + 59.0 / 2.0]);
+                    assert!((m.center[0] - center[0] * 95.0).abs() < 1e-9 && (m.center[1] - center[1] * 63.0).abs() < 1e-9, "{m:?} {center:?}");
+                }
+                let other = decoded(&file("ILCE-7M4", ca), mode).opcodes;
+                assert!(other.list3.is_empty() && other.lateral_ca.is_none(), "{mode:?} {ca}");
             }
+            // the FE 200–600 mm G got worse with the map, so it keeps the warp but gets no map
+            let worse = decoded(&file_lens("ILCE-7RM6", true, 64, 60, "FE 200-600mm F5.6-6.3 G OSS"), mode).opcodes;
+            assert!(worse.list3.len() == 1 && worse.lateral_ca.is_none(), "{mode:?}");
+            // 4:3 (an in-camera aspect crop): the map switches off with the warp
+            let four_three = decoded(&file_sized("ILCE-7RM6", true, 72), mode).opcodes;
+            assert!(four_three.list3.is_empty() && four_three.lateral_ca.is_none(), "{mode:?}");
+            // A 3:2 image crop is not enough when the table's reference crop has another aspect.
+            let mixed_aspect = decoded(&file_lens("ILCE-7RM6", true, 64, 50, "FE 24-70mm F2.8 GM II"), mode);
+            assert_eq!(mixed_aspect.crop, Rect::new(0, 0, 96, 64));
+            assert!(mixed_aspect.opcodes.lateral_ca.is_none(), "{mode:?}");
         }
+        // the headers-only probe reads the same map
+        assert_eq!(decoded(&file("ILCE-7RM6", true), Mode::Header).opcodes, decoded(&file("ILCE-7RM6", true), Mode::Full).opcodes);
     }
 
     #[test]
