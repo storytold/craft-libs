@@ -23,4 +23,6 @@ thiserror = { workspace = true }
 craft-pbr = { path = ".", features = ["parallel"] }
 # The differential tests run verbatim copies of the apps' previous code, which uses glam and rayon.
 glam = "0.30"
+# Parses and validates the WGSL text of `SHADE_WGSL`.
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 rayon = { workspace = true }
