@@ -13,7 +13,6 @@ use crate::contract::collection::{
     CollectionEvent, CollectionProps, ColumnKind, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove, ToggleColumn, ToggleEdit,
 };
 use crate::contract::reorder;
-use crate::contract::reorder::EDGE_ROWS_PER_SECOND;
 use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer as _};
 use crate::runtime::drag;
 use crate::runtime::env::Label;
@@ -65,6 +64,8 @@ pub enum SweepStep<K> {
 struct Run {
     first: GestureId,
     alt: bool,
+    /// The first press held one of the claimed modifiers: the sweep gives the host nothing but `Claimed`.
+    claimed: bool,
     /// A `Commit` or `Cancel` came: the next `Begin` or `Update` opens a new sweep.
     ended: bool,
 }
@@ -84,7 +85,6 @@ struct Run {
 pub struct SweepApply {
     run: Option<Run>,
     show_only: bool,
-    #[allow(dead_code)] // P3(appearance-w1): dp.C8
     claims: Vec<craft_keymap::Mods>,
 }
 
@@ -99,15 +99,15 @@ impl SweepApply {
 
     /// A column where Alt plus the first press shows only that cell.
     pub fn show_only() -> Self {
-        SweepApply { run: None, show_only: true, claims: Vec::new() }
+        SweepApply { show_only: true, ..Self::default() }
     }
 
     /// A first press with exactly `mods` held belongs to the host: it flips nothing, and the cells its drag crosses
     /// give nothing (`SweepStep::Claimed`). Claims are checked before `show_only`'s Alt, and the method can be called
     /// more than once.
-    pub fn claims(self, mods: craft_keymap::Mods) -> Self {
-        let _ = mods;
-        todo!("dp.C8")
+    pub fn claims(mut self, mods: craft_keymap::Mods) -> Self {
+        self.claims.push(mods);
+        self
     }
 
     /// Whether this is a [`SweepApply::show_only`] column, where Alt plus the first press shows only that cell.
@@ -124,19 +124,24 @@ impl SweepApply {
     /// The step for `edit`, if it asks the host for one. `Commit` repeats what its `Update` already applied.
     pub fn feed<K: Clone>(&mut self, edit: &EditEvent<ToggleEdit<K>>) -> Option<SweepStep<K>> {
         match edit {
-            EditEvent::Set { after, .. } => {
-                Some(if self.show_only && after.mods.alt { SweepStep::ShowOnly(after.clone()) } else { SweepStep::Flip(after.clone()) })
-            }
+            EditEvent::Set { after, .. } => Some(if self.claims.contains(&after.mods) {
+                SweepStep::Claimed(after.clone())
+            } else if self.show_only && after.mods.alt {
+                SweepStep::ShowOnly(after.clone())
+            } else {
+                SweepStep::Flip(after.clone())
+            }),
             EditEvent::Begin { id, before: Mixed::Same(before), .. } => {
                 self.open(*id, before);
                 None
             }
             EditEvent::Update { id, value, .. } => {
                 let run = self.open(*id, value);
-                match (run.alt, run.first == *id) {
-                    (false, _) => Some(SweepStep::Flip(value.clone())),
-                    (true, true) => Some(SweepStep::ShowOnly(value.clone())),
-                    (true, false) => None,
+                match (run.claimed, run.alt, run.first == *id) {
+                    (true, _, true) => Some(SweepStep::Claimed(value.clone())),
+                    (true, _, false) | (false, true, false) => None,
+                    (false, false, _) => Some(SweepStep::Flip(value.clone())),
+                    (false, true, true) => Some(SweepStep::ShowOnly(value.clone())),
                 }
             }
             EditEvent::Commit { .. } => {
@@ -144,6 +149,7 @@ impl SweepApply {
                 None
             }
             EditEvent::Cancel { id, before: Some(Mixed::Same(before)), .. } => match self.end() {
+                Some(Run { claimed: true, .. }) => None,
                 Some(Run { alt: true, first, .. }) => (first == *id).then(|| SweepStep::UndoShowOnly(before.clone())),
                 _ => Some(SweepStep::Restore(before.clone())),
             },
@@ -156,7 +162,8 @@ impl SweepApply {
         match self.run {
             Some(run) if !run.ended => run,
             _ => {
-                let run = Run { first: id, alt: self.show_only && edit.mods.alt, ended: false };
+                let claimed = self.claims.contains(&edit.mods);
+                let run = Run { first: id, alt: !claimed && self.show_only && edit.mods.alt, claimed, ended: false };
                 self.run = Some(run);
                 run
             }
@@ -310,19 +317,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return;
         }
         let row = layout.rect(0, ScrollPos::default()).height();
-        let band = row.min(view / 2.0);
-        if band <= 0.0 {
+        // The step is linear in the frame's time, so the rate for one second says whether the pointer is in a band.
+        let rate = reorder::edge_step(view, row, y, 1.0);
+        if rate == 0.0 {
             return;
         }
-        let depth = if y < band { (band - y) / band } else { (y - (view - band)) / band };
-        let direction = if y < band { -1.0 } else { 1.0 };
-        if depth <= 0.0 {
-            return;
-        }
+        // Taken even by a pass that steps by no time, so the body around does not step in a rerun pass instead.
+        reorder::mark_edge_step(&cx.core.ctx);
         cx.core.ctx.request_repaint();
         let dt = crate::runtime::frame::facts(&cx.core.ctx).elapsed.clamp(0.0, 0.1) as f32;
-        let step = depth.min(1.0) * EDGE_ROWS_PER_SECOND * row * dt;
-        self.offset = (self.offset + f64::from(direction * step)).clamp(0.0, self.max_offset(view));
+        self.offset = (self.offset + f64::from(rate * dt)).clamp(0.0, self.max_offset(view));
     }
 
     /// `at` in the layout's logical coordinates, relative to the rows' rect.
@@ -580,17 +584,24 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// A drag that did not start in the collection: the first drop kind that takes its payload at the place under the
     /// pointer registers the target and scrolls the rows at their edges; its release reports `Dropped`, and while held
-    /// it is the pending drop. A drag no kind takes here scrolls nothing: it is meant for another target.
-    fn kind_drop(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: (Rect, ScrollPos, bool)) {
+    /// it is the pending drop. A drag no kind takes here scrolls nothing: it is meant for another target. `own` is the
+    /// collection's own drag, offered here where its reorder refuses the landing: only `Onto` kinds take it, and the
+    /// rows scrolled already.
+    fn kind_drop(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: (Rect, ScrollPos, bool), own: bool) {
         let xf = self.xf;
         let (rect, _, rtl) = place;
         for kind in comp.drops() {
+            if own && !matches!(kind.place(), DropPlace::Onto) {
+                continue;
+            }
             let Some((payload, at)) = cx.core.dragging_of(kind.payload()) else { continue };
             let point = xf.map_or(at, |map| map.to_layer(at));
             let Some((at, mark)) = self.kind_spot(layout, place, kind.place(), point).filter(|(at, _)| kind.accepts(&*payload, at)) else {
                 continue;
             };
-            self.edge_scroll(cx, layout, rect.height(), Self::logical(layout, rect, rtl, point).y);
+            if !own {
+                self.edge_scroll(cx, layout, rect.height(), Self::logical(layout, rect, rtl, point).y);
+            }
             let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
             if let Some(op) = cx.core.drop_target_of(kind.payload(), &KindDrop { mark }) {
                 self.events.push(CollectionEvent::Dropped { at, op, payload: DropPayload::new(payload) });
@@ -653,6 +664,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let own = cx.dragging::<ListDrag<C::Key>>().filter(|(payload, _)| payload.list == cx.core.id);
         if let Some((payload, at)) = own {
+            let mut spot = None;
             if let Some(rule) = props.reorder {
                 // Above or below the rows too, while the pointer stays over their columns: `edge_scroll` scrolls at
                 // its full rate past an edge.
@@ -662,7 +674,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 }
                 let groups = rule.into_groups && matches!(layout.nav(), NavShape::Tree);
                 let step = groups.then(|| cx.env.control(cx.core.resolved.size).icon);
-                let spot = if self.source.is_empty() {
+                spot = if self.source.is_empty() {
                     self.empty_spot(rect, layer(at)).filter(|spot| comp.accepts(&payload, None, spot.insert))
                 } else {
                     self.spot(layout, rect, offset, rtl, step, layer(at))
@@ -682,9 +694,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     }
                 }
             }
+            if spot.is_none() {
+                self.kind_drop(comp, cx, layout, (rect, offset, rtl), true);
+            }
         } else {
             self.drags.grabbed = None;
-            self.kind_drop(comp, cx, layout, (rect, offset, rtl));
+            self.kind_drop(comp, cx, layout, (rect, offset, rtl), false);
         }
     }
 
