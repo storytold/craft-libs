@@ -129,7 +129,7 @@ The crate does not depend on wgpu or naga in its build.
 |------|------|-------|
 | `Material::try_new` | `pbr_material_clamped` | Clamps to the ranges the Rust constructors check, including `try_with_weights`. |
 | `Material::f0` | `pbr_f0` | Same formula. |
-| `Material::try_direct` | `pbr_direct` | Same terms, floors and zero cases; a zero-length direction gives 0 instead of an error. |
+| `Material::try_direct` | `pbr_direct` | Same floors: roughness at least 0.032, `n·v` at least `1e-4`, `n·h` at most 1 and `4 (n·v) (n·l)` at least `1e-4`. A light at or below the surface or a view straight opposite the light gives 0 in both. A zero-length direction gives 0 instead of an error, material values are clamped instead of checked, and `D` is evaluated in `f32` by `pbr_ggx_distribution`. |
 | `fresnel_schlick` | `pbr_fresnel_schlick` | Same formula. |
 | `smith_schlick_ggx` | `pbr_smith_schlick_ggx` | Same formula. |
 | `ggx_distribution` | `pbr_ggx_distribution` | Same `α` floor, in `f32`; `(n·h)² (α² − 1) + 1` is computed as `(1 − n·h)(1 + n·h) + (n·h)² α²`. |
@@ -149,10 +149,12 @@ The functions come from EffectCraft's `crates/gpu/src/shaders/advanced3d.wgsl` (
 `f4d45dfe`), which ports `shade.rs`. Changes from that shader:
 
 - The direct roughness floor is 0.032 instead of 0.03, a view straight opposite the light gives 0
-  instead of a fallback half vector, and the environment BRDF keeps `scale` and `bias` at least 0
-  with a sum of at most 1, as in the Rust functions (see Origin).
+  instead of a fallback half vector, `n·h` is taken as at most 1 as well as at least 0, and the
+  environment BRDF keeps `scale` and `bias` at least 0 with a sum of at most 1, as in the Rust
+  functions (see Origin).
 - A zero-length direction gives 0. EffectCraft's `norm3` replaced it with `(0, 0, −1)`.
-- Material values are clamped to the Rust ranges. EffectCraft read them unchecked.
+- Material values are clamped to the Rust ranges. EffectCraft clamped roughness to 0.03 to 1 and
+  read base color, metallic, specular and diffuse unchecked.
 - `D` computes its inner term as `(1 − n·h)(1 + n·h) + (n·h)² α²` with an `α` floor of 0.001 and
   a denominator of at least `f32::MIN_POSITIVE`. EffectCraft computed `(n·h)² (α² − 1) + 1`,
   which loses precision in `f32` near `n·h = 1` for small `α`, with a denominator of at least

@@ -94,7 +94,8 @@ fn pbr_smith_schlick_ggx(n_dot_v: f32, n_dot_l: f32, roughness: f32) -> f32 {
 // normal, the direction to the viewer and the direction to the light; they are normalized here.
 // The material is clamped with pbr_material_clamped and roughness is shaded as at least
 // PBR_MIN_DIRECT_ROUGHNESS. A light at or below the surface, a view straight opposite the light
-// and a zero-length direction give 0. n·v is taken as at least 1e-4.
+// and a zero-length direction give 0. n·v is taken as at least 1e-4, n·h as at most 1, and the
+// specular denominator 4 (n·v) (n·l) as at least 1e-4.
 fn pbr_direct(material: PbrMaterial, n_in: vec3<f32>, v_in: vec3<f32>, l_in: vec3<f32>) -> vec3<f32> {
     let m = pbr_material_clamped(material);
     let n = pbr_unit(n_in);
@@ -109,7 +110,7 @@ fn pbr_direct(material: PbrMaterial, n_in: vec3<f32>, v_in: vec3<f32>, l_in: vec
         return vec3<f32>(0.0);
     }
     let n_v = max(dot(n, v), PBR_MIN_N_DOT_V);
-    let n_h = max(dot(n, h), 0.0);
+    let n_h = clamp(dot(n, h), 0.0, 1.0);
     let v_h = max(dot(v, h), 0.0);
     let r = max(m.roughness, PBR_MIN_DIRECT_ROUGHNESS);
     let f = pbr_fresnel_schlick(pbr_f0(m), v_h);
