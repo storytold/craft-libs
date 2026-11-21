@@ -5,7 +5,7 @@ use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
     LabelColumns, LabelsFound, RegionFrame, RegionSizes, Regions, RuleBands, end_full_height, footer_in_body, footer_in_end, footer_rule_under,
-    gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
+    gap_of, header_gap_of, label_extra_of, least_of, pad_of, paint_bracket, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{
@@ -1305,12 +1305,12 @@ impl BodyHooks<'_> {
             && env.values.get::<label::LabelScheme>() == label::LabelScheme::Inspector;
         let (room, content_column, scroll, beside, label_width) =
             (plan.room, plan.content_column, plan.scroll, plan.regions.beside, plan.label_extra.x);
-        let first_body = plan.first.1;
+        let (first_body, layout_id) = (plan.first.1, plan.layout_id);
         // The slot of a footer the body places takes the size the measuring run's footer took.
         let footer_slot = footer_in_body(props)
             .then(|| FooterSlotOf { owner: id, size: if real { self.measured_footer } else { self.footer_size.unwrap_or(Vec2::ZERO) } });
         plan.body_env = Some(plan.line_env.derive_local(|scoped| {
-            self.scope_body(scoped, props, id, BodyScope { room, real, content_column, scroll, label_width, beside });
+            self.scope_body(scoped, props, id, BodyScope { room, real, content_column, scroll, label_width, beside, layout: layout_id });
             scoped.inside_label = inside.map(|inside| inside as crate::runtime::env::Held);
             scoped.cell_fills = cell_fills;
             if footer_slot.is_some() {
@@ -1569,6 +1569,12 @@ impl BodyHooks<'_> {
     /// size counts the label column.
     fn after_body(&mut self, ui: &mut Ui, env: &Env, plan: &mut BodyPlan<'_>) {
         let (props, ctx, real) = (plan.props, &plan.ctx, plan.real);
+        if let Some(bracket) = props.bracket {
+            let took = layout::take_bracket(ctx, plan.layout_id);
+            if let (true, crate::contract::Bracket::Linked, Some(took)) = (real, bracket, took) {
+                paint_bracket(ui, env, &took, plan.rtl);
+            }
+        }
         // A measuring run decided the label before the control reported its minimum width: it decides again
         // from the minimum this run recorded, so the extent it measures is the one the real run lays out.
         if let (false, Some(input)) = (real, plan.label_input.as_mut()) {
@@ -1580,6 +1586,12 @@ impl BodyHooks<'_> {
             plan.label_extra = label_extra_of(plan.regions.body, plan.body_rect, plan.label_rect, plan.rtl);
         }
         if let Some(size) = &mut self.body_size {
+            // A labelled row of a bracketed row reports where its control lies: the bracket runs from it.
+            if let (Some(row), Some(_)) = (env.bracket, props.label.as_ref()) {
+                let body = plan.body_rect;
+                let left = if plan.rtl { body.max.x - size.x } else { body.min.x };
+                layout::report_bracket_control(ctx, row, Rect::from_min_size(egui::pos2(left, body.min.y), *size), plan.rtl);
+            }
             let label_extra = plan.label_extra;
             // A body beside its label in a content-sized column of rows reports how far it reaches past the label
             // column, so that column's container measures its rows at the widest label.

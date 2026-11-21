@@ -1239,6 +1239,11 @@ pub(crate) mod guard {
         ("layout::body::HeldWidths", "held widths: opened and closed by the column's own first sweep"),
         ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
         ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
+        (
+            "layout::body::FlowStarts",
+            "flow starts: opened by each sweep of the body and closed by its first child in flow; a child reads its body's at its own start, and its measure key holds what it read",
+        ),
+        ("layout::body::Brackets", "bracket reports: opened by each sweep of the bracketed row and taken after its body"),
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),
         ("layout::body::ShrinkReports", "shrink reports: opened and closed by the row's own first sweep; the widths go through emit_record"),
         ("layout::body::LeastReports", "least reports: opened and closed by the row's own least sweep; the widths go through emit_record"),

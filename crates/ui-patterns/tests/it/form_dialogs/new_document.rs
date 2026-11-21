@@ -270,7 +270,7 @@ fn the_new_document_layout_places_presets_and_details_below_the_tabs() {
 }
 
 /// The fields run Name, size, Color Mode, Background Contents, then the advanced Color Profile and Pixel Aspect Ratio; the
-/// save icon sits at the end of the Name row.
+/// save icon (no text) sits at the end of the Name row.
 #[trial]
 fn the_new_document_fields_run_background_before_the_advanced_ones_and_save_sits_on_the_name_row() {
     let mut options = DocumentOptions::default();
@@ -287,6 +287,7 @@ fn the_new_document_fields_run_background_before_the_advanced_ones_and_save_sits
     let save = fixture.by_label("Save Document Preset").expect("the save action").rect;
     assert!(save.top() < name.bottom() && name.top() < save.bottom(), "the save icon shares the Name row");
     assert!(name.right() <= save.left(), "the save icon is at the end of the Name field");
+    assert!(!fixture.texts().iter().any(|run| run.text.starts_with("Save ")), "the save control is an icon, with no text");
 }
 
 /// The caption role sets its text in capitals when it paints; the label stays as written.

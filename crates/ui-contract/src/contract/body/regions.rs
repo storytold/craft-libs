@@ -11,7 +11,7 @@ use crate::runtime::egui::{alloc, child, style};
 use crate::runtime::env::{Env, RowLine};
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
-use crate::style::{RuleKind, UiTokens, rule_look};
+use crate::style::{RuleKind, RuleLook, RuleWidth, UiTokens, rule_look};
 use egui::{Align, Id, Layout, Pos2, Rect, Ui, UiBuilder, Vec2};
 
 /// The slots of a container's own header parts at the edges of the header's line (`Container::header_parts`).
@@ -214,6 +214,30 @@ pub(super) fn paint_rules(ui: &mut Ui, env: &Env, regions: &Regions) {
     let ppp = ui.ctx().pixels_per_point();
     for (band, side) in regions.rules.iter().flatten() {
         ui.painter().extend(Rule::edge(&rule, *band, *side, ppp));
+    }
+}
+
+/// The bracket of a linked `Row` (`Bracket::Linked`) from what its rows reported in `took`: a tick from the end of the
+/// first and the last row's controls, `space.gap.tight` past them, to the middle child's centre line, and a stroke
+/// along that line from each tick to the middle child's edge. `text.muted`, `stroke.thin` wide.
+pub(super) fn paint_bracket(ui: &mut Ui, env: &Env, took: &crate::layout::BracketTook, rtl: bool) {
+    let (Some(first), Some(last), Some(end), Some(middle)) = (took.first, took.last, took.end, took.middle) else { return };
+    if last <= first {
+        return;
+    }
+    let tokens = &env.tokens;
+    let tight = tokens.tokens().space.gap.tight;
+    let look = RuleLook { color: crate::style::rgba_color(tokens.color.text.muted), width: RuleWidth::Points(tokens.stroke.thin) };
+    let ppp = ui.ctx().pixels_per_point();
+    let (start, line) = if rtl { (-end - tight, middle.center().x) } else { (end + tight, middle.center().x) };
+    let painter = ui.painter();
+    for (from, to) in [
+        (Pos2::new(start, first), Pos2::new(line, first)),
+        (Pos2::new(start, last), Pos2::new(line, last)),
+        (Pos2::new(line, first), Pos2::new(line, middle.top().max(first))),
+        (Pos2::new(line, middle.bottom().min(last)), Pos2::new(line, last)),
+    ] {
+        painter.extend(Rule::shapes(&look, from, to, ppp));
     }
 }
 

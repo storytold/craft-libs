@@ -5,7 +5,7 @@ use super::presets::{
     BackgroundContents, ColorMode, DocumentOptions, MAX_NAME, MAX_SAVED, Orientation, PIXEL_ASPECTS, RESOLUTION_UNITS, SIZE_UNITS, SQUARE_PIXELS,
 };
 use super::{NewDocumentWords, Read, Session, background_rgb, depth_label, mode_label};
-use crate::buttons::Button;
+use crate::buttons::{Button, IconButton};
 use crate::choice::{Checkbox, Segmented, Swatch};
 use crate::contract::{Bind, Entry, FieldLayout, Gap, MemoProps, Props as _, Show as _, ShowContainer as _, Sizing, Validity, clicked};
 use crate::display::{Shade, Text};
@@ -138,7 +138,8 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
                 if std::mem::take(&mut session.focus_name) {
                     focus::request(ui.ctx(), FocusTarget::Id(shown.response.id));
                 }
-                let save = Button::new(words.save_preset_title.clone()).painted(words.save_preset.clone()).id_salt("save-preset").show(ui);
+                let title = words.save_preset_title.clone();
+                let save = IconButton::new(IconId::new("square_plus")).label(title.clone()).tooltip(title).id_salt("save-preset").show(ui);
                 if clicked(&save) {
                     session.naming = Some(proposed_name(read));
                     session.name_tried = false;

@@ -3,7 +3,7 @@
 
 use super::FormDialog;
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
+use crate::contract::{Bind, Bracket, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use crate::dialog::{DialogResult, FieldRefusal, HeldAnswer};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -412,10 +412,11 @@ impl Kit {
         }
     }
 
-    /// The width and height rows, with the chain beside them when the model draws one.
+    /// The width and height rows, with the chain bracketed to them when the model draws one.
     pub(super) fn sides(&self, ui: &mut Ui, size: &mut LinkedSize) {
         let chain = size.has_chain();
-        Row::new().show(ui, |ui, _| {
+        let row = if chain { Row::new().bracket(if size.is_linked() { Bracket::Linked } else { Bracket::Unlinked }) } else { Row::new() };
+        row.show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 self.row(ui, size, Dimension::Width);
                 self.row(ui, size, Dimension::Height);

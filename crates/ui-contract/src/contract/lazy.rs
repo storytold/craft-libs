@@ -176,6 +176,7 @@ impl Lazy {
         if memo {
             place_view(ui, rect);
         } else {
+            crate::layout::close_flow_start_in(ui);
             alloc::advance_past(ui, rect);
         }
         if view.is_some() || memo {
@@ -268,6 +269,7 @@ fn at_start(region: Rect, rtl: bool, size: Vec2) -> Pos2 {
 /// starts a layout room of its own and takes none; elsewhere the flow moves past `rect`.
 fn place_view(ui: &mut Ui, rect: Rect) -> Rect {
     if take_cell(ui, rect.size()).is_none() {
+        crate::layout::close_flow_start_in(ui);
         alloc::advance_past(ui, rect);
     }
     rect

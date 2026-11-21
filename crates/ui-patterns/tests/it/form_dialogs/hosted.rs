@@ -521,3 +521,42 @@ fn sizing_dialogs_show_width_and_height_beside_their_labels_at_full_height() {
         }
     }
 }
+
+/// The horizontal line segments one frame of `fixture` paints, as (y, from x, to x).
+fn horizontal_lines(fixture: &mut Fixture) -> Vec<(f32, f32, f32)> {
+    fixture
+        .frame_shapes()
+        .into_iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::LineSegment { points: [a, b], .. } if (a.y - b.y).abs() < 0.5 => Some((a.y, a.x.min(b.x), a.x.max(b.x))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Image Size as 0.23.1 lays it out: the chain sits halfway between Width's and Height's controls with the bracket
+/// drawn from each control to it, and Resample starts in the control column with the method on its line.
+#[trial]
+fn image_size_brackets_width_and_height_and_starts_resample_in_the_control_column() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    let rect = |fixture: &Fixture, name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name} is shown")).rect;
+    let (width, height, link) = (rect(&fixture, "Width unit"), rect(&fixture, "Height unit"), rect(&fixture, "Maintain aspect ratio"));
+    let middle = (width.center().y + height.center().y) / 2.0;
+    assert!((link.center().y - middle).abs() <= 0.5, "the chain sits halfway between Width and Height: {link:?} {middle}");
+    let lines = horizontal_lines(&mut fixture);
+    for (name, row) in [("Width", width), ("Height", height)] {
+        assert!(
+            lines.iter().any(|(y, from, to)| (y - row.center().y).abs() <= 1.0 && *from >= row.max.x && *to >= link.center().x - 1.0),
+            "a tick runs from {name}'s control to the chain: {lines:?}"
+        );
+    }
+    let (number, check, method) = (rect(&fixture, "Width"), rect(&fixture, "Resample"), rect(&fixture, "Resample method"));
+    assert!((check.min.x - number.min.x).abs() <= 0.5, "Resample starts at the control column: {check:?} {number:?}");
+    assert!(
+        method.min.x >= check.max.x - 0.5 && method.min.y < check.max.y && method.max.y > check.min.y,
+        "the method follows Resample on its line: {method:?} {check:?}"
+    );
+}

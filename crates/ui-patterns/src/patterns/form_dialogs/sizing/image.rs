@@ -4,7 +4,7 @@ use super::{Kit, LinkedSize, Resample, SizeForm, SizingOutput, set_size_json, sh
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
-use crate::form::Field;
+use crate::layout_components::Row;
 use crate::pickers::Select;
 use crate::runtime::env::{ColumnSize, Label, UnitKind};
 use crate::runtime::{keys, overlay};
@@ -220,18 +220,19 @@ impl<'a> ImageSize<'a> {
                         }
                     }
                 }
-                let on = Checkbox::new(Bind::given(state.size.is_resampling())).label(words.resample.clone()).id_salt("resample").show(ui);
-                if let Some(on) = on.value().copied() {
-                    state.size.resampling(on);
-                }
-                if state.size.is_resampling() {
-                    Field::new(words.resample_method.clone()).id_salt("method").show(ui, |ui, _| {
-                        let picked = Select::new(words.resample_method.clone(), Bind::given(state.method), &entries).show(ui);
+                // Resample and its method share a row that starts in the control column.
+                Row::new().id_salt("resample-row").show(ui, |ui, _| {
+                    let on = Checkbox::new(Bind::given(state.size.is_resampling())).label(words.resample.clone()).id_salt("resample").show(ui);
+                    if let Some(on) = on.value().copied() {
+                        state.size.resampling(on);
+                    }
+                    if state.size.is_resampling() {
+                        let picked = Select::new(words.resample_method.clone(), Bind::given(state.method), &entries).id_salt("method").show(ui);
                         if let Some(method) = picked.value().copied() {
                             state.method = method;
                         }
-                    });
-                }
+                    }
+                });
                 let styles = Checkbox::new(Bind::given(state.scale_styles))
                     .label(words.scale_styles.clone())
                     .id_salt("scale-styles")

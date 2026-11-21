@@ -29,6 +29,8 @@ pub(super) struct MeasureKey {
     /// Whether the body shows, and how much of it an animated collapse shows.
     shows: (bool, f32),
     env: EnvFacts,
+    /// Whether its parent flow showed the container as a row of a vertical flow (`label::in_column`).
+    in_column: bool,
 }
 
 /// The props a body was measured under, compared on the fields its measure reads.
@@ -92,6 +94,7 @@ impl<'b> BodyHooks<'b> {
             width,
             shows: (self.open, self.presence.t),
             env: EnvFacts::of(env),
+            in_column: self.in_column,
         }
     }
 
