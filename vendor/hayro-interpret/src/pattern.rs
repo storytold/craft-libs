@@ -164,7 +164,6 @@ pub struct TilingPattern<'a> {
     cache_key: u128,
     /// PdfCraft patch (78): see [`Self::instance`].
     instance: u64,
-    ctx_bbox: Rect,
     /// The bbox of the tiling pattern.
     pub bbox: Rect,
     /// The step in the x direction.
@@ -238,7 +237,6 @@ impl<'a> TilingPattern<'a> {
             .unwrap_or_default();
 
         let state = ctx.get().clone();
-        let ctx_bbox = ctx.bbox();
 
         let fill_cs = state
             .graphics_state
@@ -270,7 +268,6 @@ impl<'a> TilingPattern<'a> {
             x_step,
             y_step,
             matrix,
-            ctx_bbox,
             is_color,
             stream,
             stroke_paint,
@@ -301,8 +298,12 @@ impl<'a> TilingPattern<'a> {
 
         let mut context = Context::new_with(
             state.ctm,
-            // TODO: bbox?
-            (initial_transform * self.ctx_bbox.to_path(0.1)).bounding_box(),
+            // PdfCraft patch (119): the cell is drawn on a canvas of its own, in pattern space, and
+            // what bounds it there is its `/BBox` (ISO 32000-2 8.7.3.1), so `sh` paints the cell
+            // as far as that clip. It was the device rectangle of the content that set the
+            // pattern, read as if it were in pattern space: a cell with its shading at negative
+            // pattern coordinates (any pattern matrix that flips y) was painted nowhere.
+            (initial_transform * self.bbox.to_path(0.1)).bounding_box(),
             &self.cache,
             self.xref,
             self.settings.clone(),
