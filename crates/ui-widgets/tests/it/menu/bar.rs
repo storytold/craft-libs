@@ -376,7 +376,6 @@ fn holding_alt_runs_the_memoized_view_of_a_menu_bar() {
     assert!(frame(&mut fixture) > 0, "Alt coming up runs the view, which drops the underlines");
 }
 
-
 /// Alt left over from a Windows task-switcher round trip must not open the menu for the next letter.
 #[trial]
 fn returning_with_stale_alt_does_not_open_a_menu() {
@@ -387,29 +386,16 @@ fn returning_with_stale_alt_does_not_open_a_menu() {
     rig.fixture.os(Os::Windows).settle();
     rig.fixture.frame(vec![Event::WindowFocused(false), Event::ModifiersChanged(Modifiers::NONE)]);
     rig.fixture.frame(vec![Event::WindowFocused(true), Event::ModifiersChanged(Modifiers::ALT)]);
-    rig.fixture.frame(vec![Event::Key {
-        key: Key::AltLeft,
-        physical_key: None,
-        pressed: true,
-        repeat: false,
-        modifiers: Modifiers::ALT,
-    }]);
+    rig.fixture.frame(vec![Event::Key { key: Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT }]);
     rig.fixture.frame(vec![key_press(Key::F, Modifiers::ALT)]);
     assert!(!rig.open("New"), "the switcher's Alt must not open File");
-    rig.fixture.frame(vec![Event::Key {
-        key: Key::F,
-        physical_key: Some(Key::F),
-        pressed: false,
-        repeat: false,
-        modifiers: Modifiers::ALT,
-    }]);
+    rig.fixture.frame(vec![Event::Key { key: Key::F, physical_key: Some(Key::F), pressed: false, repeat: false, modifiers: Modifiers::ALT }]);
 
     // Windows may omit a modifier update if its last report still said Alt was down.
     rig.fixture.frame(vec![key_press(Key::AltLeft, Modifiers::ALT)]);
     rig.fixture.frame(vec![key_press(Key::F, Modifiers::ALT)]);
     assert!(rig.open("New"), "a fresh Alt+F still opens File");
 }
-
 
 /// A switcher's Alt release must not act like a deliberate Alt tap that moves focus to the bar.
 #[trial]
