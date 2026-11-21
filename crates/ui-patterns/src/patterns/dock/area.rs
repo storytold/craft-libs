@@ -596,9 +596,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
-    let (hide, floating) = hide::resolved(hide, shell.as_ref());
-    let prune = PruneKey { model, hide, floating, maximized: maximized.map(PanelKey::of) };
-    let view = derived(ctx, id.with("pruned"), &prune, || frame::maximize(current.layout(), maximized, hide, &protected).into_owned());
+    let prune = PruneKey::new(model, hide, shell.as_ref(), maximized.map(PanelKey::of));
+    let view = derived(ctx, id.with("pruned"), &prune, || hide::shown(current.layout(), maximized, hide, shell.as_ref(), &protected).into_owned());
     let layout: &Layout<P> = &view.layout;
     let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
     let space = float_space(ctx, bounds, &sizes, config, specs);
@@ -678,7 +677,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     };
     register_bands(&scene, ctx, body.rect, &leaves);
     let started = memory.moving.as_ref().map(|moving| moving.before.layout());
-    let moved = if floating { pass.windows(ui, body, &open, started) } else { None };
+    let moved = if prune.floating { pass.windows(ui, body, &open, started) } else { None };
     let mut report = pass.report;
     let label: Arc<str> = Arc::from(body.words::<DockWords>().move_window.as_str());
     if let Some((anchor, change, edge)) = moved

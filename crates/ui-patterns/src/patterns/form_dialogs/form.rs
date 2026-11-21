@@ -451,8 +451,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         // The app accepted the held OK: this pass finishes it. A second pass of the frame finds the answer already taken.
         let finish = !measuring_run && hold.as_deref().is_some_and(|held| held.is_accepted());
         // The refusal and the values it refused are read before the body, which may edit the values; the notice is decided
-        // after the body, in the same pass, against the values the body left.
-        let refusal = hold.as_deref().and_then(|held| held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone())));
+        // after the body, in the same pass, against the values the body left. A blocking (host) refusal shows whatever the
+        // values are.
+        let refusal =
+            hold.as_deref().and_then(|held| held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone(), held.refusal_blocks())));
         let reason_cell = Rc::new(Cell::new(None::<Label>));
         let waiting = hold.as_deref().is_some_and(|held| held.is_waiting());
         let ok_enabled = ok_enabled && !waiting;
@@ -617,8 +619,8 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 let _ = held.reborrow().write(cx, &EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
                 *changed.borrow_mut() = Some(values.clone());
             }
-            if let Some((reason, refused)) = &refusal
-                && *refused == values
+            if let Some((reason, refused, blocks)) = &refusal
+                && (*blocks || *refused == values)
             {
                 reason_cell.set(Some(reason.clone()));
             }
@@ -637,8 +639,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         };
         if let Some(held) = hold {
             let values = work.into_inner();
+            // A blocking refusal ends only when the host withdraws it.
             if let (Some((_, refused)), Some(values)) = (held.refusal(), values.as_ref())
                 && refused != values
+                && !held.refusal_blocks()
             {
                 held.clear_refusal();
             }
