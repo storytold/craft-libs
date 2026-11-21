@@ -684,7 +684,6 @@ enum WindowsAlt {
     AwaitingPress,
 }
 
-
 impl WindowsAlt {
     fn normalize(&mut self, input: &mut RawInput) {
         let mut at = 0;
@@ -721,12 +720,8 @@ impl WindowsAlt {
             }
             at += 1;
         }
-        if *self != Self::Live {
-            input.modifiers.alt = false;
-        }
     }
 }
-
 
 /// The raw-input state `prepare` keeps for one viewport.
 #[derive(Default)]
@@ -744,11 +739,10 @@ pub(crate) struct RawState {
 
 /// Repairs the Windows host's modifier report before the framework joins any synthetic input.
 pub(super) fn repair_windows_alt(ctx: &Context, input: &mut RawInput) {
-    if (!input.events.is_empty() || input.modifiers.alt) && crate::runtime::windows::os_of(ctx) == Os::Windows {
+    if !input.events.is_empty() && crate::runtime::windows::os_of(ctx) == Os::Windows {
         PerViewport::<RawState>::with(ctx, input.viewport_id, |state| state.windows_alt.normalize(input));
     }
 }
-
 
 /// The input hook's raw-input step for every viewport, after the injected step joined the input and before the key
 /// stage and the one-press rule: folds a legacy pinch, scales the wheel by the user's speed, folds Alt+numpad codes
