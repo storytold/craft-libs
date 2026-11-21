@@ -4,7 +4,7 @@
 use super::hide::{self, Shown};
 use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Cx, Entry, Lazy, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Bind, BindMut, BodyCx, Cx, Entry, Gap, Lazy, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
@@ -1054,7 +1054,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .id(dock.with(("rail footer", panel)))
                     .pad(Pad::None)
                     .footer(|ui, _| {
-                        Stack::new().fill_width().show(ui, |ui, body| pass.borrow_mut().panels.rail_footer(panel, ui, body));
+                        // Compact rail controls leave room for the scrolling panel icons in short windows.
+                        Stack::new().fill_width().gap(Gap::None).show(ui, |ui, body| pass.borrow_mut().panels.rail_footer(panel, ui, body));
                     })
                     .show_at(ui, cell, |ui, _| {
                         let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), egui::Sense::hover());
