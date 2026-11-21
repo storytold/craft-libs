@@ -23,7 +23,6 @@ fn path_options_defaults(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PathOptionsPopover<'static>, covers = [], drive = Drive::Never)]
 fn path_options_with_a_color(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut open = *data.value("open-set", false);
-    // P3(canvas-w7): cv.F33
     let settings = data
         .value("set", PathOptionsSettings { rubber_band: true, color: Some([200, 40, 40]), thickness: Some(2.0), ..PathOptionsSettings::default() });
     let shown = PathOptionsPopover::new("Path Options", Bind::bound(&mut *settings)).show(ui, &mut open);

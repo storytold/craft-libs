@@ -225,15 +225,22 @@ impl PathSelection {
 
     /// The selection with the anchors `anchors` of the other path keyed `path` drawn selected.
     #[must_use]
-    pub fn also(self, path: u64, anchors: Vec<KnotRef>) -> Self {
-        let _ = (path, anchors);
-        todo!("cv.F32")
+    pub fn also(mut self, path: u64, anchors: Vec<KnotRef>) -> Self {
+        match self.others.iter_mut().find(|(key, _)| *key == path) {
+            Some((_, held)) => held.extend(anchors),
+            None => self.others.push((path, anchors)),
+        }
+        self
     }
 
     /// Whether `knot` of `path` draws selected: a selected anchor of the path being edited, or one listed in `others`.
     pub fn draws_selected(&self, path: u64, knot: KnotRef) -> bool {
-        let _ = (path, knot);
-        todo!("cv.F32")
+        self.has_anchor(path, knot) || self.others.iter().any(|(key, anchors)| *key == path && anchors.contains(&knot))
+    }
+
+    /// The number of selected anchors over the edited path and every path in `others`.
+    pub fn selected_len(&self) -> usize {
+        self.anchors.len() + self.others.iter().map(|(_, anchors)| anchors.len()).sum::<usize>()
     }
 
     /// Whether `knot` of `path` is a selected anchor.
