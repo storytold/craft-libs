@@ -16,6 +16,7 @@ on:
       - "crates/tiff/**"
       - "crates/heif/**"
       - "crates/cms/**"
+      - "crates/cdr/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/formats.yml"
@@ -33,6 +34,7 @@ on:
       - "crates/tiff/**"
       - "crates/heif/**"
       - "crates/cms/**"
+      - "crates/cdr/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/formats.yml"
@@ -67,6 +69,7 @@ jobs:
           - { crate: craft-tiff, features: "" }
           - { crate: craft-heif, features: "testdata" }
           - { crate: craft-cms, features: "" }
+          - { crate: craft-cdr, features: "synth" }
     # fmt, clippy with default and with all features, and the tests run in the Workspace gate on
     # every OS; this lints each feature alone and checks the web build.
     name: ${{ matrix.crate }} feature sets, WASM
