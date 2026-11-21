@@ -38,8 +38,9 @@ pub(super) struct OpenField {
 impl Reader {
     /// `\field`, after its instruction slot is made: note where its result starts.
     pub(super) fn open_field(&mut self) {
-        // Hidden text drops the result: the field stays hidden with it.
-        if !self.marks_on || self.st.dest != Dest::Body || self.st.hidden || self.open_fields.len() >= MAX_OPEN {
+        // A field inside hidden text opens anyway: the hidden text of its result drops with
+        // it (the field's own close then refuses to make it, #7116).
+        if !self.marks_on || self.st.dest != Dest::Body || self.open_fields.len() >= MAX_OPEN {
             return;
         }
         let Some(index) = self.st.field else { return };
@@ -93,7 +94,8 @@ impl Reader {
             return;
         }
         let Some(f) = self.open_fields.pop() else { return };
-        if !f.result || f.hidden || f.para != self.para_seq {
+        // Hidden at the close: the whole field sits in hidden text, and stays out with it.
+        if !f.result || f.hidden || f.para != self.para_seq || self.st.hidden {
             return;
         }
         let instr = self.fields.get(f.index).map_or("", |s| s.trim());

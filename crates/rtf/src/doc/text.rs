@@ -217,7 +217,21 @@ impl Reader {
         match self.st.dest {
             Dest::Body => {
                 if self.st.hidden {
-                    self.hidden_text_dropped();
+                    // Text inside a field (its instruction or a result) drops with the field:
+                    // the field tests pin that. Body text outside any field keeps instead:
+                    // `\v` marks the run's formatting, the document model carries it in
+                    // `Fmt::extra`, and a save writes it back as `w:vanish` (#7116).
+                    if !self.open_fields.is_empty() {
+                        self.hidden_text_dropped();
+                        return;
+                    }
+                    let mut f = self.text_fmt();
+                    let extra = f.extra.get_or_insert_with(Default::default);
+                    if extra.hidden.is_none() {
+                        extra.hidden = Some(true);
+                    }
+                    self.para.push_text(s, &f);
+                    self.para_has = true;
                     return;
                 }
                 if s.contains([MARK_OPEN, MARK_CLOSE]) {
