@@ -12,3 +12,6 @@ workspace = true
 
 [dev-dependencies]
 encoding_rs = { workspace = true }
+# Independent NFC oracle for the exhaustive Windows-1258 normalization property test.
+# Test-only: `craft-codepage` keeps zero runtime dependencies.
+unicode-normalization = "0.1"
