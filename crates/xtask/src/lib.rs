@@ -15,6 +15,8 @@
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
+//! - `fetch` (feature `fetch`): files named in a pinned list, each checked against its SHA-256 before
+//!   it is written in place, and tar archives extracted under entry and size limits.
 //!
 //! ```no_run
 //! use std::path::Path;
@@ -39,6 +41,8 @@
 //! ```
 
 pub mod assets;
+#[cfg(feature = "fetch")]
+pub mod fetch;
 #[cfg(feature = "lock")]
 pub mod lock;
 #[cfg(feature = "report")]
