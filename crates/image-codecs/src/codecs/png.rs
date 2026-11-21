@@ -2235,17 +2235,18 @@ mod parallel_tests {
         let px: Vec<u8> =
             (0..w * h * bpp).map(|i| ((i / 5) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 11) as u8 / 5 + (i % 89) as u8).collect();
         assert!(px.len() >= PARALLEL_MIN_BYTES && px.len() > 2 * BAND_BYTES);
+        let img = Image::from_raw(w as u32, h as u32, ChannelLayout::Rgba, SampleType::U8, px).unwrap();
+        let px = img.data();
         for level in [PngCompression::Fast, PngCompression::Default, PngCompression::Best] {
-            let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
+            let one = banded_idat(px, w, h, bpp, level, 1).unwrap();
             for threads in [2, 7, 32] {
-                assert!(banded_idat(&px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
+                assert!(banded_idat(px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
             }
-            assert!(parallel_idat(&px, w, h, bpp, level).unwrap() == one, "{level:?}: this machine's thread count differs from one");
-            let img = Image::from_raw(w as u32, h as u32, ChannelLayout::Rgba, SampleType::U8, px.clone()).unwrap();
             let opts = EncodeOptions { png_compression: level, ..Default::default() };
             let png = crate::encode(&img, Format::Png, &opts).unwrap();
-            assert!(png.windows(one.len()).any(|c| c == one.as_slice()), "{level:?}: the file carries the stream");
-            assert_eq!(decode(&png, &Limits::default()).unwrap().data(), img.data());
+            let (_, idat, _) = super::streamed_tests::split(&png);
+            assert!(idat == one, "{level:?}: the file's IDAT stream differs from one worker");
+            assert_eq!(decode(&png, &Limits::default()).unwrap().data(), px);
         }
     }
 
@@ -2277,7 +2278,7 @@ mod streamed_tests {
     use super::*;
 
     /// (bytes ahead of the first IDAT, the IDAT payloads joined, how many IDAT chunks).
-    fn split(png: &[u8]) -> (Vec<u8>, Vec<u8>, usize) {
+    pub(super) fn split(png: &[u8]) -> (Vec<u8>, Vec<u8>, usize) {
         let (mut at, mut head, mut zlib, mut count) = (8, None, Vec::new(), 0);
         while at + 12 <= png.len() {
             let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
