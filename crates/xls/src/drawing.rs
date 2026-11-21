@@ -8,7 +8,7 @@ use std::sync::Arc;
 use craft_officeart::blip::{Decode, Format, fbse_record, parse, store_entries};
 use craft_officeart::props::{entries, prop};
 use craft_officeart::record::{MAX_DEPTH, Records};
-use craft_officeart::{dib, rt, wmf};
+use craft_officeart::{dib, rt};
 
 use crate::model::ClientAnchor;
 
@@ -52,14 +52,8 @@ fn fbse_blip(fbse: &[u8], work: &mut Decode) -> Bytes {
     let bytes = match blip.format {
         // The DIB is copied once, into its BMP file, charged whole.
         Format::Dib => dib::to_bmp_within(blip.raw(), usize::MAX, work)?,
-        // The placeable header is charged with the records.
-        Format::Wmf => {
-            let records = blip.bytes(usize::MAX, work)?;
-            if !work.charge(wmf::PLACEABLE_HEADER, "metafile") {
-                return None;
-            }
-            wmf::with_placeable_header(blip.header?, records)?
-        }
+        // With its placeable header, the copy that adds it charged too.
+        Format::Wmf => craft_officeart::blip::with_placeable_header(&blip, usize::MAX, work)?,
         _ => blip.bytes(usize::MAX, work)?,
     };
     Some((bytes, mime))
@@ -117,8 +111,9 @@ fn shape(sp: &[u8], budget: &mut usize, cut: &mut bool) -> Option<PictureShape> 
         match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
             rt::FOPT => {
-                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB && !e.is_complex).last() {
-                    pib = Some(e.op);
+                // The last `pib` entry counts; a complex one (its operand a length) is no index.
+                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
+                    pib = (!e.is_complex).then_some(e.op);
                 }
             }
             // Client anchor: flags, then eight 16-bit values.

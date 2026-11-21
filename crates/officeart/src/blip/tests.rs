@@ -147,6 +147,35 @@ fn every_copy_of_a_dib_is_charged() {
     assert!((1 << 20) - work.left >= bmp + 4 + png.len(), "{} charged", (1 << 20) - work.left);
 }
 
+/// A WMF's file with its placeable header is a second copy of its records, charged whole with the
+/// header; when that doesn't fit in the limit or the budget, or its bounds can't make a header,
+/// the records are kept as a WMF without one.
+#[test]
+fn a_wmf_header_is_added_only_when_its_copy_fits() {
+    let records = vec![3u8; 1024];
+    let wmf = |l: i32, r: i32| {
+        let mut b = metafile(rt::BLIP_WMF, 0x216, records.len(), &records, false);
+        // The bounds, at 16 + 4 (the UID, then the uncompressed size) in the record body.
+        b[8 + 20..8 + 24].copy_from_slice(&l.to_le_bytes());
+        b[8 + 28..8 + 32].copy_from_slice(&r.to_le_bytes());
+        b
+    };
+    let fits = wmf(0, 1000);
+    let blip = parse(&Rec::at(&fits, 0).unwrap()).unwrap();
+    let whole = records.len() + crate::wmf::PLACEABLE_HEADER;
+    let read = |limit: usize, left: usize| {
+        let mut work = Decode::new(left);
+        with_placeable_header(&blip, limit, &mut work).map(|b| (b.len(), left - work.left))
+    };
+    assert_eq!(read(usize::MAX, records.len() + whole), Some((whole, records.len() + whole)), "both copies charged");
+    assert_eq!(read(usize::MAX, whole), Some((records.len(), records.len())), "the second copy doesn't fit: kept bare");
+    assert_eq!(read(whole - 1, usize::MAX), Some((records.len(), records.len())), "the file doesn't fit the limit: kept bare");
+    let wide = wmf(40_000, 41_000);
+    let blip = parse(&Rec::at(&wide, 0).unwrap()).unwrap();
+    let mut work = Decode::new(records.len());
+    assert_eq!(with_placeable_header(&blip, records.len(), &mut work).map(|b| b.len()), Some(records.len()), "no header to add, none reserved");
+}
+
 /// A WMF whose bounds don't fit the 16-bit coordinates of its records keeps its records without a
 /// placeable header, rather than one whose clamped bounds have no width.
 #[test]

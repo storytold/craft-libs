@@ -201,7 +201,15 @@ fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> Option<RawShape<'a>> {
                     }
                 }
             }
-            rt::CLIENT_TEXTBOX => s.text = Some(r),
+            rt::CLIENT_TEXTBOX => {
+                // The text box's records are read later, by the text reader: charged here.
+                for _ in r.children() {
+                    if !take(budget) {
+                        return None;
+                    }
+                }
+                s.text = Some(r);
+            }
             _ => {}
         }
     }
@@ -342,7 +350,8 @@ mod tests {
         let fsp = || atom(rt::FSP, 1, &[0; 8]);
         let anchor = atom(rt::CLIENT_ANCHOR, 0, &[0; 8]);
         let ph = container(rt::CLIENT_DATA, 0, &[atom(rt::PLACEHOLDER_ATOM, 0, &[0, 0, 0, 0, 0x0D, 0, 0, 0])]);
-        let text = container(rt::CLIENT_TEXTBOX, 0, &[]);
+        // The text box's own records count too.
+        let text = container(rt::CLIENT_TEXTBOX, 0, &[atom(rt::TEXT_HEADER, 0, &[0; 4])]);
         let title = container(rt::SP_CONTAINER, 0, &[fsp(), anchor, ph, text]);
         let group = container(
             rt::SPGR_CONTAINER,
