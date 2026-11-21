@@ -4223,7 +4223,7 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
 - `craft_ui::runtime::toast::ToastEnd`: `pub enum ToastEnd { Action(usize), Dismissed, Expired, Dropped }`. How a toast left the queue.
 - `craft_ui::runtime::toast::ToastId`: `pub struct ToastId`. A posted toast's handle.
   - `pub fn value(self) -> u64`. The handle as a number, unique among the toasts of one queue: what a host reports to automation.
-- `craft_ui::runtime::toast::cards`: `pub fn cards(ctx: &Context, window: &WindowKey) -> Vec<Card>`. The cards of the window `window` in the running viewport, oldest first.
+- `craft_ui::runtime::toast::cards`: `pub fn cards(ctx: &Context, window: &WindowKey) -> Vec<Card>`. The cards of the window `window` in the running viewport, oldest first. A tracked input (`Input::Toasts`).
 - `craft_ui::runtime::toast::dismiss`: `pub fn dismiss(ctx: &Context, id: ToastId)`. Removes a toast before its timer ends, from whichever viewport holds it. The app asked for it, so no end is
 - `craft_ui::runtime::toast::end`: `pub fn end(ctx: &Context, id: ToastId) -> Option<ToastEnd>`. How the toast `id` ended, once: `Dropped` for a card the cap removed; `None` while it is queued, after the report
 - `craft_ui::runtime::toast::keep`: `pub fn keep(ctx: &Context, id: ToastId)`. Keeps the toast `id` until it is closed, whatever its timeout (an error the user must read).
@@ -4587,6 +4587,7 @@ What the accessibility trials read: the AccessKit tree a frame produced, and the
 - `craft_ui::testing::access::Declared`: `pub enum Declared { Focus, Click, Increment, Decrement, SetValue, SetTextSelection, Expand, Collapse, Custom, ScrollUp, ScrollDown, ScrollLeft, ScrollRight }`. An action a node declares.
 - `craft_ui::testing::access::NodeKey`: `pub struct NodeKey`. A node's number in the tree.
   - `pub fn of(id: Id) -> NodeKey`. The key of the node of `id`.
+- `craft_ui::testing::access::layer_root`: `pub fn layer_root(id: Id) -> Id`. The id of the root node of the overlay layer `id`. The root has an id of its own: the layer's container component
 - `craft_ui::testing::access::prune_controls`: re-export of `craft_ui::runtime::egui::access::prune_controls`.
 
 ## `craft_ui::testing::bypass`
