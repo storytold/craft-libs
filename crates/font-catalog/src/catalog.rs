@@ -262,6 +262,8 @@ fn style_key(style: &str) -> String {
 /// What the catalog reads besides the platform's font folders.
 struct Config {
     app_dirs: Vec<PathBuf>,
+    /// Folders a link inside is followed from only when it leads inside one of them ([`Catalog::set_confined_dirs`]).
+    confined_dirs: Vec<PathBuf>,
     listers: Vec<Lister>,
     font_service: bool,
 }
@@ -336,7 +338,12 @@ impl Catalog {
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             env,
-            config: RwLock::new(Config { app_dirs: Vec::new(), listers: Vec::new(), font_service: cfg!(feature = "system") }),
+            config: RwLock::new(Config {
+                app_dirs: Vec::new(),
+                confined_dirs: Vec::new(),
+                listers: Vec::new(),
+                font_service: cfg!(feature = "system"),
+            }),
             index: RwLock::new(Arc::new(Index::default())),
             ready: OnceLock::new(),
             scan: Mutex::new(ScanState::default()),
@@ -377,10 +384,11 @@ impl Catalog {
         self.write_config().app_dirs = dirs;
     }
 
-    /// Folders in which a link is followed only when it stays inside a confined folder.
+    /// Folders in which a link is followed only when it stays inside a confined folder, from the next scan on: a link
+    /// in one of them (or in a folder below) that leads outside all of them is skipped, so a folder the user picked
+    /// reads no fonts from elsewhere.
     pub fn set_confined_dirs(&self, dirs: Vec<PathBuf>) {
-        let _ = dirs;
-        todo!("ty.S1")
+        self.write_config().confined_dirs = dirs;
     }
 
     fn write_config(&self) -> std::sync::RwLockWriteGuard<'_, Config> {
@@ -674,9 +682,9 @@ impl Catalog {
 
     fn scan_now(&self, refresh: bool) {
         let mut state = lock(&self.scan);
-        let (app_dirs, listers, service) = {
+        let (app_dirs, confined_dirs, listers, service) = {
             let c = self.read_config();
-            (c.app_dirs.clone(), c.listers.clone(), c.font_service)
+            (c.app_dirs.clone(), c.confined_dirs.clone(), c.listers.clone(), c.font_service)
         };
         let ignore_case = self.env.os == Os::Windows;
         let mut roots: Vec<(PathBuf, Source)> = font_dirs(&self.env).into_iter().map(|d| (d, Source::System)).collect();
@@ -696,7 +704,16 @@ impl Catalog {
             named.extend(lister());
         }
 
-        let mut walk = Walk { ignore_case, seen_dirs: HashSet::new(), seen_files: HashSet::new(), entries: 0, dirs: Vec::new(), files: Vec::new() };
+        let mut walk = Walk {
+            ignore_case,
+            confined: Vec::new(),
+            seen_dirs: HashSet::new(),
+            seen_files: HashSet::new(),
+            entries: 0,
+            dirs: Vec::new(),
+            files: Vec::new(),
+        };
+        walk.confined = confined_dirs.iter().map(|dir| walk.key(dir)).collect();
         for (root, source) in &roots {
             walk.dir(root, *source, 0);
         }
@@ -754,6 +771,8 @@ impl Drop for Watch {
 /// The files of one scan: each folder and file once, however links lead back to it.
 struct Walk {
     ignore_case: bool,
+    /// The keys of the confined folders ([`Catalog::set_confined_dirs`]).
+    confined: Vec<PathBuf>,
     seen_dirs: HashSet<PathBuf>,
     seen_files: HashSet<PathBuf>,
     entries: usize,
@@ -768,8 +787,14 @@ impl Walk {
         if self.ignore_case { PathBuf::from(real.to_string_lossy().to_lowercase()) } else { real }
     }
 
+    /// Whether the folder or file with `key` is inside a confined folder.
+    fn confined(&self, key: &Path) -> bool {
+        self.confined.iter().any(|dir| key.starts_with(dir))
+    }
+
     fn dir(&mut self, dir: &Path, source: Source, depth: usize) {
         let key = self.key(dir);
+        let confined = self.confined(&key);
         if !self.seen_dirs.insert(key) {
             return;
         }
@@ -783,6 +808,10 @@ impl Walk {
                 break;
             }
             let path = e.path();
+            let link = e.file_type().is_ok_and(|t| t.is_symlink());
+            if link && confined && !self.confined(&self.key(&path)) {
+                continue;
+            }
             let is_dir = e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && path.is_dir()));
             paths.push((path, is_dir));
         }

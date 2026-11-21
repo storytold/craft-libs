@@ -386,3 +386,28 @@ fn bounded_sfnt_reader_preserves_face_names_and_collection_indices() {
     assert_eq!((faces[0].index, faces[0].family.as_str()), (1, "Example"));
     assert!(crate::sfnt::read_faces_bytes(b"invalid").is_empty());
 }
+
+/// In a confined folder a link is followed only when it leads inside a confined folder; elsewhere links are followed.
+#[cfg(unix)]
+#[test]
+fn a_confined_folder_follows_only_links_that_stay_inside_it() {
+    let root = temp("confined");
+    let picked = root.join("picked");
+    write(&picked.join("own/Inside.ttf"), font(&spec("Inside Face", "Regular", 400)));
+    write(&root.join("elsewhere/Outside.ttf"), font(&spec("Outside Face", "Regular", 400)));
+    std::os::unix::fs::symlink(picked.join("own/Inside.ttf"), picked.join("inner.ttf")).unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere/Outside.ttf"), picked.join("outer.ttf")).unwrap();
+    std::os::unix::fs::symlink(root.join("elsewhere"), picked.join("outer-folder")).unwrap();
+    let families = |confined: bool| {
+        let cat = Catalog::new(linux_env(&root)).with_font_service(false);
+        cat.set_app_dirs(vec![picked.clone()]);
+        if confined {
+            cat.set_confined_dirs(vec![picked.clone()]);
+        }
+        let families = cat.families();
+        (families.iter().any(|f| f == "Inside Face"), families.iter().any(|f| f == "Outside Face"))
+    };
+    assert_eq!(families(false), (true, true), "links are followed out of a folder that isn't confined");
+    assert_eq!(families(true), (true, false), "a confined folder follows no link out of it");
+    let _ = std::fs::remove_dir_all(&root);
+}
