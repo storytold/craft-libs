@@ -103,6 +103,22 @@ fn metafiles_nest_only_so_deep() {
 }
 
 #[test]
+fn wmf_wrapped_emf_shares_nesting_depth_cap() {
+    let square = emf(&[erec(43, &cat(vec![e32(0), e32(0), e32(10), e32(10)]))], [0; 4], [0; 4]);
+    let wmf_wrap = |inner: Vec<u8>| wmf(&wmfc_chunks(&inner, &[inner.len()]), None);
+    // WMF (0) -> EMF (1) -> EMF+ WMF (2) -> EMF (3): at MAX_NESTED_DEPTH, still drawn.
+    let ok = wmf_wrap(wrap(wmf_wrap(square.clone())));
+    let p_ok = parse(&ok).unwrap();
+    assert_eq!(p_ok.items.len(), 1);
+    assert!(!p_ok.truncated);
+    // One more EMF+ level exceeds MAX_NESTED_DEPTH: stops cleanly without stack overflow.
+    let too_deep = wmf_wrap(wrap(wmf_wrap(wrap(square))));
+    let p_deep = parse(&too_deep).unwrap();
+    assert_eq!(p_deep.items.len(), 0);
+    assert_eq!(p_deep.dropped_images, 1);
+}
+
+#[test]
 fn emfplus_images_that_are_not_read_are_counted() {
     let square = || emf(&[erec(43, &cat(vec![e32(0), e32(0), e32(10), e32(10)]))], [0; 4], [0; 4]);
     let nested = |levels: usize| {

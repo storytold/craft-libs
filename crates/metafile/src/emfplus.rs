@@ -178,13 +178,9 @@ enum ImageData {
     Meta(Picture),
 }
 
-thread_local! {
-    /// Nesting depth of metafile images being parsed, so a file of nested metafiles cannot run
-    /// the stack out.
-    static NESTING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
 /// Metafile images inside metafile images, at most.
-pub(crate) const MAX_NESTING: usize = 3;
+#[cfg(test)]
+pub(crate) const MAX_NESTING: usize = crate::MAX_NESTED_DEPTH as usize;
 
 #[derive(Clone)]
 enum Obj {
@@ -241,12 +237,14 @@ pub(crate) struct Plus {
     object_bytes: usize,
     stack: Vec<Saved>,
     partial: Option<Partial>,
+    /// Nesting depth of the outer metafile being played.
+    depth: u8,
     /// The picture frame in device units (`[x, y, w, h]`), what Clear paints.
     pub frame: Option<[f64; 4]>,
 }
 
 impl Plus {
-    pub fn new() -> Self {
+    pub fn new(depth: u8) -> Self {
         Plus {
             dual: false,
             gdi: false,
@@ -260,6 +258,7 @@ impl Plus {
             object_bytes: 0,
             stack: Vec::new(),
             partial: None,
+            depth,
             frame: None,
         }
     }
@@ -645,7 +644,7 @@ impl Plus {
             let room = p.total.saturating_sub(p.data.len());
             p.data.extend_from_slice(&chunk[..chunk.len().min(room)]);
             if p.data.len() >= p.total {
-                let obj = parse_object(p.kind, Bytes(&p.data));
+                let obj = parse_object(p.kind, Bytes(&p.data), self.depth);
                 self.store(p.id, obj, canvas_used);
             } else {
                 self.partial = Some(p);
@@ -659,11 +658,11 @@ impl Plus {
         {
             let room = p.total.saturating_sub(p.data.len());
             p.data.extend_from_slice(&r.0[..r.0.len().min(room)]);
-            let obj = parse_object(kind, Bytes(&p.data));
+            let obj = parse_object(kind, Bytes(&p.data), self.depth);
             self.store(id, obj, canvas_used);
             return Some(());
         }
-        let obj = parse_object(kind, r);
+        let obj = parse_object(kind, r, self.depth);
         self.store(id, obj, canvas_used);
         Some(())
     }
@@ -1074,13 +1073,13 @@ fn matrix(r: Bytes, off: usize) -> Option<Xform> {
     floats::<6>(r, off)
 }
 
-fn parse_object(kind: u16, r: Bytes) -> Option<Obj> {
+fn parse_object(kind: u16, r: Bytes, depth: u8) -> Option<Obj> {
     match kind {
         1 => brush(r, 0).map(Obj::Brush).or_else(|| lost_texture(r).then_some(Obj::LostBrush)),
         2 => pen(r),
         3 => path(r).map(Obj::Path),
         4 => region(r),
-        5 => Some(image(r).map_or_else(|| Obj::LostImage(bitmap_size(r)), |i| Obj::Image(Arc::new(i)))),
+        5 => Some(image(r, depth).map_or_else(|| Obj::LostImage(bitmap_size(r)), |i| Obj::Image(Arc::new(i)))),
         6 => font(r),
         7 => Some(Obj::Format(Format { flags: r.u32(4)?, align: r.u32(12)?, line_align: r.u32(16)? })),
         _ => None,
@@ -1097,7 +1096,7 @@ fn brush(r: Bytes, off: usize) -> Option<Fill> {
             let bflags = d.u32(0)?;
             let wrap = d.u32(4)?;
             let (xf, off) = if bflags & 0x2 != 0 { (matrix(d, 8)?, 32) } else { (IDENTITY, 8) };
-            let ImageData::Bitmap(img) = image(d.tail(off)?)? else { return None };
+            let ImageData::Bitmap(img) = image(d.tail(off)?, crate::MAX_NESTED_DEPTH)? else { return None };
             Some(Fill::Texture { img: Arc::new(img), wrap, xf })
         }
         3 => path_gradient(d),
@@ -1447,26 +1446,22 @@ fn font(r: Bytes) -> Option<Obj> {
 
 /// An image object: a bitmap of raw pixels or a compressed (PNG, JPEG, GIF…) file, or a nested
 /// metafile.
-fn image(r: Bytes) -> Option<ImageData> {
+fn image(r: Bytes, depth: u8) -> Option<ImageData> {
     match r.u32(4)? {
         1 => bitmap(r).map(ImageData::Bitmap),
-        2 => metafile(r).map(ImageData::Meta),
+        2 => metafile(r, depth).map(ImageData::Meta),
         _ => None,
     }
 }
 
 /// A metafile image: type, size, then a WMF (placeable or not) or EMF file, parsed as a picture.
-fn metafile(r: Bytes) -> Option<Picture> {
+fn metafile(r: Bytes, depth: u8) -> Option<Picture> {
     let size = r.u32(12)? as usize;
     let data = r.slice(16, size).or_else(|| r.tail(16).map(|t| t.0))?;
-    let depth = NESTING.with(std::cell::Cell::get);
-    if depth >= MAX_NESTING {
+    if depth >= crate::MAX_NESTED_DEPTH {
         return None;
     }
-    NESTING.with(|n| n.set(depth + 1));
-    let pic = crate::parse_nested(data).ok();
-    NESTING.with(|n| n.set(depth));
-    pic
+    crate::parse_nested(data, depth + 1).ok()
 }
 
 /// The size in pixels of a bitmap image object, read from its header (a compressed one's from the
@@ -1820,7 +1815,7 @@ mod cost_tests {
 
     #[test]
     fn an_object_is_not_stored_past_what_the_canvas_already_holds() {
-        let mut plus = Plus::new();
+        let mut plus = Plus::new(0);
         let path = || Some(Obj::Path(vec![Op::Z; 1000]));
         plus.store(0, path(), crate::MAX_BYTES - 100);
         assert!(plus.objects[0].is_none() && plus.object_bytes == 0);
@@ -1830,7 +1825,7 @@ mod cost_tests {
 
     #[test]
     fn an_image_or_texture_past_the_byte_budget_is_counted() {
-        let (mut plus, mut cv) = (Plus::new(), Canvas::new());
+        let (mut plus, mut cv) = (Plus::new(0), Canvas::new());
         let img = || Rgba { w: 4, h: 4, px: vec![0; 64] };
         plus.store(0, Some(Obj::Image(Arc::new(ImageData::Bitmap(img())))), crate::MAX_BYTES);
         assert!(matches!(plus.objects[0], Some(Obj::LostImage(Some((4, 4))))));
@@ -1854,7 +1849,7 @@ mod cost_tests {
 
     #[test]
     fn pieces_of_a_continued_object_count_against_the_shared_budget() {
-        let (mut plus, mut cv) = (Plus::new(), Canvas::new());
+        let (mut plus, mut cv) = (Plus::new(0), Canvas::new());
         // Image object (kind 5), id 0, continued: 1000 bytes announced, 100 delivered.
         let mut rec = 1000u32.to_le_bytes().to_vec();
         rec.extend([0u8; 100]);
@@ -1864,7 +1859,7 @@ mod cost_tests {
 
     #[test]
     fn current_and_saved_clips_count_against_the_shared_budget() {
-        let (mut plus, mut cv) = (Plus::new(), Canvas::new());
+        let (mut plus, mut cv) = (Plus::new(0), Canvas::new());
         let pts = vec![(0.0, 0.0); 1000];
         plus.clip = Some(pts.clone());
         plus.stack.push(Saved { id: 1, world: IDENTITY, page: 1.0, clip: Some(pts) });
