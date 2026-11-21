@@ -2909,6 +2909,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn scroll_bar(&self, look: &crate::style::ScrollBarLook, track: Rect, axis: craft_behavior::Axis, rtl: bool, span: &craft_behavior::ScrollSpan, state: &crate::style::StateSet,)`. Paints the scroll bar in `track` along `axis` for `span`, in the bar's `state` (`ScrollBar::shapes`;
   - `pub fn rule_width(&self, kind: RuleKind) -> f32`. The width in points of the line `rule` paints for `kind`.
   - `pub fn rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2)`. Paints the line `look` from `from` to `to`, snapped to physical pixels as `rule` is: a rule in a component's own
+  - `pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32)`. Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a grip's dotted line.
   - `pub fn surface(&self, rect: Rect, kind: SurfaceKind, corners: Corners)`. Paints a surface of `kind` (tracks, plot wells).
   - `pub fn surface_styled(&self, rect: Rect, style: &SurfaceStyle)`. Paints a surface of an already resolved `style` (a kind's look with one field changed, as a knob's round radius).
   - `pub fn surface_look(&self, rect: Rect, look: &crate::style::SurfaceLook, state: &crate::style::StateSet)`. Paints `look` over `rect` in `state`, as the paint step paints a component's surface: a part's own surface (an
@@ -3047,6 +3048,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn of(value: &impl Hash) -> Revision`. The revision of anything hashable: `Revision::of(&(fingerprint, doc_width))`. Stable within one run of the
 - `craft_ui::primitives::Rule`: `pub struct Rule`. The rule painter.
   - `pub fn shapes(look: &RuleLook, from: Pos2, to: Pos2, pixels_per_point: f32) -> Vec<Shape>`. The line from `from` to `to`, snapped across its direction: a line whose physical width is odd sits on a
+  - `pub fn dotted(look: &RuleLook, from: Pos2, to: Pos2, gap: f32, pixels_per_point: f32) -> Vec<Shape>`. The dotted form of the line from `from` to `to`: square dots as wide as the line, `gap` points apart, the run
   - `pub fn edge(look: &RuleLook, rect: Rect, side: RectSide, pixels_per_point: f32) -> Vec<Shape>`. The line along the `side` edge of `rect`, on the physical pixels just inside it: a row's bottom rule or a
 - `craft_ui::primitives::RuleKind`: `pub enum RuleKind { Divider, Edge, Grid, DropMark }`. Which rule a look is for.
 - `craft_ui::primitives::RulerFace`: `pub enum RulerFace { Edge, Centred }`. How a ruler lays out its marks and numbers. A ruler takes a face from its `face` prop, else from the scope's
@@ -4505,6 +4507,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::kept_measurement_leaves`: re-export of `craft_ui::runtime::layout_memory::kept_leaves`.
 - `craft_ui::testing::last_frame_derived_builds`: re-export of `craft_ui::runtime::measure::last_frame_derived_builds` (defined outside these crates).
 - `craft_ui::testing::last_frame_memo_runs`: re-export of `craft_ui::runtime::measure::last_frame_memo_runs` (defined outside these crates).
+- `craft_ui::testing::last_pass_access_builds`: re-export of `craft_ui::runtime::measure::last_pass_access_builds` (defined outside these crates).
 - `craft_ui::testing::last_pass_derived_builds`: re-export of `craft_ui::runtime::measure::last_pass_derived_builds` (defined outside these crates).
 - `craft_ui::testing::last_pass_measure_asks`: re-export of `craft_ui::runtime::measure::last_pass_measure_asks` (defined outside these crates).
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).
@@ -4512,6 +4515,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::last_pass_memo_runs`: re-export of `craft_ui::runtime::measure::last_pass_memo_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_runs`: re-export of `craft_ui::runtime::measure::last_pass_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_text_layouts`: re-export of `craft_ui::runtime::measure::last_pass_text_layouts` (defined outside these crates).
+- `craft_ui::testing::last_pass_tip_texts`: re-export of `craft_ui::runtime::measure::last_pass_tip_texts` (defined outside these crates).
 - `craft_ui::testing::least_stage_width`: `pub fn least_stage_width(tokens: &Tokens) -> f32`. The least width of a story's stage, which is also the least width of a column of a story grid.
 - `craft_ui::testing::measured_contributions`: re-export of `craft_ui::runtime::measure::contributions` (defined outside these crates).
 - `craft_ui::testing::measuring_run`: re-export of `craft_ui::runtime::measure::run` (defined outside these crates).

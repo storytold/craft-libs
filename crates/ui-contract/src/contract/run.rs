@@ -409,6 +409,7 @@ fn blank_core<'a>(
         texts: None,
         selections: Vec::new(),
         faded: false,
+        node: false,
         fade: None,
         focus_shapes: Vec::new(),
         surface_slot: None,
@@ -619,6 +620,7 @@ pub(super) fn paint_ui<'a>(ui: &'a mut Ui, env: &'a Env, core: &'a CxCore<'_>, s
         size: core.resolved.size,
         selections: &core.selections,
         fade: core.fade,
+        node: core.node,
         kids: None,
     }
 }
@@ -898,7 +900,6 @@ struct HostStep {
     text_keys: Option<focus::KeyUse>,
     own: Sense,
     member: Option<crate::runtime::env::ArenaId>,
-    node: bool,
     /// The bar line whose rules wait for this member.
     line: Option<Id>,
     /// A bar's view cut the member: it shows nothing until the clip is restored.
@@ -1022,6 +1023,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     }
     let session = member.filter(|_| e.keys().session);
     let core = e.core();
+    core.node = node;
     // A hovered part's declared cursor, else the role's over the root's own shape.
     let own_hovered = enabled && response.hovered() && !results.values().any(|result| result.hovered);
     core.part_cursors =
@@ -1101,7 +1103,6 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         text_keys,
         own,
         member,
-        node,
         line,
         cut,
         shown_clip,
@@ -1294,7 +1295,6 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         e,
         facts,
         &steps::ReportIn {
-            node: h.node,
             decls: &h.parts.decls,
             sense: h.own,
             live: e.live(),
@@ -1937,4 +1937,6 @@ pub(crate) struct FaceSource<'a> {
     pub enabled: bool,
     /// The host is faded (`DisabledLook::Faded`): its faces paint their enabled look inside its fade.
     pub faded: bool,
+    /// The host's step 16 fills the part's sub-node from the face's record: a reported face of a host with a node.
+    pub reported: bool,
 }
