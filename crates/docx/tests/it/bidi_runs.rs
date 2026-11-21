@@ -88,7 +88,10 @@ fn split_runs_keep_their_formatting() {
     let xml = document_xml(&craft_docx::write(&d).unwrap());
     let body = xml.split("<w:body>").nth(1).unwrap();
     assert_eq!(body.matches("<w:r>").count(), 3);
-    assert_eq!(body.matches(r#"<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>"#).count(), 4, "three runs and the mark: {body}");
+    // The runs name Arial for East Asian text too, as WordCraft draws it (the saved run defaults
+    // name their own); the mark draws no text.
+    assert_eq!(body.matches(r#"<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/>"#).count(), 3, "three runs: {body}");
+    assert_eq!(body.matches(r#"<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>"#).count(), 1, "the mark: {body}");
     assert_eq!(body.matches(r#"<w:szCs w:val="32"/>"#).count(), 4, "{body}");
 }
 

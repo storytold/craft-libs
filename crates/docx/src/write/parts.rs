@@ -54,6 +54,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
         used_media: Default::default(),
         boxes: craft_wordmodel::BoxBudget::default(),
         written_boxes: std::collections::HashSet::new(),
+        table_chr: None,
+        saved_styles: super::styles::saved_styles(&doc.styles).map(std::sync::Arc::new),
         embeds: embed::EmbedWriter::new(doc),
         txbx_links: doc
             .text_box_chains()

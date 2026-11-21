@@ -251,7 +251,7 @@ fn std_bytes(st: &Style, name: &str, sti: u16, sheet: &StyleSheet, plan: &Plan, 
     let mut para = st.para.clone();
     if root && matches!(st.kind, StyleKind::Paragraph) {
         chr = overlay(&sheet.default_chr, &chr);
-        para = craft_wordmodel::props::ParaProps { style: None, ..overlay_para(&sheet.default_para, &para) };
+        para = craft_wordmodel::props::ParaProps { style: None, ..overlay_para(&sheet.para_defaults(), &para) };
     }
     if normal {
         chr.style = None;
