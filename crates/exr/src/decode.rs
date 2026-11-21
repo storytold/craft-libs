@@ -115,13 +115,7 @@ impl Limits {
     }
 }
 
-/// How a channel's samples are stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SampleType {
-    F16,
-    F32,
-    U32,
-}
+pub use crate::SampleType;
 
 impl SampleType {
     pub(crate) fn of(t: ExrSample) -> Self {
