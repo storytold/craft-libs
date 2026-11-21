@@ -8,6 +8,10 @@
 //! `OpusHead` + `OpusTags`; Vorbis: identification, comment, setup) are collected separately from
 //! the audio packets.
 //!
+//! [`probe`] reads only the first pages, as far as every stream's header packets, and
+//! [`PacketReader`] goes on from there, returning the data packets in file order a page at a time
+//! without indexing the file.
+//!
 //! [`OpusTiming`] implements RFC 7845 §4: packet start positions from granule positions and
 //! TOC-derived durations, the pre-skip, and end trimming of the final page, so a player can seek
 //! to any 48 kHz sample.
@@ -23,7 +27,7 @@
 
 #![warn(missing_docs)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io;
 
@@ -267,6 +271,8 @@ pub struct Stream {
     header_bytes: usize,
     /// The page sequence number the next page should carry.
     next_seq: Option<u32>,
+    /// The first packet has been filed (it set `codec` and `header_count`).
+    started: bool,
 }
 
 impl Stream {
@@ -331,26 +337,47 @@ impl Stream {
 }
 
 impl Stream {
-    /// File a completed packet: the first one sets the codec and how many headers follow it, then
-    /// header packets are read in, and the rest are audio.
-    fn add_packet(&mut self, src: &(impl ByteSource + ?Sized), pk: Packet, warnings: &mut Warnings) -> Result<()> {
+    /// The bytes [`add_packet`](Stream::add_packet) needs of the next completed packet: all of a
+    /// header packet, the start of a first packet too large to be one, or none for a data packet.
+    /// It changes nothing, so a read that fails can be tried again.
+    fn header_data(&self, src: &(impl ByteSource + ?Sized), pk: &Packet) -> Result<Option<Vec<u8>>> {
         let size = pk.size as usize;
+        // `PacketReader` takes data packets out of `packets`, so empty lists do not mark the first
+        if !self.started {
+            return read_parts(src, &pk.parts, if size <= MAX_HEADER_BYTES { size } else { FIRST_PACKET_PREFIX }).map(Some);
+        }
+        if self.headers.len() >= self.header_count
+            || !self.packets.is_empty()
+            || self.headers.len() >= MAX_HEADERS
+            || self.header_bytes.saturating_add(size) > MAX_HEADER_BYTES
+        {
+            return Ok(None);
+        }
+        read_parts(src, &pk.parts, size).map(Some)
+    }
+
+    /// File a completed packet with what [`header_data`](Stream::header_data) read of it: the
+    /// first one sets the codec and how many headers follow it, then header packets are kept, and
+    /// the rest are audio.
+    fn add_packet(&mut self, pk: Packet, data: Option<Vec<u8>>, warnings: &mut Warnings) {
+        let size = pk.size as usize;
+        let mut data = data;
         // the first packet is read once: for its codec, and then as a header (a packet too large
         // to be one is only read as far as the codec needs)
-        let mut first = None;
-        if self.headers.is_empty() && self.packets.is_empty() {
-            let data = read_parts(src, &pk.parts, if size <= MAX_HEADER_BYTES { size } else { FIRST_PACKET_PREFIX })?;
-            self.codec = Codec::of(&data);
+        if !self.started {
+            self.started = true;
+            let first = data.take().unwrap_or_default();
+            self.codec = Codec::of(&first);
             self.header_count = match self.codec {
-                Codec::Flac => flac_header_count(&data),
-                Codec::Speex => speex_header_count(&data),
+                Codec::Flac => flac_header_count(&first),
+                Codec::Speex => speex_header_count(&first),
                 c => c.header_count(),
             };
-            first = Some(data).filter(|d| d.len() == size);
+            data = Some(first).filter(|d| d.len() == size);
         }
         if self.headers.len() >= self.header_count || !self.packets.is_empty() {
             self.packets.push(pk);
-            return Ok(());
+            return;
         }
         // a count the file states (FLAC, Speex) or leaves open is capped, so a hostile first
         // packet cannot turn the audio into headers; a packet past the cap is not read
@@ -358,11 +385,12 @@ impl Stream {
             warnings.push(format!("stream {}: header packets beyond {MAX_HEADERS} or {MAX_HEADER_BYTES} bytes read as data", self.serial));
             self.header_count = self.headers.len();
             self.packets.push(pk);
-            return Ok(());
+            return;
         }
-        let data = match first {
-            Some(data) => data,
-            None => read_parts(src, &pk.parts, size)?,
+        // `header_data` read every packet that gets this far
+        let Some(data) = data else {
+            self.packets.push(pk);
+            return;
         };
         if self.header_count == usize::MAX && !self.headers.is_empty() {
             // FLAC with an unstated count: metadata packets run to the one flagged last. A packet
@@ -371,7 +399,7 @@ impl Stream {
             if !is_flac_metadata_block(&data) {
                 self.header_count = self.headers.len();
                 self.packets.push(pk);
-                return Ok(());
+                return;
             }
             if data[0] & 0x80 != 0 {
                 self.header_count = self.headers.len() + 1;
@@ -379,7 +407,11 @@ impl Stream {
         }
         self.header_bytes = self.header_bytes.saturating_add(data.len());
         self.headers.push(data);
-        Ok(())
+    }
+
+    /// Every header packet has been read: the next packet is data.
+    fn headers_complete(&self) -> bool {
+        self.headers.len() >= self.header_count
     }
 }
 
@@ -434,10 +466,15 @@ impl Warnings {
         }
         self.damage += 1;
     }
-    fn finish(mut self) -> Vec<String> {
+    /// Add the closing warning that counts the damaged regions not listed since the last one.
+    fn close(&mut self) {
         if let Some(more) = self.damage.checked_sub(MAX_DAMAGE_WARNINGS).filter(|&n| n > 0) {
             self.list.push(format!("{more} more damaged regions not listed"));
+            self.damage = MAX_DAMAGE_WARNINGS;
         }
+    }
+    fn finish(mut self) -> Vec<String> {
+        self.close();
         self.list
     }
 }
@@ -490,188 +527,433 @@ enum Capture {
 /// Read every page and assemble the packets of every logical bitstream.
 pub fn open(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
     let len = src.len();
-    let mut streams: Vec<Stream> = Vec::new();
-    let mut by_serial: HashMap<u32, usize> = HashMap::new();
-    let mut partial: HashMap<u32, Partial> = HashMap::new();
-    let mut warnings = Warnings::default();
-    let mut pos = 0u64;
-    let mut found_any = false;
-    let mut recovery = Recovery::new(len);
-    let mut packet_budget = usize::try_from(len / FILE_BYTES_PER_PACKET).unwrap_or(usize::MAX).clamp(MIN_PACKET_ALLOWANCE, MAX_PACKETS);
-    let mut hdr = [0u8; 27 + 255];
-    while pos + 27 <= len {
-        src.read_at(pos, &mut hdr[..27])?;
-        if !recovery.charge(pos, pos + 27) {
-            warnings.push(past_budget(pos));
-            break;
-        }
-        if &hdr[..4] != b"OggS" || hdr[4] != 0 {
-            match find_capture(src, pos + 1, len, &mut recovery)? {
-                Capture::At(p) => {
-                    if found_any {
-                        warnings.damage(|| format!("lost sync at byte {pos}; resumed at {p}"));
-                    }
-                    pos = p;
-                    continue;
-                }
-                Capture::End => break,
-                Capture::BudgetSpent => {
-                    warnings.push(past_budget(pos));
-                    break;
-                }
-            }
-        }
-        let nseg = hdr[26] as usize;
-        let head = 27 + nseg;
-        let page_len = if pos + head as u64 <= len {
-            src.read_at(pos + 27, &mut hdr[27..head])?;
-            head as u64 + hdr[27..head].iter().map(|&b| b as u64).sum::<u64>()
-        } else {
-            u64::MAX
-        };
-        let fits = pos.saturating_add(page_len) <= len;
-        // the lacing values and the body: fake page headers a few bytes apart would otherwise
-        // each have their overlapping bodies read and hashed for free
-        if !recovery.charge(pos + 27, if fits { pos + page_len } else { (pos + head as u64).min(len) }) {
-            warnings.push(past_budget(pos));
-            break;
-        }
-        if !fits {
-            // truncated, or a damaged lacing value: look for a page further on
-            warnings.damage(|| format!("page at byte {pos} runs past the end of the file"));
-            pos += 1;
-            continue;
-        }
-        let mut page = vec![0u8; page_len as usize];
-        page[..head].copy_from_slice(&hdr[..head]);
-        src.read_at(pos + head as u64, &mut page[head..])?;
-        let stored_crc = u32::from_le_bytes([page[22], page[23], page[24], page[25]]);
-        page[22..26].fill(0);
-        if crc32(&page) != stored_crc {
-            warnings.damage(|| format!("bad CRC on page at byte {pos}"));
-            pos += 1;
-            continue;
-        }
-        found_any = true;
-        let flags = page[5];
-        let granule = i64::from_le_bytes(page[6..14].try_into().unwrap_or([0; 8]));
-        let serial = u32::from_le_bytes([page[14], page[15], page[16], page[17]]);
-        let seq = u32::from_le_bytes([page[18], page[19], page[20], page[21]]);
-        let lacing = page[27..27 + nseg].to_vec();
-        let body_off = pos + 27 + nseg as u64;
-        // a beginning-of-stream page for a serial already seen starts the next link of a chained
-        // file (RFC 3533 §4), which may reuse the serial; one that carries on the page sequence of
-        // a stream with no end-of-stream page yet is a stray flag in that stream
-        if flags & 0x02 != 0
-            && let Some(&si) = by_serial.get(&serial)
-        {
-            let st = &streams[si];
-            if !st.saw_eos && st.next_seq == Some(seq) {
-                warnings.damage(|| format!("stray beginning-of-stream flag on page at byte {pos}, read as part of stream {serial}"));
-            } else {
-                if !st.saw_eos {
-                    warnings.damage(|| format!("stream {serial} starts again at byte {pos} before its end-of-stream page"));
-                }
-                by_serial.remove(&serial);
-                if partial.remove(&serial).is_some() {
-                    warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
-                }
-            }
-        }
-        let si = *by_serial.entry(serial).or_insert_with(|| {
-            streams.push(Stream {
-                serial,
-                codec: Codec::Unknown,
-                headers: Vec::new(),
-                packets: Vec::new(),
-                pages: 0,
-                last_granule: None,
-                saw_eos: false,
-                header_count: 1,
-                header_bytes: 0,
-                next_seq: None,
-            });
-            streams.len() - 1
-        });
-        let st = &mut streams[si];
-        // a gap in the page sequence numbers is a lost page: a packet it continued is incomplete
-        if st.next_seq.is_some_and(|n| n != seq) {
-            warnings.damage(|| format!("pages missing before page at byte {pos}"));
-            partial.remove(&serial);
-        }
-        st.next_seq = Some(seq.wrapping_add(1));
-        let page_index = st.pages;
-        st.pages += 1;
-        if flags & 0x04 != 0 {
-            st.saw_eos = true;
-        }
-        // a page that does not continue a pending packet (a page was lost): drop the packet
-        let continued = flags & 0x01 != 0;
-        if !continued && partial.remove(&serial).is_some() {
-            warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
-        }
-        let mut completed: Vec<Packet> = Vec::new();
-        let mut off = 0u64;
-        let mut seg_start = 0u64;
-        // a continued page without a pending packet (a page was lost): drop the fragment
-        let mut skip_fragment = continued && !partial.contains_key(&serial);
-        for (k, &l) in lacing.iter().enumerate() {
-            off += l as u64;
-            if l < 255 || k + 1 == nseg {
-                let (a, n) = (seg_start, off - seg_start);
-                seg_start = off;
-                if skip_fragment {
-                    if l < 255 {
-                        skip_fragment = false;
-                    }
-                    continue;
-                }
-                let p = partial.entry(serial).or_insert_with(|| Partial { parts: Vec::new(), size: 0, prefix: Vec::new() });
-                if n > 0 {
-                    let Some(size) = p.size.checked_add(n as u32) else {
-                        warnings.push(format!("packet over 4 GiB dropped at byte {pos}"));
-                        partial.remove(&serial);
-                        skip_fragment = l == 255;
-                        continue;
-                    };
-                    p.parts.push((body_off + a, n as u32));
-                    p.size = size;
-                    let s = (body_off - pos + a) as usize;
-                    let need = 2usize.saturating_sub(p.prefix.len()).min(n as usize);
-                    p.prefix.extend_from_slice(&page[s..s + need]);
-                }
-                if l < 255
-                    && let Some(p) = partial.remove(&serial)
-                {
-                    let mut prefix = [0u8; 2];
-                    prefix[..p.prefix.len().min(2)].copy_from_slice(&p.prefix[..p.prefix.len().min(2)]);
-                    completed.push(Packet { parts: p.parts, size: p.size, granule: None, page: page_index, eos: flags & 0x04 != 0, prefix });
-                }
-            }
-        }
-        let Some(left) = packet_budget.checked_sub(completed.len()) else {
-            warnings.push(format!("stopped at byte {pos}: more packets than a file of this size can hold"));
-            break;
-        };
-        packet_budget = left;
-        if granule != -1 {
-            st.last_granule = Some(granule);
-            if let Some(last) = completed.last_mut() {
-                last.granule = Some(granule);
-            }
-        }
-        for pk in completed {
-            st.add_packet(src, pk, &mut warnings)?;
-        }
-        pos += page_len;
-    }
-    if !found_any {
+    let packet_budget = usize::try_from(len / FILE_BYTES_PER_PACKET).unwrap_or(usize::MAX).clamp(MIN_PACKET_ALLOWANCE, MAX_PACKETS);
+    let mut demux = Demux::new(len, Some(packet_budget));
+    while demux.next_page(src, u64::MAX)?.is_some() {}
+    if !demux.found_any {
         return Err(Error::NotOgg);
     }
-    if !partial.is_empty() {
-        warnings.push("file ends inside a packet".into());
+    demux.end_warnings();
+    Ok(OggFile { streams: demux.streams, warnings: demux.warnings.finish() })
+}
+
+/// The page reader behind [`open`], [`probe`] and [`PacketReader`]: it reads one page at a time
+/// and files the packets the page completes with their stream.
+struct Demux {
+    len: u64,
+    streams: Vec<Stream>,
+    by_serial: HashMap<u32, usize>,
+    partial: HashMap<u32, Partial>,
+    warnings: Warnings,
+    /// Where the next page is looked for.
+    pos: u64,
+    found_any: bool,
+    recovery: Recovery,
+    /// Packets that may still be completed, or `None` when there is no cap (`PacketReader` keeps
+    /// no data packets).
+    packet_budget: Option<usize>,
+    /// The last page read had the beginning-of-stream flag.
+    last_bos: bool,
+    /// Streams that do not yet have all their header packets and can still get pages (a stream
+    /// that a new link with its serial replaced is not counted).
+    incomplete: usize,
+    /// Where sync was lost when a search past damage stopped at a stop offset, for the warning
+    /// once the search goes on and finds the next page.
+    lost_at: Option<u64>,
+    /// No page follows: the source ended, or a budget ran out.
+    ended: bool,
+    hdr: [u8; 27 + 255],
+    page: Vec<u8>,
+    /// The packets the last page read completed that are not yet filed with its stream.
+    completed: VecDeque<Packet>,
+    /// The stream of the last page read and its count of data packets before the page, while
+    /// `completed` holds packets to file.
+    filing: Option<(usize, usize)>,
+}
+
+impl Demux {
+    fn new(len: u64, packet_budget: Option<usize>) -> Demux {
+        Demux {
+            len,
+            streams: Vec::new(),
+            by_serial: HashMap::new(),
+            partial: HashMap::new(),
+            warnings: Warnings::default(),
+            pos: 0,
+            found_any: false,
+            recovery: Recovery::new(len),
+            packet_budget,
+            last_bos: false,
+            incomplete: 0,
+            lost_at: None,
+            ended: false,
+            hdr: [0; 27 + 255],
+            page: Vec::new(),
+            completed: VecDeque::new(),
+            filing: None,
+        }
     }
-    Ok(OggFile { streams, warnings: warnings.finish() })
+
+    /// Every stream begun so far that can still get pages has all its header packets, and the last page read began no
+    /// stream (RFC 3533 §4 puts the beginning-of-stream pages of a link before its other pages).
+    fn headers_read(&self) -> bool {
+        self.found_any && !self.last_bos && self.incomplete == 0
+    }
+
+    /// File the packets in `completed` with the stream of the page that completed them, and
+    /// return that stream and how many data packets the page added to its `packets`. A read that
+    /// fails leaves the packet it failed on and the ones after it in `completed`, and the next
+    /// call files them.
+    fn file_completed(&mut self, src: &(impl ByteSource + ?Sized)) -> Result<Option<(usize, usize)>> {
+        let Some((si, before)) = self.filing else {
+            return Ok(None);
+        };
+        let st = &mut self.streams[si];
+        while let Some(pk) = self.completed.front() {
+            let data = st.header_data(src, pk)?;
+            let Some(pk) = self.completed.pop_front() else {
+                break;
+            };
+            let was = st.headers_complete();
+            st.add_packet(pk, data, &mut self.warnings);
+            match (was, st.headers_complete()) {
+                (false, true) => self.incomplete = self.incomplete.saturating_sub(1),
+                (true, false) => self.incomplete += 1,
+                _ => {}
+            }
+        }
+        self.filing = None;
+        Ok(Some((si, st.packets.len() - before)))
+    }
+
+    /// The warnings for the end of the source: a packet left incomplete, and the count of damaged
+    /// regions not listed.
+    fn end_warnings(&mut self) {
+        if !self.partial.is_empty() {
+            self.warnings.push("file ends inside a packet".into());
+            self.partial.clear();
+        }
+        self.warnings.close();
+    }
+
+    /// Read the next good page that starts before `stop` and file the packets it completes.
+    /// Returns the page's stream and how many data packets it added to the end of that stream's
+    /// `packets`, or `None` when no page follows (`ended` is then set) or the next page would start
+    /// at or after `stop` (a later call goes on from `stop`). After a read fails while the page's
+    /// packets are filed, the next call files the rest of them and returns that page.
+    fn next_page(&mut self, src: &(impl ByteSource + ?Sized), stop: u64) -> Result<Option<(usize, usize)>> {
+        if self.filing.is_some() {
+            return self.file_completed(src);
+        }
+        let len = self.len;
+        while !self.ended && self.pos + 27 <= len {
+            let pos = self.pos;
+            if pos >= stop {
+                return Ok(None);
+            }
+            let hdr = &mut self.hdr;
+            src.read_at(pos, &mut hdr[..27])?;
+            if !self.recovery.charge(pos, pos + 27) {
+                self.warnings.push(past_budget(pos));
+                break;
+            }
+            if &hdr[..4] != b"OggS" || hdr[4] != 0 {
+                // the scan looks at capture patterns that start before `stop`
+                let scan_end = len.min(stop.saturating_add(3));
+                match find_capture(src, pos + 1, scan_end, &mut self.recovery)? {
+                    Capture::At(p) => {
+                        let lost = self.lost_at.take().unwrap_or(pos);
+                        if self.found_any {
+                            self.warnings.damage(|| format!("lost sync at byte {lost}; resumed at {p}"));
+                        }
+                        self.pos = p;
+                        continue;
+                    }
+                    Capture::End if scan_end < len => {
+                        self.lost_at.get_or_insert(pos);
+                        self.pos = stop.max(pos + 1);
+                        return Ok(None);
+                    }
+                    Capture::End => break,
+                    Capture::BudgetSpent => {
+                        self.warnings.push(past_budget(self.lost_at.take().unwrap_or(pos)));
+                        break;
+                    }
+                }
+            } else if let Some(lost) = self.lost_at.take()
+                && self.found_any
+            {
+                // the search stopped at the stop offset, and the next page starts there
+                self.warnings.damage(|| format!("lost sync at byte {lost}; resumed at {pos}"));
+            }
+            let nseg = hdr[26] as usize;
+            let head = 27 + nseg;
+            let page_len = if pos + head as u64 <= len {
+                src.read_at(pos + 27, &mut hdr[27..head])?;
+                head as u64 + hdr[27..head].iter().map(|&b| b as u64).sum::<u64>()
+            } else {
+                u64::MAX
+            };
+            let fits = pos.saturating_add(page_len) <= len;
+            // the lacing values and the body: fake page headers a few bytes apart would otherwise
+            // each have their overlapping bodies read and hashed for free
+            if !self.recovery.charge(pos + 27, if fits { pos + page_len } else { (pos + head as u64).min(len) }) {
+                self.warnings.push(past_budget(pos));
+                break;
+            }
+            if !fits {
+                // truncated, or a damaged lacing value: look for a page further on
+                self.warnings.damage(|| format!("page at byte {pos} runs past the end of the file"));
+                self.pos += 1;
+                continue;
+            }
+            let page = &mut self.page;
+            page.clear();
+            page.resize(page_len as usize, 0);
+            page[..head].copy_from_slice(&hdr[..head]);
+            src.read_at(pos + head as u64, &mut page[head..])?;
+            let stored_crc = u32::from_le_bytes([page[22], page[23], page[24], page[25]]);
+            page[22..26].fill(0);
+            if crc32(page) != stored_crc {
+                self.warnings.damage(|| format!("bad CRC on page at byte {pos}"));
+                self.pos += 1;
+                continue;
+            }
+            self.found_any = true;
+            let flags = page[5];
+            self.last_bos = flags & 0x02 != 0;
+            let granule = i64::from_le_bytes(page[6..14].try_into().unwrap_or([0; 8]));
+            let serial = u32::from_le_bytes([page[14], page[15], page[16], page[17]]);
+            let seq = u32::from_le_bytes([page[18], page[19], page[20], page[21]]);
+            let lacing = &hdr[27..head];
+            let body_off = pos + 27 + nseg as u64;
+            let (streams, by_serial, partial, warnings) = (&mut self.streams, &mut self.by_serial, &mut self.partial, &mut self.warnings);
+            // a beginning-of-stream page for a serial already seen starts the next link of a chained
+            // file (RFC 3533 §4), which may reuse the serial; one that carries on the page sequence of
+            // a stream with no end-of-stream page yet is a stray flag in that stream
+            if flags & 0x02 != 0
+                && let Some(&si) = by_serial.get(&serial)
+            {
+                let st = &streams[si];
+                if !st.saw_eos && st.next_seq == Some(seq) {
+                    warnings.damage(|| format!("stray beginning-of-stream flag on page at byte {pos}, read as part of stream {serial}"));
+                } else {
+                    if !st.saw_eos {
+                        warnings.damage(|| format!("stream {serial} starts again at byte {pos} before its end-of-stream page"));
+                    }
+                    // no page reaches the old stream again, so its missing headers are not waited for
+                    if !st.headers_complete() {
+                        self.incomplete = self.incomplete.saturating_sub(1);
+                    }
+                    by_serial.remove(&serial);
+                    if partial.remove(&serial).is_some() {
+                        warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
+                    }
+                }
+            }
+            let si = *by_serial.entry(serial).or_insert_with(|| {
+                streams.push(Stream {
+                    serial,
+                    codec: Codec::Unknown,
+                    headers: Vec::new(),
+                    packets: Vec::new(),
+                    pages: 0,
+                    last_granule: None,
+                    saw_eos: false,
+                    header_count: 1,
+                    header_bytes: 0,
+                    next_seq: None,
+                    started: false,
+                });
+                self.incomplete += 1;
+                streams.len() - 1
+            });
+            let st = &mut streams[si];
+            // a gap in the page sequence numbers is a lost page: a packet it continued is incomplete
+            if st.next_seq.is_some_and(|n| n != seq) {
+                warnings.damage(|| format!("pages missing before page at byte {pos}"));
+                partial.remove(&serial);
+            }
+            st.next_seq = Some(seq.wrapping_add(1));
+            let page_index = st.pages;
+            st.pages += 1;
+            if flags & 0x04 != 0 {
+                st.saw_eos = true;
+            }
+            // a page that does not continue a pending packet (a page was lost): drop the packet
+            let continued = flags & 0x01 != 0;
+            if !continued && partial.remove(&serial).is_some() {
+                warnings.damage(|| format!("incomplete packet before page at byte {pos}"));
+            }
+            let completed = &mut self.completed;
+            completed.clear();
+            let mut off = 0u64;
+            let mut seg_start = 0u64;
+            // a continued page without a pending packet (a page was lost): drop the fragment
+            let mut skip_fragment = continued && !partial.contains_key(&serial);
+            for (k, &l) in lacing.iter().enumerate() {
+                off += l as u64;
+                if l < 255 || k + 1 == nseg {
+                    let (a, n) = (seg_start, off - seg_start);
+                    seg_start = off;
+                    if skip_fragment {
+                        if l < 255 {
+                            skip_fragment = false;
+                        }
+                        continue;
+                    }
+                    let p = partial.entry(serial).or_insert_with(|| Partial { parts: Vec::new(), size: 0, prefix: Vec::new() });
+                    if n > 0 {
+                        let Some(size) = p.size.checked_add(n as u32) else {
+                            warnings.push(format!("packet over 4 GiB dropped at byte {pos}"));
+                            partial.remove(&serial);
+                            skip_fragment = l == 255;
+                            continue;
+                        };
+                        p.parts.push((body_off + a, n as u32));
+                        p.size = size;
+                        let s = (body_off - pos + a) as usize;
+                        let need = 2usize.saturating_sub(p.prefix.len()).min(n as usize);
+                        p.prefix.extend_from_slice(&page[s..s + need]);
+                    }
+                    if l < 255
+                        && let Some(p) = partial.remove(&serial)
+                    {
+                        let mut prefix = [0u8; 2];
+                        prefix[..p.prefix.len().min(2)].copy_from_slice(&p.prefix[..p.prefix.len().min(2)]);
+                        completed.push_back(Packet { parts: p.parts, size: p.size, granule: None, page: page_index, eos: flags & 0x04 != 0, prefix });
+                    }
+                }
+            }
+            if let Some(budget) = self.packet_budget {
+                let Some(left) = budget.checked_sub(completed.len()) else {
+                    warnings.push(format!("stopped at byte {pos}: more packets than a file of this size can hold"));
+                    break;
+                };
+                self.packet_budget = Some(left);
+            }
+            if granule != -1 {
+                st.last_granule = Some(granule);
+                if let Some(last) = completed.back_mut() {
+                    last.granule = Some(granule);
+                }
+            }
+            self.filing = Some((si, st.packets.len()));
+            self.pos += page_len;
+            return self.file_completed(src);
+        }
+        self.ended = true;
+        Ok(None)
+    }
+}
+
+/// The streams of an Ogg file from its first pages only: each stream's codec and header packets,
+/// for a player that starts before the rest of the file is read.
+///
+/// Reading stops once every stream that begins at the start of the file has all its header
+/// packets, after [`PROBE_PACKETS`] data packets, at the first page that would start after
+/// [`PROBE_BYTES`] (the search past damage stops there too), or at the end of the file. Fails with
+/// [`Error::NotOgg`] when no good page starts in the first `PROBE_BYTES`. `packets` holds only the data packets completed on the pages read, and `pages` and
+/// `last_granule` count only those pages. Pages are read as [`open`] reads them (CRC-32 checked,
+/// damage skipped).
+pub fn probe(src: &(impl ByteSource + ?Sized)) -> Result<OggFile> {
+    let PacketReader { mut demux, queue, .. } = PacketReader::new(src)?;
+    for (s, p) in queue {
+        demux.streams[s].packets.push(p);
+    }
+    Ok(OggFile { streams: demux.streams, warnings: demux.warnings.finish() })
+}
+
+/// The count of held data packets at which [`PacketReader::new`] and [`probe`] stop waiting for
+/// header packets. The count is checked before each page is read, and one page can complete up to
+/// 255 packets, so up to 254 more than this can be held.
+pub const PROBE_PACKETS: usize = 1 << 16;
+/// The bytes of file after which [`PacketReader::new`] and [`probe`] stop waiting for header
+/// packets: room for two streams with the largest headers kept.
+pub const PROBE_BYTES: u64 = 2 * MAX_HEADER_BYTES as u64;
+
+/// Reads the packets of an Ogg file in file order, a page at a time, without first indexing the
+/// whole file as [`open`] does.
+///
+/// [`new`](PacketReader::new) reads the first pages, as [`probe`] does, so [`streams`](PacketReader::streams)
+/// gives each stream's codec and header packets before the first data packet is read. When
+/// reading stops at [`PROBE_PACKETS`] or [`PROBE_BYTES`], a stream can still lack header packets,
+/// and a stream whose first packet has not completed has no headers and the codec
+/// [`Codec::Unknown`]; `next_packet` files the missing headers as their pages are reached.
+/// [`next_packet`](PacketReader::next_packet) then returns the data packets of every stream in the
+/// order they complete in the file. Header packets are not returned: they stay in `streams`, where
+/// the later links of a chained file appear as new streams when their pages are reached. Data
+/// packets are not kept, so `Stream::packets` stays empty and memory does not grow with the count
+/// of data packets; each stream and its header packets stay in `streams`, so every link of a
+/// chained file adds to it. After `next_packet` fails, a later call goes on from where it stopped.
+/// Damaged pages are skipped as in [`open`], with the same recovery budget and warnings; the cap
+/// on kept packets does not apply.
+pub struct PacketReader<S> {
+    src: S,
+    demux: Demux,
+    /// Data packets completed and not yet returned, with their stream.
+    queue: VecDeque<(usize, Packet)>,
+    /// The end-of-source warnings have been added.
+    closed: bool,
+}
+
+impl<S: ByteSource> PacketReader<S> {
+    /// Read the first pages of `src`: see [`probe`] for where reading stops. Fails with
+    /// [`Error::NotOgg`] when no good page starts in the first [`PROBE_BYTES`] of the file.
+    pub fn new(src: S) -> Result<PacketReader<S>> {
+        let mut r = PacketReader { demux: Demux::new(src.len(), None), src, queue: VecDeque::new(), closed: false };
+        while !r.demux.headers_read() && r.queue.len() < PROBE_PACKETS && r.fill(PROBE_BYTES)? {}
+        if !r.demux.found_any {
+            return Err(Error::NotOgg);
+        }
+        Ok(r)
+    }
+
+    /// The streams read so far, with their codecs and header packets. `packets` is empty.
+    pub fn streams(&self) -> &[Stream] {
+        &self.demux.streams
+    }
+
+    /// Warnings about the pages read so far (damage skipped, an incomplete packet at the end).
+    pub fn warnings(&self) -> &[String] {
+        &self.demux.warnings.list
+    }
+
+    /// The next data packet in file order: its stream (an index into
+    /// [`streams`](PacketReader::streams)) and its place in the file, with its bytes in `buf`,
+    /// which is cleared first and reused. `None` at the end of the file.
+    pub fn next_packet(&mut self, buf: &mut Vec<u8>) -> Result<Option<(usize, Packet)>> {
+        loop {
+            if let Some((_, p)) = self.queue.front() {
+                read_parts_into(&self.src, &p.parts, usize::MAX, buf)?;
+                return Ok(self.queue.pop_front());
+            }
+            if !self.fill(u64::MAX)? {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// Read one more page that starts before `stop` and queue its data packets; false at the end
+    /// of the source or at `stop`.
+    fn fill(&mut self, stop: u64) -> Result<bool> {
+        match self.demux.next_page(&self.src, stop)? {
+            Some((si, added)) => {
+                let packets = &mut self.demux.streams[si].packets;
+                let from = packets.len() - added;
+                self.queue.extend(packets.drain(from..).map(|p| (si, p)));
+                Ok(true)
+            }
+            None if !self.demux.ended => Ok(false),
+            None => {
+                if !self.closed {
+                    self.closed = true;
+                    self.demux.end_warnings();
+                }
+                Ok(false)
+            }
+        }
+    }
 }
 
 fn past_budget(pos: u64) -> String {
@@ -714,21 +996,29 @@ fn find_capture(src: &(impl ByteSource + ?Sized), from: u64, len: u64, recovery:
 
 /// The first `max` bytes of a packet's parts.
 fn read_parts(src: &(impl ByteSource + ?Sized), parts: &[(u64, u32)], max: usize) -> Result<Vec<u8>> {
+    let mut v = Vec::new();
+    read_parts_into(src, parts, max, &mut v)?;
+    Ok(v)
+}
+
+/// The first `max` bytes of a packet's parts, in `buf` (cleared first).
+fn read_parts_into(src: &(impl ByteSource + ?Sized), parts: &[(u64, u32)], max: usize, buf: &mut Vec<u8>) -> Result<()> {
+    buf.clear();
     // Ranges come from a scan of some source; check them against this one before sizing a buffer.
     let len = src.len();
     if parts.iter().any(|&(o, n)| o.checked_add(u64::from(n)).is_none_or(|end| end > len)) {
         return Err(Error::Invalid("packet range lies outside the source".into()));
     }
-    let mut v = Vec::with_capacity(parts.iter().map(|p| p.1 as usize).sum::<usize>().min(max));
+    buf.reserve(parts.iter().map(|p| p.1 as usize).sum::<usize>().min(max));
     for &(o, n) in parts {
-        let a = v.len();
+        let a = buf.len();
         if a == max {
             break;
         }
-        v.resize(a + (n as usize).min(max - a), 0);
-        src.read_at(o, &mut v[a..])?;
+        buf.resize(a + (n as usize).min(max - a), 0);
+        src.read_at(o, &mut buf[a..])?;
     }
-    Ok(v)
+    Ok(())
 }
 
 impl OggFile {
@@ -738,8 +1028,15 @@ impl OggFile {
     }
     /// The bytes of packet `i` of stream `s`.
     pub fn read_packet(&self, src: &(impl ByteSource + ?Sized), s: usize, i: usize) -> Result<Vec<u8>> {
+        let mut v = Vec::new();
+        self.read_packet_into(src, s, i, &mut v)?;
+        Ok(v)
+    }
+    /// The bytes of packet `i` of stream `s`, in `buf`, which is cleared first and reused: one
+    /// buffer serves every packet of a file.
+    pub fn read_packet_into(&self, src: &(impl ByteSource + ?Sized), s: usize, i: usize, buf: &mut Vec<u8>) -> Result<()> {
         let p = self.streams.get(s).and_then(|st| st.packets.get(i)).ok_or_else(|| Error::Invalid(format!("no packet {i} in stream {s}")))?;
-        read_parts(src, &p.parts, usize::MAX)
+        read_parts_into(src, &p.parts, usize::MAX, buf)
     }
 }
 
