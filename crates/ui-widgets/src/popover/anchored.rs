@@ -90,7 +90,7 @@ impl<'a> Popover<'a> {
     /// The popover has no surface and no padding of its own: its content (a `Bar` with `surface(SurfaceKind::Floating)`)
     /// is the one surface.
     #[must_use]
-    pub fn content_surface(self) -> Self {
+    pub fn content_surface(mut self) -> Self {
         self.props.surface = None;
         self.props.pad = Pad::None;
         self

@@ -66,12 +66,12 @@ fn family_sample(key: u64, font: FontRef, italic: bool) -> FacePaint {
 /// A "Font family" menu: each row shows its face in the level's sample column, between the label and the shortcut.
 #[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
 fn menu_item_samples(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let families = [
-        (1, "Sans", FontRef::proportional(), false, "Ctrl+1"),
-        (2, "Sans Italic", FontRef::proportional(), true, "Ctrl+2"),
-        (3, "Mono", FontRef::monospace(), false, "Ctrl+3"),
-    ];
     let shown = Menu::inline("Font family").show(ui, |ui, _| {
+        let families = [
+            (1, "Sans", FontRef::proportional(), false, "Ctrl+1"),
+            (2, "Sans Italic", FontRef::proportional(), true, "Ctrl+2"),
+            (3, "Mono", FontRef::monospace(), false, "Ctrl+3"),
+        ];
         for (key, label, font, italic, shortcut) in families {
             MenuItem::new(label).shortcut(shortcut).sample(ThumbAspect::new(4, 1), family_sample(key, font, italic)).show(ui);
         }

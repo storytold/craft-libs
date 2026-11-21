@@ -336,15 +336,13 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             let selection = held.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, Selection::single);
             // While a query narrows the list the lead starts nowhere, so Down lands on the first match and Enter picks it.
             let lead = if query.trim().is_empty() { LeadOnOpen::First } else { LeadOnOpen::Selected };
-            List::options(name.clone())
-                .id(list)
-                .empty(words.no_matches.clone())
-                .selection(Bind::given(selection))
-                .lead_on_open(lead)
-                .reveal(held.filter(|_| Popup::opening(popup, cx)))
-                .filter(&query, |at| labels[*at].clone())
-                .show_items(ui, &rows, &mut |at, _| rows.row(*at, held, dress, picture))
-                .events
+            let options = List::options(name.clone()).id(list).empty(words.no_matches.clone()).selection(Bind::given(selection)).lead_on_open(lead);
+            // The reveal is a one-shot request: made on the opening pass only, it does not fight the keys after.
+            let options = match held.filter(|_| Popup::opening(popup, cx)) {
+                Some(at) => options.reveal(at),
+                None => options,
+            };
+            options.filter(&query, |at| labels[*at].clone()).show_items(ui, &rows, &mut |at, _| rows.row(*at, held, dress, picture)).events
         });
         let mut picked = None;
         for event in events.into_iter().flatten() {

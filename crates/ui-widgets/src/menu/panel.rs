@@ -3,7 +3,7 @@
 
 use super::MenuItem;
 use super::popup::{Menu, entry_rows};
-use crate::contract::{Entry, Show as _};
+use crate::contract::{Entry, Props as _, Show as _};
 use crate::display::Divider;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;

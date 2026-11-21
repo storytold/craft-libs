@@ -14,6 +14,9 @@ use std::ops::Range;
 /// The part a link in a sentence takes the pointer on, one per row the link's characters cover.
 const LINK: PartKey = PartKey::new("link");
 
+/// The access node of one row of a link's sentence.
+const LINE: PartKey = PartKey::new("line");
+
 /// The style of a link.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -32,13 +35,21 @@ pub struct LinkStyle {
 struct Laid {
     /// The rows the link's characters cover: the parts `LINK.at(0)..LINK.at(rows)`.
     rows: u64,
-    /// The paragraph's text and each character's start offset and advance in its row, rows in order.
+    /// The paragraph's rows in order.
+    lines: Vec<LaidLine>,
+    rtl: bool,
+}
+
+/// One row of a link's sentence, as its access node reads it.
+#[derive(Clone, Debug)]
+struct LaidLine {
     text: String,
+    /// Each character's start offset from the row's left edge, and its advance.
     positions: Vec<f32>,
     widths: Vec<f32>,
-    rtl: bool,
-    /// The link's characters in the paragraph.
-    chars: Range<usize>,
+    bounds: Rect,
+    /// The link's characters in this row, when it covers some.
+    link: Option<Range<usize>>,
 }
 
 /// A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue.
@@ -165,6 +176,7 @@ impl Component for Link {
         let chars = from..from + label.chars().count();
         let origin = origin(cx.content_rect, &cx.flow, &layout).to_vec2();
         let mut rects = Vec::new();
+        let mut lines = Vec::new();
         let mut first = 0;
         for (text, row, runs) in layout.row_lines() {
             let count = text.chars().count();
@@ -173,18 +185,23 @@ impl Component for Link {
             let (start, end) = (chars.start.max(first), chars.end.min(first + count));
             let covered = positions.iter().zip(&widths).skip(start.saturating_sub(first)).take(end.saturating_sub(start));
             let (left, right) = covered.fold((f32::INFINITY, f32::NEG_INFINITY), |(left, right), (at, width)| (left.min(*at), right.max(at + width)));
-            if left < right {
+            let covers = left < right;
+            if covers {
                 let (min, max) = (Pos2::new(row.min.x + left, row.min.y), Pos2::new(row.min.x + right, row.max.y));
                 rects.push(Rect::from_min_max(min, max).translate(origin));
             }
-            self.laid.text.push_str(&text);
-            self.laid.positions.extend(positions);
-            self.laid.widths.extend(widths);
+            lines.push(LaidLine {
+                text,
+                positions,
+                widths,
+                bounds: row.translate(origin),
+                link: covers.then(|| start.saturating_sub(first)..end - first),
+            });
             first += count;
         }
         self.laid.rows = rects.len() as u64;
         self.laid.rtl = cx.flow.is_rtl();
-        self.laid.chars = chars;
+        self.laid.lines = lines;
         // PLAN: a middle click on a part has no reader in `Cx`, so a link in a sentence opens in a new tab only with a modifier.
         for (row, rect) in rects.into_iter().enumerate() {
             let part = cx.part(LINK.at(row as u64), rect).cursor(CursorIcon::PointingHand);
@@ -215,11 +232,18 @@ impl Component for Link {
         if let Some(url) = url {
             access.url(url);
         }
-        if self.sentence.is_some() {
-            // A run node holds one line, so the rows' offsets are each from their own row's left edge.
-            let laid = &self.laid;
-            access.text_run(laid.text.clone(), laid.positions.clone(), laid.widths.clone(), laid.rtl);
-            access.run_link(laid.chars.clone(), url.unwrap_or_default());
+        // A run node holds one line, so each row has its own, its offsets from its own left edge.
+        for (row, line) in self.laid.lines.iter().enumerate() {
+            let node = access.node(LINE.at(row as u64), Role::TEXT_RUN).text_run(
+                line.text.clone(),
+                line.positions.clone(),
+                line.widths.clone(),
+                self.laid.rtl,
+            );
+            node.bounds(line.bounds);
+            if let Some(chars) = &line.link {
+                node.run_link(chars.clone(), url.unwrap_or_default());
+            }
         }
     }
 
@@ -227,7 +251,7 @@ impl Component for Link {
         let color = cx.resolve(&cx.style.text.color);
         let draw = ui.draw();
         let around = self.around(|label| cx.env.resolve(label));
-        let run = self.run(cx.resolved.label, stretches(&around)).link_color(color);
+        let run = self.run(cx.resolved.label, stretches(&around)).link_color(color.egui());
         let layout = draw.layout(&run, cx.content_rect.width());
         draw.galley(origin(cx.content_rect, &cx.flow, &layout), &layout);
     }

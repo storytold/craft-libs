@@ -414,7 +414,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// One step of `notches` (up positive) scaled by `scale`, from the applied value or from blank, by the stepper when
     /// the field has one and by the rule otherwise. A wheel run commits first and the step starts from the value it
     /// showed.
-    fn step(&self, cx: &mut Cx<'_, Self>, notches: i32, scale: f64) {
+    fn step_by(&self, cx: &mut Cx<'_, Self>, notches: i32, scale: f64) {
         if cx.in_wheel_run() {
             cx.commit();
         }
@@ -606,7 +606,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         for (key, notches) in [(STEP_UP, 1), (STEP_DOWN, -1)] {
             let Some(press) = cx.part_if_declared(key).map(|part| part.press) else { continue };
             let (start, first) = match press.phase {
-                PressPhase::Down { start } => (start, true),
+                PressPhase::Down { start, .. } => (start, true),
                 PressPhase::Held { start, .. } => (start, false),
                 _ => continue,
             };
@@ -618,7 +618,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             let (now, elapsed) = frame::running(&ctx).map_or((start.time, 0.0), |facts| (facts.now, facts.elapsed));
             let scale = key_scale(MoveMods::new(press.mods.shift, false, Granularity::Unit).fine(press.mods.alt), fine_shows);
             for _ in 0..if first { 1 } else { hold.due(now, elapsed) } {
-                self.step(cx, notches, scale);
+                self.step_by(cx, notches, scale);
             }
             frame::request_repaint_after(&ctx, hold.next_repeat(now) - now);
         }
@@ -633,7 +633,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
                 NavMove::Back => (-1, 1.0),
                 _ => continue,
             };
-            self.step(cx, notches, scale);
+            self.step_by(cx, notches, scale);
         }
         if let Some(wheel) = cx.take_wheel() {
             let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());

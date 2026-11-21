@@ -122,6 +122,7 @@ impl Component for TitleFace {
                 mnemonic: None,
                 align: crate::primitives::HAlign::Center,
                 chord: None,
+                detail: None,
             },
         )
     }
@@ -144,6 +145,7 @@ impl Component for TitleFace {
             mnemonic: self.mnemonic,
             align: crate::primitives::HAlign::Center,
             chord: None,
+            detail: None,
         };
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &spec, cx.content_rect);
     }

@@ -112,7 +112,13 @@ pub struct SwatchTable<'a> {
     common: Common,
     #[container]
     props: ContainerProps,
-    #[collection]
+    // `max_rows` is the table's own prop below: it caps the cells, where the collection's scrolls the rows.
+    #[collection(
+        select, reorder, rename, rename_column, slow_click_rename, columns, sort, activate, striped, allow_empty,
+        lead_on_open, lead_follows_hover, arrows_select, arrows_wrap, type_ahead, rows_stamp, focus_on_press, empty, space,
+        header, digit_keys, menu_on_click, item_keys, marquee, deletable, drag_count, natural_height, min_rows, row_height,
+        notch, command_click, current
+    )]
     items: CollectionProps,
     swatches: &'a [(Label, Srgba)],
     /// The selection the caller owns.
@@ -174,15 +180,8 @@ impl<'a> SwatchTable<'a> {
 
     /// Hands the drag of the cells to the host as `map` gives its payload, as `TileGrid::drag_payload` does.
     #[must_use]
-    pub fn drag_payload<P: Send + Sync + 'static>(self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
+    pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
-        self
-    }
-
-    /// What activates a cell: a double click by default.
-    #[must_use]
-    pub fn activate(mut self, on: ActivateOn) -> Self {
-        self.items = self.items.activate(on);
         self
     }
 
