@@ -115,6 +115,12 @@ fn select_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Select::new("Blend mode", data.bind("open", 1u8), &entries).show(ui).into()
 }
 
+#[story(Select<'static, u8>, covers = [Open], drive = Drive::Custom(open_listbox))]
+fn select_searchable_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = resampling();
+    Select::new("Resampling", data.bind("searchable_open", 2u8), &entries).searchable().show(ui).into()
+}
+
 #[story(Select<'static, u8>, covers = [], disabled_text = "Pick a layer first")]
 fn select_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
