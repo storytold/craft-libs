@@ -770,10 +770,12 @@ impl<'p> Pass<'p> {
         let option = line.param.option();
         let default = line.param.default_value().and_then(number_of).map(Some);
         line.show(ui, |ui| {
-            let mut field = match option.length() {
-                Some(lengths) => NumberField::length(line.name.clone(), line.bind(Some(value), default), lengths).step(step),
-                None => line.scalar_field(self.units, line.bind(Some(value), default), decimals, option.codec()).step(step),
-            };
+            let mut field = match (option.length(), option.codec()) {
+                (Some(lengths), Some(codec)) => NumberField::length(line.name.clone(), line.bind(Some(value), default), lengths).codec(codec.clone()),
+                (Some(lengths), None) => NumberField::length(line.name.clone(), line.bind(Some(value), default), lengths),
+                (None, codec) => line.scalar_field(self.units, line.bind(Some(value), default), decimals, codec),
+            }
+            .step(step);
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }

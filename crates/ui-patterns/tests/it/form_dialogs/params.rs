@@ -842,3 +842,24 @@ fn a_disabled_row_shows_its_disabled_value_and_keeps_its_own() {
     fixture.click(&paper).settle();
     assert_eq!(ink(&fixture), Some(craft_behavior::Mixed::Same(false)), "enabled, it shows its own value again");
 }
+
+// A length row reads typed text with the row's codec when it has one, as a plain number row does.
+#[trial]
+fn a_length_row_reads_with_its_codec() {
+    let lengths = craft_ui::runtime::env::LengthUnits::new(UnitKind::Points, UnitKind::Points, 72.0);
+    // A codec that reads a bare number as twice itself.
+    let doubled = craft_behavior::NumberCodec::new(craft_behavior::Reader::new().bare(2.0), 2);
+    let params = vec![
+        Param::number("plain", "Plain", 0.0, 1.0, 2).length(lengths),
+        Param::number("coded", "Coded", 0.0, 1.0, 2).length(lengths).codec(doubled),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params, &values);
+    for label in ["Plain", "Coded"] {
+        let field = fixture.by_label(label).expect("the length row");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text("3").key(Key::Enter, Modifiers::NONE).settle();
+    }
+    let (plain, coded) = (values.borrow().number("plain"), values.borrow().number("coded"));
+    assert!(plain.zip(coded).is_some_and(|(plain, coded)| coded > plain), "the codec read the typed text: {plain:?} against {coded:?}");
+}

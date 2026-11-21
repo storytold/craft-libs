@@ -16,12 +16,16 @@ const SAME: f64 = 1e-6;
 
 /// A field over points that shows inches, driven by `drive` after it holds focus.
 fn in_inches(start: f64, drive: impl FnOnce(&mut Frames, &mut dyn FnMut(&mut Ui))) -> f64 {
+    in_lengths(LengthUnits::new(UnitKind::Points, UnitKind::Inches, START), start, drive)
+}
+
+/// A field over `lengths`, driven by `drive` after it holds focus.
+fn in_lengths(lengths: LengthUnits, start: f64, drive: impl FnOnce(&mut Frames, &mut dyn FnMut(&mut Ui))) -> f64 {
     let mut frames = Frames::new();
     let value = RefCell::new(Some(start));
     let at = Cell::new(Pos2::ZERO);
     let mut show = |ui: &mut Ui| {
         let mut guard = value.borrow_mut();
-        let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Inches, START);
         at.set(NumberField::length("Width", Bind::bound(&mut *guard), lengths).id_salt("width").show(ui).response.rect.center());
     };
     frames.idle(3, &mut show);
@@ -57,4 +61,19 @@ fn a_length_field_types_and_steps_in_the_shown_unit() {
     });
     let tenth_up = in_inches(START, type_and_commit("1.1"));
     assert!((stepped - tenth_up).abs() < SAME, "an arrow moves a tenth of an inch: {stepped} against {tenth_up}");
+}
+
+/// With bare numbers in points, a bare number in a picas field reads as points; a spelled unit still reads as written.
+#[trial]
+fn a_bare_number_reads_in_the_lengths_bare_unit() {
+    let picas = LengthUnits::new(UnitKind::Points, UnitKind::Picas, START);
+    let in_points = picas.bare_in(UnitKind::Points);
+    let bare = in_lengths(in_points, START, type_and_commit("12"));
+    let spelled = in_lengths(in_points, START, type_and_commit("12 pt"));
+    assert!((bare - spelled).abs() < SAME, "a bare 12 is 12 points: {bare} against {spelled}");
+    let in_picas = in_lengths(picas, START, type_and_commit("12"));
+    assert!(in_picas > bare, "without it a bare 12 is 12 picas: {in_picas} against {bare}");
+    let picas_spelled = in_lengths(in_points, START, type_and_commit("1 pica"));
+    let picas_plain = in_lengths(picas, START, type_and_commit("1"));
+    assert!((picas_spelled - picas_plain).abs() < SAME, "a spelled pica is still a pica");
 }
