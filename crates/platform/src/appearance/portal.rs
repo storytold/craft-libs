@@ -138,6 +138,15 @@ fn owner_rule() -> zbus::Result<zbus::MatchRule<'static>> {
         .arg(0, DEST)?
         .build())
 }
+/// The absolute user settings directory. Relative environment paths must not select settings
+/// from the working directory instead of the user's KDE and GTK files.
+fn config_dir(config_home: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    config_home
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| home.map(PathBuf::from).filter(|home| home.is_absolute()).map(|home| home.join(".config")))
+}
+
 /// The one-shot reads used when the portal can't answer, each at most once per watcher: the
 /// `gsettings` reads and the `PATH` they search, and the motion settings files under the config
 /// folder.
@@ -147,15 +156,12 @@ pub(super) struct Fallbacks {
     icons_used: bool,
     motion_used: bool,
     path: Option<std::ffi::OsString>,
-    /// `$XDG_CONFIG_HOME`, or `~/.config` when that is empty or unset.
+    /// Absolute `$XDG_CONFIG_HOME`, or absolute `$HOME/.config` when that is invalid or unset.
     config_home: Option<PathBuf>,
 }
 impl Fallbacks {
     fn from_env() -> Self {
-        let config_home = std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|dir| !dir.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(".config")));
+        let config_home = config_dir(std::env::var_os("XDG_CONFIG_HOME"), std::env::var_os("HOME"));
         Self { theme_used: false, layout_used: false, icons_used: false, motion_used: false, path: std::env::var_os("PATH"), config_home }
     }
     /// The settings files' motion answer, for a session with no bus or a portal that knows none
@@ -427,11 +433,34 @@ async fn follow(
 }
 #[cfg(test)]
 mod tests {
-    use super::{ANIMATIONS_KEY, Answers, GNOME, KDE, KDE_MOTION_KEY, MOTION_KEY, STANDARD, decode, decode_motion};
+    use super::{ANIMATIONS_KEY, Answers, GNOME, KDE, KDE_MOTION_KEY, MOTION_KEY, STANDARD, config_dir, decode, decode_motion};
     use crate::appearance::is_gnome_session;
     use crate::appearance::{Theme, Watcher};
     use std::time::Duration;
     use zbus::zvariant::Value;
+    #[test]
+    fn settings_directory_falls_back_from_invalid_xdg_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let base = std::env::current_dir()?.join("appearance-config-test");
+        let xdg = base.join("xdg");
+        let home = base.join("home");
+        let expected = home.join(".config");
+        assert_eq!(config_dir(Some(xdg.clone().into_os_string()), Some(home.clone().into_os_string())), Some(xdg.clone()));
+        assert_eq!(config_dir(Some(xdg.clone().into_os_string()), None), Some(xdg));
+        for config in [None, Some("".into()), Some("relative-config".into())] {
+            assert_eq!(config_dir(config, Some(home.clone().into_os_string())), Some(expected.clone()));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn settings_directory_requires_an_absolute_home_fallback() {
+        for home in [Some("".into()), None, Some("relative-home".into())] {
+            for config in [None, Some("".into()), Some("relative-config".into())] {
+                assert_eq!(config_dir(config.clone(), home.clone()), None, "{config:?} {home:?}");
+            }
+        }
+    }
+
     // The portal's, GNOME's and KDE's keys each decode to reduced or not; malformed values say
     // nothing. Combined, any one asking for reduced motion wins, all answering otherwise is not
     // reduced, and none answering publishes nothing.
