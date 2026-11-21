@@ -101,8 +101,71 @@ fn ffmpeg_decodes_our_encoders_streams_to_the_same_samples() {
         let decoded = decode_ogg(&ogg).expect("decode");
         assert_eq!(decoded.damaged_packets, 0);
         assert_eq!(decoded.sample_rate, rate);
-        assert_same(&format!("our stream {rate} Hz {channels} ch q{quality}"), &decoded.channels, &ffmpeg_decode(&ffmpeg, &file, channels));
+        let theirs = ffmpeg_decode(&ffmpeg, &file, channels);
+        assert_same(&format!("our stream {rate} Hz {channels} ch q{quality}"), &decoded.channels, &theirs);
+        // The file decoder streams the same stream packet by packet, in WAV order.
+        let (info, streamed) = craft_audio::decode(&ogg, Some("ogg")).expect("file decode");
+        assert_eq!((info.codec, info.damaged), (craft_audio::CodecId::Vorbis, 0));
+        assert_same(&format!("our stream {rate} Hz {channels} ch q{quality} through decode"), &streamed.channels, &theirs);
     }
+}
+
+/// The file decoder against Symphonia, an independent decoder that needs no ffmpeg: streams from
+/// this crate's encoder and from libvorbis (`tone.ogg`).
+#[test]
+fn the_file_decoder_agrees_with_symphonia() {
+    let mut files: Vec<(String, Vec<u8>)> = [(44_100u32, 2usize, 6.0f32), (22_050, 1, 1.0), (48_000, 6, 5.0), (32_000, 8, 3.0)]
+        .into_iter()
+        .map(|(rate, channels, quality)| {
+            let buf = AudioBuffer { sample_rate: rate, channels: signal(rate, channels, rate as usize + 555) };
+            let ogg = encode_ogg_vorbis(&buf, &OggVorbisOptions::default().with_quality(quality)).expect("encode");
+            (format!("our stream {rate} Hz {channels} ch q{quality}"), ogg)
+        })
+        .collect();
+    let tone = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone.ogg");
+    files.push(("libvorbis tone.ogg".into(), std::fs::read(tone).expect("fixture")));
+    for (name, ogg) in files {
+        let (info, ours) = craft_audio::decode(&ogg, Some("ogg")).expect("file decode");
+        assert_eq!((info.codec, info.damaged), (craft_audio::CodecId::Vorbis, 0), "{name}");
+        assert!(ours.frames() > 0, "{name}");
+        assert_prefix(&name, &ours.channels, &symphonia_decode(&ogg), false);
+    }
+}
+
+/// The samples symphonia's Vorbis decoder gives for an Ogg Vorbis file, trimmed as symphonia trims
+/// them.
+fn symphonia_decode(ogg: &[u8]) -> Vec<Vec<f32>> {
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
+    use symphonia::core::meta::MetadataOptions;
+    let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(ogg.to_vec())), MediaSourceStreamOptions::default());
+    let mut reader = symphonia::default::get_probe().probe(&Hint::new(), mss, FormatOptions::default(), MetadataOptions::default()).expect("probe");
+    let track = reader.tracks().iter().find(|t| t.codec_params.as_ref().and_then(|p| p.audio()).is_some()).expect("an audio track");
+    let (id, params) = (track.id, track.codec_params.as_ref().and_then(|p| p.audio()).cloned().expect("audio parameters"));
+    let mut decoder = symphonia::default::get_codecs().make_audio_decoder(&params, &AudioDecoderOptions::default().gapless(true)).expect("decoder");
+    let mut out: Vec<Vec<f32>> = Vec::new();
+    let mut interleaved = Vec::new();
+    while let Ok(Some(packet)) = reader.next_packet() {
+        if packet.track_id != id {
+            continue;
+        }
+        let decoded = decoder.decode(&packet).expect("symphonia decodes the packet");
+        let ch = decoded.num_planes();
+        if ch == 0 {
+            continue;
+        }
+        interleaved.resize(decoded.frames() * ch, 0f32);
+        decoded.copy_to_slice_interleaved(&mut interleaved);
+        out.resize(ch, Vec::new());
+        for frame in interleaved.chunks_exact(ch) {
+            for (c, &s) in out.iter_mut().zip(frame) {
+                c.push(s);
+            }
+        }
+    }
+    out
 }
 
 /// ffmpeg's own Vorbis encoder (stereo only) writes setups ours does not: coupled channels, residue
@@ -140,9 +203,12 @@ fn we_decode_ffmpegs_encoder_streams_like_symphonia() {
         let ogg = std::fs::read(&file).expect("read");
         let ours = decode_ogg(&ogg).expect("decode");
         assert_eq!(ours.damaged_packets, 0, "{}", file.display());
-        let (_, symphonia) = craft_audio::decode(&ogg, Some("ogg")).expect("symphonia");
+        let symphonia = symphonia_decode(&ogg);
         let name = format!("ffmpeg-encoded {rate} Hz {bitrate}");
-        assert_prefix(&name, &ours.channels, &symphonia.channels, false);
+        assert_prefix(&name, &ours.channels, &symphonia, false);
+        // The file decoder gives the packet decoder's samples, timed by the file's granule positions.
+        let (_, streamed) = craft_audio::decode(&ogg, Some("ogg")).expect("file decode");
+        assert_prefix(&format!("{name} through decode"), &streamed.channels, &symphonia, false);
         // The first channel also agrees with ffmpeg's decoder.
         let theirs = ffmpeg_decode(&ffmpeg, &file, channels);
         assert_prefix(&format!("{name} (channel 0 against ffmpeg)"), &ours.channels[..1], &theirs[..1], true);

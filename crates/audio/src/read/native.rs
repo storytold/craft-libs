@@ -1,13 +1,13 @@
 //! The native decode path: craft-media's demuxers (ISO BMFF / QuickTime, Matroska / WebM), raw
 //! ADTS, AC-3 and MPEG audio streams, and WAV / AIFF PCM, feeding [`TrackDecoder`].
-//! [`Native::open`] answers `None` for a stream with no native codec (FLAC, Vorbis, ...) or a
-//! container these demuxers do not read; the caller then uses symphonia.
+//! [`Native::open`] answers `None` for a stream with no native codec (FLAC, Vorbis in Matroska,
+//! ...) or a container these demuxers do not read; the caller then uses symphonia.
 //!
 //! Every container is a [`Packets`] source over a [`Src`], read packet by packet, so a decode
 //! streams. Timing follows the containers: MP4 edit lists (AAC priming, Opus pre-skip), Matroska
-//! `CodecDelay` and per-block `DiscardPadding`, and Ogg Opus pre-skip and end trimming (RFC 7845
-//! §4) are applied, and so are an MP3's encoder delay and padding from its LAME tag, so a file
-//! decodes to exactly its presentation length.
+//! `CodecDelay` and per-block `DiscardPadding`, Ogg Opus pre-skip and end trimming (RFC 7845 §4)
+//! and Ogg Vorbis start and end trimming (Vorbis I §A.2) are applied, and so are an MP3's encoder
+//! delay and padding from its LAME tag, so a file decodes to exactly its presentation length.
 
 use super::aiff::{self, AiffParse};
 use super::id3v2_len;
@@ -71,6 +71,9 @@ enum Packets<'a> {
         next: usize,
         /// Output frame of each packet's first decoded sample (the pre-skip negative).
         starts: Vec<i64>,
+        /// The first packet after a seek decodes to nothing (Vorbis, whose blocks overlap), so a
+        /// seek starts one packet earlier.
+        primes: bool,
     },
     /// Frames of a raw stream: `(offset, length, decoded frames)`.
     Raw { frames: Vec<(u64, u32, u32)>, src: Src<'a>, next: usize },
@@ -149,10 +152,11 @@ impl Packets<'_> {
                 *next = i;
                 Ok(s)
             }
-            Packets::Ogg { next, starts, .. } => {
+            Packets::Ogg { next, starts, primes, .. } => {
                 let base = starts.first().copied().unwrap_or(0);
                 let (i, s) = at_or_before(starts.iter().map(|&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0)), frame);
-                *next = i;
+                // The packet before primes the decoder; the packet at `i` then decodes from `s`.
+                *next = if *primes { i.saturating_sub(1) } else { i };
                 Ok(s)
             }
             Packets::Raw { frames, next, .. } => {
@@ -533,11 +537,16 @@ fn native<'a>(
 ) -> Option<Native<'a>> {
     let lookahead: Vec<&[u8]> = lookahead.iter().map(Vec::as_slice).collect();
     let dec = TrackDecoder::new(params, &lookahead).ok()?;
+    Some(with_decoder(container, packets, dec, skip, limit, frames))
+}
+
+/// A native track from its packets and a decoder made for them.
+fn with_decoder(container: Container, packets: Packets<'_>, dec: TrackDecoder, skip: u64, limit: Option<u64>, frames: Option<u64>) -> Native<'_> {
     let mut info = AudioInfo::new(container, dec.codec(), dec.sample_format(), dec.sample_rate(), dec.layout(), frames.unwrap_or(0));
     if dec.channels() == 0 || dec.sample_rate() == 0 {
         info.frames = 0;
     }
-    Some(Native {
+    Native {
         packets,
         info,
         frames_known: frames.is_some() && dec.channels() > 0 && dec.sample_rate() > 0,
@@ -550,7 +559,7 @@ fn native<'a>(
         decoded: false,
         seeked: false,
         unsupported: None,
-    })
+    }
 }
 
 fn open_wav<'a>(src: &Src<'a>) -> Option<Result<Native<'a>>> {
@@ -897,6 +906,11 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         return None;
     }
     let params = t.codec_params();
+    // Vorbis in Matroska is left to symphonia: its first packet decodes to nothing, which the
+    // timestamp-based timing here does not model.
+    if matches!(params.codec, CodecId::Vorbis) {
+        return None;
+    }
     let lookahead: Vec<Vec<u8>> =
         (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| demux.read_sample(track, i).ok()).collect();
     let probe = TrackDecoder::new(&params, &lookahead.iter().map(Vec::as_slice).collect::<Vec<_>>()).ok()?;
@@ -1031,6 +1045,9 @@ fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>
         Err(e) => return Some(Err(e)),
     };
     let s = file.streams.get(stream)?;
+    if s.codec == ogg::Codec::Vorbis {
+        return open_ogg_vorbis(src, file, stream);
+    }
     if s.codec != ogg::Codec::Opus {
         return None;
     }
@@ -1045,8 +1062,109 @@ fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>
     let limit = u64::try_from(timing.total).ok();
     let skip = u64::from(timing.pre_skip);
     let starts = timing.starts.clone();
-    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts };
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primes: false };
     native(Container::Ogg, packets, &params, &[], skip, limit, limit).map(Ok)
+}
+
+/// Stream `stream` of `file`, an Ogg Vorbis stream. Packets are read one at a time; their places
+/// on the timeline come from their block sizes and the pages' granule positions, with the start
+/// and end trimming those positions call for (Vorbis I §A.2).
+fn open_ogg_vorbis<'a>(src: &Src<'a>, file: ogg::OggFile, stream: usize) -> Option<Result<Native<'a>>> {
+    let s = file.streams.get(stream)?;
+    let params = s.codec_params();
+    let dec = match TrackDecoder::new(&params, &[]) {
+        Ok(dec) => dec,
+        // With symphonia, it reads the stream or reports it; without, the header's fault stands.
+        Err(_) if cfg!(feature = "symphonia") => return None,
+        Err(e) => return Some(Err(e)),
+    };
+    let (starts, total) = granule_starts(s, &vorbis_durations(&dec, &s.packets));
+    // Decoded frames before the first page's granule position are not presented.
+    let skip = u64::try_from(starts.first().copied().unwrap_or(0).saturating_neg()).unwrap_or(0);
+    let limit = u64::try_from(total).ok();
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primes: true };
+    Some(Ok(with_decoder(Container::Ogg, packets, dec, skip, limit, limit)))
+}
+
+/// The frames each Vorbis packet decodes to: none for the first, then a quarter of the previous
+/// block and a quarter of its own (Vorbis I §4.3.8). A packet whose mode cannot be read counts
+/// as its concealment counts it.
+fn vorbis_durations(dec: &TrackDecoder, packets: &[ogg::Packet]) -> Vec<u64> {
+    let mut prev: Option<usize> = None;
+    packets
+        .iter()
+        .map(|p| {
+            let head = p.prefix.get(..(p.size as usize).min(p.prefix.len())).unwrap_or_default();
+            let n = dec.vorbis_block_size(head, prev);
+            let frames = match (prev, n) {
+                (Some(a), Some(b)) => (a / 4 + b / 4) as u64,
+                _ => 0,
+            };
+            prev = n;
+            frames
+        })
+        .collect()
+}
+
+/// Largest granule position [`granule_starts`] trusts, as for Opus.
+const MAX_GRANULE: i64 = ogg::MAX_OPUS_GRANULE;
+
+/// The decoded-timeline start of each packet of `stream`, given the frames each decodes to, and
+/// the frames presented, from the pages' granule positions: the presented timeline starts at 0,
+/// and decoded frames before it (a first page whose granule position is below the frames it
+/// decodes to) have negative places. A last page whose granule position is below its frames trims
+/// the end. A granule position outside `0..=MAX_GRANULE` is treated as missing.
+fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64) {
+    let n = durations.len().min(stream.packets.len());
+    let dur = |k: usize| i64::try_from(durations[k]).unwrap_or(i64::MAX);
+    let granule_of = |k: usize| stream.packets.get(k).and_then(|p| p.granule).filter(|g| (0..=MAX_GRANULE).contains(g));
+    let mut ends: Vec<i64> = vec![0; n];
+    let (mut i, mut cursor, mut trimmed_end) = (0, None::<i64>, None::<i64>);
+    while i < n {
+        // packets completing on the same page: i..=j, the last carries the page's granule position
+        let Some(j) = (i..n).find(|&k| granule_of(k).is_some()) else {
+            // trailing packets without one (a truncated file) continue from the cursor
+            let mut c = cursor.unwrap_or(0);
+            for (k, end) in ends.iter_mut().enumerate().skip(i) {
+                c = c.saturating_add(dur(k));
+                *end = c;
+            }
+            cursor = Some(c);
+            break;
+        };
+        let g = granule_of(j).unwrap_or(0);
+        let sum = (i..=j).fold(0i64, |a, k| a.saturating_add(dur(k)));
+        let eos = stream.packets[j].eos;
+        let end = match cursor.map(|c| c.saturating_add(sum)) {
+            // end trimming on the last page: the packets keep their forward places
+            Some(f) if eos && g < f => {
+                trimmed_end = Some(g);
+                f
+            }
+            Some(f) if f == g => f,
+            // the only page with audio is also the last: its shortfall is trimmed at the end
+            None if eos && g < sum => {
+                trimmed_end = Some(g);
+                sum
+            }
+            // the first page (a granule position below its frames trims the start), or a
+            // discontinuity: the granule position places the page
+            _ => g,
+        };
+        let mut e = end;
+        for k in (i..=j).rev() {
+            ends[k] = e;
+            e = e.saturating_sub(dur(k));
+        }
+        cursor = Some(end);
+        i = j + 1;
+    }
+    let starts: Vec<i64> = (0..n).map(|k| ends[k].saturating_sub(dur(k))).collect();
+    // a stream that starts later than 0 (cut from a longer one) is presented from its first packet
+    let base = starts.first().copied().unwrap_or(0).max(0);
+    let starts = starts.into_iter().map(|s| s.saturating_sub(base)).collect();
+    let total = trimmed_end.or(cursor).unwrap_or(0).saturating_sub(base).max(0);
+    (starts, total)
 }
 
 /// The audio tracks of `src` the native path reads, described for a track list; `None` when it

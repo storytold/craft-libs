@@ -1,0 +1,215 @@
+//! Ogg Vorbis through `Decoder`, `decode` and `probe`: packet by packet with the native decoder,
+//! timed by the pages' granule positions (Vorbis I §A.2), seekable, and with a damaged packet
+//! concealed without moving the audio after it.
+
+use craft_audio::vorbis::decoder::{Decoder as PacketDecoder, decode_ogg};
+use craft_audio::{AudioBuffer, ChannelLayout, CodecId, Container, DecodeOptions, Decoder, OggVorbisOptions, decode, encode_ogg_vorbis, probe};
+use craft_media::ogg::PageWriter;
+
+/// Vorbis order (§4.3.9) to WAV order for six channels: output channel → stream channel.
+const WAV_ORDER_6: [usize; 6] = [0, 2, 1, 5, 3, 4];
+
+fn signal(rate: u32, channels: usize, frames: usize) -> Vec<Vec<f32>> {
+    (0..channels)
+        .map(|c| {
+            (0..frames)
+                .map(|i| {
+                    let t = i as f32 / rate as f32;
+                    let tone = (t * (220.0 + 110.0 * c as f32) * std::f32::consts::TAU).sin() * 0.3;
+                    // clicks every 3000 frames give the encoder short blocks to switch to
+                    tone + if i % 3000 < 6 { 0.5 } else { 0.0 }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn encode(rate: u32, channels: usize, frames: usize, quality: f32) -> Vec<u8> {
+    encode_ogg_vorbis(
+        &AudioBuffer { sample_rate: rate, channels: signal(rate, channels, frames) },
+        &OggVorbisOptions::default().with_quality(quality),
+    )
+    .expect("encode")
+}
+
+/// Every block of a decoder, joined.
+fn drain(dec: &mut Decoder<'_>) -> Vec<Vec<f32>> {
+    let mut out: Vec<Vec<f32>> = Vec::new();
+    while let Some(block) = dec.next_block().expect("block") {
+        if out.is_empty() {
+            out = vec![Vec::new(); block.channels.len()];
+        }
+        for (all, c) in out.iter_mut().zip(block.channels) {
+            all.extend(c);
+        }
+    }
+    out
+}
+
+/// A file's headers, its audio packets and the frames each packet decodes to.
+struct Parts {
+    headers: Vec<Vec<u8>>,
+    packets: Vec<Vec<u8>>,
+    frames: Vec<usize>,
+    last_granule: i64,
+}
+
+fn parts(ogg: &[u8]) -> Parts {
+    let file = craft_media::ogg::open(ogg).expect("open");
+    let s = &file.streams[0];
+    let packets: Vec<Vec<u8>> = (0..s.packets.len()).map(|i| file.read_packet(ogg, 0, i).expect("packet")).collect();
+    let mut dec = PacketDecoder::new(&s.headers[0], &s.headers[1], &s.headers[2]).expect("headers");
+    let frames = packets.iter().map(|p| dec.decode_packet(p).expect("packet decodes")[0].len()).collect();
+    Parts { headers: s.headers.clone(), packets, frames, last_granule: s.last_granule.expect("granule") }
+}
+
+/// An Ogg file of `p`'s packets, `per_page` to a page, each page's granule position the frames
+/// decoded through it less `shift`, and the last page's `last`.
+fn remux(p: &Parts, packets: &[Vec<u8>], per_page: usize, shift: i64, last: i64) -> Vec<u8> {
+    let mut w = PageWriter::new(7).with_page_target(1 << 20, per_page);
+    let mut out = Vec::new();
+    for h in &p.headers {
+        out.extend(w.header(h));
+    }
+    let mut end = 0i64;
+    for (packet, &n) in packets.iter().zip(&p.frames) {
+        end += n as i64;
+        out.extend(w.packet(packet, end - shift));
+    }
+    out.extend(w.finish(Some(last)));
+    out
+}
+
+#[test]
+fn ogg_vorbis_streams_packet_by_packet_to_the_whole_file_decode() {
+    for (rate, channels, quality) in [(44_100u32, 2usize, 5.0f32), (48_000, 1, 2.0), (32_000, 6, 4.0)] {
+        let ogg = encode(rate, channels, 40_000, quality);
+        let whole = decode_ogg(&ogg).expect("decode_ogg");
+        // the native decoder's output, in WAV order
+        let expected: Vec<Vec<f32>> =
+            if channels == 6 { WAV_ORDER_6.iter().map(|&c| whole.channels[c].clone()).collect() } else { whole.channels.clone() };
+        let mut dec = Decoder::from_bytes(&ogg, None, &DecodeOptions::default()).expect("open");
+        let info = dec.info().clone();
+        assert_eq!((info.container, info.codec, info.sample_rate, usize::from(info.channels)), (Container::Ogg, CodecId::Vorbis, rate, channels));
+        assert!(dec.length_known());
+        assert_eq!(info.frames, 40_000);
+        if channels == 6 {
+            assert_eq!(info.layout, ChannelLayout::SURROUND_5_1);
+        }
+        assert_eq!(drain(&mut dec), expected, "{rate} Hz, {channels} ch");
+        let (decoded_info, buf) = decode(&ogg, Some("ogg")).expect("decode");
+        assert_eq!((decoded_info.frames, decoded_info.damaged), (40_000, 0));
+        assert_eq!(buf.channels, expected);
+        assert_eq!(probe(&ogg, None).expect("probe").frames, 40_000);
+    }
+}
+
+#[test]
+fn a_seek_lands_on_the_frame_asked_for() {
+    let ogg = encode(44_100, 2, 50_000, 5.0);
+    let whole = decode_ogg(&ogg).expect("decode_ogg").channels;
+    let mut dec = Decoder::from_bytes(&ogg, None, &DecodeOptions::default()).expect("open");
+    for target in [0u64, 1, 700, 12_345, 31_000, 49_990, 50_000, 3, 60_000] {
+        let at = dec.seek(target).expect("seek");
+        assert_eq!(at, target.min(50_000));
+        let rest = drain(&mut dec);
+        let from = at as usize;
+        let tail: Vec<Vec<f32>> = whole.iter().map(|c| c[from..].to_vec()).collect();
+        if tail[0].is_empty() {
+            assert!(rest.is_empty() || rest[0].is_empty(), "nothing after {target}");
+        } else {
+            assert_eq!(rest, tail, "after a seek to {target}");
+        }
+    }
+}
+
+/// A first page whose granule position is below the frames decoded through it trims the start; a
+/// last page's lower granule position trims the end.
+#[test]
+fn granule_positions_trim_the_start_and_the_end() {
+    let ogg = encode(44_100, 2, 30_000, 4.0);
+    let p = parts(&ogg);
+    // every decoded frame, untrimmed
+    let all: Vec<Vec<f32>> = {
+        let mut dec = PacketDecoder::new(&p.headers[0], &p.headers[1], &p.headers[2]).expect("headers");
+        let mut out = vec![Vec::new(); 2];
+        for packet in &p.packets {
+            for (a, c) in out.iter_mut().zip(dec.decode_packet(packet).expect("decodes")) {
+                a.extend(c);
+            }
+        }
+        out
+    };
+    let (start, end_cut) = (300i64, 200i64);
+    let last = p.last_granule - start - end_cut;
+    let trimmed = remux(&p, &p.packets, 4, start, last);
+    let expected: Vec<Vec<f32>> = all.iter().map(|c| c[start as usize..(p.last_granule - end_cut) as usize].to_vec()).collect();
+    let mut dec = Decoder::from_bytes(&trimmed, None, &DecodeOptions::default()).expect("open");
+    assert_eq!(dec.info().frames, last as u64);
+    assert_eq!(drain(&mut dec), expected);
+    // seeking counts from the trimmed start
+    dec.seek(1000).expect("seek");
+    let rest = drain(&mut dec);
+    assert_eq!(rest[0], expected[0][1000..]);
+    // without trimming, the same pages decode to the encoder's length
+    let plain = remux(&p, &p.packets, 4, 0, p.last_granule);
+    assert_eq!(decode(&plain, None).expect("decode").1.channels, decode_ogg(&ogg).expect("decode_ogg").channels);
+}
+
+/// A damaged packet is concealed at its own length: the audio two packets on is the same as
+/// without the damage, and the length does not change.
+#[test]
+fn a_damaged_packet_keeps_the_audio_after_it_in_place() {
+    let ogg = encode(44_100, 2, 60_000, 5.0);
+    let p = parts(&ogg);
+    // a packet between two long blocks, so its own block is long too
+    let longest = *p.frames.iter().max().expect("packets");
+    let k = (2..p.frames.len() - 3).find(|&k| p.frames[k] == longest && p.frames[k + 1] == longest).expect("a run of long blocks");
+    let mut packets = p.packets.clone();
+    packets[k][0] |= 1; // not an audio packet any more
+    let damaged = remux(&p, &packets, 8, 0, p.last_granule);
+    let clean = decode_ogg(&ogg).expect("decode_ogg").channels;
+    let (info, buf) = decode(&damaged, None).expect("decode");
+    assert_eq!(info.damaged, 1);
+    assert_eq!(buf.frames(), clean[0].len());
+    let before: usize = p.frames[..k].iter().sum();
+    let after: usize = p.frames[..k + 2].iter().sum();
+    for (ours, theirs) in buf.channels.iter().zip(&clean) {
+        assert_eq!(ours[..before], theirs[..before]);
+        assert_eq!(ours[after..], theirs[after..]);
+    }
+    // A damaged first packet counts as a short block, in the timing as in its concealment: the
+    // declared length is the decoded length, and seeking lands where asked.
+    let mut packets = p.packets.clone();
+    packets[0][0] |= 1;
+    let first_damaged = remux(&p, &packets, 8, 0, p.last_granule);
+    let (info, buf) = decode(&first_damaged, None).expect("decode");
+    assert_eq!(info.damaged, 1);
+    assert_eq!(probe(&first_damaged, None).expect("probe").frames, buf.frames() as u64);
+    let mut dec = Decoder::from_bytes(&first_damaged, None, &DecodeOptions::default()).expect("open");
+    dec.seek(20_000).expect("seek");
+    assert_eq!(drain(&mut dec), buf.channels.iter().map(|c| c[20_000..].to_vec()).collect::<Vec<_>>());
+}
+
+#[test]
+fn damaged_and_cut_files_are_errors_or_results() {
+    let ogg = encode(44_100, 2, 20_000, 3.0);
+    // cut anywhere: a result no longer than the file, or an error
+    for cut in [ogg.len() / 2, ogg.len() - 1, 4000, 200] {
+        if let Ok((_, buf)) = decode(&ogg[..cut], None) {
+            assert!(buf.frames() <= 20_000, "cut at {cut}");
+        }
+    }
+    // a setup header of garbage is not decoded
+    let p = parts(&ogg);
+    let mut broken = Parts { headers: p.headers.clone(), packets: Vec::new(), frames: p.frames.clone(), last_granule: p.last_granule };
+    broken.headers[2] = [&b"\x05vorbis"[..], &[0xFF; 64]].concat();
+    assert!(decode(&remux(&broken, &p.packets, 8, 0, p.last_granule), None).is_err());
+    // headers and no audio
+    let empty = remux(&broken, &[], 8, 0, 0);
+    let _ = decode(&empty, None);
+    let headers_only = remux(&p, &[], 8, 0, 0);
+    if let Ok((_, buf)) = decode(&headers_only, None) {
+        assert_eq!(buf.frames(), 0);
+    }
+}
