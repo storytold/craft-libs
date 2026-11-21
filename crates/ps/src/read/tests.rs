@@ -789,10 +789,10 @@ fn restore_undoes_dictionary_changes() {
          1 dict dup /z 9 put d copy pop /a 4 store restore \
          a 1 eq /b where not and d /k get 1 eq and d /z known not and { 0 0 10 10 rectfill } if");
     assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
-    assert!(c.contains(" re\n"), "{c}");
+    assert!(c.lines().any(|l| l == "f"), "{c}");
 
     let (c, _) = run("save dup restore { restore } stopped { 0 0 10 10 rectfill } if");
-    assert!(c.contains(" re\n"), "{c}");
+    assert!(c.lines().any(|l| l == "f"), "{c}");
 }
 
 #[test]
@@ -805,16 +805,18 @@ fn prolog_keeps_builtin_cmyk_with_where() {
     let (c, conv) = run("0.1 0.2 0.3 0.4 setcmykcolor currentcmykcolor \
          0.4 eq exch 0.3 eq and exch 0.2 eq and exch 0.1 eq and { 0 0 10 10 rectfill } if");
     assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
-    assert!(c.contains(" re\n"), "{c}");
+    assert!(c.lines().any(|l| l == "f"), "{c}");
 }
 
 #[test]
 fn readline_partial_line_and_eof() {
-    let (c, conv) = run("/s 16 string def currentfile s readline { (ok) eq { 0 0 10 10 rectfill } if } { pop } ifelse\nok");
+    let (c, conv) = run("/s 16 string def currentfile 0 (END) /SubFileDecode filter s readline\n\
+         okEND { (ok) eq { 0 0 10 10 rectfill } if } { pop } ifelse");
     assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
-    assert!(c.contains(" re\n"), "{c}");
+    assert!(c.lines().any(|l| l == "f"), "{c}");
 
-    let (c, conv) = run("/s 16 string def currentfile s readline not exch length 0 eq and { 0 0 10 10 rectfill } if");
+    let (c, conv) = run("/s 16 string def currentfile 0 (END) /SubFileDecode filter s readline\n\
+         END not exch length 0 eq and { 0 0 10 10 rectfill } if");
     assert!(conv.warnings.is_empty(), "{:?}", conv.warnings);
-    assert!(c.contains(" re\n"), "{c}");
+    assert!(c.lines().any(|l| l == "f"), "{c}");
 }
