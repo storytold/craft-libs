@@ -1,0 +1,26 @@
+[package]
+name = "{{name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+craft-plugin-sdk = { path = "{{sdk_path}}" }
+
+# Plugin code needs no unsafe. `#[craft_plugin]` writes the wasm exports itself, and those need a
+# local allow, so the level is deny and not forbid.
+[lints.rust]
+unsafe_code = "deny"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# This package is its own workspace, so it builds the same inside or outside another repository.
+[workspace]

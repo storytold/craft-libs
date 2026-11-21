@@ -70,6 +70,7 @@ craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
+craft-cli = { path = "crates/cli" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
 craft-cloud-local = { path = "crates/cloud-local" }
@@ -77,6 +78,8 @@ craft-color = { path = "crates/color" }
 craft-color-transform = { path = "crates/color-transform" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
+craft-command = { path = "crates/command" }
+craft-command-derive = { path = "crates/command-derive" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
 craft-dav = { path = "crates/dav" }
@@ -167,6 +170,10 @@ craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
 craft-ppt-binary = { path = "crates/ppt-binary" }
 craft-penpot = { path = "crates/penpot" }
+craft-plugin-abi = { path = "crates/plugin-abi" }
+craft-plugin-host = { path = "crates/plugin-host" }
+craft-plugin-sdk = { path = "crates/plugin-sdk" }
+craft-plugin-sdk-macros = { path = "crates/plugin-sdk-macros" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-pcraft-bundle = { path = "crates/pcraft-bundle" }
 craft-pkcs7 = { path = "crates/pkcs7" }

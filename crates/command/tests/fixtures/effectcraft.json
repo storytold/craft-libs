@@ -1,0 +1,890 @@
+{
+  "note": "EffectCraft params strings copied from cmd! and query! literals in the EffectCraft engine crate (src/commands).",
+  "commands": [
+    {
+      "id": "layer.select",
+      "params": "{layers: [id|name|#n], add?, toggle?}",
+      "required": [
+        "layers"
+      ],
+      "properties": [
+        [
+          "layers",
+          "layers: [id|name|#n]"
+        ],
+        [
+          "add",
+          "add?"
+        ],
+        [
+          "toggle",
+          "toggle?"
+        ]
+      ]
+    },
+    {
+      "id": "time.set",
+      "params": "{time? (s) | frame? | timecode?}",
+      "required": [],
+      "properties": [
+        [
+          "time",
+          "time? (s) | frame? | timecode?"
+        ],
+        [
+          "frame",
+          "time? (s) | frame? | timecode?"
+        ],
+        [
+          "timecode",
+          "time? (s) | frame? | timecode?"
+        ]
+      ]
+    },
+    {
+      "id": "comp.new",
+      "params": "{name?, width?, height?, frameRate?, duration? (s), startTime? (s) | startTimecode?, background? [r,g,b]|#hex, pixelAspect?, shutterAngle?, shutterPhase?, motionBlurSamples?, adaptiveSampleLimit? (16–256), preserveFrameRate?: bool, preserveResolution?: bool, renderer?: classic3D|advanced3D, anchor?, open?}",
+      "required": [],
+      "properties": [
+        [
+          "name",
+          "name?"
+        ],
+        [
+          "width",
+          "width?"
+        ],
+        [
+          "height",
+          "height?"
+        ],
+        [
+          "frameRate",
+          "frameRate?"
+        ],
+        [
+          "duration",
+          "duration? (s)"
+        ],
+        [
+          "startTime",
+          "startTime? (s) | startTimecode?"
+        ],
+        [
+          "startTimecode",
+          "startTime? (s) | startTimecode?"
+        ],
+        [
+          "background",
+          "background? [r,g,b]|#hex"
+        ],
+        [
+          "pixelAspect",
+          "pixelAspect?"
+        ],
+        [
+          "shutterAngle",
+          "shutterAngle?"
+        ],
+        [
+          "shutterPhase",
+          "shutterPhase?"
+        ],
+        [
+          "motionBlurSamples",
+          "motionBlurSamples?"
+        ],
+        [
+          "adaptiveSampleLimit",
+          "adaptiveSampleLimit? (16–256)"
+        ],
+        [
+          "preserveFrameRate",
+          "preserveFrameRate?: bool"
+        ],
+        [
+          "preserveResolution",
+          "preserveResolution?: bool"
+        ],
+        [
+          "renderer",
+          "renderer?: classic3D|advanced3D"
+        ],
+        [
+          "anchor",
+          "anchor?"
+        ],
+        [
+          "open",
+          "open?"
+        ]
+      ]
+    },
+    {
+      "id": "prop.pickWhip",
+      "params": "{layer?, path|prop, target: {layer, path|prop, dimension?}, expression?, range?: [start, end]} → sets an AE reference expression (`dimension`: one of the target's values, `position[0]`; with `expression`: inserts it there, replacing the characters in `range`, default the end)",
+      "required": [
+        "target"
+      ],
+      "properties": [
+        [
+          "layer",
+          "layer?"
+        ],
+        [
+          "path",
+          "path|prop"
+        ],
+        [
+          "prop",
+          "path|prop"
+        ],
+        [
+          "target",
+          "target: {layer, path|prop, dimension?}"
+        ],
+        [
+          "expression",
+          "expression?"
+        ],
+        [
+          "range",
+          "range?: [start, end]"
+        ]
+      ]
+    },
+    {
+      "id": "paint.stroke",
+      "params": "{layer?, kind?: brush|clone|eraser, points: [[x,y,pressure?],…] (effect space), time? (s) | frame?, duration? (s, drawing time for Write On), color?: [r,g,b,a], diameter?, angle?, hardness?, roundness?, spacing?, opacity?, flow?, mode?, channels?: RGBA|RGB|Alpha, durationMode?: constant|writeOn|singleFrame|custom, customFrames?, eraseMode?: layerSourceAndPaint|paintOnly|lastStrokeOnly, cloneSource?: layer id, clonePosition?: [x,y], cloneTimeShift? (s), lockSourceTime?, cloneTime? (s), sizePressure?, minSize?, opacityPressure?, flowPressure?}",
+      "required": [
+        "points"
+      ],
+      "properties": [
+        [
+          "layer",
+          "layer?"
+        ],
+        [
+          "kind",
+          "kind?: brush|clone|eraser"
+        ],
+        [
+          "points",
+          "points: [[x,y,pressure?],…] (effect space)"
+        ],
+        [
+          "time",
+          "time? (s) | frame?"
+        ],
+        [
+          "frame",
+          "time? (s) | frame?"
+        ],
+        [
+          "duration",
+          "duration? (s, drawing time for Write On)"
+        ],
+        [
+          "color",
+          "color?: [r,g,b,a]"
+        ],
+        [
+          "diameter",
+          "diameter?"
+        ],
+        [
+          "angle",
+          "angle?"
+        ],
+        [
+          "hardness",
+          "hardness?"
+        ],
+        [
+          "roundness",
+          "roundness?"
+        ],
+        [
+          "spacing",
+          "spacing?"
+        ],
+        [
+          "opacity",
+          "opacity?"
+        ],
+        [
+          "flow",
+          "flow?"
+        ],
+        [
+          "mode",
+          "mode?"
+        ],
+        [
+          "channels",
+          "channels?: RGBA|RGB|Alpha"
+        ],
+        [
+          "durationMode",
+          "durationMode?: constant|writeOn|singleFrame|custom"
+        ],
+        [
+          "customFrames",
+          "customFrames?"
+        ],
+        [
+          "eraseMode",
+          "eraseMode?: layerSourceAndPaint|paintOnly|lastStrokeOnly"
+        ],
+        [
+          "cloneSource",
+          "cloneSource?: layer id"
+        ],
+        [
+          "clonePosition",
+          "clonePosition?: [x,y]"
+        ],
+        [
+          "cloneTimeShift",
+          "cloneTimeShift? (s)"
+        ],
+        [
+          "lockSourceTime",
+          "lockSourceTime?"
+        ],
+        [
+          "cloneTime",
+          "cloneTime? (s)"
+        ],
+        [
+          "sizePressure",
+          "sizePressure?"
+        ],
+        [
+          "minSize",
+          "minSize?"
+        ],
+        [
+          "opacityPressure",
+          "opacityPressure?"
+        ],
+        [
+          "flowPressure",
+          "flowPressure?"
+        ]
+      ]
+    },
+    {
+      "id": "prop.setExpression",
+      "params": "{layer?, path|prop?, expression?, enabled?} (no path/prop: the selected properties)",
+      "required": [],
+      "properties": [
+        [
+          "layer",
+          "layer?"
+        ],
+        [
+          "path",
+          "path|prop?"
+        ],
+        [
+          "prop",
+          "path|prop?"
+        ],
+        [
+          "expression",
+          "expression?"
+        ],
+        [
+          "enabled",
+          "enabled?"
+        ]
+      ]
+    },
+    {
+      "id": "edit.undo",
+      "params": "{}",
+      "required": [],
+      "properties": []
+    },
+    {
+      "id": "layer.setText",
+      "params": "{layer?, range?: [start, end] (characters; default all), text?, font?, style?, size?, fill?, stroke?, applyFill?, applyStroke?, strokeWidth?, tracking?, leading?: px|\"auto\", baselineShift? px, hScale? %, vScale? %, tsume? %, fauxBold?, fauxItalic?, allCaps?, smallCaps?, baseline?: normal|superscript|subscript, superscript?, subscript?, kerning?: metrics|optical|number, ligatures?, discretionaryLigatures? (OpenType), contextualAlternates?, stylisticAlternates?, stylisticSets?: [1â20], ss01?, ss02?, ss03?, ss04?, ss05?, ss06?, ss07?, ss08?, ss09?, ss10?, ss11?, ss12?, ss13?, ss14?, ss15?, ss16?, ss17?, ss18?, ss19?, ss20?, swash?, titling?, ordinals?, fractions?, allSmallCaps?, figureStyle?: default|lining|oldStyle, figureWidth?: default|proportional|tabular, figures?, variations?: {tag: value} (variable font axes; null resets), justify?: left|center|right|justifyLeft|justifyCenter|justifyRight|justifyAll, indentLeft?, indentRight?, indentFirst?, spaceBefore?, spaceAfter?, direction?: ltr|rtl, composer?: everyLine|singleLine, hangingPunctuation?, strokeOverFill?, box?: [x,y,w,h]|null (layer space), vertical?}",
+      "required": [],
+      "properties": [
+        [
+          "layer",
+          "layer?"
+        ],
+        [
+          "range",
+          "range?: [start, end] (characters; default all)"
+        ],
+        [
+          "text",
+          "text?"
+        ],
+        [
+          "font",
+          "font?"
+        ],
+        [
+          "style",
+          "style?"
+        ],
+        [
+          "size",
+          "size?"
+        ],
+        [
+          "fill",
+          "fill?"
+        ],
+        [
+          "stroke",
+          "stroke?"
+        ],
+        [
+          "applyFill",
+          "applyFill?"
+        ],
+        [
+          "applyStroke",
+          "applyStroke?"
+        ],
+        [
+          "strokeWidth",
+          "strokeWidth?"
+        ],
+        [
+          "tracking",
+          "tracking?"
+        ],
+        [
+          "leading",
+          "leading?: px|\"auto\""
+        ],
+        [
+          "baselineShift",
+          "baselineShift? px"
+        ],
+        [
+          "hScale",
+          "hScale? %"
+        ],
+        [
+          "vScale",
+          "vScale? %"
+        ],
+        [
+          "tsume",
+          "tsume? %"
+        ],
+        [
+          "fauxBold",
+          "fauxBold?"
+        ],
+        [
+          "fauxItalic",
+          "fauxItalic?"
+        ],
+        [
+          "allCaps",
+          "allCaps?"
+        ],
+        [
+          "smallCaps",
+          "smallCaps?"
+        ],
+        [
+          "baseline",
+          "baseline?: normal|superscript|subscript"
+        ],
+        [
+          "superscript",
+          "superscript?"
+        ],
+        [
+          "subscript",
+          "subscript?"
+        ],
+        [
+          "kerning",
+          "kerning?: metrics|optical|number"
+        ],
+        [
+          "ligatures",
+          "ligatures?"
+        ],
+        [
+          "discretionaryLigatures",
+          "discretionaryLigatures? (OpenType)"
+        ],
+        [
+          "contextualAlternates",
+          "contextualAlternates?"
+        ],
+        [
+          "stylisticAlternates",
+          "stylisticAlternates?"
+        ],
+        [
+          "stylisticSets",
+          "stylisticSets?: [1â20]"
+        ],
+        [
+          "ss01",
+          "ss01?"
+        ],
+        [
+          "ss02",
+          "ss02?"
+        ],
+        [
+          "ss03",
+          "ss03?"
+        ],
+        [
+          "ss04",
+          "ss04?"
+        ],
+        [
+          "ss05",
+          "ss05?"
+        ],
+        [
+          "ss06",
+          "ss06?"
+        ],
+        [
+          "ss07",
+          "ss07?"
+        ],
+        [
+          "ss08",
+          "ss08?"
+        ],
+        [
+          "ss09",
+          "ss09?"
+        ],
+        [
+          "ss10",
+          "ss10?"
+        ],
+        [
+          "ss11",
+          "ss11?"
+        ],
+        [
+          "ss12",
+          "ss12?"
+        ],
+        [
+          "ss13",
+          "ss13?"
+        ],
+        [
+          "ss14",
+          "ss14?"
+        ],
+        [
+          "ss15",
+          "ss15?"
+        ],
+        [
+          "ss16",
+          "ss16?"
+        ],
+        [
+          "ss17",
+          "ss17?"
+        ],
+        [
+          "ss18",
+          "ss18?"
+        ],
+        [
+          "ss19",
+          "ss19?"
+        ],
+        [
+          "ss20",
+          "ss20?"
+        ],
+        [
+          "swash",
+          "swash?"
+        ],
+        [
+          "titling",
+          "titling?"
+        ],
+        [
+          "ordinals",
+          "ordinals?"
+        ],
+        [
+          "fractions",
+          "fractions?"
+        ],
+        [
+          "allSmallCaps",
+          "allSmallCaps?"
+        ],
+        [
+          "figureStyle",
+          "figureStyle?: default|lining|oldStyle"
+        ],
+        [
+          "figureWidth",
+          "figureWidth?: default|proportional|tabular"
+        ],
+        [
+          "figures",
+          "figures?"
+        ],
+        [
+          "variations",
+          "variations?: {tag: value} (variable font axes; null resets)"
+        ],
+        [
+          "justify",
+          "justify?: left|center|right|justifyLeft|justifyCenter|justifyRight|justifyAll"
+        ],
+        [
+          "indentLeft",
+          "indentLeft?"
+        ],
+        [
+          "indentRight",
+          "indentRight?"
+        ],
+        [
+          "indentFirst",
+          "indentFirst?"
+        ],
+        [
+          "spaceBefore",
+          "spaceBefore?"
+        ],
+        [
+          "spaceAfter",
+          "spaceAfter?"
+        ],
+        [
+          "direction",
+          "direction?: ltr|rtl"
+        ],
+        [
+          "composer",
+          "composer?: everyLine|singleLine"
+        ],
+        [
+          "hangingPunctuation",
+          "hangingPunctuation?"
+        ],
+        [
+          "strokeOverFill",
+          "strokeOverFill?"
+        ],
+        [
+          "box",
+          "box?: [x,y,w,h]|null (layer space)"
+        ],
+        [
+          "vertical",
+          "vertical?"
+        ]
+      ]
+    },
+    {
+      "id": "learn.list",
+      "params": "{} → [{id, title, summary, minutes, steps}]",
+      "required": [],
+      "properties": []
+    },
+    {
+      "id": "file.importPlaceholder",
+      "params": "{name?, width?, height?, frameRate?, duration? (s)}",
+      "required": [],
+      "properties": [
+        [
+          "name",
+          "name?"
+        ],
+        [
+          "width",
+          "width?"
+        ],
+        [
+          "height",
+          "height?"
+        ],
+        [
+          "frameRate",
+          "frameRate?"
+        ],
+        [
+          "duration",
+          "duration? (s)"
+        ]
+      ]
+    },
+    {
+      "id": "layer.distribute",
+      "params": "{mode: left|hcenter|right|top|vcenter|bottom (edges or centres), layers?}",
+      "required": [
+        "mode"
+      ],
+      "properties": [
+        [
+          "mode",
+          "mode: left|hcenter|right|top|vcenter|bottom (edges or centres)"
+        ],
+        [
+          "layers",
+          "layers?"
+        ]
+      ]
+    },
+    {
+      "id": "effect.apply",
+      "params": "{effect: id|name (e.g. Gaussian Blur), layers?}",
+      "required": [
+        "effect"
+      ],
+      "properties": [
+        [
+          "effect",
+          "effect: id|name (e.g. Gaussian Blur)"
+        ],
+        [
+          "layers",
+          "layers?"
+        ]
+      ]
+    },
+    {
+      "id": "essential.set",
+      "params": "{layer, control: id|name, value | item (media)}",
+      "required": [
+        "layer",
+        "control"
+      ],
+      "properties": [
+        [
+          "layer",
+          "layer"
+        ],
+        [
+          "control",
+          "control: id|name"
+        ],
+        [
+          "value",
+          "value | item (media)"
+        ],
+        [
+          "item",
+          "value | item (media)"
+        ]
+      ]
+    },
+    {
+      "id": "prop.toggleKey",
+      "params": "{layer?, path|prop, selected?}",
+      "required": [],
+      "properties": [
+        [
+          "layer",
+          "layer?"
+        ],
+        [
+          "path",
+          "path|prop"
+        ],
+        [
+          "prop",
+          "path|prop"
+        ],
+        [
+          "selected",
+          "selected?"
+        ]
+      ]
+    },
+    {
+      "id": "puppet.mesh",
+      "params": "{layer?, mesh?: uid, density?, expansion?, triangles?, showMesh?, time?, merge?}",
+      "required": [],
+      "properties": [
+        [
+          "layer",
+          "layer?"
+        ],
+        [
+          "mesh",
+          "mesh?: uid"
+        ],
+        [
+          "density",
+          "density?"
+        ],
+        [
+          "expansion",
+          "expansion?"
+        ],
+        [
+          "triangles",
+          "triangles?"
+        ],
+        [
+          "showMesh",
+          "showMesh?"
+        ],
+        [
+          "time",
+          "time?"
+        ],
+        [
+          "merge",
+          "merge?"
+        ]
+      ]
+    },
+    {
+      "id": "renderQueue.applyTemplate",
+      "params": "{item?|index?, renderSettings?: template name, outputModule?: template name, module?: n}",
+      "required": [],
+      "properties": [
+        [
+          "item",
+          "item?|index?"
+        ],
+        [
+          "index",
+          "item?|index?"
+        ],
+        [
+          "renderSettings",
+          "renderSettings?: template name"
+        ],
+        [
+          "outputModule",
+          "outputModule?: template name"
+        ],
+        [
+          "module",
+          "module?: n"
+        ]
+      ]
+    },
+    {
+      "id": "scriptui.click",
+      "params": "{window?: id | title, widget: id | \"#id\" | properties.name | text} (buttons, checkboxes, radio buttons, tabs)",
+      "required": [
+        "widget"
+      ],
+      "properties": [
+        [
+          "window",
+          "window?: id | title"
+        ],
+        [
+          "widget",
+          "widget: id | \"#id\" | properties.name | text"
+        ]
+      ]
+    },
+    {
+      "id": "layer.newLight",
+      "params": "{kind?: Parallel|Spot|Point|Ambient|Environment (default Spot; Environment lights and reflects from an equirectangular image layer: prop.set its lightOptions/source to that layer's id, or leave it empty for the comp's Environment Layer, see layer.environment), name?, color?, intensity?, coneAngle?, coneFeather?, falloff?: None|Smooth|Inverse Square Clamped, radius?, falloffDistance?, castsShadows?, shadowDarkness?, shadowDiffusion?, position? [x,y,z], poi? [x,y,z]}",
+      "required": [],
+      "properties": [
+        [
+          "kind",
+          "kind?: Parallel|Spot|Point|Ambient|Environment (default Spot; Environment lights and reflects from an equirectangular image layer: prop.set its lightOptions/source to that layer's id, or leave it empty for the comp's Environment Layer, see layer.environment)"
+        ],
+        [
+          "name",
+          "name?"
+        ],
+        [
+          "color",
+          "color?"
+        ],
+        [
+          "intensity",
+          "intensity?"
+        ],
+        [
+          "coneAngle",
+          "coneAngle?"
+        ],
+        [
+          "coneFeather",
+          "coneFeather?"
+        ],
+        [
+          "falloff",
+          "falloff?: None|Smooth|Inverse Square Clamped"
+        ],
+        [
+          "radius",
+          "radius?"
+        ],
+        [
+          "falloffDistance",
+          "falloffDistance?"
+        ],
+        [
+          "castsShadows",
+          "castsShadows?"
+        ],
+        [
+          "shadowDarkness",
+          "shadowDarkness?"
+        ],
+        [
+          "shadowDiffusion",
+          "shadowDiffusion?"
+        ],
+        [
+          "position",
+          "position? [x,y,z]"
+        ],
+        [
+          "poi",
+          "poi? [x,y,z]"
+        ]
+      ]
+    },
+    {
+      "id": "time.step",
+      "params": "{frames}",
+      "required": [
+        "frames"
+      ],
+      "properties": [
+        [
+          "frames",
+          "frames"
+        ]
+      ]
+    },
+    {
+      "id": "view.exportGuides",
+      "params": "{path}",
+      "required": [
+        "path"
+      ],
+      "properties": [
+        [
+          "path",
+          "path"
+        ]
+      ]
+    }
+  ]
+}

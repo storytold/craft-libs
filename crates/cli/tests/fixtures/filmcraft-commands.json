@@ -1,0 +1,227 @@
+[
+ {
+  "id": "file.newProject",
+  "label": "Project\u2026",
+  "params": "{\"name\":str}"
+ },
+ {
+  "id": "file.openDemoProject",
+  "label": "Demo Project",
+  "params": "{}"
+ },
+ {
+  "id": "file.newSequence",
+  "label": "Sequence\u2026",
+  "params": "{\"name\":str,\"width\":u32=1920,\"height\":u32=1080,\"fps\":f64=23.976,\"sampleRate\":u32=48000,\"video\":n=3,\"audio\":n=3,\"mix\":\"Stereo|Mono|5.1|Adaptive\"?,\"trackType\":\"Standard|Mono|5.1|Adaptive\"?,\"fromItem\":itemId?}"
+ },
+ {
+  "id": "file.newSequenceFromClip",
+  "label": "Sequence From Clip",
+  "params": "{\"items\":[id]?}"
+ },
+ {
+  "id": "file.newBin",
+  "label": "Bin",
+  "params": "{\"name\":str,\"parent\":binId?}"
+ },
+ {
+  "id": "file.newBinFromSelection",
+  "label": "Bin From Selection",
+  "params": "{\"items\":[id]?,\"name\":str?}"
+ },
+ {
+  "id": "file.newSearchBin",
+  "label": "Search Bin",
+  "params": "{\"name\":str?,\"column\":str?,\"operator\":str?,\"text\":str?,\"rows\":[..]?,\"matchAll\":bool?,\"caseSensitive\":bool?}"
+ },
+ {
+  "id": "file.newOfflineFile",
+  "label": "Offline File\u2026",
+  "params": "{\"name\":str?,\"fileName\":str?,\"tapeName\":str?,\"video\":bool=true,\"audio\":bool=true,\"width\":u32?,\"height\":u32?,\"fps\":f64?,\"sampleRate\":u32=48000,\"channels\":u32=2,\"timecode\":\"HH:MM:SS:FF\"?,\"seconds\":f64=10,\"description\":str?}"
+ },
+ {
+  "id": "file.newAdjustmentLayer",
+  "label": "Adjustment Layer\u2026",
+  "params": "{\"seconds\":f64=5}"
+ },
+ {
+  "id": "file.newBarsAndTone",
+  "label": "Bars and Tone\u2026",
+  "params": "{\"seconds\":f64=10}"
+ },
+ {
+  "id": "file.newBlackVideo",
+  "label": "Black Video\u2026",
+  "params": "{\"seconds\":f64}"
+ },
+ {
+  "id": "file.newColorMatte",
+  "label": "Color Matte\u2026",
+  "params": "{\"color\":\"#rrggbb\",\"seconds\":f64}"
+ },
+ {
+  "id": "project.matteColor",
+  "label": "Color Matte Color\u2026",
+  "params": "{\"item\":id?,\"color\":\"#rrggbb\"}"
+ },
+ {
+  "id": "file.newCountingLeader",
+  "label": "Universal Counting Leader\u2026",
+  "params": "{}"
+ },
+ {
+  "id": "file.newTransparentVideo",
+  "label": "Transparent Video\u2026",
+  "params": "{}"
+ },
+ {
+  "id": "file.importDemoFootage",
+  "label": "Demo Footage",
+  "params": "{\"scene\":\"OceanSunset|Aurora|CityNight|Dunes|Plasma|Forest\"}"
+ },
+ {
+  "id": "file.exportInterchange",
+  "label": "Export Interchange",
+  "params": "{\"format\":\"edl|xml|fcpxml|otio|aaf|omf\"=xml,\"path\":str,\"sequence\":id?}"
+ },
+ {
+  "id": "file.exportEdl",
+  "label": "EDL\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.exportSelectionProject",
+  "label": "Selection as FilmCraft Project\u2026",
+  "params": "{\"path\":str,\"items\":[id]?}"
+ },
+ {
+  "id": "file.exportAle",
+  "label": "Avid Log Exchange\u2026",
+  "params": "{\"path\":str,\"items\":[id]?}"
+ },
+ {
+  "id": "file.exportOtio",
+  "label": "OpenTimelineIO\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.exportFcp7Xml",
+  "label": "Final Cut Pro XML\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.exportFcpxml",
+  "label": "FCPXML\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.exportAaf",
+  "label": "AAF\u2026",
+  "params": "{\"path\":str,\"sequence\":id?,\"mixdownVideo\":bool?,\"mixdownFormat\":\"mov|mxf\"?,\"breakoutToMono\":bool?,\"audio\":\"embedded|separate|linked\"?,\"audioFormat\":\"wav|aiff|mxf\"?,\"sampleRate\":int?,\"bitDepth\":\"16|24\"?,\"trimAudio\":bool?,\"handles\":frames?,\"renderAudioEffects\":bool?,\"smallSectors\":bool?}"
+ },
+ {
+  "id": "file.exportOmf",
+  "label": "OMF\u2026",
+  "params": "{\"path\":str,\"sequence\":id?,\"title\":str?,\"audio\":\"embedded|separate\"?,\"audioFormat\":\"wav|aiff\"?,\"sampleRate\":int?,\"bitDepth\":\"16|24\"?,\"trimAudio\":bool?,\"handles\":frames?,\"renderAudioEffects\":bool?,\"breakoutToMono\":bool?}"
+ },
+ {
+  "id": "file.importAaf",
+  "label": "Import AAF\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.open",
+  "label": "Open Project\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.close",
+  "label": "Close",
+  "params": "{\"item\":id?}"
+ },
+ {
+  "id": "file.closeProject",
+  "label": "Close Project",
+  "params": "{\"force\":bool?}"
+ },
+ {
+  "id": "file.closeAllProjects",
+  "label": "Close All Projects",
+  "params": "{\"force\":bool?}"
+ },
+ {
+  "id": "file.save",
+  "label": "Save",
+  "params": "{\"path\":str?}"
+ },
+ {
+  "id": "file.saveAs",
+  "label": "Save As\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.saveCopy",
+  "label": "Save a Copy\u2026",
+  "params": "{\"path\":str}"
+ },
+ {
+  "id": "file.saveAsTemplate",
+  "label": "Save as Template\u2026",
+  "params": "{\"name\":str?,\"path\":str?}"
+ },
+ {
+  "id": "file.recover",
+  "label": "Recover Unsaved Changes\u2026",
+  "params": "{\"id\":str?}"
+ },
+ {
+  "id": "file.discardRecovery",
+  "label": "Discard Unsaved Changes",
+  "params": "{\"id\":str?,\"all\":bool?}"
+ },
+ {
+  "id": "prefs.get",
+  "label": "Get Preferences",
+  "params": "{\"key\":str?}"
+ },
+ {
+  "id": "prefs.set",
+  "label": "Set Preferences",
+  "params": "{\"key\":str,\"value\":any}|{\"values\":{key:value}}"
+ },
+ {
+  "id": "prefs.reset",
+  "label": "Reset Preferences",
+  "params": "{\"category\":str?}"
+ },
+ {
+  "id": "file.exportMedia",
+  "label": "Media\u2026",
+  "params": "{\"path\":str,\"preset\":str?,\"settings\":ExportSettings?,\"format\":\"h264|hevc|prores|dnxhr|apv|mjpeg|mxf-op1a|mxf-opatom|png|tiff|bmp|gif|wav|aiff\"?,\"width\":u32?,\"height\":u32?,\"fps\":f64?,\"bitrateKbps\":u32?,\"bitrateMode\":\"cbr|vbr1Pass|vbr2Pass\"?,\"hardwareEncoding\":\"off|auto\"?,\"scale\":f32=1,\"audio\":bool=true,\"quality\":0..100,\"burnCaptions\":bool=false,\"captionSidecar\":\"srt|vtt\"?,\"loudnessLufs\":f64?,\"proresProfile\":\"proxy|lt|standard|hq\"?,\"dnxProfile\":\"lb|sq|hq|hqx\"?,\"apvProfile\":\"422-10|422-12|444-10|444-12\"?,\"mxfVideoCodec\":\"dnxhr|proRes|h264\"?,\"sequence\":id?,\"range\":\"entire|inOut|workArea|custom\"?,\"startSeconds\":f64?,\"endSeconds\":f64?,\"wait\":bool=false}"
+ },
+ {
+  "id": "jobs.cancel",
+  "label": "Cancel Job",
+  "params": "{\"job\":id}"
+ },
+ {
+  "id": "edit.pasteAttributes",
+  "label": "Paste Attributes\u2026",
+  "params": "{\"clips\":[id]?,\"motion\":bool=true,\"opacity\":bool=true,\"timeRemapping\":bool=true,\"volume\":bool=true,\"channelVolume\":bool=true,\"panner\":bool=true,\"effects\":bool|[effectId]=true,\"scaleTimes\":bool=true}"
+ },
+ {
+  "id": "edit.removeAttributes",
+  "label": "Remove Attributes\u2026",
+  "params": "{\"clips\":[id]?,\"motion\":bool=true,\"opacity\":bool=true,\"timeRemapping\":bool=true,\"volume\":bool=true,\"channelVolume\":bool=true,\"panner\":bool=true,\"effects\":bool|[effectId]=true}"
+ },
+ {
+  "id": "edit.clear",
+  "label": "Clear",
+  "params": "{\"clips\":[id]?}"
+ },
+ {
+  "id": "edit.rippleDelete",
+  "label": "Ripple Delete",
+  "params": "{\"clips\":[id]?}"
+ }
+]
