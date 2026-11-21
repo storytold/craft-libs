@@ -4,6 +4,18 @@
 /// Bytes of the placeable header [`with_placeable_header`] adds.
 pub const PLACEABLE_HEADER: usize = 22;
 
+/// The bounds of a BLIP's `OfficeArtMetafileHeader` as 16-bit coordinates, when they are.
+fn bounds16(header: &[u8]) -> Option<[i16; 4]> {
+    let v = |at: usize| i16::try_from(i32::from_le_bytes(header.get(at..at + 4)?.try_into().ok()?)).ok();
+    Some([v(4)?, v(8)?, v(12)?, v(16)?])
+}
+
+/// Whether [`with_placeable_header`] would add a header: the BLIP header is whole and its bounds
+/// fit 16 bits.
+pub fn gets_header(header: &[u8]) -> bool {
+    header.len() >= 24 && bounds16(header).is_some()
+}
+
 /// A WMF's records with a placeable header put back in front, made from the BLIP's 34-byte
 /// `OfficeArtMetafileHeader` (uncompressed size, bounds, size in EMUs, saved size, compression,
 /// filter): the bounds in the metafile's units, and its units per inch from the bounds' width over
@@ -12,9 +24,9 @@ pub const PLACEABLE_HEADER: usize = 22;
 /// header: the records are kept as they are, without one.
 pub fn with_placeable_header(header: &[u8], records: Vec<u8>) -> Option<Vec<u8>> {
     let i32_at = |at: usize| Some(i32::from_le_bytes(header.get(at..at + 4)?.try_into().ok()?));
-    let (l, t, r, b) = (i32_at(4)?, i32_at(8)?, i32_at(12)?, i32_at(16)?);
+    let (l, r) = (i32_at(4)?, i32_at(12)?);
     let width_emu = f64::from(i32_at(20)?);
-    let Ok(bounds) = [l, t, r, b].map(i16::try_from).into_iter().collect::<Result<Vec<i16>, _>>() else {
+    let Some(bounds) = bounds16(header) else {
         log::warn!("officeart: a WMF's bounds don't fit its 16-bit coordinates; it is kept without a placeable header");
         return Some(records);
     };

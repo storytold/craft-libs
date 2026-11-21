@@ -148,6 +148,35 @@ fn every_copy_of_a_dib_is_charged() {
     assert!((1 << 20) - work.left >= bmp + 4 + png.len(), "{} charged", (1 << 20) - work.left);
 }
 
+/// A WMF's file with its placeable header is a second copy of its records, charged whole with the
+/// header; when that doesn't fit in the limit or the budget, or its bounds can't make a header,
+/// the records are kept as a WMF without one.
+#[test]
+fn a_wmf_header_is_added_only_when_its_copy_fits() {
+    let records = vec![3u8; 1024];
+    let wmf = |l: i32, r: i32| {
+        let mut b = metafile(rt::BLIP_WMF, 0x216, records.len(), &records, false);
+        // The bounds, at 16 + 4 (the UID, then the uncompressed size) in the record body.
+        b[8 + 20..8 + 24].copy_from_slice(&l.to_le_bytes());
+        b[8 + 28..8 + 32].copy_from_slice(&r.to_le_bytes());
+        b
+    };
+    let fits = wmf(0, 1000);
+    let blip = parse(&Rec::at(&fits, 0).unwrap()).unwrap();
+    let whole = records.len() + crate::wmf::PLACEABLE_HEADER;
+    let read = |limit: usize, left: usize| {
+        let mut work = Decode::new(left);
+        with_placeable_header(&blip, limit, &mut work).map(|b| (b.len(), left - work.left))
+    };
+    assert_eq!(read(usize::MAX, records.len() + whole), Some((whole, records.len() + whole)), "both copies charged");
+    assert_eq!(read(usize::MAX, whole), Some((records.len(), records.len())), "the second copy doesn't fit: kept bare");
+    assert_eq!(read(whole - 1, usize::MAX), Some((records.len(), records.len())), "the file doesn't fit the limit: kept bare");
+    let wide = wmf(40_000, 41_000);
+    let blip = parse(&Rec::at(&wide, 0).unwrap()).unwrap();
+    let mut work = Decode::new(records.len());
+    assert_eq!(with_placeable_header(&blip, records.len(), &mut work).map(|b| b.len()), Some(records.len()), "no header to add, none reserved");
+}
+
 /// A WMF whose bounds don't fit the 16-bit coordinates of its records keeps its records without a
 /// placeable header, rather than one whose clamped bounds have no width.
 #[test]
@@ -242,21 +271,18 @@ fn decodes_an_uncompressed_metafile() {
     }
 }
 
-/// A WMF's placeable header takes its place in the limit and the budget with the records: a
-/// stored WMF that fits only without its header is no picture, and costs nothing.
+/// `picture()` gives a WMF its placeable header when the copy that adds it fits the limit and
+/// the budget, and keeps it as a WMF without one when only its records fit.
 #[test]
-fn a_wmf_header_fits_in_its_limit_and_budget() {
+fn picture_gives_a_wmf_its_header_when_it_fits() {
     let wmf = vec![3u8; 24];
     let blip = metafile(rt::BLIP_WMF, 0x216, wmf.len(), &wmf, false);
     let b = parse(&Rec::at(&blip, 0).unwrap()).unwrap();
     let whole = wmf.len() + crate::wmf::PLACEABLE_HEADER;
-    let mut work = Decode::new(wmf.len());
-    assert!(picture(&b, usize::MAX, &mut work).is_none(), "the budget holds the records only");
-    assert_eq!(work.left, wmf.len(), "nothing was charged");
-    assert!(picture(&b, wmf.len(), &mut Decode::new(usize::MAX)).is_none(), "the limit holds the records only");
-    let mut work = Decode::new(whole);
-    assert_eq!(picture(&b, whole, &mut work).map(|p| p.data.len()), Some(whole));
-    assert_eq!(work.left, 0);
+    let len = |limit: usize, left: usize| picture(&b, limit, &mut Decode::new(left)).map(|p| p.data.len());
+    assert_eq!(len(usize::MAX, wmf.len()), Some(wmf.len()), "the budget holds the records only");
+    assert_eq!(len(wmf.len(), usize::MAX), Some(wmf.len()), "the limit holds the records only");
+    assert_eq!(len(whole, wmf.len() + whole), Some(whole));
 }
 
 /// A metafile whose inflated size (with its compressed bytes) would pass the remaining budget is
