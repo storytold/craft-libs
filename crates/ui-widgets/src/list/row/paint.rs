@@ -73,7 +73,6 @@ impl ListRow<'_> {
     }
 
     pub(super) fn paint_toggles(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
-        let icon = cx.style.sizes.mark;
         for (at, cell) in &placed.toggles {
             let toggle = &self.toggles[*at];
             let part = TOGGLE.at(*at as u64);
@@ -101,7 +100,9 @@ impl ListRow<'_> {
                         } else {
                             spec.color(glyph_ink(cx, part, toggle.state == ToggleState::On))
                         };
-                        ui.draw().icon(Rect::from_center_size(cell.center(), Vec2::splat(icon)), &spec);
+                        let sizes = &cx.style.sizes;
+                        let side = toggle.icon_side(sizes.icon, sizes.mark);
+                        ui.draw().icon(Rect::from_center_size(cell.center(), Vec2::splat(side)), &spec);
                     }
                 }
             }
