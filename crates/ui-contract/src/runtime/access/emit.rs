@@ -423,7 +423,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
 /// exiting layer's root is hidden from the first pass it fades out, so nothing under it is reported while it still
 /// paints; the ids stay the same if the layer reopens.
 pub(crate) fn report_layer(ctx: &Context, id: Id, content: Id, rect: Rect, modal: bool, exiting: bool) {
-    adapter::register_parent(ctx, content, id);
+    adapter::register_layer_parent(ctx, content, id);
     let mut spec = NodeSpec::layer_root();
     spec.rect = Some(rect);
     spec.modal = modal;

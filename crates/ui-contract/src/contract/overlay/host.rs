@@ -342,6 +342,8 @@ impl Nudge {
 /// The layer-stack side of an OS-window mount: records the window as an entry of its viewport's stack (rank, key
 /// class, scope; no egui layer) and decides its dismissal after the body ran. `rect` is the window's inner rect.
 pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> LayerOut {
+    // The entry stands for a window of another viewport, whose pass no record of this one holds.
+    crate::runtime::replay::block(ctx);
     let overlay = layer.overlay;
     let mut memory = recall(layer, ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);

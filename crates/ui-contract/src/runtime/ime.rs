@@ -373,8 +373,14 @@ pub(crate) fn composing(ctx: &Context, owner: Id) -> bool {
     current(ctx, |engine| engine.owner == Some(owner) && engine.composing)
 }
 
-/// Records the caret rect for the OS candidate window.
+/// Records the caret rect for the OS candidate window. A replay of the run that recorded it records it again, so the
+/// pass writes the IME output and the OS keeps the IME open for a focused field that replays.
 pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, password: bool) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (owner, field, caret, password),
+        |ctx, &(owner, field, caret, password)| note_caret(ctx, owner, field, caret, password),
+    );
     current(ctx, |engine| engine.caret = Some((owner, field, caret, password)));
 }
 

@@ -167,8 +167,10 @@ pub(crate) fn pass_through(ctx: &Context, id: Id) {
     });
 }
 
-/// Reports `id` as the focused node of this pass.
+/// Reports `id` as the focused node of this pass. A replay of the run that reported it reports it again: a view that
+/// holds focus replays while nothing reaches it.
 pub(crate) fn set_focus(ctx: &Context, id: Id) {
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| set_focus(ctx, id));
     with_emitted(ctx, |emitted| emitted.focus_set = true);
     ctx.set_accesskit_focus(id);
 }
@@ -207,6 +209,16 @@ fn with_emitted<R>(ctx: &Context, f: impl FnOnce(&mut Emitted) -> R) -> R {
 pub(crate) fn register_parent(ctx: &Context, id: Id, parent: Id) {
     ctx.register_accesskit_parent(id, parent);
     emit(ctx, id);
+}
+
+/// `register_parent` for the content `Ui` of an overlay layer, which attaches to the layer's root node. The content is
+/// neither a widget nor a node, so egui's records of the run hold no parent for it: a replay of the run registers it
+/// again. A parent egui's records hold is never journaled: they hold its last value, which a replayed earlier call
+/// would overwrite.
+pub(crate) fn register_layer_parent(ctx: &Context, content: Id, root: Id) {
+    crate::runtime::replay::journal(ctx, || (content, root), |ctx, &(content, root)| register_layer_parent(ctx, content, root));
+    ctx.register_accesskit_parent(content, root);
+    with_emitted(ctx, |emitted| emitted.emit(content));
 }
 
 /// Notes that the runtime emitted the node of `id`.

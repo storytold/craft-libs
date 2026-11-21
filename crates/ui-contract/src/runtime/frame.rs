@@ -633,7 +633,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H0: one press per pass.
     let frame = pass::frame_nr(ctx, viewport);
     let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(&mut events, frame, &mut record.held));
-    // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left.
+    // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left. The events sent
+    // to the focus are counted first, before the IME and key stages take theirs.
+    keys::count_sent(ctx, viewport, &events);
     ime::input_hook(ctx, &mut events, viewport);
     let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {

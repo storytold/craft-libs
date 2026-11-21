@@ -514,8 +514,9 @@ impl Env {
         let shell = Arc::new(windows::shell_of(ctx, pass::current_viewport(ctx)));
         let active = shell.window.active;
         let keyboard = Arc::new(crate::runtime::keys::layout_of(ctx));
-        // The window facts and the layout are tracked inputs: a view that read them runs when they change.
-        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Shell, (*shell).clone());
+        // The window facts, the safe rect and the layout are tracked inputs: a view that read them runs when they change.
+        let safe = crate::runtime::egui::areas::safe_rect_raw(ctx);
+        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Shell, ((*shell).clone(), safe));
         crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Keyboard, (*keyboard).clone());
         let words = host_words(ctx, host.as_ref());
         let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash())

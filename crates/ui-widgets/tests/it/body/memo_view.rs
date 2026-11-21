@@ -12,6 +12,7 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow};
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
+use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::in_audit_run;
@@ -22,6 +23,7 @@ use craft_ui::testing::{
     Frames, MemoRun, last_frame_memo_runs, last_pass_measuring_runs, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs,
     last_pass_text_layouts, measuring_run, trial,
 };
+use craft_ui::text::TextField;
 use egui::{Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::Cell;
 
@@ -1161,8 +1163,7 @@ impl InPopover {
         let button = &mut self.button;
         frames.frame(events, |ui| {
             Popover::new("Presets", Bind::given(true)).at_point(Pos2::new(80.0, 80.0)).show(ui, |ui, _| {
-                // The popover's first stop, outside the view, takes the focus on open: a view that holds the focus
-                // runs in every pass.
+                // The popover's first stop, outside the view, takes the focus on open.
                 Button::new("Search").show(ui);
                 *button = MemoView::new("presets", Title { title: "Inside".to_owned() }, title).show(ui);
             });
@@ -1265,6 +1266,170 @@ fn popover_width(memo: bool) -> f32 {
 fn a_view_in_a_popover_fills_its_width_as_without_the_view() {
     let (plain, memo) = (popover_width(false), popover_width(true));
     assert!(plain > 0.0 && (memo - plain).abs() <= 0.5, "the popover is as wide with the view: {memo} against {plain}");
+}
+
+/// Where the popovers of the overlay trials open, and a point outside them.
+const POPOVER_AT: Pos2 = Pos2::new(60.0, 60.0);
+const AWAY: Pos2 = Pos2::new(700.0, 500.0);
+
+/// A popover the view shows, holding a line of text and a button; the focus stays where it was, so nothing in it holds
+/// the focus.
+#[derive(MemoProps)]
+struct Hint<'a> {
+    open: Bind<'a, bool>,
+}
+
+/// Returns where the button in the popover was shown.
+fn hint(props: &mut Hint<'_>, ui: &mut Ui) -> Option<Rect> {
+    let mut row = None;
+    Popover::new("Hint", props.open.reborrowed()).at_point(POPOVER_AT).initial_focus(Initial::KeepAnchor).show(ui, |ui, _| {
+        Text::new("A hint").show(ui);
+        row = Some(Button::new("Row").show(ui).response.rect);
+    });
+    row
+}
+
+/// The hint view, with whether its popover is open and where its row was shown.
+struct HintScene {
+    open: bool,
+    row: Option<Rect>,
+}
+
+impl HintScene {
+    /// One frame with `events`; returns the views that ran in any of its passes, by props type name.
+    fn frame(&mut self, frames: &mut Frames, events: Vec<egui::Event>) -> Vec<&'static str> {
+        let (open, row) = (&mut self.open, &mut self.row);
+        frames.frame(events, |ui| *row = MemoView::new("hint", Hint { open: Bind::bound(open) }, hint).show(ui).flatten());
+        let ran = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran);
+        ran.map(|(name, _, _)| short_name(name)).collect()
+    }
+
+    fn settled(frames: &mut Frames) -> HintScene {
+        let mut scene = HintScene { open: true, row: None };
+        for _ in 0..SETTLE {
+            scene.frame(frames, vec![]);
+        }
+        scene
+    }
+}
+
+fn any_open(frames: &Frames) -> bool {
+    craft_ui::runtime::overlay::any_open(&frames.ctx, craft_ui::runtime::overlay::OpenFilter::Any)
+}
+
+/// A view that shows an open popover with no focus in it replays the popover while nothing reaches it: no component
+/// runs, the layer stays open and on top under its row, and its AccessKit node keeps its id and parent.
+#[trial]
+fn an_open_popover_without_focus_replays_with_its_layer() {
+    let mut frames = Frames::new();
+    let mut scene = HintScene::settled(&mut frames);
+    let row = scene.row.expect("the popover shows its row");
+    let layer = frames.ctx.layer_id_at(row.center()).expect("the popover's layer is under its row");
+    let dialog = |frames: &mut Frames| {
+        let tree = frames.tree();
+        let node = *tree.with_role(craft_ui::contract::Role::DIALOG).first().expect("the popover reports its node");
+        (node, tree.parent_of_key(node))
+    };
+    let ran_with = dialog(&mut frames);
+    for _ in 0..WARM {
+        assert!(scene.frame(&mut frames, vec![]).is_empty(), "an idle frame replays the view");
+        assert!(last_pass_runs(&frames.ctx).is_empty(), "no component runs: {:?}", last_pass_runs(&frames.ctx));
+        assert!(any_open(&frames), "the replayed popover stays open");
+        assert_eq!(frames.ctx.layer_id_at(row.center()), Some(layer), "the popover's layer is still on top under its row");
+        assert_eq!(dialog(&mut frames), ran_with, "the popover's node keeps its id and parent");
+    }
+    assert!(painted(&frames, "A hint"), "the replayed popover is painted");
+}
+
+/// The pointer onto the popover's row runs the view in that frame.
+#[trial]
+fn the_pointer_over_a_replayed_popover_runs_its_view() {
+    let mut frames = Frames::new();
+    let mut scene = HintScene::settled(&mut frames);
+    let row = scene.row.expect("the popover shows its row").center();
+    assert_eq!(scene.frame(&mut frames, vec![moved(row)]), ["Hint"], "the pointer onto the row runs the view");
+}
+
+/// An outside press closes a replaying popover in the press frame; the view runs at most once more and then replays
+/// with no layer open.
+#[trial]
+fn an_outside_press_closes_a_replaying_popover() {
+    let mut frames = Frames::new();
+    let mut scene = HintScene::settled(&mut frames);
+    scene.frame(&mut frames, vec![moved(AWAY)]);
+    assert!(scene.frame(&mut frames, vec![]).is_empty(), "the view replays with the pointer away");
+    assert_eq!(scene.frame(&mut frames, vec![press(AWAY), release(AWAY)]), ["Hint"], "the press runs the view");
+    assert!(!scene.open, "the outside press closed the popover in its frame");
+    let after: Vec<Vec<&str>> = (0..WARM).map(|_| scene.frame(&mut frames, vec![])).collect();
+    assert!(after.iter().skip(1).all(Vec::is_empty), "the view runs at most once after the close: {after:?}");
+    assert!(!any_open(&frames), "no layer is open");
+}
+
+/// A close of every popup from outside the view (a command's) closes a replaying popover in the next frame.
+#[trial]
+fn closing_the_popups_closes_a_replaying_popover() {
+    let mut frames = Frames::new();
+    let mut scene = HintScene::settled(&mut frames);
+    craft_ui::runtime::overlay::close_popups(&frames.ctx);
+    assert_eq!(scene.frame(&mut frames, vec![]), ["Hint"], "the queued close runs the view");
+    assert!(!scene.open, "the close reached the popover");
+}
+
+/// A window resize runs a view that shows a popover once, and the popover stays inside the new window; then it replays.
+#[trial]
+fn a_window_resize_runs_a_popover_view_once() {
+    let mut frames = Frames::new();
+    let mut scene = HintScene::settled(&mut frames);
+    frames.screen(Vec2::new(1000.0, 700.0));
+    let resized: Vec<Vec<&str>> = (0..WARM).map(|_| scene.frame(&mut frames, vec![])).collect();
+    assert_eq!(resized.iter().filter(|ran| !ran.is_empty()).count(), 1, "the resize runs the view once: {resized:?}");
+    assert!(resized[0] == ["Hint"], "it runs in the resize frame: {resized:?}");
+    let row = scene.row.expect("the popover shows its row");
+    assert!(frames.ctx.content_rect().contains_rect(row), "the popover stays inside the window");
+}
+
+/// A popover the view shows with a text field in it, which takes the focus when it opens.
+#[derive(MemoProps)]
+struct Typing<'a> {
+    text: Bind<'a, String>,
+}
+
+fn typing(props: &mut Typing<'_>, ui: &mut Ui) {
+    Popover::new("Typing", Bind::given(true)).at_point(POPOVER_AT).show(ui, |ui, _| {
+        TextField::new("Name", props.text.reborrowed()).id_salt("typing").show(ui);
+    });
+}
+
+/// With the focus in a replaying popover's text field, a typed character, a paste and an IME commit each reach the
+/// field in their frame, and an idle frame after each replays the view.
+#[trial]
+fn events_sent_to_a_replaying_focused_field_reach_it_in_their_frame() {
+    let mut frames = Frames::new();
+    let mut text = String::new();
+    let frame = |frames: &mut Frames, events: Vec<egui::Event>, text: &mut String| {
+        frames.frame(events, |ui| {
+            MemoView::new("typing", Typing { text: Bind::bound(text) }, typing).show(ui);
+        });
+        let ran = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran);
+        ran.map(|(name, _, _)| short_name(name)).collect::<Vec<_>>()
+    };
+    for _ in 0..SETTLE {
+        frame(&mut frames, vec![], &mut text);
+    }
+    assert!(frame(&mut frames, vec![], &mut text).is_empty(), "an idle frame replays the view with the focus in its field");
+    assert!(last_pass_runs(&frames.ctx).is_empty(), "no component runs: {:?}", last_pass_runs(&frames.ctx));
+    let sent = [
+        (craft_ui::testing::input::text("a"), "a"),
+        (egui::Event::Paste("b".to_owned()), "ab"),
+        (egui::Event::Ime(egui::ImeEvent::Commit("c".to_owned())), "abc"),
+    ];
+    for (event, after) in sent {
+        let ran = frame(&mut frames, vec![event], &mut text);
+        assert_eq!(text, after, "the event reached the field in its frame");
+        assert!(ran.contains(&"Typing"), "the event ran the view: {ran:?}");
+        frame(&mut frames, vec![], &mut text);
+        assert!(frame(&mut frames, vec![], &mut text).is_empty(), "an idle frame after it replays the view");
+    }
 }
 
 #[derive(MemoProps)]

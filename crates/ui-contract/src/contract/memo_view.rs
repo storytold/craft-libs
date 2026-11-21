@@ -15,15 +15,22 @@ use std::sync::Arc;
 /// it adds that run again (paint, widgets, accessibility nodes, focus stops and the other per-pass
 /// registrations) and returns what that run returned. It runs in a pass where its key differs, or where any of these
 /// holds:
-/// - the pointer is over it or was in its last run, a press started on it, or one of its widgets is dragged or holds
-///   focus, or did;
+/// - the pointer is over it or an overlay layer it shows, or was in its last run, a press started on either, or one of
+///   its widgets is dragged, or was;
+/// - the focus moved into, out of or within it, or, while the focus is in it, a key, text, IME, clipboard or AccessKit
+///   event came;
 /// - an intent of the pass is routed to a component in it (an AccessKit request on one of its nodes);
 /// - an animation in it is not at its end, a texture it shows is still loading, something in it asked for a repaint
 ///   (`frame::request_repaint`), or a wake time it asked for came;
 /// - a bound value, inspection record or command state it read changed;
 /// - its place differs from its last run (see below), or the shown life of a component it showed ended;
-/// - its last run asked for a discard pass or did something a replay cannot repeat (an overlay, paint on another
-///   layer).
+/// - it shows an overlay layer and a press came anywhere, a close waits for the layer, or the layers or the window's
+///   safe rect changed;
+/// - its last run asked for a discard pass or did something a replay cannot repeat (paint on a layer that is neither
+///   its own nor an overlay it shows, a window of another viewport).
+///
+/// An overlay it shows is part of its run: a replay shows the layer again, with its paint, widgets, nodes, focus scope
+/// and layer stack entry, at the place of the run. A view that shows one replays only at the room and clip it ran in.
 ///
 /// Input elsewhere in the window and repaint requests outside it do not run it: what they change in the data it shows
 /// reaches it through its props.

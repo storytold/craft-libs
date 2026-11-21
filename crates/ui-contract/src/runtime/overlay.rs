@@ -9,6 +9,7 @@ use crate::runtime::egui::pass;
 use crate::runtime::frame::{PassStep, PerViewport, Stamped};
 use crate::runtime::pass_state;
 use crate::runtime::pointer;
+use crate::runtime::shift::Shift;
 use craft_behavior::OwnerClass;
 use craft_behavior::overlay::Side;
 use egui::emath::TSTransform;
@@ -120,7 +121,7 @@ pub enum OpenFilter {
 }
 
 /// One shown egui layer.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[doc(hidden)]
 pub struct OpenEntry {
     /// The layer's id.
@@ -158,6 +159,29 @@ pub struct OpenEntry {
     pub(crate) place: Option<usize>,
     /// The dialog of a dialog host the layer shows for (`stack_place`).
     dialog: Option<Id>,
+}
+
+/// A replay moves the entry's screen rects with its record; the rest stays.
+impl Shift for OpenEntry {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        OpenEntry {
+            anchor: self.anchor.shifted(by),
+            peers: self.peers.shifted(by),
+            rect: self.rect.shifted(by),
+            region: self.region.shifted(by),
+            ..self.clone()
+        }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        OpenEntry {
+            anchor: self.anchor.snapped(&to.anchor, within),
+            peers: self.peers.snapped(&to.peers, within),
+            rect: self.rect.snapped(&to.rect, within),
+            region: self.region.snapped(&to.region, within),
+            ..self.clone()
+        }
+    }
 }
 
 impl OpenEntry {
@@ -479,7 +503,8 @@ pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
 /// its anchor it was placed on. A layer shown again while it fades out opens anew: it appears in this frame and pass.
 pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side: Option<Side>) {
-    crate::runtime::replay::block(ctx);
+    // Which layers a press opened reads the presses and releases.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
     let reopened = reopened(ctx, id, exiting);
     with_pass(ctx, |pass| {
         pass.drawing.push((id, tier));
@@ -617,13 +642,27 @@ pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::in
     input.events.len() != before
 }
 
-/// The outside press the input hook removed for the running pass.
+/// The outside press the input hook removed for the running pass. A tracked input (`Input::Press`).
 pub(crate) fn absorbed_press(ctx: &Context) -> Option<Pos2> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
+    absorbed_press_raw(ctx)
+}
+
+/// `absorbed_press` without noting the read: for the pointer's begin hook, which moves `Input::Press` by it.
+pub(crate) fn absorbed_press_raw(ctx: &Context) -> Option<Pos2> {
     with_persist(ctx, pass::current_viewport(ctx), |persist| persist.outside_press)
 }
 
-/// Records the toggling parts that sit beside the anchor of the layer `id` shown in this pass.
+/// Whether a close is queued for one of the layers `ids`: only a run of the layer's owner takes it, so a memoized view
+/// that showed one of them runs while it waits.
+pub(crate) fn close_queued(ctx: &Context, ids: &[Id]) -> bool {
+    !ids.is_empty() && pass_state::with::<Closes, _>(ctx, |closes| closes.0.iter().any(|(closed, ..)| ids.contains(closed)))
+}
+
+/// Records the toggling parts that sit beside the anchor of the layer `id` shown in this pass. A replay of the run
+/// that showed the layer records them again.
 pub(crate) fn note_peers(ctx: &Context, id: Id, peers: Vec<Rect>) {
+    crate::runtime::replay::journal(ctx, || (id, peers.clone()), |ctx, (id, peers)| note_peers(ctx, *id, peers.clone()));
     with_pass(ctx, |pass| {
         if let Some(entry) = pass.current.iter_mut().find(|entry| entry.id == id) {
             entry.peers = peers;
@@ -665,12 +704,16 @@ pub fn end_stack_dialog(ctx: &Context, dialog: Id) {
 
 /// Records the layer shown in this pass, parent first: a layer is recorded once its body ran, after the layers opened
 /// from inside it, so it goes in front of them, and every layer then stacks above the layer it was opened from. A
-/// layer shown again in a discarded pass replaces its entry.
+/// layer shown again in a discarded pass replaces its entry. A replay of the run that showed the layer records the
+/// entry again, its stack place and dialog filled, and the records open around it note the layer as one they show.
 pub(crate) fn record(ctx: &Context, mut entry: OpenEntry) {
-    crate::runtime::replay::block(ctx);
     with_pass(ctx, |pass| {
         entry.place = entry.place.or(pass.place);
         entry.dialog = entry.dialog.or(pass.dialog);
+    });
+    crate::runtime::replay::note_layer(ctx, entry.id);
+    crate::runtime::replay::journal(ctx, || entry.clone(), |ctx, entry| record(ctx, entry.clone()));
+    with_pass(ctx, |pass| {
         if let Some(at) = pass.current.iter().position(|recorded| recorded.id == entry.id) {
             pass.current[at] = entry;
             return;
