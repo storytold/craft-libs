@@ -95,7 +95,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         let w = s.line_w.unwrap_or(LINE_W);
         if c.segmented(j) {
             let pts: Vec<Option<(f32, f32)>> = ring.iter().map(|p| Some((p.0 as f32, p.1 as f32))).collect();
-            point_segments(out, &pts, true, |i| c.point_colour(j, i), w);
+            point_segments(out, &pts, true, |i| c.line_colour(j, i), w);
         } else {
             stroke(out, segs, col, w);
         }
@@ -105,7 +105,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
                 out.push(GraphicItem::Shape {
                     rect,
                     kind: ShapeKind::Ellipse,
-                    fill: Some(c.point_colour(j, i)),
+                    fill: Some(c.point(j, i).and_then(|p| p.marker).unwrap_or_else(|| c.auto_point_colour(j, i))),
                     stroke: None,
                     stroke_width: 0.0,
                     alpha: 1.0,

@@ -204,8 +204,8 @@ fn radar_charts_draw_spokes_grid_and_series_polygons() {
 #[test]
 fn radar_charts_show_a_legend() {
     let cats = ["a", "b", "c"];
-    // `val="0"`, as Word writes it: with no `c:varyColors`, one series varies by point and the
-    // legend lists the categories instead.
+    // `c:varyColors val="0"`, as Word writes it, so the legend lists the series, "Team". Without
+    // the element a lone series would vary by point and the legend would list the categories.
     let plot = format!(r#"<c:radarChart><c:varyColors val="0"/>{}</c:radarChart>"#, ser(0, "Team", None, &cats, &["1", "2", "3"]));
     let items = with_legend(&plot, "r", 300.0, 200.0);
     assert!(texts(&items).contains(&"Team"), "{:?}", texts(&items));
@@ -667,8 +667,119 @@ fn varied_radar_charts_colour_markers_and_segments_by_point() {
     let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{one}</c:radarChart><c:valAx/>"#);
     let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
     assert_eq!(marker_colours(&items), [accent(0), accent(1), accent(2)]);
-    // Segments a→b, b→c, then the closing c→a, each in the colour of the point it ends at.
-    assert_eq!(line_colours(&items), [accent(1), accent(2), accent(0)]);
+    // Each segment in the colour of the point it ends at. Word draws the closing c→a first, then
+    // a→b and b→c.
+    assert_eq!(line_colours(&items), [accent(0), accent(1), accent(2)]);
+    // Two points: Word still draws the closing b→a, under a→b, so b's colour shows.
+    let two = ser(0, "S", None, &CATS[..2], &["1", "2"]);
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{two}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(line_colours(&items), [accent(0), accent(1)]);
+}
+
+// `c:dPt` line and marker colours (#5960): Word saves a varied line, scatter or radar chart with
+// each point's colour in `dPt/c:spPr/a:ln` (the segment into the point) and
+// `dPt/c:marker/c:spPr` (its marker), not in a fill.
+
+const RED: Rgb = Rgb(0xFF, 0, 0);
+const GREEN: Rgb = Rgb(0, 0x80, 0);
+const BLUE: Rgb = Rgb(0, 0, 0xFF);
+
+/// A `c:dPt` for point `idx` as Word writes it for a line, scatter or radar series: a marker
+/// filled and outlined in `rgb`, and a line in `rgb`.
+fn dpt_point(idx: usize, rgb: &str) -> String {
+    let solid = format!(r#"<a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill>"#);
+    format!(
+        r#"<c:dPt><c:idx val="{idx}"/><c:marker><c:spPr>{solid}<a:ln w="9525">{solid}</a:ln></c:spPr></c:marker><c:bubble3D val="0"/><c:spPr><a:ln w="28575" cap="rnd">{solid}<a:round/></a:ln></c:spPr></c:dPt>"#
+    )
+}
+
+/// `ser` with `dpts` after the series' own properties (before `c:cat` / `c:xVal`).
+fn with_dpts(ser: &str, dpts: &str) -> String {
+    let at = ser.find("<c:cat>").or_else(|| ser.find("<c:xVal>")).unwrap_or(ser.len());
+    format!("{}{dpts}{}", &ser[..at], &ser[at..])
+}
+
+/// The colours of the stroked paths drawn in one of `palette`, in order.
+fn strokes_in(items: &[GraphicItem], palette: &[Rgb]) -> Vec<Rgb> {
+    items.iter().filter_map(|it| if let GraphicItem::Path { stroke: Some(c), .. } = it { palette.contains(c).then_some(*c) } else { None }).collect()
+}
+
+fn line_chart(vary: &str, ser: &str) -> String {
+    format!(
+        r#"<c:lineChart><c:grouping val="standard"/>{vary}{ser}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+    )
+}
+
+#[test]
+fn a_line_charts_point_line_colours_colour_the_segments_into_them() {
+    // As Word saves a varied line chart: every point has its colour in a `c:dPt`.
+    let dpts = [dpt_point(0, "FF0000"), dpt_point(1, "008000"), dpt_point(2, "0000FF")].concat();
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "3", "2"]), &dpts);
+    let items = chart_items(&space(&line_chart(r#"<c:varyColors val="1"/>"#, &s)), &theme(), 300.0, 200.0);
+    assert_eq!(strokes_in(&items, &[RED, GREEN, BLUE]), [GREEN, BLUE]);
+    assert!(line_colours(&items).is_empty(), "no accent colours: {:?}", line_colours(&items));
+    // The legend lists the categories in the points' own colours.
+    let legend = with_legend(&line_chart(r#"<c:varyColors val="1"/>"#, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&legend), [RED, GREEN, BLUE]);
+
+    // One point formatted by hand in a chart that doesn't vary: only the segment into it changes.
+    let s = with_dpts(&ser(0, "S", Some("0000FF"), &["a", "b", "c", "d"], &["1", "3", "2", "4"]), &dpt_point(2, "FF0000"));
+    let items = chart_items(&space(&line_chart(r#"<c:varyColors val="0"/>"#, &s)), &theme(), 300.0, 200.0);
+    assert_eq!(strokes_in(&items, &[RED, BLUE]), [BLUE, RED, BLUE]);
+}
+
+#[test]
+fn scatter_points_take_their_marker_and_line_colours() {
+    let dpts = [dpt_point(0, "FF0000"), dpt_point(1, "008000"), dpt_point(2, "0000FF")].concat();
+    // Markers (the series has no line).
+    let marks = scatter(r#"<c:varyColors val="1"/>"#, true);
+    let marks = marks.replacen("<c:xVal>", &format!("{dpts}<c:xVal>"), 1);
+    assert_eq!(marker_colours(&chart_items(&space(&marks), &theme(), 300.0, 200.0)), [RED, GREEN, BLUE]);
+    // A line: the segments into points 1 and 2.
+    let lined = scatter(r#"<c:varyColors val="1"/>"#, false).replacen("<c:xVal>", &format!("{dpts}<c:xVal>"), 1);
+    assert_eq!(strokes_in(&chart_items(&space(&lined), &theme(), 300.0, 200.0), &[RED, GREEN, BLUE]), [GREEN, BLUE]);
+    // Not varied, one point formatted: only its marker changes.
+    let one = scatter(r#"<c:varyColors val="0"/>"#, true).replacen("<c:xVal>", &format!("{}<c:xVal>", dpt_point(1, "FF0000")), 1);
+    assert_eq!(marker_colours(&chart_items(&space(&one), &theme(), 300.0, 200.0)), [accent(0), RED, accent(0)]);
+}
+
+#[test]
+fn radar_points_take_their_marker_and_line_colours() {
+    let dpts = [dpt_point(0, "FF0000"), dpt_point(1, "008000"), dpt_point(2, "0000FF")].concat();
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpts);
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="1"/>{s}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [RED, GREEN, BLUE]);
+    // The closing c→a first, then a→b and b→c.
+    assert_eq!(strokes_in(&items, &[RED, GREEN, BLUE]), [RED, GREEN, BLUE]);
+    // A filled radar ignores its points' colours in Word: one fill and outline.
+    let filled_radar = plot.replace(r#"val="marker""#, r#"val="filled""#);
+    let items = chart_items(&space(&filled_radar), &theme(), 300.0, 220.0);
+    assert!(strokes_in(&items, &[RED, GREEN, BLUE]).is_empty(), "{:?}", strokes_in(&items, &[RED, GREEN, BLUE]));
+    assert_eq!(filled(&items).iter().map(|f| f.0).collect::<Vec<_>>(), [accent(0)]);
+}
+
+/// Two `c:dPt` for the same point, as Word reads them (#5969 review, measured): the later one's
+/// `c:spPr` and `c:marker` each replace the earlier one's as a whole, and what it doesn't have
+/// stays.
+#[test]
+fn a_second_c_dpt_for_a_point_replaces_only_the_parts_it_has() {
+    let solid = |c: &str| format!(r#"<a:solidFill><a:srgbClr val="{c}"/></a:solidFill>"#);
+    let marker = format!(r#"<c:dPt><c:idx val="1"/><c:marker><c:spPr>{}</c:spPr></c:marker></c:dPt>"#, solid("FF0000"));
+    let line = format!(r#"<c:dPt><c:idx val="1"/><c:spPr><a:ln w="28575">{}</a:ln></c:spPr></c:dPt>"#, solid("0000FF"));
+    let fill = format!(r#"<c:dPt><c:idx val="1"/><c:spPr>{}</c:spPr></c:dPt>"#, solid("FF0000"));
+    let off = r#"<c:varyColors val="0"/>"#;
+    // A marker, then a line: both.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{marker}{line}"));
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/>{off}{s}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [accent(0), RED, accent(0)]);
+    assert_eq!(strokes_in(&items, &[RED, BLUE]), [BLUE]);
+    // A fill, then an outline: the outline's c:spPr replaces the fill.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{fill}{line}"));
+    let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(off, &[s])), &theme(), 300.0, 200.0)).iter().map(|b| b.0).collect();
+    assert_eq!(bars, [accent(0); 3]);
 }
 
 #[test]
@@ -676,6 +787,53 @@ fn the_legend_of_a_varied_chart_lists_the_categories() {
     let items = with_legend(&column_chart("", &[ser(0, "Sales", None, &CATS, &["1", "2", "3"])]), "r", 300.0, 200.0);
     assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)]);
     assert!(!texts(&items).contains(&"Sales"), "{:?}", texts(&items));
+}
+
+// Each part of a `c:dPt` alone (#5980 review; Word's PDFs): a bar's or slice's legend key takes
+// only the point's fill (with only an outline, Word fills the key in the automatic colour and
+// outlines it), and a fill colours neither a line, scatter or radar marker nor its key (Word
+// colours their keys from the point's line and marker).
+
+/// A `c:dPt` for point 1 with only `part` in red: `c:spPr` content.
+fn dpt_part(part: &str) -> String {
+    let solid = r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#;
+    let part = if part == "ln" { format!(r#"<a:ln w="28575">{solid}</a:ln>"#) } else { solid.to_string() };
+    format!(r#"<c:dPt><c:idx val="1"/><c:spPr>{part}</c:spPr></c:dPt>"#)
+}
+
+#[test]
+fn an_outline_alone_leaves_a_bar_or_slice_key_in_its_automatic_colour() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let one = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("ln"));
+    for plot in [column_chart(vary, std::slice::from_ref(&one)), format!(r#"<c:pieChart>{vary}{one}</c:pieChart>"#)] {
+        let items = with_legend(&plot, "r", 300.0, 200.0);
+        assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+        assert!(!filled(&items).iter().any(|f| f.0 == RED), "{plot}");
+    }
+    // A fill colours both.
+    let one = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("fill"));
+    let items = with_legend(&column_chart(vary, &[one]), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(2)]);
+}
+
+#[test]
+fn a_fill_alone_colours_no_line_scatter_or_radar_marker_or_key() {
+    let vary = r#"<c:varyColors val="1"/>"#;
+    let fill = dpt_part("fill");
+    let marks = scatter(vary, true).replacen("<c:xVal>", &format!("{fill}<c:xVal>"), 1);
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &fill);
+    let radar = format!(r#"<c:radarChart><c:radarStyle val="marker"/>{vary}{s}</c:radarChart><c:valAx/>"#);
+    for plot in [&marks, &radar] {
+        let items = with_legend(plot, "r", 300.0, 220.0);
+        assert_eq!(marker_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+        assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)], "{plot}");
+    }
+    let items = with_legend(&line_chart(vary, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), accent(1), accent(2)]);
+    // A line colour alone colours the key (Word draws the key's line in it).
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &dpt_part("ln"));
+    let items = with_legend(&line_chart(vary, &s), "r", 300.0, 200.0);
+    assert_eq!(swatch_colours(&items), [accent(0), RED, accent(2)]);
 }
 
 // An automatic series colour follows the series' `c:idx`, not its place in the file (#5963), as

@@ -534,13 +534,14 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
 }
 
 /// Series `j`'s line through `pts`: one path in the series colour, or, when the chart varies
-/// colours by point ([`Chart::segmented`]), one straight segment per point in the colour of the point it ends at (a
+/// colours by point or a point has its own line colour ([`Chart::segmented`]), one straight
+/// segment per point in the line colour of the point it ends at (a
 /// smoothed series is then drawn straight).
 fn series_line(out: &mut Vec<GraphicItem>, c: &Chart, j: usize, pts: &[Option<(f32, f32)>]) {
     let Some(s) = c.series.get(j) else { return };
     let w = s.line_w.unwrap_or(LINE_W);
     if c.segmented(j) {
-        point_segments(out, pts, false, |i| c.point_colour(j, i), w);
+        point_segments(out, pts, false, |i| c.line_colour(j, i), w);
     } else {
         stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), w);
     }
