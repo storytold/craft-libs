@@ -23,7 +23,7 @@ pub fn caps_lock(ctx: &Context) -> bool {
     let pass = ctx.cumulative_pass_nr();
     with_session(ctx, global("craft-ui lock keys", ()), |reading: &mut Reading| {
         if reading.pass != Some(pass) {
-            *reading = Reading { pass: Some(pass), caps: craft_window::caps_lock(WindowHost::of(ctx).shell().backend) }; // P3(shell-w2): sh.K9
+            *reading = Reading { pass: Some(pass), caps: craft_window::caps_lock(WindowHost::of(ctx).shell().backend) };
         }
         reading.caps
     })

@@ -1,10 +1,11 @@
 //! Stories of the buttons.
 
-use super::{Button, IconButton, Link, SplitButton, ToggleButton};
+use super::{Button, ButtonChord, IconButton, Link, SplitButton, ToggleButton};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Grid, Row};
 use crate::primitives::IconSpec;
+use crate::runtime::commands::EditCommands;
 use crate::runtime::env::Message;
 use crate::style::DataColor;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -165,4 +166,55 @@ fn split_button_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Link, covers = [Default])]
 fn link(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Link::new("Show all your shortcuts").url("https://example.com/shortcuts").show(ui).into()
+}
+
+/// A command button showing its command's chord after the label.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Variants", title = "Chord")]
+fn button_chord(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Button::command(EditCommands::Copy).chord(ButtonChord::Trailing).show(ui).into()
+}
+
+/// A long painted label with the chord: the chord shows while the whole label fits beside it.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Variants", title = "Chord, long text")]
+fn button_chord_long_text(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Button::command(EditCommands::Copy).chord(ButtonChord::Trailing).painted("Copy the selected objects to the clipboard").show(ui).into()
+}
+
+/// A room too short for label and chord together: the chord is dropped and the label stays whole.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Variants", title = "Chord, narrow room")]
+fn button_chord_narrow_room(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let width = |chord| Button::command(EditCommands::Copy).chord(chord).measure_in(ui, Proposal::Ideal).x;
+    // Halfway between the button without its chord and with it: room for the whole label, not for the chord too.
+    let room = (width(ButtonChord::Hidden) + width(ButtonChord::Trailing)) / 2.0;
+    ui.scope(|ui| {
+        ui.set_max_width(room.min(ui.available_width()));
+        Button::command(EditCommands::Copy).chord(ButtonChord::Trailing).show(ui)
+    })
+    .inner
+    .into()
+}
+
+/// A button with a muted second line under its icon and label.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Variants", title = "With detail")]
+fn button_with_detail(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Button::new("Quick start").icon(IconId::new("eye")).detail("Learn the basics of drawing in five minutes").show(ui).into()
+}
+
+/// A link inside a sentence.
+#[story(Link, covers = [], drive = Drive::Never, title = "In a sentence")]
+fn link_in_sentence(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        Text::new("Every shortcut is listed in").show(ui);
+        Link::new("the shortcuts guide").url("https://example.com/shortcuts").id_salt("guide").show(ui);
+        Text::new("and can be changed.").show(ui);
+    });
+    shown.into()
+}
+
+/// An icon button reporting that it is held, from the press to the release, also after the pointer leaves it.
+#[story(IconButton<'static>, covers = [], title = "Press and hold")]
+fn icon_button_held(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let out = IconButton::new(IconId::new("eye")).label("Hold to preview").show(ui);
+    Text::new(if out.held { "Held" } else { "Not held" }).shade(Shade::Muted).show(ui);
+    out.into()
 }

@@ -16,12 +16,14 @@ use egui::{Rect, Vec2, pos2};
 pub(crate) struct FaceLook {
     /// The gap between icon and label.
     pub gap: f32,
+    /// The colour of the chord and of the detail line: the variant's muted ink, as a `Kbd` chord is muted.
+    pub muted: Stateful<StyleColor>,
 }
 
 impl FaceLook {
-    /// The face look of the instance's variant: the control's gap.
+    /// The face look of the instance's variant: the control's gap and the variant's muted ink.
     pub(crate) fn of(cx: &StyleCx<'_>) -> FaceLook {
-        FaceLook { gap: cx.control().gap }
+        FaceLook { gap: cx.control().gap, muted: cx.variant_look().muted }
     }
 }
 
@@ -45,8 +47,9 @@ pub(crate) struct FaceSpec<'a> {
     /// Where the icons and the label sit along the area when it is wider than they are.
     pub align: HAlign,
     /// The command's chord, shown after the label and dropped before the label elides.
-    #[allow(dead_code)] // P3(shell-w2): sh.K13
     pub chord: Option<&'a str>,
+    /// A caption-role second line under the icon and label, wrapped to the face's width.
+    pub detail: Option<&'a str>,
 }
 
 impl FaceSpec<'_> {
@@ -65,6 +68,47 @@ impl FaceSpec<'_> {
     /// The gaps between the parts that are shown.
     fn gaps(&self) -> usize {
         (self.icons() + usize::from(!self.label.is_empty())).saturating_sub(1)
+    }
+
+    /// The chord as a run: only after a label, and not while the face is busy. It keeps its left-to-right order under
+    /// right-to-left, as `ChordText` lays a chord out.
+    fn chord_run(&self) -> Option<TextRun<'_>> {
+        self.chord.filter(|chord| !chord.is_empty() && !self.loading && !self.label.is_empty()).map(|chord| {
+            let mut run = TextRun::new(chord).role(TypeRole::Caption);
+            run.ltr = true;
+            run
+        })
+    }
+
+    fn detail_run(&self) -> Option<TextRun<'_>> {
+        self.detail.filter(|detail| !detail.is_empty()).map(|detail| TextRun::new(detail).role(TypeRole::Caption))
+    }
+}
+
+/// Whether the chord, `chord` wide after a gap, fits with the whole label (`label` wide) and the icons and gaps (`fixed`)
+/// in `room`: the chord is dropped before the label elides.
+fn chord_fits(label: f32, chord: f32, fixed: f32, gap: f32, room: f32) -> bool {
+    fixed + label + gap + chord <= room
+}
+
+/// How far the parts start from the reading start of a row with `free` room to spare.
+fn lead_offset(align: HAlign, free: f32) -> f32 {
+    match align {
+        HAlign::Start => 0.0,
+        HAlign::Center => free / 2.0,
+        HAlign::End => free,
+    }
+}
+
+/// The row of icons, label and chord, `row_height` tall: all of `area` without a detail line; with one `detail_height`
+/// tall, the top of the block the two make, centred in `area`.
+fn row_rect(area: Rect, row_height: f32, detail_height: Option<f32>, gap: f32) -> Rect {
+    match detail_height {
+        Some(detail) => {
+            let block = row_height + gap + detail;
+            Rect::from_min_size(pos2(area.min.x, area.center().y - block / 2.0), Vec2::new(area.width(), row_height))
+        }
+        None => area,
     }
 }
 
@@ -154,21 +198,37 @@ pub(crate) fn focus(cx: &StyleCx<'_>) -> FocusLook {
     cx.focus_look()
 }
 
-/// The size of the face: its parts and the gaps between them.
-/// The label elides in the room the icons and gaps leave, so a squeezed face is as wide as its room; at its least
-/// the label is at its readable least.
+/// The size of the face: its parts and the gaps between them, the detail line under them.
+/// The chord is dropped before the label elides; the label then elides in the room the icons and gaps leave, so a
+/// squeezed face is as wide as its room; at its least the label is at its readable least and the chord is dropped.
 pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) -> Vec2 {
-    let icon = cx.icon();
-    let fixed = icon * spec.icons() as f32 + cx.gap() * spec.gaps() as f32;
-    let text = if spec.label.is_empty() {
-        Vec2::ZERO
+    let (icon, gap) = (cx.icon(), cx.gap());
+    let fixed = icon * spec.icons() as f32 + gap * spec.gaps() as f32;
+    let room = cx.room.unwrap_or(f32::INFINITY);
+    let (text, chord) = if spec.label.is_empty() {
+        (Vec2::ZERO, None)
     } else if cx.proposal == Proposal::Min {
         let run = spec.run();
-        Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y)
+        (Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y), None)
     } else {
-        cx.layout_at(&spec.run(), cx.room.map_or(f32::INFINITY, |room| (room - fixed).max(0.0))).size()
+        let beside = spec.chord_run().and_then(|chord| {
+            let label = cx.layout_at(&spec.run(), f32::INFINITY).size();
+            let chord = cx.layout_at(&chord, f32::INFINITY).size();
+            chord_fits(label.x, chord.x, fixed, gap, room).then_some((label, chord))
+        });
+        match beside {
+            Some((label, chord)) => (Vec2::new(label.x, label.y.max(chord.y)), Some(chord.x)),
+            None => (cx.layout_at(&spec.run(), (room - fixed).max(0.0)).size(), None),
+        }
     };
-    Vec2::new(text.x + fixed, text.y.max(icon))
+    let row = Vec2::new(text.x + fixed + chord.map_or(0.0, |width| width + gap), text.y.max(icon));
+    let Some(detail) = spec.detail_run() else { return row };
+    let detail = if cx.proposal == Proposal::Min {
+        Vec2::new(cx.least_width(&detail), cx.layout_at(&detail, f32::INFINITY).size().y)
+    } else {
+        cx.layout_at(&detail, room).size()
+    };
+    Vec2::new(row.x.max(detail.x), row.y + gap + detail.y)
 }
 
 /// `icon` in `color`, unless the spec names a colour of its own.
@@ -181,26 +241,23 @@ pub(super) fn tinted<'a>(icon: &IconSpec<'a>, color: StyleColor) -> IconSpec<'a>
 struct Slots {
     lead: Option<Rect>,
     text: Option<Rect>,
+    chord: Option<Rect>,
     trail: Option<Rect>,
 }
 
-/// Places the icons of `side` and a label `text_width` wide with `gap` between them, in `area` by `spec.align`: the leading
-/// icon at the reading start, the trailing icon at the reading end.
-fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, area: Rect, rtl: bool) -> Slots {
-    let width = side * spec.icons() as f32 + gap * spec.gaps() as f32 + text_width;
-    let free = (area.width() - width).max(0.0);
-    let lead = match spec.align {
-        HAlign::Start => 0.0,
-        HAlign::Center => free / 2.0,
-        HAlign::End => free,
-    };
+/// Places the icons of `side` and a label `text_width` wide with `gap` between them, and the chord of `chord` width
+/// after the label, in `area` by `spec.align`: the leading icon at the reading start, the trailing icon at the reading
+/// end.
+fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, chord: Option<f32>, area: Rect, rtl: bool) -> Slots {
+    let width = side * spec.icons() as f32 + gap * spec.gaps() as f32 + text_width + chord.map_or(0.0, |width| width + gap);
+    let lead = lead_offset(spec.align, (area.width() - width).max(0.0));
     let (_, mut rest) = Flow::new(area, rtl).take_start(lead);
     let mut take = |extent: f32| {
         let (slot, next) = rest.take_start(extent);
         rest = next;
         slot
     };
-    let mut slots = Slots { lead: None, text: None, trail: None };
+    let mut slots = Slots { lead: None, text: None, chord: None, trail: None };
     let mut gapped = false;
     if spec.lead.is_some() {
         slots.lead = Some(take(side));
@@ -212,6 +269,10 @@ fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, area: Rect, 
         }
         slots.text = Some(take(text_width));
         gapped = true;
+        if let Some(width) = chord {
+            take(gap);
+            slots.chord = Some(take(width));
+        }
     }
     if spec.trail.is_some() {
         if gapped {
@@ -234,28 +295,53 @@ fn text_top(draw: &crate::primitives::Draw<'_>, area: Rect, text: &crate::primit
     area.center().y - body.size().y / 2.0 + body.first_baseline - text.first_baseline
 }
 
-/// Paints the face in `area`, placed by `spec.align`: the leading icon at the reading start, the trailing icon at the reading end.
+/// Paints the face in `area`, placed by `spec.align`: the leading icon at the reading start, the trailing icon at the
+/// reading end, the chord after the label when it fits beside the whole label, the detail line centred in `area` with
+/// them as one block.
 pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextLook, &IconLook), look: &FaceLook, spec: &FaceSpec<'_>, area: Rect) {
     let (text_look, icon_look) = ink;
     let (text_color, icon_color, side) = (cx.resolve(&text_look.color), cx.resolve(&icon_look.color), icon_look.side);
     let draw = ui.draw();
     let fixed = side * spec.icons() as f32 + look.gap * spec.gaps() as f32;
     let run = spec.run().color(text_color);
-    let text = if spec.label.is_empty() { None } else { Some(draw.layout(&run, (area.width() - fixed).max(0.0))) };
+    let muted = cx.resolve(&look.muted);
+    let beside = spec.chord_run().and_then(|chord| {
+        let label = draw.layout(&run, f32::INFINITY);
+        let chord = draw.layout(&chord.color(muted), f32::INFINITY);
+        chord_fits(label.size().x, chord.size().x, fixed, look.gap, area.width()).then_some((label, chord))
+    });
+    let (text, chord) = match beside {
+        Some((label, chord)) => (Some(label), Some(chord)),
+        None if spec.label.is_empty() => (None, None),
+        None => (Some(draw.layout(&run, (area.width() - fixed).max(0.0))), None),
+    };
+    let detail = spec.detail_run().map(|detail| draw.layout(&detail.color(muted), area.width()));
+    let height = |layout: &Option<crate::primitives::TextLayout>| layout.as_ref().map_or(0.0, |layout| layout.size().y);
+    let row = row_rect(area, height(&text).max(height(&chord)).max(side), detail.as_ref().map(|detail| detail.size().y), look.gap);
+    let rtl = cx.flow.is_rtl();
     let text_width = text.as_ref().map_or(0.0, |text| text.size().x);
-    let slots = slots(spec, side, look.gap, text_width, area, cx.flow.is_rtl());
+    let slots = slots(spec, side, look.gap, text_width, chord.as_ref().map(|chord| chord.size().x), row, rtl);
     if let (Some(lead), Some(slot)) = (spec.lead, slots.lead)
         && !spec.loading
     {
-        draw.icon(icon_at(slot, area, side), &tinted(lead, icon_color));
+        draw.icon(icon_at(slot, row, side), &tinted(lead, icon_color));
     }
     if let (Some(text), Some(slot)) = (&text, slots.text)
         && !(spec.loading && spec.lead.is_none())
     {
-        draw.galley(pos2(slot.min.x, text_top(&draw, area, text)), text);
+        draw.galley(pos2(slot.min.x, text_top(&draw, row, text)), text);
+    }
+    if let (Some(chord), Some(slot)) = (&chord, slots.chord) {
+        draw.galley(pos2(slot.min.x, text_top(&draw, row, chord)), chord);
     }
     if let (Some(trail), Some(slot)) = (spec.trail, slots.trail) {
-        draw.icon(icon_at(slot, area, side), &tinted(trail, icon_color));
+        draw.icon(icon_at(slot, row, side), &tinted(trail, icon_color));
+    }
+    if let Some(detail) = &detail {
+        let width = detail.size().x;
+        let (_, rest) = Flow::new(area, rtl).take_start(lead_offset(spec.align, (area.width() - width).max(0.0)));
+        let (slot, _) = rest.take_start(width);
+        draw.galley(pos2(slot.min.x, row.max.y + look.gap), detail);
     }
 }
 
@@ -270,8 +356,10 @@ pub(super) fn spinner_rect<C: Component>(
     rtl: bool,
 ) -> Option<Rect> {
     let fixed = side * spec.icons() as f32 + look.gap * spec.gaps() as f32;
-    let text_width = if spec.label.is_empty() { 0.0 } else { cx.layout_at(&spec.run(), (area.width() - fixed).max(0.0)).size().x };
-    let slots = slots(spec, side, look.gap, text_width, area, rtl);
+    let text = if spec.label.is_empty() { Vec2::ZERO } else { cx.layout_at(&spec.run(), (area.width() - fixed).max(0.0)).size() };
+    let detail = spec.detail_run().map(|detail| cx.layout_at(&detail, area.width()).size().y);
+    let row = row_rect(area, text.y.max(side), detail, look.gap);
+    let slots = slots(spec, side, look.gap, text.x, None, row, rtl);
     let slot = if spec.lead.is_some() { slots.lead } else { slots.text }?;
-    Some(icon_at(slot, area, side))
+    Some(icon_at(slot, row, side))
 }

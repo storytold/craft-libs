@@ -3,11 +3,11 @@
 
 use crate::primitives::{AppIcons, Mirror, SvgIcon, icon_names, register_app_icons};
 use crate::style::UiTokens;
-use crate::testing::{style, trial};
+use crate::testing::{Frames, style, trial};
 use craft_behavior::IconId;
 use craft_i18n::Direction;
 use craft_theme::{AppSizes, Appearance, Contrast, IconPackId, Mode, Size, TextSize, builtins};
-use egui::ColorImage;
+use egui::{Color32, ColorImage, Rect, pos2, vec2};
 
 // Built from parts so the workspace scan of icon-id literals does not read them.
 const FIRST_NAME: &str = concat!("zz_t10_", "first");
@@ -21,14 +21,17 @@ const FIRST_SET: AppIcons = AppIcons {
     name: "t10-first",
     stroke_width: None,
     icons: &[(FIRST_NAME, DISC), (CATALOG_NAME, DISC)],
-    fills: &[], /* P3(shell-w2): sh.K10 */
+    fills: &[],
 };
 const SECOND_SET: AppIcons = AppIcons {
     name: "t10-second",
     stroke_width: None,
     icons: &[(FIRST_NAME, SQUARE), (SECOND_NAME, SQUARE)],
-    fills: &[], /* P3(shell-w2): sh.K10 */
+    fills: &[],
 };
+const FILLED_NAME: &str = concat!("zz_k10_", "filled");
+const FILL_COLOR: [u8; 4] = [255, 0, 0, 255];
+const FILLED_SET: AppIcons = AppIcons::new("k10-filled", None, &[(FILLED_NAME, DISC)]).with_fills(&[(FILLED_NAME, SQUARE, FILL_COLOR)]);
 
 fn icon(name: &'static str) -> Option<SvgIcon> {
     let tokens = style::tokens(Mode::Light, Contrast::Standard);
@@ -90,4 +93,31 @@ fn a_theme_icon_pack_picks_the_set_and_an_unknown_pack_draws_the_default() {
     assert_ne!(mask_under_pack(Some("craft.carbon"), CATALOG_NAME), default, "a built-in pack draws its own icon");
     assert_eq!(mask_under_pack(Some("craft.lucide"), CATALOG_NAME), default, "the default set by name draws the default");
     assert_eq!(mask_under_pack(Some("user.missing"), CATALOG_NAME), default, "a pack that is not installed draws the default");
+}
+
+/// The colours of the textured shapes `name` paints under the tint `color`, first to last.
+fn painted(name: &'static str, color: Color32) -> Vec<Color32> {
+    let Some(svg) = icon(name) else { return Vec::new() };
+    let square = Rect::from_min_size(pos2(10.0, 10.0), vec2(24.0, 24.0));
+    Frames::new()
+        .frame_shapes(|ui| svg.paint(ui.painter(), square, color))
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Mesh(mesh) => mesh.vertices.first().map(|vertex| vertex.color),
+            egui::Shape::Rect(rect) if rect.brush.is_some() => Some(rect.fill),
+            _ => None,
+        })
+        .collect()
+}
+
+#[trial]
+fn an_icon_with_a_fill_keeps_its_colour_under_the_tint() {
+    register_app_icons(&FILLED_SET);
+    let [r, g, b, a] = FILL_COLOR;
+    let fill = Color32::from_rgba_unmultiplied(r, g, b, a);
+    for tint in [Color32::from_rgb(10, 200, 30), Color32::WHITE] {
+        assert_eq!(painted(FILLED_NAME, tint), [fill, tint], "the fill keeps its colour and the icon takes the tint");
+    }
+    let tint = Color32::from_rgb(10, 200, 30);
+    assert_eq!(painted(CATALOG_NAME, tint), [tint], "an icon with no fill paints the icon only");
 }

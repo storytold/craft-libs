@@ -267,17 +267,26 @@ impl SvgIcon {
         svg_set::rasterise_entry(self.entry, self.set, px, stroke_px as f32 / 64.0, self.mirrored)
     }
 
-    /// Paints the icon in `color` centred in `square`, on whole pixels.
+    /// Paints the entry's fill in its fixed colour when it has one, then the icon in `color`, centred in `square`, on
+    /// whole pixels.
     pub(crate) fn paint(&self, painter: &Painter, square: Rect, color: Color32) {
         let ctx = painter.ctx();
         let ppp = ctx.pixels_per_point();
         let (px, stroke_px) = self.pixels(square.width(), ppp);
-        let key = (self.entry, self.set, px, stroke_px, self.mirrored);
-        let texture = TextureCache::texture(ctx, key, || self.mask(square.width(), ppp));
         let side = px as f32 / ppp;
         let min = (square.center() - vec2(side, side) / 2.0).round_to_pixels(ppp);
+        let rect = Rect::from_min_size(min, vec2(side, side));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        crate::runtime::egui::textures::paint(painter, texture, Rect::from_min_size(min, vec2(side, side)), uv, color, egui::CornerRadius::ZERO);
+        // The fill flag keeps the fill's texture apart from the icon's.
+        let stamp = |fill: bool, tint: Color32, image: &dyn Fn() -> egui::ColorImage| {
+            let key = (self.entry, self.set, px, stroke_px, self.mirrored, fill);
+            let texture = TextureCache::texture(ctx, key, image);
+            crate::runtime::egui::textures::paint(painter, texture, rect, uv, tint, egui::CornerRadius::ZERO);
+        };
+        if let Some((svg, [r, g, b, a])) = svg_set::fill_of(self.entry) {
+            stamp(true, Color32::from_rgba_unmultiplied(r, g, b, a), &|| svg_set::rasterise_fill(svg, px));
+        }
+        stamp(false, color, &|| self.mask(square.width(), ppp));
     }
 }
 

@@ -40,8 +40,7 @@ pub trait ClipboardBackend: Send {
     /// As [`read`](Self::read), but the slow part (the Wayland pipe, a DIB conversion) is left in the returned
     /// closure, which runs off the UI thread. Reads now and wraps the result by default.
     fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Box<dyn FnOnce() -> Option<Flavor> + Send>>, ClipboardError> {
-        let _ = (mimes, limit);
-        todo!("sh.N1")
+        Ok(self.read(mimes, limit)?.map(|flavor| Box::new(move || Some(flavor)) as Box<dyn FnOnce() -> Option<Flavor> + Send>))
     }
     /// Whether the clipboard can be read at any time; `false` where it can be read only inside a paste event (the
     /// web).

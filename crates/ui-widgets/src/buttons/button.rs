@@ -1,20 +1,24 @@
 //! `Button`: a push button with an optional leading and trailing icon and a busy state.
 
 use super::face::{self, FaceLook, FaceSpec};
-use crate::contract::{Common, Component, Cx, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _};
-use crate::display::Spinner;
+use crate::contract::{
+    Access, Common, Component, Cx, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _, WordSetCx as _,
+};
+use crate::display::{ChordWrite, DisplayWords, Kbd, Spinner};
 use crate::primitives::{HAlign, IconSpec, PaintShape};
-use crate::runtime::commands::CommandRef;
+use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
-use craft_behavior::{Metrics, PartKey, PressPhase, Sense};
-use craft_keymap::Mods;
+use craft_behavior::{Metrics, PartKey, PointerButton, PressPhase, Sense};
+use craft_host::target::Os;
+use craft_keymap::{Mods, Trigger};
 use craft_theme::{
     Rgba, Stateful, Variant,
     variant::{Emphasis, Tone},
 };
 use egui::{Color32, Rect, Response, Vec2};
 use std::ops::Deref;
+use std::sync::Arc;
 
 /// The part a loading button shows its spinner in.
 const SPINNER: PartKey = PartKey::new("spinner");
@@ -62,6 +66,7 @@ impl ButtonStyle {
         let ink = cx.ink_on(DataColor::new(cx.color(tint).egui()));
         style.text = TextLook::new(TypeRole::Label, Stateful::new(ink));
         style.icon = IconLook::new(cx.control().icon, Stateful::new(ink));
+        style.face.muted = Stateful::new(ink);
         style
     }
 }
@@ -96,7 +101,8 @@ impl ButtonOutput {
             (true, Some(activation)) => activation.mods,
             _ => Mods::NONE,
         };
-        ButtonOutput { response: cx.response.clone(), clicks, mods, held: false } // P3(shell-w2): op.F1
+        let held = cx.press().phase.button_down() && cx.press().phase.start().is_some_and(|start| start.button == PointerButton::Primary);
+        ButtonOutput { response: cx.response.clone(), clicks, mods, held }
     }
 
     /// Whether the button was clicked this pass, by pointer or by key, by the framework's click rule. It stands in
@@ -170,11 +176,9 @@ pub struct Button<'a> {
     /// A muted caption-role second line, wrapped under the icon and label. The face grows to fit it. It is the
     /// accessible description unless `description` is set.
     #[prop(into)]
-    #[allow(dead_code)] // P3(shell-w2): dp.R3
     detail: Option<Label>,
     /// Whether a command button shows its command's chord after the label.
     #[prop]
-    #[allow(dead_code)] // P3(shell-w2): sh.K13
     chord: ButtonChord,
 }
 
@@ -201,7 +205,8 @@ impl<'a> Button<'a> {
         <Button as Props>::command(Button::new(Label::Empty), command)
     }
 
-    fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
+    /// The face of the button, with `chord` after the label.
+    fn spec<'s>(&'s self, label: &'s str, chord: Option<&'s str>) -> FaceSpec<'s> {
         let label = self.painted.as_ref().map_or(label, Label::as_str);
         FaceSpec {
             label,
@@ -211,8 +216,16 @@ impl<'a> Button<'a> {
             loading: self.loading,
             mnemonic: None,
             align: self.align,
-            chord: None, // P3(shell-w2): sh.K13
+            chord,
+            detail: self.detail.as_ref().map(Label::as_str),
         }
+    }
+
+    /// The chord a `Trailing` button shows: the bound `command`'s, written as `Kbd` writes it with the scope's key
+    /// names (`words`, asked only then). `None` for a hidden chord and for a command with none.
+    fn chord_text(&self, command: Option<&ResolvedCommand>, os: Os, words: impl FnOnce() -> Arc<DisplayWords>) -> Option<String> {
+        let chord = command.filter(|_| self.chord == ButtonChord::Trailing)?.chord?;
+        Some(Kbd::text(&Trigger::from(chord), os, &words(), ChordWrite::default()))
     }
 }
 
@@ -234,7 +247,8 @@ impl Component for Button<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        face::measure(cx, &self.spec(cx.resolved.label))
+        let chord = self.chord_text(cx.command(), cx.env.shell().os, || cx.words::<DisplayWords>());
+        face::measure(cx, &self.spec(cx.resolved.label, chord.as_deref()))
     }
 
     fn sense(&self) -> Sense {
@@ -247,7 +261,7 @@ impl Component for Button<'_> {
             return;
         }
         let (area, rtl) = (cx.content_rect, cx.flow.is_rtl());
-        let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, area, rtl);
+        let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label, None), &cx.style.face, cx.style.icon.side, area, rtl);
         if let Some(rect) = spinner {
             cx.part(SPINNER, rect);
         }
@@ -265,13 +279,23 @@ impl Component for Button<'_> {
         if self.loading { crate::style::Flags::BUSY } else { crate::style::Flags::empty() }
     }
 
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        let detail = self.detail.as_ref().map(Label::as_str).filter(|detail| !detail.is_empty());
+        if let Some(detail) = detail
+            && cx.resolved.description.is_none()
+        {
+            access.description(detail);
+        }
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if let Some(tint) = self.tint {
             let shape = PaintShape::Rect(cx.rect, cx.style.surface.radius);
             ui.draw().data_fill(&shape, DataColor::new(Color32::from(craft_theme::Srgba::from(tint))));
             ui.draw().fill(&shape, cx.resolve(&cx.style.overlay));
         }
-        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label), cx.content_rect);
+        let chord = self.chord_text(cx.command.as_deref(), cx.env.shell().os, || cx.words::<DisplayWords>());
+        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label, chord.as_deref()), cx.content_rect);
         if cx.part_if_declared(SPINNER).is_some() {
             ui.face(SPINNER, Spinner::new().size(cx.resolved.size));
         }

@@ -99,6 +99,22 @@ fn app_icon(set: usize, icon: usize) -> (&'static str, &'static [u8], Option<f32
     (name, svg, set.stroke_width)
 }
 
+/// The fill drawn under an app icon: its SVG document and fixed sRGBA colour. `None` for a catalog entry and for an icon
+/// its set gives no fill.
+pub(crate) fn fill_of(entry: Entry) -> Option<(&'static [u8], [u8; 4])> {
+    let Entry::App { set, icon } = entry else { return None };
+    let registry = APPS.read().unwrap_or_else(PoisonError::into_inner);
+    let set = registry.sets[set];
+    let name = set.icons[icon].0;
+    set.fills.iter().find(|(fill, ..)| *fill == name).map(|&(_, svg, color)| (svg, color))
+}
+
+/// A fill document in white at `px` x `px` physical pixels, drawn as drawn and never mirrored: no app icon is
+/// directional.
+pub(crate) fn rasterise_fill(svg: &[u8], px: u32) -> ColorImage {
+    image(draw(svg, None, px, 0.0, false), px, || "app icon fill".to_owned())
+}
+
 /// The position of the icon called `name` in the catalog.
 pub(crate) fn find(name: &str) -> Option<usize> {
     NAMES.binary_search(&name).ok()
