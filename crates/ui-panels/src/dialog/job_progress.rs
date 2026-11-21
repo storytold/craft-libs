@@ -3,13 +3,12 @@
 use super::prompt::{Prompt, Reply, buttons};
 use super::words::DialogWords;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
-use crate::display::{Progress, Text};
+use crate::display::{Progress, Shade, Text};
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
 use crate::style::TypeRole;
-use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 
 /// Modal progress window for a running job: a progress bar (or an indeterminate one), counts and the percentage, the
@@ -82,7 +81,7 @@ impl JobProgress {
                 if counts.is_some() || percent.is_some() {
                     Row::new().show(ui, |ui, _| {
                         for text in counts.iter().cloned().chain(percent.iter().cloned().map(Label::from)) {
-                            Text::new(text).role(TypeRole::Caption).tone(Tone::Muted).show(ui);
+                            Text::new(text).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
                         }
                     });
                 }

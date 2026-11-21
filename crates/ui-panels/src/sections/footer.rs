@@ -820,7 +820,7 @@ impl Component for FooterBar {
         let Some(pass) = frame::running(&ctx) else { return };
         let focused = WindowHost::of(&ctx).facts(pass.viewport).is_some_and(|facts| facts.focused);
         let held = !crate::runtime::pointer::frame(&ctx).buttons.is_empty()
-            || keys::held(&ctx).iter().any(|key| matches!(key, egui::Key::Enter | egui::Key::Space));
+            || keys::held(&ctx).iter().any(|key| matches!(key, Key::Enter | Key::Space));
         let arming = cx.keep::<Arming>();
         let continues = arming.frame.is_some_and(|last| pass.frame_nr == last || pass.frame_nr == last + 1);
         if !(continues && focused) {

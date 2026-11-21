@@ -10,7 +10,7 @@ use crate::runtime::env::Label;
 use crate::style::{StyleColor, TypeRole};
 use craft_behavior::{ColumnKey, Flow, PartKey};
 use craft_theme::ControlSize;
-use egui::{Rect, Vec2, pos2, vec2};
+use egui::{Rect, Vec2, vec2};
 use smallvec::SmallVec;
 
 /// The chevron of the up half of a step strip.

@@ -71,7 +71,7 @@ const GRID_OPTIONS: &str = "Grid Options…";
 
 /// The open state a story's dialog binds, behind the button that opens it: dialogs start closed, and the button opens
 /// the real one.
-fn opener<'d>(ui: &mut Ui, data: &'d mut StoryData, label: &'static str) -> &'d mut bool {
+pub(super) fn opener<'d>(ui: &mut Ui, data: &'d mut StoryData, label: &'static str) -> &'d mut bool {
     let open = data.value("open", false);
     if clicked(&Button::new(label).show(ui)) {
         *open = true;
