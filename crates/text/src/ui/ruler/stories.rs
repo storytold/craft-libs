@@ -115,7 +115,7 @@ fn edge_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     over_a_page(ui, data, Some(RulerFace::Edge))
 }
 
-/// The centred face (the office set's): a bar inset in the strip, ticks centred on it, numbers in place of the
+/// The centred face (the productivity set's): a bar inset in the strip, ticks centred on it, numbers in place of the
 /// whole-unit ticks over the column only.
 #[story(TextRuler<'static>, covers = [], drive = Drive::Never)]
 fn centred_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

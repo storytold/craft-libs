@@ -52,11 +52,11 @@ pub enum RulerFace {
 }
 
 impl RulerFace {
-    /// The face the component set `set` shows: the creative set the edge face, the office set the centred one.
+    /// The face the component set `set` shows: the creative set the edge face, the productivity set the centred one.
     pub const fn of(set: craft_theme::ComponentSet) -> Self {
         match set {
             craft_theme::ComponentSet::Creative => RulerFace::Edge,
-            craft_theme::ComponentSet::Office => RulerFace::Centred,
+            craft_theme::ComponentSet::Productivity => RulerFace::Centred,
         }
     }
 
