@@ -2,7 +2,7 @@
 
 use super::words::PanelWords;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, ListDrag, NoValue, Outcome, Pattern, Props as _, SelectMode, Show as _, ShowCollection as _,
+    Bind, CollectionEvent, ColumnSpec, ListDrag, NoValue, Outcome, Pattern, Props as _, ScrollAnchor, SelectMode, Show as _, ShowCollection as _,
     ShowContainer as _, Sizing, ToggleColumn, request_rename,
 };
 use crate::layout_components::Stack;
@@ -334,6 +334,9 @@ impl<'a> HistoryPanel<'a> {
 
         let shown = stack.show(ui, |ui, stack| {
             let mut target = stack.memory::<MenuTarget>().0;
+            // The row menu holds Rename and Delete only, so it opens only where one of them applies.
+            let renamable = |key: &HistoryKey| enabled && matches!(key, HistoryKey::Snapshot(_));
+            let removable = |key: &HistoryKey| enabled && deletable.contains(key);
             let mut held = current.map_or_else(Selection::default, Selection::single);
             let set = Arc::clone(&deletable);
             let mut list = List::<HistoryKey>::new(words.history_list.clone())
@@ -344,6 +347,7 @@ impl<'a> HistoryPanel<'a> {
                 .empty(words.history_empty.clone())
                 .selection(Bind::bound(&mut held))
                 .sizing(Sizing::Fill)
+                .scroll_anchor(ScrollAnchor::End)
                 .enabled(enabled)
                 .drag_payload(move |drag: &ListDrag<HistoryKey>| set.contains(&drag.grabbed).then(|| drag.clone()));
             if has_source {
@@ -412,15 +416,19 @@ impl<'a> HistoryPanel<'a> {
                     CollectionEvent::Delete(keys) => {
                         picked.extend(keys.into_iter().filter(|key| deletable.contains(key)).map(|key| HistoryEvent::Delete(Some(key))));
                     }
-                    CollectionEvent::ContextMenu(request) => target = Some(request.key),
+                    CollectionEvent::ContextMenu(request) => {
+                        if renamable(&request.key) || removable(&request.key) {
+                            target = Some(request.key);
+                        }
+                    }
                     _ => {}
                 }
             }
             drop(picked);
 
             if let Some(key) = target {
-                let renamable = enabled && matches!(key, HistoryKey::Snapshot(_));
-                let removable = enabled && deletable.contains(&key);
+                let renamable = renamable(&key);
+                let removable = removable(&key);
                 let mut deleted = false;
                 let menu = Menu::context(words.history_list.clone(), &response).show(ui, |ui, _| {
                     if MenuItem::new(words.history_rename.clone()).enabled(renamable).show(ui).ran {
