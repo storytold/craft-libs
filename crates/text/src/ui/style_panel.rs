@@ -7,11 +7,12 @@ use craft_behavior::{IconId, Selection, keyed};
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
 use craft_ui::contract::{
-    ActivateOn, Bind, CollectionEvent, CommandSet, Commands as _, ListDrag, NoValue, Outcome, Pad, Props as _, Remember as _, SelectMode,
+    ActivateOn, Bind, CollectionEvent, CommandSet, Commands as _, ListDrag, NoValue, Outcome, Pad, Props as _, Remember as _, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _,
 };
+use craft_ui::display::Divider;
 use craft_ui::list::{List, ListRow, RowInk};
-use craft_ui::menu::PanelRow;
+use craft_ui::menu::{Menu, MenuItem, PanelRow};
 use craft_ui::runtime::commands::CommandState;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::sections::{FooterAction, FooterBar, Panel};
@@ -37,6 +38,11 @@ craft_ui::words! {
         duplicate: "textStyles.duplicate" = "Duplicate style";
         new_style: "textStyles.new" = "Create new style (from the selected type)";
         delete: "textStyles.delete" = "Delete style";
+        /// The row menu's accessible name.
+        row_menu: "textStyles.rowMenu" = "Style";
+        menu_duplicate: "textStyles.menuDuplicate" = "Duplicate Style";
+        menu_delete: "textStyles.menuDelete" = "Delete Style";
+        menu_redefine: "textStyles.menuRedefine" = "Redefine Style";
         overridden_name: template "textStyles.overriddenName" = "{name}+";
         overridden_spoken: template "textStyles.overriddenSpoken" = "{name}, overridden";
     }
@@ -114,8 +120,9 @@ pub enum TextStyleAction {
     },
     /// Clear Override, with a target whose style is overridden.
     ClearOverride,
-    /// Redefine: the current style takes the target's attributes. Not for character style 0.
-    Redefine,
+    /// Redefine: the style of this id takes the target's attributes: the current style from the footer and the panel
+    /// menu, the row's from its menu. Not for character style 0.
+    Redefine(u64),
     /// New: a style from the selected type when there is a target (`from_selection`), else a default one. The app
     /// opens its Style Options for the new id.
     #[non_exhaustive]
@@ -192,9 +199,7 @@ impl Facts {
         let several = self.selected.len() > 1;
         match command {
             TextStyleCommand::ClearOverride => (self.target && self.overridden).then_some(TextStyleAction::ClearOverride),
-            TextStyleCommand::Redefine => {
-                (self.target && self.current.is_some_and(|id| id != 0 || self.paragraph)).then_some(TextStyleAction::Redefine)
-            }
+            TextStyleCommand::Redefine => self.current.filter(|id| self.target && (*id != 0 || self.paragraph)).map(TextStyleAction::Redefine),
             TextStyleCommand::New => Some(TextStyleAction::new_style(self.target, false)),
             TextStyleCommand::Duplicate if several => Some(TextStyleAction::DuplicateHighlighted),
             TextStyleCommand::Delete if several => Some(TextStyleAction::DeleteHighlighted),
@@ -205,6 +210,28 @@ impl Facts {
         }
     }
 }
+
+/// The row menu's commands, in its two groups.
+const ROW_MENU: [&[TextStyleCommand]; 2] = [
+    &[TextStyleCommand::Options, TextStyleCommand::Duplicate, TextStyleCommand::Delete],
+    &[TextStyleCommand::Redefine, TextStyleCommand::ClearOverride],
+];
+
+impl Facts {
+    /// The action of the row menu's `command` on the style `row`, which the right-click made the lead of `selected`;
+    /// `None` when its condition doesn't hold. Redefine redefines the row's style, and Clear Override applies it without
+    /// the overrides where a click would apply it (`applies`); the rest act as the footer's.
+    fn row_action(&self, row: u64, command: TextStyleCommand, applies: bool) -> Option<TextStyleAction> {
+        match command {
+            TextStyleCommand::ClearOverride => applies.then_some(TextStyleAction::apply(row, true)),
+            command => Facts { current: Some(row), picked: Some(row), ..self.clone() }.action(command),
+        }
+    }
+}
+
+/// The row whose menu the last context request opened.
+#[derive(Clone, Debug, Default)]
+struct RowMenu(Option<u64>);
 
 /// The footer's buttons: the start group from the start edge, the rest from the end edge.
 const FOOTER: [TextStyleCommand; 6] = [
@@ -237,6 +264,9 @@ const START_ACTIONS: usize = 2;
 /// - With [`highlighting`](Self::highlighting), Shift-click selects a range and Ctrl or Cmd-click adds or removes a
 ///   row without applying. A row dragged onto New or Delete carries every selected style when it is one of them,
 ///   else itself.
+/// - Right-click: selects the row (unless it is selected) and opens its menu: Style Options…, Duplicate Style and Delete
+///   Style act as the footer's with that row as the lead; Redefine Style redefines the row's style, and Clear Override
+///   applies it without the overrides.
 /// - Footer: Clear Override and Redefine at the start edge; Style Options, Duplicate, New and Delete at the end edge,
 ///   each disabled while its condition doesn't hold. The panel menu ([`TextStylesPanel::panel_rows`]) has the same commands under the same conditions.
 /// - Padding: none of its own. The panel is a dock body, docked or floating, and the dock group insets it.
@@ -430,6 +460,12 @@ impl<'a> TextStylesPanel<'a> {
                     if none { styled.ink(RowInk::Dimmed) } else { styled }
                 });
                 let (events, second) = (shown_rows.events, shown_rows.activation_clicks >= 2);
+                if let Some(row) = events.iter().rev().find_map(|event| match event {
+                    CollectionEvent::ContextMenu(request) => Some(request.key),
+                    _ => None,
+                }) {
+                    cx.memory::<RowMenu>().0 = Some(row);
+                }
 
                 let mods = craft_ui::runtime::pointer::mods(ui.ctx());
                 let alt = mods.alt;
@@ -449,6 +485,37 @@ impl<'a> TextStylesPanel<'a> {
                             }
                         }
                         _ => {}
+                    }
+                }
+
+                if let Some(row) = cx.memory::<RowMenu>().0.filter(|row| rows.iter().any(|shown| shown.id == *row)) {
+                    let selected = selection.reborrow().read(cx).and_then(|held| held.same().map(|held| held.items.clone())).unwrap_or_default();
+                    let facts = Facts { selected, ..cx.memory::<Facts>().clone() };
+                    let applies = target && (paragraph || text_selected);
+                    let label = |command: TextStyleCommand| match command {
+                        TextStyleCommand::Options => &words.options,
+                        TextStyleCommand::Duplicate => &words.menu_duplicate,
+                        TextStyleCommand::Delete => &words.menu_delete,
+                        TextStyleCommand::Redefine => &words.menu_redefine,
+                        _ => &words.clear_override,
+                    };
+                    let menu = Menu::context(words.row_menu.clone(), &shown_rows.response).show(ui, |ui, _| {
+                        let mut ran = None;
+                        for (at, group) in ROW_MENU.into_iter().enumerate() {
+                            if at > 0 {
+                                Divider::horizontal().show(ui);
+                            }
+                            for &command in group {
+                                let found = facts.row_action(row, command, applies);
+                                if MenuItem::new(label(command).clone()).enabled(found.is_some()).show(ui).ran {
+                                    ran = found;
+                                }
+                            }
+                        }
+                        ran
+                    });
+                    if let Some(found) = menu.inner.flatten() {
+                        action.set(Some(found));
                     }
                 }
             });

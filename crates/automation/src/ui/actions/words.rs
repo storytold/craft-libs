@@ -39,6 +39,16 @@ craft_ui::words! {
         /// The panel menu's submenu-free title of the row menu.
         row_menu: "actions.rowMenu" = "Action";
         save_set: "actions.saveSet" = "Save Set…";
+        menu_new_action: "actions.menuNewAction" = "New Action…";
+        menu_new_set: "actions.menuNewSet" = "New Set…";
+        duplicate_set: "actions.duplicateSet" = "Duplicate Set";
+        delete_set: "actions.deleteSet" = "Delete Set";
+        set_options: "actions.setOptions" = "Set Options…";
+        menu_play: "actions.menuPlay" = "Play";
+        menu_record: "actions.menuRecord" = "Record";
+        duplicate: "actions.duplicate" = "Duplicate";
+        action_options: "actions.actionOptions" = "Action Options…";
+        batch: "actions.batch" = "Batch…";
         keyboard_shortcuts: "actions.keyboardShortcuts" = "Keyboard Shortcuts";
         /// The shortcut menu's "no shortcut" row.
         none: "actions.none" = "None";

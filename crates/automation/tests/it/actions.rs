@@ -313,3 +313,37 @@ fn shift_clicking_a_set_selects_the_range_and_delete_reports_it_once() {
     assert!(shared.borrow().state.selected_sets.is_empty(), "a click on an action ends the range");
     assert_eq!(shared.borrow().state.selected, Some(ActionSelection::Action(1)));
 }
+
+/// A right-click at `pos`, with the pointer moved there first.
+fn right_click(fixture: &mut Fixture, pos: Pos2) {
+    fixture.frame(vec![pointer::moved(pos)]);
+    fixture.frame(vec![pointer::secondary(pos, true)]);
+    fixture.frame(vec![pointer::secondary(pos, false)]);
+    fixture.idle(2);
+}
+
+/// What the row `item` of the menu a right-click on `row` opens reports.
+fn menu_ran(fixture: &mut Fixture, shared: &Shared, row: &str, item: &str) -> Vec<ActionsEvent> {
+    let at = node(fixture, row).center();
+    right_click(fixture, at);
+    let at = node(fixture, item).center();
+    click(fixture, at);
+    take(shared)
+}
+
+/// A right-click on an action or a set selects it and opens its menu, whose rows report their event for that row;
+/// Play reports nothing while an action plays.
+#[trial]
+fn a_rows_menu_selects_the_row_and_reports_its_rows_for_it() {
+    let (mut fixture, shared) = rig(app(two_sets()));
+    assert_eq!(menu_ran(&mut fixture, &shared, "First", "Action Options…"), [ActionsEvent::ActionOptions(1)]);
+    assert_eq!(shared.borrow().state.selected, Some(ActionSelection::Action(1)), "the right-click selects the action");
+    assert_eq!(menu_ran(&mut fixture, &shared, "Second", "Duplicate"), [ActionsEvent::Duplicate(ActionSelection::Action(2))]);
+    assert_eq!(menu_ran(&mut fixture, &shared, "Alpha", "Delete Set"), [ActionsEvent::Delete(ActionSelection::Set("Alpha".into()))]);
+    assert_eq!(shared.borrow().state.selected, Some(ActionSelection::Set("Alpha".into())), "the right-click selects the set");
+
+    let mut playing = app(two_sets());
+    playing.host.playing = true;
+    let (mut fixture, shared) = rig(playing);
+    assert_eq!(menu_ran(&mut fixture, &shared, "First", "Play"), [], "Play is off while an action plays");
+}

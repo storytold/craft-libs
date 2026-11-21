@@ -234,6 +234,8 @@ pub enum ActionsEvent {
     InsertStop,
     /// Batch… with this action (the app's dialog).
     Batch(usize),
+    /// Action Options… from an action's menu: the app's dialog for this action's name, set, function key and colour.
+    ActionOptions(usize),
     /// Load Actions… (the app's file dialog).
     Load,
     /// Clear All Actions: the app asks with [`LibraryPrompt::ClearAll`](super::LibraryPrompt) and
@@ -378,7 +380,9 @@ impl Default for Session {
 ///   all); a double click on an action's name renames it, elsewhere on an action it plays it. The
 ///   cells sweep down their column as one gesture. A drag moves an action (into or out of a set)
 ///   or a step (within or between actions), or drops it on the footer's Delete. Right-click on an
-///   action opens Keyboard Shortcuts and Color; on a set, Save Set….
+///   action or a set selects it and opens its menu: on an action Play, Record, Duplicate, Delete,
+///   Action Options…, Batch…, Keyboard Shortcuts and Color; on a set New Action…, New Set…,
+///   Duplicate Set, Delete Set, Set Options… and Save Set….
 /// - **Keys**: the rows are one Tab stop: arrows move, Left and Right close and open, Enter plays
 ///   an action or toggles a set, Space toggles the include cell, F2 renames, Delete deletes the
 ///   selection (not an action while recording), Cmd/Ctrl+] and [ move the row, Shift to the ends. The footer
