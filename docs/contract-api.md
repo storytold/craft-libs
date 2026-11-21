@@ -2190,7 +2190,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn focus_arrived_by_key(&self) -> Option<PartRef>`. [`focus_arrived`](Focus::focus_arrived) when the focus record says the keyboard or a
   - `fn is_focused(&self) -> bool`. The component holds key focus.
   - `fn focus_visible(&self) -> bool`. The component holds focus and shows it.
-  - `fn reveal(&mut self, rect: Rect)`. Asks the nearest scroll owner to bring `rect` into view.
+  - `fn reveal(&mut self, rect: Rect)`. Asks the scroll owner around the component to bring `rect` into view.
   - `fn take_scroll_moves(&mut self) -> Vec<(NavMove, MoveMods)>`. For a container that is its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`): the
   - `fn take_reveal(&mut self, view: Rect) -> Option<Vec2>`. For a container that is its body's scroll owner with a view of its own: the reveal a child asked of it, as the
   - `fn register_menu_bar(&mut self)`. Registers that this component is a menu bar that takes the menu-bar keys of the next input hook (9.7).
@@ -5095,7 +5095,6 @@ Reading text parts in trials: the widget id, the caret and the text a frame pain
 The wheel service from a trial's side: registering takers and reading their shares.
 
 - `craft_ui::testing::wheel::focus`: `pub fn focus(ctx: &Context, id: Id)`. Gives key focus to the widget `id`.
-- `craft_ui::testing::wheel::nearest_scroll_owner`: `pub fn nearest_scroll_owner(ctx: &Context, rect: egui::Rect) -> Option<Id>`. The taker of last pass a reveal of `rect` goes to outside every declared scroll owner: the innermost scroll region
 - `craft_ui::testing::wheel::register`: `pub fn register(ctx: &Context, taker: WheelTaker<Id>)`. Registers `taker` for the next pass's split.
 - `craft_ui::testing::wheel::take`: `pub fn take(ctx: &Context, id: Id) -> Option<Vec2>`. The scroll `id` takes this pass, if it has a share.
 - `craft_ui::testing::wheel::take_share`: `pub fn take_share(ctx: &Context, id: Id) -> Option<craft_behavior::Wheel>`. The whole share `id` takes this pass: scroll, zoom and the pointer a zoom is about.

@@ -24,9 +24,3 @@ pub fn take_share(ctx: &Context, id: Id) -> Option<craft_behavior::Wheel> {
 pub fn focus(ctx: &Context, id: Id) {
     fixture::focus(ctx, id);
 }
-
-/// The taker of last pass a reveal of `rect` goes to outside every declared scroll owner: the innermost scroll region
-/// that meets it.
-pub fn nearest_scroll_owner(ctx: &Context, rect: egui::Rect) -> Option<Id> {
-    wheel::nearest_scroll_owner(ctx, rect)
-}
