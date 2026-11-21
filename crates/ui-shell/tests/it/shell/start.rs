@@ -210,6 +210,40 @@ fn the_home_screen_places_navigation_to_the_left_of_recent_files() {
     assert!(rect("GitHub").top() - rect("Discord").bottom() >= 6.0);
 }
 
+/// The Home rail's links are rows as wide as the rail, as New and Open are, not inline links; the selected row (Home)
+/// shows a bar at its leading edge and the others none.
+#[trial]
+fn the_home_rail_shows_its_links_as_rows_with_a_bar_on_the_selected_one() {
+    use egui::{Shape, vec2};
+
+    let (mut fixture, _) = home_screen(true);
+    fixture.room(vec2(1100.0, 700.0)).settle();
+    let new = fixture.by_label("New…").expect("New").rect;
+    let rows: Vec<_> =
+        ["Home", "Learn", "Website", "Discord", "GitHub"].into_iter().map(|label| (label, fixture.by_label(label).expect(label).rect)).collect();
+    for (label, row) in &rows {
+        assert!((row.width() - new.width()).abs() < 1.0, "{label} {row:?} is a row as wide as New {new:?}");
+    }
+    let rect = |label: &str| rows.iter().find(|(name, _)| *name == label).map(|(_, row)| *row).expect(label);
+    // Upright lines at the rail's leading edge: the selected row's bar.
+    let bars: Vec<_> = fixture
+        .frame_shapes()
+        .into_iter()
+        .filter_map(|shape| match shape {
+            Shape::LineSegment { points, .. } if (points[0].x - points[1].x).abs() < 0.5 && (points[0].x - new.left()).abs() <= 2.0 => Some(points),
+            _ => None,
+        })
+        .collect();
+    let on = |label| {
+        let row = rect(label);
+        bars.iter().any(|p| row.y_range().contains(p[0].y) && row.y_range().contains(p[1].y))
+    };
+    assert!(on("Home"), "the selected Home row has a bar at its leading edge: {bars:?}");
+    for label in ["Learn", "Website", "Discord", "GitHub"] {
+        assert!(!on(label), "{label} is not selected and has no bar: {bars:?}");
+    }
+}
+
 /// A desktop Recent tile gives its picture and filename room while keeping the whole card clickable.
 #[trial]
 fn desktop_home_recent_cards_give_the_picture_and_caption_room() {

@@ -57,6 +57,9 @@ impl Document {
 pub struct Menu {
     /// The title in the bar.
     pub title: String,
+    /// The title's English name, when `title` is a translation: the bar takes the mnemonic of a title the keyboard
+    /// can't type from it.
+    pub english: Option<String>,
     /// What the menu is for.
     pub role: MenuRole,
     /// The menu's entries, top to bottom.
@@ -145,6 +148,8 @@ pub enum Node {
     Submenu {
         /// The submenu's title.
         label: String,
+        /// The title's English name, when `label` is a translation ([`Menu::english`]).
+        english: Option<String>,
         /// The submenu's entries.
         children: Vec<Node>,
         /// The place a layout gives it, if any.
@@ -172,6 +177,9 @@ pub struct Item {
     pub command: CommandRef,
     /// The text shown.
     pub label: String,
+    /// The label's English name, when `label` is a translation. A label the keyboard can't type (Chinese, Japanese,
+    /// Korean…) takes its mnemonic from it in the in-window bar, and the Help search matches it on every target.
+    pub english: Option<String>,
     /// `cmd` is ⌘ and `ctrl` the Control key: ⌃⌘M and ⌘M are different shortcuts.
     pub shortcut: Option<Chord>,
     /// Whether the item can be chosen.
@@ -354,6 +362,7 @@ impl Item {
         Item {
             command: command.into(),
             label: label.into(),
+            english: None,
             shortcut: None,
             enabled: true,
             kind: ItemKind::Plain,
@@ -402,6 +411,12 @@ impl Item {
         self
     }
 
+    /// Set the label's English name ([`Item::english`] field).
+    pub fn english(mut self, english: impl Into<String>) -> Item {
+        self.english = Some(english.into());
+        self
+    }
+
     /// Show the item only on `platforms`.
     pub fn platforms(mut self, platforms: Platforms) -> Item {
         self.platforms = platforms;
@@ -435,7 +450,17 @@ impl Node {
 
     /// A submenu shown on every platform.
     pub fn submenu(label: impl Into<String>, children: Vec<Node>) -> Node {
-        Node::Submenu { label: label.into(), children, role: None, platforms: Platforms::ALL }
+        Node::Submenu { label: label.into(), english: None, children, role: None, platforms: Platforms::ALL }
+    }
+
+    /// Set the English name of an item's label or a submenu's title.
+    pub fn english(mut self, english: impl Into<String>) -> Node {
+        match &mut self {
+            Node::Item(it) => it.english = Some(english.into()),
+            Node::Submenu { english: e, .. } => *e = Some(english.into()),
+            Node::Separator | Node::Standard { .. } => {}
+        }
+        self
     }
 
     /// Give an item or a submenu a role: `Node::submenu("Theme", pages).role(ItemRole::Appearance)`.
@@ -462,7 +487,13 @@ impl Node {
 impl Menu {
     /// A menu with no special role.
     pub fn new(title: impl Into<String>, children: Vec<Node>) -> Menu {
-        Menu { title: title.into(), role: MenuRole::Other, children }
+        Menu { title: title.into(), english: None, role: MenuRole::Other, children }
+    }
+
+    /// Set the title's English name ([`Menu::english`] field).
+    pub fn english(mut self, english: impl Into<String>) -> Menu {
+        self.english = Some(english.into());
+        self
     }
 
     /// Set the menu's role.
@@ -580,6 +611,8 @@ pub struct Row {
     pub command: CommandRef,
     /// The text shown.
     pub label: String,
+    /// The label's English name, when `label` is a translation ([`Item::english`]).
+    pub english: Option<String>,
     /// The row's shortcut.
     pub shortcut: Option<Chord>,
     /// Whether the row can be chosen.
@@ -601,6 +634,7 @@ impl Row {
             path: path.iter().map(|s| (*s).to_owned()).collect(),
             command: command.into(),
             label: label.into(),
+            english: None,
             shortcut: None,
             enabled: true,
             kind: ItemKind::Plain,
@@ -608,6 +642,12 @@ impl Row {
             tooltip: None,
             alternate: None,
         }
+    }
+
+    /// Set the label's English name.
+    pub fn english(mut self, english: impl Into<String>) -> Row {
+        self.english = Some(english.into());
+        self
     }
 
     /// Whether the row can be chosen.
@@ -682,6 +722,7 @@ pub fn from_items(tops: &[&str], rows: &[Row]) -> MenuBar {
             match slot {
                 Slot::Leaf(it) if it.label == "---" => out.push(Node::Separator),
                 Slot::Leaf(it) => out.push(Node::Item(Item {
+                    english: it.english.clone(),
                     shortcut: it.shortcut,
                     enabled: it.enabled,
                     kind: it.kind,
