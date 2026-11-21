@@ -66,6 +66,27 @@ fn adam7_compressions() {
 }
 
 #[test]
+fn png_from_borrowed_rgba8_matches_encoding_an_image() {
+    let img = synth(37, 23, ChannelLayout::Rgba, SampleType::U8, 9042, 0.5);
+    for interlace in [false, true] {
+        let opts = EncodeOptions { png_interlaced: interlace, ..Default::default() };
+        let borrowed = encode_png_rgba8(img.width(), img.height(), img.data(), &opts).unwrap();
+        assert_eq!(borrowed, encode(&img, Format::Png, &opts).unwrap(), "interlaced {interlace}");
+        assert_eq!(decode(&borrowed).unwrap().data(), img.data());
+    }
+}
+
+#[test]
+fn png_from_borrowed_rgba8_rejects_a_buffer_of_the_wrong_size() {
+    let pixels = [0u8; 4 * 4 * 4];
+    let opts = EncodeOptions::default();
+    for (w, h, data) in [(4, 4, &pixels[..pixels.len() - 1]), (4, 3, &pixels[..]), (0, 4, &[][..])] {
+        let result = encode_png_rgba8(w, h, data, &opts);
+        assert!(matches!(result, Err(CodecError::InvalidImage(_))), "{w}x{h} with {} bytes: {result:?}", data.len());
+    }
+}
+
+#[test]
 fn png_palette_and_low_bit_depth_expand() {
     // Build a 2-bit gray PNG and a palette PNG with tRNS using the png crate.
     let mut out = Vec::new();
