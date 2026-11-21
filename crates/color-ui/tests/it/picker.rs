@@ -4,13 +4,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::Mixed;
-use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorPopover, ColorReadout, ColorWarning, PickedColor};
+use craft_color_ui::ui::{
+    ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorPopover, ColorReadout, ColorWarning, PickedColor, PickerLibrary, PickerSwatches,
+};
 use craft_host::{AppInfo, Host};
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, OklchModel, RgbModel, Rgba, Size, Srgba, ThemeId};
 use craft_ui::contract::{Bind, Role, ShowContainer as _};
 use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rect, vec2};
 
@@ -352,6 +355,59 @@ fn the_color_picker_dialog_stands_its_buttons_over_the_second_group_in_photoshop
         assert!((1.9..=2.3).contains(&wide), "{look:?}: the dialog is about twice as wide as the area: {wide}");
         assert!((1.4..=1.8).contains(&tall), "{look:?}: and about one and a half times as tall: {tall}");
     }
+}
+
+/// The Color Swatches button switches the dialog to the swatch view, which marks the cell of the current colour; a click
+/// on another cell is an edit that OK answers. A remembered library past the end shows the last library, and an empty
+/// library shows the notice.
+#[trial]
+fn the_color_picker_dialogs_swatch_view_marks_the_current_colour_and_a_pick_is_an_edit() {
+    let (red, blue, green) = (Srgba::rgb(1.0, 0.0, 0.0), Srgba::rgb(0.0, 0.0, 1.0), Srgba::rgb(0.0, 1.0, 0.0));
+    let library = |name: &'static str, swatches: &[(&'static str, Srgba)]| {
+        PickerLibrary::new(name, swatches.iter().map(|(name, color)| (Label::from(*name), *color)).collect())
+    };
+    let open = |libraries: Vec<PickerLibrary>| {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let dialog = ColorPickerDialog::new("fill", "Fill", red).swatch_view(PickerSwatches::new(libraries, "No swatches"));
+        dialogs.borrow_mut().open(dialog);
+        fixture.idle(6);
+        (dialogs, fixture)
+    };
+    let id = dialog_id(("color-picker", "fill"));
+
+    let (dialogs, mut fixture) = open(vec![library("Basic", &[("Red", red), ("Blue", blue)])]);
+    let toggle = fixture.by_label("Color Swatches").expect("the dialog shows the Color Swatches button");
+    fixture.click(&toggle).idle(4);
+    let selected = |fixture: &Fixture, name: &str| {
+        let cell = fixture.by_label(name).unwrap_or_else(|| panic!("the swatch view shows {name}"));
+        fixture.tree().data_of(cell.node).and_then(|data| data.is_selected()).unwrap_or(false)
+    };
+    assert!(selected(&fixture, "Red"), "the cell equal to the current colour is marked");
+    assert!(!selected(&fixture, "Blue"), "and no other");
+    let blue_cell = fixture.by_label("Blue").expect("the blue cell");
+    fixture.click(&blue_cell).idle(4);
+    let current = dialogs.borrow().get::<ColorPickerDialog>().and_then(|d| d.current()).map(|picked| picked.color.to_hex());
+    assert_eq!(current, Some(blue.to_hex()), "a click on a cell edits the colour");
+    let ctx = fixture.ctx().clone();
+    assert!(dialogs.borrow_mut().confirm::<ColorPickerDialog>(&ctx));
+    let answered = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).map(|result| result.picked.color.to_hex());
+    assert_eq!(answered, Some(blue.to_hex()), "OK answers the picked colour");
+
+    let (dialogs, mut fixture) = open(vec![library("Basic", &[("Red", red)]), library("Spare", &[("Green", green)])]);
+    let ctx = fixture.ctx().clone();
+    assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "swatches", serde_json::json!(true)), Ok(()));
+    assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "library", serde_json::json!(9)), Ok(()));
+    fixture.idle(4);
+    assert!(fixture.by_label("Green").is_some(), "a library past the end shows the last library");
+
+    let (dialogs, mut fixture) = open(vec![library("Empty", &[])]);
+    let ctx = fixture.ctx().clone();
+    assert_eq!(dialogs.borrow_mut().set_json_field(&ctx, id, "swatches", serde_json::json!(true)), Ok(()));
+    fixture.idle(4);
+    assert!(fixture.texts().iter().any(|run| run.text == "No swatches"), "an empty library shows the notice");
 }
 
 /// The Compact picker's width is set by the area and the strip, and its rows take that width; its popover is as wide

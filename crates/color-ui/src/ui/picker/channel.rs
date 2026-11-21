@@ -178,12 +178,13 @@ pub struct ChannelRow<'a> {
     /// Whether the track shows over the transparency checkerboard.
     checker: bool,
     unit: ChannelUnit,
+    marks: &'a [f64],
 }
 
 impl<'a> ChannelRow<'a> {
     /// A row named `label` over `value`, ruled by `rule`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, f64>, rule: ChannelRule) -> Self {
-        ChannelRow { label: label.into(), short: None, value, rule, track: None, checker: false, unit: ChannelUnit::None }
+        ChannelRow { label: label.into(), short: None, value, rule, track: None, checker: false, unit: ChannelUnit::None, marks: &[] }
     }
 
     /// Shows `short` at the line's start in place of the label, which stays the row's name.
@@ -213,14 +214,14 @@ impl<'a> ChannelRow<'a> {
     /// The ticks under the track, passed to `SliderField::marks`; not the labelled form, whose caption line has no room
     /// in a channel row.
     #[must_use]
-    pub fn marks(self, marks: &'a [f64]) -> Self {
-        let _ = marks;
-        todo!("co.K9")
+    pub fn marks(mut self, marks: &'a [f64]) -> Self {
+        self.marks = marks;
+        self
     }
 
     /// Shows the row; the edit of the slider or the field, `None` when the row did not run.
     pub fn show(self, ui: &mut Ui) -> Option<EditResponse<f64>> {
-        let ChannelRow { label, short, mut value, rule, track, checker, unit } = self;
+        let ChannelRow { label, short, mut value, rule, track, checker, unit, marks } = self;
         let side = match short {
             Some(short) => SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Label::from(short)))),
             None => SideLabel::new(),
@@ -229,6 +230,7 @@ impl<'a> ChannelRow<'a> {
             .side(side.scrub(true))
             .show(ui, |ui, _| {
                 channel_slider(label.clone(), value.reborrowed(), &rule, unit, track.clone().map(|stops| (stops, checker)))
+                    .marks(marks)
                     .layout(SliderFieldLayout::Inline)
                     .field_sizing(Sizing::Content)
                     .thumb(SliderThumb::Triangle)

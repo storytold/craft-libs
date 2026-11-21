@@ -14,12 +14,17 @@ use craft_cms::convert::CmykConverter;
 use craft_host::Host;
 use craft_host::target::Caps;
 use craft_settings::Remembered;
+use craft_theme::variant::Tone;
 use craft_theme::{ColorModel, Srgba, builtin_models};
-use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
+use craft_ui::choice::SwatchSpacing;
+use craft_ui::contract::{Bind, CanvasGesture, Entry, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::{
     ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
+use craft_ui::layout_components::Stack;
+use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::overlay::CloseReason;
@@ -29,7 +34,7 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use egui::{Context, Id, Ui};
 use std::sync::Arc;
 
-use super::{ColorPicker, ColorPickerLayout, ColorWarning, Gamut, PickedColor, ScreenPickGesture};
+use super::{ColorPicker, ColorPickerLayout, ColorWarning, Gamut, PickedColor, ScreenPickGesture, SwatchPalette};
 use crate::{AreaMode, CmykModel, not_web_safe, web_safe};
 
 craft_ui::words! {
@@ -44,6 +49,9 @@ craft_ui::words! {
         add_to_swatches: "colorPickerDialog.addToSwatches" = "Add to Swatches";
         out_of_gamut: "colorPickerDialog.outOfGamut" = "Out of gamut for printing: click for the nearest printable color";
         not_web_color: "colorPickerDialog.notWebColor" = "Not a web color: click for the nearest web color";
+        color_swatches: "colorPickerDialog.colorSwatches" = "Color Swatches";
+        color_models: "colorPickerDialog.colorModels" = "Color Models";
+        library: "colorPickerDialog.library" = "Swatch library";
     }
 }
 
@@ -76,8 +84,7 @@ pub struct PickerLibrary {
 impl PickerLibrary {
     /// A library named `name` of `swatches`.
     pub fn new(name: impl Into<Label>, swatches: Vec<(Label, Srgba)>) -> Self {
-        let _ = (name, swatches);
-        todo!("co.K10")
+        PickerLibrary { name: name.into(), swatches }
     }
 }
 
@@ -95,9 +102,38 @@ pub struct PickerSwatches {
 impl PickerSwatches {
     /// Swatch libraries `libraries`, with `empty` as the notice for an empty one.
     pub fn new(libraries: Vec<PickerLibrary>, empty: impl Into<Label>) -> Self {
-        let _ = (libraries, empty);
-        todo!("co.K10")
+        PickerSwatches { libraries, empty: empty.into() }
     }
+}
+
+/// The Color Swatches view: the library `Select` over the chosen library's spaced palette, whose cell equal to the colour
+/// in `held` is marked and whose pick replaces `held`; the notice for a library without swatches. `library` is the
+/// remembered index, which may lie past the end; it is written only when the user chooses another.
+fn show_swatches(ui: &mut Ui, view: &PickerSwatches, library: &mut usize, held: &mut Mixed<PickedColor>, library_label: &Label) {
+    let mut chosen = (*library).min(view.libraries.len().saturating_sub(1));
+    Stack::new().show(ui, |ui, _| {
+        if !view.libraries.is_empty() {
+            let entries: Vec<Entry<usize>> = view.libraries.iter().enumerate().map(|(i, lib)| Entry::new(i, lib.name.clone())).collect();
+            let shown = Select::new(library_label.clone(), Bind::given(chosen), &entries).show(ui);
+            if let Some(next) = shown.value().copied() {
+                chosen = next;
+                *library = next;
+            }
+        }
+        match view.libraries.get(chosen).filter(|lib| !lib.swatches.is_empty()) {
+            Some(lib) => {
+                // A colour that is not set marks no cell of a library without it; black stands for "none yet".
+                let color = held.same().map_or(Srgba::BLACK, |picked| picked.color);
+                let shown = SwatchPalette::new(lib.name.clone(), Bind::given(color), &lib.swatches).spacing(SwatchSpacing::Spaced).show(ui);
+                if let Some(picked) = shown.edit.as_ref().and_then(|edit| edit.value()).copied() {
+                    *held = Mixed::Same(PickedColor::rgb(picked));
+                }
+            }
+            None => {
+                Notice::new(Tone::Neutral, view.empty.clone()).layout(NoticeLayout::Centred).show(ui);
+            }
+        }
+    });
 }
 
 /// The remembered scope of [`ColorPickerMemory`].
@@ -128,12 +164,12 @@ enum Title {
 /// dialog takes the picker's size: one arrangement in every room.
 ///
 /// - **Opening:** the hex field has the focus with its text selected, so typing replaces it. The field shows the
-///   component it showed last time and Only Web Colors is as it was left ([`ColorPickerMemory`]); with Only Web Colors
+///   component and view it showed last time and Only Web Colors is as it was left ([`ColorPickerMemory`]); with Only Web Colors
 ///   on, the opening colour is snapped to the nearest web colour and the compare swatch's "current" half shows the
 ///   snapped colour, so OK without an edit changes nothing (storytold/photocraft#4995).
-/// - **Warnings:** the out-of-gamut chip shows when the colour leaves the CMYK gamut of the [`cmyk`](Self::cmyk)
-///   converter (ΔE over 3); with Only Web Colors off, the web-colour chip shows for a colour that is not one. A click
-///   on a chip takes its nearest colour.
+/// - **Warnings:** the out-of-gamut chip shows when the colour leaves the [`gamut`](Self::gamut) (the CMYK gamut of the
+///   [`cmyk`](Self::cmyk) converter when none is given); with Only Web Colors off, the web-colour chip shows for a colour
+///   that is not one. A click on a chip takes its nearest colour.
 /// - **Eyedroppers:** while the dialog is the top dialog it files an `EyedropperRequest` through
 ///   [`requests`](Self::requests); the host runs its canvas dropper, which samples under the dialog (the dialog
 ///   registers [`canvas`](Self::canvas) with the sampler) and answers with `HostRequests::answer_eyedropper`. The
@@ -159,6 +195,8 @@ pub struct ColorPickerDialog {
     remember: bool,
     add_to_swatches: bool,
     cmyk: Option<CmykConverter>,
+    gamut: Option<Gamut<'static>>,
+    swatches: Option<PickerSwatches>,
     eyedropper: bool,
     canvas_samples: bool,
     canvas: Option<Id>,
@@ -213,6 +251,8 @@ impl ColorPickerDialog {
             remember: true,
             add_to_swatches: true,
             cmyk: None,
+            gamut: None,
+            swatches: None,
             eyedropper: true,
             canvas_samples: true,
             canvas: None,
@@ -232,17 +272,17 @@ impl ColorPickerDialog {
     /// A body button after Cancel switches between Color Models and Color Swatches: a library `Select` over a spaced
     /// `SwatchPalette` with the current colour's cell marked, a pick being an edit. Without it there is no button.
     #[must_use]
-    pub fn swatch_view(self, swatches: PickerSwatches) -> ColorPickerDialog {
-        let _ = swatches;
-        todo!("co.K10")
+    pub fn swatch_view(mut self, swatches: PickerSwatches) -> ColorPickerDialog {
+        self.swatches = Some(swatches);
+        self
     }
 
     /// The gamut the out-of-gamut chip tests with `Gamut::nearest`; without it the `cmyk` converter gives
     /// `Gamut::cmyk`.
     #[must_use]
-    pub fn gamut(self, gamut: Gamut<'static>) -> ColorPickerDialog {
-        let _ = gamut;
-        todo!("co.K12")
+    pub fn gamut(mut self, gamut: Gamut<'static>) -> ColorPickerDialog {
+        self.gamut = Some(gamut);
+        self
     }
 
     /// Fills `{name}` in a given title with `value`, after the title is translated: the title follows a language
@@ -286,9 +326,9 @@ impl ColorPickerDialog {
         self
     }
 
-    /// The document's CMYK converter: the C, M, Y, K fields convert through it and the out-of-gamut chip tests against
-    /// it. Without it the dialog uses the built-in coated converter, as PhotoCraft does for a document without a CMYK
-    /// profile.
+    /// The document's CMYK converter: the C, M, Y, K fields convert through it, and it is the out-of-gamut chip's gamut
+    /// when [`gamut`](Self::gamut) gives none. Without it the dialog uses the built-in coated converter, as PhotoCraft
+    /// does for a document without a CMYK profile.
     #[must_use]
     pub fn cmyk(mut self, converter: &CmykConverter) -> ColorPickerDialog {
         self.cmyk = Some(converter.clone());
@@ -497,17 +537,34 @@ impl StackDialog for ColorPickerDialog {
             }
         };
         let cmyk = CmykModel::new(self.cmyk.clone().unwrap_or_else(|| CmykConverter::coated().clone()));
+        let fallback;
+        let gamut = match &self.gamut {
+            Some(gamut) => gamut,
+            None => {
+                fallback = Gamut::cmyk(cmyk.converter().clone());
+                &fallback
+            }
+        };
         let footer = ResetFooter::new(ui, None, true);
         let changed = self.current != self.opening;
         let mut buttons = footer.buttons(FooterButton::new(common.ok.clone(), DialogRole::Accept).enabled(self.current.is_some()), changed).to_vec();
+        // The buttons after OK and Cancel are placed by position; their indices are read back from the list.
+        let mut toggle_at = None;
+        if self.swatches.is_some() {
+            toggle_at = Some(buttons.len());
+            let label = if self.memory.swatches { words.color_models.clone() } else { words.color_swatches.clone() };
+            buttons.push(FooterButton::new(label, DialogRole::Other).stays_open(true));
+        }
+        let mut add_at = None;
         if self.add_to_swatches {
+            add_at = Some(buttons.len());
             buttons.push(FooterButton::new(words.add_to_swatches.clone(), DialogRole::Other).stays_open(true));
         }
 
         let arm = self.sampling.then_some(self.canvas).flatten();
         let keep_open = self.canvas;
         let screen = self.eyedropper && env.view().shell().caps.contains(Caps::SCREEN_CAPTURE);
-        let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, .. } = self;
+        let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, swatches: view, .. } = self;
         let mut held: Mixed<PickedColor> = current.map_or(Mixed::Mixed, Mixed::Same);
         let (sampled, busy, compare_with) = (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, Mixed::Same)));
         let color = current.map(|current| current.color);
@@ -526,14 +583,19 @@ impl StackDialog for ColorPickerDialog {
                 if let Some(canvas) = arm {
                     cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
+                // PLAN: the swatch view should keep the value fields and replace only the area and strip, which the picker body
+                // (picker/mod.rs, not in this set) lays out; here it replaces the whole picker body.
+                if let Some(view) = view.as_ref().filter(|_| memory.swatches) {
+                    show_swatches(ui, view, &mut memory.library, &mut held, &words.library);
+                    return;
+                }
                 let mut models: Vec<&dyn ColorModel> = builtin_models().into_iter().filter(|model| model.default_on().full).collect();
                 models.push(&cmyk);
                 let mut warnings = Vec::new();
                 if let Some(color) = color {
                     let rgb = [color.r, color.g, color.b];
-                    if let Some(nearest) = cmyk.converter().nearest_in_gamut(rgb, CmykConverter::PICKER_GAMUT_DE) {
-                        warnings
-                            .push(ColorWarning::new(words.out_of_gamut.clone(), Srgba { r: nearest[0], g: nearest[1], b: nearest[2], a: color.a }));
+                    if let Some(nearest) = gamut.nearest(color) {
+                        warnings.push(ColorWarning::new(words.out_of_gamut.clone(), Srgba { a: color.a, ..nearest }));
                     }
                     if !web_only && let Some(nearest) = not_web_safe(rgb) {
                         warnings.push(ColorWarning::web_colors(
@@ -563,12 +625,16 @@ impl StackDialog for ColorPickerDialog {
         self.current = held.same().copied();
 
         let (picked, closed) = (shown.output.picked, shown.output.closed);
+        if picked.is_some() && picked == toggle_at {
+            self.memory.swatches = !self.memory.swatches;
+            return None;
+        }
         let ok = (picked == Some(0) || closed == Some(CloseReason::Enter)) && self.current.is_some();
         if !ok && picked == Some(1) && footer.resetting() {
             self.current = self.opening;
             return None;
         }
-        if picked == Some(2) {
+        if picked.is_some() && picked == add_at {
             self.pending_swatch = self.current;
             return None;
         }
