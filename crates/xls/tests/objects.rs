@@ -167,8 +167,11 @@ fn od(vi: u16, ty: u16, body: &[u8]) -> Vec<u8> {
     cat(&[&vi.to_le_bytes(), &ty.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body])
 }
 
+/// An FBSE holding `blip`: 36 bytes of description (its size at 20), then the BLIP.
 fn fbse(blip: &[u8]) -> Vec<u8> {
-    od(0x0062, 0xF007, &cat(&[&[0u8; 36], blip]))
+    let mut d = [0u8; 36];
+    d[20..24].copy_from_slice(&(blip.len() as u32).to_le_bytes());
+    od(0x0062, 0xF007, &cat(&[&d, blip]))
 }
 
 fn shape(pib: u32, anchor: [u16; 8]) -> Vec<u8> {
@@ -179,12 +182,17 @@ fn shape(pib: u32, anchor: [u16; 8]) -> Vec<u8> {
 
 /// The drawing group (split over a Continue record, as real files do) and one sheet's drawing.
 fn pictures(blips: &[Vec<u8>], shapes: &[u8]) -> (Workbook, Report) {
+    pictures_after(blips, shapes, &[])
+}
+
+/// [`pictures`], with `sheet` records before the sheet's drawing.
+fn pictures_after(blips: &[Vec<u8>], shapes: &[u8], sheet: &[u8]) -> (Workbook, Report) {
     let dgg = od(0x000F, 0xF000, &od(0x002F, 0xF001, &blips.iter().map(|b| fbse(b)).collect::<Vec<_>>().concat()));
     let (first, second) = dgg.split_at(30);
     let dg = od(0x000F, 0xF002, &od(0x000F, 0xF003, shapes));
     // MsoDrawing records are at most 8224 bytes; longer drawings continue in more of them.
     let drawing: Vec<u8> = dg.chunks(8000).flat_map(|c| rec(0x00EC, c)).collect();
-    book(&cat(&[&rec(0x00EB, first), &rec(0x003C, second)]), &drawing)
+    book(&cat(&[&rec(0x00EB, first), &rec(0x003C, second)]), &cat(&[sheet, &drawing]))
 }
 
 #[test]
@@ -212,6 +220,50 @@ fn reads_pictures() {
     assert!(std::sync::Arc::ptr_eq(&p[0].data, &p[2].data));
     assert_eq!((p[2].anchor.dx1, p[2].anchor.dy1), (512, 128));
     assert!(report.warnings.iter().any(|w| w.contains("pictures were damaged")), "{:?}", report.warnings);
+}
+
+/// A picture inside a shape group (with a child anchor in the group's space) is read, at the
+/// cells its share of the group's box falls in.
+#[test]
+fn reads_pictures_inside_groups() {
+    let png = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], b"png"]));
+    let rect = |ty: u16, r: [i32; 4]| od(0, ty, &r.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+    let a: Vec<u8> = [0u16, 1, 0, 1, 0, 3, 0, 3, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let head = od(
+        0x000F,
+        0xF004,
+        &cat(&[&od(0x0002, 0xF00A, &cat(&[&1024u32.to_le_bytes(), &1u32.to_le_bytes()])), &rect(0xF009, [0, 0, 1000, 1000]), &od(0, 0xF010, &a)]),
+    );
+    let opt = od(0x0013, 0xF00B, &cat(&[&0x4104u16.to_le_bytes(), &1u32.to_le_bytes()]));
+    let member = od(0x000F, 0xF004, &cat(&[&opt, &rect(0xF00F, [0, 0, 500, 500])]));
+    let (wb, report) = pictures(&[png], &od(0x000F, 0xF003, &cat(&[&head, &member])));
+    let p = &wb.sheets[0].pictures;
+    assert_eq!(p.len(), 1, "{:?}", report.warnings);
+    // The group covers B2:D4 on columns and rows of the default size: its top-left quarter is B2:C3.
+    assert_eq!(p[0].anchor, ClientAnchor { col1: 1, dx1: 0, row1: 1, dy1: 0, col2: 2, dx2: 0, row2: 2, dy2: 0 });
+}
+
+/// Rows a sheet hides by default (DefaultRowHeight's `fDyZero`) and doesn't list are zero high
+/// when a grouped picture is made cells: with row 1 the only one shown, the top half of a group
+/// over rows 1 to 3 ends half way down row 1.
+#[test]
+fn rows_hidden_by_default_have_no_height() {
+    let png = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], b"png"]));
+    let rect = |ty: u16, r: [i32; 4]| od(0, ty, &r.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+    let a: Vec<u8> = [0u16, 1, 0, 1, 0, 3, 0, 3, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let head = od(
+        0x000F,
+        0xF004,
+        &cat(&[&od(0x0002, 0xF00A, &cat(&[&1024u32.to_le_bytes(), &1u32.to_le_bytes()])), &rect(0xF009, [0, 0, 1000, 1000]), &od(0, 0xF010, &a)]),
+    );
+    let opt = od(0x0013, 0xF00B, &cat(&[&0x4104u16.to_le_bytes(), &1u32.to_le_bytes()]));
+    let member = od(0x000F, 0xF004, &cat(&[&opt, &rect(0xF00F, [0, 0, 500, 500])]));
+    let default_hidden = rec(0x0225, &u16s(&[0x0002, 255]));
+    let row1 = rec(0x0208, &cat(&[&1u16.to_le_bytes(), &[0; 4], &255u16.to_le_bytes(), &[0; 4], &0u32.to_le_bytes()]));
+    let (wb, report) = pictures_after(&[png], &od(0x000F, 0xF003, &cat(&[&head, &member])), &cat(&[&default_hidden, &row1]));
+    let p = &wb.sheets[0].pictures;
+    assert_eq!(p.len(), 1, "{:?}", report.warnings);
+    assert_eq!((p[0].anchor.row2, p[0].anchor.dy2), (1, 128));
 }
 
 #[test]

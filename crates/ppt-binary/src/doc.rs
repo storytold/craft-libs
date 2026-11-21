@@ -54,21 +54,11 @@ pub mod rt {
     pub const PERSIST_DIRECTORY: u16 = 0x1772;
     pub const CRYPT_SESSION: u16 = 0x2F14;
 
-    pub const DGG_CONTAINER: u16 = 0xF000;
-    pub const BSTORE: u16 = 0xF001;
-    pub const DG_CONTAINER: u16 = 0xF002;
-    pub const SPGR_CONTAINER: u16 = 0xF003;
-    pub const SP_CONTAINER: u16 = 0xF004;
-    pub const FBSE: u16 = 0xF007;
-    pub const FSPGR: u16 = 0xF009;
-    pub const FSP: u16 = 0xF00A;
-    pub const FOPT: u16 = 0xF00B;
-    pub const CLIENT_TEXTBOX: u16 = 0xF00D;
-    pub const CHILD_ANCHOR: u16 = 0xF00F;
-    pub const CLIENT_ANCHOR: u16 = 0xF010;
-    pub const CLIENT_DATA: u16 = 0xF011;
-    pub const SECONDARY_FOPT: u16 = 0xF121;
-    pub const TERTIARY_FOPT: u16 = 0xF122;
+    // The Office Drawing records a slide's drawing holds.
+    pub use craft_officeart::rt::{
+        CHILD_ANCHOR, CLIENT_ANCHOR, CLIENT_DATA, CLIENT_TEXTBOX, DG_CONTAINER, DGG_CONTAINER, FOPT, FSP, FSPGR, SECONDARY_FOPT, SP_CONTAINER,
+        SPGR_CONTAINER, TERTIARY_FOPT,
+    };
 }
 
 /// `headerToken` of a `CurrentUserAtom` for an encrypted document.
