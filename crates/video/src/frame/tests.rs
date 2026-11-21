@@ -108,6 +108,43 @@ fn h264_picture_with_a_short_buffer_is_an_error() {
     assert_eq!(VideoFrame::try_from(h264_picture(7)), Err(FrameError::Plane("buffer is shorter than the plane")));
 }
 
+#[cfg(feature = "hap")]
+#[test]
+fn hap_pictures_split_into_rgb_and_alpha() {
+    use crate::hap::Image;
+    let img = Image { width: 2, height: 2, rgba: (1..=16).collect() };
+    let f = VideoFrame::try_from(img).unwrap();
+    assert_eq!((f.family(), f.subsampling(), f.bit_depth()), (ColorFamily::Rgb, Subsampling::S444, 8));
+    assert_eq!(f.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
+    assert_eq!(f.plane(0).unwrap().samples(), &Samples::U8(vec![1, 5, 9, 13]));
+    assert_eq!(f.plane(2).unwrap().samples(), &Samples::U8(vec![3, 7, 11, 15]));
+    assert_eq!(f.alpha().unwrap().samples(), &Samples::U8(vec![4, 8, 12, 16]));
+    assert!(f.pts.is_none());
+}
+
+#[cfg(feature = "hap")]
+#[test]
+fn a_hap_picture_with_the_wrong_size_is_an_error() {
+    use crate::hap::Image;
+    assert!(VideoFrame::try_from(Image { width: 2, height: 2, rgba: vec![0; 15] }).is_err());
+    assert!(VideoFrame::try_from(Image { width: 2, height: 2, rgba: vec![0; 17] }).is_err());
+    assert!(VideoFrame::try_from(Image { width: u32::MAX, height: u32::MAX, rgba: Vec::new() }).is_err());
+}
+
+#[cfg(feature = "hap")]
+#[test]
+fn a_decoded_hap_frame_converts() {
+    use crate::hap::{Decoder, Encoder, Variant};
+    let (w, h) = (20u32, 12u32);
+    let src: Vec<u8> = (0..w * h * 4).map(|i| (i * 5 % 253) as u8).collect();
+    let frame = Encoder::new(w, h, Variant::HapAlpha).unwrap().encode_rgba(&src).unwrap();
+    let img = Decoder::new(w, h).unwrap().decode_rgba(&frame).unwrap();
+    let want_alpha: Vec<u8> = img.rgba.iter().skip(3).step_by(4).copied().collect();
+    let f = VideoFrame::try_from(img).unwrap();
+    assert_eq!((f.width(), f.height()), (20, 12));
+    assert_eq!(f.alpha().unwrap().samples(), &Samples::U8(want_alpha));
+}
+
 #[cfg(feature = "hevc-decode")]
 #[test]
 fn hevc_picture_converts() {
