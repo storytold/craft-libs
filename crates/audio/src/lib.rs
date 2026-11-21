@@ -2,7 +2,7 @@
 #![warn(missing_docs)]
 // The docs link items of every feature; built with fewer features, those links have no target.
 // CI and docs.rs build the docs with all features, where every link must resolve.
-#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks")), allow(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks", feature = "dsd")), allow(rustdoc::broken_intra_doc_links))]
 //! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
 //! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
 //! `wasm32-unknown-unknown`.
@@ -32,7 +32,7 @@
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`; `mpa-encode`: the Layer II encoder), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
 //!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files), [`adpcm`]
-//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM),
+//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM), [`dsd`] (`dsd`: DSF and DSDIFF files to PCM),
 //!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`vmd`] (`vmd-decode`:
 //!   Sierra VMD sound).
 //!
@@ -47,6 +47,10 @@ pub mod adpcm;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
 mod buffer;
+#[cfg(feature = "dsd")]
+pub mod dsd;
+#[cfg(any(feature = "flac-decode", feature = "symphonia"))]
+mod flac_layout;
 #[cfg(feature = "g722")]
 pub mod g722;
 #[cfg(feature = "g726")]
@@ -60,7 +64,14 @@ pub mod mp3;
 pub mod mpa;
 #[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
@@ -70,7 +81,14 @@ pub mod qoa;
 mod read;
 #[cfg(feature = "sbc")]
 pub mod sbc;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 mod track;
 #[cfg(feature = "vmd-decode")]
 pub mod vmd;
@@ -148,7 +166,14 @@ pub use read::{
 };
 #[cfg(feature = "decode-native")]
 pub use read::{RawPcm, aiff_pcm, wav_pcm};
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(any(
     feature = "pcm-encode",

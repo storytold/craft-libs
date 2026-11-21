@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 craft-xml = { workspace = true }
 kurbo = { workspace = true }
 log = "0.4"

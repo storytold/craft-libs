@@ -58,7 +58,12 @@ pub struct Imp<'a> {
     /// Whether a part has relationships of its own, by normalized part name: looked up once
     /// however many embedded objects point at the part.
     pub has_rels: HashMap<String, bool>,
+    /// Warnings for content cut to fit a limit during import.
+    pub warnings: Vec<String>,
 }
+
+/// Import warnings kept; a hostile file with many oversized tables adds no more than this.
+const MAX_IMPORT_WARNINGS: usize = 32;
 
 impl<'a> Imp<'a> {
     fn new(pkg: &'a Package, defaults: &'a dyn Defaults, next: u32, chart_points_cap: usize) -> Self {
@@ -82,6 +87,14 @@ impl<'a> Imp<'a> {
             tag_bytes: 0,
             tags_capped: false,
             has_rels: HashMap::new(),
+            warnings: vec![],
+        }
+    }
+    /// Record something the file lost, and log it.
+    pub fn warn(&mut self, msg: String) {
+        log::warn!("pptx: {msg}");
+        if self.warnings.len() < MAX_IMPORT_WARNINGS {
+            self.warnings.push(msg);
         }
     }
     pub fn alloc(&mut self) -> u32 {
@@ -392,11 +405,26 @@ pub fn import(bytes: &[u8], defaults: &dyn Defaults) -> Result<Presentation, Err
 /// [`import`], plus the parts of the slide list the file names but that couldn't be read (a
 /// missing or truncated slide): those slides are left out, so a caller can say so.
 pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>), Error> {
-    import_with_chart_points(bytes, defaults, chart::MAX_PRESENTATION_CHART_POINTS)
+    import_report(bytes, defaults).map(|(p, lost, _)| (p, lost))
+}
+
+/// [`import_checked`], plus warnings for content the file had that was cut to fit a limit (a
+/// table past the cell cap keeps its leading rows).
+pub fn import_report(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>, Vec<String>), Error> {
+    import_report_with_chart_points(bytes, defaults, chart::MAX_PRESENTATION_CHART_POINTS)
 }
 
 /// [`import_checked`] with the presentation's chart point budget set (tests lower it).
 pub(crate) fn import_with_chart_points(bytes: &[u8], defaults: &dyn Defaults, chart_points_cap: usize) -> Result<(Presentation, Vec<String>), Error> {
+    import_report_with_chart_points(bytes, defaults, chart_points_cap).map(|(p, lost, _)| (p, lost))
+}
+
+/// [`import_report`] with the presentation's chart point budget set.
+fn import_report_with_chart_points(
+    bytes: &[u8],
+    defaults: &dyn Defaults,
+    chart_points_cap: usize,
+) -> Result<(Presentation, Vec<String>, Vec<String>), Error> {
     let mut lost_slides: Vec<String> = vec![];
     let pkg = Package::open(bytes)?;
     let root_rels = pkg.rels("");
@@ -438,7 +466,7 @@ pub(crate) fn import_with_chart_points(bytes: &[u8], defaults: &dyn Defaults, ch
     p.media = std::mem::take(&mut imp.media);
     p.next_id = imp.next;
     p.fix_next_id();
-    Ok((p, lost_slides))
+    Ok((p, lost_slides, imp.warnings))
 }
 
 /// Masters, layouts and slides to read, in file order and without duplicates: (master paths,
@@ -602,6 +630,7 @@ fn read_slides(
         let mut slide = read_slide(imp, &part, doc, *id, layout);
         if let Some(notes) = slide_notes(imp, &part, &mut owned_parts) {
             slide.notes = notes;
+            slide.has_notes_slide = true;
         }
         read_slide_comments(pkg, pres_part, &part, &mut slide, &mut owned_parts);
         file_slide_ids.insert(*file_id, *id);

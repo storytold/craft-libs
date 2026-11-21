@@ -3,8 +3,8 @@
 //! [`read`] turns a `.docx` package into a [`craft_wordmodel::Document`]; [`write`] does the
 //! reverse. Both are written from the public specification. The reader is lenient (unknown
 //! markup is skipped, bad numbers fall back to defaults) and bounded (zip entry sizes, total
-//! decompressed size, XML depth and element counts are capped), so hostile input yields an
-//! error or a best-effort document, never a panic.
+//! decompressed size, XML depth, element counts per part and a package-wide element budget are
+//! capped), so hostile input yields an error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 // The code came from an app whose lints allow this.
 #![allow(clippy::type_complexity)]
@@ -49,12 +49,12 @@ pub use crypt::{
     DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_standard_for_tests,
     encrypt_with_spin_count, is_encrypted, protection_hash,
 };
-pub use flat::{XmlKind, sniff_xml, write as write_flat};
+pub use flat::{XmlKind, sniff_xml, write as write_flat, write_with_options as write_flat_with_options};
 pub use fonts::{EmbeddedFont, embedded_fonts};
 pub use read::{AltChunk, ChunkImporter, ReadOptions, read};
 pub use smart_art::smart_art_items;
 pub use wordml2003_write::write as write_wordml2003;
-pub use write::{write, write_as};
+pub use write::{WriteOptions, write, write_as, write_as_with_options};
 
 /// Largest `.xml` file read as a Word XML document.
 pub const MAX_XML_FILE: usize = 1 << 30;
@@ -165,6 +165,12 @@ impl Flavor {
     }
 }
 
+/// Bound the tooltip at both file boundaries. A whole link can have many formatted runs.
+fn bounded_link_tooltip(text: &str) -> Option<&str> {
+    const MAX_BYTES: usize = 4096;
+    text.get(..text.floor_char_boundary(MAX_BYTES)).filter(|tip| !tip.is_empty())
+}
+
 /// Errors from reading or writing a DOCX package.
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum DocxError {
@@ -196,4 +202,7 @@ pub enum DocxError {
     /// (or encrypting failed).
     #[error("encrypted document: {0}")]
     Encryption(String),
+    /// The retained mail-merge settings cannot be written with their original source.
+    #[error("mail merge: {0}")]
+    MailMerge(String),
 }
