@@ -357,7 +357,15 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     drawn.sort_by_key(|(cp, _)| *cp);
     let ctx = WalkCtx { drawn: &drawn, ..ctx };
 
-    let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp.hdd), &mut pics, max_paragraphs)?;
+    let hf_ids = header_parts(
+        &ctx,
+        &mut doc,
+        (final_section(&sects, fib.ccp.text) + 1).min(sects.len()),
+        &stories,
+        (hdd_base, fib.ccp.hdd),
+        &mut pics,
+        max_paragraphs,
+    )?;
 
     // Footnote and endnote stories: each text range becomes a part; the reference CPs then
     // link to the part ids during the main walk.
@@ -442,7 +450,15 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
         sprms
     });
     let stories = word6::header_stories(word, &fib, sects.iter().map(|s| s.grpf_ihdt));
-    let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp_hdd), &mut pics, max_paragraphs)?;
+    let hf_ids = header_parts(
+        &ctx,
+        &mut doc,
+        (final_section(&sects, fib.ccp_text) + 1).min(sects.len()),
+        &stories,
+        (hdd_base, fib.ccp_hdd),
+        &mut pics,
+        max_paragraphs,
+    )?;
     let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
     let footnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT);
     note_parts(&ctx, &mut doc, &footnotes, (ftn_base, fib.ccp_ftn), NoteKind::Footnote, &mut note_links, &mut pics, max_paragraphs)?;
@@ -527,6 +543,13 @@ fn note_parts(
     Ok(())
 }
 
+/// The index of the final section: the first that reaches the end of the main text (in a
+/// malformed PlcfSed, sections after it are ignored, their headers and footers too), else the
+/// last one.
+fn final_section(sects: &[sections::Section], ccp_text: u32) -> usize {
+    sects.iter().position(|s| s.end_cp >= ccp_text).unwrap_or(sects.len().saturating_sub(1))
+}
+
 /// Each section's properties (its header and footer parts included) go on the paragraph that ends
 /// it; the section reaching the end of the main text (`ccp_text`) is the document's last section.
 fn attach_sections(doc: &mut Document, paras: &mut [table::ParaOut], sects: &[sections::Section], hf_ids: &[(usize, usize, u32)], ccp_text: u32) {
@@ -542,9 +565,7 @@ fn attach_sections(doc: &mut Document, paras: &mut [table::ParaOut], sects: &[se
         props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
         props
     };
-    // The final section is the first that reaches the end of the main text (in a malformed
-    // PlcfSed, sections after it are ignored), else the last one.
-    let final_si = sects.iter().position(|s| s.end_cp >= ccp_text).unwrap_or(sects.len().saturating_sub(1));
+    let final_si = final_section(sects, ccp_text);
     for (si, sec) in sects.iter().enumerate().take(final_si) {
         if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
             p.para.section = Some(Box::new(with_parts(si, &sec.props)));
