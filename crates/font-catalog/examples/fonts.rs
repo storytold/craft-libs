@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use craft_font_catalog::{Catalog, font_dirs, font_store_dir};
+use craft_font_catalog::{Catalog, Generic, font_dirs, font_store_dir};
 
 fn main() {
     let catalog = Catalog::global();
@@ -18,6 +18,9 @@ fn main() {
     let faces = catalog.faces();
     println!("{} families, {} faces, first scan {:?}", families.len(), faces.len(), start.elapsed());
     println!("font store: {:?}", font_store_dir(catalog.env()));
+    for generic in Generic::ALL {
+        println!("{}: {:?}", generic.css_name(), catalog.generic_family(generic));
+    }
     for dir in font_dirs(catalog.env()).iter().filter(|d| d.is_dir()) {
         println!("folder: {}", dir.display());
     }
