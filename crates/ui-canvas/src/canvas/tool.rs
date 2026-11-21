@@ -235,13 +235,11 @@ pub(crate) struct ToolRequests {
     /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`].
     pub(crate) hud: Option<Vec<(Label, String)>>,
     /// The content a tool handed to a drag session, from [`ToolContext::start_drag`].
-    #[allow(dead_code)] // P3(canvas-w3): cv.F21
     pub(crate) drag: Option<DragRequest>,
 }
 
 /// A drag session a tool asked for: the payload, the extra content some targets read, and the ghost.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // P3(canvas-w3): cv.F21
 pub(crate) struct DragRequest {
     pub(crate) payload: Arc<dyn Any + Send + Sync>,
     pub(crate) also: Option<Arc<dyn Any + Send + Sync>>,
@@ -274,6 +272,7 @@ pub struct ToolContext<'a> {
     snap: Option<&'a Snap>,
     march: Option<March>,
     requests: ToolRequests,
+    over_drop_target: bool,
 }
 
 /// What a paint call needs to march ants: the motion mode and the ants' dash length.
@@ -303,6 +302,7 @@ impl<'a> ToolContext<'a> {
             snap: None,
             march: None,
             requests: ToolRequests::default(),
+            over_drop_target: false,
         }
     }
 
@@ -351,6 +351,14 @@ impl<'a> ToolContext<'a> {
     /// Whether the tool shows its precise cursor now: the canvas's [`CanvasSpace::precise`]; never without a space.
     pub fn precise(&self) -> bool {
         self.space.is_some_and(|space| space.precise())
+    }
+
+    /// Whether a drag session the running gesture started has a target that would take it now; the host sets it from
+    /// the session's mark.
+    #[must_use]
+    pub(crate) fn over_target(mut self, over: bool) -> Self {
+        self.over_drop_target = over;
+        self
     }
 
     /// The press arena's slop.
@@ -554,19 +562,17 @@ impl<'a> ToolContext<'a> {
     /// Hands `payload` to a drag session shown with `preview`: the content of the gesture the tool runs. The gesture
     /// goes on; the tool keeps its `drag` calls until the release.
     pub fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview) {
-        let _ = (payload, preview);
-        todo!("cv.F21")
+        self.requests.drag = Some(DragRequest { payload: Arc::new(payload), also: None, preview });
     }
 
     /// [`start_drag`](Self::start_drag) with `also`, extra content that some targets read beside the payload.
     pub fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn Any + Send + Sync>, preview: DragPreview) {
-        let _ = (payload, also, preview);
-        todo!("cv.F21")
+        self.requests.drag = Some(DragRequest { payload: Arc::new(payload), also: Some(also), preview });
     }
 
     /// While a drag session this tool started runs, whether a target would take it at the pointer now.
     pub fn over_drop_target(&self) -> bool {
-        todo!("cv.F21")
+        self.over_drop_target
     }
 
     /// Asks for another pass (an animation, a held key that repeats).

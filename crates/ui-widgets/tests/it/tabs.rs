@@ -14,6 +14,9 @@ use std::rc::Rc;
 
 const TITLES: [&str; 3] = ["One", "Two", "Three"];
 
+/// Frames a rest of the tooltip delay takes: every frame adds 1/60 s.
+const REST_FRAMES: usize = (craft_ui::contract::tooltip::DELAY * 60.0) as usize + 2;
+
 /// An arrow moves the focus to the next tab without showing it; Enter shows it.
 #[trial]
 fn an_arrow_moves_the_focus_and_enter_shows_the_tab() {
@@ -146,12 +149,22 @@ fn tab_rect(tree: &AccessTree, name: &str) -> Rect {
     tab_rects(tree, name).first().copied().expect("the tab's node")
 }
 
-/// Files from the operating system, a drag that did not start in the strip, rest over `at` for a few passes and then
-/// leave the window.
+/// The bounds of the close button of the tab named `name`.
+fn close_rect(tree: &AccessTree, name: &str) -> Rect {
+    let label = format!("Close {name}");
+    tree.with_role(Role::BUTTON)
+        .into_iter()
+        .find(|key| tree.name_of(*key) == Some(label.as_str()))
+        .and_then(|key| tree.bounds_of(key))
+        .expect("the close button's node")
+}
+
+/// Files from the operating system, a drag that did not start in the strip, rest over `at` for the tooltip delay and
+/// then leave the window.
 fn rest_files_over(frames: &mut Frames, at: Pos2, show: &mut impl FnMut(&mut Ui)) {
     frames.hover_files(&["a.png"]);
     frames.frame(vec![moved(at)], &mut *show);
-    frames.idle(3, &mut *show);
+    frames.idle(REST_FRAMES, &mut *show);
     frames.leave_files();
     frames.frame(vec![moved(at)], &mut *show);
 }
@@ -175,8 +188,9 @@ fn files_before(events: &[craft_ui::tabs::DocumentTabsEvent<usize>]) -> Option<O
     })
 }
 
-/// A drag that did not start in the strip, resting over an unselected document tab, selects it in that pass; a drag of
-/// the strip's own tab (a reorder) selects nothing it crosses, and a panel strip selects nothing under a drag.
+/// A drag that did not start in the strip, resting over an unselected document tab, selects it after the rest delay and
+/// not before; a drag of the strip's own tab (a reorder) selects nothing it crosses, and a panel strip selects nothing
+/// under a drag.
 /// `Fixture` cannot hover files from the OS, so these trials drive `Frames`.
 #[trial]
 fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
@@ -191,8 +205,15 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
     frames.idle(2, &mut show);
     let tree = frames.tree();
     let (one, two, three) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"));
-    rest_files_over(&mut frames, two.center(), &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(two.center())], &mut show);
+    assert!(!seen.borrow().contains(&DocumentTabsEvent::Selected(1)), "files select no tab in the pass they arrive in: {:?}", seen.borrow());
+    frames.idle(REST_FRAMES / 2, &mut show);
+    assert!(!seen.borrow().contains(&DocumentTabsEvent::Selected(1)), "files select no tab before the rest delay: {:?}", seen.borrow());
+    frames.idle(REST_FRAMES, &mut show);
     assert!(seen.borrow().contains(&DocumentTabsEvent::Selected(1)), "files resting over a tab select it: {:?}", seen.borrow());
+    frames.leave_files();
+    frames.frame(vec![moved(two.center())], &mut show);
 
     seen.borrow_mut().clear();
     frames.frame(vec![moved(one.center())], &mut show);
@@ -200,7 +221,7 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
     for step in 1..=4 {
         frames.frame(vec![moved(one.center().lerp(three.center(), step as f32 / 4.0))], &mut show);
     }
-    frames.idle(3, &mut show);
+    frames.idle(REST_FRAMES, &mut show);
     let crossed = seen.borrow().iter().any(|event| matches!(event, DocumentTabsEvent::Selected(1 | 2)));
     assert!(!crossed, "the strip's own drag selects no tab it rests over: {:?}", seen.borrow());
     frames.frame(vec![moved(one.center())], &mut show);
@@ -224,6 +245,42 @@ fn a_drag_resting_over_a_tab_selects_it_unless_it_is_the_strips_own() {
     let two = tab_rect(&frames.tree(), "Two");
     rest_files_over(&mut frames, two.center(), &mut panel);
     assert!(!picked.borrow().contains(&1), "a panel strip selects nothing under a drag: {:?}", picked.borrow());
+}
+
+/// Leaving a tab restarts the rest wait, and a rest over a tab's close button selects nothing. The strip scrolled under
+/// a still pointer is not covered here.
+#[trial]
+fn a_drag_leaving_a_tab_restarts_the_wait_and_a_rest_on_the_close_button_selects_nothing() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    let seen = RefCell::new(Vec::new());
+    let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two"), DocumentTab::new(2, "Three")];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        seen.borrow_mut().extend(out.events);
+    };
+    frames.idle(2, &mut show);
+    let tree = frames.tree();
+    let (one, two, three) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"));
+    let close = close_rect(&tree, "Two");
+    let selected = |key: usize| seen.borrow().contains(&DocumentTabsEvent::Selected(key));
+
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(two.center())], &mut show);
+    frames.idle(REST_FRAMES / 2, &mut show);
+    frames.frame(vec![moved(three.center())], &mut show);
+    frames.idle(REST_FRAMES / 2, &mut show);
+    assert!(!selected(1) && !selected(2), "half a delay on each of two tabs selects neither: {:?}", seen.borrow());
+    frames.idle(REST_FRAMES, &mut show);
+    assert!(selected(2) && !selected(1), "the tab the pointer rests on selects, the one it left does not: {:?}", seen.borrow());
+
+    frames.leave_files();
+    frames.frame(vec![moved(one.center())], &mut show);
+    seen.borrow_mut().clear();
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(close.center())], &mut show);
+    frames.idle(REST_FRAMES * 2, &mut show);
+    assert!(!selected(1), "a rest over the close button selects nothing: {:?}", seen.borrow());
 }
 
 /// Files from the operating system dropped in the gap before the second of three document tabs go before it, and past

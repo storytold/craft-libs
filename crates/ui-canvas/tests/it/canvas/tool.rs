@@ -3,27 +3,32 @@
 
 use craft_behavior::geometry::{SnapKind, SnapLine, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton, PointerSample};
+use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton, PointerKind, PointerSample};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
     NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, ToolRegion,
     canvas_space, tool_pass,
 };
-use craft_ui::contract::{Bind, Lazy, Sampler as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{
+    Bind, Common, Component, Cx, DragPreview, DropMark, DropTarget, Lazy, MeasureCx, Pointer as _, Props as _, Sampler as _, Show as _,
+    ShowContainer as _,
+};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
+use craft_ui::runtime::drag;
 use craft_ui::runtime::frame;
 use craft_ui::runtime::windows::WindowHost;
-use craft_ui::style::DataColor;
+use craft_ui::style::{DataColor, StyleCx};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
 use craft_ui::text::NumberField;
-use egui::{Color32, Id, Key, Modifiers, Pos2, Rect, Shape, Vec2};
+use craft_ui_test_kit::contract::PlainStyle;
+use egui::{Color32, Event, Id, Key, Modifiers, Pos2, Rect, Response, Shape, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -825,16 +830,19 @@ fn a_held_space_ends_when_the_injected_input_is_cancelled() {
 #[derive(Default)]
 struct PenProbe {
     pressures: Vec<f32>,
+    kinds: Vec<PointerKind>,
 }
 
 impl CanvasTool for PenProbe {
     fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
         self.pressures.push(pointer.sample.pressure);
+        self.kinds.push(pointer.kind);
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
         self.pressures.push(pointer.sample.pressure);
+        self.kinds.push(pointer.kind);
     }
 
     fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
@@ -849,7 +857,7 @@ impl CanvasTool for PenProbe {
 }
 
 /// An injected pen reading reaches the tool as a tablet's does: the press and the drag carry the pressure their steps
-/// were injected with.
+/// were injected with, and the pointer kind of a pen.
 #[trial]
 fn an_injected_pen_reading_reaches_the_tool() {
     let probe = Rc::new(RefCell::new(PenProbe::default()));
@@ -877,6 +885,171 @@ fn an_injected_pen_reading_reaches_the_tool() {
     fixture.run_injected();
     let pressures = probe.borrow().pressures.clone();
     assert!(pressures.len() == 2 && (pressures[0] - 0.3).abs() < 1e-4 && (pressures[1] - 0.7).abs() < 1e-4, "{pressures:?}");
+    let kinds = probe.borrow().kinds.clone();
+    assert_eq!(kinds, [PointerKind::Pen, PointerKind::Pen], "the press and the drag of a pen reach the tool as a pen's");
+}
+
+/// A pass whose only news is a key or a modifier change hovers a still pointer and drags a still press once, in the
+/// frame's first pass; the rerun pass of the same frame, which has no input, does neither.
+#[trial]
+fn a_pass_with_only_a_key_or_modifier_change_re_hovers_a_still_pointer_and_re_drags_a_still_press_once() {
+    let log = Log::default();
+    let rerun = Rc::new(Cell::new(false));
+    let mut rig = Rig::with(Probe::new("main", &log), &log, None, Setup { rerun: Rc::clone(&rerun), ..Setup::default() });
+    let at = rig.centre();
+    let count = |rig: &Rig, call: &str| rig.calls().iter().filter(|logged| logged.as_str() == call).count();
+
+    rig.fixture.frame(vec![pointer::moved(at)]).idle(2);
+    rig.log.borrow_mut().clear();
+    rig.fixture.idle(1);
+    assert_eq!(count(&rig, "main hover"), 0, "a still pointer is not hovered again by a pass with no news: {:?}", rig.calls());
+
+    rerun.set(true);
+    rig.fixture.frame(vec![key_press(Key::A, Modifiers::NONE)]);
+    assert_eq!(count(&rig, "main hover"), 1, "a key press hovers the still pointer once, the rerun pass not again: {:?}", rig.calls());
+
+    rig.log.borrow_mut().clear();
+    rerun.set(true);
+    rig.fixture.hold(Modifiers::SHIFT).frame(vec![Event::ModifiersChanged(Modifiers::SHIFT)]);
+    assert_eq!(count(&rig, "main hover"), 1, "Shift going down hovers the still pointer once: {:?}", rig.calls());
+    rig.fixture.hold(Modifiers::NONE).frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+
+    rig.fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).idle(1);
+    rig.log.borrow_mut().clear();
+    rig.fixture.idle(1);
+    assert_eq!(count(&rig, "main drag"), 0, "a still press is not dragged by a pass with no news: {:?}", rig.calls());
+    rerun.set(true);
+    rig.fixture.frame(vec![key_press(Key::B, Modifiers::NONE)]);
+    assert_eq!(count(&rig, "main drag"), 1, "a key press drags the still press once, the rerun pass not again: {:?}", rig.calls());
+    rig.fixture.frame(vec![pointer::release(at + BY)]);
+}
+
+/// What the drag session of `DropperTool` carries.
+#[derive(Clone, Debug, PartialEq)]
+struct Parcel(u32);
+
+/// Takes every `Parcel` dropped on it.
+struct TakesParcel;
+
+impl DropTarget<Parcel> for TakesParcel {
+    type Drop = u32;
+
+    fn accept(&self, payload: &Parcel, _: Pos2, _: craft_behavior::DropOperation) -> Option<u32> {
+        Some(payload.0)
+    }
+
+    fn mark(&self, _: &u32) -> DropMark {
+        DropMark::region(TARGET)
+    }
+}
+
+/// Where the drop target lies in the fixture's room: the room's top left corner.
+const TARGET: Rect = Rect { min: Pos2::new(0.0, 0.0), max: Pos2::new(100.0, 50.0) };
+
+/// A drop target for `Parcel`s that records what it took.
+#[derive(Component)]
+struct DropSlot<'a> {
+    #[common]
+    common: Common,
+    taken: &'a RefCell<Vec<u32>>,
+}
+
+impl Component for DropSlot<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: DropSlotStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        TARGET.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(parcel) = cx.drop_target(&TakesParcel) {
+            self.taken.borrow_mut().push(parcel);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A tool that hands a `Parcel` to a drag session in every drag and notes whether a target would take it.
+struct DropperTool {
+    seen: Rc<RefCell<Vec<(&'static str, bool)>>>,
+}
+
+impl CanvasTool for DropperTool {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        cx.start_drag(Parcel(7), DragPreview::None);
+        self.seen.borrow_mut().push(("drag", cx.over_drop_target()));
+    }
+
+    fn release(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.seen.borrow_mut().push(("release", cx.over_drop_target()));
+    }
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the probe only records")
+    }
+}
+
+/// A tool's `start_drag` starts one session under the canvas, however many `drag` calls repeat it; a target takes the
+/// drop, `over_drop_target` is true in `release` over the target and false off it, and the session ends with the
+/// gesture.
+#[trial]
+fn a_tools_start_drag_session_reaches_a_target_and_the_tool_reads_over_drop_target_at_its_release() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let taken = Rc::new(RefCell::new(Vec::new()));
+    let tool = Rc::new(RefCell::new(DropperTool { seen: Rc::clone(&seen) }));
+    let (shown_tool, shown_taken) = (Rc::clone(&tool), Rc::clone(&taken));
+    let canvas = Rc::new(Cell::new(Id::NULL));
+    let shown_canvas = Rc::clone(&canvas);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *shown_tool.borrow_mut());
+            }
+        });
+        shown_canvas.set(shown.output.response.id);
+        DropSlot { common: Common::new(), taken: &shown_taken }.id_salt("slot").show_at(ui, TARGET.translate(room.min.to_vec2()));
+    });
+    fixture.settle();
+    let room = fixture.by_role(Role::CANVAS)[0].rect;
+    let (at, slot) = (room.center(), TARGET.translate(room.min.to_vec2()).center());
+    let ctx = fixture.ctx().clone();
+    let before = drag::started(&ctx);
+
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(at.lerp(slot, step as f32 / 4.0))]);
+    }
+    fixture.idle(1);
+    assert_eq!(drag::started(&ctx) - before, 1, "several drag calls start one session");
+    assert_eq!(seen.borrow().first(), Some(&("drag", false)), "no target takes the drag before the session runs: {:?}", seen.borrow());
+    fixture.frame(vec![pointer::release(slot)]).idle(1);
+    assert_eq!(seen.borrow().last(), Some(&("release", true)), "the release over the target reads it: {:?}", seen.borrow());
+    assert_eq!(taken.borrow().clone(), vec![7], "the target took the drop");
+    assert!(!ToolHost::in_gesture(&ctx, canvas.get()) && drag::mark(&ctx).is_none(), "the session ends with the gesture");
+
+    let away = at + BY;
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(away)]).idle(1);
+    fixture.frame(vec![pointer::release(away)]).idle(1);
+    assert_eq!(seen.borrow().last(), Some(&("release", false)), "a release off the target reads none: {:?}", seen.borrow());
+    assert_eq!(taken.borrow().clone(), vec![7], "a release off the target drops nothing");
 }
 
 /// A tool that asks for a repaint in every drag, as a brush that previews its stroke does.
