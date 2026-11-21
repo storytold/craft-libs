@@ -1017,6 +1017,12 @@ pub struct ColorData {
     /// matrices a Kelvin scale ([`kelvin`]). Not a DNG tag: the DNG writer does not write it.
     #[serde(default)]
     pub kelvin_presets: Option<kelvin::KelvinPresets>,
+    /// The as-shot multipliers (green = 1) the samples were already balanced with. Sony's downsized lossless (M / S)
+    /// ARWs store white-balanced linear YCbCr, so their `wb_multipliers` are unit and the data renders as delivered;
+    /// a white balance scale reads As Shot from these instead (storytold/lightcraft#4078). Not a DNG tag: the DNG
+    /// writer does not write it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balanced_with: Option<[f32; 3]>,
 }
 
 /// Bounded diagnostics for decisions actually made by a raw decoder. An absent optional tag

@@ -848,7 +848,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
         // (linear YCbCr comes white-balanced: its unit multipliers have no place on the presets' curve)
-        color: ColorData { kelvin_presets: if linear_rgb { None } else { sr2().and_then(sr2_kelvin_presets) }, ..Default::default() },
+        color: ColorData {
+            kelvin_presets: if linear_rgb { None } else { sr2().and_then(sr2_kelvin_presets) },
+            // the white the data was balanced to, for a white balance scale's As Shot (storytold/lightcraft#4078)
+            balanced_with: wb.filter(|_| linear_rgb),
+            ..Default::default()
+        },
         // Sony's linear YCbCr already carries as-shot WB. Applying the CFA gains again
         // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
         wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
@@ -897,6 +902,9 @@ mod tests {
         assert!(!full.notices.assumed_cfa);
         assert_eq!(full.data.len(), 48);
         assert_eq!(full.wb_multipliers, Some([1.0; 3]));
+        // storytold/lightcraft#4078: the multipliers the data was balanced with are kept for a white balance scale's As Shot
+        assert_eq!(full.color.balanced_with, Some([2.0, 1.0, 2.0]));
+        assert_eq!(header.color.balanced_with, full.color.balanced_with);
         // the YCbCr data sit 512 above the recorded sensor black level; white moves with it
         assert_eq!((full.black.mean(), full.white_at(0)), (1024.0, 16895.0));
         assert_eq!((header.black.mean(), header.white_at(0)), (1024.0, 16895.0));
