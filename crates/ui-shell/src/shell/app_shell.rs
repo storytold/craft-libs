@@ -653,6 +653,15 @@ impl<'a, S> AppShell<'a, S> {
             let panels_hidden = kept.reveal.panels_hidden();
 
             let rect_of = |key| regions.slots.iter().find(|(shown, _)| *shown == key).map_or(Rect::ZERO, |(_, rect)| *rect);
+            // The room a content slot can grow into: from its outer edge to the far edge of what the slots before it
+            // leave. Its content runs there, so it measures at its own extent, never at the extent it was laid out at.
+            let window_rect = cx.rect;
+            let grow_room = |key: SlotKey| {
+                let Some(at) = claims.iter().position(|claim| claim.key == key) else { return Rect::ZERO };
+                let mut claimed = claims[..=at].to_vec();
+                claimed[at].extent = f32::INFINITY;
+                layout(window_rect, &claimed, rtl).slots.get(at).map_or(Rect::ZERO, |(_, rect)| *rect)
+            };
             // The extents the content slots were laid out at, and what their content took in this pass.
             let measured_before = kept.measured.clone();
             let mut measured_now: Vec<(SlotKey, f32)> = Vec::new();
@@ -667,7 +676,7 @@ impl<'a, S> AppShell<'a, S> {
                 }
                 if let Some((scope, SlotBody(page))) = page.as_mut() {
                     let pane = ShellPane::new("page");
-                    let pane = if content_room.is_some() { pane.at_content_height(regions.body) } else { pane.at(regions.body) };
+                    let pane = if content_room.is_some() { pane.at_content_extent(regions.body) } else { pane.at(regions.body) };
                     let mut region = ShellRegion::pane(pane).label(body_label.clone());
                     region.props = region.props.command_scope(*scope);
                     let shown = region.show(ui, |ui, bcx| page(ui, bcx, app));
@@ -690,8 +699,10 @@ impl<'a, S> AppShell<'a, S> {
                         let by_content = placed.sized_by_content();
                         let along_x = placed.along_x();
                         let Placed { slot, edge, named, add, .. } = placed;
-                        let at = rect_of(slot.key());
-                        let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(at);
+                        // A slot sized by its content is as large as its content from its outer edge, in the room it
+                        // can grow into; any other slot fills its rect.
+                        let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent);
+                        let pane = if by_content { pane.at_content_extent(grow_room(slot.key())) } else { pane.at(rect_of(slot.key())) };
                         // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
                         // the body.
                         let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
@@ -709,28 +720,19 @@ impl<'a, S> AppShell<'a, S> {
                             region.show(ui, |ui, bcx| add(ui, bcx, app));
                             continue;
                         }
-                        // The slot's extent along its edge: what its content allocated, plus what the pane keeps
+                        // The slot's extent along its edge is the pane's: its content's, with what the pane keeps
                         // around its body (its rule). A top or bottom slot's content fills its width and is as tall
-                        // as it is; a rail's is as wide as it is. The content is read from the `Ui` it allocated in,
-                        // never from the stack's response: a response rect is clipped to the pane (`sense_root`), so
-                        // it can never report more than the extent the slot was laid out at.
-                        let took = region
+                        // as it is; a rail's is as wide as it is.
+                        let pane = region
                             .show(ui, |ui, bcx| {
-                                let room = ui.max_rect();
-                                let inset = (if along_x { at.width() - room.width() } else { at.height() - room.height() }).max(0.0);
                                 let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
-                                stack
-                                    .show(ui, |ui, _| {
-                                        add(ui, bcx, app);
-                                        let content = ui.min_rect();
-                                        if along_x { content.width() } else { content.height() }
-                                    })
-                                    .inner
-                                    .map(|content| content + if inset.is_finite() { inset } else { 0.0 })
+                                stack.show(ui, |ui, _| add(ui, bcx, app));
                             })
-                            .inner
-                            .flatten();
-                        if let Some(took) = took.filter(|took| took.is_finite() && *took > 0.0) {
+                            .output
+                            .response
+                            .rect;
+                        let took = if along_x { pane.width() } else { pane.height() };
+                        if took.is_finite() && took > 0.0 {
                             measured_now.push((key, took));
                         }
                     }
@@ -740,7 +742,7 @@ impl<'a, S> AppShell<'a, S> {
                 // mode's surround (Focus's black). Otherwise the body paints what it shows, and the gaps between its parts
                 // (the dock's gutters) show the window's background; Immersive's body fills the room with its own canvas.
                 let pane = ShellPane::new("body");
-                let pane = if content_room.is_some() { pane.at_content_height(regions.body) } else { pane.at(regions.body) };
+                let pane = if content_room.is_some() { pane.at_content_extent(regions.body) } else { pane.at(regions.body) };
                 let mut center = ShellRegion::pane(pane).label(body_label.clone());
                 let surround = if only && !host_only { Some(SurfaceKind::Scrim) } else { mode.surround() };
                 if let Some(surface) = surround {

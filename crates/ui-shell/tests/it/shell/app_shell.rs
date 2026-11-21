@@ -3,10 +3,11 @@
 //! body, and its band keeps the window's ends and moves the window.
 
 use craft_host::target::ShellInfo;
+use craft_theme::Size;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -136,6 +137,101 @@ fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
     assert!(slot.height() <= row.max.y - strip.min.y + RULE, "the slot {slot:?} is as tall as its content, from {strip:?} to {row:?}");
     assert!((row.width() - slot.width()).abs() <= SLACK, "the row {row:?} takes the slot's width {slot:?}");
     assert!(body.min.y >= row.max.y - SLACK, "the body {body:?} starts under the row {row:?}");
+}
+
+/// The labels of a column of buttons taller than a slot's default extent.
+const TALL: [&str; 6] = ["Paste", "Cut", "Copy", "Format Painter", "Clipboard", "Styles"];
+
+/// The rect of the fill-height column a content slot holds and of each of its buttons, from the last run.
+type Column = Rc<RefCell<(Rect, Vec<Rect>)>>;
+
+fn column() -> Column {
+    Rc::new(RefCell::new((Rect::NOTHING, Vec::new())))
+}
+
+/// A column of `labels` that fills its height, as a ribbon group does, recording its rects in `seen`.
+fn fill_column(ui: &mut Ui, labels: &[&'static str], seen: &Column) {
+    let mut buttons = Vec::new();
+    let column = Stack::new()
+        .sizing(Sizing::FillHeight)
+        .show(ui, |ui, _| {
+            for label in labels {
+                buttons.push(Button::new(*label).show(ui).rect);
+            }
+        })
+        .output
+        .rect;
+    *seen.borrow_mut() = (column, buttons);
+}
+
+/// A content slot whose content fills its height grows to that content, at the top and at the bottom edge: its
+/// content runs in the room the slot can grow into, not in the extent it was first laid out at, so the column takes
+/// its buttons' height and the slot takes the column's.
+#[trial]
+fn a_slot_sized_by_its_content_grows_to_a_child_that_fills_its_height() {
+    let (top, bottom) = (column(), column());
+    let regions = Rc::new(RefCell::new(None));
+    let (top_seen, bottom_seen, out) = (Rc::clone(&top), Rc::clone(&bottom), Rc::clone(&regions));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &top_seen))
+            .bottom(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &bottom_seen))
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        *out.borrow_mut() = Some(shown.regions);
+    });
+    fixture.room(Vec2::new(600.0, 700.0)).settle();
+    let regions = regions.borrow().clone().expect("the shell shows");
+    const SLACK: f32 = 1.0;
+    for (key, seen) in [("ribbon", &top), ("findBar", &bottom)] {
+        let slot = regions.slots.iter().find(|(shown, _)| *shown == key).map(|(_, rect)| *rect).expect("the slot shows");
+        let (column, buttons) = seen.borrow().clone();
+        assert_eq!(buttons.len(), TALL.len(), "{key}: every button shows");
+        for button in &buttons {
+            assert!(column.expand(SLACK).contains_rect(*button), "{key}: the button {button:?} lies in its column {column:?}");
+        }
+        assert!(slot.expand(SLACK).contains_rect(column), "{key}: the slot {slot:?} holds its column {column:?}");
+    }
+    let (top_slot, bottom_slot) = (regions.slots[0].1, regions.slots[1].1);
+    assert!(
+        regions.body.min.y >= top_slot.max.y - SLACK && regions.body.max.y <= bottom_slot.min.y + SLACK,
+        "the body {:?} lies between the slots",
+        regions.body
+    );
+    assert!((bottom_slot.max.y - 700.0).abs() <= SLACK, "the bottom slot {bottom_slot:?} stands on the window's bottom edge");
+}
+
+/// A settled frame runs a content slot's content once, in one pass: its measure is reused while its inputs are
+/// unchanged. A frame where the content grows (a denser theme makes every button taller) lays the window out again at
+/// most once and shows the new extent in that frame.
+#[trial]
+fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame() {
+    let runs = Rc::new(Cell::new(0_u32));
+    let seen = column();
+    let regions = Rc::new(RefCell::new(None));
+    let (count, column, out) = (Rc::clone(&runs), Rc::clone(&seen), Rc::clone(&regions));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                count.set(count.get() + 1);
+                fill_column(ui, &TALL, &column);
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        *out.borrow_mut() = Some(shown.regions);
+    });
+    fixture.room(Vec2::new(600.0, 700.0)).density(Size::Compact).settle();
+    let before = seen.borrow().0;
+    runs.set(0);
+    fixture.frame(Vec::new());
+    assert_eq!(fixture.passes(), 1, "a settled frame runs one pass");
+    assert_eq!(runs.get(), 1, "a settled frame runs the slot's content once");
+    fixture.density(Size::Comfortable).frame(Vec::new());
+    assert!(fixture.passes() <= 2, "the frame the content grows in lays the window out again at most once: {} passes", fixture.passes());
+    let slot = regions.borrow().as_ref().and_then(|regions| regions.slots.first().map(|(_, rect)| *rect)).expect("the slot shows");
+    let grown = seen.borrow().0;
+    assert!(grown.height() > before.height() + 1.0, "the denser theme makes the column taller: {before:?} to {grown:?}");
+    assert!(slot.expand(1.0).contains_rect(grown), "in the frame it grows in, the slot {slot:?} holds the grown column {grown:?}");
 }
 
 /// A check box with its label after it sits on the options slot's middle, as a button beside it does: the slot is
