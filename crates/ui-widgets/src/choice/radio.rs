@@ -160,19 +160,22 @@ pub struct Radio<T: Value + 'static> {
     value: T,
     checked: bool,
     invalid: bool,
+    /// The line after the label ([`Radio::detail`]).
+    detail: Option<crate::runtime::env::Label>,
 }
 
 impl<T: Value + 'static> Radio<T> {
     /// A radio button standing for `value`.
     pub fn new(value: T) -> Self {
-        Radio { common: Common::new(), value, checked: false, invalid: false }
+        Radio { common: Common::new(), value, checked: false, invalid: false, detail: None }
     }
 
-    /// A dimmed line under the label (muted text role, small text token), inside the radio's hit area.
+    /// A dimmed line after the label (the label's detail: muted text), inside the radio's hit area; it joins the
+    /// radio's description.
     #[must_use]
-    pub fn detail(self, text: impl Into<crate::runtime::env::Label>) -> Self {
-        let _ = text;
-        todo!("co.K26")
+    pub fn detail(mut self, text: impl Into<crate::runtime::env::Label>) -> Self {
+        self.detail = Some(text.into());
+        self
     }
 }
 
@@ -193,6 +196,10 @@ impl<T: Value + 'static> Component for Radio<T> {
             well: super::indicator(cx, CornerRadius::from(control.icon / 2.0)),
             dot: super::mark(cx),
         }
+    }
+
+    fn label_detail(&self) -> Option<crate::runtime::env::Label> {
+        self.detail.clone()
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

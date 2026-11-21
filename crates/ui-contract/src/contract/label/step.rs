@@ -504,5 +504,9 @@ pub(crate) fn show_leaf_in_flow<C: Show>(mut child: C, ui: &mut Ui) -> C::Output
     let facts = crate::contract::run::TypeFacts::of::<C>();
     let id = crate::contract::steps::id(ui, &child.common(crate::contract::Internal::new()).id, false, true, facts.style_key, facts.name);
     let side = SideLabel::new().layout(FieldLayout::After);
+    let side = match child.label_detail() {
+        Some(detail) => side.detail(detail),
+        None => side,
+    };
     flow_leaf(ui, (id, id), (env.enabled, env.size), label, side, child, None)
 }

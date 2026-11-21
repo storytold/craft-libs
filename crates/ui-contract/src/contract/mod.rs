@@ -399,6 +399,12 @@ pub trait Component: Meta + Sized {
         Self::SHOWS_LABEL
     }
 
+    /// The muted line a `LABELLED_AFTER` control's label shows after its text (`SideLabel::detail`), as a radio's
+    /// `detail`; none by default. It reads props only.
+    fn label_detail(&self) -> Option<crate::runtime::env::Label> {
+        None
+    }
+
     /// How far the component paints outside its rect by design, in points (a graph node's ports sit on its edge).
     /// Steps 13 and 14 clip to the rect grown by this much; the paint-bounds suite case reads it.
     fn paint_outset(_tokens: &crate::style::UiTokens) -> f32 {

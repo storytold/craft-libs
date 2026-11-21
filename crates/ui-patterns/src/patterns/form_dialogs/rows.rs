@@ -13,8 +13,8 @@ use super::words::ParamWords;
 use crate::buttons::{Button, IconButton, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
-    SideLabel, Sizing, clicked,
+    Bind, BodyCx, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, SideLabel, Sizing,
+    clicked,
 };
 use crate::display::Text;
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -1017,20 +1017,15 @@ impl<'p> Pass<'p> {
         if let Some(tip) = line.param.tooltip_text() {
             group = group.tooltip(tip.clone());
         }
-        let group = group.show(ui, |ui, cx| {
+        let group = group.show(ui, |ui, _| {
             let mut radios = |ui: &mut Ui| {
                 for (at, (id, label)) in options.iter().enumerate() {
-                    let radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled);
+                    let radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled).label(label.clone());
                     match details.get(at) {
-                        // An option with a detail line draws it under its label through the body's label step.
-                        Some(detail) => {
-                            let side = SideLabel::new().layout(FieldLayout::After).detail(detail.clone());
-                            cx.labelled(ui, id, label.clone(), side, radio);
-                        }
-                        None => {
-                            radio.label(label.clone()).show(ui);
-                        }
+                        Some(detail) => radio.detail(detail.clone()),
+                        None => radio,
                     }
+                    .show(ui);
                 }
             };
             if in_row {
