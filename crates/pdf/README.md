@@ -147,6 +147,12 @@ interpretation needs.
 - Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
   file whose cross-reference data is wrong or missing is rebuilt by scanning for object headers,
   and each repair is recorded (`repair_log`). Malformed input gives `CosError`, never a panic.
+- `startxref` is looked for in the last 4 KiB first and then backwards through the file, so data
+  after the final `%%EOF` (a web page glued to a served PDF) is not a reason to rebuild. Before
+  the tail only a whole footer counts (the keyword, an offset and `%%EOF`): up to 64 keywords
+  that are only text are passed over, and the last whole footer is taken when its offset is
+  where a cross-reference section starts (`xref` or an `N G obj` header) and no object follows
+  it. Otherwise the file is rebuilt, and no earlier footer is read in its place.
 - Encryption on open and save through `crypt`: revisions 2 to 6, crypt filters, `/EFF` and
   `/EncryptMetadata`. `set_encryption` and `remove_encryption` change it.
 - `write_incremental` appends the edited objects with a cross-reference section in the style of
