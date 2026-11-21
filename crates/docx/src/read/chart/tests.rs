@@ -640,6 +640,21 @@ fn varied_lines_colour_each_segment_by_the_point_it_ends_at() {
     assert_eq!(line_colours(&chart_items(&space(&plain), &theme(), 300.0, 200.0)), [accent(0)]);
 }
 
+#[test]
+fn a_smoothed_varied_line_stays_smooth_in_each_points_colour() {
+    let plot = format!(
+        r#"<c:lineChart><c:grouping val="standard"/><c:varyColors val="1"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        ser(0, "S", None, &["a", "b", "c", "d"], &["1", "3", "2", "4"]).replace("</c:ser>", r#"<c:smooth val="1"/></c:ser>"#)
+    );
+    let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+    assert_eq!(line_colours(&items), [accent(1), accent(2), accent(3)]);
+    let curved = items
+        .iter()
+        .filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), segs, .. } if *c != AXIS && *c != GRID && segs.iter().any(|s| matches!(s, PathSeg::Cubic(..)))))
+        .count();
+    assert_eq!(curved, 3, "every piece is a curve, not a straight segment: {items:?}");
+}
+
 /// A one-series scatter chart; `no_line` hides the line so markers are drawn.
 fn scatter(vary: &str, no_line: bool) -> String {
     let ln = if no_line { "<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>" } else { "" };

@@ -603,13 +603,16 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
 }
 
 /// Series `j`'s line through `pts`: one path in the series colour, or, when the chart varies
-/// colours by point or a point has its own line colour ([`Chart::segmented`]), one straight
-/// segment per point in the line colour of the point it ends at (a
-/// smoothed series is then drawn straight).
+/// colours by point or a point has its own line colour ([`Chart::segmented`]), one piece per
+/// point (straight, or a piece of the smooth curve) in the line colour of the point it ends at.
 fn series_line(out: &mut Vec<GraphicItem>, c: &Chart, j: usize, pts: &[Option<(f32, f32)>]) {
     let Some(s) = c.series.get(j) else { return };
     let w = s.line_w.unwrap_or(LINE_W);
-    if c.segmented(j) {
+    if c.segmented(j) && s.smooth {
+        for (to, piece) in smooth_pieces(pts) {
+            stroke(out, piece, c.line_colour(j, to), w);
+        }
+    } else if c.segmented(j) {
         point_segments(out, pts, false, |i| c.line_colour(j, i), w);
     } else {
         stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), w);
@@ -695,18 +698,48 @@ fn curve(pts: impl Iterator<Item = Option<(f32, f32)>>, smooth: bool) -> Vec<Pat
             continue;
         }
         segs.push(PathSeg::Move(run[0].0, run[0].1));
-        for k in 0..run.len() - 1 {
-            // Catmull-Rom: tangent at p1 from p0 to p2 (ends mirror their own tangent).
-            let p0 = run[k.max(1) - 1];
-            let p1 = run[k];
-            let p2 = run[k + 1];
-            let p3 = run.get(k + 2).copied().unwrap_or(p2);
-            let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
-            let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
-            segs.push(PathSeg::Cubic(c1.0, c1.1, c2.0, c2.1, p2.0, p2.1));
-        }
+        segs.extend((0..run.len() - 1).map(|k| catmull_rom(&run, k)));
     }
     segs
+}
+
+/// The piece of a smooth curve through `run` from point `k` to point `k + 1`: Catmull-Rom, the
+/// tangent at a point running from the point before it to the point after it (ends mirror their
+/// own tangent).
+fn catmull_rom(run: &[(f32, f32)], k: usize) -> PathSeg {
+    let p0 = run[k.max(1) - 1];
+    let p1 = run[k];
+    let p2 = run[k + 1];
+    let p3 = run.get(k + 2).copied().unwrap_or(p2);
+    let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+    let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+    PathSeg::Cubic(c1.0, c1.1, c2.0, c2.1, p2.0, p2.1)
+}
+
+/// [`curve`] with `smooth` set, cut into one path per piece, each with the index of the point it
+/// ends at, so a series that varies colours by point can draw each piece in its own colour. The
+/// pieces are the same curves the single path draws; a run of two points is a straight segment.
+fn smooth_pieces(pts: &[Option<(f32, f32)>]) -> Vec<(usize, Vec<PathSeg>)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < pts.len() {
+        if pts[i].is_none() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while pts.get(i + 1).copied().flatten().is_some() {
+            i += 1;
+        }
+        let run: Vec<(f32, f32)> = pts[start..=i].iter().flatten().copied().collect();
+        for k in 0..run.len() - 1 {
+            let (p1, p2) = (run[k], run[k + 1]);
+            let to = if run.len() >= 3 { catmull_rom(&run, k) } else { PathSeg::Line(p2.0, p2.1) };
+            out.push((start + k + 1, vec![PathSeg::Move(p1.0, p1.1), to]));
+        }
+        i += 1;
+    }
+    out
 }
 
 fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
