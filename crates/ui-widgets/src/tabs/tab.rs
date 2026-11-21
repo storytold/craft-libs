@@ -2,8 +2,9 @@
 //!
 //! Selection, the lead, the focus ring and the drag ghost belong to the collection that shows the tab; the tab draws
 //! the look the item step gives it and reports what its own parts do. The strip gives the tab a rect: the tab's
-//! measure is its natural width (`Proposal::Min` the room for the first letters of its title), and a narrower rect cuts the label
-//! first, then the detail, and shows the whole text as a tooltip.
+//! measure is its natural width (`Proposal::Min` the room for the first letters of its title). A document tab's measure
+//! stops at the theme's document-tab length, and a narrower rect cuts the label first, then the detail, and shows the
+//! whole text as a tooltip. The accessible name stays the full title.
 
 use super::rules::{CloseSide, TabKind, close_side};
 use super::words::TabWords;
@@ -395,6 +396,12 @@ impl Component for Tab<'_> {
         }
         if self.shows_close() {
             natural += sizes.gap + sizes.close_box;
+        }
+        // A document tab stops at the theme length, so one long file name cannot take the strip. The rect is then
+        // narrower than the title, which cuts the label and shows the full title as a tooltip; the accessible name
+        // is still the full title.
+        if self.kind == TabKind::Document {
+            natural = natural.min(cx.tokens.size.length.tab);
         }
         Vec2::new(natural, sizes.label_line)
     }

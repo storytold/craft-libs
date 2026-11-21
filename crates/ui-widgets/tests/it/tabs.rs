@@ -2,6 +2,7 @@
 //! member of the strip's run.
 
 use craft_behavior::{SelectionChange, keyed};
+use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{CollectionEvent, Role, ShowCollection as _};
 use craft_ui::runtime::egui::access::AccessTree;
 use craft_ui::tabs::{Tab, TabKind, TabRole, TabStrip};
@@ -694,4 +695,40 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
     let back = fixture.by_label(RIBBON[TABLE]).expect("a contextual tab that enters has a node once listed");
     fixture.click(&back);
     assert_eq!(shown.get(), TABLE, "a click on the entering tab shows it");
+}
+
+/// A document title longer than the theme's document-tab length is cut there. Two such titles take the same width,
+/// a short title stays narrower, and the cut title keeps its full text as its accessible name and its tooltip.
+#[trial]
+fn a_long_document_title_stops_at_the_theme_length_and_keeps_its_name() {
+    let longer = "W".repeat(100);
+    let long = "W".repeat(50);
+    let short = "Notes";
+    let titles = [longer.clone(), long, short.to_owned()];
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = TabStrip::new("Documents").shown(0).show_items(ui, &source, &mut |key, _| Tab::new(titles[*key].clone()));
+    });
+    // Wider than both titles uncapped, so a missing cap leaves them different widths.
+    fixture.room(egui::Vec2::new(2400.0, 160.0)).settle();
+    let wide = fixture.by_label(&longer).expect("the long title is the tab's accessible name");
+    let mid = fixture.by_label(&"W".repeat(50)).expect("the other long title");
+    let notes = fixture.by_label(short).expect("the short title");
+    assert_eq!(wide.rect.width(), mid.rect.width(), "titles past the theme length take the same width: {wide:?} {mid:?}");
+    assert!(notes.rect.width() < wide.rect.width(), "a short title stays narrower than the length: {notes:?} {wide:?}");
+    assert!(fixture.texts().iter().any(|run| run.text == longer && run.elided), "the long title is cut in the tab");
+    let before: Vec<(String, bool)> = fixture.texts().iter().map(|run| (run.text.clone(), run.elided)).collect();
+    // The close button sits at one end of the tab, so the pointer rests on the title.
+    fixture.frame(vec![moved(Pos2::new(wide.rect.left() + 12.0, wide.rect.center().y))]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    let added: Vec<String> =
+        fixture.texts().iter().map(|run| (run.text.clone(), run.elided)).filter(|run| !before.contains(run)).map(|(text, _)| text).collect();
+    assert!(
+        added.iter().any(|text| text.contains(&longer)),
+        "the tooltip shows the full title: added {added:?}, tab {:?}, texts {:?}",
+        wide.rect,
+        fixture.texts().iter().map(|run| (run.elided, run.rect, run.text.chars().take(24).collect::<String>())).collect::<Vec<_>>()
+    );
 }

@@ -171,11 +171,12 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     let PlotSizes { width, height } = plot;
     out.line("size.plot.width", len(*width));
     out.line("size.plot.height", len(*height));
-    let LengthSizes { field, track, short, number } = length;
+    let LengthSizes { field, track, short, tab, number } = length;
     out.line("size.length.field.sm", len(field.sm));
     out.line("size.length.field.md", len(field.md));
     out.line("size.length.track", len(*track));
     out.line("size.length.short", len(*short));
+    out.line("size.length.tab", len(*tab));
     out.line("size.length.number.sm", len(number.sm));
     out.line("size.length.number.md", len(number.md));
     let RowSizes { text } = row;

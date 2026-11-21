@@ -164,6 +164,7 @@ size.length.field.sm = 160
 size.length.field.md = 192
 size.length.track = 128
 size.length.short = 96
+size.length.tab = 192
 size.length.number.sm = 60
 size.length.number.md = 72
 size.row.text = 18

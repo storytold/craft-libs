@@ -299,6 +299,8 @@ pub struct LengthSizes {
     pub track: f32,
     /// The width of a short field, such as a number beside a slider.
     pub short: f32,
+    /// The most a document tab grows. A longer title is cut; the full title stays the tab's accessible name and its tooltip.
+    pub tab: f32,
     /// The width of a number field over a slider, one per control size.
     pub number: ControlSizes,
 }
@@ -309,7 +311,7 @@ impl LengthSizes {
     pub(crate) fn text_scaled(self, factor: f32) -> LengthSizes {
         let round = |v: f32| (v * factor).round();
         let sizes = |c: ControlSizes| ControlSizes { sm: round(c.sm), md: round(c.md) };
-        LengthSizes { field: sizes(self.field), short: round(self.short), number: sizes(self.number), ..self }
+        LengthSizes { field: sizes(self.field), short: round(self.short), tab: round(self.tab), number: sizes(self.number), ..self }
     }
 }
 

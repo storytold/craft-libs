@@ -127,6 +127,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.length.field.md" Num 64.0..=1024.0 => s.length.field.md;
         "base.size.length.track" Num 48.0..=1024.0 => s.length.track;
         "base.size.length.short" Num 32.0..=512.0 => s.length.short;
+        "base.size.length.tab" Num 80.0..=640.0 => s.length.tab;
         "base.size.length.number.sm" Num 32.0..=512.0 => s.length.number.sm;
         "base.size.length.number.md" Num 32.0..=512.0 => s.length.number.md;
         "base.size.row.text" Num 12.0..=48.0 => s.row.text;

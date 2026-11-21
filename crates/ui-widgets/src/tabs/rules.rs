@@ -7,7 +7,8 @@ use craft_host::target::Os;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TabKind {
-    /// Document tabs: whole titles, a close button on every closable tab, every document in the overflow menu.
+    /// Document tabs: titles up to the theme's document-tab length (`size.length.tab`), then cut, a close button on
+    /// every closable tab, every document in the overflow menu.
     #[default]
     Document,
     /// Panel tabs: tabs shrink before they overflow, no close button, only the hidden tabs in the overflow menu.
@@ -68,7 +69,8 @@ pub enum OverflowMenu {
 }
 
 impl TabKind {
-    /// How tab widths are fitted: whole titles for document, text and ribbon tabs, shrinking for panel tabs.
+    /// How tab widths are fitted: whole titles for text and ribbon tabs, whole titles up to the theme's document-tab
+    /// length for document tabs, shrinking for panel tabs.
     pub fn fit_mode(self) -> FitMode {
         match self {
             Self::Document | Self::Text | Self::Ribbon => FitMode::Whole,
