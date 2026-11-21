@@ -54,22 +54,33 @@ impl Lengths<'_> {
     /// A field over a length in points, shown in the unit: its event in points, the preset row picked, and the
     /// report of a typed value that committed outside the range and was clamped (the field's `out_of_range`,
     /// never for an arrow, wheel or scrub step). The row itself shows nothing for the clamp: it hands the report
-    /// to the host to word as an alert. The field fills its grid cell.
-    pub(crate) fn row_with_alert(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>, Option<RangeAlert>) {
+    /// to the host to word as an alert. `decimals` writes the field's number at exactly that many decimals
+    /// ([`NumberField::fixed_decimals`]), which is also how many the report names its range's ends at; `None` keeps
+    /// the unit's own display. The field fills its grid cell.
+    pub(crate) fn row_with_alert(
+        &self,
+        ui: &mut Ui,
+        spec: LengthRow<'_>,
+        decimals: Option<usize>,
+    ) -> (EditEvents<Option<f64>>, Option<NumberPick>, Option<RangeAlert>) {
         let LengthRow { label, side, value, range, presets } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
         let field = Field::new(label.clone()).side(side).show(ui, |ui, _| {
-            let out =
-                length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth).show(ui);
+            let field = length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth);
+            let field = match decimals {
+                Some(decimals) => field.fixed_decimals(decimals),
+                None => field,
+            };
+            let out = field.show(ui);
             (out.edit.events, out.preset, out.out_of_range)
         });
         field.inner.unwrap_or_default()
     }
 
-    /// [`Lengths::row_with_alert`] without the out-of-range report: the row stays silent about a clamped
-    /// typed value, as every caller but the type bar's size field keeps it.
+    /// [`Lengths::row_with_alert`] without the out-of-range report and at the unit's own display decimals: the row
+    /// stays silent about a clamped typed value, as every caller but the type bar's size field keeps it.
     pub(crate) fn row(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
-        let (events, picked, _) = self.row_with_alert(ui, spec);
+        let (events, picked, _) = self.row_with_alert(ui, spec, None);
         (events, picked)
     }
 
