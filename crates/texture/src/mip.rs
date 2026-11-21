@@ -390,7 +390,8 @@ impl MipChain {
         let (level, next, blend) = match sampler.min_filter.mode() {
             MipMode::BaseOnly => (0, 0, 0.0),
             MipMode::Nearest => {
-                let level = ((d + 0.5).ceil() - 1.0).max(0.0) as usize;
+                // In `f64` the half-level offset is exact for every `f32` LOD.
+                let level = ((f64::from(d) + 0.5).ceil() - 1.0).max(0.0) as usize;
                 (level.min(last), level.min(last), 0.0)
             }
             MipMode::Linear => {
@@ -590,6 +591,10 @@ mod tests {
         // A tie takes the lower-numbered level: 0.5 selects level 0 and 1.5 selects level 1.
         assert_eq!(pick(0.5, &nearest), Ok((0, 0)));
         assert_eq!(pick(1.5, &nearest), Ok((1, 1)));
+        // The value just above a tie takes the higher level, although `d + 0.5` rounds back to the
+        // tie in `f32`.
+        assert_eq!(pick(f32::from_bits(0x3f00_0001), &nearest), Ok((1, 1)));
+        assert_eq!(pick(f32::from_bits(0x3fc0_0001), &nearest), Ok((2, 2)));
         assert_eq!(pick(1.25, &nearest), Ok((1, 1)));
         assert_eq!(c.select(1.25, &linear), Ok(LevelSelection { filter: TexelFilter::Linear, level: 1, next: 2, blend: 0.25 }));
         assert!(c.select(3.0f32.log2(), &linear).is_ok_and(|l| l.level == 1 && l.next == 2 && near(l.blend, 3.0f32.log2() - 1.0)));
