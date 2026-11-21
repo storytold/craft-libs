@@ -19,7 +19,8 @@ use craft_ui::patterns::form_dialogs::{
     DialogFields, FieldValue, FormDialog, HostRequests, Param, ParamRows, SectionList, set_color_field, set_param_field,
 };
 use craft_ui::patterns::presets::{
-    NameCheck, NamedPresetEvent, NamedPresetRow, Naming, PickerField, PresetError, PresetPicker, PresetRow, PresetSource, PresetState, PresetWords,
+    NameCheck, NameRefuses, NamedPresetEvent, NamedPresetRow, Naming, PickerField, PresetError, PresetPicker, PresetRow, PresetSource, PresetState,
+    PresetWords,
 };
 use craft_ui::runtime::env::{Env, Label, Message};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
@@ -516,7 +517,7 @@ fn preset_row(
     ui: &mut Ui,
     words: &PrintDialogWords,
     presets: &PrintPresets<'_>,
-    check: Option<&dyn Fn(&str) -> Option<PresetError>>,
+    check: Option<&NameRefuses<'_>>,
     picker: &mut PresetState<String>,
     events: &mut Vec<NamedPresetEvent<String>>,
 ) {
@@ -533,7 +534,7 @@ fn preset_row(
 }
 
 /// The preset editor's name field with the host's refusal under it. Returns whether the name can be saved.
-fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&dyn Fn(&str) -> Option<PresetError>>, name: &mut Bind<'_, String>) -> bool {
+fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&NameRefuses<'_>>, name: &mut Bind<'_, String>) -> bool {
     let preset_words = Env::of(ui).words::<PresetWords>();
     let current = read(name).unwrap_or_default();
     let host = check.map(NameCheck::of_host);
@@ -618,8 +619,8 @@ pub struct PrintDialog<'a> {
     #[prop]
     preset_name: Option<Bind<'a, String>>,
     /// Whether a typed preset name may be used, in the preset editor.
-    #[prop(boxed)]
-    check_name: Option<Box<dyn Fn(&str) -> Option<PresetError> + 'a>>,
+    #[prop(boxed = "Fn(&str) -> Option<PresetError> + 'a")]
+    check_name: Option<Box<NameRefuses<'a>>>,
     /// The driver's Setup… button is shown, with [`PrintLayout::Sections`].
     #[prop]
     driver: bool,

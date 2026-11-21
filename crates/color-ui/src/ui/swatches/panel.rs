@@ -130,7 +130,6 @@ impl<'a> SwatchesPanel<'a> {
     /// Paints each swatch's thumbnail with `paint` over the host's `inputs` in place of the panel's own swatch face
     /// (the host's gradient and pattern previews), as `PresetFns::thumb` does: the inputs are all the painter reads, so
     /// the swatch list keys on them. The painter draws the selected state from `ThumbInfo::selected`.
-    #[must_use]
     pub fn thumb<I: MemoProps + Send + 'a>(mut self, inputs: I, paint: ThumbFn<I, SwatchKey>) -> Self {
         self.thumb = Some(HostThumb::new(inputs, paint));
         self

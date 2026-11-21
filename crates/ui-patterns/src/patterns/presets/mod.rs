@@ -30,7 +30,7 @@ pub use model::{
     CellShape, GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetKind, PresetLibrary, PresetNames, PresetRow,
     PresetRowMenu, PresetTiles, Preview, ThumbInfo, children_end, has_captions, nest_allowed,
 };
-pub use named::{NameCheck, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow, NamedPresetStyle, Naming};
+pub use named::{NameCheck, NameRefuses, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow, NamedPresetStyle, Naming};
 pub use panel_menu::{PresetCommands, PresetMenuAction, PresetPanelMenu};
 pub use picker::{PickerField, PickerHead, PresetPicker, PresetPickerOutput, PresetPickerStyle};
 pub use source::{AcceptsFn, PresetFns, PresetSource, ThumbFn};

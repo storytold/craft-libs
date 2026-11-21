@@ -61,6 +61,9 @@ pub enum NamedPresetStyle {
     Menu,
 }
 
+/// A host's check of a typed preset name, as a closure: why it refuses the name, `None` when it accepts it.
+pub type NameRefuses<'a> = dyn Fn(&str) -> Option<PresetError> + 'a;
+
 /// Whether a name may be used: the host's answer for a typed name.
 pub struct NameCheck<'a>(Box<dyn NameChecker + 'a>);
 
@@ -74,7 +77,7 @@ impl<'a> NameCheck<'a> {
 
     /// The host's `check`, a closure: a memoized view that holds it runs every pass, as no key can follow what the
     /// closure reads.
-    pub fn of_host(check: &'a dyn Fn(&str) -> Option<PresetError>) -> Self {
+    pub fn of_host(check: &'a NameRefuses<'a>) -> Self {
         NameCheck::new(HostCheck(check), |host, name| (host.0)(name))
     }
 
@@ -95,7 +98,7 @@ impl MemoProps for NameCheck<'_> {
 /// The inputs of [`NameCheck::of_host`].
 #[derive(MemoProps)]
 #[memo_props(every_pass = "the host's name check is a closure, whose answers no key can follow")]
-struct HostCheck<'a>(&'a dyn Fn(&str) -> Option<PresetError>);
+struct HostCheck<'a>(&'a NameRefuses<'a>);
 
 /// A name check: its answer, and the key of its inputs and `fn`.
 trait NameChecker {

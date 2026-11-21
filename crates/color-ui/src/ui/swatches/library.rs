@@ -575,8 +575,11 @@ impl SwatchLibrary {
 pub(super) struct HostThumb<'a> {
     key: u128,
     #[memo_props(covered_by = "key", reason = "the painter runs the host's `fn` over the host's inputs, and `key` holds both")]
-    paint: Box<dyn Fn(&ContentPainterCx<'_>, Rect, ThumbInfo<'_, SwatchKey>) + Send + 'a>,
+    paint: Box<PaintThumb<'a>>,
 }
+
+/// The painter a [`HostThumb`] holds: the host's `fn` over its inputs.
+type PaintThumb<'a> = dyn Fn(&ContentPainterCx<'_>, Rect, ThumbInfo<'_, SwatchKey>) + Send + 'a;
 
 impl<'a> HostThumb<'a> {
     /// `paint` over `inputs`.
