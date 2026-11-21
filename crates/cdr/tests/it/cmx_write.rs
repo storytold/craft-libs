@@ -635,6 +635,24 @@ fn spot_colors_with_no_name_share_no_look() {
 }
 
 #[test]
+fn an_ink_used_with_different_looks_is_reported() {
+    let ink = |tint, look| Color::Spot { name: "Ink".into(), tint, look: Some(look) };
+    let written = |second| {
+        let shapes =
+            [ink(1.0, [1.0, 0.0, 0.0]), second].map(|c| Object::Shape(Box::new(Shape::new(square(0.0, 0.0, 1.0), Matrix::IDENTITY, Some(c), None))));
+        write_cmx(&drawing(vec![Page { size: None, layers: vec![layer("L", shapes.to_vec())] }])).unwrap().merged_looks
+    };
+    assert!(!written(ink(0.5, [1.0, 0.0, 0.0])), "one look");
+    assert!(written(ink(0.5, [0.0, 1.0, 0.0])), "a second look");
+    // At 1 % both looks store the same color, and only the tint changes it.
+    let gray = |tint, v| Color::Spot { name: "Gray".into(), tint, look: Some([v; 3]) };
+    let shapes =
+        [gray(1.0, 0.5), gray(0.01, 0.501)].map(|c| Object::Shape(Box::new(Shape::new(square(0.0, 0.0, 1.0), Matrix::IDENTITY, Some(c), None))));
+    let w = write_cmx(&drawing(vec![Page { size: None, layers: vec![layer("L", shapes.to_vec())] }])).unwrap();
+    assert!(w.zero_tints && !w.merged_looks);
+}
+
+#[test]
 fn a_cubic_looping_between_its_samples_is_reported() {
     let p = |x, y| Pt { x, y };
     // (s² − 1, s³ − s) for s from −2 to 30 crosses itself at s = −1 and 1.

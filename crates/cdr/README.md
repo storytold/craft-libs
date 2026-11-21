@@ -96,7 +96,8 @@ objects, coordinates or dashes than a read within the limits takes, a file longe
 size, and a chunk past its 32-bit size. Otherwise the returned `Written` reports paths split or cut into several curves, dashes
 rounded to whole outline widths, nonzero fills that may fill differently, names that open
 shortened, spot colors at a tint too low to keep their look, with no name or with no known look
-(written black), and what was left out or written opaque, unclipped or unlocked.
+(written black), uses of one ink with different looks, and what was left out or written opaque,
+unclipped or unlocked.
 
 The header's index offsets, the index chunks (`LIST indx`), the instruction counts and offsets
 inside page, layer and group records, and the bounds inside layer and group records are not

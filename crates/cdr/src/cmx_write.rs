@@ -92,6 +92,10 @@ pub struct Written {
     /// A spot color's look is unknown in every use of its name (or, for a spot color with no name,
     /// in that use), so it is written, and opens, as black at its tint.
     pub unknown_looks: bool,
+    /// A spot color name was used with different looks, and a use was written with the look of
+    /// the use at the strongest tint, so that it opens more than 2/255 off what its own look would
+    /// open as, or off its own look where its own look would not.
+    pub merged_looks: bool,
     /// The drawing held what the file does not hold: hidden layers, groups or shapes, guide and
     /// grid layers, guidelines and master layers (left out), opacity below 1 or a blend mode
     /// (written opaque and normal), clipping (written unclipped), locked layers, groups or shapes
@@ -163,6 +167,7 @@ pub fn write(drawing: &Drawing, limits: crate::Limits) -> Result<Written, Error>
         nonzero_fills: w.nonzero_fills,
         unnamed_spots: w.unnamed_spots,
         unknown_looks: w.unknown_looks,
+        merged_looks: w.merged_looks,
         left_out: w.left_out,
     })
 }
@@ -471,6 +476,7 @@ struct Writer {
     nonzero_fills: bool,
     unnamed_spots: bool,
     unknown_looks: bool,
+    merged_looks: bool,
     left_out: bool,
 }
 
@@ -546,11 +552,27 @@ impl Writer {
             self.long_names |= shortened(name);
             // The reader takes the tint back out of the stored color; at a low tint the 8-bit
             // values do not hold enough of the look for that.
-            let [b, g, r] = [key.values[0], key.values[1], key.values[2]].map(|v| f32::from(v) / 255.0);
-            let back = crate::records::untinted([r, g, b], f32::from(key.values[3]) / 100.0);
-            let want = self.looks.get(name).copied().or(*look).unwrap_or([0.0; 3]);
-            self.zero_tints |= key.values[3] == 0 || back.iter().zip(want).any(|(a, w)| (a - w.clamp(0.0, 1.0)).abs() > 2.0 / 255.0);
+            let opens = |k: &ColorKey| {
+                let [b, g, r] = [k.values[0], k.values[1], k.values[2]].map(|v| f32::from(v) / 255.0);
+                crate::records::untinted([r, g, b], f32::from(k.values[3]) / 100.0)
+            };
+            // More than 2/255 apart in some value, with room for the reader's rounding.
+            let lost = |opened: &[f32; 3], want: [f32; 3]| opened.iter().zip(want).any(|(a, w)| (a - w.clamp(0.0, 1.0)).abs() > 2.0 / 255.0 + 1e-6);
+            let back = opens(&key);
+            let ink = self.looks.get(name).copied().or(*look).unwrap_or([0.0; 3]);
+            self.zero_tints |= key.values[3] == 0 || lost(&back, ink);
             self.unknown_looks |= look.is_none() && !self.looks.contains_key(name);
+            // A use with a look of its own: the ink's look written in its place changed it when the
+            // use opens off what its own look would open as, or off its own look where its own
+            // look would not. Otherwise the tint alone keeps its own look from opening again.
+            if let Some(own) = look {
+                let back_own = if self.looks.get(name) == Some(own) { back } else { opens(&color_key(c)) };
+                if lost(&back, back_own) || (lost(&back, *own) && !lost(&back_own, *own)) {
+                    self.merged_looks = true;
+                } else {
+                    self.zero_tints |= lost(&back_own, *own);
+                }
+            }
         }
         if let Some(name) = key.name.as_ref().filter(|_| !self.tables.colors.index.contains_key(&key)) {
             self.table_bytes = self.table_bytes.saturating_add(2 * utf16_prefix(name).len());
