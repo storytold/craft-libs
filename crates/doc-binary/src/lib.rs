@@ -362,7 +362,15 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     drawn.sort_by_key(|(cp, _)| *cp);
     let ctx = WalkCtx { drawn: &drawn, ..ctx };
 
-    let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp.hdd), &mut pics, max_paragraphs)?;
+    let hf_ids = header_parts(
+        &ctx,
+        &mut doc,
+        (final_section(&sects, fib.ccp.text) + 1).min(sects.len()),
+        &stories,
+        (hdd_base, fib.ccp.hdd),
+        &mut pics,
+        max_paragraphs,
+    )?;
     note_separators(&ctx, &mut doc, &stories, (hdd_base, fib.ccp.hdd), &mut pics, max_paragraphs)?;
 
     // Footnote and endnote stories: each text range becomes a part; the reference CPs then
@@ -373,10 +381,10 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let endnotes = notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT);
     note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp.edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
     // Sorted so the main walk finds each reference by binary search.
-    note_links.sort_by_key(|l| l.cp);
+    link_custom_marks(&ctx, &mut note_links);
     let mut marks = notes::parse_bookmarks(&table, &fib, comments::Layout::Word97);
     let atn_base = hdd_base.saturating_add(fib.ccp.hdd);
-    let comments = comments::parse(&table, &fib, comments::Layout::Word97);
+    let comments = comments::in_main_text(comments::parse(&table, &fib, comments::Layout::Word97), fib.ccp.text);
     comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp.atn), &mut marks, &mut pics, max_paragraphs)?;
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
@@ -452,17 +460,25 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
         sprms
     });
     let stories = word6::header_stories(word, &fib, sects.iter().map(|s| s.grpf_ihdt));
-    let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp_hdd), &mut pics, max_paragraphs)?;
+    let hf_ids = header_parts(
+        &ctx,
+        &mut doc,
+        (final_section(&sects, fib.ccp_text) + 1).min(sects.len()),
+        &stories,
+        (hdd_base, fib.ccp_hdd),
+        &mut pics,
+        max_paragraphs,
+    )?;
     note_separators(&ctx, &mut doc, &stories, (hdd_base, fib.ccp_hdd), &mut pics, max_paragraphs)?;
     let mut note_links: Vec<NoteLink> = Vec::new();
     let footnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT);
     note_parts(&ctx, &mut doc, &footnotes, (ftn_base, fib.ccp_ftn), NoteKind::Footnote, &mut note_links, &mut pics, max_paragraphs)?;
     let endnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT);
     note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp_edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
-    note_links.sort_by_key(|l| l.cp);
+    link_custom_marks(&ctx, &mut note_links);
     let mut marks = notes::parse_bookmarks(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page()));
     let atn_base = hdd_base.saturating_add(fib.ccp_hdd).saturating_add(fib.ccp_mcr);
-    let comments = comments::parse(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page()));
+    let comments = comments::in_main_text(comments::parse(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page())), fib.ccp_text);
     comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp_atn), &mut marks, &mut pics, max_paragraphs)?;
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
@@ -580,6 +596,8 @@ struct NoteLink {
     cp: u32,
     kind: NoteKind,
     id: u32,
+    /// Whether the note has a custom mark (FRD 0); `custom` is read once every reference is known.
+    wants_custom: bool,
     custom: Option<(String, u32)>,
 }
 
@@ -588,13 +606,13 @@ const MAX_MARK: usize = 10;
 
 /// A custom note mark at `cp`: its characters up to the end of their character run, as Word reads
 /// a mark (`ab` reads as one mark, the space after it, formatted apart, as text), and the CP
-/// after them.
-fn custom_mark(ctx: &WalkCtx<'_>, cp: u32) -> Option<(String, u32)> {
+/// after them. It stops before `stop`, the next note reference, which has a mark of its own.
+fn custom_mark(ctx: &WalkCtx<'_>, cp: u32, stop: Option<u32>) -> Option<(String, u32)> {
     let fc_of = |cp: u32| ctx.pieces.fc_of_cp(cp);
     let run = ctx.chpx_bins.chpx_run(ctx.word, fc_of(cp)?);
     let mut mark = String::new();
     let mut at = cp;
-    while mark.chars().count() < MAX_MARK && fc_of(at).is_some_and(|fc| run.contains(fc)) {
+    while mark.chars().count() < MAX_MARK && stop.is_none_or(|s| at < s) && fc_of(at).is_some_and(|fc| run.contains(fc)) {
         let Ok((c, units)) = ctx.pieces.char_at(ctx.word, at) else { break };
         if (c as u32) < 0x20 {
             break;
@@ -631,11 +649,27 @@ fn note_parts(
         let blocks = story_blocks(ctx, a, b, pics, max_paragraphs)?;
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(part, blocks);
-            let custom = if note.custom { custom_mark(ctx, note.cp) } else { None };
-            links.push(NoteLink { cp: note.cp, kind, id, custom });
+            links.push(NoteLink { cp: note.cp, kind, id, wants_custom: note.custom, custom: None });
         }
     }
     Ok(())
+}
+
+/// Sorts `links` by reference CP and reads each custom mark, up to the next reference.
+fn link_custom_marks(ctx: &WalkCtx<'_>, links: &mut [NoteLink]) {
+    links.sort_by_key(|l| l.cp);
+    let cps: Vec<u32> = links.iter().map(|l| l.cp).collect();
+    for l in links.iter_mut().filter(|l| l.wants_custom) {
+        let stop = cps.get(cps.partition_point(|&c| c <= l.cp)).copied();
+        l.custom = custom_mark(ctx, l.cp, stop);
+    }
+}
+
+/// The index of the final section: the first that reaches the end of the main text (in a
+/// malformed PlcfSed, sections after it are ignored, their headers and footers too), else the
+/// last one.
+fn final_section(sects: &[sections::Section], ccp_text: u32) -> usize {
+    sects.iter().position(|s| s.end_cp >= ccp_text).unwrap_or(sects.len().saturating_sub(1))
 }
 
 /// Each section's properties (its header and footer parts included) go on the paragraph that ends
@@ -653,9 +687,7 @@ fn attach_sections(doc: &mut Document, paras: &mut [table::ParaOut], sects: &[se
         props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
         props
     };
-    // The final section is the first that reaches the end of the main text (in a malformed
-    // PlcfSed, sections after it are ignored), else the last one.
-    let final_si = sects.iter().position(|s| s.end_cp >= ccp_text).unwrap_or(sects.len().saturating_sub(1));
+    let final_si = final_section(sects, ccp_text);
     for (si, sec) in sects.iter().enumerate().take(final_si) {
         if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
             p.para.section = Some(Box::new(with_parts(si, &sec.props)));
@@ -878,7 +910,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         if let Some(link) = ctx.notes.get(ctx.notes.partition_point(|l| l.cp < cp)).filter(|l| l.cp == cp)
             && let Some((mark, after)) = &link.custom
         {
-            pb.push('\u{FFFC}', CharProps::default());
+            pb.push('\u{FFFC}', anchor_props(ctx, cp));
             pb.objects.push(InlineObject::NoteRef { kind: link.kind, id: link.id, custom: mark.clone() });
             cp = (*after).max(cp.saturating_add(1));
             continue;
@@ -1053,7 +1085,19 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         }
         cp = cp.saturating_add(units);
     }
-    close_marks(marks.take_while(|&&(mcp, _)| mcp <= cp_end), &mut out, &mut pb);
+    // A boundary at `cp_end` is still this story's if it ends a range, but a start there opens
+    // one in the next story: kept only with its end.
+    let rest: Vec<&(u32, notes::Mark)> = marks.take_while(|&&(mcp, _)| mcp <= cp_end).collect();
+    let ended = |m: &notes::Mark| {
+        rest.iter().any(|(_, e)| match (m, e) {
+            (notes::Mark::Start(a), notes::Mark::End(b)) => a == b,
+            (notes::Mark::CommentStart(a), notes::Mark::CommentEnd(b)) => a == b,
+            _ => false,
+        })
+    };
+    let kept =
+        rest.iter().copied().filter(|(mcp, m)| *mcp < cp_end || !matches!(m, notes::Mark::Start(_) | notes::Mark::CommentStart(_)) || ended(m));
+    close_marks(kept, &mut out, &mut pb);
     if !pb.text.is_empty() {
         let done = pb;
         out.push(ParaOut {
