@@ -241,13 +241,22 @@ impl ListRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         for (at, position, cell) in &placed.texts {
             let text = &self.texts[*at];
-            if self.cell_fields.iter().any(|(column, _)| *column == text.column) {
+            let field = self.cell_fields.iter().any(|(column, _)| *column == text.column);
+            if field && !self.field_suffixes.contains(&text.column) {
                 continue;
             }
             let look = self.cell_look(cx.style, &text.column);
             let cell = Rect::from_x_y_ranges(cell.x_range(), cx.rect.y_range());
-            let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
+            let mut room = if field && self.label_column(&self.cells) == Some(&text.column) {
+                placed.label
+            } else {
+                Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()))
+            };
             let run = self.cell_run(cx.style, *at).color(cx.resolve(&look.color));
+            if field {
+                let width = ui.draw().layout(&run, f32::INFINITY).size().x;
+                room = split_field_text(room, rtl, width, sizes.gap).1;
+            }
             let layout = ui.draw().layout(&run, room.width());
             let top =
                 if text.wrap { room.top() + ((room.height() - layout.size().y) / 2.0).max(0.0) } else { room.center().y - sizes.label_line / 2.0 };
@@ -303,6 +312,15 @@ impl ListRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         let label = self.label_column(&self.cells).cloned();
         let band = placed.label.y_range();
+        let suffixes: Vec<_> = self
+            .texts
+            .iter()
+            .filter(|text| self.field_suffixes.contains(&text.column))
+            .map(|text| {
+                let run = TextRun::new(text.text.as_str()).role(cx.style.cell.role);
+                (text.column.clone(), ui.draw().layout(&run, f32::INFINITY).size().x)
+            })
+            .collect();
         for (at, (column, field)) in self.cell_fields.iter_mut().enumerate() {
             let (Some(item), Some(size)) = (field.item.take(), field.size) else { continue };
             let room = if label.as_ref() == Some(column) {
@@ -312,10 +330,20 @@ impl ListRow<'_> {
                 let cell = Rect::from_x_y_ranges(cell.x_range(), band);
                 Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()))
             };
+            let room = suffixes.iter().find(|(key, _)| key == column).map_or(room, |(_, width)| split_field_text(room, rtl, *width, sizes.gap).0);
             let height = size.ideal.y.min(room.height());
             item.show(ui, cell_key(at), Rect::from_center_size(room.center(), Vec2::new(room.width(), height)));
         }
     }
+}
+
+/// Divides a cell's inset room into a field and its trailing text, in reading order.
+fn split_field_text(room: Rect, rtl: bool, text_width: f32, gap: f32) -> (Rect, Rect) {
+    let text = text_width.min(room.width());
+    let gap = gap.min((room.width() - text).max(0.0));
+    let field = (room.width() - text - gap).max(0.0);
+    let flow = Flow::new(room, rtl);
+    (flow.span(0.0, field), flow.span(field + gap, text))
 }
 
 /// The ink of a toggle or link glyph that is `on` or not: its own part's hover and press, over the row's selection and

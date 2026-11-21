@@ -667,6 +667,16 @@ impl ListRow<'_> {
                 cx.cell_width(&text.column, line + inset);
             }
         }
+        for (column, field) in &self.cell_fields {
+            if let Some(size) = field.size
+                && self.cells.iter().any(|(key, _)| key == column)
+            {
+                let suffix = self.texts.iter().find(|text| text.column == *column && self.field_suffixes.contains(column)).map_or(0.0, |text| {
+                    cx.layout_at(&TextRun::new(text.text.as_str()).role(cx.style.cell.role), f32::INFINITY).size().x + cx.style.sizes.gap
+                });
+                cx.cell_width(column, size.ideal.x + suffix + inset);
+            }
+        }
         // A status cell holds its icon, text and action whole, with the gaps the slots keep between them.
         let (role, sizes) = (cx.style.cell.role, &cx.style.sizes);
         for cell in &self.statuses {

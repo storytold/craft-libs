@@ -379,6 +379,8 @@ pub struct ListRow<'a> {
     pub(super) below: Vec<Hosted<'a>>,
     /// The components shown in a column's cell in place of its text (`cell_field`).
     pub(super) cell_fields: Vec<(ColumnKey, Hosted<'a>)>,
+    /// Columns whose field is followed by their text cell.
+    pub(super) field_suffixes: Vec<ColumnKey>,
     /// The row's depth in a tree, which indents it; `None` for a row of a flat list.
     /// The row is at `depth` levels of a tree: indented by it, an `AccessKit` tree item.
     #[prop]
@@ -470,6 +472,7 @@ impl<'a> ListRow<'a> {
             trailing: Vec::new(),
             below: Vec::new(),
             cell_fields: Vec::new(),
+            field_suffixes: Vec::new(),
             depth: None,
             group: None,
             disclosure_by_host: false,
@@ -610,6 +613,13 @@ impl<'a> ListRow<'a> {
     pub fn cell_field<C: Show + 'a>(mut self, column: ColumnKey, field: C, output: impl FnOnce(C::Output) + 'a) -> Self {
         self.cell_fields.push((column, Hosted { item: Some(Box::new(Hosting::new(field, output))), size: None }));
         self
+    }
+
+    /// Text following a hosted field in the same column. The field takes the room the text and their gap leave.
+    #[must_use]
+    pub fn cell_field_suffix(mut self, column: ColumnKey, text: impl Into<Label>) -> Self {
+        self.field_suffixes.push(column.clone());
+        self.cell(column, text)
     }
 
     /// Like `cell`, with the text wrapped to the column's width; the row is as high as its tallest wrapped cell.

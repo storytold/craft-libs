@@ -47,6 +47,74 @@ fn a_table_cell_text_field_reports_edits() {
     assert_eq!(edited.borrow().as_deref(), Some("1"), "typing reports an edit before Enter");
 }
 
+#[trial]
+fn a_table_cell_can_show_a_field_followed_by_text() {
+    use craft_ui::contract::Bind;
+    use craft_ui::text::TextField;
+    for (direction, column) in [
+        (craft_i18n::Direction::Ltr, NAME),
+        (craft_i18n::Direction::Rtl, NAME),
+        (craft_i18n::Direction::Ltr, SIZE),
+        (craft_i18n::Direction::Rtl, SIZE),
+    ] {
+        let mut fixture = Fixture::new(move |ui| {
+            let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::Content)];
+            let keys = [0_usize];
+            let source = keyed(&keys, |key: &usize| *key);
+            Table::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+                ListRow::new("File").cells(icx.cells()).cell_field_suffix(column.clone(), "2 of 3").cell_field(
+                    column.clone(),
+                    TextField::new("Page range", Bind::given(String::new())).placeholder("Choose pages 1–3"),
+                    |_| {},
+                )
+            });
+        });
+        fixture.in_room(Room::Dialog).direction(direction).settle();
+        let field = fixture.by_label("Page range").expect("the range field");
+        let count = fixture.texts().iter().find(|text| text.text == "2 of 3").expect("the count is painted").rect;
+        assert!(
+            if direction == craft_i18n::Direction::Ltr { field.rect.right() <= count.left() } else { count.right() <= field.rect.left() },
+            "field {:?} and count {count:?} follow reading order",
+            field.rect
+        );
+        assert!(field.rect.width() >= 80.0, "the field keeps room for a range: {:?}", field.rect);
+    }
+}
+
+#[trial]
+fn an_accessibility_focused_table_cell_field_reports_typing() {
+    use craft_behavior::EditEvent;
+    use craft_ui::contract::Bind;
+    use craft_ui::testing::focus::AccessActionKind;
+    use craft_ui::text::TextField;
+    let edited = Rc::new(RefCell::new(None::<String>));
+    let seen = edited.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::Content)];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+            let seen = seen.clone();
+            ListRow::new("File").cells(icx.cells()).cell_field(
+                SIZE,
+                TextField::new("Page range", Bind::given(String::new())).placeholder("All pages"),
+                move |out| {
+                    for event in out.events {
+                        if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
+                        {
+                            *seen.borrow_mut() = Some(value);
+                        }
+                    }
+                },
+            )
+        });
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let field = fixture.by_label("Page range").expect("the field");
+    fixture.access(AccessActionKind::Focus, &field).type_text("1").settle();
+    assert_eq!(edited.borrow().as_deref(), Some("1"), "typing after accessibility focus reports the edit");
+}
+
 const NAME: ColumnKey = ColumnKey::new("name");
 const SIZE: ColumnKey = ColumnKey::new("size");
 const DATE: ColumnKey = ColumnKey::new("date");
