@@ -2226,24 +2226,20 @@ mod parallel_tests {
         }
     }
 
-    /// The bytes depend on the image, not on the machine: one, two and 32 worker threads on four bands
-    /// give the same stream. A large image's reference stream is also carried unchanged through `encode`.
+    /// The bytes depend on the image, not on the machine: one, two, seven and 32 worker threads
+    /// (and the machine's own count, through `encode`) give the same stream.
     #[test]
     fn the_parallel_encoder_gives_the_same_bytes_on_any_thread_count() {
         let (w, h, bpp) = (1201usize, 1013usize, 4usize);
         let px: Vec<u8> =
             (0..w * h * bpp).map(|i| ((i / 5) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 11) as u8 / 5 + (i % 89) as u8).collect();
         assert!(px.len() >= PARALLEL_MIN_BYTES && px.len() > 2 * BAND_BYTES);
-        // Three full bands and a partial fourth cover inline workers, shared work and more workers than bands.
-        let small_h = 3 * band_rows(w * bpp) + 1;
-        let small = &px[..w * small_h * bpp];
         for level in [PngCompression::Fast, PngCompression::Default, PngCompression::Best] {
-            let small_one = banded_idat(small, w, small_h, bpp, level, 1).unwrap();
-            for threads in [2, 32] {
-                assert!(banded_idat(small, w, small_h, bpp, level, threads).unwrap() == small_one, "{level:?}: {threads} threads differ from one");
-            }
-            // Keep the large image on the public encoder's parallel path, including its exact stream comparison.
             let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
+            for threads in [2, 7, 32] {
+                assert!(banded_idat(&px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
+            }
+            assert!(parallel_idat(&px, w, h, bpp, level).unwrap() == one, "{level:?}: this machine's thread count differs from one");
             let img = Image::from_raw(w as u32, h as u32, ChannelLayout::Rgba, SampleType::U8, px.clone()).unwrap();
             let opts = EncodeOptions { png_compression: level, ..Default::default() };
             let png = crate::encode(&img, Format::Png, &opts).unwrap();
