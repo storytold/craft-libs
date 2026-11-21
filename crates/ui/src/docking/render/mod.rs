@@ -29,7 +29,7 @@ pub(in crate::docking) use body_drag::held_events;
 #[cfg(feature = "native-windows")]
 pub(in crate::docking) use body_drag::{cancel_body_route, mark_app_drag};
 #[cfg(feature = "native-windows")]
-pub(in crate::docking) use native::{InputHook, WindowSystem, send_keys, set_input_hook, typing_window};
+pub(in crate::docking) use native::{InputHook, WindowSystem, native_place, send_keys, set_input_hook, typing_window};
 
 /// How long after blocking starts a native window that still has the keyboard hands it to the
 /// main window: an OS dialog the app opens with the modal (a file dialog) takes focus a little

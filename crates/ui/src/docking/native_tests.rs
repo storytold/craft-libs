@@ -442,6 +442,74 @@ fn a_minimized_native_window_shrinks_to_its_bar_and_keeps_its_expanded_size() {
     assert_eq!(window(&d, 5).native, Some([open.left(), open.top(), 300.0, 300.0]));
 }
 
+/// Set the width of window 5 in the frame's logic, before the area draws, keeping the rest of
+/// its place from [`super::native_place`]; returns the place it read.
+#[allow(clippy::expect_used)]
+fn widen(d: &mut DockDriver<u32, Content>, width: f32) -> Option<[f32; 4]> {
+    let area = d.id;
+    let mut read = None;
+    let out = d.frame_with(vec![], |ctx, layout| {
+        read = super::native_place(ctx, area, &layout.floating[0]);
+        if let Some([x, y, _, h]) = read {
+            layout.apply(Action::SetNative { panel: 5, rect: Some([x, y, width, h]) }).expect("width");
+        }
+    });
+    d.layout.apply_all(out.actions, |_| Permissions::default()).expect("the frame's actions");
+    read
+}
+
+#[test]
+fn native_place_has_a_report_the_area_has_not_drawn_yet() {
+    let mut d = driver(layout(true));
+    let viewport = d.viewport(id_of(&d));
+    for _ in 0..40 {
+        d.step(vec![]);
+    }
+    // The window system moves the window and changes its height. The frame that reports it
+    // sets only the width before the area draws, and the window keeps the reported rest.
+    let moved = Rect::from_min_size(pos2(700.0, 200.0), vec2(240.0, 410.0));
+    d.host().windows.get_mut(&viewport).unwrap().rect = moved;
+    assert_eq!(widen(&mut d, 400.0), Some([700.0, 200.0, 240.0, 410.0]));
+    d.settle();
+    assert_eq!(d.host().windows[&viewport].rect, Rect::from_min_size(moved.min, vec2(400.0, 410.0)));
+    assert_eq!(window(&d, 5).native, Some([700.0, 200.0, 400.0, 410.0]));
+}
+
+#[test]
+fn native_place_has_a_commanded_move_until_it_lands() {
+    let mut d = driver(layout(true));
+    let viewport = d.viewport(id_of(&d));
+    for _ in 0..40 {
+        d.step(vec![]);
+    }
+    let open = d.host().windows[&viewport].rect;
+    // The application moves the window; the window system still reports the old place.
+    d.host().lag = true;
+    d.layout.apply(Action::SetNative { panel: 5, rect: Some([600.0, 120.0, 240.0, 300.0]) }).unwrap();
+    d.step(vec![]);
+    assert_eq!(d.host().windows[&viewport].rect, open, "not landed yet");
+    assert_eq!(widen(&mut d, 400.0), Some([600.0, 120.0, 240.0, 300.0]));
+    d.settle();
+    assert_eq!(d.host().windows[&viewport].rect, Rect::from_min_size(pos2(600.0, 120.0), vec2(400.0, 300.0)));
+    assert_eq!(window(&d, 5).native, Some([600.0, 120.0, 400.0, 300.0]));
+}
+
+#[test]
+fn native_place_keeps_the_expanded_height_of_a_minimized_window() {
+    let mut d = driver(layout(true));
+    let viewport = d.viewport(id_of(&d));
+    let open = d.host().windows[&viewport].rect;
+    d.layout.apply(Action::SetMinimized { panel: 5, minimized: true }).unwrap();
+    for _ in 0..40 {
+        d.step(vec![]);
+    }
+    assert!(d.host().windows[&viewport].rect.height() < 300.0, "collapsed to its bar");
+    assert_eq!(widen(&mut d, 400.0), Some([open.left(), open.top(), 240.0, 300.0]));
+    d.layout.apply(Action::SetMinimized { panel: 5, minimized: false }).unwrap();
+    d.settle();
+    assert_eq!(d.host().windows[&viewport].rect, Rect::from_min_size(open.min, vec2(400.0, 300.0)));
+}
+
 #[test]
 fn a_locked_area_moves_no_native_window_and_records_where_the_os_put_it() {
     let mut d = driver(layout(true));
