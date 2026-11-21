@@ -67,6 +67,8 @@ mod no_zoom_tests;
 #[cfg(test)]
 #[cfg(test)]
 mod subpixel_dash_tests;
+#[cfg(test)]
+mod thin_stroke_width_tests;
 mod tiling_cell_backdrop_tests;
 /// PdfCraft patch: exported for its regression test.
 pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
