@@ -1,6 +1,7 @@
 //! The row line: a child of an unwrapped row that is one line sits with its centre on the row's line; a child of more
-//! than one line (a column, a field with its label above or a help line below) sits at the row's top. A control with
-//! its label after it sits on the line by its control, as a bare control does, in a row and in a grid's cell.
+//! than one line (a column, a field with a help line below) sits at the row's top. A control with its label after it
+//! or above it, and a field labelled above, sit on the line by their control, as a bare control does, in a row and in
+//! a grid's cell.
 
 use craft_behavior::ColumnWidth;
 use craft_theme::ControlSize;
@@ -107,10 +108,10 @@ fn columns_sit_at_the_rows_top_and_lines_on_the_line() {
     assert!(four.top() <= control(&fixture, &["Go"]).top() + ROUNDING, "the four-line column starts below the button's top");
 }
 
-/// A field labelled above its control is two lines and sits at the row's top, so a button beside it sits level with
-/// the label, not the control.
+/// A field labelled above its control sits on the row's line by its control, as a control labelled above does: a
+/// button beside it sits level with the control, and the label stands above the line.
 #[trial]
-fn a_field_labelled_above_sits_at_the_rows_top() {
+fn a_field_labelled_above_sits_on_the_row_line_by_its_control() {
     let fixture = settled(|ui| {
         Row::new().show(ui, |ui, _| {
             Field::new("Caption").layout(FieldLayout::Above).sizing(Sizing::Content).show(ui, |ui, _| {
@@ -121,7 +122,7 @@ fn a_field_labelled_above_sits_at_the_rows_top() {
     });
     let (caption, control, button) = (text(&fixture, "Caption"), text(&fixture, "X"), text(&fixture, "Y"));
     assert!(caption.bottom() < control.top(), "the label sits above its control");
-    assert!(button.center().y < control.top(), "the button {button:?} sits level with the label, above the control {control:?}");
+    assert!((button.center().y - control.center().y).abs() <= ROUNDING, "the button {button:?} sits on the control's line {control:?}");
 }
 
 /// A check box whose label runs to a second line under it, beside a button in a row: its box sits on the button's

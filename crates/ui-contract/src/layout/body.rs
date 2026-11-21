@@ -1155,9 +1155,10 @@ pub(crate) struct InFlow {
     /// rows run along Y, or a container whose first child is one. The child is one line when that centre lies at
     /// half its height (`one_line`).
     pub first: Option<f32>,
-    /// `first` is the line of the child's own unwrapped `Row` body, or of the control of a labelled control's row: the
-    /// child sits on a row's line by it even when it is more than one line (a nested row with a child of two lines, a
-    /// check box whose label has a detail line under it, a control under its label).
+    /// `first` is the line of the child's own unwrapped `Row` body, of the control of a labelled control's row, or of
+    /// the first control of a container labelled above its body: the child sits on a row's line by it even when it is
+    /// more than one line (a nested row with a child of two lines, a check box whose label has a detail line under it,
+    /// a control or a field under its label).
     pub line: bool,
 }
 
@@ -1166,8 +1167,8 @@ const ONE_LINE_SLACK: f32 = 0.5;
 
 /// The centre of the line of a child `height` tall whose first line's centre lies `first` below its top, when the
 /// child is one line: a control, a row of one-line children, a container around one line (a field with its label
-/// beside its control). A child of more than one line (a column, a field with its label above or a help line below)
-/// has its first line above its middle.
+/// beside its control). A child of more than one line (a column, a field with a help line below) has its first line
+/// above its middle.
 fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
     first.filter(|first| (2.0 * first - height).abs() <= ONE_LINE_SLACK)
 }
