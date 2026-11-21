@@ -3,6 +3,7 @@
 use super::*;
 use crate::ControlRequest;
 use crate::server::{Hub, Protocol, Stop, Summary, Waits as ServerWaits};
+use socket2::{Domain, Socket, Type};
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -78,9 +79,14 @@ fn addr(port: u16) -> String {
     format!("127.0.0.1:{port}")
 }
 
-/// A port nothing listens on.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+/// Keep this port bound without listening, so another normal test listener cannot take it.
+fn reserve_non_listening_port() -> (Socket, u16) {
+    let reserved = Socket::new(Domain::IPV4, Type::STREAM, Some(socket2::Protocol::TCP)).unwrap();
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+    reserved.bind(&address.into()).unwrap();
+    let port = reserved.local_addr().unwrap().as_socket().unwrap().port();
+    assert_ne!(port, 0);
+    (reserved, port)
 }
 
 #[test]
@@ -115,13 +121,22 @@ fn a_wrong_token_or_none_is_refused() {
 
 #[test]
 fn an_app_not_running_says_how_to_start_it() {
-    let port = free_port();
+    let (reserved, port) = reserve_non_listening_port();
     let mut c = Connection::new(APP, &addr(port), Some(TOKEN));
     let e = c.call(Request::new("document.inspect", json!({}))).unwrap_err();
     let CallError::NotRunning(m) = &e else { panic!("{e:?}") };
     assert!(m.starts_with(&format!("no Probe app is listening at 127.0.0.1:{port}")), "{m}");
     assert!(m.contains(&format!("`probe --control {port}`")), "{m}");
     assert_eq!(c.try_connect().unwrap_err().kind(), std::io::ErrorKind::NotConnected);
+    drop(reserved);
+}
+
+#[test]
+fn the_not_running_fixture_keeps_its_port_from_another_listener() {
+    let (reserved, port) = reserve_non_listening_port();
+    let rival = TcpListener::bind(("127.0.0.1", port));
+    assert!(rival.is_err(), "another listener acquired the reserved port");
+    drop(reserved);
 }
 
 /// An app that goes away during a call is lost, not "not running"; the next call says it is not
