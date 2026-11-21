@@ -16,7 +16,7 @@ fn comments(n: u32, imported: bool) -> Document {
     d
 }
 
-fn cpu_cost(mut f: impl FnMut()) -> f64 {
+pub(super) fn cpu_cost(mut f: impl FnMut()) -> f64 {
     let ran = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
     let (wall, before) = (std::time::Instant::now(), ran());
     f();

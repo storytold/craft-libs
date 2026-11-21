@@ -5,13 +5,13 @@
 //! paragraph, and to compare every control with every other one, so the save was quadratic in the
 //! number of controls.
 
-use std::time::Instant;
-
 use craft_docx::write;
 use craft_wordmodel::control::{ContentControl, ControlKind};
 use craft_wordmodel::para::InlineObject;
 use craft_wordmodel::props::CharProps;
 use craft_wordmodel::{Document, Paragraph, para_block};
+
+use super::comment_save_cost::cpu_cost;
 
 /// One paragraph per control, the control inline in it.
 fn inline_controls(n: usize) -> Document {
@@ -51,21 +51,24 @@ fn block_controls(n: usize) -> Document {
 
 /// How much more saving the bigger document costs than the smaller one, for the bigger one
 /// `scale` times the size of the smaller one's: ~`scale` when linear, ~`scale`² when quadratic.
-/// Each is the cheapest of several runs after a warm-up, the runs alternating so a busy spell
-/// slows both sizes alike; the smaller document is saved `scale` times over per run, so both
-/// timings are long against the clock's resolution.
+/// Use the cheapest of five smaller-document samples as a fixed baseline, saving it `scale`
+/// times per sample. Then take up to five larger-document samples, stopping once their minimum
+/// is below eight times that baseline. Thread CPU time excludes scheduler delays on Linux;
+/// the existing timer falls back to elapsed time elsewhere.
 fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
     small();
     big();
     let mut small_scaled = || (0..scale).for_each(|_| small());
-    let (mut t1, mut tk) = (f64::INFINITY, f64::INFINITY);
+    let mut t1 = f64::INFINITY;
     for _ in 0..5 {
-        let a = Instant::now();
-        small_scaled();
-        t1 = t1.min(a.elapsed().as_secs_f64() / scale as f64);
-        let b = Instant::now();
-        big();
-        tk = tk.min(b.elapsed().as_secs_f64());
+        t1 = t1.min(cpu_cost(&mut small_scaled) / scale as f64);
+    }
+    let mut tk = f64::INFINITY;
+    for _ in 0..5 {
+        tk = tk.min(cpu_cost(&mut big));
+        if tk / t1.max(1e-9) < 8.0 {
+            break;
+        }
     }
     (t1, tk, tk / t1.max(1e-9))
 }
