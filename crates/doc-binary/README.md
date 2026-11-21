@@ -19,6 +19,8 @@ assert_eq!(doc.body[0].as_para().map(|p| p.text.as_str()), Some("Hello"));
 - Text in pieces (8-bit and UTF-16), paragraph and character formatting, styles, lists,
   tables, sections, headers and footers, notes, comments, fields, bookmarks, pictures and
   OfficeArt shapes, document properties.
+- OfficeArt WordArt text (shape types 136–175) as unfilled, borderless text boxes, including
+  grouped shapes, with the named font and literal fill colour (or line colour when unfilled).
 - XOR obfuscation, RC4 and RC4 CryptoAPI password protection.
 - Tracked insertions and deletions, with their author and time.
 
