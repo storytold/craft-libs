@@ -13,7 +13,7 @@ use hayro_syntax::content::ops::{LineCap, LineJoin};
 use hayro_syntax::object::dict::keys::{FONT, SMASK, TR, TR2};
 use hayro_syntax::object::{Array, Dict, Name, Number, Object};
 use hayro_syntax::page::Resources;
-use kurbo::{Affine, BezPath, Vec2};
+use kurbo::{Affine, Vec2};
 use smallvec::smallvec;
 use std::ops::Deref;
 
@@ -145,19 +145,6 @@ pub(crate) struct TextState<'a> {
 
     pub(crate) text_matrix: Affine,
     pub(crate) text_line_matrix: Affine,
-
-    // When setting the text rendering mode to `clip`, the glyphs should instead be collected
-    // as paths and then applied as 1 single clip path. This field stores those clip paths.
-    pub(crate) clip_paths: BezPath,
-    /// PdfCraft patch: whether a glyph was shown in a clipping render mode (4 to 7) in this text
-    /// object, so `ET` knows to apply the clip even when none of them contributed an outline: the
-    /// clip is then empty and nothing paints through it. A text object that shows no glyph at all
-    /// leaves the clipping path alone, which is what readers do with it.
-    pub(crate) clip_shown: bool,
-    /// PdfCraft patch: whether a glyph in a clipping mode could not be turned into an outline
-    /// (a Type 3 glyph, which `clip_glyph` does not implement). The real clip is then unknown, so
-    /// `ET` leaves what follows unclipped rather than hiding it.
-    pub(crate) clip_unsupported: bool,
 }
 
 impl<'a> TextState<'a> {
@@ -253,9 +240,6 @@ impl Default for TextState<'_> {
             text_matrix: Affine::IDENTITY,
             text_line_matrix: Affine::IDENTITY,
             rise: 0.0,
-            clip_paths: BezPath::default(),
-            clip_shown: false,
-            clip_unsupported: false,
         }
     }
 }
