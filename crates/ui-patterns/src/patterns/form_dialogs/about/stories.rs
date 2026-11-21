@@ -56,6 +56,17 @@ fn about_dialog_with_mark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     })
 }
 
+#[story(AboutDialog<'static>, covers = [], drive = Drive::Never, title = "About with icon links")]
+fn about_dialog_icon_links(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, AboutTab::About, || {
+        let links = [
+            AboutLink::new("Website", "https://example.org").icon(craft_behavior::IconId::new("globe")),
+            AboutLink::new("Source", "https://example.org/source").icon(craft_behavior::IconId::new("code-xml")),
+        ];
+        HostedAbout::new(info(false).links(links), CREDITS.clone())
+    })
+}
+
 #[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
 fn about_dialog_contributors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tab = *data.choice("tab", AboutTab::Contributors, &TABS);
