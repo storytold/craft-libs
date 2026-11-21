@@ -7,6 +7,7 @@ pub(crate) mod access;
 pub(crate) mod bars;
 pub(crate) mod body;
 pub(crate) mod buttons;
+pub(crate) mod checkbox_sweep;
 pub(crate) mod commands;
 pub(crate) mod contract;
 pub(crate) mod disabled_fade;

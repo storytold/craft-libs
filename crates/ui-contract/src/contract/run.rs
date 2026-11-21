@@ -378,6 +378,7 @@ fn blank_core<'a>(
         member_of: None,
         lent: Default::default(),
         activation: None,
+        pointer_group: None,
         injected: None,
         keep_open: false,
         part_clicked: false,
@@ -1766,6 +1767,7 @@ fn run_passes(
     let env = begun.env();
     let id = resolved.id;
     let mut core = blank_core(env.view(), resolved, stage, begun.ctx.clone(), env.ink, steps::inert_response(ui, id), begun.step1.command.clone());
+    core.pointer_group = Some(ui.scope_id());
     core.faded = begun.facts.faded && !resolved.enabled;
     // 6 to 16, in the host's `Ui`, once per call of the host.
     let mut host = t.host(HostCx { ui: &*ui, env, id, label: &begun.step1.label, size: sizes.size });
