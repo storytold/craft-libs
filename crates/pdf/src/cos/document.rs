@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::cos::CosError;
+use crate::cos::budget::Budget;
 use crate::cos::object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream};
 use crate::cos::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
 
@@ -65,6 +66,8 @@ pub struct Document {
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
     jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,
     stream_limit: usize,
+    /// Bytes of text still allowed to be copied out of the file ([`Budget`]).
+    copy_budget: Arc<Mutex<Budget>>,
     overlay: BTreeMap<u32, Slot>,
     next_num: u32,
     /// Position of the `%PDF-` header (some files have junk before it).
