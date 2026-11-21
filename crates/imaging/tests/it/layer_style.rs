@@ -15,7 +15,7 @@ use craft_ui::contract::Role;
 use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::testing::access::{NodeKey, name};
 use craft_ui::testing::focus::AccessActionKind;
-use craft_ui::testing::{Fixture, Target, trial};
+use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Vec2};
 
 /// The room the dialog is shown in: tall enough for the longest effect page.
@@ -114,6 +114,42 @@ fn a_list_click_commits_the_typing_of_the_page_it_leaves() {
     let typed = host.borrow().draft.style.effect(EffectId(1)).and_then(|e| e.params.number("size"));
     assert_eq!(typed, Some(42.0));
     assert_eq!(host.borrow().draft.page, LayerStylePage::Effect(EffectId(2)), "the chosen page shows once the host applied it");
+}
+
+#[trial]
+fn a_fast_effect_sweep_applies_each_crossed_checkbox_and_ends_on_release() {
+    let kinds = [EffectKind::DropShadow, EffectKind::Satin, EffectKind::OuterGlow, EffectKind::InnerGlow];
+    let effects = kinds.into_iter().enumerate().map(|(i, kind)| instance(i as u32 + 1, kind, true)).collect();
+    let draft = LayerStyleDraft::new(LayerStyle { effects, ..LayerStyle::default() });
+    let (mut fixture, host) = rig_of(host(draft, kinds.into_iter().map(spec).collect()));
+    let first = one(&fixture, Role::CHECK_BOX, "Drop Shadow");
+    let last = one(&fixture, Role::CHECK_BOX, "Inner Glow");
+    fixture.press(&first);
+    fixture.release(&last);
+    fixture.idle(2);
+    assert!(host.borrow().draft.style.effects.iter().all(|effect| !effect.on));
+}
+
+#[trial]
+fn cancelling_an_effect_sweep_restores_checks_and_removes_an_effect_it_added() {
+    let effects = vec![instance(1, EffectKind::DropShadow, false), instance(2, EffectKind::OuterGlow, false)];
+    let draft = LayerStyleDraft::new(LayerStyle { effects, ..LayerStyle::default() });
+    let (mut fixture, host) = rig_of(host(draft, [EffectKind::DropShadow, EffectKind::Satin, EffectKind::OuterGlow].into_iter().map(spec).collect()));
+    let first = one(&fixture, Role::CHECK_BOX, "Drop Shadow");
+    let last = one(&fixture, Role::CHECK_BOX, "Outer Glow");
+    fixture.press(&first);
+    fixture.frame(vec![pointer::moved(last.center())]);
+    {
+        let host = host.borrow();
+        assert_eq!(host.draft.style.effects.len(), 3);
+        assert!(host.draft.style.effects.iter().all(|effect| effect.on));
+    }
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.release(&last);
+    fixture.idle(2);
+    let host = host.borrow();
+    assert_eq!(host.draft.style.effects.len(), 2);
+    assert!(host.draft.style.effects.iter().all(|effect| !effect.on));
 }
 
 /// A rig showing one effect of the Photoshop tables with its defaults, or `params` over them.

@@ -132,3 +132,35 @@ fn a_clicks_event_is_delivered_once_across_the_run_and_the_replays() {
     let selects = rig.seen.borrow().iter().filter(|event| matches!(event, LayersEvent::Select(_))).count();
     assert_eq!(selects, 1, "{:?}", rig.seen.borrow());
 }
+
+/// A pointer move beside the panel replays its view: the panel reads the modifiers it shows its rows with, not the
+/// pointer, so only a modifier change runs it (#2812). Before, every pointer move in the window ran it.
+#[trial]
+fn a_pointer_move_beside_the_panel_replays_it_and_a_modifier_runs_it() {
+    let tree = Tracked::new(FakeLayers::fifty());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut filter = LayerFilter::default();
+        let mut events = Vec::new();
+        let at = egui::Rect::from_min_size(ui.max_rect().min, PANEL);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
+            MemoView::new("layers", Host { tree: &tree, filter: Bind::bound(&mut filter), events: Outbox::new(&mut events) }, host).show(ui);
+        });
+    });
+    fixture.room(Vec2::new(PANEL.x + 400.0, PANEL.y));
+    fixture.settle().idle(2);
+    let runs = |fixture: &Fixture| {
+        let runs = last_frame_memo_runs(fixture.ctx());
+        let count = |wanted: MemoRun| runs.iter().filter(|(name, _, run)| name.contains("Host") && *run == wanted).count();
+        (count(MemoRun::Ran), count(MemoRun::Replayed))
+    };
+    // The pointer enters the window beside the panel; in an app it is already there.
+    fixture.frame(vec![pointer::moved(egui::Pos2::new(PANEL.x + 200.0, 90.0))]);
+    for step in 0..3 {
+        fixture.frame(vec![pointer::moved(egui::Pos2::new(PANEL.x + 200.0, 100.0 + step as f32 * 10.0))]);
+        assert_eq!(runs(&fixture), (0, 1), "pointer move {step} beside the panel replays its view");
+    }
+    fixture.hold(egui::Modifiers::ALT).frame(Vec::new());
+    assert_eq!(runs(&fixture).0, 1, "Alt held runs the view");
+    fixture.frame(Vec::new());
+    assert_eq!(runs(&fixture), (0, 1), "and it replays while Alt stays held");
+}
