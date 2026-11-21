@@ -21,10 +21,12 @@
 //! The exit status is not checked. The run is bounded by [`ProbeLimits`]: each output stream may
 //! hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or
 //! the byte limit. On Unix the child runs in its own process group, and the whole group is killed,
-//! so a process it started that holds the output pipes ends too. A successful lookup is cached for
-//! the process under every input it read (the program, the version argument, the explicit variable
-//! and its value, `PATH`, `PATHEXT`, the current directory, the install folders and the limits). A
-//! failed lookup is not cached.
+//! so a process it started that holds the output pipes ends too. On Windows the child's process
+//! tree is ended with `taskkill /T /F`, then the child is killed; when the child has already exited,
+//! the processes it started are not reached. A successful lookup is cached for the process under
+//! every input it read (the program, the version argument, the explicit variable and its value,
+//! `PATH`, `PATHEXT`, the current directory, the install folders and the limits). A failed lookup is
+//! not cached.
 //!
 //! No function here panics. [`require_oracle!`](crate::require_oracle), [`require_ffmpeg!`](crate::require_ffmpeg)
 //! and [`require_ffprobe!`](crate::require_ffprobe) expand in the calling test: a missing program
@@ -593,8 +595,9 @@ fn spawn_reader(pipe: Option<impl Read + Send + 'static>, is_stdout: bool, cap: 
 
 /// Kill the child and reap it. On Unix the child leads its own process group, and the whole group
 /// is killed first with the `kill` built into `/bin/sh` (the shell runs without `PATH`), so a
-/// process the child started that still holds the output pipes ends too. On Windows only the child
-/// is killed.
+/// process the child started that still holds the output pipes ends too. On Windows the child's
+/// process tree is ended first with [`end_tree`]. The child itself is then killed either way, so
+/// it ends even when the group or tree kill could not run.
 fn kill_and_reap(child: &mut Child) {
     #[cfg(unix)]
     let _ = Command::new("/bin/sh")
@@ -604,8 +607,55 @@ fn kill_and_reap(child: &mut Child) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    #[cfg(windows)]
+    end_tree(child);
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// How long [`end_tree`] lets `taskkill` run before it kills `taskkill` and gives up.
+#[cfg(windows)]
+const TREE_KILL_LIMIT: Duration = Duration::from_secs(5);
+
+/// End the live child and the processes it started with `%SystemRoot%\System32\taskkill.exe /T /F`.
+/// The tool is run by that absolute path, with only `SystemRoot` in its environment, so neither
+/// `PATH` nor the current directory chooses the program. It does nothing when `SystemRoot` is unset
+/// or not absolute, or when the tool does not start. A run longer than [`TREE_KILL_LIMIT`] is killed
+/// and reaped. When the child has already exited, `taskkill` does not find it, and the processes it
+/// started are not ended.
+#[cfg(windows)]
+fn end_tree(child: &Child) {
+    let Some(root) = std::env::var_os("SystemRoot").filter(|r| Path::new(r).is_absolute()) else {
+        return;
+    };
+    let tool = Path::new(&root).join("System32").join("taskkill.exe");
+    let started = Command::new(&tool)
+        .args(["/T", "/F", "/PID", &child.id().to_string()])
+        .env_clear()
+        .env("SystemRoot", &root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut taskkill) = started else {
+        return;
+    };
+    let until = Instant::now().checked_add(TREE_KILL_LIMIT).unwrap_or_else(Instant::now);
+    let mut pause = Duration::from_millis(1);
+    loop {
+        match taskkill.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < until => {
+                std::thread::sleep(until.saturating_duration_since(Instant::now()).min(pause));
+                pause = (pause * 2).min(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = taskkill.kill();
+                let _ = taskkill.wait();
+                return;
+            }
+        }
+    }
 }
 
 /// How long a failed run waits for its pipe readers to finish after the child is killed.
@@ -653,7 +703,9 @@ fn spawn(cmd: &mut Command) -> io::Result<Child> {
 /// Run `cmd` with standard input closed and both outputs read under `limits`. On a timeout, an
 /// output over the limit or a read error, the child is killed and reaped before the error returns.
 /// A timeout too long to set a deadline returns [`OracleError::InvalidTimeout`] without starting
-/// the program.
+/// the program. A failed run can take longer than the timeout: on Windows ending the process tree
+/// can take up to 5 seconds, and on every platform the pipe readers then get up to [`PIPE_GRACE`]
+/// to finish.
 fn run_bounded(mut cmd: Command, path: &Path, limits: ProbeLimits, seen: &mut Observed) -> Result<Captured, OracleError> {
     let invalid_timeout = || OracleError::InvalidTimeout { timeout: limits.timeout };
     if Instant::now().checked_add(limits.timeout).is_none() {
@@ -1168,5 +1220,78 @@ mod tests {
         let got = run_bounded(Command::new(&tool), &tool, limits, &mut seen);
         assert!(matches!(got, Err(OracleError::OutputLimit { .. })), "{got:?}");
         assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe a descendant holds");
+    }
+
+    /// The role `tree_member` plays: unset for a normal test run, `parent` or `grandchild` otherwise.
+    const TREE_ROLE: &str = "CRAFT_TESTKIT_ORACLE_TREE_ROLE";
+    /// The file the grandchild writes its process id to.
+    const TREE_MARKER: &str = "CRAFT_TESTKIT_ORACLE_TREE_MARKER";
+
+    /// This test binary run on `oracle::tests::tree_member` alone, with its output inherited.
+    fn tree_member_command(role: &str, marker: &Path) -> Command {
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", "oracle::tests::tree_member", "--nocapture", "--test-threads=1"]).env(TREE_ROLE, role).env(TREE_MARKER, marker);
+        cmd
+    }
+
+    /// Passes at once in a normal run. As `parent` it starts a `grandchild`, which inherits the
+    /// parent's standard output and error, waits for the grandchild's marker and then for the
+    /// grandchild to exit. As `grandchild` it writes its process id to the marker and sleeps for
+    /// 60 seconds.
+    #[test]
+    fn tree_member() {
+        let (Some(role), Some(marker)) = (std::env::var_os(TREE_ROLE), std::env::var_os(TREE_MARKER)) else {
+            return;
+        };
+        let marker = PathBuf::from(marker);
+        if role == "grandchild" {
+            let partial = marker.with_extension("partial");
+            std::fs::write(&partial, std::process::id().to_string()).unwrap();
+            std::fs::rename(&partial, &marker).unwrap();
+            std::thread::sleep(Duration::from_secs(60));
+            return;
+        }
+        let mut grandchild = tree_member_command("grandchild", &marker).spawn().unwrap();
+        while !marker.exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = grandchild.wait();
+    }
+
+    /// Whether a process with this id is running. A process that has exited but was not yet reaped
+    /// does not count.
+    #[cfg(unix)]
+    fn process_running(pid: u32) -> bool {
+        let out = Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout);
+        let stat = stat.trim();
+        !stat.is_empty() && !stat.starts_with('Z')
+    }
+
+    /// Whether a process with this id is running.
+    #[cfg(windows)]
+    fn process_running(pid: u32) -> bool {
+        let filter = format!("PID eq {pid}");
+        let out = Command::new("tasklist").args(["/FI", &filter, "/FO", "CSV", "/NH"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&format!(",\"{pid}\","))
+    }
+
+    /// A process the child started holds both pipes and outlives the probe's timeout. Ending the
+    /// child's process group (Unix) or process tree (Windows) ends it too, so both pipe readers
+    /// finish and the process is gone.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn descendant_holding_the_pipes_ends_at_the_timeout() {
+        let d = Scratch::new("tree");
+        let marker = d.path().join("grandchild-pid");
+        let exe = std::env::current_exe().unwrap();
+        let mut seen = Observed::default();
+        // The grandchild starts within the timeout; it then lives far longer than `PIPE_GRACE`.
+        let limits = ProbeLimits { max_output_bytes: 1024 * 1024, timeout: Duration::from_secs(10) };
+        let got = run_bounded(tree_member_command("parent", &marker), &exe, limits, &mut seen);
+        assert!(matches!(got, Err(OracleError::Timeout { .. })), "{got:?}");
+        let pid: u32 = std::fs::read_to_string(&marker).expect("the grandchild did not start before the timeout").trim().parse().unwrap();
+        assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe the grandchild holds");
+        assert!(!process_running(pid), "grandchild {pid} is still running");
     }
 }
