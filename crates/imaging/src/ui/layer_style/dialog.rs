@@ -17,9 +17,9 @@ use super::blending::{BlendingInput, blending_page};
 use super::contour::{ContourAction, ContourRequest, ContourSampler};
 use super::labels::LayerStyleWords;
 use super::list::{LayerStyleCommand, ListAction, effect_list};
-use super::page::{PageInput, StyleOp, effect_page, push_edit, set_edit};
+use super::page::{PageInput, effect_page, push_edit};
 use super::styles::styles_page;
-use craft_behavior::EditEvents;
+use craft_behavior::{EditEvent, EditEvents, Mixed};
 
 use crate::layer_style::{Contour, EffectId, EffectKind, EffectSpec, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams, StyleValue};
 
@@ -239,9 +239,6 @@ impl<'a> LayerStyleDialog<'a> {
         let name = label.as_str().to_owned();
         let shown = Row::new().label(label.clone()).show(ui, |ui, _| {
             let list = Stack::new().command_scope(LayerStyleCommand::SCOPE).show(ui, |ui, cx| effect_list(ui, cx, draft, specs, &words, &units));
-            if let Some(action) = list.inner.flatten() {
-                work.list_action(action, specs, draft, &name);
-            }
             Divider::vertical().show(ui);
             Stack::new().label(title.clone()).show(ui, |ui, _| {
                 let page = PageEnv {
@@ -258,6 +255,9 @@ impl<'a> LayerStyleDialog<'a> {
                 };
                 work.page(ui, &page, style_presets);
             });
+            if let Some(actions) = list.inner {
+                work.list_actions(actions, specs, &name);
+            }
         });
         let Work { next, edit, extras } = work;
         LayerStyleOutput {
@@ -356,29 +356,43 @@ struct Work {
 }
 
 impl Work {
-    /// Applies a list action to the copy (its view state: the page an added effect opens on) and records its change to
-    /// the style as the pass's edit.
-    fn list_action(&mut self, action: ListAction, specs: &[EffectSpec], draft: &LayerStyleDraft, label: &str) {
-        let op = match action {
-            ListAction::Select(page) => {
-                self.next.page = page;
-                return;
+    /// Apply the list's edits together, on top of any field edit the page reported on losing focus.
+    fn list_actions(&mut self, actions: Vec<ListAction>, specs: &[EffectSpec], label: &str) {
+        if actions.is_empty() {
+            return;
+        }
+        if let Some(style) = self.edit.landed() {
+            self.next.style = style.clone();
+        }
+        let before = self.next.style.clone();
+        let defaults = |kind| specs.iter().find(|spec| spec.kind == kind).map(|spec| spec.defaults.clone()).unwrap_or_default();
+        for action in actions {
+            match action {
+                ListAction::Select(page) => self.next.page = page,
+                ListAction::Check(id, on) => {
+                    if self.next.style.effect(id).is_some_and(|effect| effect.on != on) {
+                        self.next.toggle(id);
+                    }
+                }
+                ListAction::CheckAbsent(kind, on) => {
+                    let present = self.next.style.instances(kind).next();
+                    match (present, on) {
+                        (None, true) => {
+                            self.next.add_instance(kind, &defaults(kind));
+                        }
+                        (Some(id), false) => self.next.remove_instance(id),
+                        _ => {}
+                    }
+                }
+                ListAction::Add(kind) => {
+                    self.next.add_instance(kind, &defaults(kind));
+                }
+                ListAction::Remove(id) => self.next.remove_instance(id),
             }
-            ListAction::Toggle(id) => {
-                self.next.toggle(id);
-                StyleOp::Toggle(id)
-            }
-            ListAction::Add(kind) => {
-                let defaults = specs.iter().find(|spec| spec.kind == kind).map(|spec| spec.defaults.clone()).unwrap_or_default();
-                self.next.add_instance(kind, &defaults);
-                StyleOp::Add { kind, defaults }
-            }
-            ListAction::Remove(id) => {
-                self.next.remove_instance(id);
-                StyleOp::Remove(id)
-            }
-        };
-        push_edit(&mut self.edit, set_edit(&draft.style, &op, label));
+        }
+        if self.next.style != before {
+            self.edit.push(EditEvent::set(Mixed::Same(before), self.next.style.clone(), label.into(), None));
+        }
     }
 
     /// Draws the page of the pass; its controls add their edits to the pass's.

@@ -1,7 +1,7 @@
 //! Collections with columns and reordering, and the trials of the header's sideways reveal and its bound layout.
 
 use super::kit::{Count, Dismissed, ROW_H, Row};
-use craft_behavior::{ColumnKey, ColumnWidth, ItemSource, Selection, SpanLayout};
+use craft_behavior::{CanvasTransform, ColumnKey, ColumnWidth, ItemSource, Selection, SpanLayout};
 use craft_ui::contract::{
     Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnEvent, ColumnLayout, ColumnSpec, Common, Component,
     ContainerProps, Cx, Props as _, Role, ShowCollection as _,
@@ -33,6 +33,11 @@ impl<'a> Table<'a> {
     /// The column arrangement the trial owns.
     pub fn column_layout(mut self, layout: Bind<'a, ColumnLayout>) -> Self {
         self.column_layout = Some(layout);
+        self
+    }
+
+    pub fn transformed(mut self, transform: CanvasTransform) -> Self {
+        self.props = self.props.transform(transform);
         self
     }
 }

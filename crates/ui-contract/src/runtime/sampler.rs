@@ -122,6 +122,10 @@ pub(crate) struct Hole {
 }
 
 impl Hole {
+    pub(crate) fn bounds(&self) -> impl Iterator<Item = Rect> + '_ {
+        std::iter::once(self.rect).chain(self.covers.iter().copied())
+    }
+
     /// The one let-through test: the canvas answers a pointer at `at` when `at` lies in its rect and no layer lies
     /// over its layer there.
     pub(crate) fn answers(&self, at: Pos2) -> bool {

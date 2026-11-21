@@ -137,6 +137,8 @@ pub struct CxCore<'a> {
     /// For an arena root: the member activated this pass.
     pub(crate) activated_member: Option<Id>,
     pub(crate) press: PressState,
+    /// The parent layout of a standalone control, used to keep a sweep within its siblings.
+    pub(crate) pointer_group: Option<Id>,
     pub(crate) cursor: Option<(Cursor, CursorPriority)>,
     /// The declared cursors of the parts hovered this pass, recorded at step 8 and written at step 16.
     pub(crate) part_cursors: Vec<Cursor>,
