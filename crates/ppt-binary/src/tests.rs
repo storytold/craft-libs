@@ -1273,3 +1273,99 @@ fn a_broken_chain_reads_the_newest_edits() {
     let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
     assert_eq!(p.slides[0].shapes[0].text.as_ref().unwrap().text(), "Newest");
 }
+
+/// A `MouseClick…` (instance 0) or `MouseOver…` (instance 1) `InteractiveInfo` container.
+fn interactive(instance: u16, action: u8, jump: u8, link: u32, link_type: u8, flags: u8) -> Vec<u8> {
+    let atom_bytes = [&le32(&[0, link])[..], &[action, 0, jump, flags, link_type, 0, 0, 0]].concat();
+    container(rt::INTERACTIVE_INFO, instance, &[atom(rt::INTERACTIVE_INFO_ATOM, 0, &atom_bytes)])
+}
+
+/// An `ExObjListContainer` with one `ExHyperlinkContainer` per (id, target).
+fn hyperlinks(links: &[(u32, &str)]) -> Vec<u8> {
+    let mut kids = vec![atom(0x040A, 0, &[0; 4])];
+    for (id, target) in links {
+        kids.push(container(
+            rt::EX_HYPERLINK,
+            0,
+            &[atom(rt::EX_HYPERLINK_ATOM, 0, &id.to_le_bytes()), atom(rt::CSTRING, 0, &utf16("Friendly")), atom(rt::CSTRING, 1, &utf16(target))],
+        ));
+    }
+    container(rt::EX_OBJ_LIST, 0, &kids)
+}
+
+/// A one-slide file whose slide holds `shapes`, with `links` in the document's object list.
+fn file_with_shapes(shapes: &[Vec<u8>], links: &[(u32, &str)]) -> Presentation {
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, shapes)]);
+    let (cu, doc, pics) = streams_with_document(0xE391_C05F, 1, master(), slide, None, &[], &[hyperlinks(links)]);
+    import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap()
+}
+
+/// A shape's client data gives its click and mouse-over actions: a web link from the document's
+/// object list, and a jump to the next slide that also stops other sounds.
+#[test]
+fn shape_actions_on_click_and_mouse_over() {
+    let shape = container(
+        rt::SP_CONTAINER,
+        0,
+        &[
+            fsp(1, 2049, 0xA00),
+            anchor(400, 500, 2000, 1200),
+            container(rt::CLIENT_DATA, 0, &[interactive(0, 0x04, 0, 7, 0x08, 0), interactive(1, 0x03, 0x01, 0, 0, 0x02)]),
+        ],
+    );
+    let p = file_with_shapes(&[shape], &[(7, "https://example.com/")]);
+    let s = p.slides[0].shapes.iter().find(|s| s.click.is_some()).unwrap();
+    let click = s.click.as_ref().unwrap();
+    assert_eq!(click.action, craft_pptx::text::Action::Url { url: "https://example.com/".into() });
+    assert!(!click.stop_sound);
+    let hover = s.hover.as_ref().unwrap();
+    assert_eq!(hover.action, craft_pptx::text::Action::NextSlide);
+    assert!(hover.stop_sound);
+}
+
+/// A text range's action applies to that range only: the run splits at its ends. A range past
+/// the text's end, and one overlapping an earlier range, are left out.
+#[test]
+fn a_text_range_links_only_its_characters() {
+    let text = text_box(
+        0,
+        "Go next here",
+        &[
+            interactive(0, 0x04, 0, 9, 0x08, 0),
+            atom(rt::TEXT_INTERACTIVE_INFO_ATOM, 0, &le32(&[3, 7])),
+            interactive(0, 0x03, 0x04, 0, 0, 0),
+            atom(rt::TEXT_INTERACTIVE_INFO_ATOM, 0, &le32(&[5, 9])),
+            interactive(1, 0x03, 0x06, 0, 0, 0),
+            atom(rt::TEXT_INTERACTIVE_INFO_ATOM, 1, &le32(&[8, 40])),
+        ],
+    );
+    let shape = container(rt::SP_CONTAINER, 0, &[fsp(202, 2049, 0xA00), anchor(400, 500, 2000, 1200), text]);
+    let p = file_with_shapes(&[shape], &[(9, "https://example.com/next")]);
+    let body = p.slides[0].shapes.iter().find_map(|s| s.text.as_ref().filter(|t| t.text() == "Go next here")).unwrap();
+    let runs = &body.paragraphs[0].runs;
+    let linked: Vec<&str> = runs.iter().filter(|r| r.props.link.is_some()).map(|r| r.text.as_str()).collect();
+    assert_eq!(linked, ["next"]);
+    let link = runs.iter().find_map(|r| r.props.link.as_ref()).unwrap();
+    assert_eq!(link.action, craft_pptx::text::Action::Url { url: "https://example.com/next".into() });
+    assert!(runs.iter().all(|r| r.props.hover.is_none()), "{runs:?}");
+}
+
+/// Actions the model can't hold, a slide link whose location format [MS-PPT] doesn't give, and a
+/// link whose target is missing are left out rather than guessed.
+#[test]
+fn unknown_actions_are_left_out() {
+    let with = |info: Vec<u8>, spid: u32| {
+        container(rt::SP_CONTAINER, 0, &[fsp(1, spid, 0xA00), anchor(400, 500, 2000, 1200), container(rt::CLIENT_DATA, 0, &[info])])
+    };
+    let shapes = [
+        // A macro.
+        with(interactive(0, 0x01, 0, 0, 0, 0), 2049),
+        // A link to a specific slide (LT_SlideNumber).
+        with(interactive(0, 0x04, 0, 7, 0x07, 0), 2050),
+        // A web link to an id the object list doesn't have.
+        with(interactive(0, 0x04, 0, 99, 0x08, 0), 2051),
+    ];
+    let p = file_with_shapes(&shapes, &[(7, "Slide 2")]);
+    assert!(p.slides[0].shapes.len() >= 3);
+    assert!(p.slides[0].shapes.iter().all(|s| s.click.is_none() && s.hover.is_none()));
+}

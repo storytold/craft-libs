@@ -221,6 +221,9 @@ pub struct RawShape<'a> {
     pub placeholder: Option<Placeholder>,
     /// The records of the shape's text box (`OfficeArtClientTextbox`).
     pub text: Option<Rec<'a>>,
+    /// The action on click and on mouse over, from the client data.
+    pub click: Option<crate::link::Info>,
+    pub hover: Option<crate::link::Info>,
 }
 
 /// The top-level shapes and the background shape of a `DrawingContainer`.
@@ -287,6 +290,8 @@ fn shape<'a>(sp: &Rec<'a>) -> RawShape<'a> {
         is_group: false,
         placeholder: None,
         text: None,
+        click: None,
+        hover: None,
     };
     // Tables in specificity order: primary (the last one first), then secondary and tertiary.
     let mut primary: Vec<Rec> = vec![];
@@ -332,6 +337,12 @@ fn shape<'a>(sp: &Rec<'a>) -> RawShape<'a> {
             rt::CLIENT_DATA => {
                 if let Some(p) = r.child(rt::PLACEHOLDER_ATOM) {
                     s.placeholder = Some(Placeholder { position: p.u32(0).unwrap_or(0), kind: p.u8(4).unwrap_or(0) });
+                }
+                for info in r.children_of(rt::INTERACTIVE_INFO) {
+                    let slot = if info.instance == crate::link::OVER { &mut s.hover } else { &mut s.click };
+                    if slot.is_none() {
+                        *slot = crate::link::read(&info);
+                    }
                 }
             }
             rt::CLIENT_TEXTBOX => s.text = Some(r),

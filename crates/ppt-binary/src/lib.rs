@@ -27,6 +27,7 @@ mod convert;
 mod doc;
 mod draw;
 mod geom;
+mod link;
 mod ppt95;
 mod record;
 mod text;
