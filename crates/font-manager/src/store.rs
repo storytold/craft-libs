@@ -105,13 +105,15 @@ pub trait Installer: Send + Sync {
     }
 
     /// The preview service's base URL, if one is set: [`craft_font_store::PREVIEW_SERVICE_ENV`], else the font
-    /// store's `preview_service` setting. Installs try it as a mirror first.
+    /// store's `preview_service` setting, else the host's default
+    /// ([`SuiteStore::with_default_preview_service`]). Installs try it as a mirror first.
     fn preview_service(&self) -> Option<String> {
         None
     }
 
     /// Where [`Installer::preview_service`] comes from: the environment variable (the setting
-    /// can't change it), the saved setting, or nowhere.
+    /// can't change it), the saved setting, the host's default
+    /// ([`PreviewServiceSource::Default`]), or nowhere.
     fn preview_service_source(&self) -> PreviewServiceSource {
         PreviewServiceSource::None
     }

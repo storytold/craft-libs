@@ -61,6 +61,23 @@ pub(crate) enum Legal {
     Failed(String),
 }
 
+/// What a licence or NOTICE text is kept by: the family's key, which text, and the file's sha256
+/// (else its path), so a file an index refresh changed is read again.
+pub(crate) type LegalKey = (String, LegalText, String);
+
+fn legal_key(family: &Family, which: LegalText) -> LegalKey {
+    let file = match which {
+        LegalText::License => family.license_file.as_ref(),
+        LegalText::Notice => family.notice_file.as_ref(),
+    };
+    let identity = match (file, which) {
+        (Some(file), _) => file.sha256.clone(),
+        (None, LegalText::License) => family.license_path.clone().unwrap_or_default(),
+        (None, LegalText::Notice) => String::new(),
+    };
+    (family_key(&family.source, &family.family), which, identity)
+}
+
 /// A variable axis as its slider shows it.
 struct AxisRange {
     tag: [u8; 4],
@@ -159,6 +176,12 @@ fn axes_of(font: Option<&[u8]>, file: &FontFile) -> Vec<AxisRange> {
             Some(AxisRange { tag, name, min: a.min, default: default.clamp(a.min, a.max), max: a.max })
         })
         .collect()
+}
+
+/// An axis value to two decimals at most, a whole number without any.
+fn axis_value(value: f32) -> String {
+    let text = format!("{:.2}", (value * 100.0).round() / 100.0 + 0.0);
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
 fn file_name(face: &FaceInfo) -> Option<String> {
@@ -268,7 +291,8 @@ impl FontsPanel {
         let store: Vec<FaceInfo> = installed.iter().filter(|f| f.source == Source::Store).cloned().collect();
         let on_system = !installed.is_empty() && store.is_empty();
         let previewed = self.previewed.get(&key).cloned();
-        let session_preview = installed.is_empty() && previewed.is_none() && !self.subsets.previewing();
+        let sample = self.sample_for(samples::of_family(&index, &family), family.scripts.iter().map(String::as_str));
+        let session_preview = installed.is_empty() && previewed.is_none() && !self.subsets.draws_detail(&index, &family, &sample);
         let job = self.jobs.of(&family.source, &family.family).map(|j| (j.kind, j.file.clone(), j.fraction()));
         let (source, curated) = source_label(&index, &family);
         let eyebrow = [source.to_owned(), category_label(&family)].join(" · ");
@@ -542,10 +566,9 @@ impl FontsPanel {
     /// licence text on demand; the fields the index lacks are left out.
     fn licence_block(&mut self, ui: &mut Ui, s: &Skin, index: &Arc<Index>, i: usize, family: &Family) {
         let ctx = ui.ctx().clone();
-        let key = family_key(&family.source, &family.family);
         let allowed = self.allowed(ctx.input(|i| i.time));
         // An Apache family's NOTICE is shown with its fonts: read it once downloads are allowed.
-        if family.notice_file.is_some() && allowed && !self.legal.contains_key(&(key.clone(), LegalText::Notice)) {
+        if family.notice_file.is_some() && allowed && !self.legal.contains_key(&legal_key(family, LegalText::Notice)) {
             self.load_legal(&ctx, index, i, LegalText::Notice);
         }
         for state in self.legal.values_mut() {
@@ -580,19 +603,20 @@ impl FontsPanel {
             }
         }
         if family.notice_file.is_some() {
-            self.legal_text(ui, s, index, i, &key, LegalText::Notice, tl!("Show notice"));
+            self.legal_text(ui, s, index, i, family, LegalText::Notice, tl!("Show notice"));
         }
         if family.license_file_name().is_some() {
-            self.legal_text(ui, s, index, i, &key, LegalText::License, tl!("Show licence text"));
+            self.legal_text(ui, s, index, i, family, LegalText::License, tl!("Show licence text"));
         }
     }
 
     /// A licence or NOTICE text: a button that reads it, then the text, or why it couldn't be read.
     #[allow(clippy::too_many_arguments)]
-    fn legal_text(&mut self, ui: &mut Ui, s: &Skin, index: &Arc<Index>, i: usize, key: &str, which: LegalText, show: &str) {
+    fn legal_text(&mut self, ui: &mut Ui, s: &Skin, index: &Arc<Index>, i: usize, family: &Family, which: LegalText, show: &str) {
         let ctx = ui.ctx().clone();
         let mut load = false;
-        match self.legal.get(&(key.to_owned(), which)) {
+        let key = legal_key(family, which);
+        match self.legal.get(&key) {
             None => load = widgets::button(ui, s, show, widgets::Kind::Secondary, 28.0, 0.0).clicked(),
             Some(Legal::Loading(_)) => {
                 ui.label(RichText::new(format!("{}…", tl!("Loading"))).size(12.5).color(s.p.muted));
@@ -607,7 +631,7 @@ impl FontsPanel {
                 let text = text.clone();
                 egui::Frame::new().stroke(s.hairline()).corner_radius(s.look.corner).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    egui::ScrollArea::vertical().id_salt(("craft-fonts.legal", key, which)).max_height(220.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt(("craft-fonts.legal", &key.0, which)).max_height(220.0).show(ui, |ui| {
                         ui.add(
                             egui::Label::new(RichText::new(text).size(11.5).family(FontFamily::Monospace).color(s.p.muted)).wrap().selectable(true),
                         );
@@ -628,7 +652,7 @@ impl FontsPanel {
     /// Reads the licence or NOTICE text of the `i`th family through the store, on a thread.
     fn load_legal(&mut self, ctx: &Context, index: &Arc<Index>, i: usize, which: LegalText) {
         let Some(family) = index.families().get(i) else { return };
-        let key = (family_key(&family.source, &family.family), which);
+        let key = legal_key(family, which);
         let (tx, rx) = std::sync::mpsc::channel();
         let installer = Arc::clone(&self.installer);
         let index = Arc::clone(index);
@@ -728,21 +752,28 @@ impl FontsPanel {
         }
     }
 
-    /// A slider for each of `axes`, with its name and value; returns the values set.
+    /// A slider for each of `axes`, with its name and value; returns the values set. An axis the
+    /// user hasn't moved is at its default in `axes`, which the subset's own `fvar` replaces once
+    /// it loads; one the user moved keeps its value, within the range `axes` gives.
     fn axis_sliders(&mut self, ui: &mut Ui, s: &Skin, file: &FontFile, axes: &[AxisRange], width: f32) -> Vec<([u8; 4], f32)> {
         let mut coords = Vec::new();
         for axis in axes {
-            let value = self.detail_axes.entry((file.sha256.clone(), axis.tag)).or_insert(axis.default);
+            let key = (file.sha256.clone(), axis.tag);
+            let mut value = self.detail_axes.get(&key).map_or(axis.default, |v| v.clamp(axis.min, axis.max));
+            let mut moved = false;
             ui.allocate_ui_with_layout(vec2(width, s.h()), direction::row(ui), |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 ui.allocate_ui_with_layout(vec2(110.0, s.h()), direction::row(ui), |ui| {
                     ui.set_width(110.0);
                     widgets::label(ui, s, &axis.name, s.p.muted);
                 });
-                widgets::slider(ui, s, value, axis.min..=axis.max, (width - 180.0).clamp(80.0, 320.0), &axis.name);
-                widgets::label(ui, s, &format!("{value:.0}"), s.p.faint);
+                moved = widgets::slider(ui, s, &mut value, axis.min..=axis.max, (width - 180.0).clamp(80.0, 320.0), &axis.name).changed();
+                widgets::label(ui, s, &axis_value(value), s.p.faint);
             });
-            coords.push((axis.tag, *value));
+            if moved {
+                self.detail_axes.insert(key, value);
+            }
+            coords.push((axis.tag, value));
         }
         coords
     }

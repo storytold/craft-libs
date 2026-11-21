@@ -29,7 +29,9 @@ The layout follows Adobe Fonts' and Google Fonts' browse pages.
   as they come into view. With a preview service set, families that aren't installed draw from
   small subsets of their face: the sample for the cards on screen, then one screen above and two
   below, then ASCII for the Latin cards on screen; typed text outside those asks for its own
-  characters once typing pauses. The arrow keys step through the cards and Enter opens one.
+  characters once typing pauses. A card the service draws offers no Preview; one whose subset
+  failed does, and so does its details sheet. The arrow keys step through the cards and Enter
+  opens one.
 - **Sample toolbar**: a preset (a sentence in the language filtered by, else the family's own
   sample from the index, by its `sample_script`; the alphabet; numerals), the sample text, and the
   size.

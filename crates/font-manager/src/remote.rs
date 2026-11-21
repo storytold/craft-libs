@@ -327,9 +327,10 @@ impl DiskCache {
         }
     }
 
-    /// Whether `path` is cached, without marking it used.
+    /// Whether `path` is cached, without marking it used. Asks the folder, which another app
+    /// sharing it may have added to since it was read.
     pub fn contains(&self, path: &str) -> bool {
-        self.with(|e| e.files.contains_key(&file_name(path)))
+        std::fs::metadata(self.dir.join(file_name(path))).is_ok_and(|m| m.is_file())
     }
 
     /// Caches `bytes` for `path`, then removes the least recently used past the limit. Bytes

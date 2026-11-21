@@ -231,6 +231,8 @@ impl FontsPanel {
     pub(crate) fn main(&mut self, ui: &mut Ui) {
         let s = self.skin.clone();
         self.toolbar(ui, &s);
+        let typed = format!("{:?}\n{:?}\n{}", self.settings.preset, self.query.language, self.settings.sample);
+        self.subsets.typed(typed);
         ui.add_space(12.0);
         if let Some(notice) = self.notice.clone() {
             widgets::note(ui, &s, |ui| {
@@ -516,7 +518,8 @@ impl FontsPanel {
         });
     }
 
-    fn catalogue_state(&self, source: &str, family: &str, faces_installed: bool) -> CardState {
+    /// `drawn`: the preview service draws the card, or is loading it.
+    fn catalogue_state(&self, source: &str, family: &str, faces_installed: bool, drawn: bool) -> CardState {
         let key = family_key(source, family);
         if let Some(job) = self.jobs.of(source, family) {
             return CardState::Running(job.kind, job.fraction());
@@ -527,7 +530,7 @@ impl FontsPanel {
         if faces_installed {
             return CardState::Installed;
         }
-        CardState::Offer { preview: !self.subsets.previewing() && !self.previewed.contains_key(&key) }
+        CardState::Offer { preview: !drawn && !self.previewed.contains_key(&key) }
     }
 
     fn catalogue_card(&mut self, ui: &mut Ui, index: &Index, i: usize, rect: Rect) -> egui::Response {
@@ -536,10 +539,11 @@ impl FontsPanel {
         let key = family_key(&family.source, &family.family);
         let installed = self.installed_by_name.get(&family.family.to_lowercase()).and_then(|f| regular(f)).cloned();
         let previewed = self.previewed.get(&key).and_then(|f| regular(f)).cloned();
-        let state = self.catalogue_state(&family.source, &family.family, installed.is_some());
         let (source, curated) = source_label(index, family);
         let meta = [tn(style_count(family) as u64, "{n} style", "{n} styles"), category_label(family), source.to_owned()].join(" · ");
         let sample = self.sample_for(samples::of_family(index, family), family.scripts.iter().map(String::as_str));
+        let drawn = self.subsets.draws(index, &Row { family, text: sample.clone() });
+        let state = self.catalogue_state(&family.source, &family.family, installed.is_some(), drawn);
         let face = match (installed, previewed) {
             (Some(face), _) => Some(Face::Local(Owner::Installed, Box::new(face))),
             (None, Some(face)) => Some(Face::Local(Owner::Preview, Box::new(face))),

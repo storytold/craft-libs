@@ -489,6 +489,8 @@ struct FakeService {
     held: std::sync::Mutex<bool>,
     /// Answers sample subsets with HTTP 404, as for a sample text the service doesn't have.
     no_samples: std::sync::Mutex<bool>,
+    /// Answers every subset with HTTP 500.
+    failing: std::sync::Mutex<bool>,
 }
 
 impl Fetch for FakeService {
@@ -499,9 +501,15 @@ impl Fetch for FakeService {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+        if cancel.is_cancelled() {
+            return Err(FetchError::Cancelled);
+        }
         self.answered.lock().unwrap().push(url.to_owned());
         if *self.no_samples.lock().unwrap() && url.contains("/sample-") {
             return Err(FetchError::Failed("HTTP 404".into()));
+        }
+        if *self.failing.lock().unwrap() {
+            return Err(FetchError::Failed("HTTP 500".into()));
         }
         Ok(include_bytes!("data/Tiny-glyf.woff2").to_vec())
     }
@@ -692,6 +700,21 @@ fn a_sample_the_service_lacks_falls_back_to_its_characters_once() {
         idle(&mut h);
     }
     assert!(numbers(&service.take(), "sample").is_empty(), "the sample is not asked for again");
+}
+
+#[test]
+fn a_family_the_service_cannot_draw_offers_a_session_preview() {
+    let service = Arc::new(FakeService::default());
+    *service.failing.lock().unwrap() = true;
+    let (mut h, store) = service_setup("list-previews-failing", &service, 8);
+    store.set_previews_enabled(true).unwrap();
+    set_service(&mut h, &store);
+    idle(&mut h);
+    assert!(!service.take().is_empty());
+    let preview = |family: &'static str| By::new().predicate(move |n| n.label().is_some_and(|l| l.contains("Preview") && l.contains(family)));
+    assert!(h.query_all(preview("Family 01")).next().is_some(), "a family whose subsets failed offers the whole-family preview");
+    click(&mut h, "Family 01");
+    assert!(h.query_all_by_label("Preview").next().is_some(), "and so does its detail view");
 }
 
 #[test]

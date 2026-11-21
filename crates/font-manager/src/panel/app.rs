@@ -9,14 +9,14 @@ use crate::filter::{Query, Search};
 use crate::index::{Category, Family, FontFile, Index, categories, source_label};
 use crate::installed::{InstalledFamily, group};
 use crate::remote::Previews;
-use crate::store::{Installer, LegalText, RemoveRequest, StoreError};
+use crate::store::{Installer, RemoveRequest, StoreError};
 use crate::{Catalog, FaceInfo, Source};
 use craft_i18n::Folder;
 use craft_ui::direction;
 use craft_ui::fonts::{CraftFace, I18nScripts, UiFonts};
 use egui::{CentralPanel, Context, Frame, Margin, Panel, Ui};
 
-use crate::panel::details::Legal;
+use crate::panel::details::{Legal, LegalKey};
 use crate::panel::faces::FaceFonts;
 use crate::panel::i18n::{self, I18N, LANGUAGES, fmt, tl};
 use crate::panel::jobs::{Finished, Jobs, Kind, Request, Runner};
@@ -188,10 +188,10 @@ pub struct FontsPanel {
     /// The list's previews from the font preview service.
     pub(crate) subsets: Subsets,
     pub(crate) faces: FaceFonts,
-    /// The detail view's axis sliders, by file sha256 and axis tag.
+    /// The values the user set on the detail view's axis sliders, by file sha256 and axis tag.
     pub(crate) detail_axes: HashMap<(String, [u8; 4]), f32>,
-    /// Licence and NOTICE texts, by family key.
-    pub(crate) legal: HashMap<(String, LegalText), Legal>,
+    /// Licence and NOTICE texts, by family, text and file.
+    pub(crate) legal: HashMap<LegalKey, Legal>,
     pub(crate) jobs: Jobs,
     pub(crate) asking: Option<Pending>,
     /// By lower-case family name.
@@ -492,8 +492,7 @@ impl FontsPanel {
         let ctx = ui.ctx().clone();
         self.skin = Skin { p: self.look.palette(&ctx), look: self.look.clone() };
         self.faces.begin_frame(&ctx);
-        let typed = format!("{:?}\n{:?}\n{}", self.settings.preset, self.query.language, self.settings.sample);
-        self.subsets.begin_frame(&ctx, typed);
+        self.subsets.begin_frame(&ctx);
         self.poll_jobs();
         let focused = ctx.input(|i| i.focused);
         if focused && !self.focused {

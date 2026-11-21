@@ -62,7 +62,8 @@ pub(crate) struct Subsets {
     read_at: Option<f64>,
     /// Decoded subsets and the frame each was last wanted in.
     fonts: HashMap<PreviewKey, (Arc<Vec<u8>>, u64)>,
-    /// Subsets that didn't load, and when.
+    /// Subsets that didn't load, and when; kept until one loads, so a family whose subset is
+    /// asked for again still offers a session preview meanwhile.
     failed: HashMap<PreviewKey, f64>,
     /// Sample subsets the service doesn't have for the text this index gives (HTTP 404), so
     /// those faces draw from a subset of the sample text's characters. Keyed by the sample's
@@ -125,8 +126,25 @@ impl Subsets {
 
     /// Whether rows and the detail view get their previews from the service: a service is set
     /// and previews are on. Otherwise a session download is the only way to see a font.
-    pub(crate) fn previewing(&self) -> bool {
+    fn previewing(&self) -> bool {
         self.available && self.fetching
+    }
+
+    /// Whether the service draws `row`, or is still loading it: previews are on and its subset
+    /// hasn't failed. A row it doesn't draw offers a session preview.
+    pub(crate) fn draws(&self, index: &Index, row: &Row<'_>) -> bool {
+        self.previewing() && self.key(index, row).is_some_and(|k| !self.failed.contains_key(&k))
+    }
+
+    /// Whether the service draws every file of `family` in the detail view with `text`, or is
+    /// still loading them: for each, the subset `text` needs or the sample subset hasn't failed.
+    pub(crate) fn draws_detail(&self, index: &Index, family: &Family, text: &str) -> bool {
+        let fine = |key: Option<PreviewKey>| key.is_some_and(|k| !self.failed.contains_key(&k));
+        self.previewing()
+            && family.files.iter().all(|file| {
+                let instance = detail_instance(file);
+                fine(text_key(index, family, file, instance, text, &self.sample_missing)) || fine(self.sample_key(index, family, file, instance))
+            })
     }
 
     /// Reads which service is set and whether previews are on; a change asks for everything again.
@@ -148,18 +166,14 @@ impl Subsets {
         !self.asked.is_empty()
     }
 
-    /// Takes in what the pool fetched. `typed` is the text setting (the sample typed, the preset
-    /// and the language filtered by), for the pause before typed characters are asked for.
-    pub(crate) fn begin_frame(&mut self, ctx: &Context, typed: String) {
+    /// Takes in what the pool fetched.
+    pub(crate) fn begin_frame(&mut self, ctx: &Context) {
         self.frame += 1;
         self.now = ctx.input(|i| i.time);
         if !self.armed {
             self.armed = true;
             let ctx = ctx.clone();
             self.pool = self.pool.take().map(|pool| pool.on_ready(move || ctx.request_repaint()));
-        }
-        if typed != self.typed.0 {
-            self.typed = (typed, self.now);
         }
         if self.read_at.is_none_or(|at| !(0.0..SETTINGS_RECHECK_SECS).contains(&(self.now - at))) {
             self.read_at = Some(self.now);
@@ -180,9 +194,19 @@ impl Subsets {
                         self.sample_missing.insert(preview.key);
                     } else {
                         self.failed.insert(preview.key, self.now);
+                        ctx.request_repaint_after(std::time::Duration::from_secs_f64(RETRY_SECS));
                     }
                 }
             }
+        }
+    }
+
+    /// Takes in the text setting (the sample typed, the preset and the language filtered by) once
+    /// the controls have changed it this frame, before anything is asked for: typed characters
+    /// are asked for once it pauses.
+    pub(crate) fn typed(&mut self, typed: String) {
+        if typed != self.typed.0 {
+            self.typed = (typed, self.now);
         }
     }
 
@@ -218,23 +242,27 @@ impl Subsets {
 
     /// The subset that draws `text` in `file` of `family` in the detail view, and asks for it
     /// with [`Subsets::request_detail`]: the file's sample subset, and the one `text` needs once
-    /// typing pauses. `None` without a service, while nothing of the file has loaded, and when
-    /// its subset failed.
+    /// typing pauses. The sample subset draws while that loads, when it failed, and for text of
+    /// more characters than a request may name. `None` without a service, while nothing of the
+    /// file has loaded, and when both failed.
     pub(crate) fn detail_font(&mut self, index: &Index, family: &Family, file: &FontFile, text: &str) -> Option<(PreviewKey, Arc<Vec<u8>>)> {
         if !self.available {
             return None;
         }
-        let want = text_key(index, family, file, detail_instance(file), text, &self.sample_missing)?;
-        let sample = self.sample_key(index, family, file, detail_instance(file));
-        let typing = matches!(want.subset(), Subset::Codepoints(_)) && self.now - self.typed.1 < PAUSE_SECS;
-        self.detail_waits |= typing;
-        if !typing {
-            self.detail_wanted.insert(want.clone());
-        }
+        let instance = detail_instance(file);
+        let sample = self.sample_key(index, family, file, instance);
         if let Some(sample) = &sample {
             self.detail_wanted.insert(sample.clone());
         }
-        self.loaded(want).or_else(|| self.loaded(sample?))
+        let want = text_key(index, family, file, instance, text, &self.sample_missing);
+        if let Some(want) = &want {
+            let typing = matches!(want.subset(), Subset::Codepoints(_)) && self.now - self.typed.1 < PAUSE_SECS;
+            self.detail_waits |= typing;
+            if !typing {
+                self.detail_wanted.insert(want.clone());
+            }
+        }
+        want.and_then(|want| self.loaded(want)).or_else(|| self.loaded(sample?))
     }
 
     /// Asks for what [`Subsets::detail_font`] wanted this frame, before the list's rows; called

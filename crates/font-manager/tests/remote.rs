@@ -98,6 +98,9 @@ fn disk_cache_drops_the_least_recently_used() {
     let smaller = DiskCache::new(&dir, 200);
     assert_eq!(smaller.size(), 200);
     assert_eq!(files(), 2);
+    // A file another session cached after this one read the folder.
+    smaller.put("f", &bytes(6));
+    assert!(again.contains("f"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
