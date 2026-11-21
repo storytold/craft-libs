@@ -799,10 +799,7 @@ impl Stack {
         if let Some(system) = system {
             let mut providers = system.into_iter().collect::<Vec<_>>();
             providers.push(installed as Arc<dyn FontProvider>);
-            providers::set_font_providers(ctx, providers);
-        }
-        if let Some(start) = start_index {
-            start(ctx);
+            set_context_providers(ctx, providers, start_index);
         }
         fit::install(ctx, self.row_faces());
     }
@@ -1012,6 +1009,38 @@ pub fn system_font_provider(_locale: &str) -> Option<Arc<dyn FontProvider>> {
 
 /// Starts building the system font index for a context.
 type StartIndex = fn(&egui::Context);
+
+fn set_context_providers(ctx: &egui::Context, providers: Vec<Arc<dyn FontProvider>>, start_index: Option<StartIndex>) {
+    // Register before exposing providers: otherwise a lookup can cache a fallback and
+    // indexing can finish before this context is registered for the completion reload.
+    // If indexing finishes first, setting the providers below clears any older caches.
+    if let Some(start) = start_index {
+        start(ctx);
+    }
+    providers::set_font_providers(ctx, providers);
+}
+
+/// Replace a context's providers without replacing its configured fonts or theme.
+///
+/// With a locale, discover installed fonts in the background, followed by `fallbacks`.
+/// With `None`, install only `fallbacks`; pass an empty list too to disable all providers.
+/// System text faces use the interface baseline and regular weight. On the web or without
+/// `system_fonts`, only `fallbacks` are installed.
+///
+/// A lookup during indexing returns immediately. When indexing completes, the context forgets
+/// cached misses and fallback choices and repaints. Reinstall on language changes; an older
+/// pending index completion reloads the latest providers, never a previous locale or opt-in.
+pub fn install_font_providers(ctx: &egui::Context, locale: Option<&str>, fallbacks: Vec<Arc<dyn FontProvider>>) {
+    install_context_providers(ctx, locale.and_then(installed_system_font_provider), fallbacks);
+}
+
+fn install_context_providers(ctx: &egui::Context, system: Option<(Arc<dyn FontProvider>, StartIndex)>, mut fallbacks: Vec<Arc<dyn FontProvider>>) {
+    let start = system.as_ref().map(|(_, start)| *start);
+    if let Some((provider, _)) = system {
+        fallbacks.insert(0, Arc::new(RegularWeight::new(Arc::new(providers::OnBaseline(provider)))));
+    }
+    set_context_providers(ctx, fallbacks, start);
+}
 
 /// The system font provider [`Stack::install`] gives `ctx` when the app sets none. A lookup before
 /// the index is built finds nothing, so the UI thread doesn't wait; `ctx` reloads its fonts and

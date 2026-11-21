@@ -2,7 +2,7 @@
 //! the system font provider.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use egui::epaint::text::Tag;
 use egui::{FallbackRequest, FontData, FontFamily, FontInsert, FontPriority, FontProvider, InsertFontFamily};
@@ -208,7 +208,7 @@ pub(super) fn has_char(data: &FontData, c: char) -> bool {
 
 /// The font providers last set by [`set_font_providers`], for [`reload_font_providers`].
 #[derive(Clone)]
-struct ContextProviders(Vec<Arc<dyn FontProvider>>);
+struct ContextProviders(Arc<Mutex<Vec<Arc<dyn FontProvider>>>>);
 
 fn providers_id() -> egui::Id {
     egui::Id::unique("craft_ui::fonts::providers")
@@ -216,8 +216,19 @@ fn providers_id() -> egui::Id {
 
 /// Set `ctx`'s font providers and remember them for [`reload_font_providers`].
 pub(super) fn set_font_providers(ctx: &egui::Context, providers: Vec<Arc<dyn FontProvider>>) {
-    ctx.data_mut(|d| d.insert_temp(providers_id(), ContextProviders(providers.clone())));
+    set_with(ctx, providers, || {});
+}
+
+fn set_with(ctx: &egui::Context, providers: Vec<Arc<dyn FontProvider>>, before_apply: impl FnOnce()) {
+    let state = ctx.data_mut(|d| d.get_temp_mut_or_insert_with(providers_id(), || ContextProviders(Arc::new(Mutex::new(Vec::new())))).clone());
+    // Release the context's data lock before taking this lock: applying providers also
+    // locks the context. Keep the per-context lock through application so an index
+    // completion cannot apply an older snapshot after a language change or opt-out.
+    let mut current = state.0.lock().unwrap_or_else(PoisonError::into_inner);
+    *current = providers.clone();
+    before_apply();
     ctx.set_font_providers(providers);
+    drop(current);
 }
 
 /// Set `ctx`'s providers again, so egui forgets the characters they had no font for and repaints.
@@ -226,8 +237,23 @@ pub(super) fn set_font_providers(ctx: &egui::Context, providers: Vec<Arc<dyn Fon
     allow(dead_code, reason = "called when the shared system font index is built, and in its tests")
 )]
 pub(super) fn reload_font_providers(ctx: &egui::Context) {
+    reload_with(ctx, || {});
+}
+
+#[cfg_attr(
+    not(all(feature = "system_fonts", not(target_arch = "wasm32"))),
+    allow(dead_code, reason = "called by the system index reload, and its tests")
+)]
+fn reload_with(ctx: &egui::Context, before_apply: impl FnOnce()) {
     let providers: Option<ContextProviders> = ctx.data(|d| d.get_temp(providers_id()));
-    if let Some(ContextProviders(providers)) = providers {
+    if let Some(state) = providers {
+        let current = state.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let providers = current.clone();
+        before_apply();
         ctx.set_font_providers(providers);
+        drop(current);
     }
 }
+
+#[cfg(test)]
+mod tests;
