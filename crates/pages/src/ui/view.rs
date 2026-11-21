@@ -1024,7 +1024,7 @@ fn go_to_offset(go_to: GoTo, geo: &Placed, continuous: bool, want: (f64, f64), (
             let (top, bottom) = geo.layout.bands[page];
             let y = if continuous || fraction > 0.0 { r.y0 + top + fraction * (bottom - top) - spacing.margin } else { geo.doc.y0 };
             let x = if r.width() + 2.0 * spacing.side <= vw {
-                want.0.clamp(r.x1 - vw + spacing.side, r.x0 - spacing.side)
+                clamp_between(want.0, r.x1 - vw + spacing.side, r.x0 - spacing.side)
             } else if r.x1 <= want.0 {
                 r.x1 - vw + spacing.side
             } else if r.x0 >= want.0 + vw {
@@ -1313,6 +1313,13 @@ fn overlaps(a: DocRect, b: DocRect) -> bool {
 }
 
 /// The offsets a view `len` long can take over `lo..hi`; a document shorter than the view sits centred in it.
+/// `value` kept between `a` and `b`, in either order. A page that just fits the view gives bounds that can cross by a
+/// rounding error, where `f64::clamp` would panic.
+fn clamp_between(value: f64, a: f64, b: f64) -> f64 {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    if value.is_nan() { lo } else { value.max(lo).min(hi) }
+}
+
 fn offset_range(lo: f64, hi: f64, len: f64) -> (f64, f64) {
     let spare = hi - lo - len;
     if spare <= 0.0 {
@@ -1415,5 +1422,20 @@ fn near_pages(placed: &Placed, continuous: bool, visible: &Range<usize>, count: 
         let before = placed.row.start.checked_sub(1).map(|p| shown_row(count, p, options));
         let after = (placed.row.end < count).then(|| shown_row(count, placed.row.end, options));
         before.into_iter().chain(after).flatten().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_between;
+    use craft_ui::testing::trial;
+
+    #[trial]
+    fn bounds_crossed_by_a_rounding_error_keep_the_value_between_them() {
+        // A page exactly as wide as the view: the bounds cross by 1e-13 (seen at fit-width).
+        assert_eq!(clamp_between(5.0, 1.136_868_377_216_160_3e-13, 0.0), 1.136_868_377_216_160_3e-13);
+        assert_eq!(clamp_between(-5.0, 1.136_868_377_216_160_3e-13, 0.0), 0.0);
+        assert_eq!(clamp_between(3.0, 0.0, 10.0), 3.0);
+        assert_eq!(clamp_between(f64::NAN, 0.0, 10.0), 0.0);
     }
 }
