@@ -1,6 +1,7 @@
-//! Stories of `AboutDialog`: the About tab (centred and listed), the Contributors tab with a PR-only contributor, and an app tab.
+//! Stories of `AboutDialog`: the About tab (centred and listed), the Contributors tab with a PR-only contributor, the
+//! Licenses tab, and an app tab.
 
-use super::{AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use super::{AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLicense, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
 use crate::contract::Show as _;
 use crate::dialog::stories::hosted;
 use crate::display::Text;
@@ -59,6 +60,29 @@ fn about_dialog_app_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Text::new("Deutsch 1.1 · 91% translated").show(ui);
         });
         HostedAbout::new(info(community), CREDITS.clone()).app_tab(languages).tab(AboutTab::App(0))
+    })
+}
+
+/// Two short license texts, standing in for the full texts an app bakes in.
+const LICENSE_TEXTS: [(&str, &str); 2] = [
+    (
+        "MIT License",
+        "Permission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction.",
+    ),
+    (
+        "SIL Open Font License 1.1",
+        "This Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ.",
+    ),
+];
+
+/// The dialog open on the Licenses tab, with two licenses (the License picker shows) or one (it does not).
+#[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
+fn about_dialog_licenses(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let several = *data.value("several_licenses", true);
+    hosted(ui, data, several, || {
+        let count = if several { LICENSE_TEXTS.len() } else { 1 };
+        let licenses = LICENSE_TEXTS.iter().take(count).map(|(name, text)| AboutLicense::new(*name, *text));
+        HostedAbout::new(info(true), CREDITS.clone()).licenses(licenses).tab(AboutTab::Licenses)
     })
 }
 
