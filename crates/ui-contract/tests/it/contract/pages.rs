@@ -1,4 +1,4 @@
-//! `Pages`: a hidden page is measured only, and its measure is reused while nothing it read changed.
+//! `Pages`: a hidden page is measured only, once in each pass.
 
 use craft_ui::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Pages, Props as _, Role, Show as _};
 use craft_ui::style::StyleCx;
@@ -47,7 +47,7 @@ impl Component for Width<'_> {
 
 /// Two pages: page 0 shows a fixed-width leaf that can edit `value`; page 1, hidden, is as wide as `value`.
 struct Scene {
-    /// The value, kept in place across frames: a settled reader knows a bound value by where it lives.
+    /// The value both pages bind.
     value: RefCell<f32>,
     /// What page 0's leaf sets the value to in the next pass that shows it.
     set_to: Cell<Option<f32>>,
@@ -80,29 +80,30 @@ impl Scene {
         self.width.set(shown.response.rect.width());
     }
 
-    /// The hidden page's runs in one frame with no input.
-    fn frame(&self, frames: &mut Frames) -> usize {
+    /// The hidden page's runs in one frame with no input, and the frame's passes.
+    fn frame(&self, frames: &mut Frames) -> (usize, usize) {
         self.hidden_runs.set(0);
-        frames.frame(vec![], |ui| self.show(ui));
-        self.hidden_runs.get()
+        let passes = frames.frame(vec![], |ui| self.show(ui));
+        (self.hidden_runs.get(), passes)
     }
 }
 
-/// The pages take the size of the largest, a hidden one included; in a settled frame the hidden page's measure is
-/// reused and its closure runs in no pass.
+/// The pages take the size of the largest, a hidden one included, and each pass measures the hidden page once: the
+/// page closure reads app data the framework does not track, so no pass takes the size an earlier pass measured.
 #[trial]
-fn a_settled_hidden_page_runs_no_body() {
+fn a_hidden_page_is_measured_once_in_each_pass() {
     let scene = Scene::new();
     let mut frames = Frames::new();
     frames.idle(30, |ui| scene.show(ui));
     assert!(scene.width.get() > 20.0, "the pages are as wide as the hidden page, wider than the shown one");
     for frame in 0..4 {
-        assert_eq!(scene.frame(&mut frames), 0, "settled frame {frame} ran the hidden page");
+        let (runs, passes) = scene.frame(&mut frames);
+        assert_eq!(runs, passes, "settled frame {frame} measured the hidden page once in each pass");
     }
 }
 
-/// An edit of a value the hidden page read measures that page again in the frame of the edit, once, and the pages take
-/// its new size there. The edit is a `set`, as a click on a control makes it.
+/// An edit of a value the hidden page read earlier in the pass runs the pass again, which measures that page again,
+/// and the pages take its new size in the frame of the edit. The edit is a `set`, as a click on a control makes it.
 #[trial]
 fn an_edit_of_a_value_a_hidden_page_read_measures_it_again() {
     let scene = Scene::new();
@@ -110,8 +111,8 @@ fn an_edit_of_a_value_a_hidden_page_read_measures_it_again() {
     frames.idle(30, |ui| scene.show(ui));
     let before = scene.width.get();
     scene.set_to.set(Some(before * 3.0));
-    assert_eq!(scene.frame(&mut frames), 1, "the edit measured the hidden page again, once");
+    let (runs, passes) = scene.frame(&mut frames);
+    assert!(passes > 1, "the edit of a value read earlier in the pass ran the pass again");
+    assert_eq!(runs, passes, "each pass measured the hidden page once");
     assert!(scene.width.get() > before, "the pages took the hidden page's new width in the frame of the edit");
-    frames.idle(30, |ui| scene.show(ui));
-    assert_eq!(scene.frame(&mut frames), 0, "the hidden page settles again");
 }

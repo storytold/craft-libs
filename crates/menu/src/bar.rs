@@ -8,13 +8,15 @@
 //! choice reaches the app as a fired command with [`craft_ui::runtime::commands::FireSource::Menu`].
 //! `Builtin::Quit` and `Builtin::Minimize` act on the root window through the runtime.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
+use craft_host::target::Os;
+use craft_i18n::Words;
 use craft_keymap::{CommandRef, Platform};
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{MemoProps, MemoView, Show as _, Stateless, Tracked};
 use craft_ui::menu::{MenuBar as Bar, MenuHelp, MenuTitle};
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, Label};
 use egui::{Rect, Ui};
 
 use crate::context::Rows;
@@ -56,8 +58,19 @@ pub(crate) fn keymap_platform(target: Target, os: Platform) -> Platform {
     }
 }
 
+/// A replay at another place moves the titles' rect with the bar.
+impl craft_ui::runtime::Shift for MenuBarOutput {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        MenuBarOutput { titles: by.rect(self.titles) }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within) }
+    }
+}
+
 /// What the bar did in a frame, from [`MenuBarUi::show`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct MenuBarOutput {
     /// The menu titles alone, without the room the bar leaves after them
@@ -65,36 +78,57 @@ pub struct MenuBarOutput {
     pub titles: Rect,
 }
 
+/// The English-label hook a bar takes by default: none is set, so this type only names the slot.
+pub type EnglishFn = fn(Labeled<'_>) -> Option<String>;
+
 /// The bar for one frame: `MenuBarUi::new(&bar).show(ui)`. Draw it at the top of the window, in a top panel.
 /// The commands chosen come back through the command queue, not from `show`.
+///
+/// The bar is a memoized view: while its model, options, place and environment are those of its last run and nothing
+/// reaches it (pointer, focus, keys, an open menu), it adds that run again in place of running.
 #[derive(craft_ui::contract::Pattern)]
-pub struct MenuBarUi<'a> {
-    bar: &'a MenuBar,
+#[pattern(probe(MenuBarUi<'static, EnglishFn>))]
+pub struct MenuBarUi<'a, E = EnglishFn> {
+    bar: &'a Tracked<MenuBar>,
     /// The platform set with [`target`](Self::target); the shell's when none is.
     target: Option<Target>,
-    english: Option<&'a EnglishHook<'a>>,
+    english: Option<Stateless<E>>,
     preferred: &'a [(&'a str, char)],
     keyboard: Option<bool>,
     help_search: bool,
 }
 
+/// Every input of the bar's view.
+#[derive(MemoProps)]
+struct BarProps<'a, #[memo_props(stateless)] E> {
+    bar: &'a Tracked<MenuBar>,
+    target: Target,
+    english: Option<Stateless<E>>,
+    preferred: &'a [(&'a str, char)],
+    keyboard: bool,
+    help: Option<usize>,
+    label: Label,
+}
+
 impl<'a> MenuBarUi<'a> {
     /// The bar for `bar`, already laid out ([`crate::layout`]), on the shell's platform ([`Target::of_shell`]).
-    pub fn new(bar: &'a MenuBar) -> MenuBarUi<'a> {
+    pub fn new(bar: &'a Tracked<MenuBar>) -> MenuBarUi<'a> {
         MenuBarUi { bar, target: None, english: None, preferred: &[], keyboard: None, help_search: false }
     }
+}
 
+impl<'a, E: Fn(Labeled<'_>) -> Option<String> + Copy + 'static> MenuBarUi<'a, E> {
     /// The platform the bar is on, for the shortcut column ([`craft_keymap::Chord::display`]): ⌘ glyphs on
     /// [`Target::Mac`] and in a browser on a Mac, Ctrl names everywhere else. On [`Target::Mac`] the native bar
     /// has the keys, and this one takes none unless [`keyboard`](Self::keyboard) says so.
-    pub fn target(mut self, target: Target) -> MenuBarUi<'a> {
+    pub fn target(mut self, target: Target) -> MenuBarUi<'a, E> {
         self.target = Some(target);
         self
     }
 
     /// Whether the bar takes F10, Alt and Alt with a letter. By default it does, except on [`Target::Mac`]. The
     /// app turns it off while a modal dialog or the shortcut recorder has the keys.
-    pub fn keyboard(mut self, on: bool) -> MenuBarUi<'a> {
+    pub fn keyboard(mut self, on: bool) -> MenuBarUi<'a, E> {
         self.keyboard = Some(on);
         self
     }
@@ -102,23 +136,24 @@ impl<'a> MenuBarUi<'a> {
     /// The English label of a row or title, for labels the keyboard can't type a letter of (Chinese, Japanese,
     /// Korean…): such a label shows its English label's mnemonic after it, "文件(F)", before a trailing ellipsis
     /// ("開く(O)…"), as Windows menus do. Without this hook (or when it returns `None`) such a label has no
-    /// mnemonic. The Help menu's search also matches the English labels, on every target.
-    pub fn english(mut self, english: &'a dyn Fn(Labeled<'_>) -> Option<String>) -> MenuBarUi<'a> {
-        self.english = Some(english);
-        self
+    /// mnemonic. The Help menu's search also matches the English labels, on every target. The hook is a fn item or a
+    /// closure that captures nothing ([`Stateless`]): the bar's key follows its type.
+    pub fn english<F: Fn(Labeled<'_>) -> Option<String> + Copy + 'static>(self, english: F) -> MenuBarUi<'a, F> {
+        let MenuBarUi { bar, target, english: _, preferred, keyboard, help_search } = self;
+        MenuBarUi { bar, target, english: Some(Stateless::new(english)), preferred, keyboard, help_search }
     }
 
     /// Preferred mnemonics, each for a menu or submenu by its title as shown or for an item by its command id:
     /// the row takes that letter when its label has it and no row before it in its menu took it. Every other row
     /// takes the first unused letter of its label, word starts first.
-    pub fn mnemonics(mut self, preferred: &'a [(&'a str, char)]) -> MenuBarUi<'a> {
+    pub fn mnemonics(mut self, preferred: &'a [(&'a str, char)]) -> MenuBarUi<'a, E> {
         self.preferred = preferred;
         self
     }
 
     /// Start the [`MenuRole::Help`] menu with a search field over every command of the bar
     /// ([`MenuBar::help_entries`]). A bar with no Help menu has no field.
-    pub fn help_search(mut self, on: bool) -> MenuBarUi<'a> {
+    pub fn help_search(mut self, on: bool) -> MenuBarUi<'a, E> {
         self.help_search = on;
         self
     }
@@ -129,20 +164,71 @@ impl<'a> MenuBarUi<'a> {
     pub fn show(self, ui: &mut Ui) -> MenuBarOutput {
         let env = Env::of(ui);
         let target = self.target.unwrap_or_else(|| Target::of_shell(env.view().shell()));
-        let rows = Rows::new(target).english(self.english).preferred(self.preferred);
-        let labels =
-            rows.labels(&self.bar.menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| rows.english_of(Labeled::Title(&menu.title)));
-        let shared = &rows;
-        let titles: Vec<MenuTitle<'_>> =
-            self.bar.menus.iter().zip(labels).map(|(menu, label)| MenuTitle::new(label, move |ui| shared.show(ui, &menu.children))).collect();
         let help = self.help_search.then(|| self.bar.menus.iter().position(|menu| menu.role == MenuRole::Help)).flatten();
-        // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
-        let (bar_model, english) = (self.bar, self.english);
-        let entries = move || entries_of(bar_model, english);
-        let mut bar = Bar::new(env.words::<BarWords>().label.clone(), titles).keyboard(self.keyboard.unwrap_or(target != Target::Mac));
-        if let Some(menu) = help {
-            bar = bar.help(MenuHelp::new(menu, &entries));
-        }
-        MenuBarOutput { titles: bar.show(ui).titles }
+        let props = BarProps {
+            bar: self.bar,
+            target,
+            english: self.english,
+            preferred: self.preferred,
+            keyboard: self.keyboard.unwrap_or(target != Target::Mac),
+            help,
+            label: env.words::<BarWords>().label.clone(),
+        };
+        MemoView::new("menu-bar", props, show_bar::<E>).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING })
     }
+}
+
+/// The bar's view: the titles through [`craft_ui::menu::MenuBar`], each menu's rows as command rows.
+fn show_bar<E: Fn(Labeled<'_>) -> Option<String> + Copy + 'static>(props: &mut BarProps<'_, E>, ui: &mut Ui) -> MenuBarOutput {
+    let hook = props.english.map(|english| {
+        let english = english.get();
+        move |labeled: Labeled<'_>| english(labeled)
+    });
+    let english: Option<&EnglishHook<'_>> = hook.as_ref().map(|hook| hook as &EnglishHook<'_>);
+    let rows = Rows::new(props.target).english(english).preferred(props.preferred);
+    let env = Env::of(ui);
+    let os = env.view().shell().os;
+    // The text of every menu is worked out once for these inputs and kept: a pass that shows an open menu again writes none of it.
+    let key = LabelKey {
+        bar: props.bar,
+        target: props.target,
+        os,
+        preferred: props.preferred,
+        english: props.english,
+        words: &env.words,
+        keymap: craft_ui::runtime::commands::keymap_generation(ui.ctx()),
+    };
+    let labels = craft_ui::runtime::derived::derived(ui.ctx(), ui.scope_id().with("menu-labels"), &key, || {
+        rows.bar_labels(&props.bar.menus, keymap_platform(props.target, os))
+    });
+    let (shared, labels) = (&rows, &*labels);
+    let titles: Vec<MenuTitle<'_>> = props
+        .bar
+        .menus
+        .iter()
+        .zip(&labels.titles)
+        .zip(&labels.menus)
+        .map(|((menu, title), level)| MenuTitle::new(title.clone(), move |ui| shared.show(ui, &menu.children, level)))
+        .collect();
+    // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
+    let bar_model: &MenuBar = props.bar;
+    let entries = move || entries_of(bar_model, english);
+    let mut bar = Bar::new(props.label.clone(), titles).keyboard(props.keyboard);
+    if let Some(menu) = props.help {
+        bar = bar.help(MenuHelp::new(menu, &entries));
+    }
+    MenuBarOutput { titles: bar.show(ui).titles }
+}
+
+/// What the kept text of a bar is made of: the model, the platform that names its shortcuts, the mnemonic and English
+/// hooks, the language and the keymap.
+#[derive(MemoProps)]
+struct LabelKey<'a, #[memo_props(stateless)] E> {
+    bar: &'a Tracked<MenuBar>,
+    target: Target,
+    os: Os,
+    preferred: &'a [(&'a str, char)],
+    english: Option<Stateless<E>>,
+    words: &'a Words,
+    keymap: u64,
 }

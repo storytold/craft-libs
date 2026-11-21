@@ -17,7 +17,7 @@
 mod cache;
 mod directories;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::path::{Path, PathBuf};
 

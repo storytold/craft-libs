@@ -3,7 +3,8 @@
 use super::Fixture;
 use crate::contract::{CollectionEvent, Inner, Outcome, TooltipSpec};
 use crate::runtime::commands::CommandStates;
-use craft_behavior::{EditEvent, EditEvents, PartKey, PartRef, Value};
+use craft_behavior::{EditEvent, EditEvents, Mixed, PartKey, PartRef, Value};
+use craft_tracked::{Revision, Tracked};
 use egui::{Id, Response, Ui, Vec2};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -148,12 +149,14 @@ impl Story {
 
     /// The name of the story's group as a story of the type whose display name is `type_name`: its group, else its
     /// caption.
+    #[cfg(feature = "suite")]
     pub fn group_name(&self, type_name: &str) -> String {
         self.group.map_or_else(|| self.caption(type_name), str::to_owned)
     }
 
     /// The story's caption as a story of the type whose display name is `type_name`: its title, else the one its
     /// name makes ([`crate::contract::story_title`]).
+    #[cfg(feature = "suite")]
     pub fn caption(&self, type_name: &str) -> String {
         self.title.map_or_else(|| crate::contract::story_title(type_name, self.name), str::to_owned)
     }
@@ -180,6 +183,7 @@ impl Story {
 
 /// A story registered by `#[story]`, linked to its type by the type's registered name.
 #[doc(hidden)]
+#[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct StoryRegistration {
     /// The package that declares the story.
@@ -188,6 +192,8 @@ pub struct StoryRegistration {
     pub crate_target: &'static str,
     /// The registered name of the type the story shows.
     pub type_name: fn() -> &'static str,
+    /// The registration of the type shown by this story.
+    pub registration: fn() -> crate::contract::Registration,
     /// The story.
     pub story: Story,
     /// The source file of the declaration.
@@ -198,8 +204,14 @@ pub struct StoryRegistration {
 
 impl StoryRegistration {
     /// The registration `#[story]` writes.
-    pub const fn new(crate_name: &'static str, crate_target: &'static str, type_name: fn() -> &'static str, story: Story) -> Self {
-        StoryRegistration { crate_name, crate_target, type_name, story, file: "", line: 0 }
+    pub const fn new(
+        crate_name: &'static str,
+        crate_target: &'static str,
+        type_name: fn() -> &'static str,
+        registration: fn() -> crate::contract::Registration,
+        story: Story,
+    ) -> Self {
+        StoryRegistration { crate_name, crate_target, type_name, registration, story, file: "", line: 0 }
     }
 
     /// The registration declared at `line` of `file`.
@@ -208,27 +220,6 @@ impl StoryRegistration {
         self.line = line;
         self
     }
-}
-
-inventory::collect!(StoryRegistration);
-
-/// Every story linked into the running binary, by type name; of each type, the stories of the package that registers
-/// it first, then those other packages declare; each in the order they are declared in.
-#[doc(hidden)]
-pub fn stories() -> Vec<&'static StoryRegistration> {
-    let homes: HashMap<&str, &str> = crate::contract::registrations()
-        .into_iter()
-        .filter_map(|registration| {
-            let name = registration.probe().map(|probe| probe.type_name()).or_else(|| registration.pattern_probe().map(|probe| probe.type_name()))?;
-            Some((name, registration.crate_name()))
-        })
-        .collect();
-    let mut all: Vec<_> = inventory::iter::<StoryRegistration>().collect();
-    all.sort_by_key(|entry| {
-        let name = (entry.type_name)();
-        (name, homes.get(name) != Some(&entry.crate_name), entry.file, entry.line)
-    });
-    all
 }
 
 /// The values a story shows, by name. Each is a `Value`, so the runner compares them before and after a drive.
@@ -243,6 +234,84 @@ pub struct StoryData {
     notes: HashMap<(&'static str, TypeId), Box<dyn Any>>,
     /// The story's `disabled_text`.
     disabled_text: Option<&'static str>,
+    /// Moves when [`StoryData::settle`] finds the values changed: the revision a memoized view of the story keys on.
+    written: Tracked<()>,
+    /// The values as the last [`StoryData::settle`] found them.
+    settled: Option<StorySnapshot>,
+    /// The revision after the last [`StoryData::settle`]: a write through a binding ([`StoryData::bind`]) moved it
+    /// since, and settle moves it no further for that write.
+    settled_at: Option<Revision>,
+}
+
+/// A story value as the Properties editor binds it ([`StoryData::__slot`]).
+#[doc(hidden)]
+pub struct Slot<'a> {
+    pub value: &'a mut dyn Shown,
+    pub how: Option<&'a Edit>,
+    pub count: &'a std::cell::Cell<u64>,
+    pub source: u64,
+    pub offset: usize,
+}
+
+impl Slot<'_> {
+    /// A binding of the value as `T`, as [`StoryData::bind`] makes it; `None` when the value is not a `T`.
+    pub fn bind<T: Value>(&mut self) -> Option<crate::contract::Bind<'_, T>> {
+        let value = self.value.any_mut().downcast_mut::<T>()?;
+        Some(crate::contract::Bind::__tracked(value, self.count, self.source, self.offset))
+    }
+}
+
+/// Where a story value lies ([`StoryData::value_at`]): its data's source, its name and its place in memory, so a binding
+/// of the value or of a field of it names that field by source and the field's offset in the value, as `bind_tracked!`
+/// names a field of a `Tracked`. A write through such a binding moves the story's revision.
+#[derive(Clone, Copy)]
+pub struct ValueAt<'a> {
+    count: &'a std::cell::Cell<u64>,
+    source: u64,
+    /// The value's key in the data's source (`slot_offset`): a part of it is keyed by this plus its offset.
+    key: usize,
+    base: usize,
+    size: usize,
+}
+
+impl<'a> ValueAt<'a> {
+    /// Where `value`, the story value named `name`, lies in the data whose writes `count` counts under `source`.
+    fn of<T: 'static>(count: &'a std::cell::Cell<u64>, source: u64, name: &'static str, value: &T) -> Self {
+        ValueAt { count, source, key: slot_offset(name, TypeId::of::<T>()), base: std::ptr::from_ref::<T>(value).addr(), size: size_of::<T>() }
+    }
+
+    /// A binding of `part`, the value itself or a field inside it.
+    ///
+    /// # Panics
+    ///
+    /// When `part` does not lie inside the value (a field behind a pointer, or another value).
+    pub fn bind<'b, F: Value>(self, part: &'b mut F) -> crate::contract::Bind<'b, F>
+    where
+        Self: 'b,
+    {
+        let offset = self.offset_of(std::ptr::from_ref::<F>(part).addr(), size_of::<F>());
+        crate::contract::Bind::__tracked(part, self.count, self.source, offset)
+    }
+
+    /// Like [`ValueAt::bind`] for a field that may be mixed: an edit makes it concrete.
+    ///
+    /// # Panics
+    ///
+    /// When `part` does not lie inside the value.
+    pub fn bind_mixed<'b, F: Value>(self, part: &'b mut Mixed<F>) -> crate::contract::Bind<'b, F>
+    where
+        Self: 'b,
+    {
+        let offset = self.offset_of(std::ptr::from_ref::<Mixed<F>>(part).addr(), size_of::<Mixed<F>>());
+        crate::contract::Bind::__tracked_mixed(part, self.count, self.source, offset)
+    }
+
+    /// The key of the part at address `at`, `size` bytes long: the value's key plus the part's offset in it.
+    fn offset_of(self, at: usize, size: usize) -> usize {
+        let offset = at.wrapping_sub(self.base);
+        assert!(offset <= self.size && size <= self.size - offset, "a story value binding names a part inside the value");
+        self.key.wrapping_add(offset)
+    }
 }
 
 /// How the Properties editor edits a value, beyond what its type says.
@@ -338,6 +407,112 @@ impl StoryData {
         }
     }
 
+    /// A binding of the value named `name` of type `T`, created from `init` on first use. Every view that binds a value
+    /// shows and edits one value: the story's view, and the Properties editor in the same pass. The binding names
+    /// the value by this data's source, so a reader that replays sees an edit made later in its pass, and an edit
+    /// moves the [`revision`](Self::revision) at the write.
+    #[allow(clippy::unreachable, reason = "the slot key holds the type, so the downcast cannot fail")]
+    pub fn bind<T: Value>(&mut self, name: &'static str, init: T) -> crate::contract::Bind<'_, T> {
+        let StoryData { values, written, .. } = self;
+        let slot = values.entry((name, TypeId::of::<T>())).or_insert_with(|| Box::new(init));
+        let (_, count, source) = written.__split_for_bind();
+        match slot.any_mut().downcast_mut::<T>() {
+            Some(value) => crate::contract::Bind::__tracked(value, count, source, slot_offset(name, TypeId::of::<T>())),
+            None => unreachable!("a slot's value has the type its key names"),
+        }
+    }
+
+    /// Like [`StoryData::bind`] for a value that may be mixed, as a multi-selection field shows it; an edit makes it
+    /// concrete.
+    #[allow(clippy::unreachable, reason = "the slot key holds the type, so the downcast cannot fail")]
+    pub fn bind_mixed<T: Value>(&mut self, name: &'static str, init: Mixed<T>) -> crate::contract::Bind<'_, T> {
+        let StoryData { values, written, .. } = self;
+        let slot = values.entry((name, TypeId::of::<Mixed<T>>())).or_insert_with(|| Box::new(init));
+        let (_, count, source) = written.__split_for_bind();
+        match slot.any_mut().downcast_mut::<Mixed<T>>() {
+            Some(value) => crate::contract::Bind::__tracked_mixed(value, count, source, slot_offset(name, TypeId::of::<Mixed<T>>())),
+            None => unreachable!("a slot's value has the type its key names"),
+        }
+    }
+
+    /// Like [`StoryData::bind`] for a number the Properties editor keeps inside `range`.
+    pub fn bind_ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> crate::contract::Bind<'_, T> {
+        self.how.entry((name, TypeId::of::<T>())).or_insert(Edit::Range(range));
+        self.bind(name, init)
+    }
+
+    /// Called by the Properties editor only: the value under `key` with what binds it as [`StoryData::bind`] does (the
+    /// write count, the source and the value's place in the data).
+    #[doc(hidden)]
+    pub fn __slot(&mut self, key: (&'static str, TypeId)) -> Option<Slot<'_>> {
+        let StoryData { values, how, written, .. } = self;
+        let value = values.get_mut(&key)?.as_mut();
+        let (_, count, source) = written.__split_for_bind();
+        Some(Slot { value, how: how.get(&key), count, source, offset: slot_offset(key.0, key.1) })
+    }
+
+    /// Called by the Properties editor only: it wrote the value under `key` outside a binding (an assignment after a
+    /// picked choice or an edited number). The revision moves, and a view that read the value earlier in the pass
+    /// runs again.
+    #[doc(hidden)]
+    pub fn __wrote(&mut self, ctx: &egui::Context, key: (&'static str, TypeId)) {
+        *self.written = ();
+        let size = self.values.get(&key).map_or(0, |value| size_of_val(&**value));
+        let read = crate::runtime::reads::BindKey::Tracked(self.written.source(), slot_offset(key.0, key.1), size, key.1);
+        crate::runtime::inspect::edited(ctx, read, Id::NULL);
+    }
+
+    /// The value named `name` of type `T`, created from `init` on first use, with where it lies ([`ValueAt`]): a
+    /// binding of the value or of a part of it (`at.bind(&mut value.0)`) names that part by this data's source, as
+    /// [`StoryData::bind`] does, while the story keeps the value to read and pass on.
+    #[allow(clippy::unreachable, reason = "the slot key holds the type, so the downcast cannot fail")]
+    pub fn value_at<T: Value>(&mut self, name: &'static str, init: T) -> (&mut T, ValueAt<'_>) {
+        let StoryData { values, written, .. } = self;
+        let slot = values.entry((name, TypeId::of::<T>())).or_insert_with(|| Box::new(init));
+        let (_, count, source) = written.__split_for_bind();
+        match slot.any_mut().downcast_mut::<T>() {
+            Some(value) => {
+                let at = ValueAt::of(count, source, name, value);
+                (value, at)
+            }
+            None => unreachable!("a slot's value has the type its key names"),
+        }
+    }
+
+    /// Two values by name, each created from its init on first use and returned with where it lies, as
+    /// [`StoryData::value_at`] returns one: for a story that binds a value it must keep by its own name beside another,
+    /// such as a dialog's `open`, which the gallery closes and opens by that name, beside the value the dialog edits.
+    ///
+    /// # Panics
+    ///
+    /// When both name the same value (the same name and type).
+    #[allow(clippy::unreachable, reason = "both values exist and each slot key holds its type, so neither lookup can fail")]
+    pub fn pair_at<A: Value, B: Value>(&mut self, a: (&'static str, A), b: (&'static str, B)) -> ((&mut A, ValueAt<'_>), (&mut B, ValueAt<'_>)) {
+        let StoryData { values, written, .. } = self;
+        let (key_a, key_b) = ((a.0, TypeId::of::<A>()), (b.0, TypeId::of::<B>()));
+        values.entry(key_a).or_insert_with(|| Box::new(a.1));
+        values.entry(key_b).or_insert_with(|| Box::new(b.1));
+        let (_, count, source) = written.__split_for_bind();
+        let [Some(slot_a), Some(slot_b)] = values.get_disjoint_mut([&key_a, &key_b]) else { unreachable!("both values were created above") };
+        let (Some(value_a), Some(value_b)) = (slot_a.any_mut().downcast_mut::<A>(), slot_b.any_mut().downcast_mut::<B>()) else {
+            unreachable!("a slot's value has the type its key names")
+        };
+        let (at_a, at_b) = (ValueAt::of(count, source, a.0, value_a), ValueAt::of(count, source, b.0, value_b));
+        ((value_a, at_a), (value_b, at_b))
+    }
+
+    /// Like [`StoryData::value_at`] for a number the Properties editor keeps inside `range`.
+    pub fn ranged_at<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> (&mut T, ValueAt<'_>) {
+        self.how.entry((name, TypeId::of::<T>())).or_insert(Edit::Range(range));
+        self.value_at(name, init)
+    }
+
+    /// Like [`StoryData::value_at`] for a value that is one of `options`, which the Properties editor offers by label.
+    pub fn choice_at<T: Value>(&mut self, name: &'static str, init: T, options: &[(&'static str, T)]) -> (&mut T, ValueAt<'_>) {
+        self.choice(name, init.clone(), options);
+        self.value_at(name, init)
+    }
+
     /// Like [`StoryData::value`] for a number the Properties editor keeps inside `range`.
     pub fn ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> &mut T {
         self.how.entry((name, TypeId::of::<T>())).or_insert(Edit::Range(range));
@@ -358,6 +533,30 @@ impl StoryData {
                 now.assign(&**was);
             }
         }
+        self.settle();
+    }
+
+    /// Moves the [`revision`](Self::revision) when a value was added or changed since the last call. The accessors hand
+    /// out `&mut T`, so a write leaves no trace of its own: comparing the values after code that may have written them
+    /// (a story's run, an editor's pass) is the only signal that one happened. Notes are not compared: only a run
+    /// writes them, and a run is what a reader of the revision would repeat.
+    pub fn settle(&mut self) {
+        let same = self.settled.as_ref().is_some_and(|last| {
+            last.values.len() == self.values.len() && last.values.iter().all(|(key, was)| self.values.get(key).is_some_and(|now| now.same(&**was)))
+        });
+        if !same {
+            if self.settled_at.is_none_or(|at| at == self.written.revision()) {
+                *self.written = ();
+            }
+            self.settled = Some(self.snapshot());
+        }
+        self.settled_at = Some(self.written.revision());
+    }
+
+    /// The revision of the values: unique to this data, and moved by every [`settle`](Self::settle) that finds a
+    /// change, so equal revisions mean the values a memoized view showed.
+    pub fn revision(&self) -> Revision {
+        self.written.revision()
     }
 
     /// The names of the values that differ from `before`; a value added since counts as changed.
@@ -388,6 +587,14 @@ impl StoryData {
     /// A copy of every value.
     pub fn snapshot(&self) -> StorySnapshot {
         StorySnapshot { values: self.values.iter().map(|(key, value)| (*key, value.copy())).collect() }
+    }
+}
+
+/// A story's data as props, by its [`revision`](StoryData::revision). A view that shows the story settles the data at
+/// the end of its run, so a run that changed a value runs once more, from the changed values, and then replays.
+impl crate::contract::MemoProps for &mut StoryData {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        crate::contract::MemoProps::key(&self.revision(), key);
     }
 }
 
@@ -567,4 +774,13 @@ where
     C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
 {
     crate::contract::show_item_in_flow(ui, row, crate::runtime::access::SetPosition::new(0).of(1))
+}
+
+/// A story value's place in its data, by its name and type, as the data keeps it: with the data's source it names the
+/// value in every pass (`BindKey::Tracked`), and a part of it by this plus the part's offset.
+fn slot_offset(name: &str, ty: TypeId) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (name, ty).hash(&mut hasher);
+    hasher.finish() as usize
 }

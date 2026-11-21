@@ -90,7 +90,7 @@ fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: 
     let values = StatusValues { document_sizes: Some((26_100_000, 31_400_000)), ..StatusValues::default() };
     let canvas = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
     let mut item = *data.value("item", StatusItem::DocumentSizes);
-    let view = data.value("view", CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667));
+    let (view, view_at) = data.value_at("view", CanvasView::new(canvas, Point::new(1000.0, 750.0), 0.6667));
     let shown = crate::testing::memory::scoped(ui, |ui| {
         ui.set_max_width(width.min(ui.available_width()));
         Bar::new("Status", BarKind::Status)
@@ -98,7 +98,7 @@ fn status_bar(ui: &mut Ui, data: &mut StoryData, message: StatusMessage, width: 
                 Link::new("CPU Rendering").tone(Tone::Warn).show(ui);
             })
             .show(ui, |ui, _| {
-                if let Some(picked) = StatusReadout::new(Bind::bound(view), DOCUMENT, item, &values).show(ui).item {
+                if let Some(picked) = StatusReadout::new(view_at.bind(view), DOCUMENT, item, &values).show(ui).item {
                     item = picked;
                 }
                 message.show(ui);

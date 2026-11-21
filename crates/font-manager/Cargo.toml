@@ -7,11 +7,18 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[package.metadata.craft]
+reads = [
+    "crates/ui-contract/fonts/inter/Inter-Regular.ttf",
+    "crates/ui-contract/fonts/inter/Inter-SemiBold.ttf",
+]
+
 [lib]
 # Every test lives in the `it` integration binary, so `cargo test` builds the library once.
 test = false
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # `FontsPanel`: the whole interface as one egui panel (it builds for the web too), with the picker, the Glyphs panel, the axis sliders and the
 # Missing Fonts dialog.
@@ -40,13 +47,13 @@ log = { version = "0.4", optional = true }
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-craft-font-manager = { path = ".", features = ["screen-testing"] }
+craft-font-manager = { path = ".", features = ["suite"] }
 
 [[test]]
 name = "it"
 path = "tests/it/main.rs"
 harness = false
-required-features = ["screen-testing"]
+required-features = ["suite"]
 
 [lints]
 workspace = true

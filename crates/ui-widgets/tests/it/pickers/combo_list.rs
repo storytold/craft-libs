@@ -2,7 +2,7 @@
 //! back what was typed. The option under the pointer is previewed without changing the field.
 
 use craft_behavior::Preview;
-use craft_ui::contract::{Bind, Entry, Role, Show as _};
+use craft_ui::contract::{Entry, Role, Show as _};
 use craft_ui::pickers::ComboBox;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
@@ -12,14 +12,14 @@ const FAMILIES: [&str; 3] = ["Garamond", "Georgia", "Arial"];
 
 fn combo(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options: Vec<Entry<String>> = FAMILIES.iter().map(|family| Entry::new((*family).to_owned(), *family)).collect();
-    ComboBox::new("Font", Bind::bound(data.value("font", "Arial".to_owned())), &options).show(ui).edit.into()
+    ComboBox::new("Font", data.bind("font", "Arial".to_owned()), &options).show(ui).edit.into()
 }
 
 /// The combo box that stores the last preview change it reported and how many passes reported one; with `twice` set,
 /// every frame runs two passes.
 fn previewing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options: Vec<Entry<String>> = FAMILIES.iter().map(|family| Entry::new((*family).to_owned(), *family)).collect();
-    let shown = ComboBox::new("Font", Bind::bound(data.value("font", "Arial".to_owned())), &options).show(ui);
+    let shown = ComboBox::new("Font", data.bind("font", "Arial".to_owned()), &options).show(ui);
     if shown.preview != Preview::Unchanged {
         *data.value("reports", 0_u32) += 1;
         *data.value("preview", Preview::<String>::Unchanged) = shown.preview.clone();

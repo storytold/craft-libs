@@ -16,8 +16,8 @@ use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 use serde_json::{Value, json};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the report dialog beside the common OK.

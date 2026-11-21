@@ -30,11 +30,11 @@ use craft_ui::text::{NamedOr, NumberName, NumberPick, NumberValue as _};
 use egui::{Response, Ui};
 
 pub(crate) mod paragraph;
-mod paragraph_dialog;
+pub(crate) mod paragraph_dialog;
 pub(crate) mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
-mod style_options;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+pub(crate) mod style_options;
 
 pub use paragraph::{ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign};
 pub use paragraph_dialog::{
@@ -456,7 +456,7 @@ impl Outcome for CharacterControlsOutput {
 /// for edit in out.edits { gestures.handle(&mut doc, edit, apply_to_selection) }
 /// ```
 ///
-/// - Fields fill two columns of the available width with a mark for a label (PhotoCraft's marks: "tT", "A↕", "VA",
+/// - Fields fill two columns where they fit and stack in narrower panels. A mark serves as a label (PhotoCraft's marks: "tT", "A↕", "VA",
 ///   "↕T", "↔T", "Aª"); a drag on the mark scrubs the value. Size, leading, kerning and tracking have a preset menu in
 ///   the field (presets are shortcuts, not limits: any value in range can be typed). Ranges in points: size
 ///   0.1–1296, leading 0.1–5000, baseline shift −1296–1296; tracking and kerning −1000–10000; scales 0–1000 %. The
@@ -553,6 +553,11 @@ impl<'a> CharacterControls<'a> {
         let mut rested_family = None;
         let mut requests = HostRequests::new();
 
+        // A short field needs room for its value, plus space for the mark and preset button.
+        let tokens = &env.tokens;
+        let field_width = tokens.size.length.short + 2.0 * tokens.size.icon.md;
+        let pair_width = 2.0 * field_width + tokens.space.gap.row;
+        let columns = if ui.available_width() < pair_width { &TWO_COLUMNS[..1] } else { &TWO_COLUMNS };
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
             let family = family_field(ui, &words, values, families, picker.as_mut());
@@ -572,7 +577,7 @@ impl<'a> CharacterControls<'a> {
                 edits.extend(sliders.show(ui).edit.into_iter().map(|event| event.map(CharacterChange::Axes)));
             }
 
-            Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
+            Grid::new(columns).fill_width().show(ui, |ui, _| {
                 let size = LengthRow {
                     label: words.size.clone(),
                     side: mark(GlyphLabel::text("tT"), None, FieldLayout::Inside),
@@ -585,7 +590,7 @@ impl<'a> CharacterControls<'a> {
                 let side = mark(GlyphLabel::text("A↕"), Some(words.leading_hint.clone()), FieldLayout::Inside);
                 edits.extend(leading_row(&lengths, ui, &words, side, values.leading, values.size, &leading_presets));
             });
-            Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
+            Grid::new(columns).fill_width().show(ui, |ui, _| {
                 let event = lengths.kerning(
                     ui,
                     words.kerning.clone(),
@@ -606,7 +611,7 @@ impl<'a> CharacterControls<'a> {
                 let (event, _) = lengths.plain(ui, tracking);
                 edits.extend(number_change(event, CharacterChange::Tracking));
             });
-            Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
+            Grid::new(columns).fill_width().show(ui, |ui, _| {
                 let vertical = PlainRow {
                     label: words.vertical_scale.clone(),
                     side: mark(GlyphLabel::text("↕T"), None, FieldLayout::Inside),
@@ -628,7 +633,7 @@ impl<'a> CharacterControls<'a> {
                 let (event, _) = lengths.plain(ui, horizontal);
                 edits.extend(number_change(event, CharacterChange::HorizontalScale));
             });
-            Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
+            Grid::new(columns).fill_width().show(ui, |ui, _| {
                 let shift = LengthRow {
                     label: words.baseline_shift.clone(),
                     side: mark(GlyphLabel::text("Aª"), None, FieldLayout::Inside),

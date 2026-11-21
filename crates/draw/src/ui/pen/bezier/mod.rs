@@ -5,8 +5,8 @@ mod hit_test;
 mod mark;
 mod model;
 mod ops;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod style;
 mod tools;
 mod words;
@@ -398,7 +398,7 @@ struct Scene {
 ///   the selected anchors or the picked handle (⌥ alone); Delete and Backspace report
 ///   [`delete`](BezierOutput::delete) under the tools that delete anchors (Direct, Convert, Curvature, Add Anchor,
 ///   Delete Anchor), Insert [`insert`](BezierOutput::insert) halfway along the segment leaving the picked anchor;
-///   Escape deselects.
+///   Escape leaves the selection and goes to the window.
 /// - The anchor tools ([`BezierTool::AddAnchor`], [`BezierTool::DeleteAnchor`], [`BezierTool::AutoAddDelete`]) and
 ///   [`BezierTool::Curvature`] take only a press that hits what they edit, and draw the [`HitMark`] of what a press
 ///   would take under the pointer. [`segment_mark`](Self::segment_mark), [`anchors`](Self::anchors) and
@@ -1120,9 +1120,6 @@ impl<'a> BezierOverlay<'a> {
             if forward || backward {
                 self.report.delete = Some(AnchorDelete::new(path, self.selection.anchors.clone(), true));
             }
-        }
-        if keyed && cx.gesture().is_none() && cx.intents().take(Intent::Cancel) && *self.selection != PathSelection::default() {
-            self.report.select = Some(PathSelection::default());
         }
     }
 

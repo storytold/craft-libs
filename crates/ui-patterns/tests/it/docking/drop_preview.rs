@@ -1,9 +1,10 @@
 //! A dock drop's mark is the region the dragged panel takes once dropped: the rect the area then gives its group.
 
+use super::Numbered;
 use craft_behavior::Axis;
 use craft_behavior::dock::{Layout, Node, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx, Role};
-use craft_ui::docking::{DockConfig, DockPanels, DragUnit, FloatSpace, GroupAt, PanelSpec, float_drop};
+use craft_ui::contract::{Bind, BodyCx, Role, Tracked};
+use craft_ui::docking::{DockConfig, DockPanels, DragUnit, FloatSpace, GroupAt, float_drop};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag::{self, DropMark};
 use craft_ui::testing::pointer::{moved, press, release};
@@ -12,6 +13,7 @@ use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 const ROOM: Vec2 = Vec2::new(800.0, 500.0);
 const SLACK: f32 = 0.5;
@@ -25,10 +27,6 @@ struct Panels {
 }
 
 impl DockPanels<usize> for Panels {
-    fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(format!("Panel {panel}"))
-    }
-
     fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
 
     fn group_view(&mut self, panels: &[usize], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
@@ -41,7 +39,7 @@ impl DockPanels<usize> for Panels {
 
 struct Bed {
     fixture: Fixture,
-    workspace: Rc<RefCell<Workspace<usize>>>,
+    workspace: Rc<RefCell<Arc<Workspace<usize>>>>,
     shown: Shown,
 }
 
@@ -56,13 +54,13 @@ fn bed() -> Bed {
 }
 
 fn bed_on(root: Node<usize>) -> Bed {
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
     let shown: Shown = Rc::default();
-    let (held, seen) = (Rc::clone(&workspace), Rc::clone(&shown));
+    let (held, seen, specs) = (Rc::clone(&workspace), Rc::clone(&shown), Tracked::new(Numbered));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
         let mut panels = Panels { shown: Rc::clone(&seen) };
-        DockArea::new("Dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default()).show(ui);
         *held.borrow_mut() = workspace;
     });
     fixture.room(ROOM).settle();
@@ -97,7 +95,7 @@ fn drop_tab(bed: &mut Bed, panel: usize, to: Pos2) -> DropMark {
 
 /// The rect the area shows the group of `panel` in.
 fn group_rect(bed: &Bed, panel: usize) -> Rect {
-    let layout = bed.workspace.borrow().layout.clone();
+    let layout = bed.workspace.borrow().layout().clone();
     let place = layout.place(&panel).expect("the panel is docked");
     let Some(Node::Tabs { panels, .. }) = layout.node_of(&place) else { panic!("panel {panel} is in a tab group") };
     *bed.shown.borrow().get(panels).unwrap_or_else(|| panic!("the group {panels:?} was shown"))

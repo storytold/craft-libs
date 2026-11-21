@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use craft_theme::Srgba;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::contract::{Bind, Job};
+use craft_ui::contract::Job;
 use craft_ui::dialog::{FullWindowWorkspace as _, WorkspaceCx};
 use craft_ui::patterns::form_dialogs::{Param, ParamKind};
 use craft_ui::primitives::textures::{FakeThumbSource, ThumbSource, ThumbnailOptions, Thumbnails};
@@ -153,7 +153,7 @@ fn workspace(ui: &mut Ui, data: &mut StoryData, rendering: bool) -> StoryOutput 
     let session = data.value("session", start()).clone();
     let mut workspace = FilterGalleryWorkspace::new(FilterGalleryOpen::new(image.size(), "Photo", session));
     let source: &dyn FilterGallerySource = &MockSource { image, rendering, thumbs: FakeThumbSource::new() };
-    let pass = workspace.show(ui, WorkspaceCx::new(source, Bind::bound(data.value("open", true))));
+    let pass = workspace.show(ui, WorkspaceCx::new(source, data.bind("open", true)));
     // A swatch press asks the app for a color; the story has no picker.
     for event in &pass.events {
         if let FilterGalleryEvent::PickColor(request) = event {

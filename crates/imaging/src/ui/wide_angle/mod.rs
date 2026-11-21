@@ -15,10 +15,10 @@
 //! [`EditHistory`]: craft_behavior::EditHistory
 
 mod commands;
-mod lines;
-mod panel;
+pub(crate) mod lines;
+pub(crate) mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;
 mod words;
@@ -37,7 +37,7 @@ use std::time::Duration;
 use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
 use craft_ui::canvas::{CanvasTool, HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
-use craft_ui::contract::{Bind, Pattern, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Pattern, Remember as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
     WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
@@ -58,7 +58,7 @@ use serde_json::Value;
 use crate::ui::live_preview::settings_hash;
 
 /// The tools of the strip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum WideAngleTool {
     /// A.
@@ -146,11 +146,12 @@ pub enum WideAngleEvent {
 }
 
 /// The state the dialog body keeps between passes: what the app does not read.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct Body {
     view: Option<FullWindowView>,
     tool: WideAngleTool,
-    last_used: LastUsed<WideAngleTool>,
+    last_used: Tracked<LastUsed<WideAngleTool>>,
+    slots: Tracked<Vec<ToolSlot<WideAngleTool>>>,
     constraint: ConstraintTool,
     hand: Option<HandTool>,
     zoom: Option<ZoomTool>,
@@ -160,6 +161,24 @@ struct Body {
     menu: Option<usize>,
     /// The Add Constraint form is open.
     adding: bool,
+}
+
+impl Default for Body {
+    fn default() -> Self {
+        let slots = TOOL_SLOT.iter().zip(0..).map(|(&(tool, command), slot)| ToolSlot::new(slot, vec![RailTool::new(tool, command)])).collect();
+        Body {
+            view: None,
+            tool: WideAngleTool::default(),
+            last_used: Tracked::default(),
+            slots: Tracked::new(slots),
+            constraint: ConstraintTool::default(),
+            hand: None,
+            zoom: None,
+            canvas: None,
+            menu: None,
+            adding: false,
+        }
+    }
 }
 
 /// A change the passes ask of the session, applied after the dialog has been shown.
@@ -349,11 +368,9 @@ impl FullWindowWorkspace for WideAngleWorkspace {
                     end_gesture(&ctx, &mut body, CancelReason::UndoDuringGesture);
                 }
 
-                let slots: Vec<ToolSlot<WideAngleTool>> =
-                    TOOL_SLOT.iter().zip(0..).map(|(&(tool, command), slot)| ToolSlot::new(slot, vec![RailTool::new(tool, command)])).collect();
                 let mut next = None;
                 while let Some((command, fired)) = cx.take_command::<WideAngleCommands>() {
-                    next = pick(&slots, command, &fired, &body).or(next);
+                    next = pick(command, &fired, &body).or(next);
                 }
 
                 let image = source.source();
@@ -369,10 +386,10 @@ impl FullWindowWorkspace for WideAngleWorkspace {
                 }
 
                 Row::new().fill().show(ui, |ui, _| {
-                    let rail = ToolRail::new(words.tools.clone(), &slots, &body.tool, &body.last_used).show_column(ui, |_, _| {});
+                    let rail = ToolRail::new(words.tools.clone(), &body.slots, &body.tool, &body.last_used).show_column(ui, |_, _| {});
                     next = rail.select.or(next);
                     if let Some(last_used) = rail.last_used {
-                        body.last_used = last_used;
+                        *body.last_used = last_used;
                     }
                     if let Some(tool) = next.take().filter(|tool| *tool != body.tool) {
                         end_gesture(&ctx, &mut body, CancelReason::Removed);
@@ -566,12 +583,12 @@ fn edit_name<'a>(words: &'a WideAngleWords, edit: &WideAngleConstraintEdit) -> &
 }
 
 /// The tool a fired tool command picks, through its slot's pick rule; a tool key's release picks nothing.
-fn pick(slots: &[ToolSlot<WideAngleTool>], command: WideAngleCommands, fired: &Fired, body: &Body) -> Option<WideAngleTool> {
+fn pick(command: WideAngleCommands, fired: &Fired, body: &Body) -> Option<WideAngleTool> {
     if fired.phase == FirePhase::Release {
         return None;
     }
     let tool = TOOL_SLOT.iter().find(|(_, c)| *c == command)?.0;
-    let slot = slots.iter().find(|slot| slot.tools.iter().any(|t| t.id == tool))?;
+    let slot = body.slots.iter().find(|slot| slot.tools.iter().any(|t| t.id == tool))?;
     let visible: Vec<&RailTool<WideAngleTool>> = slot.tools.iter().collect();
     tool_pick(&visible, slot.id, &body.tool, &body.last_used, PickStep::of(fired), |_| true).map(|t| t.id)
 }

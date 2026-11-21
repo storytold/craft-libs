@@ -1,9 +1,9 @@
 //! The file service's UI part: [`PathField`], and the words of the service's native boxes.
 
-mod chooser;
-mod path_field;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod chooser;
+pub(crate) mod path_field;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use chooser::{ChooserWords, FileChooser};
 pub use path_field::{PathField, PathFieldOutput, PathFieldWords};

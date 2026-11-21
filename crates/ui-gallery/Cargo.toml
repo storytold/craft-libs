@@ -48,7 +48,7 @@ review = ["dep:craft-review"]
 table = ["dep:craft-table"]
 text = ["dep:craft-text"]
 # The theme panels are linked in every build (the Theme workspace uses them); the feature adds their stories.
-theme-editor = ["craft-theme-editor/screen-testing"]
+theme-editor = ["craft-theme-editor/suite"]
 theme-store = ["dep:craft-theme-store"]
 timeline = ["dep:craft-timeline"]
 dialogs = ["dep:craft-dialogs"]
@@ -64,7 +64,7 @@ harness = false
 workspace = true
 
 [dependencies]
-craft-ui = { workspace = true, features = ["app", "testing"] }
+craft-ui = { workspace = true, features = ["app", "suite"] }
 craft-i18n = { workspace = true }
 craft-theme = { workspace = true }
 craft-theme-editor = { workspace = true }
@@ -82,29 +82,30 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 web-time = "1.1"
 
-# The domain crates' stories, registered under each crate's `screen-testing`.
-craft-automation = { workspace = true, features = ["screen-testing"], optional = true }
-craft-browse = { workspace = true, features = ["screen-testing"], optional = true }
-craft-color-ui = { workspace = true, features = ["screen-testing"], optional = true }
-craft-draw = { workspace = true, features = ["screen-testing"], optional = true }
-craft-imaging = { workspace = true, features = ["screen-testing"], optional = true }
-craft-layers = { workspace = true, features = ["screen-testing"], optional = true }
-craft-menu = { workspace = true, features = ["screen-testing"], optional = true }
-craft-pages = { workspace = true, features = ["screen-testing"], optional = true }
-craft-print = { workspace = true, features = ["screen-testing"], optional = true }
-craft-review = { workspace = true, features = ["screen-testing"], optional = true }
-craft-table = { workspace = true, features = ["screen-testing"], optional = true }
-craft-text = { workspace = true, features = ["screen-testing", "find"], optional = true }
-craft-theme-store = { workspace = true, features = ["screen-testing"], optional = true }
-craft-timeline = { workspace = true, features = ["screen-testing"], optional = true }
+# The domain crates' stories, registered under each crate's `suite`.
+craft-automation = { workspace = true, features = ["suite"], optional = true }
+craft-browse = { workspace = true, features = ["suite"], optional = true }
+craft-color-ui = { workspace = true, features = ["suite"], optional = true }
+craft-draw = { workspace = true, features = ["suite"], optional = true }
+craft-imaging = { workspace = true, features = ["suite"], optional = true }
+craft-layers = { workspace = true, features = ["suite"], optional = true }
+craft-menu = { workspace = true, features = ["suite"], optional = true }
+craft-pages = { workspace = true, features = ["suite"], optional = true }
+craft-print = { workspace = true, features = ["suite"], optional = true }
+craft-review = { workspace = true, features = ["suite"], optional = true }
+craft-table = { workspace = true, features = ["suite"], optional = true }
+craft-text = { workspace = true, features = ["suite", "find"], optional = true }
+craft-theme-store = { workspace = true, features = ["suite"], optional = true }
+craft-timeline = { workspace = true, features = ["suite"], optional = true }
 
 # Native only: these crates do not build for the web, so their stories are not in the web gallery.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-dialogs = { workspace = true, features = ["screen-testing"], optional = true }
-craft-font-manager = { workspace = true, features = ["screen-testing"], optional = true }
-craft-update = { workspace = true, features = ["screen-testing"], optional = true }
+craft-dialogs = { workspace = true, features = ["suite"], optional = true }
+craft-font-manager = { workspace = true, features = ["suite"], optional = true }
+craft-update = { workspace = true, features = ["suite"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }

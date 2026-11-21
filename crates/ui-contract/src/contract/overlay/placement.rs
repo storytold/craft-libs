@@ -59,7 +59,7 @@ fn stored_opening(ctx: &Context, id: Id) -> Option<Opening> {
 /// The screen rect the popups opened in an env are contained in, and the popups opened from those: the menus of a menu
 /// bar stay below the bar ([`OverlayUi::contain_popups_below`](super::OverlayUi::contain_popups_below)). `None`, the
 /// root's, lets popups take the whole safe rect.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PopupRegion(pub Option<Rect>);
 
@@ -82,10 +82,16 @@ pub(crate) fn region_for(env: &Env, overlay: &Overlay) -> Option<Rect> {
     }
 }
 
-/// The screen rect a layer of `overlay` opened in `env` keeps inside: the safe rect, or the part of it a contained
-/// layer's region leaves.
+/// The room a layer opened in the running viewport may take, in its points: the work area around a palette window,
+/// whose layers show in popup windows of their own (`windows::popup_room`), else the window's safe rect.
+pub fn layer_room(ctx: &Context) -> Rect {
+    crate::runtime::windows::popup_room(ctx).map_or_else(|| areas::safe_rect(ctx), |popup| popup.room)
+}
+
+/// The screen rect a layer of `overlay` opened in `env` keeps inside: the layer room ([`layer_room`]), or the part
+/// of it a contained layer's region leaves.
 pub(crate) fn screen_for(ctx: &Context, env: &Env, overlay: &Overlay) -> Rect {
-    let safe = areas::safe_rect(ctx);
+    let safe = layer_room(ctx);
     region_for(env, overlay).map_or(safe, |region| region.intersect(safe))
 }
 

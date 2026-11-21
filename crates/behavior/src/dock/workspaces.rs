@@ -286,7 +286,7 @@ impl<P> From<StoredSet<P>> for WorkspaceSet<P> {
                 let StoredWorkspace { mut workspace, locked: lock, saved } = named.layout;
                 locked |= lock;
                 if let Some(layout) = saved {
-                    workspace.layout = layout;
+                    workspace = workspace.with_layout(layout);
                 }
                 NamedWorkspace { id: named.id, name: named.name, layout: workspace, chrome: named.chrome, keeps: named.keeps }
             })
@@ -297,7 +297,7 @@ impl<P> From<StoredSet<P>> for WorkspaceSet<P> {
             if let Some(layout) = stored.saved
                 && let Some(named) = saved.iter_mut().find(|w| w.id == id)
             {
-                named.layout.layout = layout;
+                named.layout = std::mem::take(&mut named.layout).with_layout(layout);
             }
             edited.insert(id, stored.workspace);
         }

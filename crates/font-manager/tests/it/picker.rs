@@ -9,7 +9,7 @@ use craft_behavior::{PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::buttons::ControlPlace;
@@ -18,7 +18,7 @@ use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::moved;
-use craft_ui::testing::{Fixture, Room, trial};
+use craft_ui::testing::{Fixture, Room, last_frame_derived_builds, trial};
 use egui::{Event, Key, Modifiers};
 
 const INTER_REGULAR: &[u8] = include_bytes!("../../../ui-contract/fonts/inter/Inter-Regular.ttf");
@@ -125,14 +125,15 @@ fn similar_fonts_put_the_current_family_first_and_leave_the_list_alone_without_a
     let catalog = catalog_of(&[epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT, INTER_REGULAR]);
     let mut similar = FontFilters::default();
     similar.similar = true;
-    let rows = family_rows(&catalog, "", None, &similar, "Inter", "en");
+    let infos = FamilyInfos::of(&catalog);
+    let rows = family_rows(&catalog, &infos, "", None, &similar, "Inter", "en");
     let names: Vec<&str> = rows.iter().map(|row| row.family.as_str()).collect();
     assert_eq!(names.first(), Some(&"Inter"), "the current family first, though it is not first by name");
     assert!(rows.len() <= SIMILAR_COUNT);
 
     // A current family the catalog lacks has no traits: the list stays as unfiltered.
-    let unfiltered = family_rows(&catalog, "", None, &FontFilters::default(), "", "en");
-    assert_eq!(family_rows(&catalog, "", None, &similar, "Missing", "en"), unfiltered);
+    let unfiltered = family_rows(&catalog, &infos, "", None, &FontFilters::default(), "", "en");
+    assert_eq!(family_rows(&catalog, &infos, "", None, &similar, "Missing", "en"), unfiltered);
 }
 
 #[trial]
@@ -359,4 +360,43 @@ fn a_squeezed_ribbon_font_box_keeps_a_short_fields_name() {
     let short = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.short;
     assert!(squeezed > short, "the squeezed font box keeps a name field {short} wide and its arrow: {squeezed}");
     assert!(squeezed <= picker_width("Inter", true) + 0.5, "and is no wider than where the room allows");
+}
+
+/// The family data builds of the last frame.
+fn family_builds(fx: &Fixture) -> u32 {
+    last_frame_derived_builds(fx.ctx()).iter().map(|(_, builds)| builds).sum()
+}
+
+#[trial]
+fn the_family_data_builds_when_the_catalog_changes_and_not_while_it_is_idle() {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let (mut fx, _) = rig(Arc::clone(&catalog), vec![]);
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 0, "an idle open list builds nothing");
+    catalog.add_bytes(INTER_SEMIBOLD.to_vec(), Source::Bundled, &Limits::default()).expect("a font file");
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 1, "a changed catalog builds the data once, whatever reads it");
+}
+
+#[trial]
+fn a_picker_handed_another_catalog_at_the_same_generation_builds_its_family_data_once() {
+    let (one, two) = (catalog_of(&[INTER_REGULAR]), catalog_of(&[INTER_REGULAR]));
+    assert_eq!(one.generation(), two.generation(), "the two catalogs count alike");
+    assert_ne!(one.id(), two.id());
+    let shown = Rc::new(RefCell::new(Arc::clone(&one)));
+    let held = Rc::clone(&shown);
+    let mut family = String::new();
+    let mut fx = Fixture::new(move |ui| {
+        let catalog = Arc::clone(&held.borrow());
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog).show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 0, "the first catalog's data is kept");
+    *shown.borrow_mut() = Arc::clone(&two);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 1, "the second catalog builds the data once");
 }

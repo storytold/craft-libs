@@ -14,7 +14,7 @@ use craft_ui::canvas::{PickStep, ViewCommands};
 use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogResult, PromptChoice, StandardPrompt};
 use craft_ui::display::{Divider, Text};
-use craft_ui::docking::{DockConfig, DockEvent, DockPanels as _};
+use craft_ui::docking::{DockConfig, DockEvent, PanelSpecs as _};
 use craft_ui::menu::{Menu, MenuBar, MenuItem, MenuTitle};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::patterns::form_dialogs::{
@@ -25,6 +25,7 @@ use craft_ui::runtime::env::{Env, Label, WindowKey};
 use craft_ui::shell::{AppShell, AppShellOutput, CaptionFamily, Captions, Frame, ScreenMode, ShellDialogsCx as _, Title, TitleBar};
 use craft_window::Layout;
 use egui::{Rect, Ui};
+use std::sync::Arc;
 
 /// The parameters of Gaussian Blur.
 const BLUR: &str = r#"{"radius":0.1..1000=1}"#;
@@ -94,13 +95,19 @@ impl<'a> EditorMock<'a> {
 /// The dock, then the commands and dialog answers of this pass.
 fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
     let mut tools = cx.keep::<Tools>().clone();
-    let ctx = ui.ctx().clone();
     let (events, picked) = {
-        let mut panels =
-            Panels { document: &mut state.document, tool: state.tool, tools: &mut tools, last_used: &mut state.last_used, picked: None, ctx: &ctx };
+        let mut panels = Panels {
+            document: &mut state.document,
+            tool: state.tool,
+            tools: &mut tools,
+            slots: &state.slots,
+            last_used: &mut state.last_used,
+            picked: None,
+        };
         // The mock app is a preview inside the gallery's page: its floats stay in it.
-        let mut area = DockArea::new("Dock", Bind::bound(&mut state.workspace), &mut panels, DockConfig::default().native_windows(false))
-            .flyout(Bind::bound(&mut state.flyout));
+        let mut area =
+            DockArea::new("Dock", Bind::bound(&mut state.workspace), &state.specs, &mut panels, DockConfig::default().native_windows(false))
+                .flyout(Bind::bound(&mut state.flyout));
         if let Some(panel) = state.maximized {
             area = area.maximized(panel);
         }
@@ -138,20 +145,13 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
     for command in asked {
         if let Some(panel) = command.panel() {
             // A panel in a column collapsed to icons shows in its flyout: the command opens or closes that.
-            if state.workspace.layout.opens_in_flyout(&panel) {
+            if state.workspace.layout().opens_in_flyout(&panel) {
                 state.flyout = if state.flyout == Some(panel) { None } else { Some(panel) };
                 continue;
             }
-            let shown = state.workspace.layout.panel_state(&panel) != PanelState::Hidden;
-            let panels = Panels {
-                document: &mut state.document,
-                tool: state.tool,
-                tools: &mut tools,
-                last_used: &mut state.last_used,
-                picked: None,
-                ctx: &ctx,
-            };
-            let _ = state.workspace.set_visible(panel, !shown, None, false, |panel| panels.permissions(panel));
+            let shown = state.workspace.layout().panel_state(&panel) != PanelState::Hidden;
+            let specs = &state.specs;
+            let _ = Arc::make_mut(&mut state.workspace).set_visible(panel, !shown, None, false, |panel| specs.permissions(panel));
             continue;
         }
         match command {
@@ -266,7 +266,7 @@ fn title_bar(ui: &mut Ui, state: &MockState) {
                 }),
                 MenuTitle::new("&Window", |ui| {
                     for panel in Panel::ALL {
-                        let layout = &state.workspace.layout;
+                        let layout = state.workspace.layout();
                         let shown = if layout.opens_in_flyout(&panel) {
                             state.flyout == Some(panel)
                         } else {
@@ -309,7 +309,7 @@ fn status_bar(ui: &mut Ui, state: &mut MockState) {
             Link::new(words.cpu_rendering.clone()).tone(Tone::Warn).show(ui);
         })
         .show(ui, |ui, _| {
-            chosen = StatusReadout::new(Bind::bound(&mut document.view), document.size, *status_item, &values).show(ui).item;
+            chosen = StatusReadout::new(craft_ui::contract::bind_tracked!(document.view), document.size, *status_item, &values).show(ui).item;
             Divider::vertical().show(ui);
             Text::new(words.color_mode.clone()).show(ui);
             Divider::vertical().show(ui);

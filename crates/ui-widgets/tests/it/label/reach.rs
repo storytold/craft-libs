@@ -8,10 +8,11 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, ContainerProps, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::pickers::UnitSelect;
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, Frames, last_pass_measuring_runs, trial};
-use craft_ui::text::{NumberField, NumberPick};
-use egui::Rect;
+use craft_ui::text::{NumberField, NumberPick, link_toggle};
+use egui::{Rect, Vec2};
 use std::cell::RefCell;
 
 /// How far two edges may differ and still line up, in points.
@@ -193,4 +194,57 @@ fn a_field_before_the_groups_widest_value_shows_at_its_width() {
     fixture.frame(vec![]);
     let runs = last_pass_measuring_runs(fixture.ctx());
     assert!(runs.is_empty(), "a settled frame takes the kept measurements: {runs:?}");
+}
+
+/// A field `caption` holding a unit select, its select named "`caption` unit".
+fn unit(ui: &mut egui::Ui, caption: &'static str, units: &[Entry<UnitKind>]) {
+    Field::new(caption).show(ui, |ui, _| {
+        UnitSelect::new(caption, Bind::given(Some(8.0)), Bind::given(UnitKind::Pixels), units).unit_label(format!("{caption} unit")).show(ui);
+    });
+}
+
+/// In a content-sized form, the labelled rows of a stack inside a row (Image Size's Width and Height beside their
+/// link) take the placement their measure took, at the form's final label column: each label sits beside its
+/// controls, each control is as tall as a direct row's, and the next row starts under the one before. At 1x and 1.25x.
+#[trial]
+fn a_stack_of_labelled_rows_in_a_row_lays_out_as_it_measured() {
+    for scale in [1.0, 1.25] {
+        let units = [Entry::new(UnitKind::Pixels, "Pixels"), Entry::new(UnitKind::Percent, "Percent")];
+        let mut fixture = Fixture::new(move |ui| {
+            Row::new().show(ui, |ui, _| {
+                FieldGroup::new("Image size").show(ui, |ui, _| {
+                    number(ui, "Size");
+                    Row::new().show(ui, |ui, _| {
+                        Stack::new().show(ui, |ui, _| {
+                            unit(ui, "Width", &units);
+                            unit(ui, "Height", &units);
+                        });
+                        link_toggle("Link", Bind::given(true)).show(ui);
+                    });
+                    unit(ui, "Resolution", &units);
+                    number(ui, "Canvas extension color");
+                });
+            });
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).pixels_per_point(scale);
+        fixture.settle();
+        let reference = control(&fixture, "Resolution");
+        let mut above = f32::NEG_INFINITY;
+        for name in ["Width", "Height", "Resolution"] {
+            let (label, field, select) = (caption(&fixture, name), control(&fixture, name), control(&fixture, &format!("{name} unit")));
+            for part in [field, select] {
+                assert!(part.height() >= reference.height() - SLACK, "{name}'s controls are a full row tall at {scale}x: {part:?} {reference:?}");
+            }
+            assert!(label.max.x <= field.min.x + SLACK, "{name}'s label sits before its field at {scale}x: {label:?} {field:?}");
+            assert!(
+                label.min.y < field.max.y && label.max.y > field.min.y,
+                "{name}'s label sits on its field's line at {scale}x: {label:?} {field:?}"
+            );
+            assert!(label.min.y >= above - SLACK, "{name}'s row starts under the row before at {scale}x: {label:?} {above}");
+            above = field.max.y.max(select.max.y);
+        }
+        let link = fixture.by_label("Link").expect("the link toggle is shown").rect;
+        let select = control(&fixture, "Width unit");
+        assert!(link.min.x >= select.max.x - SLACK, "the link starts clear of the selects at {scale}x: {link:?} {select:?}");
+    }
 }

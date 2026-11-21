@@ -3,7 +3,7 @@
 //! The model and the stop rules ([`GradientStops`], [`stops`]) need no egui and live in [`crate::gradient`]; they are
 //! re-exported here so a widget user imports the editor and its model from one path.
 
-mod editor;
+pub(crate) mod editor;
 mod ramp;
 mod value;
 mod words;

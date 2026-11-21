@@ -30,8 +30,8 @@ use crate::ui::length::DocUnit;
 #[cfg(feature = "font-picker")]
 use super::FontPickerSource;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the style options editor, English by default: the three short alignment names its rows show. The

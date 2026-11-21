@@ -47,7 +47,7 @@ pub enum VanishingPointStripTool {
 }
 
 /// A slot of the strip.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 pub(super) enum Pick {
     EditPlane,
     CreatePlane,

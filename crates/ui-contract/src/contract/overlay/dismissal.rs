@@ -73,9 +73,30 @@ pub(super) fn dismissal(
     None
 }
 
+/// The dismissal of a layer shown in the popup window `popup`, decided in its opener's pass, beside what the popup's
+/// own pass decides: a layer that closes on outside presses closes on one in the opener outside it and its anchor
+/// (absorbed or not, as its rule says), and on one in any other window of the app; a popup also closes once the app
+/// has no focus. An absorbing layer can't keep a press in another OS window from reaching that window.
+pub(super) fn popup_dismissal(
+    ctx: &Context,
+    layer: &Layer<'_>,
+    rect: Rect,
+    anchor: Rect,
+    popup: egui::ViewportId,
+    appears: bool,
+) -> Option<CloseReason> {
+    let here = match layer.overlay.dismiss.outside {
+        Outside::Keep => return None,
+        Outside::Absorb => overlay::absorbed_press(ctx).is_some(),
+        Outside::Close => press_outside(ctx, layer, rect, anchor),
+    };
+    let away = layer.overlay.rank == Rank::Popup && crate::runtime::windows::app_away(ctx);
+    (here || away || crate::runtime::windows::pressed_elsewhere(ctx, popup, appears)).then_some(CloseReason::Outside)
+}
+
 /// Whether a primary press landed outside the layer, its anchor and the layers opened from inside it.
 fn press_outside(ctx: &Context, layer: &Layer<'_>, rect: Rect, anchor: Rect) -> bool {
-    let Some(press) = pointer::frame(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
+    let Some(press) = pointer::frame_raw(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
     else {
         return false;
     };
@@ -120,10 +141,9 @@ impl<C: Component> Cx<'_, C> {
         self.core.injected = Some(source);
     }
 
-    /// The modifiers held this frame, Alt alone included. The read is recorded like a value's: a settled component
-    /// that read them runs again in the frame they change (a menu title underlines its mnemonic while Alt is held).
+    /// The modifiers held this frame, Alt alone included. A tracked input: a memoized view that reads them runs when
+    /// they change.
     pub fn modifiers(&self) -> Mods {
-        crate::runtime::replay::note_read(&self.core.ctx, crate::runtime::reads::BindKey::Modifiers);
-        pointer::frame(&self.core.ctx).mods
+        pointer::mods(&self.core.ctx)
     }
 }

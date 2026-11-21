@@ -5,8 +5,8 @@
 mod gesture;
 mod paint;
 mod shield;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::CanvasWords;
 use super::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_snap, canvas_space, context_click, readout};

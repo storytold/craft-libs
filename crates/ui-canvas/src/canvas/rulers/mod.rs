@@ -2,8 +2,8 @@
 //! control (20.6). The strips and the corner are parts at handle priority in the canvas's arena. A drag from a strip
 //! reports a guide being placed; a drag from the corner moves the zero point.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod ticks;
 
 pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
@@ -16,7 +16,7 @@ use crate::contract::{
     PaintUi, PartsCx, Pointer as _, Props as _, Role, Styled as _, WordSetCx as _,
 };
 use crate::menu::Menu;
-use crate::primitives::{PaintShape, RectSide, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
+use crate::primitives::{PaintShape, RectSide, RulerFace, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use crate::runtime::env::{Label, UnitKind};
 use crate::runtime::focus::KeyUse;
 use crate::runtime::memory::Remember as _;
@@ -137,8 +137,14 @@ pub struct RulersStyle {
     pad: f32,
     /// How far a vertical label's next character sits below the one before: the label role's size.
     pitch: f32,
+    /// The face: the prop's, else the component set's.
+    face: RulerFace,
+    /// The strips and the corner.
     fill: StyleColor,
-    margin: StyleColor,
+    /// The well: the edge face's margin bands, the centred face's bar.
+    well: StyleColor,
+    /// The centred face's margin bands, shaded as the desk round the page.
+    shade: StyleColor,
     label: TextLook,
     marker: StyleColor,
 }
@@ -212,6 +218,10 @@ pub struct Rulers<'a> {
     /// no menu.
     #[prop]
     units: Option<&'a [UnitKind]>,
+    /// The face; unset, the scope's component set picks it ([`RulerFace::of`]).
+    #[style_key]
+    #[prop]
+    face: Option<RulerFace>,
     /// The canvas's space and snap in this pass, which the canvas hands to the rulers it shows.
     space: Option<CanvasSpace>,
     snap: Option<Snap>,
@@ -231,6 +241,7 @@ impl<'a> Rulers<'a> {
             interactive: true,
             margins: RulerMargins::default(),
             units: None,
+            face: None,
             space: None,
             snap: None,
             guide: None,
@@ -246,13 +257,12 @@ impl<'a> Rulers<'a> {
         Self::content_rect_of(full, thickness(cx.tokens))
     }
 
-    /// The top and the left strip inside the canvas's rect `full`, each as thick as the canvas's own rulers, for a ruler
-    /// of another component (a text ruler, a page ruler) that lies along them.
-    pub fn strips(ui: &egui::Ui, full: Rect) -> (Rect, Rect) {
+    /// The top strip, the left strip and the corner where they meet inside the canvas's rect `full`, each as thick as
+    /// the canvas's own rulers, for a ruler of another component (a text ruler, a page ruler) that lies along them.
+    pub fn strips(ui: &egui::Ui, full: Rect) -> (Rect, Rect, Rect) {
         let env = crate::runtime::env::Env::of(ui);
         let cx = StyleCx::of_env(ui.ctx(), &env);
-        let (top, left, _) = strips(full, thickness(cx.tokens));
-        (top, left)
+        strips(full, thickness(cx.tokens))
     }
 
     /// The ticks of one ruler over `values` (ruler units from the zero point): the one tick rule of every ruler, so a
@@ -357,15 +367,17 @@ impl Component for Rulers<'_> {
     type Style = RulersStyle;
     type Output = RulersOutput;
 
-    fn style(cx: &StyleCx<'_>, _: RulersStyleKey) -> RulersStyle {
+    fn style(cx: &StyleCx<'_>, key: RulersStyleKey) -> RulersStyle {
         let c = &cx.tokens.color;
         RulersStyle {
             metrics: Metrics::new(),
             thickness: thickness(cx.tokens),
             pad: cx.tokens.space.gap.tight,
             pitch: cx.tokens.typography.get(LABEL_ROLE).size,
+            face: key.face.unwrap_or(RulerFace::of(cx.set())),
             fill: cx.color(c.surface.chrome),
-            margin: cx.color(c.surface.sunken),
+            well: cx.color(c.surface.sunken),
+            shade: cx.color(c.surface.canvas),
             label: TextLook::new(LABEL_ROLE, Stateful::new(cx.color(c.text.muted))),
             marker: cx.color(c.text.normal),
         }
@@ -520,11 +532,39 @@ impl Component for Rulers<'_> {
             draw.fill(&rect(corner), style.fill);
             return;
         };
+        let face = style.face;
         let level = space.view.level(zero);
         let rulers = space.rulers();
         let text_of = |part: RulerPart| if part == RulerPart::Vertical { rulers.y } else { rulers.x };
-        for (part, strip, spans) in [(RulerPart::Horizontal, top, &self.margins.horizontal), (RulerPart::Vertical, left, &self.margins.vertical)] {
-            let vertical = part == RulerPart::Vertical;
+        // The divider is painted inside each strip's inner edge; the ticks keep clear of it so they keep their full
+        // length, and the centred face's bar is inset in what is left.
+        let band = draw.rule_width(RuleKind::Divider);
+        let tick_strip = |part: RulerPart, strip: Rect| {
+            if part == RulerPart::Vertical {
+                Rect::from_min_max(strip.min, Pos2::new(strip.right() - band, strip.bottom()))
+            } else {
+                Rect::from_min_max(strip.min, Pos2::new(strip.right(), strip.bottom() - band))
+            }
+        };
+        let painter = ui.content_painter(cx);
+        let parts = [(RulerPart::Horizontal, top, TickEdge::Bottom), (RulerPart::Vertical, left, TickEdge::Right)];
+        let bars = parts.map(|(part, strip, edge)| painter.ruler_bar(tick_strip(part, strip), edge, face));
+        if face == RulerFace::Centred {
+            for bar in &bars {
+                draw.fill(&rect(*bar), style.well);
+            }
+        }
+        // The edge face shades the margin bands across the strip in the well colour; the centred face shades them on
+        // its bar, as the text ruler shades its margins.
+        let mut margin_bands: [Vec<Rect>; 2] = [Vec::new(), Vec::new()];
+        for (((part, strip, _), spans), (bar, bands)) in
+            parts.iter().zip([&self.margins.horizontal, &self.margins.vertical]).zip(bars.iter().zip(margin_bands.iter_mut()))
+        {
+            let vertical = *part == RulerPart::Vertical;
+            let across = match face {
+                RulerFace::Edge => *strip,
+                RulerFace::Centred => *bar,
+            };
             for span in spans {
                 let at = |along: f64| {
                     let p = if vertical { Point::new(zero.x, along) } else { Point::new(along, zero.y) };
@@ -533,58 +573,79 @@ impl Component for Rulers<'_> {
                 };
                 let (a, b) = (at(span.start), at(span.end));
                 let (lo, hi) = (a.min(b), a.max(b));
-                let band = if vertical {
-                    Rect::from_min_max(Pos2::new(strip.left(), lo), Pos2::new(strip.right(), hi))
+                let shaded = if vertical {
+                    Rect::from_min_max(Pos2::new(across.left(), lo), Pos2::new(across.right(), hi))
                 } else {
-                    Rect::from_min_max(Pos2::new(lo, strip.top()), Pos2::new(hi, strip.bottom()))
+                    Rect::from_min_max(Pos2::new(lo, across.top()), Pos2::new(hi, across.bottom()))
                 };
-                let band = band.intersect(strip);
-                if band.is_positive() {
-                    draw.fill(&rect(band), style.margin);
+                let shaded = shaded.intersect(across);
+                if shaded.is_positive() {
+                    draw.fill(&rect(shaded), if face == RulerFace::Centred { style.shade } else { style.well });
+                    bands.push(shaded);
                 }
             }
         }
 
-        let painter = ui.content_painter(cx);
         let numbers = cx.env.units();
         let label = &style.label;
         let color = cx.resolve(&label.color);
         // A label is painted where the strip shows it: it overlaps the strip and stays inside the rulers' rect, so a
-        // label that hangs off an end of the strip is left out.
+        // label that hangs off an end of the strip is left out. The centred face numbers no margin band.
         let shows = |strip: Rect, text: Rect| text.intersects(strip) && cx.rect.contains_rect(text);
-        for (part, strip, edge) in [(RulerPart::Horizontal, top, TickEdge::Bottom), (RulerPart::Vertical, left, TickEdge::Right)] {
+        for (((part, strip, edge), bar), bands) in parts.into_iter().zip(bars).zip(&margin_bands) {
             let vertical = part == RulerPart::Vertical;
             let ticks = Self::axis_ticks(&text_of(part), &level, strip, part, zero);
-            let marks: Vec<Tick> =
-                ticks.iter().map(|(tick, at)| Tick::new(*at - if vertical { strip.top() } else { strip.left() }, tick.rank)).collect();
-            // The divider is painted inside the strip's inner edge; the ticks hang from its inner side so they keep their full length.
-            let band = draw.rule_width(RuleKind::Divider);
-            let tick_strip = if vertical {
-                Rect::from_min_max(strip.min, Pos2::new(strip.right() - band, strip.bottom()))
-            } else {
-                Rect::from_min_max(strip.min, Pos2::new(strip.right(), strip.bottom() - band))
-            };
-            painter.ticks(tick_strip, edge, &marks);
+            let mut galleys = Vec::new();
             for (tick, at) in ticks.iter().filter(|(tick, _)| tick.rank == TickRank::Major) {
                 let text = text_of(part).tick_label(&numbers, tick.value, tick.step);
                 if vertical {
                     // One character per line, centred in the strip: a narrow "1" lines up with a "0".
-                    let mut y = at + style.pad;
-                    for ch in text.chars() {
-                        let layout = draw.layout(&TextRun::new(ch.to_string()).role(label.role).color(color), f32::INFINITY);
-                        let at = Pos2::new(strip.center().x - layout.size().x / 2.0, y);
+                    let layouts: Vec<_> =
+                        text.chars().map(|ch| draw.layout(&TextRun::new(ch.to_string()).role(label.role).color(color), f32::INFINITY)).collect();
+                    let mut y = match face {
+                        RulerFace::Edge => at + style.pad,
+                        RulerFace::Centred => at - style.pitch * layouts.len() as f32 / 2.0,
+                    };
+                    let middle = match face {
+                        RulerFace::Edge => strip.center().x,
+                        RulerFace::Centred => bar.center().x,
+                    };
+                    let placed: Vec<_> = layouts
+                        .into_iter()
+                        .map(|layout| {
+                            let at = Pos2::new(middle - layout.size().x / 2.0, y);
+                            y += style.pitch;
+                            (at, layout)
+                        })
+                        .collect();
+                    let column = placed.iter().fold(Rect::NOTHING, |all, (at, layout)| all.union(Rect::from_min_size(*at, layout.size())));
+                    if face == RulerFace::Centred && (!shows(strip, column) || bands.iter().any(|band| band.intersects(column))) {
+                        continue;
+                    }
+                    for (at, layout) in placed {
                         if shows(strip, Rect::from_min_size(at, layout.size())) {
-                            draw.galley(at, &layout);
+                            galleys.push((at, layout));
                         }
-                        y += style.pitch;
                     }
                 } else {
                     let layout = draw.layout(&TextRun::new(text).role(label.role).color(color), f32::INFINITY);
-                    let at = Pos2::new(at + style.pad, strip.top() + style.pad);
-                    if shows(strip, Rect::from_min_size(at, layout.size())) {
-                        draw.galley(at, &layout);
+                    let boxed = match face {
+                        RulerFace::Edge => Rect::from_min_size(Pos2::new(at + style.pad, strip.top() + style.pad), layout.size()),
+                        RulerFace::Centred => RulerFace::centred_number(bar, edge, *at, layout.size()),
+                    };
+                    let clear = face == RulerFace::Edge || !bands.iter().any(|band| band.intersects(boxed));
+                    if shows(strip, boxed) && clear {
+                        galleys.push((boxed.min, layout));
                     }
                 }
+            }
+            let origin = if vertical { bar.top() } else { bar.left() };
+            let marks: Vec<Tick> = ticks.iter().map(|(tick, at)| Tick::new(*at - origin, tick.rank)).collect();
+            let boxes: Vec<Rect> = galleys.iter().map(|(at, layout)| Rect::from_min_size(*at, layout.size())).collect();
+            let marks = face.beside_numbers(edge, origin, marks, &boxes, style.pad);
+            painter.ticks(bar, edge, face, &marks);
+            for (at, layout) in &galleys {
+                draw.galley(*at, layout);
             }
         }
 

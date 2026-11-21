@@ -43,7 +43,7 @@ pub(crate) use scroll_owner::{child_reveal, peek_reveal, queue_child_reveal, rev
 pub(crate) use sense::{part_state, register_wheel};
 pub(crate) use settle::settle;
 pub(crate) use state::{register_reset, state, value_flags};
-pub(crate) use stops::{StopsIn, body_group, join_group, member_group, parts_group, register_stops, takes_focus};
+pub(crate) use stops::{StopsIn, body_group, parts_group, register_stops, takes_focus};
 pub(crate) use style::{style, style_cx};
 pub(crate) use update::{after_update, edit_intents, gesture_gate, key_activation, record_context, secondary_click, takes_activation, update_inputs};
 pub(crate) use value::{Shown, ShownState, peek_value, value};

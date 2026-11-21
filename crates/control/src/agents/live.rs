@@ -14,7 +14,7 @@
 //!   folders are for agents the person let in.
 //! - No app accepts agents, but agents are allowed: the closed-app choice decides
 //!   ([`LiveConfig::when_closed`], otherwise [`AgentSettings::when_app_closed`]): start the app and
-//!   wait until it accepts agents, a headless session with the app's agent folders (the command's
+//!   wait until it accepts agents, a headless session with the app's agent folders ([`AgentSettings::folders`], the default agent folder for an empty setting; the command's
 //!   folders win), or an error that says what to do.
 //!
 //! Once headless, the session stays headless: documents don't move under the agent. Only a session
@@ -138,6 +138,9 @@ pub struct LiveConfig<W, H> {
     /// The folder a headless session may save to (the CLI's write root); while agents are allowed
     /// it replaces the app's write folder.
     pub write_root: Option<PathBuf>,
+    /// The app's default agent folder, used for an empty folder setting
+    /// ([`AgentSettings::folders_with`]); [`super::default_folder`] of `app_name` unless changed.
+    pub default_folder: Option<PathBuf>,
     /// Starts the app; `None` when this install can't ([`launcher`] found nothing to start).
     pub launch: Option<LaunchFn>,
     /// How long a started app gets to accept agents ([`LAUNCH_TIMEOUT`]; at most 10 minutes).
@@ -159,8 +162,10 @@ impl<W, H> LiveConfig<W, H> {
         connect: impl Fn(&Window) -> Result<W, String> + Send + Sync + 'static,
         headless: impl Fn(&HeadlessFolders) -> Result<H, String> + Send + Sync + 'static,
     ) -> Self {
+        let app_name = app_name.into();
         Self {
-            app_name: app_name.into(),
+            default_folder: super::default_folder(&app_name),
+            app_name,
             config_dir,
             when_closed: None,
             read_roots: Vec::new(),
@@ -260,11 +265,17 @@ impl<W: Clone, H: Clone> Live<W, H> {
         match self.cfg.when_closed.unwrap_or(consent.settings.when_app_closed) {
             WhenAppClosed::Error => Err(format!("{app} isn't running: open it, then try again.")),
             WhenAppClosed::Headless => {
-                let app_read = self.cfg.read_roots.is_empty() && consent.settings.read_folder().is_some();
-                let app_write = self.cfg.write_root.is_none() && consent.settings.write_folder().is_some();
-                let read =
-                    if self.cfg.read_roots.is_empty() { consent.settings.read_folder().into_iter().collect() } else { self.cfg.read_roots.clone() };
-                let write = self.cfg.write_root.clone().or_else(|| consent.settings.write_folder());
+                // The app's folders, its default agent folder for an empty setting; only looked up
+                // (and the default created) when the command leaves a direction open.
+                let own = if self.cfg.read_roots.is_empty() || self.cfg.write_root.is_none() {
+                    consent.settings.folders_with(self.cfg.default_folder.as_deref())
+                } else {
+                    super::AgentFolders::default()
+                };
+                let app_read = self.cfg.read_roots.is_empty() && own.read.is_some();
+                let app_write = self.cfg.write_root.is_none() && own.write.is_some();
+                let read = if self.cfg.read_roots.is_empty() { own.read.into_iter().collect() } else { self.cfg.read_roots.clone() };
+                let write = self.cfg.write_root.clone().or(own.write);
                 let why = format!("{app} isn't running and its agent folders can't be used");
                 self.headless(&HeadlessFolders { read, write }, app_read || app_write, &why)
             }
