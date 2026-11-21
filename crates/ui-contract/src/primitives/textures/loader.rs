@@ -75,6 +75,13 @@ impl Debug for LoaderOptions {
 pub enum LoadedPicture {
     /// The picture to upload.
     Image(ColorImage),
+    /// Replaces the part of the existing picture at `origin` with `image` in place (TextureStore::put_region).
+    Region {
+        /// Top-left texel [x, y] of the region to replace in the stored image.
+        origin: [u32; 2],
+        /// The new pixels for the region.
+        image: ColorImage,
+    },
     /// The key has no picture (a file the decoder doesn't read): stored with `TextureStore::put_empty`, so its state
     /// is `Empty` and the row paints its own tile.
     Blank,
@@ -335,6 +342,17 @@ impl<K: TextureKey> TextureLoader<K> {
                         break;
                     }
                     self.store.put(ctx, key.clone(), revision, image);
+                }
+                Ok(LoadedPicture::Region { origin, image }) => {
+                    if !self.store.allow_upload(ctx, image.pixels.len() * size_of::<Color32>()) {
+                        deferred.push((key, revision, Ok(LoadedPicture::Region { origin, image })));
+                        deferred.extend(batch);
+                        repaint::request(ctx);
+                        break;
+                    }
+                    if self.store.put_region(ctx, &key, revision, origin, image).is_none() {
+                        repaint::request(ctx);
+                    }
                 }
                 Ok(LoadedPicture::Blank) => self.store.put_empty(ctx, key.clone(), revision),
                 Err(failure) => self.store.put_failure(ctx, key.clone(), revision, failure),

@@ -5,6 +5,7 @@ use craft_host::ManualJobs;
 use craft_host::queue::Cancel;
 use craft_ui::primitives::{
     LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, TextureBudget, TextureLoader, TextureState, TextureStore, TextureStoreOptions,
+    ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails,
 };
 use craft_ui::testing::{Frames, trial};
 use egui::{Color32, ColorImage, Context, Rect, TextureId, pos2};
@@ -229,4 +230,97 @@ fn a_finished_render_asks_for_a_repaint() {
     frame(&mut frames, || state.set(loader.ask(&ctx, &1, Revision::new(1), Priority::VISIBLE).expect("settled")));
     let state = state.into_inner();
     assert!(ready(&state), "the pass it asked for shows the picture: {state:?}");
+}
+
+#[trial]
+fn a_region_update_patches_the_existing_texture_in_place_and_advances_revision() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let (loader, jobs) = loader_with(&ctx, 1, 16);
+    assert!(!loader.cache().has_texture(&ctx, &1), "initially has no texture");
+
+    // Put initial full picture
+    frame(&mut frames, || {
+        loader.request(&ctx, &1, Revision::new(1), Priority::VISIBLE, || move |_| Ok(LoadedPicture::Image(square(LARGE, shade(10)))));
+    });
+    jobs.run_all();
+    let mut orig_id = None;
+    frame(&mut frames, || {
+        if let Some(TextureState::Ready(tex)) = loader.ask(&ctx, &1, Revision::new(1), Priority::VISIBLE) {
+            orig_id = Some(tex.id);
+        }
+    });
+    let orig_id = orig_id.expect("revision 1 loaded");
+    assert!(loader.cache().has_texture(&ctx, &1), "now has texture resident");
+    assert_eq!(loader.cache().texture_size(&ctx, &1), Some(PixelSize::new(LARGE as u32, LARGE as u32)));
+
+    // Request region update to revision 2
+    frame(&mut frames, || {
+        loader.request(&ctx, &1, Revision::new(2), Priority::VISIBLE, || {
+            move |_| Ok(LoadedPicture::Region { origin: [0, 2], image: square(SMALL, shade(200)) })
+        });
+    });
+    jobs.run_all();
+    frame(&mut frames, || {
+        let state = loader.ask(&ctx, &1, Revision::new(2), Priority::VISIBLE).expect("settled");
+        match state {
+            TextureState::Ready(tex) => {
+                assert_eq!(tex.id, orig_id, "the texture handle is patched in place (id stays)");
+                assert_eq!(tex.size, PixelSize::new(LARGE as u32, LARGE as u32));
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+    });
+    assert!(matches!(loader.cache().state(&ctx, &1, Revision::new(2)), TextureState::Ready(_)));
+    assert!(matches!(loader.cache().state(&ctx, &1, Revision::new(1)), TextureState::Loading { stand_in: Some(_), .. }));
+}
+
+struct TestPatchSource {
+    seen_patchable: Cell<bool>,
+    render_count: Cell<usize>,
+}
+
+impl ThumbSource<u32> for TestPatchSource {
+    fn revision(&self, _key: &u32, _request: &ThumbRequest) -> Revision {
+        Revision::new(self.render_count.get() as u64)
+    }
+
+    fn render(&self, _key: &u32, request: &ThumbRequest) -> ThumbRender {
+        self.seen_patchable.set(request.patchable);
+        let count = self.render_count.get();
+        self.render_count.set(count + 1);
+        if request.patchable {
+            ThumbRender::Region { origin: [0, 2], image: square(SMALL, shade(220)) }
+        } else {
+            ThumbRender::Ready(square(LARGE, shade(50)))
+        }
+    }
+}
+
+#[trial]
+fn thumbnails_routes_region_render_in_place_and_reports_patchable() {
+    let frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let thumbs = Thumbnails::<u32>::in_context(&ctx, "test-patch", ThumbnailOptions::new());
+    let source = TestPatchSource { seen_patchable: Cell::new(false), render_count: Cell::new(0) };
+    let req = ThumbRequest::for_cell(LARGE as f32, 1.0);
+
+    // Initial render: patchable is false
+    let initial = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+    assert!(!source.seen_patchable.get(), "first pass is not patchable");
+    let orig_id = match initial {
+        TextureState::Ready(tex) => tex.id,
+        other => panic!("expected Ready, got {other:?}"),
+    };
+
+    // Second render: patchable is true and Region patches in place
+    let patched = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
+    assert!(source.seen_patchable.get(), "second pass is patchable");
+    match patched {
+        TextureState::Ready(tex) => {
+            assert_eq!(tex.id, orig_id, "texture patched in place");
+            assert_eq!(tex.size, PixelSize::new(LARGE as u32, LARGE as u32));
+        }
+        other => panic!("expected Ready, got {other:?}"),
+    }
 }

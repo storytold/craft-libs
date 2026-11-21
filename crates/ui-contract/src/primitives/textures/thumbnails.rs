@@ -30,6 +30,9 @@ pub struct ThumbRequest {
     /// view and shows its detail. The region is part of the picture's revision, so each region has its own
     /// texture.
     pub region: Option<Rect>,
+    /// Whether an existing unpacked GPU texture for `key` is resident in the store and can accept an in-place
+    /// region patch (`ThumbRender::Region` or `LoadedPicture::Region`).
+    pub patchable: bool,
 }
 
 /// Requested sides are multiples of this many pixels.
@@ -46,7 +49,7 @@ impl ThumbRequest {
         let pixels = points * pixels_per_point;
         let steps = if pixels.is_finite() { (pixels / SIZE_STEP as f32).ceil().max(1.0) as u32 } else { 1 };
         let side = steps.saturating_mul(SIZE_STEP).min(MAX_TEXTURE / SIZE_STEP * SIZE_STEP);
-        ThumbRequest { side, pixels_per_point, region: None }
+        ThumbRequest { side, pixels_per_point, region: None, patchable: false }
     }
 
     /// The request for the part `region` of the frame (fractions of the frame, 0 to 1).
@@ -71,6 +74,13 @@ pub type ThumbJob = Box<dyn FnOnce(&Cancel) -> Result<LoadedPicture, LoadFailure
 pub enum ThumbRender {
     /// The picture, made now on the UI thread (a light layer, a fill colour).
     Ready(ColorImage),
+    /// A region of the picture to patch in place, made now on the UI thread.
+    Region {
+        /// Top-left texel [x, y] of the region to replace in the stored image.
+        origin: [u32; 2],
+        /// The new pixels for the region.
+        image: ColorImage,
+    },
     /// A job that makes it on a queue lane (a heavy node, a PDF page, a decoded file).
     Later(ThumbJob),
     /// No picture: state `Empty`, and the row paints its own tile (a group's folder, an adjustment's glyph).
@@ -347,7 +357,8 @@ impl<K: TextureKey> Thumbnails<K> {
     fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
-        let request = ThumbRequest { side, ..*request };
+        let patchable = self.loader.cache().has_texture(ctx, key);
+        let request = ThumbRequest { side, patchable, ..*request };
         let revision = Revision::of(&(source.revision(key, &request), side, region_bits(request.region)));
         if let Some(state) = self.loader.ask(ctx, key, revision, priority) {
             return state;
@@ -374,6 +385,16 @@ impl<K: TextureKey> Thumbnails<K> {
                 let mut inner = self.lock();
                 inner.renders += 1;
                 TextureState::Ready(texture)
+            }
+            ThumbRender::Region { origin, image } => {
+                if let Some(texture) = self.loader.cache().put_region(ctx, key, revision, origin, image) {
+                    let mut inner = self.lock();
+                    inner.renders += 1;
+                    TextureState::Ready(texture)
+                } else {
+                    repaint::request(ctx);
+                    stand_in()
+                }
             }
             ThumbRender::Blank => {
                 self.loader.cache().put_empty(ctx, key.clone(), revision);

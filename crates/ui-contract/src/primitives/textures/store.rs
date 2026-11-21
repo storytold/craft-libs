@@ -471,6 +471,19 @@ impl<K: TextureKey> TextureStore<K> {
         self.with(ctx, |inner| inner.state(key, revision, frame))
     }
 
+    /// Whether `key` has an unpacked GPU texture resident in the store that can accept region updates.
+    pub fn has_texture(&self, ctx: &Context, key: &K) -> bool {
+        self.with(ctx, |inner| matches!(inner.entries.get(key).map(|e| &e.picture), Some(Picture::Texture { .. })))
+    }
+
+    /// The pixel dimensions of `key`'s stored texture, if it has an unpacked GPU texture in the store.
+    pub fn texture_size(&self, ctx: &Context, key: &K) -> Option<PixelSize> {
+        self.with(ctx, |inner| match &inner.entries.get(key)?.picture {
+            Picture::Texture { source, .. } => Some(*source),
+            _ => None,
+        })
+    }
+
     /// Stores `image` as `key`'s picture at `revision` and returns it: in place when the key has a texture (same
     /// id), else a new texture with the store's filter. Reduced first when past `texture_side`. Counts as an upload
     /// this frame, marks the entry seen, then evicts. The image is sRGBA as egui's `ColorImage` holds it (built
