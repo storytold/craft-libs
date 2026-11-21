@@ -1312,22 +1312,25 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 }
 
 /// `path` filled by `rule`, as a path and the rule it is filled by. An even-odd path is
-/// rebuilt from its boundary as a path filled nonzero; if that fails it is kept closed and
-/// filled even-odd.
+/// rebuilt from its boundary as a path filled nonzero; if that fails or panics it is kept
+/// closed and filled even-odd.
 fn nonzero(path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
     if rule == FillRule::NonZero {
         return (path.clone(), FillRule::NonZero);
     }
     let closed = closed(path);
-    match linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union) {
-        Ok(contours) => {
+    let op = catch_unwind(AssertUnwindSafe(|| {
+        linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union)
+    }));
+    match op {
+        Ok(Ok(contours)) => {
             let mut out = BezPath::new();
             for contour in contours.contours() {
                 out.extend(contour.path.iter());
             }
             (out, FillRule::NonZero)
         }
-        Err(_) => (closed, FillRule::EvenOdd),
+        Ok(Err(_)) | Err(_) => (closed, FillRule::EvenOdd),
     }
 }
 
@@ -1372,6 +1375,15 @@ mod tests {
         assert!(values(cell, cell_scale, 1000) <= MAX_CELL_PIXELS * CANVAS_INKS * 1.01);
         // A CMYK page keeps its resolution.
         assert_eq!(tiling_scales(dpi, page, cell, 1.0, 4).0, dpi);
+    }
+
+    #[test]
+    fn even_odd_path_with_inconsistent_windings_is_kept() {
+        // The sweep gives this path winding numbers that disagree around a point.
+        let path = BezPath::from_svg("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z").unwrap();
+        let union = linesweeper::binary_op(&closed(&path), &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+        assert_eq!(union.err(), Some(linesweeper::Error::InconsistentWindingNumbers));
+        assert_eq!(nonzero(&path, FillRule::EvenOdd), (closed(&path), FillRule::EvenOdd));
     }
 
     #[test]
