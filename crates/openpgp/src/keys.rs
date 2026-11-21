@@ -27,6 +27,36 @@ const MAX_USER_ID: usize = 4 * 1024;
 /// checked, so a real key needs a handful). Room for two copies of the largest key kept, merged:
 /// two self-signatures for each User ID, and two with a back-signature each for each subkey.
 const MAX_CHECKS: usize = 512;
+
+#[cfg(not(test))]
+pub(super) fn max_checks() -> usize {
+    MAX_CHECKS
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_MAX_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_CHECKS) };
+}
+
+#[cfg(test)]
+pub(super) fn max_checks() -> usize {
+    TEST_MAX_CHECKS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn with_max_checks<T>(limit: usize, run: impl FnOnce() -> T) -> T {
+    struct Restore(usize);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_MAX_CHECKS.with(|value| value.set(self.0));
+        }
+    }
+
+    let _restore = Restore(TEST_MAX_CHECKS.with(|value| value.replace(limit)));
+    run()
+}
+
 /// How many packets one block is read for before it is given up on.
 const MAX_PACKETS: usize = 4_096;
 
@@ -298,7 +328,7 @@ impl PublicKey {
             return None;
         }
         let primary = &key.primary_key;
-        let mut local = Budget::new(MAX_CHECKS);
+        let mut local = Budget::new(max_checks());
         let mut revocations = Budget::new(MAX_REVOCATION_CHECKS);
         let spend = |budget: &mut Budget, total: &mut Budget| budget.spend() && total.spend();
 
