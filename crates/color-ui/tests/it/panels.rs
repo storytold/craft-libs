@@ -429,13 +429,13 @@ fn run(fixture: &Fixture, text: &str) -> egui::Rect {
 #[trial]
 fn the_info_panel_shows_rgb_and_cmyk_as_two_aligned_columns() {
     let mut fixture = Fixture::new(|ui| {
-        let color = craft_color_ui::ui::InfoColor::from_parts([100, 128, 255], [11, 22, 33, 25]);
+        let color = craft_color_ui::ui::InfoColor::from_parts([10, 200, 30], [1, 22, 33, 44]);
         let readings = craft_color_ui::ui::InfoReadings::new().color(Some(color)).document(Some([640, 480]));
         let _ = craft_color_ui::ui::InfoPanel::new("Info", &readings).show(ui);
     });
     fixture.settle();
-    let [r, g, b] = ["100", "128", "255"].map(|value| run(&fixture, value));
-    let [c, m, y, k] = ["11%", "22%", "33%", "25%"].map(|value| run(&fixture, value));
+    let [r, g, b] = ["10", "200", "30"].map(|value| run(&fixture, value));
+    let [c, m, y, k] = ["1%", "22%", "33%", "44%"].map(|value| run(&fixture, value));
     assert!(c.left() > r.right().max(g.right()).max(b.right()), "CMYK starts right of RGB: {r:?} {c:?}");
     assert!(r.left() == g.left() && g.left() == b.left(), "the RGB values share a column");
     assert!(c.left() == m.left() && m.left() == y.left() && y.left() == k.left(), "the CMYK values share a column");
