@@ -31,3 +31,15 @@ to reinstall the current release or replace a newer development build. Leave it 
 to retain the normal protection against installing an older or equal version.
 
 Web builds have no updater. These settings apply to native builds only.
+
+## Turning the startup check off
+
+A copy that a package manager updates (Nix, Flatpak, Homebrew, a distro package) can leave
+out the check at start with `CRAFT_UPDATE_STARTUP=0` (also `false`, `off` or `no`). Set it
+in the app's environment, for example with a wrapper script, or while building: a fresh
+build of craft-update reads it then. `1`, `true`, `on` or `yes` at run time turn the check
+back on over a build that turned it off. Help → Check for Updates still checks when asked.
+Other values are logged and ignored.
+
+An app that runs its own check at start and hands the release to `Updater::offer` asks
+`craft_update::updater::startup_check_enabled()` first.

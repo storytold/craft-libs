@@ -24,6 +24,8 @@ fn a_pinned_app_is_not_prompted_and_the_network_is_not_asked() {
         let mut u = Updater::new(&PHOTOCRAFT, "0.13.0")
             .with_source(Arc::new(|| std::panic::panic_any("the network must not be asked")))
             .with_pins_path(dir.path().join("versions.json"));
+        // The check at start reads the pin, whatever `CRAFT_UPDATE_STARTUP` says.
+        u.startup_check = true;
         u.check_at_start(&ctx);
         settle(&mut u, &ctx);
         assert!(!u.prompt_open(), "{track:?}");
@@ -60,6 +62,8 @@ fn an_unreadable_choice_from_a_newer_launcher_also_holds_updates() {
     let path = dir.path().join("versions.json");
     std::fs::write(&path, r#"{"apps":{"photocraft":{"Beta":1}}}"#).unwrap();
     let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(&path);
+    // The check at start reads the choice, whatever `CRAFT_UPDATE_STARTUP` says.
+    u.startup_check = true;
     u.check_at_start(&ctx);
     settle(&mut u, &ctx);
     assert!(!u.prompt_open());
@@ -75,6 +79,8 @@ fn another_apps_pin_does_not_hold_this_one() {
     pins.set("pdfcraft", &crate::pins::VersionTrack::Pinned("v0.2.0".into()));
     pins.save(&path).unwrap();
     let mut u = Updater::new(&PHOTOCRAFT, "0.13.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(&path);
+    // The prompt comes from the check at start, whatever `CRAFT_UPDATE_STARTUP` says.
+    u.startup_check = true;
     u.check_at_start(&ctx);
     settle(&mut u, &ctx);
     assert!(u.prompt_open());
