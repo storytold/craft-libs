@@ -1270,6 +1270,7 @@ pub(crate) mod guard {
             "runtime::lazy::Store",
             "lazy extents: the kept extent of content out of view, its own mechanism; a pass a kept transcript serves decides in its real run, which compares each row by its backstop",
         ),
+        ("runtime::derived::Store", "derived values: a pure function of their key, so a value a measuring run builds is the one a real run builds"),
         ("contract::steps::scroll_owner::", "scroll reveals and moves: read; taken through take_queued"),
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),

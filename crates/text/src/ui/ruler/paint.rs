@@ -1,12 +1,12 @@
 //! The ruler's drawing.
 
 use super::geometry::glyph;
-use super::items::Item;
+use super::items::{Item, SELECTOR};
 use super::run::{Held, ruler_text};
 use super::{TextRuler, TextRulerStyle};
 use craft_ui::canvas::{RulerTick, Rulers, TickRule};
 use craft_ui::contract::{Cx, Edit as _, PaintUi, Remember as _, Styled as _};
-use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
+use craft_ui::primitives::{PaintShape, RulerFace, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use craft_ui::style::StyleColor;
 use egui::{CornerRadius, Pos2, Rect, pos2, vec2};
 
@@ -17,15 +17,21 @@ impl TextRuler<'_> {
         let (g, shapes) = (layout.g, layout.shapes);
         let values = cx.value().cloned().unwrap_or_default();
         let held = cx.recall::<Held>();
-        let draw = ui.draw();
         let rect = |rect: Rect| PaintShape::Rect(rect, CornerRadius::ZERO);
         let path = |a: Pos2, b: Pos2| PaintShape::Path(vec![a, b]);
         let visible = g.visible();
-        draw.fill(&rect(visible), style.margin);
-        draw.fill(&rect(g.column().intersect(visible)), style.fill);
+        let bar = ui.content_painter(cx).ruler_bar(g.strip, TickEdge::Bottom, style.face);
+        // The edge face shades the whole strip; the centred face shades its bar on the strip's own surface.
+        let across = |part: Rect| Rect::from_x_y_ranges(part.x_range(), bar.y_range());
+        let draw = ui.draw();
+        if style.face == RulerFace::Centred {
+            draw.fill(&rect(g.strip), style.strip);
+        }
+        draw.fill(&rect(across(visible)), style.margin);
+        draw.fill(&rect(across(g.column().intersect(visible))), style.fill);
         for (start, end) in self.gaps {
             let (a, b) = (g.x(*start), g.x(*end));
-            let gap = Rect::from_x_y_ranges(a.min(b)..=a.max(b), g.strip.y_range()).intersect(visible);
+            let gap = Rect::from_x_y_ranges(a.min(b)..=a.max(b), bar.y_range()).intersect(visible);
             if gap.is_positive() {
                 draw.fill(&rect(gap), style.margin);
             }
@@ -89,18 +95,23 @@ impl TextRuler<'_> {
         let end = shapes.right(g.strip, right);
         triangle(end.left_bottom(), end.right_bottom(), pos2(right, end.min.y), Item::Right);
 
-        if let Some(kind) = self.kind {
-            let corner = layout.corner;
-            draw.fill(&rect(corner), style.fill);
-            let side = style.thickness.min(corner.width()).min(corner.height());
-            let boxed = Rect::from_center_size(corner.center(), vec2(side, side));
-            draw.stroke(&rect(boxed), StrokeWidth::Thin, style.tick);
-            let (segments, dot) = glyph(&shapes, boxed.center().x, boxed.max.y - (boxed.height() - style.stem) / 2.0, kind, false);
+        if let (Some(kind), Some(corner)) = (self.kind, layout.corner) {
+            // The corner continues the strip round it, the box is the column's colour.
+            let surround = if style.face == RulerFace::Centred { style.strip } else { style.margin };
+            draw.fill(&rect(corner), surround);
+            let side = style.selector_side.min(corner.width()).min(corner.height());
+            let boxed = PaintShape::Rect(Rect::from_center_size(corner.center(), vec2(side, side)), style.selector_radius);
+            draw.fill(&boxed, cx.resolve_part(SELECTOR, &style.selector));
+            draw.stroke(&boxed, StrokeWidth::Thin, style.tick);
+            // The glyph is centred on the box by its own bounds: a left or right stop's foot runs to one side of its stem.
+            let (segments, dot) = glyph(&shapes, 0.0, 0.0, kind, false);
+            let bounds = Rect::from_points(&segments.iter().flatten().copied().chain(dot).collect::<Vec<_>>());
+            let shift = corner.center() - bounds.center();
             for [a, b] in segments {
-                draw.stroke(&path(a, b), StrokeWidth::Thin, cx.resolve(&style.marker));
+                draw.stroke(&path(a + shift, b + shift), StrokeWidth::Thin, cx.resolve(&style.marker));
             }
             if let Some(centre) = dot {
-                draw.fill(&PaintShape::Circle(centre, style.dot), cx.resolve(&style.marker));
+                draw.fill(&PaintShape::Circle(centre + shift, style.dot), cx.resolve(&style.marker));
             }
         }
     }
@@ -114,34 +125,45 @@ impl TextRuler<'_> {
         let (lo, hi) = g.shown_span();
         let ticks: Vec<RulerTick> =
             Rulers::ticks(&text.units, TickRule::of_unit(self.unit.kind), f64::from(g.scale), (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc));
+        let bar = ui.content_painter(cx).ruler_bar(g.strip, TickEdge::Bottom, style.face);
+        let draw = ui.draw();
+        let color: StyleColor = cx.resolve(&style.label.color);
+        // Numbers count from the column's start edge, so none stand in the margins.
+        let in_column = |at: f32| (0.0..=g.width).contains(&at);
+        let mut runs = Vec::new();
+        for tick in ticks.iter().filter(|tick| matches!(tick.rank, TickRank::Major)) {
+            if !in_column((tick.value / per_doc) as f32) {
+                continue;
+            }
+            let x = g.x((tick.value / per_doc) as f32);
+            let label = text.tick_label(&numbers, tick.value, tick.step);
+            let run = TextRun::new(label).role(style.label.role).color(color);
+            let size = draw.layout(&run, f32::INFINITY).size();
+            let boxed = match style.face {
+                RulerFace::Edge => {
+                    let start = if g.right_to_left { x - style.pad - size.x } else { x + style.pad };
+                    Rect::from_min_size(pos2(start, g.strip.top()), vec2(size.x, g.strip.height()))
+                }
+                RulerFace::Centred => RulerFace::centred_number(bar, TickEdge::Bottom, x, size),
+            };
+            if g.visible().contains_rect(boxed) && !keep_clear.iter().any(|clear| clear.intersects(boxed)) {
+                runs.push((boxed, run));
+            }
+        }
         // The tick rule adds a labelled step beyond each end; a ruler cut to its extent (a page's) shows none past it.
         let covered = g.visible().x_range();
         let marks: Vec<Tick> = ticks
             .iter()
-            .map(|tick| g.x((tick.value / per_doc) as f32))
-            .zip(&ticks)
+            .map(|tick| (g.x((tick.value / per_doc) as f32), tick))
             .filter(|(x, _)| covered.contains(*x))
-            .map(|(x, tick)| Tick::new(x - g.strip.min.x, tick.rank))
+            .map(|(x, tick)| Tick::new(x - bar.min.x, tick.rank))
             .collect();
-        ui.content_painter(cx).ticks(g.strip, TickEdge::Bottom, &marks);
+        let boxes: Vec<Rect> = runs.iter().map(|(boxed, _)| *boxed).collect();
+        let marks = style.face.beside_numbers(TickEdge::Bottom, bar.min.x, marks, &boxes, style.pad);
+        ui.content_painter(cx).ticks(bar, TickEdge::Bottom, style.face, &marks);
         let draw = ui.draw();
-        let color: StyleColor = cx.resolve(&style.label.color);
-        // Numbers count from the column's start edge, so none stand in the margins.
-        let in_column = |tick: &&RulerTick| {
-            let at = (tick.value / per_doc) as f32;
-            (0.0..=g.width).contains(&at)
-        };
-        for tick in ticks.iter().filter(|tick| matches!(tick.rank, TickRank::Major)).filter(in_column) {
-            let x = g.x((tick.value / per_doc) as f32);
-            let label = text.tick_label(&numbers, tick.value, tick.step);
-            let run = TextRun::new(label).role(style.label.role).color(color);
-            let width = draw.layout(&run, f32::INFINITY).size().x;
-            let size = vec2(width, g.strip.height());
-            let at = if g.right_to_left { pos2(x - style.pad - width, g.strip.top()) } else { pos2(x + style.pad, g.strip.top()) };
-            let boxed = Rect::from_min_size(at, size);
-            if g.visible().contains_rect(boxed) && !keep_clear.iter().any(|clear| clear.intersects(boxed)) {
-                draw.text(boxed, &run);
-            }
+        for (boxed, run) in &runs {
+            draw.text(*boxed, run);
         }
     }
 }

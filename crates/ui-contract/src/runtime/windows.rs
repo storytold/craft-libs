@@ -180,6 +180,14 @@ pub(crate) fn take_sent(ctx: &Context) -> Vec<(ViewportId, WindowAction)> {
     shared(ctx, |shared| std::mem::take(&mut shared.sent))
 }
 
+/// Whether the OS resizes `viewport`'s window from a frame of its own: it draws the frame (macOS `Inset`, a titled
+/// window under the app's bar) and the window is resizable. A window its caller sizes opens not resizable, so the OS
+/// leaves it to the app's grips.
+pub(crate) fn os_resizes(ctx: &Context, viewport: ViewportId) -> bool {
+    let chrome = shell_of(ctx, viewport).window.chrome;
+    chrome == WindowChrome::Inset && PerViewport::<Record>::with(ctx, viewport, |record| record.resizable != Some(false))
+}
+
 /// Whether the app runs the move of `viewport`'s window (`Overlay::moved_by_app`).
 pub(crate) fn app_moves(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<Record>::with(ctx, viewport, |record| record.moved_by_app)

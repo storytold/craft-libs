@@ -723,6 +723,36 @@ fn a_shadowed_run_keeps_its_shadow() {
     assert!(runs[1].props.shadow.is_none());
 }
 
+/// A paragraph's end mark keeps the formatting of the character run at its CR, not of the
+/// paragraph's first character, as PowerPoint reads a .ppt PowerPoint saved: "AB\rCD" at 40 pt
+/// with A and C at 24 ends each paragraph at 40; at 24 with only the first CR at 40, its first
+/// paragraph ends at 40 and its second at 24.
+#[test]
+fn a_paragraphs_end_mark_keeps_the_formatting_at_its_cr() {
+    let end_sizes = |runs: &[(u32, u16)]| {
+        let mut style = vec![];
+        style.extend_from_slice(&6u32.to_le_bytes());
+        style.extend_from_slice(&0u16.to_le_bytes());
+        style.extend_from_slice(&pf_bytes(0, false));
+        for (n, size) in runs {
+            style.extend_from_slice(&n.to_le_bytes());
+            style.extend_from_slice(&0x2_0000u32.to_le_bytes()); // mask: size
+            style.extend_from_slice(&size.to_le_bytes());
+        }
+        let tb = container(
+            rt::SP_CONTAINER,
+            0,
+            &[fsp(202, 2049, 0xA00), anchor(0, 0, 1000, 1000), text_box(4, "AB\rCD", &[atom(rt::STYLE_TEXT_PROP, 0, &style)])],
+        );
+        let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[tb])]);
+        let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, None);
+        let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+        p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs.iter().map(|para| para.end_props.size).collect::<Vec<_>>()
+    };
+    assert_eq!(end_sizes(&[(1, 24), (2, 40), (1, 24), (2, 40)]), [Some(40.0), Some(40.0)]);
+    assert_eq!(end_sizes(&[(2, 24), (1, 40), (3, 24)]), [Some(40.0), Some(24.0)]);
+}
+
 /// `tests/fixtures/old-talk.pps`: a one-slide `.pps` built here from records, for applications'
 /// tests that need real 97–2003 bytes (DeckCraft's show-on-open test). Run this test with
 /// `CRAFT_WRITE_PPT_FIXTURE=1` to rebuild the file after changing the builders.

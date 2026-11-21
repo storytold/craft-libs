@@ -4,22 +4,29 @@
 use craft_behavior::Axis;
 use craft_behavior::PartKey;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx, Role, ShowContainer as _};
-use craft_ui::docking::{DockConfig, DockPanels, PanelSpec, WindowMenuRows};
+use craft_ui::contract::{Bind, BodyCx, PlainData, Role, ShowContainer as _, Tracked};
+use craft_ui::docking::{DockConfig, DockPanels, PanelSpec, PanelSpecs, WindowMenuRows};
 use craft_ui::menu::{Menu, PanelRow};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+
+/// Panels named by number.
+#[derive(PlainData)]
+struct Specs;
+
+impl PanelSpecs<usize> for Specs {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+}
 
 struct Panels;
 
 impl DockPanels<usize> for Panels {
-    fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(format!("Panel {panel}"))
-    }
-
     fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
 
     /// A host row, so each group shows its panel menu button.
@@ -32,11 +39,11 @@ impl DockPanels<usize> for Panels {
 #[trial]
 fn a_panel_menu_command_reaches_the_group_whose_button_opened_it() {
     let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0, 1], 0), Node::tabs(vec![2, 3], 0));
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
-    let held = Rc::clone(&workspace);
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Specs));
     let mut fixture = Fixture::new(move |ui| {
         let mut shown = held.borrow().clone();
-        DockArea::new("Dock", Bind::bound(&mut shown), &mut Panels, DockConfig::default()).show(ui);
+        DockArea::new("Dock", Bind::bound(&mut shown), &specs, &mut Panels, DockConfig::default()).show(ui);
         *held.borrow_mut() = shown;
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle();
@@ -48,7 +55,8 @@ fn a_panel_menu_command_reaches_the_group_whose_button_opened_it() {
     fixture.click(&buttons[1]).idle(2);
     let float = fixture.by_label("Float").expect("the menu's Float row");
     fixture.click(&float).idle(2);
-    let layout = &workspace.borrow().layout;
+    let shown = workspace.borrow();
+    let layout = shown.layout();
     let floated: Vec<usize> = layout.floating.iter().flat_map(|window| window.panels().copied().collect::<Vec<_>>()).collect();
     assert_eq!(floated, vec![2], "Float reaches the group whose menu ran it");
 }
@@ -57,9 +65,10 @@ fn a_panel_menu_command_reaches_the_group_whose_button_opened_it() {
 /// then the panel menu button.
 #[trial]
 fn tab_reaches_the_tabs_then_the_drag_band_then_the_panel_menu_button() {
-    let mut workspace = Workspace::new(Layout::new(Some(Node::tabs(vec![0, 1], 0)), Vec::new()));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![0, 1], 0)), Vec::new())));
+    let specs = Tracked::new(Specs);
     let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::bound(&mut workspace), &mut Panels, DockConfig::default()).show(ui);
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Panels, DockConfig::default()).show(ui);
     });
     fixture.room(Vec2::new(800.0, 600.0)).settle();
     let tab = fixture.by_label("Panel 0").expect("the group's tab");
@@ -87,7 +96,7 @@ fn the_window_menu_opens_and_closes_the_flyout_of_a_panel_in_a_collapsed_column(
         let shown = *open.borrow();
         let mut menu_open = true;
         Menu::new("Window").open(Bind::bound(&mut menu_open)).show(ui, |ui, _| {
-            let out = WindowMenuRows::new(&layout, &Panels, &[1, 2]).flyout(shown.as_ref()).show(ui);
+            let out = WindowMenuRows::new(&layout, &Tracked::new(Specs), &[1, 2]).flyout(shown.as_ref()).show(ui);
             if let Some(next) = out.flyout {
                 *open.borrow_mut() = next;
             }
@@ -105,4 +114,36 @@ fn the_window_menu_opens_and_closes_the_flyout_of_a_panel_in_a_collapsed_column(
     fixture.click(&row).settle();
     assert_eq!(*actions.borrow(), vec![Action::close(1)], "the row of a showing panel closes it");
     assert_eq!(*flyout.borrow(), None, "and leaves the flyout alone");
+}
+
+/// Floats panel 2 through the panel menu of the second group.
+fn float_second_group(fixture: &mut Fixture) {
+    let buttons: Vec<_> =
+        fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
+    fixture.click(&buttons[1]).idle(2);
+    let float = fixture.by_label("Float").expect("the menu's Float row");
+    fixture.click(&float).idle(2);
+}
+
+/// An undo that brings back the workspace from before a float keeps the area's next window off the id the undone
+/// window had: the area remembers the ids it has shown.
+#[trial]
+fn a_window_floated_after_an_undo_takes_a_new_id() {
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0, 1], 0), Node::tabs(vec![2, 3], 0));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Specs));
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut *held.borrow_mut()), &specs, &mut Panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle();
+    let older = Arc::clone(&workspace.borrow());
+    float_second_group(&mut fixture);
+    let undone: Vec<u64> = workspace.borrow().layout().floating.iter().map(|window| window.id).collect();
+    assert_eq!(undone.len(), 1, "Float made a window");
+    *workspace.borrow_mut() = older;
+    fixture.settle();
+    float_second_group(&mut fixture);
+    let ids: Vec<u64> = workspace.borrow().layout().floating.iter().map(|window| window.id).collect();
+    assert_eq!(ids.len(), 1, "Float made a window again");
+    assert_ne!(ids, undone, "the window after the undo does not take the undone window's id");
 }

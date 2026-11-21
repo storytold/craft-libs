@@ -153,6 +153,15 @@ pub(super) struct Regions {
     pub(super) rules: [Option<(Rect, RectSide)>; 4],
 }
 
+impl Regions {
+    /// The regions with the header's band, which may spread over the padding, below `top`: the bottom of the band a
+    /// layer keeps clear for its top grip.
+    pub(super) fn below(mut self, top: f32) -> Regions {
+        self.header.min.y = self.header.min.y.max(top);
+        self
+    }
+}
+
 /// The sizes of the header, footer and end region that the regions are placed from (zero or `None` for a region the
 /// container lacks or that has not measured).
 #[derive(Clone, Copy)]

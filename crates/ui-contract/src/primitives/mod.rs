@@ -40,8 +40,8 @@ pub(crate) use icon::SvgIcon;
 pub use icon::{Glyph, IconMark, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names};
 pub use ime_surface::ImeSurface;
 pub use kit::{
-    Checker, CheckerArea, GridAxis, GridCrowding, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark,
-    ellipse, fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
+    Checker, CheckerArea, GridAxis, GridCrowding, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, RulerFace, Tick, TickEdge, TickRank, dashed,
+    drop_mark, ellipse, fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
 };
 pub use marker::{Marker, MarkerSize};
 pub use paint_slot::PaintSlot;
@@ -57,7 +57,7 @@ pub use surround::paint_surround;
 #[cfg(feature = "testing")]
 pub(crate) use svg_set::Layer;
 pub use svg_set::{AppIcons, register_app_icons};
-pub use text::{ChordText, HAlign, LayoutRun, LayoutRuns, LayoutText, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
+pub use text::{ChordText, HAlign, LayoutRun, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
 pub use text_input::{
     Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp, TabKey, TextKey, TextOptions,
 };

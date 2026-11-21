@@ -124,7 +124,7 @@ pub(crate) fn generation(ctx: &Context, input: Input) -> u64 {
         Input::Drag => observe(ctx, input, crate::runtime::drag::state(ctx)),
         Input::Focus => observe(ctx, input, crate::runtime::focus::focus_state(ctx)),
         Input::Overlays => observe(ctx, input, crate::runtime::overlay::open_state(ctx)),
-        Input::Keymap => return crate::runtime::commands::keymap_generation(ctx),
+        Input::Keymap => return crate::runtime::commands::keymap_built(ctx),
         Input::Modifiers | Input::Pointer | Input::Shell | Input::Keyboard | Input::Scroll => {}
     }
     with(ctx, |generations| generations.gens[input as usize])

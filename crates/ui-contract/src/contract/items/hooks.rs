@@ -8,7 +8,7 @@ use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, 
 use super::{request, rows};
 use crate::contract::ValueOf;
 use crate::contract::collection::{
-    CollectionEvent, ColumnLayout, ContextMenuRequest, DropAt, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
+    CollectionEvent, ColumnLayout, ContextMenuRequest, DropAt, Gestures, HoverLead, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
 };
 use crate::contract::cx::{BodyCx, CxCore, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
@@ -277,8 +277,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let seen = Placement { offset: ScrollPos { x: self.offset_x_at_read, y: self.offset_at_read }, ..at };
         self.edge_step(cx);
         self.press_step(comp, cx, &props, &layout, seen);
-        if props.lead_follows_hover {
-            self.hover_lead(comp, cx, &layout, seen);
+        if props.hover_lead != HoverLead::Off {
+            self.hover_lead(comp, cx, &layout, seen, props.hover_lead);
         }
         if props.select_under_drag {
             self.drag_select(comp, cx, &layout, seen);
@@ -653,7 +653,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             // The rows blend into the surface they sit on.
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
             let hidden = HiddenContent::new(self.content, rect.size(), Vec2::new(self.offset_x as f32, self.offset as f32), rtl);
-            ui.painter().extend(ScrollBar::fades(&look, rect, hidden, background));
+            ui.painter().extend(ScrollBar::fades(rect, hidden, background));
             if self.shows_bar(rect) {
                 let track = bar_track(rect, look.thickness, rtl);
                 let content = f64::from(self.content.y);

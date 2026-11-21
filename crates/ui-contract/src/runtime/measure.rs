@@ -52,6 +52,17 @@ struct BodyRuns {
     runs: Vec<(Id, u32)>,
 }
 
+/// The derived values built in a pass, by component id, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+pub(crate) struct DerivedBuilds {
+    pass: u64,
+    builds: Vec<(Id, u32)>,
+    /// The frame `frame_builds` counts, and the builds of every pass of it.
+    frame: u64,
+    frame_builds: Vec<(Id, u32)>,
+}
+
 /// How many contributions the measuring runs of a pass made that stand, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -233,35 +244,6 @@ pub fn last_pass_body_runs(ctx: &Context) -> Vec<(Id, u32)> {
 #[cfg(feature = "testing")]
 pub fn body_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<BodyRuns, _>(ctx, |log| log.runs.clone())
-}
-
-/// Adjacent leaf measures whose environment and style steps were reused in the current pass.
-#[cfg(feature = "testing")]
-#[derive(Default)]
-struct PreparedLeafCounts {
-    pass: u64,
-    count: u32,
-}
-
-#[cfg(feature = "testing")]
-pub(crate) fn count_prepared_leaf(ctx: &Context) {
-    if active(ctx) || uncounted(ctx) {
-        return;
-    }
-    let pass = ctx.cumulative_pass_nr();
-    store::with::<PreparedLeafCounts, _>(ctx, |counts| {
-        if counts.pass != pass {
-            *counts = PreparedLeafCounts { pass, count: 0 };
-        }
-        counts.count += 1;
-    });
-}
-
-/// Adjacent leaf measures whose steps were reused in the last pass.
-#[cfg(feature = "testing")]
-pub fn last_pass_prepared_leaves(ctx: &Context) -> u32 {
-    let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    store::with::<PreparedLeafCounts, _>(ctx, |counts| if counts.pass == last { counts.count } else { 0 })
 }
 
 /// Counts a run of a component of the type `name` in this pass, measuring or real. Counts nothing without `testing`.
@@ -567,6 +549,47 @@ pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
 #[cfg(feature = "testing")]
 pub fn last_pass_memo_key_bytes(ctx: &Context) -> usize {
     last_totals(ctx, |log| log.key_bytes, 0)
+}
+
+/// Counts a build of a derived value of the component `id` in this pass (`runtime::derived`).
+#[cfg(feature = "testing")]
+pub(crate) fn count_derived(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    let frame = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx));
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| {
+        if log.frame != frame {
+            log.frame = frame;
+            log.frame_builds.clear();
+        }
+        if log.pass != pass {
+            log.pass = pass;
+            log.builds.clear();
+        }
+        for builds in [&mut log.builds, &mut log.frame_builds] {
+            match builds.iter_mut().find(|(of, _)| *of == id) {
+                Some((_, count)) => *count += 1,
+                None => builds.push((id, 1)),
+            }
+        }
+    });
+}
+
+/// The components that built a derived value in any pass of the last frame, and how many builds each.
+#[cfg(feature = "testing")]
+pub fn last_frame_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx)).saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.frame == last { log.frame_builds.clone() } else { Vec::new() })
+}
+
+/// The components that built a derived value in the last pass, and how many builds each; empty when that pass built
+/// none.
+#[cfg(feature = "testing")]
+pub fn last_pass_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.pass == last { log.builds.clone() } else { Vec::new() })
 }
 
 /// Counts a text layout handed to egui (`text_layout::layout`, `layout_with`) in this pass.

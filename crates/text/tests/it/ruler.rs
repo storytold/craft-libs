@@ -4,11 +4,15 @@
 use craft_behavior::GesturePhase;
 use craft_text::ui::DocUnit;
 use craft_text::ui::ruler::{GapDrag, GapEdge, RulerValues, TabAlign, TabLeader, TabStop, TextRuler};
+use craft_theme::ComponentSet;
 use craft_ui::buttons::Button;
 use craft_ui::canvas::Rulers;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
+use craft_ui::popover::Popover;
+use craft_ui::primitives::RulerFace;
 use craft_ui::runtime::env::UnitKind;
+use craft_ui::runtime::env::with_env;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
@@ -155,7 +159,7 @@ fn ruler_numbers_skip_margins_and_markers_thin_out_mirror_for_rtl_and_keep_clear
         }));
         let mut fixture = Fixture::new(move |ui| {
             let stage = craft_ui::testing::stage(ui);
-            let (strip, _) = Rulers::strips(ui, stage);
+            let (strip, _, _) = Rulers::strips(ui, stage);
             let origin = if rtl { strip.max.x - ORIGIN * scale } else { strip.min.x + ORIGIN * scale };
             TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), WIDTH).origin(origin).scale(scale).right_to_left(rtl).show_at(ui, strip);
         });
@@ -202,7 +206,7 @@ fn a_ruler_cut_to_an_extent_paints_no_tick_past_it() {
     let seen = strip_at.clone();
     let mut fixture = Fixture::new(move |ui| {
         let stage = craft_ui::testing::stage(ui);
-        let (strip, _) = Rulers::strips(ui, stage);
+        let (strip, _, _) = Rulers::strips(ui, stage);
         *seen.borrow_mut() = Some(strip);
         TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), 140.0)
             .unit(DocUnit::new(UnitKind::Inches, 96.0))
@@ -239,7 +243,7 @@ fn the_ruler_column_is_lighter_than_its_margins() {
     let seen = strip_at.clone();
     let mut fixture = Fixture::new(move |ui| {
         let stage = craft_ui::testing::stage(ui);
-        let (strip, _) = Rulers::strips(ui, stage);
+        let (strip, _, _) = Rulers::strips(ui, stage);
         *seen.borrow_mut() = Some(strip);
         TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), WIDTH)
             .origin(strip.min.x + ORIGIN)
@@ -313,4 +317,135 @@ fn a_tab_stop_gesture_is_primary_only_cancellable_and_a_drag_off_the_ruler_clear
     let at = stop(&fixture);
     fixture.drag_at(at, Vec2::new(0.0, 80.0));
     assert!(values.borrow().stops.is_empty(), "a release well away from the strip clears the stop");
+}
+
+/// What one frame of a page-wide ruler painted: its strip, its tick marks and its numbers.
+struct Painted {
+    strip: egui::Rect,
+    ticks: Vec<egui::Rect>,
+    numbers: Vec<egui::Rect>,
+}
+
+/// The tick marks among `shapes`: thin upright lines inside `strip`.
+fn tick_marks(shapes: &[egui::Shape], strip: egui::Rect) -> Vec<egui::Rect> {
+    shapes
+        .iter()
+        .map(egui::Shape::visual_bounding_rect)
+        .filter(|rect| rect.is_finite() && rect.width() <= 2.0 && rect.height() > 0.0)
+        .filter(|rect| strip.expand(0.5).contains_rect(*rect))
+        .collect()
+}
+
+/// A page-wide ruler in inches, shown with `face` when given, in a fixture whose root takes `set`; `popup` shows it in
+/// an open popover inside a scope that sets the productivity set.
+fn page_ruler(set: ComponentSet, face: Option<RulerFace>, popup: bool) -> (Fixture, Rc<RefCell<Option<egui::Rect>>>) {
+    let values = Rc::new(RefCell::new(RulerValues::default()));
+    let strip_at: Rc<RefCell<Option<egui::Rect>>> = Rc::new(RefCell::new(None));
+    let seen = strip_at.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let ruler = |ui: &mut egui::Ui| {
+            let stage = craft_ui::testing::stage(ui);
+            let (strip, _, _) = Rulers::strips(ui, stage);
+            *seen.borrow_mut() = Some(strip);
+            let mut values = values.borrow_mut();
+            let mut ruler = TextRuler::new("Ruler", Bind::bound(&mut *values), 432.0)
+                .unit(DocUnit::new(UnitKind::Inches, 96.0))
+                .origin(strip.min.x + 72.0)
+                .extent(egui::Rangef::new(strip.min.x, strip.min.x + 576.0))
+                .scale(1.0);
+            if let Some(face) = face {
+                ruler = ruler.face(face);
+            }
+            ruler.show_at(ui, strip);
+        };
+        if popup {
+            with_env(
+                ui,
+                |env| {
+                    env.values.set(ComponentSet::Productivity);
+                },
+                |ui| {
+                    Popover::new("Card", Bind::given(true)).show(ui, |ui, _| ruler(ui));
+                },
+            );
+        } else {
+            ruler(ui);
+        }
+    });
+    fixture.set(set);
+    fixture.settle();
+    (fixture, strip_at)
+}
+
+/// The latest paint of `fixture`.
+fn painted(fixture: &mut Fixture, strip_at: &Rc<RefCell<Option<egui::Rect>>>) -> Painted {
+    let shapes = fixture.frame_shapes();
+    let strip = strip_at.borrow().expect("the ruler showed");
+    Painted { strip, ticks: tick_marks(&shapes, strip), numbers: numbers(fixture) }
+}
+
+/// Whether the ruler paints the centred face: every tick is centred on the strip's middle line and clear of its edges,
+/// and every number is centred on that line with no tick under it.
+fn centred(p: &Painted) -> bool {
+    let middle = p.strip.center().y;
+    !p.ticks.is_empty()
+        && !p.numbers.is_empty()
+        && p.ticks.iter().all(|tick| (tick.center().y - middle).abs() < 1.0 && tick.max.y < p.strip.max.y - 1.0)
+        && p.numbers.iter().all(|number| (number.center().y - middle).abs() < 1.0)
+        && p.numbers.iter().all(|number| !p.ticks.iter().any(|tick| number.x_range().contains(tick.center().x)))
+}
+
+/// Whether the ruler paints the edge face: every tick rises from the strip's bottom edge.
+fn edge(p: &Painted) -> bool {
+    !p.ticks.is_empty() && p.ticks.iter().all(|tick| (tick.max.y - p.strip.max.y).abs() < 1.0)
+}
+
+/// With no face given, the component set picks it: the productivity set's ruler centres its marks on a bar and puts numbers
+/// in place of the whole-unit ticks, the creative set's hangs them from the strip's bottom edge.
+#[trial]
+fn the_component_set_picks_the_ruler_face() {
+    let (mut fixture, strip) = page_ruler(ComponentSet::Productivity, None, false);
+    let productivity = painted(&mut fixture, &strip);
+    assert!(
+        centred(&productivity),
+        "the productivity set paints the centred face: ticks {:?}, numbers {:?}",
+        productivity.ticks,
+        productivity.numbers
+    );
+    let (mut fixture, strip) = page_ruler(ComponentSet::Creative, None, false);
+    let creative = painted(&mut fixture, &strip);
+    assert!(edge(&creative), "the creative set paints the edge face: ticks {:?}", creative.ticks);
+}
+
+/// A face given on the ruler wins over the component set.
+#[trial]
+fn a_given_face_wins_over_the_component_set() {
+    let (mut fixture, strip) = page_ruler(ComponentSet::Productivity, Some(RulerFace::Edge), false);
+    let given_edge = painted(&mut fixture, &strip);
+    assert!(edge(&given_edge), "the edge face under the productivity set: ticks {:?}", given_edge.ticks);
+    let (mut fixture, strip) = page_ruler(ComponentSet::Creative, Some(RulerFace::Centred), false);
+    let given_centred = painted(&mut fixture, &strip);
+    assert!(centred(&given_centred), "the centred face under the creative set: ticks {:?}", given_centred.ticks);
+}
+
+/// A scope's component set reaches a popup opened inside it, though the root's set is another.
+#[trial]
+fn a_scopes_component_set_reaches_a_popup_opened_inside_it() {
+    let (mut fixture, strip) = page_ruler(ComponentSet::Creative, None, true);
+    let in_popup = painted(&mut fixture, &strip);
+    assert!(centred(&in_popup), "the popup's ruler takes the scope's productivity set: ticks {:?}", in_popup.ticks);
+}
+
+/// A set change restyles the ruler in the frame it arrives in, in one pass, and the frame after asks for nothing more.
+#[trial]
+fn a_component_set_change_restyles_the_ruler_in_one_pass_and_then_rests() {
+    let (mut fixture, strip) = page_ruler(ComponentSet::Creative, None, false);
+    assert!(edge(&painted(&mut fixture, &strip)));
+    fixture.set(ComponentSet::Productivity);
+    let changed = painted(&mut fixture, &strip);
+    assert!(centred(&changed), "the frame of the change paints the productivity face");
+    assert_eq!(fixture.passes(), 1, "the change takes one pass");
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1);
+    assert!(!fixture.repaint_requested(), "an idle frame after the change asks for no repaint");
 }

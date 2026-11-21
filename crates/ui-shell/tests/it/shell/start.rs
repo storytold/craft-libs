@@ -1,7 +1,7 @@
 //! `StartScreen`: which part of the page takes a double click, and what a recent file's menu offers.
 
 use craft_ui::contract::{Bind, Role};
-use craft_ui::shell::{RecentFile, RecentList, RecentSort, RecentView, StartAction, StartLink, StartScreen};
+use craft_ui::shell::{RecentFile, RecentList, RecentSort, RecentView, StartAction, StartLayout, StartLink, StartScreen, Template};
 use craft_ui::testing::pointer::{moved, secondary};
 use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Key, Modifiers};
@@ -395,4 +395,28 @@ fn an_empty_recent_list_says_so_at_the_reading_start() {
     let line = fixture.by_label("Nothing opened yet").expect("the empty line shows");
     assert!(line.rect.left() < 60.0, "the line starts at the list's start edge: {:?}", line.rect);
     assert!(line.rect.width() < 300.0, "the line is as wide as its text: {:?}", line.rect);
+}
+
+/// The template cards of a greeting page, as `(width, height)` of the card named "Memo", for the knobs `shape` sets.
+fn memo_card(shape: impl for<'a> Fn(StartScreen<'a>) -> StartScreen<'a> + 'static) -> egui::Vec2 {
+    let templates = vec![Template::new("memo", "Memo", ""), Template::new("report", "Report", "")];
+    let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ =
+            shape(StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &[]).layout(StartLayout::Greeting).templates(&templates)).show(ui);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 700.0));
+    fixture.settle();
+    fixture.by_label("Memo").expect("the card shows").rect.size()
+}
+
+/// An app can give its card pictures a shape and a fixed width: by default the cards are 16:9 and grow to fill the row,
+/// with `picture_aspect(3, 4)` and `card_zoom(1.0)` they are portrait and stay narrow.
+#[trial]
+fn a_start_screen_takes_the_shape_and_width_of_its_card_pictures() {
+    let default = memo_card(|screen| screen);
+    assert!(default.x > default.y * 1.3, "the default card is a wide 16:9 card: {default:?}");
+    let page = memo_card(|screen| screen.picture_aspect(3, 4).card_zoom(1.0));
+    assert!(page.y > page.x, "a 3:4 card is taller than wide: {page:?}");
+    assert!(page.x < default.x * 0.7, "a card at zoom 1 does not grow to fill the row: {page:?}");
 }
