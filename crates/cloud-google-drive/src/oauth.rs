@@ -311,8 +311,9 @@ impl Auth {
     }
 
     /// The switch that lets this session write to the store. A sign-out sets it to `false` and
-    /// removes the stored token while holding it, so a refresh still in flight can't store a
-    /// rotated token afterwards; the next sign-in sets it back.
+    /// removes the stored token while holding it, so a refresh or code exchange still waiting on
+    /// Google can't store a token afterwards. Whoever starts the next sign-in sets it back;
+    /// [`Auth::exchange`] never does.
     pub fn keeping(&self) -> Arc<Mutex<bool>> {
         self.keep.clone()
     }
@@ -370,10 +371,15 @@ impl Auth {
         let v =
             self.token_request(vec![("grant_type", "authorization_code"), ("code", code), ("code_verifier", verifier), ("redirect_uri", redirect)])?;
         let tokens = parse_tokens(&v, now)?;
-        // A new session: it may keep its token again.
-        let mut keep = self.keep.lock().unwrap_or_else(PoisonError::into_inner);
-        *keep = true;
+        // Held while the token is stored. The backend opens it as a sign-in begins; a sign-out
+        // that started while Google was answering has closed it and removed the stored token,
+        // so this sign-in stays in memory, where that sign-out revokes it.
+        let keep = self.keep.lock().unwrap_or_else(PoisonError::into_inner);
         let kept = match &tokens.refresh_token {
+            _ if !*keep => {
+                log::info!("Google Drive: signed out while signing in; the sign-in isn't kept");
+                false
+            }
             Some(r) => {
                 self.store.put(&self.handle, &Secret::new(r.as_str())).map_err(|e| log::warn!("Google Drive: refresh token not kept: {e}")).is_ok()
             }
@@ -384,7 +390,7 @@ impl Auth {
         };
         // Signed in for this session only. A token kept from an earlier sign-in, maybe another
         // account's, must not come back on the next launch in this one's place.
-        if !kept && self.store.available().is_ok() {
+        if *keep && !kept && self.store.available().is_ok() {
             self.store
                 .remove(&self.handle)
                 .map_err(|e| Error::Keychain(format!("the earlier Google sign-in couldn't be replaced or removed: {e}")))?;

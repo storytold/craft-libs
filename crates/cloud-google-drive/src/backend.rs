@@ -384,10 +384,17 @@ impl Inner {
             Ok(code) => code,
         };
         let mut guard = lock(&self.drive);
-        // Checked under the lock a sign-out takes after setting the flag: a code arriving as
-        // the person signs out is never exchanged into a fresh stored token.
-        if superseded() {
-            return SignedIn::Superseded;
+        // A sign-out sets the flag before it closes the keep switch, so checking the flag while
+        // holding the switch orders the two: a sign-out after this point closes it again, and
+        // the exchange below then keeps nothing.
+        {
+            let mut keep = self.keep.as_ref().map(|k| lock(k));
+            if superseded() {
+                return SignedIn::Superseded;
+            }
+            if let Some(k) = keep.as_deref_mut() {
+                *k = true;
+            }
         }
         let Ok(drive) = guard.as_mut() else { return SignedIn::Superseded };
         match drive.auth.exchange(&code, &pkce.verifier, &redirect, Instant::now()) {

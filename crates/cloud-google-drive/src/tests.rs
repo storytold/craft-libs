@@ -831,6 +831,35 @@ fn a_renewed_refresh_token_arriving_after_sign_out_started_isnt_kept() {
     assert_eq!(store.get(&handle()).unwrap(), None, "nothing to restore on the next launch");
 }
 
+/// Answers the token request only after a sign-out has run: the session's keep switch closed
+/// and the stored token removed, as the backend's sign-out does while Google is answering.
+struct SignOutDuring {
+    store: Memory,
+    keep: std::sync::OnceLock<Arc<Mutex<bool>>>,
+}
+
+impl Transport for SignOutDuring {
+    fn send(&self, _req: Request) -> crate::Result<Response> {
+        if let Some(keep) = self.keep.get() {
+            *keep.lock().unwrap() = false;
+            self.store.remove(&handle()).unwrap();
+        }
+        let v = json!({"access_token": "a1", "refresh_token": "refresh-new", "expires_in": 3599});
+        Ok(Response { status: 200, body: v.to_string().into_bytes() })
+    }
+}
+
+#[test]
+fn a_sign_in_finishing_after_sign_out_started_isnt_kept() {
+    let store = Memory::new();
+    let http = Arc::new(SignOutDuring { store: store.clone(), keep: std::sync::OnceLock::new() });
+    let mut auth = Auth::new(cfg(), http.clone(), Arc::new(store.clone()));
+    http.keep.set(auth.keeping()).unwrap();
+    auth.exchange("code", "verifier", "http://127.0.0.1:1/", Instant::now()).unwrap();
+    assert_eq!(store.get(&handle()).unwrap(), None, "nothing to restore on the next launch");
+    assert!(auth.signed_in(), "held in memory, for the waiting sign-out to revoke");
+}
+
 #[test]
 fn a_save_refused_after_a_refresh_is_googles_error_not_a_sign_out() {
     let denied = || (401, json!({"error": {"code": 401, "message": "Invalid Credentials"}}));
