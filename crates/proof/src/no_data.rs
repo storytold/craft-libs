@@ -7,7 +7,7 @@
 use crate::hyphen::{self, Limits, Source};
 use crate::{EnglishSource, Options, ProofLang, dict, en_variants, patterns};
 
-const LANGS: [ProofLang; 19] = [
+const LANGS: [ProofLang; 20] = [
     ProofLang::En,
     ProofLang::EnGb,
     ProofLang::EnAu,
@@ -21,6 +21,7 @@ const LANGS: [ProofLang; 19] = [
     ProofLang::Ru,
     ProofLang::Cs,
     ProofLang::Id,
+    ProofLang::Gu,
     ProofLang::Es,
     ProofLang::EsMx,
     ProofLang::Es419,
@@ -117,6 +118,7 @@ fn hyphenation_is_off_where_it_needs_data() {
     for (w, l) in [
         ("hyphenation", ProofLang::En),
         ("hyphenation", ProofLang::Cs),
+        ("hyphenation", ProofLang::Gu),
         ("przedsiębiorstwo", ProofLang::Pl),
         ("computador", ProofLang::Pt),
         ("calcolatore", ProofLang::It),

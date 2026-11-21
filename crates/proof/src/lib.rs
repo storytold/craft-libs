@@ -35,6 +35,9 @@
 //! - **Indonesian** ([`ProofLang::Id`], module [`id`]): the installed Hunspell `id_ID`
 //!   dictionary (not bundled), dictionary-driven suggestions and generic checks with Indonesian
 //!   messages. Hyphenation uses the existing English fallback.
+//! - **Gujarati** ([`ProofLang::Gu`], module [`gu`]): the installed Hunspell `gu_IN`
+//!   dictionary (not bundled), dictionary-driven suggestions and generic checks with Gujarati
+//!   messages. Hyphenation uses the existing English fallback.
 //! - **Spanish** ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`], [`ProofLang::EsUy`],
 //!   module [`es`]): each variety's installed Hunspell dictionary (`es_ES`, `es_MX`, `es_419`,
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,
@@ -77,6 +80,7 @@ pub mod en_variants;
 mod english;
 pub mod es;
 pub mod fr;
+pub mod gu;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -223,7 +227,7 @@ struct Language {
 
 /// Every language proofed against a Hunspell dictionary, in the order File › Options › Proofing
 /// lists them. English has a built-in word list and is handled apart.
-static LANGUAGES: [Language; 12] = [
+static LANGUAGES: [Language; 13] = [
     Language {
         lang: ProofLang::Pl,
         slot: &pl::DICT,
@@ -289,6 +293,14 @@ static LANGUAGES: [Language; 12] = [
         is_correct: |w, _, o| id::is_correct_with_options(w, o),
         suggest: |w, n, _| id::suggest(w, n),
         grammar: |t, _, _| id::grammar::check(t),
+    },
+    Language {
+        lang: ProofLang::Gu,
+        slot: &gu::DICT,
+        message: "શક્ય જોડણી ભૂલ",
+        is_correct: |w, _, o| gu::is_correct_with_options(w, o),
+        suggest: |w, n, _| gu::suggest(w, n),
+        grammar: |t, _, _| gu::grammar::check(t),
     },
     Language {
         lang: ProofLang::Es,
@@ -1210,6 +1222,7 @@ mod tests {
             (ProofLang::Ru, "ru_RU"),
             (ProofLang::Cs, "cs_CZ"),
             (ProofLang::Id, "id_ID"),
+            (ProofLang::Gu, "gu_IN"),
             // #3360: each Spanish variety names its own.
             (ProofLang::Es, "es_ES"),
             (ProofLang::EsMx, "es_MX"),
@@ -1267,6 +1280,7 @@ mod tests {
             ("ru_RU", ru::test_dict::AFF, ru::test_dict::DIC),
             ("cs_CZ", cs::test_dict::AFF, cs::test_dict::DIC),
             ("id_ID", id::test_dict::AFF, id::test_dict::DIC),
+            ("gu_IN", gu::test_dict::AFF, gu::test_dict::DIC),
             ("es_ES", es::test_dict::AFF, es::test_dict::DIC),
             ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
@@ -1507,7 +1521,7 @@ mod tests {
         // the languages' own tests install theirs concurrently, so an exact path would race them.
         // The folder is searched first whatever is in use.
         let found = installed_dictionaries();
-        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY"];
+        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "gu_IN", "es_ES", "es_MX", "es_419", "es_UY"];
         assert_eq!(
             found.iter().map(|(lang, _)| *lang).collect::<Vec<_>>(),
             [
@@ -1519,6 +1533,7 @@ mod tests {
                 ProofLang::Ru,
                 ProofLang::Cs,
                 ProofLang::Id,
+                ProofLang::Gu,
                 ProofLang::Es,
                 ProofLang::EsMx,
                 ProofLang::Es419,
@@ -2631,6 +2646,7 @@ mod tests {
             ProofLang::Cs,
             ProofLang::Hr,
             ProofLang::Id,
+            ProofLang::Gu,
             ProofLang::Pl,
             ProofLang::Ru,
             ProofLang::Tr,
@@ -3231,7 +3247,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Gu, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -3275,6 +3291,13 @@ mod tests {
         }
 
         #[test]
+        fn gujarati_suggestions_never_panic(s in "[\\u{0A80}-\\u{0AFF}'’ -]{0,14}") {
+            gu::test_dict::install();
+            let _ = suggest_in(&s, 4, ProofLang::Gu);
+            let _ = is_correct_in(&s, ProofLang::Gu);
+        }
+
+        #[test]
         fn spanish_suggestions_never_panic(s in "[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ¿¡'’ -]{0,14}") {
             es::test_dict::install();
             for lang in [ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
@@ -3285,7 +3308,7 @@ mod tests {
 
         #[test]
         fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Gu, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
