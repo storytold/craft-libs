@@ -436,6 +436,34 @@ fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
     assert_eq!(on_dialog(&host, HostedParamDialog::take_listing).flatten(), None, "a cancel drops the listing request");
 }
 
+/// A dialog with a custom row whose button asks the host to run the action `pen`.
+fn pen_dialog(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let pen = Param::custom("pen", "Pen", |ui, _, cx| {
+        let pressed = Button::new("Pen…").show(ui);
+        if clicked(&pressed) {
+            cx.request_action("pen");
+        }
+        pressed.response().clone()
+    });
+    ParamDialog::new("pens", "Pens", vec![pen]).values(Bind::bound(fields))
+}
+
+// A custom row's action request reaches the host once, in a frame that runs twice too.
+#[trial]
+fn a_custom_rows_action_request_reaches_the_host_once() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "pens", DialogFields::new(), pen_dialog));
+    fixture.idle(10);
+    let pen = fixture.by_label("Pen").expect("the row's button, named by the row");
+    twice.set(true);
+    fixture.click(&pen);
+    twice.set(false);
+    fixture.idle(4);
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_actions), Some(vec!["pen".to_owned()]), "the press asks for the action");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_actions), Some(Vec::new()), "the request is taken once");
+}
+
 /// A dialog with a radio row whose second option is disabled.
 fn brush_tip(fields: &mut DialogFields) -> ParamDialog<'_> {
     let options = vec![("round".to_owned(), Label::from("Round")), ("square".to_owned(), Label::from("Square"))];

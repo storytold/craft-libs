@@ -420,6 +420,8 @@ pub struct CustomContext {
     sampling_ended: bool,
     /// The gesture steps the row's controls reported ([`CustomContext::gesture`]).
     gestures: Vec<Lifted>,
+    /// The ids of the actions the row asked the host to run ([`CustomContext::request_action`]).
+    actions: Vec<String>,
 }
 
 /// One edit event of a custom row's control with its value erased.
@@ -436,7 +438,7 @@ pub(crate) struct Lifted {
 impl CustomContext {
     /// The context of a row labelled `title`; `sampling_ended` says an Escape ended sampling in the previous pass.
     pub(crate) fn new(title: Label, canvas: Option<egui::Id>, sampling_ended: bool) -> Self {
-        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false, sampling_ended, gestures: Vec::new() }
+        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false, sampling_ended, gestures: Vec::new(), actions: Vec::new() }
     }
 
     /// The gesture steps the row reported, once.
@@ -447,8 +449,12 @@ impl CustomContext {
     /// Asks the host to run the action `id`; the host takes this pass's requests once with
     /// `HostedParamDialog::take_actions`.
     pub fn request_action(&mut self, id: impl Into<String>) {
-        let _ = (self, id);
-        todo!("ex.FA1")
+        self.actions.push(id.into());
+    }
+
+    /// The ids of the actions the row asked for, once.
+    pub(crate) fn take_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.actions)
     }
 
     /// Arms the host's eyedropper for the colour under `request.key`, as a colour row's dropper toggle does.

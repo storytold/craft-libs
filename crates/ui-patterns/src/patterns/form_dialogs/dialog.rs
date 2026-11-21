@@ -1055,8 +1055,7 @@ impl HostedParamDialog {
 
     /// The ids of the actions the custom rows requested since the last call (`CustomContext::request_action`).
     pub fn take_actions(&mut self) -> Vec<String> {
-        let _ = self;
-        todo!("ex.FA1")
+        self.requests.take_actions()
     }
 
     /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with

@@ -89,6 +89,9 @@ pub struct ParamRowsOutput {
     pub help_link: Option<String>,
     /// An Escape ended a row's sampling in this pass: the dialog stays open, and the next Escape cancels as usual.
     pub sampling_ended: bool,
+    /// The ids of the actions custom rows asked the host to run in this pass (`CustomContext::request_action`), in
+    /// the order asked.
+    pub actions: Vec<String>,
 }
 
 impl Outcome for ParamRowsOutput {
@@ -245,8 +248,11 @@ impl<'a> ParamRows<'a> {
             })
         };
         let shown = if read_only { with_env(ui, |scope| scope.read_only = Some(true), group) } else { group(ui) };
-        let (pick_color, path, eyedropper, listing, out_of_range, help_link) =
-            if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range, pass.help_link) };
+        let (pick_color, path, eyedropper, listing, out_of_range, help_link, actions) = if read_only {
+            Default::default()
+        } else {
+            (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range, pass.help_link, pass.actions)
+        };
         ParamRowsOutput {
             response: shown.output,
             changed,
@@ -260,6 +266,7 @@ impl<'a> ParamRows<'a> {
             unparsed: pass.unparsed,
             help_link,
             sampling_ended: pass.sampling_ended,
+            actions,
         }
     }
 }
@@ -314,6 +321,8 @@ struct Pass<'p> {
     unparsed: bool,
     /// The help link a row's button reported.
     help_link: Option<String>,
+    /// The actions custom rows asked the host to run.
+    actions: Vec<String>,
     /// An Escape ended sampling in this pass.
     sampling_ended: bool,
     /// An Escape ended sampling in the previous pass.
@@ -419,6 +428,7 @@ impl<'p> Pass<'p> {
             events: EditEvents::new(),
             unparsed: false,
             help_link: None,
+            actions: Vec::new(),
             sampling_ended: false,
             ended_prev: false,
             pending: EditEvents::new(),
@@ -436,6 +446,7 @@ impl<'p> Pass<'p> {
         self.events = EditEvents::new();
         self.unparsed = false;
         self.help_link = None;
+        self.actions.clear();
         self.sampling_ended = false;
         self.pending = EditEvents::new();
         self.locked = false;
@@ -1267,6 +1278,7 @@ impl<'p> Pass<'p> {
             self.eyedropper = Some(request);
         }
         self.sampling |= context.is_sampling();
+        self.actions.extend(context.take_actions());
     }
 }
 

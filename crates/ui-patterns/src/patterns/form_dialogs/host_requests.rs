@@ -43,6 +43,8 @@ pub struct HostRequests {
     /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
     previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
+    /// The ids of the actions custom rows asked the host to run, in the order asked.
+    actions: Vec<String>,
 }
 
 impl HostRequests {
@@ -69,6 +71,12 @@ impl HostRequests {
             self.help_link = Some(link);
         }
         self.sampling_ended |= std::mem::take(&mut rows.sampling_ended);
+        self.actions.append(&mut rows.actions);
+    }
+
+    /// The ids of the actions custom rows asked the host to run since the last call, once, in the order asked.
+    pub fn take_actions(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.actions)
     }
 
     /// The help link a row's button reported, once.
@@ -145,7 +153,9 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, help_link, sampling_ended, previews, answers } = other;
+        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, help_link, sampling_ended, previews, answers, actions } =
+            other;
+        self.actions.extend(actions);
         self.sampling_ended |= sampling_ended;
         self.help_link = help_link.or(self.help_link.take());
         self.color = color.or(self.color.take());
