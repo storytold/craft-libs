@@ -104,8 +104,9 @@ fn shape(sp: &[u8], budget: &mut usize, cut: &mut bool) -> Option<PictureShape> 
         match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
             rt::FOPT => {
-                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB && !e.is_complex).last() {
-                    pib = Some(e.op);
+                // The last `pib` entry counts; a complex one (its operand a length) is no index.
+                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
+                    pib = (!e.is_complex).then_some(e.op);
                 }
             }
             // Client anchor: flags, then eight 16-bit values.
