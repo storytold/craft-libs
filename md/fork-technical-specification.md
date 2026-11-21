@@ -243,3 +243,22 @@ cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Aux
 - `craft-psd`: **189 passed; 0 failed**
 - `craft-zip`: **45 passed; 0 failed**
 - **Total: 2,729 passed; 0 failed** (Clippy: **0 warnings, exit code 0**)
+
+---
+
+## 5. Automated Synchronization & Fork Preservation Protocol
+
+To guarantee that continuous synchronization with official upstream (`storytold/craft-libs:next`) never degrades, overwrites, or strips fork capabilities, automated integration tools (such as `photocraft_sync_mcp_server.py`) must enforce the following non-negotiable policies:
+
+1. **`crates/zip` Non-Upstream Protection**:
+   `crates/zip` is a customized fork crate carrying `scan_offsets` EOCD64 chunked scanning. It must NEVER be added to `upstream_only_prefixes` or wiped via `git checkout --theirs`.
+2. **Keyboard Associated Constants Preservation**:
+   In `crates/ui-panels/src/rails/flyout.rs` and `crates/ui-patterns/src/action/button.rs`, the associated constant:
+   ```rust
+   const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_space_activation();
+   ```
+   is mandatory. It ensures keyboard activation for rail buttons without sacrificing canvas Space-key Hand/Pan tool isolation. It must NEVER be removed when cleaning up obsolete UI hooks.
+3. **Automated Conflict Resolution Hunk Matching**:
+   Any conflict marker hunk carrying known fork identifiers (`drop_dangling_relations`, `prune_controls`, `activate_on_space`, `with_space_activation`, `space_activates`, `ActivateKeys::Enter`, `PressRoute::Space`, `PressRoute::Free`, `!self.printers.is_empty()`, `KANA_SAMPLE`, `is_cjk_song`, `shown_name`, `localized_families`, `Layr`, `Mt16`, `Mt32`, `Mtrn`, `MTrn`, `scan_offsets`, `EOCD64`, `carry`) must automatically resolve to preserve fork modifications (`ours`).
+4. **Pre-Push MSVC Verification Gate**:
+   Prior to pushing synchronized commits to `fork:next` or retagging releases, all eight test suites above (2,729 tests) must execute and pass under MSVC x64 with 0 failures and 0 Clippy warnings.
