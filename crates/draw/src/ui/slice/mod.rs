@@ -36,7 +36,7 @@ use craft_keymap::Mods;
 use std::sync::Arc;
 
 pub(crate) mod bar;
-mod dialogs;
+pub(crate) mod dialogs;
 pub(crate) mod overlay;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
