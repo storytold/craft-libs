@@ -8,13 +8,18 @@ use craft_wordmodel::para::ShapeKind;
 use craft_wordmodel::props::Rgb;
 use craft_wordmodel::wordart::{GradStop, MAX_STOPS};
 
-use super::drawing_color::{color, color_alpha, fill as read_fill, fill_colour};
+use super::drawing_color::{color_alpha, fill as read_fill, fill_colour};
 use crate::units::{int, measure};
 use crate::xml::El;
 
 /// Outline widths of the theme's three line styles (`a:lnStyleLst`), points: what Word's
 /// default themes give (6 350, 12 700 and 19 050 EMU).
 const THEME_LINE_WIDTHS: [f32; 3] = [0.5, 1.0, 1.5];
+
+/// Width of an outline whose file names no width, points: Word's default shape and picture
+/// outline width (9 525 EMU, ¾ pt). Used for a line drawn without a width of its own or from
+/// its theme line.
+pub(crate) const DEFAULT_OUTLINE_PT: f32 = 0.75;
 
 /// The shape kind drawn for DrawingML preset geometry `prst` (ECMA-376 Part 1 §20.1.10.56).
 /// Presets WordCraft has no shape for are drawn as the nearest one it has: callouts as the box,
@@ -197,15 +202,15 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], 
     let ln = sppr.and_then(|s| s.child("a:ln"));
     let line_ref = style_ref("a:lnRef").filter(|(idx, _)| *idx > 0);
     let outline_fill = ln.and_then(|l| l.child("a:gradFill")).and_then(|g| read_fill(g, theme, None)).filter(|f| matches!(f, Fill::Gradient(_)));
+    // The referenced theme line itself (the `a:lnStyleLst` entry the `a:lnRef` names): its own
+    // fill, and its own width where the stock table would only guess Word's defaults.
+    let theme_ln = line_ref.and_then(|(idx, _)| styles.get_line(idx));
     let stroke = match ln {
         Some(l) if l.child("a:noFill").is_some() => None,
         _ if outline_fill.is_some() => outline_fill.as_ref().map(Fill::main_color),
         Some(l) if l.els().any(|c| matches!(c.name.as_str(), "a:solidFill" | "a:gradFill" | "a:pattFill")) => fill_colour(l, theme),
-        _ => line_ref.and_then(|(_, r)| color(r, theme)),
+        _ => line_ref.and_then(|(_, r)| themed_stroke(theme_ln, r, theme)),
     };
-    // The referenced theme line itself (the `a:lnStyleLst` entry the `a:lnRef` names):
-    // its own width where the stock table would only guess Word's defaults.
-    let theme_ln = line_ref.and_then(|(idx, _)| styles.get_line(idx));
     let themed_width = theme_ln
         .and_then(|l| l.attr("w"))
         .and_then(|v| measure(v, 12_700.0))
@@ -215,7 +220,7 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], 
         .and_then(|v| measure(v, 12_700.0))
         .or(themed_width)
         // Word's default outline when the file names none (no outline: no width).
-        .unwrap_or(if stroke.is_some() { 0.75 } else { 0.0 })
+        .unwrap_or(if stroke.is_some() { DEFAULT_OUTLINE_PT } else { 0.0 })
         .clamp(0.0, 100.0);
     // Dash and compound type: the shape's own `a:ln` states them, else the theme line's.
     let dash = match ln.filter(|l| l.child("a:custDash").is_some() || l.child("a:prstDash").is_some()) {
@@ -228,6 +233,26 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], 
         .map(craft_wordmodel::line_dash::CompoundLine::from_ooxml)
         .unwrap_or_default();
     ShapePaint { fill, stroke, stroke_width, outline_fill, dash, compound }
+}
+
+/// The outline colour a style's `a:lnRef` (`line_ref`) gives: the referenced theme line's
+/// (`theme_ln`) own fill, painted with the reference colour as its placeholder (`phClr`), as
+/// the style references of ECMA-376 Part 1 §20.1.4.2 have it. A theme line with no fill draws
+/// no outline; a theme line that is missing, names no fill or holds one the model can't read is
+/// the reference colour itself, so the outline doesn't vanish.
+fn themed_stroke(theme_ln: Option<&El>, line_ref: &El, theme: &[Rgb]) -> Option<Rgb> {
+    let ph = color_alpha(line_ref, theme, None);
+    let Some(t) = theme_ln else {
+        return ph.map(|p| p.0);
+    };
+    if t.child("a:noFill").is_some() {
+        return None;
+    }
+    t.els()
+        .find(|c| matches!(c.name.as_str(), "a:solidFill" | "a:gradFill" | "a:pattFill"))
+        .and_then(|f| read_fill(f, theme, ph))
+        .map(|f| f.main_color())
+        .or(ph.map(|p| p.0))
 }
 
 /// A VML shape's fill: `fillcolor` (white by default) and its `v:fill`: opacity, and a linear
@@ -442,6 +467,31 @@ mod tests {
         );
         let p = shape_paint(Some(&sp), Some(&st), &THEME_COLORS, &styles, None);
         assert_eq!(p.dash, LineDash::Dot);
+    }
+
+    #[test]
+    fn a_theme_line_paints_with_its_own_fill_and_the_reference_colour_as_placeholder() {
+        let fmt = el(
+            r#"<a:fmtScheme xmlns:wps="w" xmlns:a="a"><a:lnStyleLst><a:ln w="12700"><a:solidFill><a:srgbClr val="EE0000"/></a:solidFill></a:ln><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"><a:lumMod val="50000"/></a:schemeClr></a:solidFill></a:ln><a:ln w="12700"><a:noFill/></a:ln></a:lnStyleLst></a:fmtScheme>"#,
+        );
+        let styles = ThemeFills::read(Some(&fmt));
+        let st =
+            |idx: u8| el(&format!(r#"<wps:style xmlns:wps="w" xmlns:a="a"><a:lnRef idx="{idx}"><a:srgbClr val="0000FF"/></a:lnRef></wps:style>"#));
+        let stroke = |idx: u8| shape_paint(None, Some(&st(idx)), &THEME_COLORS, &styles, None).stroke;
+        let blue = Rgb(0, 0, 0xFF);
+        // A theme line in a fixed colour is that colour, not the reference's.
+        assert_eq!(stroke(1), Some(Rgb(0xEE, 0, 0)));
+        // A theme line in the placeholder colour is the reference's, with the line's own
+        // transforms: darker blue, not blue.
+        let darker = stroke(2);
+        assert!(darker.is_some_and(|c| c != blue && c.0 == 0 && c.1 == 0 && c.2 > 0 && c.2 < 0xFF), "{darker:?}");
+        // A theme line with no fill draws no outline.
+        assert_eq!(stroke(3), None);
+        // No such theme line: the reference colour, as before.
+        assert_eq!(stroke(9), Some(blue));
+        // The shape's own outline colour still wins over the theme line's.
+        let sp = el(r#"<wps:spPr xmlns:wps="w" xmlns:a="a"><a:ln><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></a:ln></wps:spPr>"#);
+        assert_eq!(shape_paint(Some(&sp), Some(&st(1)), &THEME_COLORS, &styles, None).stroke, Some(Rgb(0, 0xAA, 0)));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use craft_wordmodel::{Block, Blocks, InlineObject, Paragraph, PartKind, Revision
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
-use super::shape_style::{own_fill, preset_kind, shape_paint, vml_color, vml_fill, vml_fraction, vml_preset_kind};
+use super::shape_style::{DEFAULT_OUTLINE_PT, own_fill, preset_kind, shape_paint, vml_color, vml_fill, vml_fraction, vml_preset_kind};
 use crate::package::{ContentTypes, Rels, rt};
 use crate::units::{int, measure, u32_of};
 use crate::xml::{El, Node};

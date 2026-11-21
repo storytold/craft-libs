@@ -1,7 +1,8 @@
 use super::{
-    AltText, Anchor, Arc, Blocks, CHARTEX_URI, ConnEnd, ContentTypes, El, Embedded, Float, FloatAlign, Glow, Graphic, GraphicItem, GraphicKind,
-    INK_REL, INK_URI, InlineObject, MAX_STORY_DEPTH, Node, PartKind, Reader, Rels, Rgb, Shadow, ShapeEffects, ShapeExtra, ShapeKind, StoryCtx,
-    TextWarp, Wrap, WrapText, cap_alt, children_of_choice, int, measure, on_off_attr, own_fill, preset_kind, rt, shape_paint, u32_of,
+    AltText, Anchor, Arc, Blocks, CHARTEX_URI, ConnEnd, ContentTypes, DEFAULT_OUTLINE_PT, El, Embedded, Float, FloatAlign, Glow, Graphic,
+    GraphicItem, GraphicKind, INK_REL, INK_URI, InlineObject, MAX_STORY_DEPTH, Node, PartKind, Reader, Rels, Rgb, Shadow, ShapeEffects, ShapeExtra,
+    ShapeKind, StoryCtx, TextWarp, Wrap, WrapText, cap_alt, children_of_choice, int, measure, on_off_attr, own_fill, preset_kind, rt, shape_paint,
+    u32_of,
 };
 
 impl Reader<'_> {
@@ -316,19 +317,29 @@ impl Reader<'_> {
         // its dash and compound type.
         let paint = shape_paint(pic.find("pic:spPr"), pic.find("pic:style"), &self.doc.settings.theme_colors, &self.theme_fills, None);
         let ln = pic.find("pic:spPr").and_then(|s| s.child("a:ln"));
-        // An `a:ln` that names a width but omits its fill, with no style line reference
-        // either, is a solid line in the theme's dark colour (dk1) — that is how Office
-        // draws it. shape_paint leaves such a line colourless, so without this the border
-        // the file asks for is lost on import, and a save cannot restore it.
-        let stroke = paint.stroke.or_else(|| {
-            let ln = ln?;
-            let fills = ["a:solidFill", "a:gradFill", "a:pattFill", "a:blipFill", "a:noFill"];
-            if ln.attr("w").is_none() || ln.els().any(|c| fills.contains(&c.name.as_str())) {
-                return None;
-            }
-            Some(crate::read::drawing_color::slot(&self.doc.settings.theme_colors, 0))
-        });
-        let stroke_width = if stroke.is_some() { paint.stroke_width } else { 0.0 };
+        // An `a:ln` that states something about its line (a width, a compound type or a dash)
+        // but omits its fill, with no style line reference either, is a line in the theme's
+        // dark colour (dk1) — that is how Office draws it. shape_paint leaves such a line
+        // colourless, so without this the border the file asks for is lost on import, and a
+        // save cannot restore it. Only an explicit `a:noFill` (or a fill of its own) decides
+        // otherwise; an empty `<a:ln/>` states no line and stays none.
+        let line_ref = pic.find("pic:style").and_then(|s| s.child("a:lnRef")).and_then(|r| r.attr("idx")).and_then(int).is_some_and(|i| i > 0);
+        let own_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).is_some();
+        let fallback = paint.stroke.is_none()
+            && !line_ref
+            && ln.is_some_and(|l| {
+                let fills = ["a:solidFill", "a:gradFill", "a:pattFill", "a:blipFill", "a:noFill"];
+                let states_line =
+                    l.attr("w").is_some() || l.attr("cmpd").is_some() || l.child("a:prstDash").is_some() || l.child("a:custDash").is_some();
+                states_line && !l.els().any(|c| fills.contains(&c.name.as_str()))
+            });
+        let stroke = paint.stroke.or_else(|| fallback.then(|| crate::read::drawing_color::slot(&self.doc.settings.theme_colors, 0)));
+        // Such a line with no width (or one that can't be read) is Word's default outline width.
+        let stroke_width = match stroke {
+            None => 0.0,
+            Some(_) if fallback && !own_width => DEFAULT_OUTLINE_PT,
+            Some(_) => paint.stroke_width,
+        };
         // Dash and compound type come with the paint: the picture's own `a:ln` states
         // them, else the theme line its style references (shape_paint resolved both).
         let (dash, compound) = if stroke.is_some() { (paint.dash.clone(), paint.compound) } else { Default::default() };

@@ -752,6 +752,55 @@ fn a_picture_outline_with_its_fill_omitted_is_the_theme_dark_colour() {
 }
 
 #[test]
+fn a_picture_outline_with_its_width_omitted_keeps_its_dash_and_compound_type() {
+    use craft_wordmodel::line_dash::{CompoundLine, LineDash};
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let obj = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "dashed".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    let outline = |doc: &Document| -> Vec<(Option<Rgb>, f32, LineDash, CompoundLine)> {
+        paras(doc)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Image { stroke, stroke_width, dash, compound, .. } => Some((*stroke, *stroke_width, dash.clone(), *compound)),
+                _ => None,
+            })
+            .collect()
+    };
+    // A line that states its dash and compound type but leaves out its width and fill: a
+    // line in the theme's dark colour at Word's default outline width, dashed and doubled.
+    let dashed = xml.replacen("</pic:spPr>", r#"<a:ln cmpd="dbl"><a:prstDash val="dash"/></a:ln></pic:spPr>"#, 1);
+    let read = craft_docx::read(&replace_part(&bytes, "word/document.xml", dashed.as_bytes())).unwrap();
+    let want = vec![(Some(Rgb(0x00, 0x00, 0x00)), 0.75, LineDash::Dash, CompoundLine::Double)];
+    assert_eq!(outline(&read), want);
+    // Saved and read again, it is the same outline.
+    let again = craft_docx::read(&craft_docx::write(&read).unwrap()).unwrap();
+    assert_eq!(outline(&again), want);
+    // An empty `a:ln` states nothing about a line: still no outline.
+    let empty = xml.replacen("</pic:spPr>", r#"<a:ln/></pic:spPr>"#, 1);
+    let read = craft_docx::read(&replace_part(&bytes, "word/document.xml", empty.as_bytes())).unwrap();
+    assert_eq!(outline(&read), vec![(None, 0.0, LineDash::Solid, CompoundLine::Single)]);
+}
+
+#[test]
 fn hyperlinks_and_bookmarks_round_trip() {
     let ext = CharProps { link: Some("https://example.com/a?b=1&c=2".into()), underline: Some(Underline::Single), ..Default::default() };
     let int = CharProps { link: Some("#target".into()), ..Default::default() };
