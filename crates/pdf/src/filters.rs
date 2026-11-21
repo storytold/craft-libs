@@ -29,6 +29,8 @@ pub use craft_stream_codecs::{
 use craft_stream_codecs::{Failure, Step, pay};
 use craft_stream_codecs::{ascii85, asciihex, lzw, predictor, runlength};
 
+pub use flate::input_for as flate_input_for;
+
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Filter {
