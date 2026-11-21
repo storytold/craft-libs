@@ -101,6 +101,31 @@ pub fn declarations(s: &str) -> impl Iterator<Item = (String, String)> + '_ {
         .filter(|(k, _)| !k.is_empty())
 }
 
+/// Escape `s` as a CSS string delimited by `quote`.
+///
+/// Escapes backslashes, the delimiter quote, control characters, and `<` / `>` (which could end
+/// a `<style>` element) using CSS hex escapes.
+pub fn quote_css_string(s: &str, quote: char) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() || matches!(c, '<' | '>') => {
+                let _ = write!(out, "\\{:x} ", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
 fn strip_comments(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
@@ -342,5 +367,11 @@ mod tests {
         assert!(parse(&format!("rect{{{}}}", "fill:red;".repeat(MAX_CSS_DECLARATIONS + 1)), &mut sheet).is_err());
         let mut sheet = StyleSheet { bytes: MAX_CSS_BYTES, ..Default::default() };
         assert!(parse("x", &mut sheet).is_err());
+    }
+
+    #[test]
+    fn css_string_quoting_escapes_delimiters_controls_and_tags() {
+        assert_eq!(quote_css_string("a\"b\\c\n<d>", '"'), "\"a\\\"b\\\\c\\a \\3c d\\3e \"");
+        assert_eq!(quote_css_string("Arial's", '\''), "'Arial\\'s'");
     }
 }

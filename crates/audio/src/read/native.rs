@@ -889,6 +889,11 @@ fn open_mp4<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
         return Some(Err(AudioError::Malformed("MP4 sample is larger than the file".into())));
     }
     let params = t.codec_params();
+    // Keep file-level FLAC on its existing path until this reader can index variable packet
+    // lengths and final duration from the frame headers. The packet API has no such timing role.
+    if params.codec == CodecId::Flac {
+        return None;
+    }
     let lookahead: Vec<Vec<u8>> =
         (0..t.samples.len().min(crate::track::LOOKAHEAD_PACKETS)).filter_map(|i| file.read_sample(src, track, i).ok()).collect();
     let timescale = t.timescale;
@@ -968,7 +973,9 @@ fn open_mkv<'a>(src: &Src<'a>, container: Container, track: Option<usize>) -> Op
     let params = t.codec_params();
     // Vorbis in Matroska is left to symphonia: its first packet decodes to nothing, which the
     // timestamp-based timing here does not model.
-    if matches!(params.codec, CodecId::Vorbis) {
+    // The Matroska file API needs FLAC frame counts to undo timestamp rounding on seeks.
+    // Keep its existing fallback until it can index those counts.
+    if matches!(params.codec, CodecId::Vorbis | CodecId::Flac) {
         return None;
     }
     let lookahead: Vec<Vec<u8>> =

@@ -49,6 +49,8 @@ pub mod alac;
 mod buffer;
 #[cfg(feature = "dsd")]
 pub mod dsd;
+#[cfg(any(feature = "flac-decode", feature = "symphonia"))]
+mod flac_layout;
 #[cfg(feature = "g722")]
 pub mod g722;
 #[cfg(feature = "g726")]
@@ -68,7 +70,8 @@ pub mod opus;
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
-    feature = "vorbis-decode"
+    feature = "vorbis-decode",
+    feature = "flac-decode"
 ))]
 mod pcm;
 #[cfg(feature = "peaks")]
@@ -85,7 +88,8 @@ pub mod sbc;
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
-    feature = "vorbis-decode"
+    feature = "vorbis-decode",
+    feature = "flac-decode"
 ))]
 mod track;
 #[cfg(feature = "vmd-decode")]
@@ -170,7 +174,8 @@ pub use read::{RawPcm, aiff_pcm, wav_pcm};
     feature = "opus-decode",
     feature = "ac3-decode",
     feature = "mpa-decode",
-    feature = "vorbis-decode"
+    feature = "vorbis-decode",
+    feature = "flac-decode"
 ))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(any(
