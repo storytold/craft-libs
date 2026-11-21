@@ -22,6 +22,7 @@ use hayro_syntax::object::dict::keys::{
     BASE_FONT, ENCODING, FLAGS, FONT_DESC, FONT_WEIGHT, ITALIC_ANGLE,
 };
 use hayro_syntax::object::{Dict, Name};
+use kurbo::BezPath;
 use skrifa::{FontRef, GlyphId};
 use std::sync::{Arc, OnceLock};
 
@@ -88,6 +89,18 @@ pub struct FontFacts<'a> {
     /// `Identity-V` CMap and an identity `/CIDToGIDMap`): the strict text of the code that
     /// draws glyph id `id`.
     pub id_text: Option<&'a dyn Fn(u32) -> Option<BfString>>,
+    /// Simple Type 1, CFF and TrueType fonts: a code's `/ToUnicode` text, when the font has a
+    /// map and it names the code.
+    pub to_unicode_text: Option<&'a dyn Fn(u8) -> Option<BfString>>,
+    /// Simple Type 1, CFF and TrueType fonts: a code's text by the font's encoding and glyph
+    /// names, `/ToUnicode` aside (the strict text of a font without a map).
+    pub encoding_text: Option<&'a dyn Fn(u8) -> Option<BfString>>,
+    /// Simple Type 1, CFF and TrueType fonts with an embedded program: the outline of the glyph
+    /// a code draws, as drawn (1000 units per em); nothing for a code that draws `.notdef`.
+    pub code_outline: Option<&'a dyn Fn(u8) -> Option<BezPath>>,
+    /// Simple Type 1, CFF and TrueType fonts: a code's width as `/Widths` gives it (not
+    /// `/MissingWidth` or a standard font's).
+    pub code_width: Option<&'a dyn Fn(u8) -> Option<f32>>,
     /// Type 0 fonts: whether the encoding CMap is `Identity-H` or `Identity-V`, whatever the
     /// `/CIDToGIDMap` (ISO 32000-2 §9.7.5.2: two-byte codes that are CIDs).
     pub identity_encoding: bool,
@@ -117,6 +130,10 @@ impl FontFacts<'_> {
             ids: None,
             id_width: None,
             id_text: None,
+            to_unicode_text: None,
+            encoding_text: None,
+            code_outline: None,
+            code_width: None,
             identity_encoding: false,
             program_glyphs: None,
             substitute: false,
@@ -134,6 +151,8 @@ pub struct GlyphFacts<'a> {
     /// The number [`FontFacts::ids`] holds for the glyph: a Type 0 glyph's CID, a Type 3
     /// glyph's code. `None` for other fonts, or a code the CMap gives no CID.
     pub id: Option<u32>,
+    /// Simple Type 1, CFF and TrueType fonts: the character code.
+    pub code: Option<u8>,
 }
 
 /// The parts of a font's dictionary its [`FontFacts`] give that the font doesn't keep

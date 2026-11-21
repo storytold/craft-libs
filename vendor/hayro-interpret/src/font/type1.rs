@@ -151,18 +151,22 @@ impl Type1Font {
     }
 
     pub(crate) fn char_code_to_unicode(&self, char_code: u32) -> Option<BfString> {
-        if let Some(to_unicode) = &self.2
-            && let Some(c) = to_unicode.lookup_bf_string(char_code)
-        {
-            // Skip null character mappings and fall back to glyph name
-            // lookup. Some PDFs have incorrect ToUnicode mappings that map
-            // to U+0000.
-            if c != BfString::Char('\0') {
-                return Some(c);
-            }
-        }
+        self.to_unicode_text(char_code)
+            .or_else(|| self.encoding_text(char_code as u8))
+    }
 
-        let code = char_code as u8;
+    /// The code's `/ToUnicode` text, when the font has a map that names it.
+    fn to_unicode_text(&self, char_code: u32) -> Option<BfString> {
+        let c = self.2.as_ref()?.lookup_bf_string(char_code)?;
+        // Skip null character mappings and fall back to glyph name
+        // lookup. Some PDFs have incorrect ToUnicode mappings that map
+        // to U+0000.
+        (c != BfString::Char('\0')).then_some(c)
+    }
+
+    /// PdfCraft patch (107): the code's text by the font's encoding and glyph names, `/ToUnicode`
+    /// aside: the strict text of a code `/ToUnicode` doesn't name.
+    fn encoding_text(&self, code: u8) -> Option<BfString> {
         let found = match &self.1 {
             Kind::Standard(s) => s.char_code_to_unicode(code),
             Kind::Cff(c) => c.char_code_to_unicode(code),
@@ -214,9 +218,22 @@ impl Type1Font {
         f: impl FnOnce(&FontFacts<'_>, &GlyphFacts<'_>) -> R,
     ) -> R {
         let names = |c: u8| self.code_to_ps_name(c);
+        let to_unicode_text = |c: u8| self.to_unicode_text(u32::from(c));
+        let encoding_text = |c: u8| self.encoding_text(c);
+        let code_outline = |c: u8| self.embedded_outline(c);
+        let code_width = |c: u8| match &self.1 {
+            Kind::Standard(_) => None,
+            Kind::Type1(t) => explicit_width(&t.widths, c),
+            Kind::Cff(f) => explicit_width(&f.widths, c),
+        };
         let font = FontFacts {
             has_to_unicode: self.2.is_some(),
             names: Some(&names),
+            to_unicode_text: Some(&to_unicode_text),
+            encoding_text: Some(&encoding_text),
+            code_outline: (!matches!(self.1, Kind::Standard(_)))
+                .then_some(&code_outline as &dyn Fn(u8) -> Option<BezPath>),
+            code_width: Some(&code_width),
             ..self.4.facts(self.font_kind())
         };
         let glyph = GlyphFacts {
@@ -225,8 +242,19 @@ impl Type1Font {
                 .ok()
                 .and_then(|c| self.code_to_ps_name(c)),
             id: None,
+            code: u8::try_from(code).ok(),
         };
         f(&font, &glyph)
+    }
+
+    /// PdfCraft patch (107): the outline of the glyph `code` draws from the embedded program, as
+    /// drawn; nothing for a standard font or a code that draws `.notdef`.
+    fn embedded_outline(&self, code: u8) -> Option<BezPath> {
+        if matches!(self.1, Kind::Standard(_)) {
+            return None;
+        }
+        let glyph = self.map_code(code);
+        (glyph != GlyphId::NOTDEF).then(|| self.outline_glyph(glyph))
     }
 
     fn code_to_ps_name(&self, code: u8) -> Option<&str> {
@@ -235,6 +263,14 @@ impl Type1Font {
             Kind::Cff(c) => c.code_to_ps_name(code),
             Kind::Type1(t) => t.code_to_ps_name(code),
         }
+    }
+}
+
+/// PdfCraft patch (107): the width `/Widths` gives `code`, if it gives one.
+fn explicit_width(widths: &[Width], code: u8) -> Option<f32> {
+    match widths.get(usize::from(code)) {
+        Some(Width::Value(w)) => Some(*w),
+        _ => None,
     }
 }
 

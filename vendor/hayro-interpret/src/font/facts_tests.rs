@@ -298,9 +298,16 @@ struct Facts {
     identity_encoding: bool,
     program_glyphs: Option<u32>,
     substitute: bool,
+    /// The `/ToUnicode` text, the encoding's text, whether an outline is drawn, and the
+    /// `/Widths` width of codes 65 to 67.
+    to_unicode_text: Option<Vec<Option<BfString>>>,
+    encoding_text: Option<Vec<Option<BfString>>>,
+    code_outline: Option<Vec<bool>>,
+    code_width: Option<Vec<Option<f32>>>,
     gid: GlyphId,
     name: Option<String>,
     id: Option<u32>,
+    code: Option<u8>,
 }
 
 #[derive(Default)]
@@ -344,9 +351,16 @@ impl<'a> Device<'a> for Recorder {
             identity_encoding: font.identity_encoding,
             program_glyphs: font.program_glyphs,
             substitute: font.substitute,
+            to_unicode_text: font.to_unicode_text.map(|t| (65..=67).map(t).collect()),
+            encoding_text: font.encoding_text.map(|t| (65..=67).map(t).collect()),
+            code_outline: font
+                .code_outline
+                .map(|o| (65..=67).map(|c| o(c).is_some_and(|p| !p.elements().is_empty())).collect()),
+            code_width: font.code_width.map(|w| (65..=67).map(w).collect()),
             gid: g.gid,
             name: g.name.map(str::to_owned),
             id: g.id,
+            code: g.code,
         });
         let fill = match paint {
             Paint::Color(c) => c.components().to_vec(),
@@ -539,6 +553,53 @@ fn a_truetype_fonts_facts_give_its_program_and_code_glyphs() {
         (a.gid, seen[1].facts.gid),
         (GlyphId::new(3), GlyphId::new(4))
     );
+}
+
+/// A simple font's facts give each code's `/ToUnicode` text and its text by the encoding apart
+/// (the strict text is the first, else the second), the outline of the glyph it draws from an
+/// embedded program, the width `/Widths` gives it, and the glyph's code. A standard font has no
+/// program to draw from and no explicit widths; a Type 3 or Type 0 glyph has no code here.
+#[test]
+fn a_simple_fonts_facts_give_its_codes_text_outlines_and_widths() {
+    let program = truetype(5, &[(65, 3), (66, 4)]);
+    let to_unicode = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def \
+        1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0058> endbfchar \
+        endcmap CMapName currentdict /CMap defineresource pop end end";
+    let pdf = document(
+        "/F1 5 0 R /F2 8 0 R /F3 9 0 R",
+        "BT /F1 10 Tf (AB) Tj /F2 10 Tf (A) Tj /F3 10 Tf (A) Tj ET",
+        &[
+            b"<< /Type /Font /Subtype /TrueType /BaseFont /Shapes /FirstChar 65 /LastChar 66 \
+               /Widths [600 700] /FontDescriptor 6 0 R /ToUnicode 10 0 R >>"
+                .to_vec(),
+            b"<< /Type /FontDescriptor /Flags 4 /FontFile2 7 0 R >>".to_vec(),
+            stream(&program, ""),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            type3_font(""),
+            stream(to_unicode, ""),
+            glyph_procedure(),
+        ],
+    );
+    let seen = glyphs(&pdf);
+    assert_eq!(seen.len(), 4);
+    let (a, b) = (&seen[0], &seen[1]);
+    assert_eq!((&a.strict, &b.strict), (&Some(BfString::Char('X')), &Some(BfString::Char('B'))));
+    let x = |c| Some(BfString::Char(c));
+    assert_eq!(a.facts.to_unicode_text, Some(vec![x('X'), None, None]));
+    assert_eq!(a.facts.encoding_text, Some(vec![x('A'), x('B'), x('C')]));
+    assert_eq!(a.facts.code_outline, Some(vec![true, true, false]), "code 67 draws .notdef");
+    assert_eq!(a.facts.code_width, Some(vec![Some(600.0), Some(700.0), None]));
+    assert_eq!((a.facts.code, b.facts.code), (Some(65), Some(66)));
+    let helvetica = &seen[2].facts;
+    assert_eq!(helvetica.kind, FontKind::Type1);
+    assert_eq!(helvetica.to_unicode_text, Some(vec![None, None, None]));
+    assert_eq!(helvetica.encoding_text, Some(vec![x('A'), x('B'), x('C')]));
+    assert_eq!(helvetica.code_outline, None, "a standard font has no program");
+    assert_eq!(helvetica.code_width, Some(vec![None, None, None]));
+    assert_eq!(helvetica.code, Some(65));
+    let type3 = &seen[3].facts;
+    assert_eq!(type3.kind, FontKind::Type3);
+    assert_eq!((type3.code, type3.encoding_text.is_some()), (None, false));
 }
 
 /// A Type 0 font over an identity CMap and `/CIDToGIDMap` with a TrueType program: its codes

@@ -678,6 +678,7 @@ impl Type0Font {
             gid,
             name: None,
             id: self.code_to_cid(code),
+            code: None,
         };
         f(&font, &glyph)
     }

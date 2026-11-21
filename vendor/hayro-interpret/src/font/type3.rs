@@ -284,6 +284,7 @@ impl<'a> Type3<'a> {
             gid: GlyphId::NOTDEF,
             name: u8::try_from(code).ok().and_then(names),
             id: Some(code),
+            code: None,
         };
         f(&font, &glyph)
     }
