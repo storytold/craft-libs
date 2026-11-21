@@ -147,8 +147,9 @@ pub struct ClientAnchor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Picture {
     pub anchor: ClientAnchor,
-    /// The file: PNG, JPEG, EMF, WMF (with its placeable header put back) or BMP (a DIB with a
-    /// file header in front). Shapes that show one picture share its bytes.
+    /// The file: PNG (a DIB or TIFF is decoded and made one), JPEG, EMF, WMF (with its placeable
+    /// header put back) or BMP (a DIB that couldn't be decoded, with a file header in front). Shapes that show
+    /// one picture share its bytes.
     pub data: Arc<Vec<u8>>,
     /// `image/png`, `image/jpeg`, `image/x-emf`, `image/x-wmf` or `image/bmp`.
     pub mime: &'static str,
