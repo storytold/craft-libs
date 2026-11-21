@@ -20,7 +20,7 @@ pub use regions::{Slot, SlotSize};
 pub(crate) mod app_shell;
 pub(crate) mod canvas_shell;
 pub(crate) mod opening;
-mod options_place;
+pub(crate) mod options_place;
 mod reveal;
 mod screen_mode;
 pub(crate) mod screen_mode_button;
