@@ -109,6 +109,13 @@ fn strip_lead(kind: TabKind, tokens: &crate::style::UiTokens) -> f32 {
     if kind == TabKind::Ribbon { tokens.space.pad.regular } else { 0.0 }
 }
 
+/// The room after the last end item of a ribbon strip: a regular pad, as `strip_lead` leaves before the first tab, so
+/// the end items do not touch the strip's end edge (storytold/wordcraft#7164). None for the other kinds and for a
+/// strip without end items.
+fn strip_trail(kind: TabKind, tokens: &crate::style::UiTokens, ends: usize) -> f32 {
+    if kind == TabKind::Ribbon && ends > 0 { tokens.space.pad.regular } else { 0.0 }
+}
+
 /// The look of a strip: it has none of its own; its row is as high as its tabs.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -936,9 +943,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
     }
 
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> StripLayout {
-        // The tabs and end items share the room the strip lead leaves (`strip_lead`), so the strip is no wider than
-        // the room it was given.
-        let width = (width - strip_lead(self.kind, cx.tokens)).max(0.0);
+        // The tabs and end items share the room the strip lead and trail leave (`strip_lead`, `strip_trail`), so the
+        // strip is no wider than the room it was given.
+        let width = (width - strip_lead(self.kind, cx.tokens) - strip_trail(self.kind, cx.tokens, self.trailing.len())).max(0.0);
         let count = source.len();
         *self.texts.borrow_mut() = (0..count).map(|at| (source.key(at), source.text(at).map(|text| text.into_owned()).unwrap_or_default())).collect();
         let selected = self.shown.as_ref().and_then(|key| source.index_of(key)).unwrap_or(usize::MAX);
