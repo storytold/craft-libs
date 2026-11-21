@@ -1,6 +1,7 @@
 //! Scaling (dequantisation) and inverse transforms (8.5.10 - 8.5.13).
 
 use crate::h264::decode::params::ScalingMatrices;
+use crate::h264::decode::picture::Sample;
 use crate::h264::decode::tables::{norm_adjust4, norm_adjust8};
 
 /// LevelScale4x4 / LevelScale8x8 for all six scaling lists and qP % 6, raster order.
@@ -104,26 +105,50 @@ pub fn chroma_dc_dequant_420(c: &mut [i32; 4], qp: i32, ls00: i32) {
     }
 }
 
-#[inline(always)]
-fn clip_u8(v: i32) -> u8 {
-    v.clamp(0, 255) as u8
+/// 4:2:2 chroma DC: 4x2 transform + scaling (8.5.11). `c` holds the 8 levels in parsing order
+/// (chroma DC scan: c[0..8] fill the 4x2 matrix as [[c0, c2], [c1, c5], [c3, c6], [c4, c7]]);
+/// on return `c[2 * row + col]` is the DC of chroma block 2 * row + col (raster). `qp` is
+/// QP'c + 3, `ls00` LevelScale4x4(qp % 6, 0, 0).
+pub fn chroma_dc_dequant_422(c: &mut [i32; 8], qp: i32, ls00: i32) {
+    let m = [[c[0], c[2]], [c[1], c[5]], [c[3], c[6]], [c[4], c[7]]];
+    // columns: 2-point transform; rows: 4-point transform with the 4x4 DC matrix
+    let mut g = [[0i32; 2]; 4];
+    for (r, row) in m.iter().enumerate() {
+        g[r] = [row[0].wrapping_add(row[1]), row[0].wrapping_sub(row[1])];
+    }
+    let mut f = [[0i32; 2]; 4];
+    for col in 0..2 {
+        let (a, b, cc, dd) = (g[0][col], g[1][col], g[2][col], g[3][col]);
+        f[0][col] = a.wrapping_add(b).wrapping_add(cc).wrapping_add(dd);
+        f[1][col] = a.wrapping_add(b).wrapping_sub(cc).wrapping_sub(dd);
+        f[2][col] = a.wrapping_sub(b).wrapping_sub(cc).wrapping_add(dd);
+        f[3][col] = a.wrapping_sub(b).wrapping_add(cc).wrapping_sub(dd);
+    }
+    let qp = qp.max(0);
+    for r in 0..4 {
+        for col in 0..2 {
+            let v = f[r][col].wrapping_mul(ls00);
+            c[2 * r + col] = if qp >= 36 { v.wrapping_shl((qp / 6 - 6) as u32) } else { v.wrapping_add(1 << (5 - qp / 6)) >> (6 - qp / 6) };
+        }
+    }
 }
 
 /// A dequantised coefficient the inverse transforms are defined for: the dequantisation wraps
 /// by design (see `huge_levels_dequantise_without_overflow_panics`), so their butterflies
-/// clamp an r outside −2^15..2^15−1 to this range — where the spec leaves the output
-/// unspecified anyway (8.5.12.1, 8.5.13.1) — instead of overflowing the plain i32 additions.
+/// clamp an r outside −2^(7+bitDepth)..2^(7+bitDepth)−1 (`S::R_MAX`: 2^15 for 8-bit samples)
+/// to this range — where the spec leaves the output unspecified anyway (8.5.12.1, 8.5.13.1) —
+/// instead of overflowing the plain i32 additions.
 #[inline(always)]
-fn r_clamp(v: i32) -> i32 {
-    v.clamp(-(1 << 15), (1 << 15) - 1)
+fn r_clamp<S: Sample>(v: i32) -> i32 {
+    v.clamp(-S::R_MAX, S::R_MAX - 1)
 }
 
 /// Inverse 4x4 transform of raster-order `d` and add to `dst` (8.5.12.2, 8.5.14).
 ///
 /// Rows first, then columns (the spec's order: the `>> 1` steps make it matter). The column
 /// pass and the reconstruction run across all columns at once so they vectorise.
-pub fn idct4_add(d: &[i32; 16], dst: &mut [u8], stride: usize) {
-    let d: [i32; 16] = std::array::from_fn(|i| r_clamp(d[i]));
+pub fn idct4_add<S: Sample>(d: &[i32; 16], dst: &mut [S], stride: usize, max: i32) {
+    let d: [i32; 16] = std::array::from_fn(|i| r_clamp::<S>(d[i]));
     let mut t = [[0i32; 4]; 4];
     for (i, row) in t.iter_mut().enumerate() {
         let r = &d[i * 4..i * 4 + 4];
@@ -149,21 +174,21 @@ pub fn idct4_add(d: &[i32; 16], dst: &mut [u8], stride: usize) {
             return;
         };
         for (p, &v) in line.iter_mut().zip(row) {
-            *p = clip_u8(*p as i32 + ((v + 32) >> 6));
+            *p = S::clip(p.to_i32() + ((v + 32) >> 6), max);
         }
     }
 }
 
 /// `idct4_add` / `idct8_add` when all AC coefficients are zero: every output sample is
 /// `(dc + 32) >> 6`, so the transform reduces to adding that to the `N`x`N` block.
-pub fn idct_dc_add<const N: usize>(dc: i32, dst: &mut [u8], stride: usize) {
+pub fn idct_dc_add<S: Sample, const N: usize>(dc: i32, dst: &mut [S], stride: usize, max: i32) {
     let v = (dc + 32) >> 6;
     for i in 0..N {
         let Some(line) = dst.get_mut(i * stride..).and_then(|d| d.first_chunk_mut::<N>()) else {
             return;
         };
         for p in line {
-            *p = clip_u8(*p as i32 + v);
+            *p = S::clip(p.to_i32() + v, max);
         }
     }
 }
@@ -191,8 +216,8 @@ fn idct8_1d(d: [i32; 8]) -> [i32; 8] {
 
 /// Inverse 8x8 transform of raster-order `d` and add to `dst` (8.5.13.2): rows, then columns,
 /// the column pass and reconstruction across all columns at once (they vectorise).
-pub fn idct8_add(d: &[i32; 64], dst: &mut [u8], stride: usize) {
-    let d: [i32; 64] = std::array::from_fn(|i| r_clamp(d[i]));
+pub fn idct8_add<S: Sample>(d: &[i32; 64], dst: &mut [S], stride: usize, max: i32) {
+    let d: [i32; 64] = std::array::from_fn(|i| r_clamp::<S>(d[i]));
     let mut t = [[0i32; 8]; 8];
     for (row, src) in t.iter_mut().zip(d.as_chunks::<8>().0) {
         *row = idct8_1d(*src);
@@ -209,7 +234,7 @@ pub fn idct8_add(d: &[i32; 64], dst: &mut [u8], stride: usize) {
             return;
         };
         for (p, &v) in line.iter_mut().zip(row) {
-            *p = clip_u8(*p as i32 + ((v + 32) >> 6));
+            *p = S::clip(p.to_i32() + ((v + 32) >> 6), max);
         }
     }
 }
@@ -254,11 +279,11 @@ mod tests {
             let d8: [i32; 64] = std::array::from_fn(|_| (next() % (2 * range + 1)) as i32 - range as i32);
             let base: Vec<u8> = (0..24 * 8).map(|_| next() as u8).collect();
             let (mut a, mut b) = (base.clone(), base.clone());
-            idct4_add(&d4, &mut a[3..], 24);
+            idct4_add(&d4, &mut a[3..], 24, 255);
             reference_add(&d4, 4, &mut b[3..], 24);
             assert_eq!(a, b, "4x4 iteration {iter}");
             let (mut a, mut b) = (base.clone(), base);
-            idct8_add(&d8, &mut a[5..], 24);
+            idct8_add(&d8, &mut a[5..], 24, 255);
             reference_add(&d8, 8, &mut b[5..], 24);
             assert_eq!(a, b, "8x8 iteration {iter}");
         }
@@ -270,8 +295,8 @@ mod tests {
         d[0] = 640; // -> +10 everywhere
         let mut a = [100u8; 16];
         let mut b = [100u8; 16];
-        idct4_add(&d, &mut a, 4);
-        idct_dc_add::<4>(640, &mut b, 4);
+        idct4_add(&d, &mut a, 4, 255);
+        idct_dc_add::<u8, 4>(640, &mut b, 4, 255);
         assert_eq!(a, b);
         assert!(a.iter().all(|&v| v == 110));
     }
@@ -292,14 +317,14 @@ mod tests {
             let mut d4 = [0i32; 16];
             d4[0] = dc;
             let (mut a, mut b) = (base.clone(), base.clone());
-            idct4_add(&d4, &mut a[3..], 24);
-            idct_dc_add::<4>(dc, &mut b[3..], 24);
+            idct4_add(&d4, &mut a[3..], 24, 255);
+            idct_dc_add::<u8, 4>(dc, &mut b[3..], 24, 255);
             assert_eq!(a, b, "4x4 iteration {iter}");
             let mut d8 = [0i32; 64];
             d8[0] = dc;
             let (mut a, mut b) = (base.clone(), base);
-            idct8_add(&d8, &mut a[5..], 24);
-            idct_dc_add::<8>(dc, &mut b[5..], 24);
+            idct8_add(&d8, &mut a[5..], 24, 255);
+            idct_dc_add::<u8, 8>(dc, &mut b[5..], 24, 255);
             assert_eq!(a, b, "8x8 iteration {iter}");
         }
     }
@@ -312,7 +337,7 @@ mod tests {
         d[0] = 64;
         d[1] = 64;
         let mut out = [0u8; 16];
-        idct4_add(&d, &mut out, 4);
+        idct4_add(&d, &mut out, 4, 255);
         for i in 0..4 {
             assert_eq!(&out[i * 4..i * 4 + 4], &[2, 2, 1, 0]);
         }
@@ -323,7 +348,7 @@ mod tests {
         let mut d = [0i32; 64];
         d[0] = 64 * 5;
         let mut out = [10u8; 64];
-        idct8_add(&d, &mut out, 8);
+        idct8_add(&d, &mut out, 8, 255);
         assert!(out.iter().all(|&v| v == 15));
     }
 
@@ -378,23 +403,23 @@ mod tests {
     /// bit-exact for every stream inside it — instead of panicking.
     #[test]
     fn huge_coefficients_are_clamped_to_the_spec_r_range() {
-        assert_eq!(r_clamp(-32769), -32768);
-        assert_eq!(r_clamp(-32768), -32768);
-        assert_eq!(r_clamp(32767), 32767);
-        assert_eq!(r_clamp(32768), 32767);
+        assert_eq!(r_clamp::<u8>(-32769), -32768);
+        assert_eq!(r_clamp::<u8>(-32768), -32768);
+        assert_eq!(r_clamp::<u8>(32767), 32767);
+        assert_eq!(r_clamp::<u8>(32768), 32767);
         let clamp = |v: i32| v.clamp(-(1 << 15), (1 << 15) - 1);
         for d in [[i32::MAX; 16], [i32::MIN; 16], std::array::from_fn(|i| if i % 2 == 0 { i32::MIN } else { i32::MAX })] {
             let clamped = std::array::from_fn(|i| clamp(d[i]));
             let (mut a, mut b) = ([0u8; 64], [0u8; 64]);
-            idct4_add(&d, &mut a, 8);
-            idct4_add(&clamped, &mut b, 8);
+            idct4_add(&d, &mut a, 8, 255);
+            idct4_add(&clamped, &mut b, 8, 255);
             assert_eq!(a, b, "idct4 of extremes equals idct4 of the spec range");
         }
         for d in [[i32::MIN; 64], [i32::MAX; 64]] {
             let clamped = std::array::from_fn(|i| clamp(d[i]));
             let (mut a, mut b) = ([0u8; 64], [0u8; 64]);
-            idct8_add(&d, &mut a, 8);
-            idct8_add(&clamped, &mut b, 8);
+            idct8_add(&d, &mut a, 8, 255);
+            idct8_add(&clamped, &mut b, 8, 255);
             assert_eq!(a, b, "idct8 of extremes equals idct8 of the spec range");
         }
     }
