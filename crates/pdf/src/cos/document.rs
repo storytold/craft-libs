@@ -76,6 +76,9 @@ pub struct Document {
     encrypt_num: Option<u32>,
     /// What that dictionary and `/ID` refer to, which the key comes from, and so is as stored.
     encrypt_members: Arc<HashSet<u32>>,
+    /// The objects of the file a file specification's `/EF` refers to, read only when `/EFF` and
+    /// `/StmF` differ (see `Document::embedded_file_streams`).
+    embedded_files: Arc<HashSet<u32>>,
     /// Object numbers a scan of the file didn't find: the file doesn't change, so it never will.
     unfound: Arc<Mutex<HashSet<u32>>>,
     /// Encryption was added, changed or removed since opening: only a full save can apply it.

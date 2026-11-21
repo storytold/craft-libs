@@ -181,7 +181,7 @@ fn keyless_check(doc: &Document) -> Result<(), CosError> {
     if locked && (doc.encryption_changed() || doc.trailer().get(b"Encrypt").is_none()) {
         return refuse("the document's security can't change");
     }
-    if doc.overlay_entries().any(|(_, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if doc.reads_as_stored(s))) {
+    if doc.overlay_entries().any(|(num, _, o)| matches!(o.as_deref(), Some(Object::Stream(s)) if doc.reads_as_stored_at(num, s))) {
         if !locked {
             return Err(unsupported_stream());
         }
@@ -211,7 +211,7 @@ fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &
     match doc.output_security() {
         (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::cos::security::Pass::EncryptReplacing } else { crate::cos::security::Pass::Encrypt };
-            Cow::Owned(crate::cos::security::transform(doc, h, o, num, generation, pass))
+            Cow::Owned(crate::cos::security::transform(doc, h, o, source_num, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -477,7 +477,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             let document = &reader.document;
             if let Object::Stream(s) = &*o
                 && document.security().is_some_and(|h| h.has_key() && defines_unsupported(h))
-                && document.reads_as_stored(s)
+                && document.reads_as_stored_at(r.num, s)
             {
                 return Err(unsupported_stream());
             }
