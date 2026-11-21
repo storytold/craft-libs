@@ -20,6 +20,7 @@ struct Scene {
     /// The anchor, in document points: a crop frame's corners.
     anchor: Vec<Point>,
     place: TaskBarPlace,
+    done_label: &'static str,
     /// The anchor's bounds on screen.
     bounds: Rect,
     /// The canvas rect the bar is kept in.
@@ -43,9 +44,10 @@ fn fixture(scene: &Rc<RefCell<Scene>>) -> Fixture {
             let scene = &mut *held;
             scene.bounds = Rect::from_points(&scene.anchor.iter().map(|point| view.to_screen(*point)).collect::<Vec<_>>());
             scene.area = area;
+            let done_label = scene.done_label;
             let shown = TaskBar::new("Crop", &scene.anchor, Bind::bound(&mut scene.place)).show(ui, area, |ui, cx| {
                 cx.more_menu(ui);
-                let _ = Button::new("Done").show(ui);
+                let _ = Button::new(done_label).show(ui);
             });
             scene.rect = shown.output.rect;
             shown.output
@@ -187,6 +189,7 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     let scene = Rc::new(RefCell::new(Scene {
         anchor: frame(DocVec::ZERO),
         place: TaskBarPlace::default(),
+        done_label: "Done",
         bounds: Rect::NOTHING,
         area: Rect::NOTHING,
         rect: Rect::NOTHING,
@@ -232,6 +235,15 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     fixture.settle();
     assert!((seen(&scene).rect.min - pinned.rect.min).length() < SLACK, "a pinned bar stays while the anchor moves");
 
+    scene.borrow_mut().done_label = "Apply the crop";
+    fixture.settle();
+    let grown = seen(&scene);
+    assert!(grown.rect.width() > pinned.rect.width() + SLACK, "the longer button grows the bar: {:?} -> {:?}", pinned.rect, grown.rect);
+    assert!(pinned.rect.left() + grown.rect.width() + SLACK < grown.area.right(), "the wider bar has room to the right");
+    assert!((grown.rect.left() - pinned.rect.left()).abs() < SLACK, "growth keeps the pinned left edge: {:?} -> {:?}", pinned.rect, grown.rect);
+    assert!((grown.rect.top() - pinned.rect.top()).abs() < SLACK, "growth keeps the pinned top edge: {:?} -> {:?}", pinned.rect, grown.rect);
+
+    scene.borrow_mut().done_label = "Done";
     scene.borrow_mut().place = TaskBarPlace::new(false, Some([f32::NAN, 0.0]));
     fixture.settle();
     let unset = seen(&scene);
@@ -250,6 +262,7 @@ fn the_grip_sits_on_the_members_line() {
     let scene = Rc::new(RefCell::new(Scene {
         anchor: frame(DocVec::ZERO),
         place: TaskBarPlace::default(),
+        done_label: "Done",
         bounds: Rect::NOTHING,
         area: Rect::NOTHING,
         rect: Rect::NOTHING,
@@ -281,6 +294,7 @@ fn a_dragged_task_bar_stands_under_the_pointer_in_each_frame_and_writes_its_plac
     let scene = Rc::new(RefCell::new(Scene {
         anchor: frame(DocVec::ZERO),
         place: TaskBarPlace::default(),
+        done_label: "Done",
         bounds: Rect::NOTHING,
         area: Rect::NOTHING,
         rect: Rect::NOTHING,
