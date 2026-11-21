@@ -52,20 +52,28 @@ pub use version::{Version, is_newer, parse as parse_version};
 pub use dialog::{CheckResultDialog, CheckResultResponse, StartupPrompt, StartupPromptResponse};
 
 /// Checks for an update against GitHub releases for the given app.
+///
+/// Returns an error when GitHub does not find the repository (renamed, deleted or private).
 pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, String> {
     let version = self_update::current_version(app, current_version).map(|v| v.to_string());
     let current_version = version.as_deref().unwrap_or(current_version);
     let url = format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo);
-    match http.get_api(&url, None)? {
-        crate::http::Fetched::Body { text, .. } => offered_release(&text, app.repo, current_version),
-        crate::http::Fetched::RateLimited { .. } => Err("GitHub's request limit was reached".into()),
-        crate::http::Fetched::NotModified | crate::http::Fetched::NotFound => Ok(None),
-    }
+    checked_release(http.get_api(&url, None)?, app.repo, current_version)
 }
 
 /// Unix seconds now.
 pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// The answer of [`check_for_update`] for what GitHub's release list request `fetched`.
+fn checked_release(fetched: crate::http::Fetched, repo: &str, current_version: &str) -> Result<Option<Release>, String> {
+    match fetched {
+        crate::http::Fetched::Body { text, .. } => offered_release(&text, repo, current_version),
+        crate::http::Fetched::RateLimited { .. } => Err("GitHub's request limit was reached".into()),
+        crate::http::Fetched::NotFound => Err(format!("GitHub has no repository {repo}, or it is private")),
+        crate::http::Fetched::NotModified => Ok(None),
+    }
 }
 
 /// The release in GitHub's release list `json` to offer a copy running `current_version`, if any:
@@ -83,7 +91,8 @@ pub(crate) const TEST_AGENT: &str = "ArtCraft-Launcher-Test/0.0";
 
 #[cfg(test)]
 mod offer_tests {
-    use super::offered_release;
+    use super::{checked_release, offered_release};
+    use crate::http::Fetched;
 
     const REPO: &str = "storytold/photocraft";
     const LIST: &str = r#"[{"tag_name":"v0.17.0","prerelease":false,"draft":false,"assets":[]},
@@ -105,5 +114,11 @@ mod offer_tests {
         assert_eq!(offered("0.16.4"), Some("v0.17.0".into()));
         assert_eq!(offered("0.17.0"), None);
         assert_eq!(offered("not a version"), None);
+    }
+
+    #[test]
+    fn a_repository_github_does_not_find_is_an_error_not_up_to_date() {
+        let why = checked_release(Fetched::NotFound, REPO, "0.16.4").unwrap_err();
+        assert!(why.contains(REPO), "the reason names the repository: {why}");
     }
 }
