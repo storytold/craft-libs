@@ -25,6 +25,11 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! `oracle` finds external oracle programs such as ffmpeg and qpdf, probes their version under a
+//! byte limit and a timeout, and caches the result for the process. Its `require_oracle!`,
+//! `require_ffmpeg!` and `require_ffprobe!` macros skip or fail the calling test when a program is
+//! missing. It is not built for `wasm32`.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -39,6 +44,8 @@
 pub mod deadline;
 pub mod guards;
 pub mod hostile;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod oracle;
 pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]
