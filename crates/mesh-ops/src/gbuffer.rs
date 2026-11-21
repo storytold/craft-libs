@@ -113,7 +113,8 @@ impl UvGBuffer {
     /// lists are checked before the texel buffers are reserved. An index count that is not a
     /// multiple of 3, a submesh of the material that does not start and end on a triangle
     /// boundary inside the index buffer, and a corner of the material's triangles without a
-    /// vertex or a finite UV are `Invalid`.
+    /// vertex, a finite UV, a normal or a tangent are `Invalid`, so every covered texel has a
+    /// [`UvGBuffer::surface`]. [`UvGBuffer::from_slices`] needs only the UVs.
     pub fn try_new(mesh: &Mesh, material: usize, width: u32, height: u32, limits: &Limits) -> Result<UvGBuffer> {
         let n = texels(width, height, limits)?;
         check_limit("vertex count", mesh.positions.len(), limits.max_vertices)?;
@@ -137,6 +138,9 @@ impl UvGBuffer {
                 }
                 if !mesh.uvs.get(v).is_some_and(|uv| uv.is_finite()) {
                     return Err(MeshOpsError::Invalid(format!("vertex {v} has no finite UV")));
+                }
+                if v >= mesh.normals.len() || v >= mesh.tangents.len() {
+                    return Err(MeshOpsError::Invalid(format!("vertex {v} has no normal or no tangent")));
                 }
             }
         }
@@ -712,6 +716,8 @@ mod tests {
     fn try_new_rejects_a_submesh_that_does_not_start_on_a_triangle() {
         let m = Mesh {
             positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::ONE],
+            normals: vec![Vec3::Z; 4],
+            tangents: vec![Vec4::new(1.0, 0.0, 0.0, 1.0); 4],
             uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE],
             indices: vec![0, 1, 2, 1, 3, 2],
             submeshes: vec![crate::SubMesh { name: "a".into(), material: 0, start: 1, count: 3 }],
@@ -720,10 +726,13 @@ mod tests {
         };
         let r = UvGBuffer::try_new(&m, 0, 8, 8, &Limits::default());
         assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e == "submesh a is out of range"), "{r:?}");
-        // A missing or non-finite UV, an index past the vertices and a trailing index are
-        // errors, not triangles left out of the buffer.
+        // A missing or non-finite UV, a missing normal or tangent, an index past the vertices and
+        // a trailing index are errors, not triangles left out of the buffer or covered texels
+        // without a surface.
         let whole = Mesh { submeshes: vec![crate::SubMesh { name: "a".into(), material: 0, start: 0, count: 6 }], ..m.clone() };
-        assert!(UvGBuffer::try_new(&whole, 0, 8, 8, &Limits::default()).unwrap().covered_count() > 0);
+        let g = UvGBuffer::try_new(&whole, 0, 8, 8, &Limits::default()).unwrap();
+        assert!(g.covered_count() > 0);
+        assert!((0..64).filter(|&i| g.covered(i)).all(|i| g.surface(&whole, i).is_some()));
         let broken = |f: &dyn Fn(&mut Mesh)| {
             let mut b = whole.clone();
             f(&mut b);
@@ -732,11 +741,20 @@ mod tests {
         for (what, r) in [
             ("missing UV", broken(&|b| b.uvs.truncate(3))),
             ("NaN UV", broken(&|b| b.uvs[3].x = f32::NAN)),
+            ("missing normal", broken(&|b| b.normals.truncate(3))),
+            ("no normals", broken(&|b| b.normals.clear())),
+            ("missing tangent", broken(&|b| b.tangents.truncate(3))),
             ("index past the vertices", broken(&|b| b.indices[4] = 9)),
             ("trailing index", broken(&|b| b.indices.push(0))),
         ] {
             assert!(matches!(r, Err(MeshOpsError::Invalid(_))), "{what}: {r:?}");
         }
+        // A mesh built from slices has no tangents.
+        let positions = whole.positions.iter().map(|p| p.to_array()).collect::<Vec<_>>();
+        let uvs = whole.uvs.iter().map(|uv| uv.to_array()).collect::<Vec<_>>();
+        let sliced = Mesh::from_slices(&positions, None, Some(&uvs), &whole.indices, &Limits::default()).unwrap();
+        let r = UvGBuffer::try_new(&sliced, 0, 8, 8, &Limits::default());
+        assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e == "vertex 0 has no normal or no tangent"), "{r:?}");
         // Repeated listings stop at the triangle limit before every corner is checked: the
         // seventh visit, past a limit of 6, has a NaN UV.
         let mut repeated = whole.clone();
