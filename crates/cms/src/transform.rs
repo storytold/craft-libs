@@ -2,7 +2,8 @@
 //! compensation, soft-proofing chains, and fast lookup-table evaluation of pixel buffers.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::clut::{Clut, MAX_CHANNELS};
 use crate::curve::Curve;
@@ -110,6 +111,31 @@ struct White {
 }
 
 impl Transform {
+    /// Heap bytes this transform's tables hold: the exact pipeline, the acceleration tables built
+    /// from it (input curves or a device-link grid, the output inverse tables, the 8-bit grid
+    /// coordinates) and the white it keeps. What the cache accounts for, since a CMYK or
+    /// LUT-based link holds megabytes where a matrix/TRC one holds kilobytes.
+    pub fn table_bytes(&self) -> usize {
+        let f32s = |n: usize| n * std::mem::size_of::<f32>();
+        let core = match &self.core {
+            Core::Shaper { curves8, curves, matrix } => {
+                curves8.capacity() * std::mem::size_of::<[f32; 256]>()
+                    + curves.capacity() * std::mem::size_of::<Vec<f32>>()
+                    + curves.iter().map(|c| f32s(c.capacity())).sum::<usize>()
+                    + matrix.as_ref().map_or(0, |(_, _, m, o)| f32s(m.capacity() + o.capacity()))
+            }
+            Core::Grid(c) => c.table_bytes(),
+            Core::Exact => 0,
+        };
+        let post = self
+            .post
+            .as_ref()
+            .map_or(0, |p| p.tables.capacity() * std::mem::size_of::<Vec<f32>>() + p.tables.iter().map(|t| f32s(t.capacity())).sum::<usize>());
+        let white = self.white.as_ref().map_or(0, |w| f32s(w.src.capacity() + w.dst.capacity()) + w.src8.as_ref().map_or(0, Vec::capacity));
+        let exact8 = self.exact8.capacity() * std::mem::size_of::<[f32; 256]>();
+        self.pipeline.table_bytes() + core + post + self.grid8.capacity() * std::mem::size_of::<[(u32, f32); 256]>() + exact8 + white
+    }
+
     /// Transform from `src` to `dst` with `intent`, optionally with black point compensation.
     pub fn new(src: &Profile, dst: &Profile, intent: Intent, bpc: bool) -> Result<Transform, CmsError> {
         Self::with_options(src, dst, TransformOptions { intent, bpc, ..Default::default() })
@@ -941,34 +967,125 @@ pub fn black_point(p: &Profile, intent: Intent, _input: bool) -> Result<f64, Cms
 
 type Key = (u64, u64, TransformOptions);
 
+/// Transforms the cache keeps at most, whatever their size.
+pub const MAX_CACHED: usize = 64;
+
+/// Bytes of transform tables the cache keeps by default ([`set_cache_budget`]). A matrix/TRC link
+/// holds a few hundred kilobytes and a CMYK or LUT-based one a few megabytes, so a count alone
+/// bounds the cache by a factor of ten or more; this bounds the memory instead.
+pub const DEFAULT_CACHE_BUDGET: usize = 64 << 20;
+
+static BUDGET: AtomicUsize = AtomicUsize::new(DEFAULT_CACHE_BUDGET);
+
+/// What the cache may hold, in bytes of transform tables ([`Transform::table_bytes`]). An app with
+/// its own memory budget can lower this; 0 keeps only the transform last built.
+pub fn set_cache_budget(bytes: usize) {
+    BUDGET.store(bytes, Ordering::Relaxed);
+    let cache = cache();
+    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    c.evict(bytes);
+}
+
+/// The byte budget in force.
+pub fn cache_budget() -> usize {
+    BUDGET.load(Ordering::Relaxed)
+}
+
+/// What the cache holds now: transforms, and bytes of their tables.
+pub fn cache_usage() -> (usize, usize) {
+    let cache = cache();
+    let c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    (c.entries.len(), c.bytes)
+}
+
+/// Drop every cached transform (the memory goes as their last users do).
+pub fn clear_cache() {
+    let cache = cache();
+    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    c.entries.clear();
+    c.bytes = 0;
+}
+
 /// A cached transform with the ICC bytes of the profiles it was built from.
 struct Entry {
     src: Arc<Vec<u8>>,
     dst: Arc<Vec<u8>>,
     transform: Arc<Transform>,
+    /// What the entry holds, against the budget: the transform's tables and both profiles' ICC
+    /// bytes.
+    bytes: usize,
+    /// Value of the cache's counter when this transform was last asked for.
+    used: u64,
+}
+
+#[derive(Default)]
+struct Cache {
+    entries: HashMap<Key, Entry>,
+    bytes: usize,
+    tick: u64,
+}
+
+impl Cache {
+    /// Drop least recently used transforms until the cache is inside `budget` and
+    /// [`MAX_CACHED`]. The transform just asked for is the most recently used, so it stays -- one
+    /// is kept whatever the budget, since the caller holds it anyway and rebuilding it for the
+    /// next frame would cost more than the bytes it holds.
+    fn evict(&mut self, budget: usize) {
+        while self.entries.len() > 1 && (self.bytes > budget || self.entries.len() > MAX_CACHED) {
+            let Some(oldest) = self.entries.iter().min_by_key(|(_, e)| e.used).map(|(k, _)| *k) else { break };
+            if let Some(e) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(e.bytes);
+            }
+        }
+    }
+}
+
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
 }
 
 /// Process-wide cache of transforms keyed by profile content and options. The key is the
 /// profiles' 64-bit hashes, which a crafted profile can share with another, so a hit counts only
 /// when the bytes match too; a colliding pair gets its own, uncached transform.
+///
+/// Least recently used transforms are dropped when the cache passes [`MAX_CACHED`] or its byte
+/// budget ([`set_cache_budget`]). It used to clear itself whole, which dropped the transforms the
+/// next frames were about to use along with the rest, and counted entries rather than bytes, so a
+/// CMYK document's cache was an order of magnitude larger than an RGB one's (#63).
 pub fn cached(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Arc<Transform>, CmsError> {
-    static CACHE: OnceLock<Mutex<HashMap<Key, Entry>>> = OnceLock::new();
     let key = (src.content_hash(), dst.content_hash(), opts);
     let (src_bytes, dst_bytes) = (src.to_bytes(), dst.to_bytes());
-    let cache = CACHE.get_or_init(Default::default);
-    let hit =
-        cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key).map(|e| (e.src == src_bytes && e.dst == dst_bytes).then(|| e.transform.clone()));
+    let cache = cache();
+    let hit = {
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+        c.tick += 1;
+        let tick = c.tick;
+        c.entries.get_mut(&key).map(|e| {
+            let same = e.src == src_bytes && e.dst == dst_bytes;
+            if same {
+                e.used = tick;
+            }
+            same.then(|| e.transform.clone())
+        })
+    };
     match hit {
         Some(Some(t)) => return Ok(t),
         Some(None) => return Ok(Arc::new(Transform::with_options(src, dst, opts)?)),
         None => {}
     }
+    // Built without the lock held: another thread may want a different transform meanwhile, and
+    // building one takes far longer than a lookup.
     let t = Arc::new(Transform::with_options(src, dst, opts)?);
-    let mut c = cache.lock().unwrap_or_else(PoisonError::into_inner);
-    if c.len() > 64 {
-        c.clear();
+    let bytes = t.table_bytes().saturating_add(src_bytes.len()).saturating_add(dst_bytes.len());
+    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    c.tick += 1;
+    let used = c.tick;
+    if let Some(old) = c.entries.insert(key, Entry { src: src_bytes, dst: dst_bytes, transform: t.clone(), bytes, used }) {
+        c.bytes = c.bytes.saturating_sub(old.bytes);
     }
-    c.insert(key, Entry { src: src_bytes, dst: dst_bytes, transform: t.clone() });
+    c.bytes = c.bytes.saturating_add(bytes);
+    c.evict(BUDGET.load(Ordering::Relaxed));
     Ok(t)
 }
 

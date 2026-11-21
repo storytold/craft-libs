@@ -23,6 +23,11 @@ pub struct Clut {
 }
 
 impl Clut {
+    /// Heap bytes this table holds: the nodes and the index arithmetic beside them.
+    pub fn table_bytes(&self) -> usize {
+        self.data.capacity() * std::mem::size_of::<f32>() + (self.grid.capacity() + self.strides.capacity()) * std::mem::size_of::<usize>()
+    }
+
     /// Builds a table from node data: `grid` holds the points per input dimension (1 to
     /// [`MAX_CHANNELS`] dimensions, each ≥ 2, or 1 for a degenerate dimension), `data` holds
     /// `outputs` values per node. Refuses inconsistent dimensions with
