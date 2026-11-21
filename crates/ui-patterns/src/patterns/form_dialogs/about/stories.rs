@@ -59,7 +59,7 @@ fn about_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
 fn about_dialog_listed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let community = *data.value("community_link", true);
-    hosted(ui, data, community, || HostedAbout::new(info(community), CREDITS.clone()).layout(AboutLayout::Listed))
+    hosted(ui, data, community, || HostedAbout::new(info(community, false), CREDITS.clone()).layout(AboutLayout::Listed))
 }
 
 /// The dialog with one app tab after Models, open on it.
@@ -72,7 +72,7 @@ fn about_dialog_app_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Text::new("Français 1.2 · 98% translated").show(ui);
             Text::new("Deutsch 1.1 · 91% translated").show(ui);
         });
-        HostedAbout::new(info(community), CREDITS.clone()).app_tab(languages).tab(AboutTab::App(0))
+        HostedAbout::new(info(community, false), CREDITS.clone()).app_tab(languages).tab(AboutTab::App(0))
     })
 }
 

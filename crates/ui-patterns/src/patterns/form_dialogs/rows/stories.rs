@@ -81,12 +81,10 @@ fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// The rows of `params` over the story's values, which `setup` may prepare once.
 fn rows_story(ui: &mut Ui, data: &mut StoryData, params: &[Param], setup: impl FnOnce(&mut DialogFields)) -> StoryOutput {
-    let first = data.present::<DialogFields>("fields").is_none();
-    let fields = data.value("fields", DialogFields::new());
-    if first {
-        setup(fields);
+    if data.present::<DialogFields>("fields").is_none() {
+        setup(data.value("fields", DialogFields::new()));
     }
-    ParamRows::new("Filter", params, Bind::bound(fields)).show(ui).into()
+    ParamRows::new("Filter", params, data.bind("fields", DialogFields::new())).show(ui).into()
 }
 
 /// Rows with a reset dot after their label while the value differs from the default.
