@@ -668,6 +668,8 @@ if let Some(RadialEvent::Picked(id)) = ring.show(ctx, &items, &labels) {
   quick tap, or a release after the arrows or Tab moved the highlight, leaves the ring open for
   Enter or a click.
 - In a right-to-left interface the items run counterclockwise from the top.
+- On a window too small for the ring, the items and their distance from the center shrink
+  together until the ring fits, down to an item size of 16 pt.
 
 ## Screenshot completion
 
