@@ -817,7 +817,7 @@ impl<'a> PrintDialog<'a> {
                                 let source = keyed(&titles, |title: &String| title.clone());
                                 // PLAN: assumes `SectionList::foot(self, impl FnOnce(&mut Ui) + 'a) -> Self` (type-w6 request on ty.X70).
                                 let picked = SectionList::new(words.sections.clone(), &source, current.clone())
-                                    .foot(preview)
+                                    .foot(|ui| preview(ui))
                                     .show(
                                         ui,
                                         |title| ListRow::new(Label::from(title.clone())),

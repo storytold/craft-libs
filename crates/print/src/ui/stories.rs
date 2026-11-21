@@ -139,10 +139,11 @@ fn print_dialog_sections_no_sheet(ui: &mut Ui, data: &mut StoryData) -> StoryOut
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_preset_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sections = [PrintSection::new("Position and Size", vec![Param::number("scale", "Scale", 100.0, 1.0, 0)])];
-    PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &[], Bind::given(DialogFields::default()))
+    let (settings, name) = data.value("editor", (Settings::default(), "Default".to_owned()));
+    PrintDialog::new(Bind::bound(settings), &[], Bind::given(DialogFields::default()))
         .layout(PrintLayout::Sections)
         .mode(PrintMode::PresetEditor)
-        .preset_name(Bind::bound(data.value("name", "Default".to_owned())))
+        .preset_name(Bind::bound(name))
         .check_name(|name| name.eq_ignore_ascii_case("Default").then_some(PresetError::NameTaken))
         .sections(&sections)
         .show(ui)

@@ -74,7 +74,8 @@ impl<'a> NameCheck<'a> {
 }
 
 impl NameCheck<'_> {
-    fn refuses(&self, name: &str) -> Option<PresetError> {
+    /// The refusal of `name`, `None` when the host accepts it.
+    pub fn refuses(&self, name: &str) -> Option<PresetError> {
         (self.0)(name)
     }
 }
