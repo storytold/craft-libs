@@ -28,7 +28,9 @@ pub struct Limits {
     /// Past them a shape's outline is solid, with a warning.
     pub dashes: usize,
     /// Chunks walked inside clipped groups, all containers together, a group's counted again for
-    /// every container that names it. Past them a container's group is left out, with a warning.
+    /// every container that names it. Each search of an object's list for its `loda`, `flgs` and
+    /// `trfd` runs once per read and counts every chunk it looks at. Past them a container's group
+    /// is left out, with a warning.
     pub clipped_chunks: usize,
 }
 
