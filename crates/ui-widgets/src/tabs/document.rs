@@ -332,7 +332,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
             let mut shown = None;
             // The row measures more than once to reserve non-filling children before sharing the
             // remaining width. Recreate the strip and show both areas on every sweep.
-            let row = Row::new().fill_width().show(ui, |ui, _| {
+            let row = Row::new().show(ui, |ui, _| {
                 if let Some(area) = leading.as_mut() {
                     area(ui);
                 }

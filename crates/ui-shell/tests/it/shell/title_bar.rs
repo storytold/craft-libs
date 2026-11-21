@@ -147,13 +147,8 @@ fn a_document_tab_strip_in_the_bar_takes_the_free_width() {
             Title::new("One.pdf"),
             |ui, _| {
                 Button::new("Home").show(ui);
-                DocumentTabs::new("Documents", &tabs)
-                    .reorderable(true)
-                    .selected(0)
-                    .trailing(|ui| {
-                        Button::new("Open").show(ui);
-                    })
-                    .show(ui);
+                DocumentTabs::new("Documents", &tabs).reorderable(true).selected(0).show(ui);
+                Button::new("Open").show(ui);
             },
             |ui, _| {
                 Button::new("Settings").show(ui);
