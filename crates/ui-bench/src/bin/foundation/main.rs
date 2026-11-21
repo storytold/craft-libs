@@ -66,16 +66,17 @@ impl Library for Foundation {
 
     fn build(&self, name: &str) -> SceneBuild {
         let (scene, equivalent): (Box<dyn Scene>, &'static str) = match name {
-            "inspector-500-fields" => (
-                Box::new(InspectorScene::new()),
+            "inspector-500-fields" | "inspector-1000-fields" => (
+                Box::new(InspectorScene::new(if name == "inspector-500-fields" { 500 } else { 1000 })),
                 // F8-MERGE: family (Field row): the field's own side label stands in for the `Field` row.
-                "500 rows alternating NumberField and TextField, each with its side label (no Field row component yet)",
+                "500 (or 1000) rows alternating NumberField and TextField, each with its side label (no Field row component yet)",
             ),
             "virtual-list-10000" => (Box::new(ListScene::new(Selected::None)), "List over 10,000 ListRow rows, one selected row"),
             "sheet-50x200" => (Box::new(SheetScene), "BenchList of 200 rows, each with 50 cell parts that paint their text"),
             // F8-MERGE: canvas: the canvas component and its declared controls.
             "canvas-50-controls" => (Box::new(CanvasScene), "a leaf with 50 control parts painted as knobs"),
-            "menu-40-rows" => (Box::new(MenuScene), "a Menu open from the first frame over 40 MenuItem rows"),
+            "menu-40-rows" => (Box::new(MenuScene { rows: 40 }), "a Menu open from the first frame over 40 MenuItem rows"),
+            "menu-80-rows" => (Box::new(MenuScene { rows: 80 }), "a Menu open from the first frame over 80 MenuItem rows"),
             "table-1000x5" => (Box::new(TableScene), "a Table of 1,000 rows and 5 columns, text in every cell"),
             "tile-grid-500" => (Box::new(TileGridScene), "a TileGrid of 500 Tiles"),
             "text-field-100kb" => (Box::new(TextScene::new()), "TextField::lines(30) bound with Bind::bound over a 100 KB String"),
@@ -114,8 +115,8 @@ struct InspectorScene {
 }
 
 impl InspectorScene {
-    fn new() -> Self {
-        Self { values: (0..500).map(|i| Some(f64::from(i))).collect(), texts: (0..500).map(|i| format!("Value {i}")).collect() }
+    fn new(count: i32) -> Self {
+        Self { values: (0..count).map(|i| Some(f64::from(i))).collect(), texts: (0..count).map(|i| format!("Value {i}")).collect() }
     }
 }
 
@@ -195,7 +196,10 @@ impl Scene for CanvasScene {
     }
 }
 
-struct MenuScene;
+/// A menu open over `rows` items.
+struct MenuScene {
+    rows: usize,
+}
 
 impl Scene for MenuScene {
     fn size(&self) -> Vec2 {
@@ -205,7 +209,7 @@ impl Scene for MenuScene {
     fn show(&mut self, ui: &mut Ui, _frame: u64) {
         let mut open = true;
         let _ = Menu::new("Items").open(Bind::bound(&mut open)).id_salt("menu").show(ui, |ui, _| {
-            for key in 0..40 {
+            for key in 0..self.rows {
                 let _ = MenuItem::new(format!("Item {key}")).id_salt(key).show(ui);
             }
         });
@@ -533,8 +537,17 @@ impl Scene for ReadoutScene {
 }
 
 fn main() -> std::process::ExitCode {
-    let report = run_all(&Foundation { root: RootEnv::default() });
+    // `--only <scenario>` runs one scenario and prints its row: for profiling, it writes no baseline and runs no gate.
+    let mut args = std::env::args().skip(1);
+    let only = match (args.next().as_deref(), args.next()) {
+        (Some("--only"), Some(name)) => Some(name),
+        _ => None,
+    };
+    let report = run_all(&Foundation { root: RootEnv::default() }, only.as_deref());
     print_table(&report);
+    if only.is_some() {
+        return std::process::ExitCode::SUCCESS;
+    }
     let baseline = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("baseline");
     let outcome = write_json(&report, &baseline.join("foundation.json")).and_then(|()| read_json(&baseline.join("legacy.json")));
     let legacy = match outcome {

@@ -54,10 +54,10 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
     let spec = open.spec;
-    let active = !shared(ctx, |shared| shared.away);
+    let state = shared(ctx, |shared| shared.app);
     let os = os_of(ctx);
     let (chrome, captions) = frame_of_spec(ctx, spec);
-    let level = PerViewport::<Record>::with(ctx, viewport, |record| {
+    let standing = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.kind = Some(spec.kind);
         record.chrome = Some(chrome);
         record.captions = captions.clone();
@@ -73,8 +73,11 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
                 record.searched = None;
             }
         }
-        record.level.get_or_insert(spec.level).for_egui(active, os)
+        record.level.get_or_insert(spec.level).standing(viewport, state, os)
     });
+    if standing.lowered {
+        shared(ctx, |shared| shared.lowered = true);
+    }
     let app = app_id(ctx);
     let opens = viewports::Spec {
         title: open.title,
@@ -88,10 +91,12 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         // egui sends a limit only when it has one: an open window always carries its maximum, unbounded when the
         // caller has none, so a lifted maximum reaches the OS.
         max_size: open.limits.1.or(opened.then_some(Vec2::INFINITY)),
-        level,
+        level: standing.level,
         resizable: open.resizable,
         taskbar: spec.taskbar,
         hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint),
+        active: spec.takes_focus,
+        passes_pointer: spec.passes_pointer,
         app_id: &app,
     };
     viewports::show_immediate(ctx, viewport, &opens, |ui| {
@@ -115,8 +120,77 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
             record_placement(&ctx, viewport, key, &at_known(&ctx, viewport, viewports::current(&ctx)));
         }
     });
-    if PerViewport::<Record>::with(ctx, viewport, |record| std::mem::take(&mut record.awaiting_first_paint)) {
-        viewports::show(ctx, viewport);
+    // A window opened hidden appears once its first pass ran; a window the app's state hides goes and comes back with
+    // it. The builder's visibility only opens the window: egui sends no change of it once the window is open.
+    let hidden = !standing.shown;
+    let (reveal, changed) = PerViewport::<Record>::with(ctx, viewport, |record| {
+        let first = std::mem::take(&mut record.awaiting_first_paint);
+        let changed = std::mem::replace(&mut record.hidden, hidden) != hidden;
+        (first || changed, changed)
+    });
+    if hidden && changed {
+        viewports::set_visible(ctx, viewport, false);
+    } else if !hidden && reveal {
+        viewports::set_visible(ctx, viewport, true);
+    }
+}
+
+/// What a layer shown in a popup window asks for ([`show_popup`]).
+pub(crate) struct PopupOpen<'a> {
+    /// The layer's id; the popup's viewport derives from it.
+    pub id: Id,
+    /// How the window opens: a [`WindowSpec::popup`].
+    pub spec: &'a WindowSpec,
+    /// The window's place in desktop points (outer top-left corner and inner size) when the layer's size is known
+    /// before its pass; otherwise the caller places it after the pass ([`place_popup`]).
+    pub rect: Option<Rect>,
+}
+
+/// Opens the popup window of a layer opened in the running viewport (its opener) and runs `body` in its pass. The
+/// window is a viewport mount without a container: it opens at `open.rect` and follows it, and the opener gets the OS
+/// focus back when it closes ([`close_popup`]).
+pub(crate) fn show_popup(ctx: &Context, open: &PopupOpen<'_>, body: impl FnMut(&mut Ui)) {
+    let opener = crate::runtime::egui::pass::current_viewport(ctx);
+    PerViewport::<Record>::with(ctx, viewports::viewport_id(open.id), |record| record.opener = Some(opener));
+    let mount = ViewportOpen {
+        id: open.id,
+        title: "",
+        size: open.rect.map(|rect| rect.size()),
+        follows_size: true,
+        save: None,
+        spec: open.spec,
+        limits: (None, None),
+        position: open.rect.map(|rect| rect.min),
+        resizable: false,
+        moved_by_app: false,
+    };
+    show_viewport(ctx, &mount, body);
+}
+
+/// Sends the popup window of layer `id` to `rect` (desktop points) where it is not there already: a layer whose size
+/// its pass measured is placed once that pass ran.
+pub(crate) fn place_popup(ctx: &Context, id: Id, rect: Rect) {
+    let viewport = viewports::viewport_id(id);
+    let known = PerViewport::<Record>::with(ctx, viewport, |record| record.known);
+    if known.is_none_or(|known| differs(ctx, viewport, rect.min - known.min)) {
+        act(ctx, viewport, WindowAction::SetOuterPosition(rect.min));
+    }
+    if known.is_none_or(|known| differs(ctx, viewport, rect.size() - known.size())) {
+        act(ctx, viewport, WindowAction::SetInnerSize(rect.size()));
+    }
+    PerViewport::<Record>::with(ctx, viewport, |record| record.known = Some(rect));
+}
+
+/// The layer `id` is hidden: when it showed in a popup window that still has the OS focus, the window it was opened
+/// from takes the focus back. Once per close; a layer that never showed in a popup does nothing.
+pub(crate) fn close_popup(ctx: &Context, id: Id) {
+    let viewport = viewports::viewport_id(id);
+    let closed = PerViewport::<Record>::with_existing(ctx, viewport, |record| {
+        let focused = record.facts.is_some_and(|facts| facts.focus_reported);
+        record.opener.take().filter(|_| focused)
+    });
+    if let Some(opener) = closed.flatten() {
+        act(ctx, opener, WindowAction::Focus);
     }
 }
 
@@ -151,9 +225,17 @@ pub(crate) fn unplaced(ctx: &Context, id: Id) -> bool {
         && PerViewport::<Record>::with(ctx, viewports::viewport_id(id), |record| record.kind.is_some() && record.seen.is_none())
 }
 
-/// How far a caller's place may differ from the known place before it is a change: the OS rounds to pixels, and a
-/// placement records the position in pixels.
-const ROUNDING: f32 = 0.5;
+/// How far a caller's place may differ from the known place before it is a change, in physical pixels of the window's
+/// display: the OS rounds to pixels, and a placement records the position in pixels.
+const ROUNDING_PX: f32 = 0.5;
+
+/// Whether `delta`, in points, moves the window `viewport` by more than rounding on its display: a whole pixel on
+/// a 2x display is half a point.
+fn differs(ctx: &Context, viewport: ViewportId, delta: Vec2) -> bool {
+    let facts = PerViewport::<Record>::with(ctx, viewport, |record| record.facts);
+    let scale = facts.and_then(|facts| super::host::scale_of(ctx, &facts)).unwrap_or(1.0);
+    delta.x.abs() * scale > ROUNDING_PX || delta.y.abs() * scale > ROUNDING_PX
+}
 
 /// The place of a window with `facts`: its outer top-left corner and its inner size.
 fn place_of(facts: &viewports::Facts) -> Option<Rect> {
@@ -182,11 +264,10 @@ fn keep_placed(ctx: &Context, viewport: ViewportId, pos: Option<Pos2>, size: Opt
         (record.known, state || record.moved_pointer.is_some())
     });
     let Some(known) = known.filter(|_| !held) else { return };
-    let differs = |delta: Vec2| delta.x.abs() > ROUNDING || delta.y.abs() > ROUNDING;
-    if let Some(pos) = pos.filter(|pos| differs(*pos - known.min)) {
+    if let Some(pos) = pos.filter(|pos| differs(ctx, viewport, *pos - known.min)) {
         act(ctx, viewport, WindowAction::SetOuterPosition(pos));
     }
-    if let Some(size) = size.filter(|size| differs(*size - known.size())) {
+    if let Some(size) = size.filter(|size| differs(ctx, viewport, *size - known.size())) {
         act(ctx, viewport, WindowAction::SetInnerSize(size));
     }
 }

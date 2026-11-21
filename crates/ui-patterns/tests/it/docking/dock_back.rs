@@ -25,7 +25,7 @@ fn layout() -> Layout<usize> {
     let end = Node::dock(DockEdge::End, vec![Column::new(vec![Group::new(vec![LAYERS], 0)])]);
     let root = Node::split(Axis::X, SplitSize::Ratio(0.2), start, Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![CANVAS], 0), end));
     let window = Rect::from_min_size(Pos2::new(100.0, 100.0), egui::vec2(200.0, 150.0));
-    Layout::new(Some(root), vec![Floating::single(vec![FLOATED], 0, window)])
+    Layout::new(Some(root), vec![Floating::single(100, vec![FLOATED], 0, window)])
 }
 
 #[trial]

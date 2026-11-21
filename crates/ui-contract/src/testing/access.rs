@@ -3,6 +3,7 @@
 use crate::runtime::access::{FieldLabel, scope};
 use egui::{Context, Id};
 
+pub use crate::runtime::access::layer_root;
 pub use crate::runtime::egui::access::{AccessTree, Declared, NodeKey, prune_controls};
 
 /// The AccessKit tree a finished pass of a viewport produced, taken out of its output; empty when it made none.

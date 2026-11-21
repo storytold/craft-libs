@@ -1,12 +1,11 @@
 //! [`PreviewPixels`] and [`PreviewTextures`]: the moving pixels of a transform, read once and
 //! uploaded as a mip chain built on demand, off the UI thread where a finer level can stand in.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_host::queue::Cancel;
 use craft_ui::primitives::{
-    LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, TextureLoader, TextureState, TextureStatistics, TextureStore,
+    LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, Serials, TextureLoader, TextureState, TextureStatistics, TextureStore,
     TextureStoreOptions,
 };
 use egui::{Color32, ColorImage, Context, TextureId, TextureOptions};
@@ -114,9 +113,6 @@ pub struct TextureChoice {
 /// The key of a preview's level in the shared stores: the preview's name and the level.
 type LevelKey = (Arc<str>, u32);
 
-/// Tells previews apart in the store revisions: a preview made under an old name with new pixels gets a new serial.
-static SERIAL: AtomicU64 = AtomicU64::new(0);
-
 /// The moving pixels uploaded for the preview: level 0 at once, the other mip levels (2 × 2 box filtered) and the
 /// nearest-filtered level 0 on first use. The CPU levels are kept for the session.
 ///
@@ -137,21 +133,22 @@ pub struct PreviewTextures {
 }
 
 impl PreviewTextures {
-    /// The preview of `pixels`, named `name`: the store entries are keyed by it. Nothing is
-    /// uploaded until the preview is painted.
-    pub fn new(name: impl Into<String>, pixels: PreviewPixels) -> Self {
+    /// The preview of `pixels`, named `name`: the store entries are keyed by it. `serials` tells this preview from an
+    /// earlier one of the same name (new pixels under an old name replace its textures); the previews of one owner
+    /// share it. Nothing is uploaded until the preview is painted.
+    pub fn new(serials: &mut Serials, name: impl Into<String>, pixels: PreviewPixels) -> Self {
         let base_uv = pixels.base_uv;
-        Self::over(name, vec![Arc::new(pixels.image)], base_uv)
+        Self::over(serials, name, vec![Arc::new(pixels.image)], base_uv)
     }
 
     /// The preview over `levels` already built, level 0 first, covering the source with `base_uv`.
     #[cfg(feature = "screen-testing")]
-    pub(crate) fn from_levels(name: impl Into<String>, levels: Vec<Arc<ColorImage>>, base_uv: [f32; 2]) -> Self {
-        Self::over(name, levels, base_uv)
+    pub(crate) fn from_levels(serials: &mut Serials, name: impl Into<String>, levels: Vec<Arc<ColorImage>>, base_uv: [f32; 2]) -> Self {
+        Self::over(serials, name, levels, base_uv)
     }
 
-    fn over(name: impl Into<String>, levels: Vec<Arc<ColorImage>>, base_uv: [f32; 2]) -> Self {
-        let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
+    fn over(serials: &mut Serials, name: impl Into<String>, levels: Vec<Arc<ColorImage>>, base_uv: [f32; 2]) -> Self {
+        let serial = serials.mint();
         Self { name: Arc::from(name.into()), serial, images: Arc::new(Mutex::new(levels)), base_uv }
     }
 

@@ -2,6 +2,7 @@
 
 pub(crate) mod align;
 pub(crate) mod baseline;
+pub(crate) mod bracket;
 pub(crate) mod caption;
 pub mod group;
 pub(crate) mod hit;

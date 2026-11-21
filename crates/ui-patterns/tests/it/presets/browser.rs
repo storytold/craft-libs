@@ -1,7 +1,7 @@
 //! `PresetBrowser::drop_zone`: a preset dragged from the browser and released over the zone reports `DropAt`.
 
 use craft_ui::contract::{Bind, DropZone};
-use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetState, PresetView};
+use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFns, PresetRow, PresetSource, PresetState, PresetView};
 use craft_ui::runtime::drag;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Id, Key, Modifiers, Pos2, Rect, Sense, UiBuilder, pos2, vec2};
@@ -19,7 +19,10 @@ const COVER: Rect = Rect { min: Pos2::new(260.0, 200.0), max: Pos2::new(460.0, 2
 fn rig() -> (Fixture, Rc<RefCell<Vec<PresetEvent<u32>>>>) {
     let events = Rc::new(RefCell::new(Vec::new()));
     let seen = events.clone();
-    let rows = vec![PresetRow::group(GROUP, "Group", 0), PresetRow::item(ALPHA, "Alpha", 1), PresetRow::item(2, "Beta", 1)];
+    let rows = PresetSource::new(
+        (),
+        PresetFns::new(|_, _| vec![PresetRow::group(GROUP, "Group", 0), PresetRow::item(ALPHA, "Alpha", 1), PresetRow::item(2, "Beta", 1)]),
+    );
     let mut state = PresetState::<u32>::new();
     let mut fixture = Fixture::new(move |ui| {
         let zone = DropZone::new(ui.layer_id(), ZONE);
@@ -65,8 +68,14 @@ fn a_preset_released_over_the_zone_reports_drop_at_and_nothing_else_does() {
 /// `room_height` set when given, and where its New Group button and its last preset are.
 fn footer_rig(presets: u32, room_height: Option<f32>) -> (Rect, Option<Rect>) {
     const ROOM: Rect = Rect { min: Pos2::ZERO, max: Pos2::new(250.0, 300.0) };
-    let mut rows = vec![PresetRow::group(GROUP, "Group", 0)];
-    rows.extend((1..=presets).map(|key| PresetRow::item(key, format!("Preset {key}"), 1)));
+    let rows = PresetSource::new(
+        presets,
+        PresetFns::new(|presets: &u32, _| {
+            let mut rows = vec![PresetRow::group(GROUP, "Group", 0)];
+            rows.extend((1..=*presets).map(|key| PresetRow::item(key, format!("Preset {key}"), 1)));
+            rows
+        }),
+    );
     let mut state = PresetState::<u32>::new();
     let mut fixture = Fixture::new(move |ui| {
         ui.scope_builder(UiBuilder::new().max_rect(ROOM), |ui| {
@@ -105,7 +114,7 @@ fn delete_and_backspace_on_a_selected_preset_report_delete() {
         for key in [Key::Delete, Key::Backspace] {
             let events = Rc::new(RefCell::new(Vec::new()));
             let seen = events.clone();
-            let rows = vec![PresetRow::item(ALPHA, "Alpha", 0), PresetRow::item(2, "Beta", 0)];
+            let rows = PresetSource::new((), PresetFns::new(|_, _| vec![PresetRow::item(ALPHA, "Alpha", 0), PresetRow::item(2, "Beta", 0)]));
             let mut state = PresetState::<u32>::new();
             let mut fixture = Fixture::new(move |ui| {
                 ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {

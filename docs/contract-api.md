@@ -3033,6 +3033,11 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn shapes(look: &RuleLook, from: Pos2, to: Pos2, pixels_per_point: f32) -> Vec<Shape>`. The line from `from` to `to`, snapped across its direction: a line whose physical width is odd sits on a
   - `pub fn edge(look: &RuleLook, rect: Rect, side: RectSide, pixels_per_point: f32) -> Vec<Shape>`. The line along the `side` edge of `rect`, on the physical pixels just inside it: a row's bottom rule or a
 - `craft_ui::primitives::RuleKind`: `pub enum RuleKind { Divider, Edge, Grid, DropMark }`. Which rule a look is for.
+- `craft_ui::primitives::RulerFace`: `pub enum RulerFace { Edge, Centred }`. How a ruler lays out its marks and numbers. A ruler takes a face from its `face` prop, else from the scope's
+  - `pub const fn of(set: craft_theme::ComponentSet) -> Self`. The face the component set `set` shows: the creative set the edge face, the productivity set the centred one.
+  - `pub fn bar(self, strip: Rect, edge: TickEdge) -> Rect`. Where the marks of a strip along `edge` sit: the whole strip for the edge face, the strip inset across its
+  - `pub fn beside_numbers(self, edge: TickEdge, origin: f32, marks: Vec<Tick>, numbers: &[Rect], pad: f32) -> Vec<Tick>`. The marks of `marks` this face shows beside the numbers in `numbers` (screen boxes): the edge face shows every
+  - `pub fn centred_number(bar: Rect, edge: TickEdge, at: f32, size: Vec2) -> Rect`. The box a centred number of `size` takes for the mark at `at` (a screen position along `edge`'s axis): centred
 - `craft_ui::primitives::ScrollBar`: `pub struct ScrollBar`. The scroll bar painter.
   - `pub fn strip_arrow(strip: Rect, back: bool, color: Color32) -> Shape`. The filled arrow of a scroll strip, centred in `strip`: pointing up for the strip before the view (`back`),
   - `pub fn thumb(min_thumb: f32, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan) -> Rect`. The thumb inside `track`, a bar along `axis`, for `span`: its length is the shown share of the track, at least
@@ -3150,6 +3155,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::Tick`: `pub struct Tick { pub at: f32, pub rank: TickRank }`. One tick: where it sits along its edge and how long it is.
   - `pub const fn new(at: f32, rank: TickRank) -> Self`. A tick at `at` of the length class `rank`.
 - `craft_ui::primitives::TickEdge`: `pub enum TickEdge { Bottom, Top, Left, Right }`. Which edge of a rect a tick row sits on, and so which way its marks point.
+  - `pub const fn horizontal(self) -> bool`. Whether positions run along x (a top or bottom edge).
 - `craft_ui::primitives::TickRank`: `pub enum TickRank { Minor, Mid, Major }`. How long a tick is: the rank it has among its neighbours.
 - `craft_ui::primitives::ToolIcon`: `pub enum ToolIcon { Custom(IconId), Move, Artboard, RectangularMarquee, EllipticalMarquee, SingleRowMarquee, SingleColumnMarquee, Brush, Pencil, MixerBrush, ColorReplacement, Eraser, BackgroundEraser, MagicEraser, Eyedropper, ColorSampler, Ruler, Note, Count, Lasso, PolygonalLasso, MagneticLasso, MagicWand, Crop, PerspectiveCrop, Slice, SliceSelect, Frame, Gradient, PaintBucket, HorizontalType, VerticalType, HorizontalTypeMask, VerticalTypeMask, Hand, RotateView, Zoom, SpotHealing, Healing, Remove, Patch, ContentAwareMove, RedEye, CloneStamp, PatternStamp, HistoryBrush, ArtHistoryBrush, Blur, Sharpen, Smudge, Dodge, Burn, Sponge, QuickSelection, ObjectSelection, Pen, FreeformPen, CurvaturePen, AddAnchorPoint, DeleteAnchorPoint, ConvertPoint, PathSelection, DirectSelection, Rectangle, Ellipse, Triangle, Polygon, Line, CustomShape }`. A tool, for its icon: a raster editor's tool set, which other apps share variant for variant (a vector
   - `pub const ALL: [ToolIcon; 68]`. Every tool, in this enum's order.
@@ -3180,7 +3186,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::texture_factor`: `pub fn texture_factor(size: PixelSize, side: u32) -> u32`. How many document pixels per side one texel of the base texture holds for a document of `size` with textures at
 - `craft_ui::primitives::texture_side`: `pub fn texture_side(ctx: &Context) -> u32`. The texture side on this device: [`MAX_TEXTURE`], or the device's smaller limit (2048 on some older GPUs and
 - `craft_ui::primitives::thumb_image`: `pub fn thumb_image(frame: PixelSize, longest_side: u32, mut sample: impl FnMut(u32, u32) -> [u8; 4]) -> ColorImage`. A picture of the document area `frame` (pixels) with that exact aspect, its longest side `longest_side`, each
-- `craft_ui::primitives::ticks`: `pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape>`. The tick marks of `ticks` on one edge of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
+- `craft_ui::primitives::ticks`: `pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, face: RulerFace, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape>`. The tick marks of `ticks` along `edge` of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
 
 ## `craft_ui::primitives::backdrop`
 
@@ -3738,6 +3744,8 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn appearance(&self, ctx: &Context) -> Appearance`. The appearance the root's tokens resolve under on `ctx`: the mode, contrast, density and text size.
   - `pub fn contrast(mut self, contrast: impl Into<ContrastChoice>) -> Self`. Sets the contrast choice.
   - `pub fn density(mut self, density: Size) -> Self`. Sets the density preset.
+  - `pub fn set(mut self, set: ComponentSet) -> Self`. Sets the component set (`Selection::set`): a root app value, so a container can set another for its subtree.
+  - `pub fn component_set(&self) -> ComponentSet`. The component set the root's values carry.
   - `pub fn today(mut self, date: CalendarDate) -> Self`. Sets today's date, as the host's clock and time zone give it.
   - `pub fn wheel_speed(mut self, speed: WheelSpeed) -> Self`. Sets this frame's wheel speed.
   - `pub fn alt_code_pages(mut self, pages: AltCodePages) -> Self`. Sets the code pages that decode Alt+numpad codes.
@@ -4353,6 +4361,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
 - `craft_ui::style::StyleCx`: `pub struct StyleCx<'a> { pub tokens: &'a UiTokens, pub size: ControlSize, pub variant: Variant, pub direction: Direction, pub scale: Scale, pub os: Os, pub active: bool, pub key: EnvKey }`. What `fn style` gets. Tokens are read here and nowhere else.
   - `pub fn contrast(&self) -> Contrast`. The contrast setting of the scope, for a style that adds a cue at high contrast.
   - `pub fn density(&self) -> Size`. The density preset of the scope, for a style whose shape differs between presets.
+  - `pub fn set(&self) -> craft_theme::ComponentSet`. The component set of the scope, for a component that maps it to one of its named variants.
   - `pub fn of_env(ctx: &'a Context, env: &'a crate::runtime::env::Env) -> Self`. The style context of the scope `env` describes, in the secondary variant: for code outside a style function
   - `pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R`. Runs `f` with the style context of the root scope (`Env::of_root(ctx)`), for code with no `Ui` that reads a
   - `pub fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec, listed: &[impl Hash]) -> Vec<(Presence, P)>`. The keyed presences of `name` in the motion memory of the component this context is scoped to, for the keys
@@ -4471,6 +4480,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::last_pass_memo_runs`: re-export of `craft_ui::runtime::measure::last_pass_memo_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_runs`: re-export of `craft_ui::runtime::measure::last_pass_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_text_layouts`: re-export of `craft_ui::runtime::measure::last_pass_text_layouts` (defined outside these crates).
+- `craft_ui::testing::least_stage_width`: `pub fn least_stage_width(tokens: &Tokens) -> f32`. The least width of a story's stage, which is also the least width of a column of a story grid.
 - `craft_ui::testing::measured_contributions`: re-export of `craft_ui::runtime::measure::contributions` (defined outside these crates).
 - `craft_ui::testing::measuring_run`: re-export of `craft_ui::runtime::measure::run` (defined outside these crates).
 - `craft_ui::testing::measuring_runs`: re-export of `craft_ui::runtime::measure::body_runs` (defined outside these crates).
@@ -4634,6 +4644,7 @@ Text dumps for tests: ordered `key = value` lines compared exactly with a file, 
   - `pub fn motion(&mut self, motion: MotionMode) -> &mut Self`. The motion mode.
   - `pub fn text_size(&mut self, text_size: TextSize) -> &mut Self`. The text-size step.
   - `pub fn density(&mut self, density: Size) -> &mut Self`. The density preset.
+  - `pub fn set(&mut self, set: craft_theme::ComponentSet) -> &mut Self`. The component set.
   - `pub fn scale(&mut self, scale: Scale) -> &mut Self`. The interface scale.
   - `pub fn root_value<T: crate::runtime::env::EnvValue>(&mut self, value: T) -> &mut Self`. Sets the root app value of type `T` for every following frame, as an app's `FrameInput.root.values` does.
   - `pub fn host(&mut self, host: std::sync::Arc<craft_host::Host>) -> &mut Self`. The host every following frame is given: its language, catalogs and services.

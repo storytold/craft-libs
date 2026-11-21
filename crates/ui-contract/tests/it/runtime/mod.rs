@@ -4,6 +4,7 @@ pub(crate) mod chord_fallthrough;
 pub(crate) mod clipboard;
 pub(crate) mod control_click;
 pub(crate) mod cursor;
+pub(crate) mod derived;
 pub(crate) mod elapsed;
 pub(crate) mod env;
 pub(crate) mod frame;

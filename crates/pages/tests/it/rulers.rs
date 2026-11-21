@@ -10,7 +10,7 @@ use craft_pages::ui::{PageEdges, PageRulers, RowDrag, VerticalRuler};
 use craft_text::ui::DocUnit;
 use craft_text::ui::ruler::{RulerValues, TabAlign, TabLeader, TabStop, TextRulerWords};
 use craft_ui::contract::{Bind, Role, Show as _};
-use craft_ui::runtime::env::UnitKind;
+use craft_ui::runtime::env::{Direction, UnitKind};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rangef, Rect, pos2, vec2};
 use std::cell::{Cell, RefCell};
@@ -227,4 +227,27 @@ fn a_new_salt_during_a_tab_drag_commits_nothing() {
     fixture.release_at(at + by);
     fixture.settle();
     assert_eq!(commits.get(), 1, "the drag open when the paragraph changed commits nothing");
+}
+
+/// The tab selector shows in the canvas's corner, where the top and left strips meet, in either interface direction:
+/// the host places it, so it never lies over the horizontal ruler.
+#[trial]
+fn the_tab_selector_sits_in_the_canvas_corner_in_both_directions() {
+    let words = TextRulerWords::default();
+    let name = words.tab_selector.fill(&[("kind", words.left_tab.as_str())]);
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let corner = Rc::new(Cell::new(Rect::NOTHING));
+        let seen = corner.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let full = craft_ui::testing::stage(ui);
+            seen.set(craft_ui::canvas::Rulers::strips(ui, full).2);
+            let page = demo_placed(1, pos2(full.min.x + PAGE_AT.0, full.min.y + PAGE_AT.1)).remove(0);
+            let (mut edges, mut values) = (PageEdges::new(Margins::uniform(72.0)), RulerValues::default());
+            PageRulers::new("Rulers", &page, Bind::bound(&mut edges), Bind::bound(&mut values)).kind(Some(TabAlign::Left)).show_at(ui, full);
+        });
+        fixture.direction(direction).room(vec2(900.0, 600.0));
+        fixture.settle();
+        let selector = fixture.by_label(&name).expect("the tab selector shows").rect;
+        assert!(corner.get().contains_rect(selector), "{direction:?}: the selector {selector:?} lies outside the canvas's corner {:?}", corner.get());
+    }
 }

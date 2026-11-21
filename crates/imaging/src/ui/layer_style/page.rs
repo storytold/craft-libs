@@ -12,16 +12,16 @@ use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::patterns::presets::{PresetPicker, PresetRow, PresetState};
+use craft_ui::patterns::presets::{PresetPicker, PresetSource, PresetState};
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Label, UnitKind, Units};
+use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::text::NumberField;
 use craft_ui::value_drag::AngleDial;
 use egui::Ui;
 
 use super::blending::BlendingOp;
-use super::contour::{ContourAction, ContourField, ContourKey, ContourRequest, ContourWords, SharedSampler, contour_rows};
+use super::contour::{ContourAction, ContourField, ContourKey, ContourRequest, ContourSampler, contour_source};
 use super::labels::LayerStyleWords;
 use crate::layer_style::{
     Contour, EffectField, EffectId, EffectInstance, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, StyleParams, StyleValue,
@@ -74,12 +74,11 @@ pub(super) struct PageInput<'a> {
     pub instance: &'a EffectInstance,
     pub style: &'a LayerStyle,
     pub blend_modes: &'a [Entry<String>],
-    pub patterns: &'a [PresetRow<String>],
+    pub patterns: &'a PresetSource<'a, String>,
     pub user_contours: &'a [Contour],
-    pub sampler: Option<&'a SharedSampler>,
+    pub sampler: Option<ContourSampler>,
     pub gradient_presets: &'a [(String, GradientStops)],
     pub words: &'a LayerStyleWords,
-    pub contour_words: &'a ContourWords,
     pub units: &'a Units,
 }
 
@@ -317,7 +316,7 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
         }
         FieldKind::Pattern => {
             let stored = text_of(shown.get(key)).filter(|t| !t.is_empty());
-            let first = input.patterns.iter().find(|row| !row.is_group()).map(|row| row.key.clone());
+            let first = input.patterns.rows(ui.ctx(), &Env::of(ui)).iter().find(|row| !row.is_group()).map(|row| row.key.clone());
             let current = stored.map(str::to_owned).or(first.clone());
             let picker = Field::new(label.clone())
                 .id_salt(key)
@@ -339,7 +338,7 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
             let before = anti_alias.as_deref().map(|k| shown.bool(k).unwrap_or(false));
             let mut checked = before;
             let presets = Contour::presets();
-            let rows = contour_rows(&presets, input.user_contours, input.contour_words, input.sampler.cloned());
+            let rows = contour_source(&presets, input.user_contours, input.sampler);
             // A field with no visible label (Emboss's contour under its check box) is still named for assistive tech.
             let name = if label.as_str().is_empty() {
                 words.field("contour").cloned().unwrap_or_else(|| Label::from(field.key.to_string()))

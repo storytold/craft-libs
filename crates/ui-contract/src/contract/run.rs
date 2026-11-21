@@ -1610,8 +1610,11 @@ fn extent_step(
     let (ctx, facts, shape, sizing, id) = (&begun.ctx, &begun.facts, begun.shape, begun.sizing, begun.id);
     let env = begun.env();
     // A body root with parts steps its press machine before its measuring run, so the body reads this pass's part
-    // presses in both runs (`BodyCx::part_press`). Step 8 finds the outcome. A member of another arena senses at step 8.
-    if !sizing && shape == ShapeKind::Body && (facts.parts || t.declares_parts()) && (t.arena() || facts.text() || env.arena.is_none()) {
+    // presses in both runs (`BodyCx::part_press`) and its host reads them before it places the body. Step 8 finds the
+    // outcome. A member of another arena senses at step 8. A root its host shows on a layer of its own (not in flow)
+    // senses in its own arena: its steps 6 to 16 run in the layer's env, which is outside its opener's arena.
+    let own_arena = t.arena() || facts.text() || env.arena.is_none() || !t.in_flow();
+    if !sizing && shape == ShapeKind::Body && (facts.parts || t.declares_parts()) && own_arena {
         sensing::sense_early(ctx, id, resolved.enabled);
     }
     let scx = steps::style_cx(ctx, &begun.env, &begun.step1);

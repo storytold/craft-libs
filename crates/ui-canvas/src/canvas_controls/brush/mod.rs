@@ -30,6 +30,8 @@ pub(crate) mod source_marker;
 pub(crate) mod stories;
 mod tip;
 pub(crate) mod trail;
+#[cfg(feature = "testing")]
+pub(crate) mod trials;
 
 pub use cursor::{BrushCursor, BrushCursorOptions, PaintingCursor, TipCell, TipCellStyle};
 pub use falloff::{FalloffPreview, FalloffPreviewStyle, TipFalloff};
