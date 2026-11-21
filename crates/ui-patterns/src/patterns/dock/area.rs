@@ -167,7 +167,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 struct AreaMemory<P> {
     /// The open flyout when the host binds none.
     open: Option<P>,
-    /// The running move or resize of a floating window.
+    /// The running resize or keyboard move of a floating window.
     moving: Option<Moving<P>>,
 }
 
@@ -1333,8 +1333,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, chrome, scene.rtl));
                     self.report.actions.extend(reported);
                 }
-            } else if let Some(mut change) = output.placed {
-                // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
+            } else if let Some(mut change) = output.placed.filter(|change| change.kind != PlacementKind::Move || change.phase == GesturePhase::Commit)
+            {
+                // The layer host shows a window its title row moves under the pointer, so the move reaches the workspace
+                // once, when it ends: one edit. A collapsed window keeps its edge until then, and the move ends where its
+                // strip was dropped.
                 let mut keeps = shape.collapsed.map(|_| edge);
                 if change.phase == GesturePhase::Commit && output.collapsed_width.is_none() {
                     (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
@@ -1397,8 +1400,9 @@ fn split_changes<P>(from: &Node<P>, to: &Node<P>) -> Vec<(Vec<bool>, SplitSize)>
 
 /// The workspace edit of a floating window's move or resize, the step `phase` of a gesture that `action`
 /// (`Action::MoveFloating`) places the window by: the gesture runs from the window's `Begin` to its `Commit`, so one
-/// drag is one undo step. `moving` holds the gesture and the workspace it began on; `rights` are the panels'
-/// permissions with the lock applied, which refuse the move of a locked workspace.
+/// drag is one undo step. A move by the title row arrives only as its `Commit`, which sets the place. `moving` holds
+/// the gesture and the workspace it began on; `rights` are the panels' permissions with the lock applied, which refuse
+/// the move of a locked workspace.
 fn window_edit<P: Clone + Eq + Hash>(
     ctx: &Context,
     current: &Workspace<P>,

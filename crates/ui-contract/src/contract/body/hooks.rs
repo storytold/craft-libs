@@ -68,7 +68,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     }
 
     fn host(&mut self, comp: &C, at: crate::contract::run::HostCx<'_>) -> Box<dyn crate::contract::run::Host> {
-        let mounted = crate::contract::mount::host(comp.props(Internal::new()), &at, self.open, at.label);
+        let props = comp.props(Internal::new());
+        let moving = overlay_of(props).filter(|overlay| overlay.movable).and_then(|_| self.mode.running_move(at.ui.ctx(), at.id));
+        let mounted = crate::contract::mount::host(props, &at, self.open, at.label, moving);
         if mounted.exiting {
             self.exiting = true;
             self.open = true;
@@ -185,7 +187,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             Mount::Layer(_) | Mount::Viewport { .. } => {
                 let placement = overlay_of(props).map_or_else(Placement::default, |overlay| {
                     let screen = crate::contract::overlay::screen_for(&ctx, env, overlay);
-                    shown_placement(&ctx, id, save.as_ref(), overlay, screen, env.tokens.space.inset.screen)
+                    shown_placement(&ctx, id, save.as_ref(), overlay, None, screen, env.tokens.space.inset.screen)
                 });
                 // A layer the user sized takes that size, at its saved position or where its anchor places it.
                 placement.size.is_some()

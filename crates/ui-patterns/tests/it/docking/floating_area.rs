@@ -73,6 +73,10 @@ struct Bed {
 }
 
 fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
+    bed_with(layout, rights, DockConfig::default())
+}
+
+fn bed_with(layout: Layout<usize>, rights: fn(&usize) -> Permissions, config: DockConfig) -> Bed {
     let workspace = Rc::new(RefCell::new(Workspace::new(layout)));
     let actions: Rc<RefCell<Vec<Action<usize>>>> = Rc::default();
     let second = Rc::new(Cell::new(false));
@@ -84,7 +88,7 @@ fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
         let mut panels = Panels { rights };
-        let out = DockArea::new("Floating dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
+        let out = DockArea::new("Floating dock", Bind::bound(&mut workspace), &mut panels, config.clone()).show(ui);
         *held.borrow_mut() = workspace;
         seen_actions.borrow_mut().extend(out.actions);
         if let Some(space) = out.float_space {
@@ -145,15 +149,13 @@ fn a_tab_dragged_over_a_floating_window_marks_and_joins_the_window() {
     assert!(window.panels().any(|panel| *panel == SECOND), "the tab joined the window: {:?}", bed.actions.borrow());
 }
 
-/// A window's move is the area's own edit, written each pass, and keeps its drag; a host that replaces the workspace
-/// ends the drag, and the release drops nothing.
+/// A host that replaces the workspace while a window's move runs ends the drag, and the release drops nothing.
 #[trial]
-fn a_replaced_workspace_ends_the_drag_that_the_areas_own_edits_keep() {
+fn a_replaced_workspace_ends_a_window_drag() {
     let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
     let by = Vec2::new(-40.0, 30.0);
     press_and_move(&mut bed.fixture, window_title(), by);
-    let moved_to = bed.workspace.borrow().layout.floating[0].rect;
-    assert!(dragging(&bed) && moved_to != WINDOW_AT, "the window moves under its drag: {moved_to:?}");
+    assert!(dragging(&bed), "the window's drag runs");
     bed.workspace.borrow_mut().replace(Workspace::new(with_window(Some(Node::tabs(vec![DOCKED, SECOND], 0)))));
     bed.fixture.frame(vec![moved(window_title() + by * 1.25)]);
     assert!(!dragging(&bed), "the replacement ended the drag");
@@ -186,7 +188,7 @@ fn a_given_workspace_gets_the_window_move_and_the_bodies_requests_as_actions() {
     let mut fixture = Fixture::new(move |ui| {
         let given = held.borrow().clone();
         let mut panels = Requesting;
-        let out = DockArea::new("Given dock", Bind::given(given), &mut panels, DockConfig::default()).show(ui);
+        let out = DockArea::new("Given dock", Bind::given(given), &mut panels, DockConfig::default().title_bar_docks(false)).show(ui);
         held.borrow_mut().apply_all(out.actions, false, |_| Permissions::ALL).expect("the area's actions apply");
         seen.borrow_mut().extend(out.requested);
     });
@@ -196,9 +198,38 @@ fn a_given_workspace_gets_the_window_move_and_the_bodies_requests_as_actions() {
     let own = |action: &Action<usize>| *action == Action::activate(DOCKED) || *action == Action::activate(WINDOW);
     assert!(!asked.is_empty() && asked.iter().all(own), "each body's request came back: {asked:?}");
     assert_eq!(workspace.borrow().layout.floating[0].rect, WINDOW_AT, "nothing moved yet");
-    press_and_move(&mut fixture, window_title(), Vec2::new(-40.0, 30.0));
+    let by = Vec2::new(-40.0, 30.0);
+    press_and_move(&mut fixture, window_title(), by);
+    fixture.frame(vec![release(window_title() + by)]);
+    fixture.settle();
     let moved_to = workspace.borrow().layout.floating[0].rect;
     assert!(moved_to != WINDOW_AT, "the host's copy took the window's move: {moved_to:?}");
+}
+
+/// A drag of a floating window's title row shows the window under the pointer in the frame of each step, in one pass;
+/// the workspace takes the move once, on the drop.
+#[trial]
+fn a_dragged_floating_window_stands_under_the_pointer_in_each_frame_and_moves_on_the_drop() {
+    let mut bed = bed(with_window(None), |_| Permissions::ALL);
+    let from = window_title();
+    let step = Vec2::new(-10.0, 8.0);
+    bed.fixture.frame(vec![moved(from)]);
+    bed.fixture.frame(vec![press(from)]);
+    for n in 1..=4 {
+        let to = WINDOW_AT.translate(step * n as f32);
+        bed.fixture.frame(vec![moved(from + step * n as f32)]);
+        let shown = layer_rects(bed.fixture.ctx());
+        assert!(
+            shown.iter().any(|rect| (rect.min - to.min).length() < SLACK && (rect.size() - to.size()).length() < SLACK),
+            "step {n}: the window stands under the pointer in its frame: {shown:?}, wanted {to:?}"
+        );
+        assert_eq!(bed.fixture.passes(), 1, "step {n}: the frame runs one pass");
+        assert_eq!(bed.workspace.borrow().layout.floating[0].rect, WINDOW_AT, "step {n}: the workspace is not written while the move runs");
+    }
+    bed.fixture.frame(vec![release(from + step * 4.0)]);
+    bed.fixture.settle();
+    let rect = bed.workspace.borrow().layout.floating.first().map(|window| window.rect);
+    assert!(rect.is_some_and(|rect| (rect.min - (WINDOW_AT.min + step * 4.0)).length() < SLACK), "the drop moves the window: {rect:?}");
 }
 
 /// A dock area's first pass leaves a drag running in another area alone.
@@ -258,11 +289,14 @@ fn a_floating_windows_group_starts_under_the_chrome_the_area_sizes_windows_by() 
     );
 }
 
-/// The window's rect while a press at `from` drags by `by`, before the release, which would dock a window moved over
-/// the docked group.
+/// The window's rect after a press at `from` drags by `by` and releases, in an area whose title-row drags only move a
+/// window, so the release docks nothing.
 fn dragged_from(from: Pos2, by: Vec2) -> Rect {
-    let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let config = DockConfig::default().title_bar_docks(false);
+    let mut bed = bed_with(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL, config);
     press_and_move(&mut bed.fixture, from, by);
+    bed.fixture.frame(vec![release(from + by)]);
+    bed.fixture.settle();
     bed.workspace.borrow().layout.floating[0].rect
 }
 
