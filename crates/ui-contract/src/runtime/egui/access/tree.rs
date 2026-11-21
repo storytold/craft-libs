@@ -82,8 +82,7 @@ impl Declared {
 }
 
 /// Every node that has a hidden node among its ancestors.
-fn nodes_below_hidden(update: &TreeUpdate) -> HashSet<NodeId> {
-    let by_id: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, node)| (*id, node)).collect();
+fn nodes_below_hidden(update: &TreeUpdate, by_id: &HashMap<NodeId, &Node>) -> HashSet<NodeId> {
     let mut below = HashSet::new();
     let mut pending: Vec<NodeId> = update.nodes.iter().filter(|(_, node)| node.is_hidden()).map(|(id, _)| *id).collect();
     while let Some(id) = pending.pop() {
@@ -103,12 +102,23 @@ pub struct AccessTree {
     update: TreeUpdate,
     /// The nodes below a hidden node: assistive technology does not report them, so no lookup finds them.
     below_hidden: HashSet<NodeId>,
+    /// Whether reported entries already contain the data that a key lookup would return.
+    #[cfg(feature = "suite")]
+    ids_are_unique: bool,
 }
 
 impl AccessTree {
     pub(crate) fn new(update: TreeUpdate) -> Self {
-        let below_hidden = nodes_below_hidden(&update);
-        AccessTree { update, below_hidden }
+        let by_id: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, node)| (*id, node)).collect();
+        let below_hidden = nodes_below_hidden(&update, &by_id);
+        #[cfg(feature = "suite")]
+        let ids_are_unique = by_id.len() == update.nodes.len();
+        AccessTree {
+            update,
+            below_hidden,
+            #[cfg(feature = "suite")]
+            ids_are_unique,
+        }
     }
 
     /// The tree of a frame that made none.
@@ -406,8 +416,22 @@ impl AccessTree {
         false
     }
 
+    fn visible_entries(&self) -> impl Iterator<Item = &(NodeId, Node)> + '_ {
+        self.update.nodes.iter().filter(|(key, node)| !node.is_hidden() && !self.below_hidden.contains(key))
+    }
+
     fn reported(&self) -> impl Iterator<Item = NodeKey> + '_ {
-        self.update.nodes.iter().filter(|(key, node)| !node.is_hidden() && !self.below_hidden.contains(key)).map(|(key, _)| NodeKey(key.0))
+        self.visible_entries().map(|(key, _)| NodeKey(key.0))
+    }
+
+    /// The reported keys and their data in tree order, with the same data as a lookup by key.
+    #[cfg(feature = "suite")]
+    pub(crate) fn reported_nodes(&self) -> impl Iterator<Item = (NodeKey, &Node)> + '_ {
+        self.visible_entries().map(|(key, node)| {
+            // On duplicate keys, lookups read the first matching entry, even if a later entry is the visible one.
+            let data = if self.ids_are_unique { node } else { self.lookup(*key).expect("the entry's key is present") };
+            (NodeKey(key.0), data)
+        })
     }
 
     /// Every node that assistive technology reports.
