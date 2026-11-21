@@ -271,3 +271,35 @@ fn track_dispatch_preserves_mjpeg_frames_and_timestamps() {
     assert_eq!(track.decode(&gray, -3).expect("gray track picture"), [want_gray]);
     assert!(track.flush().expect("flush").is_empty());
 }
+
+#[test]
+fn track_mjpeg_allocation_cap_survives_reset_and_larger_requests() {
+    use craft_media::{CodecId, CodecParams};
+    use craft_video::{TrackDecoder, VideoError};
+
+    let encoder = Encoder::default();
+    let small = encoder.encode(16, 16, 1, &[31; 16 * 16]).expect("small JPEG");
+    let large = encoder.encode(256, 256, 1, &[31; 256 * 256]).expect("large JPEG");
+    let mut track = TrackDecoder::new(&CodecParams::new(CodecId::Mjpeg)).expect("Motion JPEG track");
+    assert_eq!(track.decode(&large, 0).expect("default cap admits the picture")[0].width(), 256);
+
+    for cap in [16 << 10, u64::MAX] {
+        track.limit_mjpeg_allocation(cap).expect("Motion JPEG allocation cap");
+        track.reset().expect("seek");
+        assert_eq!(track.decode(&small, 11).expect("small picture fits")[0].width(), 16);
+        assert!(
+            matches!(track.decode(&large, 12), Err(VideoError::Malformed(ref message)) if message.contains("above the limits")),
+            "the larger picture exceeds the stricter cap"
+        );
+    }
+}
+
+#[cfg(feature = "prores")]
+#[test]
+fn the_track_mjpeg_allocation_cap_is_codec_specific() {
+    use craft_media::{CodecId, CodecParams};
+    use craft_video::{TrackDecoder, VideoError};
+
+    let mut track = TrackDecoder::new(&CodecParams::new(CodecId::ProRes)).expect("ProRes track");
+    assert!(matches!(track.limit_mjpeg_allocation(16 << 10), Err(VideoError::Unsupported(_))));
+}
