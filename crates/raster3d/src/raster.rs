@@ -44,8 +44,9 @@ pub struct AuxPlanes {
     pub depth: Vec<f32>,
     /// Unit normal of the surface in view space, `[0, 0, 0]` where empty: the interpolated vertex
     /// normal (a vector of length 1e-20 or less is read as `[0, 0, −1]`), reversed on a back face,
-    /// turned by the upper-left 3 × 3 of [`Scene::view`] and normalized. Normal textures are not
-    /// applied.
+    /// turned by the inverse transpose of the upper-left 3 × 3 of [`Scene::view`] and normalized,
+    /// so it stays perpendicular to the surface under a non-uniform scale or a shear. Normal
+    /// textures are not applied.
     pub normal: Vec<[f32; 3]>,
     /// [`Scene::part_ids`] of the surface's triangle, [`NO_PART`] where empty.
     pub part_id: Vec<u32>,
@@ -480,8 +481,16 @@ impl Band<'_> {
         if !f.front {
             n = n.map(|x| -x);
         }
-        let v = &self.s.view;
-        let r: [f64; 3] = std::array::from_fn(|row| (0..3).map(|c| f64::from(v[row][c]) * n[c]).sum());
+        // A normal turns by the inverse transpose of the view's 3 × 3, which is its cofactor
+        // matrix divided by its determinant. The rows of the cofactor matrix are cross products
+        // of the 3 × 3's rows, and the determinant's sign keeps the normal on its side.
+        let row = |r: usize| -> [f64; 3] { std::array::from_fn(|c| f64::from(self.s.view[r][c])) };
+        let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let dot = |a: &[f64; 3], b: &[f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let (a, b, c) = (row(0), row(1), row(2));
+        let cof = [cross(b, c), cross(c, a), cross(a, b)];
+        let sign = if dot(&a, &cof[0]) < 0.0 { -1.0 } else { 1.0 };
+        let r: [f64; 3] = std::array::from_fn(|i| sign * dot(&cof[i], &n));
         unit(r, 0.0).map_or([f32::NAN; 3], |r| r.map(|x| x as f32))
     }
 

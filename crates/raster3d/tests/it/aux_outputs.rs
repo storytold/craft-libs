@@ -239,6 +239,29 @@ fn normals_are_turned_by_the_view() {
 }
 
 #[test]
+fn a_view_that_stretches_and_mirrors_keeps_normals_perpendicular_to_the_surface() {
+    // The view doubles x and mirrors it. A surface's tangents turn by that 3 × 3, so its normal
+    // turns by the inverse transpose, diag(−1/2, 1, 1), and keeps facing outward.
+    let (mut s, expected) = sphere_scene();
+    s.view = [[-2.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let a = try_render_with_aux(&s, &Limits::default()).unwrap();
+    let mut checked = 0;
+    for y in 0..32 {
+        for x in 0..32 {
+            if let Some(e) = expected(x, y) {
+                let t = [-e[0] / 2.0, e[1], e[2]];
+                let len = dot(t, t).sqrt();
+                let t = t.map(|v| v / len);
+                let n = a.aux.normal[y * 32 + x];
+                assert!(dot(n, t) > 0.995, "({x}, {y}): {n:?} against {t:?}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 200, "{checked} pixels checked");
+}
+
+#[test]
 fn a_double_sided_back_face_reports_the_reversed_normal_and_a_zero_normal_reads_as_toward_the_camera() {
     let mut s = quad_scene(8, 8, &[([0.0, 0.0, 8.0, 8.0], 100.0, [1.0; 4])]);
     // quad_scene's quads face the camera; reversing the winding shows their back.

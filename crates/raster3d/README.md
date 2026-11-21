@@ -83,9 +83,10 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   surface per pixel. `depth` is the surface's camera depth (`f32`, the units of `Scene::view`),
   infinity where empty. `normal` is its unit normal in view space, `[0, 0, 0]` where empty: the
   interpolated vertex normal (one of length 1e-20 or less is read as `[0, 0, −1]`), reversed on a
-  back face, turned by the upper-left 3 × 3 of `Scene::view` and normalized; normal textures are
-  not applied. `part_id` is the `Scene::part_ids` entry of the surface's triangle (`u32`), or
-  `NO_PART` (`u32::MAX`) where empty; a triangle cut by clipping keeps its ID. Only a fragment that
+  back face, turned by the inverse transpose of the upper-left 3 × 3 of `Scene::view` and
+  normalized, so it stays perpendicular to the surface when the view scales axes unequally or
+  shears; normal textures are not applied. `part_id` is the `Scene::part_ids` entry of the
+  surface's triangle (`u32`), or `NO_PART` (`u32::MAX`) where empty; a triangle cut by clipping keeps its ID. Only a fragment that
   adds alpha above 0 can be the surface: the nearest opaque surface drawn at the pixel, including
   the one found under a discarded fragment, or a nearer transparent fragment; of several such
   fragments the nearest is kept. `depth` therefore differs from `Target::depth`, which holds opaque surfaces only. The
