@@ -395,3 +395,18 @@ fn libreoffices_watermark_reads_as_the_watermark() {
     let [w, h] = wm.size.unwrap();
     assert!((w - 6.69 * 72.0).abs() < 0.5 && (h - 2.24 * 72.0).abs() < 0.5);
 }
+
+#[test]
+fn an_exact_negative_margin_is_written_at_its_size() {
+    // Word's exact margin (a negative top or bottom, read from DOCX or DOC) has no ODF form: the
+    // nearest is the margin's size, never a negative fo:margin.
+    let mut d = Document::default();
+    d.body.push(text_para("x", CharProps::default()));
+    d.last_section.margin_top = -40.0;
+    d.last_section.margin_bottom = -60.0;
+    let saved = export(&d).unwrap();
+    let styles = crate::text::tests::entry(&saved, "styles.xml");
+    assert!(!styles.contains(r#"fo:margin-top="-"#) && !styles.contains(r#"fo:margin-bottom="-"#), "{styles}");
+    let s = import(&saved).unwrap().last_section;
+    assert!((s.margin_top - 40.0).abs() < 0.05 && (s.margin_bottom - 60.0).abs() < 0.05, "{} {}", s.margin_top, s.margin_bottom);
+}

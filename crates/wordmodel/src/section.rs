@@ -765,6 +765,10 @@ pub struct SectionProps {
     pub page_w: f32,
     pub page_h: f32,
     pub landscape: bool,
+    /// Top and bottom margins, points. Negative is Word's exact margin (`w:pgMar` `w:top` /
+    /// `w:bottom` below zero, ECMA-376 §17.6.11; DOC `dyaTop` / `dyaBottom`): the text starts
+    /// (ends) at the absolute value from the page edge even when the header (footer) is taller,
+    /// and overlaps it.
     pub margin_top: f32,
     pub margin_bottom: f32,
     pub margin_left: f32,
@@ -904,17 +908,21 @@ impl SectionProps {
     pub fn text_width(&self) -> f32 {
         (self.page_w - self.margin_left - self.margin_right - self.gutter).max(18.0)
     }
+    /// Height of the text area between the margins, points (a negative, exact margin counts at
+    /// its size).
     pub fn text_height(&self) -> f32 {
-        (self.page_h - self.margin_top - self.margin_bottom).max(18.0)
+        (self.page_h - self.margin_top.abs() - self.margin_bottom.abs()).max(18.0)
     }
     /// Swap to landscape/portrait (keeps margins relative to the paper as Word does: rotates them).
+    /// An exact (negative) top or bottom turns into a side at its size, as in Word: only the top
+    /// and bottom can be exact.
     pub fn set_landscape(&mut self, on: bool) {
         if on == self.landscape {
             return;
         }
         self.landscape = on;
         std::mem::swap(&mut self.page_w, &mut self.page_h);
-        let (t, b, l, r) = (self.margin_top, self.margin_bottom, self.margin_left, self.margin_right);
+        let (t, b, l, r) = (self.margin_top.abs(), self.margin_bottom.abs(), self.margin_left, self.margin_right);
         if on {
             self.margin_top = l;
             self.margin_bottom = r;
@@ -1049,6 +1057,15 @@ mod tests {
         s.set_landscape(false);
         assert_eq!(s.margin_left, 50.0);
         assert_eq!((s.page_w, s.page_h), (612.0, 792.0));
+    }
+
+    #[test]
+    fn landscape_turns_an_exact_margin_into_a_side_at_its_size() {
+        // Word: T -60 B -40 turned to landscape gives sides of 40 and 60, never negative.
+        let mut s = SectionProps { margin_top: -60.0, margin_bottom: -40.0, ..Default::default() };
+        s.set_landscape(true);
+        assert_eq!((s.margin_left, s.margin_right), (40.0, 60.0));
+        assert!((s.text_height() - (612.0 - 144.0)).abs() < 0.01);
     }
 
     #[test]

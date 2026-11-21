@@ -1090,6 +1090,33 @@ fn section_props_parsed() {
     assert_eq!(doc.last_section.margin_left, 72.0);
 }
 
+/// `sprmSDyaTop` and `sprmSDyaBottom` are signed: Word saves a margin typed as a negative number
+/// (text at that distance from the page edge, overlapping a taller header or footer) as a
+/// negative operand. The model keeps the sign, as the DOCX reader does with `w:pgMar`, and the
+/// writer puts it back; it used to read as 0.
+#[test]
+fn negative_top_and_bottom_margins_keep_their_sign() {
+    let spec = StructSpec {
+        text: "a\rb\r",
+        header_stories: vec![],
+        sections: vec![(2, grpprl(&[(0x9023, &(-798i16).to_le_bytes()), (0x9024, &(-1200i16).to_le_bytes()), (0xB021, &1440u16.to_le_bytes())]))],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (2, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let s = &doc.last_section;
+    assert!((s.margin_top + 39.9).abs() < 0.01 && (s.margin_bottom + 60.0).abs() < 0.01, "{} {}", s.margin_top, s.margin_bottom);
+    assert_eq!(s.margin_left, 72.0);
+    let back = read(&crate::write::write(&doc).expect("writes")).expect("reopens");
+    assert_eq!((back.last_section.margin_top, back.last_section.margin_bottom), (s.margin_top, s.margin_bottom));
+}
+
 #[test]
 fn two_sections_box_the_first() {
     let spec = StructSpec {
