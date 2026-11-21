@@ -2264,6 +2264,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu-device"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "log",
+ "pollster 0.4.0",
+ "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "craft-gpu-null"
 version = "0.1.0"
 dependencies = [
@@ -2283,6 +2295,7 @@ name = "craft-gpu-wgpu"
 version = "0.1.0"
 dependencies = [
  "craft-gpu",
+ "craft-gpu-device",
  "craft-gpu-providers",
  "pollster 0.4.0",
  "wgpu",
