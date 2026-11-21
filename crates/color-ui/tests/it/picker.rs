@@ -530,3 +530,23 @@ fn enter_in_the_full_dialogs_hex_field_confirms_the_typed_colour() {
     let Some(DialogResult::Ok(result)) = answer else { panic!("the dialog answers OK") };
     assert_eq!(result.picked.color.to_hex(), "#336699", "with the typed colour");
 }
+
+/// A request that asks for the swatches opens the picker on its Color Swatches view; one that doesn't opens it on the
+/// Color Models.
+#[trial]
+fn a_request_for_the_swatches_opens_the_picker_on_its_swatch_view() {
+    let red = Srgba::rgb(1.0, 0.0, 0.0);
+    let shows_swatches = |request: craft_ui::runtime::requests::ColorRequest| {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let libraries = vec![PickerLibrary::new("Basic", vec![(Label::from("Red"), red)])];
+        dialogs.borrow_mut().open(ColorPickerDialog::from_request(request).swatch_view(PickerSwatches::new(libraries, "No swatches")));
+        fixture.idle(6);
+        fixture.by_label("Red").is_some()
+    };
+    let request = || craft_ui::runtime::requests::ColorRequest::new("fill", red);
+    assert!(shows_swatches(request().on_swatches()), "the swatch view shows the library's cells");
+    assert!(!shows_swatches(request()), "without it the picker opens on the Color Models");
+}

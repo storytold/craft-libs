@@ -25,12 +25,21 @@ pub struct ColorRequest {
     /// The colour the picker opens with; `None` opens it with no current colour (a mixed swatch): no current swatch
     /// and empty fields, and the first pick sets the colour.
     pub color: Option<Srgba>,
+    /// The picker opens on its swatches view in place of the one it showed last.
+    pub on_swatches: bool,
 }
 
 impl ColorRequest {
     /// A request for `key`, opening the picker at `color`, or with no colour for `None`.
     pub fn new(key: impl Into<String>, color: impl Into<Option<Srgba>>) -> Self {
-        Self { key: key.into(), title: None, color: color.into() }
+        Self { key: key.into(), title: None, color: color.into(), on_swatches: false }
+    }
+
+    /// Opens the picker on its swatches view, in place of the view it showed last.
+    #[must_use]
+    pub fn on_swatches(mut self) -> Self {
+        self.on_swatches = true;
+        self
     }
 
     /// The picker's title.

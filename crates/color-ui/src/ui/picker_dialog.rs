@@ -252,6 +252,9 @@ pub struct ColorPickerDialog {
     standard: Option<StandardColors>,
     /// The tab the app asked to open on; it wins over the remembered one, once.
     tab: Option<ColorPickerTab>,
+    /// The request asked to open on the Color Swatches view ([`ColorRequest::on_swatches`]); it wins over the
+    /// remembered view, once.
+    on_swatches: bool,
 }
 
 /// What the tabbed body shows besides the memory and the colour it edits.
@@ -341,9 +344,9 @@ impl ColorPickerDialog {
     /// and its colour. The app opens it on its `DialogHost` and answers the component with the result's `key` and
     /// `picked.color`.
     pub fn from_request(request: ColorRequest) -> ColorPickerDialog {
-        let ColorRequest { key, title, color, .. } = request;
+        let ColorRequest { key, title, color, on_swatches, .. } = request;
         let title = title.map_or(Title::Default, Title::Given);
-        ColorPickerDialog::with_title(key, title, color)
+        ColorPickerDialog { on_swatches, ..ColorPickerDialog::with_title(key, title, color) }
     }
 
     /// A picker for the colour `key` names, titled `title`, opening on `color`.
@@ -393,6 +396,7 @@ impl ColorPickerDialog {
             layout: ColorPickerDialogLayout::default(),
             standard: None,
             tab: None,
+            on_swatches: false,
         }
     }
 
@@ -591,6 +595,7 @@ impl ColorPickerDialog {
         if let Some(tab) = self.tab.take() {
             self.memory.tab = tab;
         }
+        self.memory.swatches |= self.on_swatches;
         if self.memory.web_colors
             && self.layout == ColorPickerDialogLayout::Full
             && let Some(opening) = self.opening
