@@ -12,10 +12,10 @@ use egui::{Pos2, Vec2, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-struct Rig {
-    fixture: Fixture,
+pub(crate) struct Rig {
+    pub(crate) fixture: Fixture,
     curve: Rc<RefCell<Curve>>,
-    selected: Rc<Cell<Option<usize>>>,
+    pub(crate) selected: Rc<Cell<Option<usize>>>,
     /// The kind of each edit event, in order.
     kinds: Rc<RefCell<Vec<&'static str>>>,
     origin: Pos2,
@@ -34,6 +34,11 @@ fn kind(event: &EditEvent<Curve>) -> &'static str {
 }
 
 fn rig(points: &[[f32; 2]]) -> Rig {
+    rig_with(points, false)
+}
+
+/// [`rig`] with `tab_steps` and `end_delete_deselects` when `point_keys`.
+pub(crate) fn rig_with(points: &[[f32; 2]], point_keys: bool) -> Rig {
     let curve = Curve::smooth(points.to_vec());
     let shared = Rc::new(RefCell::new(curve.clone()));
     let selected = Rc::new(Cell::new(None));
@@ -42,7 +47,11 @@ fn rig(points: &[[f32; 2]]) -> Rig {
     let channels = [CurveChannel::new("RGB", ChannelColor::Neutral), CurveChannel::new("Red", ChannelColor::Red)];
     let mut fixture = Fixture::new(move |ui| {
         let mut value = c.borrow().clone();
-        let out = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get()).show(ui);
+        let mut editor = CurveEditor::new("Curve", Bind::bound(&mut value)).channels(&channels).channel(0).selection(s.get());
+        if point_keys {
+            editor = editor.tab_steps().end_delete_deselects();
+        }
+        let out = editor.show(ui);
         for event in &out.edit.events {
             k.borrow_mut().push(kind(event));
         }
@@ -72,7 +81,7 @@ impl Rig {
         pos2(self.origin.x + q[0] * self.scale.x, self.origin.y + q[1] * self.scale.y)
     }
 
-    fn points(&self) -> Vec<[f32; 2]> {
+    pub(crate) fn points(&self) -> Vec<[f32; 2]> {
         self.curve.borrow().points().map(<[_]>::to_vec).unwrap_or_default()
     }
 
@@ -80,7 +89,7 @@ impl Rig {
         self.kinds.borrow().clone()
     }
 
-    fn press_at(&mut self, q: [f32; 2]) {
+    pub(crate) fn press_at(&mut self, q: [f32; 2]) {
         let pos = self.at(q);
         self.fixture.frame(vec![moved(pos)]);
         self.fixture.frame(vec![press(pos)]);
@@ -90,7 +99,7 @@ impl Rig {
         self.fixture.frame(vec![moved(self.at(q))]);
     }
 
-    fn release_at(&mut self, q: [f32; 2]) {
+    pub(crate) fn release_at(&mut self, q: [f32; 2]) {
         self.fixture.frame(vec![release(self.at(q))]);
         self.fixture.idle(1);
     }

@@ -29,6 +29,9 @@ const PLUS: [Chord; 3] = [Chord::plain(Key::Plus), Chord::plain(Key::Equals), Ch
 const MINUS: Chord = Chord::plain(Key::Minus);
 const INSERT: [Chord; 3] = [Chord::plain(Key::Insert), Chord::new(Mods::CMD, Key::Enter), Chord::new(Mods::CTRL, Key::Enter)];
 const DELETE: [Chord; 2] = [Chord::plain(Key::Delete), Chord::plain(Key::Backspace)];
+/// The next and the previous point with [`CurveGraph::tab_steps`].
+const NEXT_POINT: Chord = Chord::new(Mods::CTRL, Key::Tab);
+const PREVIOUS_POINT: Chord = Chord::new(Mods { ctrl: true, shift: true, ..Mods::NONE }, Key::Tab);
 
 /// Levels one arrow key moves a point, and with Shift.
 const NUDGE: f32 = 1.0;
@@ -364,6 +367,12 @@ pub struct CurveGraph<'a> {
     /// The selected point.
     #[prop]
     selection: Option<usize>,
+    /// Ctrl+Tab and Ctrl+Shift+Tab select the next and the previous point, wrapping round, while a point is selected.
+    #[prop(flag)]
+    tab_steps: bool,
+    /// Delete and Backspace on an end point, which stays, deselect it.
+    #[prop(flag)]
+    end_delete_deselects: bool,
     /// The selection after `update`, for the output.
     chosen: Option<usize>,
 }
@@ -386,6 +395,8 @@ impl<'a> CurveGraph<'a> {
             histogram: None,
             overlays: &[],
             selection: None,
+            tab_steps: false,
+            end_delete_deselects: false,
             chosen: None,
         }
         .label(label)
@@ -651,6 +662,11 @@ impl Component for CurveGraph<'_> {
         for chord in PLUS.into_iter().chain([MINUS]).chain(INSERT).chain(DELETE) {
             cx.claim(chord);
         }
+        // Only with a point selected, after this pass's keys: otherwise Ctrl+Tab stays the app's.
+        if self.tab_steps && selected.is_some() {
+            cx.claim(NEXT_POINT);
+            cx.claim(PREVIOUS_POINT);
+        }
         self.chosen = selected;
     }
 
@@ -759,6 +775,12 @@ impl CurveGraph<'_> {
         while cx.take_claimed(MINUS) {
             selected = Some(selected.map_or(n - 1, |i| i.saturating_sub(1)));
         }
+        while cx.take_claimed(NEXT_POINT) {
+            selected = selected.map(|i| (i + 1) % n);
+        }
+        while cx.take_claimed(PREVIOUS_POINT) {
+            selected = selected.map(|i| (i + n - 1) % n);
+        }
         let mut insert = false;
         for chord in INSERT {
             while cx.take_claimed(chord) {
@@ -799,8 +821,8 @@ impl CurveGraph<'_> {
         }
         let Some(at) = selected else { return selected };
         if delete {
-            // An end point stays, and so does the selection on it.
-            let Some(next) = CurveRules::deleted(curve, at) else { return selected };
+            // An end point stays, and so does the selection on it unless `end_delete_deselects`.
+            let Some(next) = CurveRules::deleted(curve, at) else { return if self.end_delete_deselects { None } else { selected } };
             cx.set(next.clone());
             *curve = next;
             return None;

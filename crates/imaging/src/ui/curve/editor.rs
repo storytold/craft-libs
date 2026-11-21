@@ -142,6 +142,12 @@ pub struct CurveEditor<'a> {
     /// The selected point, kept by the host: the editor shows it and reports changes in the output.
     #[prop]
     selection: Option<Option<usize>>,
+    /// Ctrl+Tab and Ctrl+Shift+Tab select the next and the previous point, wrapping round, while a point is selected.
+    #[prop(flag)]
+    tab_steps: bool,
+    /// Delete and Backspace on an end point, which stays, deselect it.
+    #[prop(flag)]
+    end_delete_deselects: bool,
     /// The host's rows between the graph and the fields.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     between: Option<CurveRows<'a>>,
@@ -167,6 +173,8 @@ impl<'a> CurveEditor<'a> {
             histogram: None,
             overlays: &[],
             selection: None,
+            tab_steps: false,
+            end_delete_deselects: false,
             between: None,
         }
     }
@@ -196,6 +204,8 @@ impl<'a> CurveEditor<'a> {
             histogram,
             overlays,
             selection: host_selection,
+            tab_steps,
+            end_delete_deselects,
             mut between,
         } = self;
         let words = craft_ui::runtime::env::Env::of(ui).words::<CurveWords>();
@@ -238,6 +248,12 @@ impl<'a> CurveEditor<'a> {
             }
             if percent {
                 graph = graph.percent();
+            }
+            if tab_steps {
+                graph = graph.tab_steps();
+            }
+            if end_delete_deselects {
+                graph = graph.end_delete_deselects();
             }
             let CurveGraphOutput { mut edit, selected } = graph.show(ui);
             if let Some(rows) = between.as_mut() {
