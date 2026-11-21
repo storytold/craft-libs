@@ -138,11 +138,11 @@ impl Resample {
         }
     }
 
-    /// The list entries of the methods in `allowed`, in the order of [`Resample::ALL`]; all of them when `allowed` names
-    /// none.
+    /// The list entries of the methods in `allowed`, in the order given; all of them in the order of
+    /// [`Resample::ALL`] when `allowed` names none.
     pub fn entries(words: &SizingWords, allowed: &[Resample]) -> Vec<Entry<Resample>> {
-        let listed = |method: &Resample| allowed.is_empty() || allowed.contains(method);
-        Resample::ALL.iter().copied().filter(listed).map(|method| Entry::new(method, method.label(words))).collect()
+        let methods = if allowed.is_empty() { &Resample::ALL[..] } else { allowed };
+        methods.iter().map(|&method| Entry::new(method, method.label(words))).collect()
     }
 }
 

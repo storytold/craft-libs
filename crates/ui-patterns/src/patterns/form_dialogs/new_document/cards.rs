@@ -171,7 +171,7 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
         let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
-        Text::new(Env::of(ui).view().resolve(&heading).as_str().to_uppercase()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        Text::new(heading).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
         let shown = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
             .card()
