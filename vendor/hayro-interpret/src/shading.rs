@@ -5,7 +5,9 @@
 use crate::CacheKey;
 use crate::cache::Cache;
 use crate::color::{ColorComponents, ColorSpace, DefaultColorSpaces, DeviceFamily};
-use crate::function::{Function, StitchingBounds, Values, interpolate};
+use crate::function::{
+    Function, MAX_LINEAR_BREAKS, StitchingBounds, Values, interpolate, sorted_breaks,
+};
 use crate::util::{Float32Ext, PointExt, RectExt, hash128};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
@@ -65,6 +67,28 @@ impl ShadingFunction {
         bounds.sort_by(f32::total_cmp);
         bounds.dedup_by(|a, b| (*a - *b).abs() <= f32::EPSILON);
         bounds
+    }
+
+    /// Craft patch (mesh breaks): the inputs, sorted, between which every output is an affine
+    /// function of the single input; it may jump at one. `None` when that isn't known: a
+    /// Type 4 function, a Type 2 one with N other than 1, a Type 0 one with more inputs, a
+    /// Decode outside its Range or more than 4096 samples, a Type 3 one with a Range or such
+    /// a child, or more than 4096 breaks in all. Sampled functions are interpolated linearly
+    /// here whatever their /Order, and the breaks are those of that interpolation.
+    pub fn linear_breaks(&self) -> Option<Vec<f32>> {
+        match self {
+            Self::Single(function) => function.linear_breaks(),
+            Self::Multiple(functions) => {
+                let mut breaks = Vec::new();
+                for function in functions {
+                    breaks.extend(function.linear_breaks()?);
+                    if breaks.len() > MAX_LINEAR_BREAKS {
+                        return None;
+                    }
+                }
+                sorted_breaks(breaks)
+            }
+        }
     }
 }
 

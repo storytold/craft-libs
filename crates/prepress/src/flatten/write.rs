@@ -24,7 +24,9 @@ use craft_pdf::write::backend::image::{BitsPerComponent, CustomImage, Image, Ima
 use craft_pdf::write::backend::mask::{Mask as KMask, MaskType, TransferFunction};
 use craft_pdf::write::backend::num::NormalizedF32;
 use craft_pdf::write::backend::page::PageSettings;
-use craft_pdf::write::backend::paint::{Fill, FillRule as KFillRule, LinearGradient, Paint as KPaint, RadialGradient, SpreadMethod, Stop};
+use craft_pdf::write::backend::paint::{
+    Fill, FillRule as KFillRule, LinearGradient, MeshGradient, MeshPatch, Paint as KPaint, RadialGradient, SpreadMethod, Stop,
+};
 use craft_pdf::write::backend::surface::Surface;
 use craft_pdf::write::backend::tagging::{ContentTag, SpanTag};
 use craft_pdf::write::backend::text::{Font, GlyphId, KrillaGlyph};
@@ -34,7 +36,7 @@ use kurbo::{Affine, BezPath, PathEl};
 
 use super::{
     BlendMode, ComplexRegion, DisplayList, FillItem, FillRule, Flattened, FontBytes, GradientGeometry, GroupItem, ImageItem, ImageSpace, Item, Mask,
-    MaskKind, Paint, TextFont, TextItem,
+    MaskKind, Mesh, Paint, TextFont, TextItem,
 };
 use crate::ink::{Ink, InkColor, InkId, InkSet, Overprint, Process, to_pdf_color};
 
@@ -523,6 +525,7 @@ impl<'a> Painter<'a, '_> {
                 Ok((color.into(), overprint))
             }
             Paint::Gradient { stops, geometry } => Ok((self.gradient(stops, geometry, overprint, ctm)?, overprint)),
+            Paint::Mesh(mesh) => Ok((self.mesh(mesh, overprint, ctm)?, overprint)),
         }
     }
 
@@ -558,42 +561,11 @@ impl<'a> Painter<'a, '_> {
         Some(device_n::Color::new(tints, DeviceNSpace::new(colorants)?)?.into())
     }
 
-    /// Stops in one color space: each lists every ink some stop lists, so krilla writes them
-    /// all in the space a color of those inks gets.
+    /// Stops in one color space (see [`Self::one_space`]).
     fn gradient(&self, stops: &[(f32, InkColor)], geometry: &GradientGeometry, overprint: Overprint, ctm: Affine) -> Result<KPaint, WriteError> {
-        let mut resolved: Vec<(f32, BTreeMap<InkId, f32>)> = Vec::with_capacity(stops.len());
-        for (offset, color) in stops {
-            let InkColor::Tints(tints) = self.inks.resolve(color, self.cms) else {
-                return Err(WriteError::Unsupported("a gradient stop of the All or None colorant"));
-            };
-            let mut merged = BTreeMap::new();
-            for (id, t) in tints {
-                let v = merged.entry(id).or_insert(0.0);
-                *v = 1.0 - (1.0 - *v) * (1.0 - unit(t));
-            }
-            resolved.push((*offset, merged));
-        }
-        let all: BTreeSet<InkId> = resolved.iter().flat_map(|(_, m)| m.keys().copied()).collect();
-        self.fits(all.len())?;
-        let partial_process = overprint.fill && all.len() < 4 && all.iter().all(|id| id.index() < 4);
-        let mut krilla_stops = Vec::with_capacity(resolved.len());
-        for ((offset, merged), (_, original)) in resolved.iter().zip(stops) {
-            let tint = |id: &InkId| merged.get(id).copied().unwrap_or(0.0);
-            let color = if partial_process {
-                let named: Vec<usize> = all.iter().map(|id| id.index()).collect();
-                let mut cmyk = [0.0; 4];
-                for id in &all {
-                    if let Some(c) = cmyk.get_mut(id.index()) {
-                        *c = tint(id);
-                    }
-                }
-                self.process_device_n(&named, cmyk)
-            } else {
-                to_pdf_color(&InkColor::Tints(all.iter().map(|id| (*id, tint(id))).collect()), self.inks, self.cms)
-            };
-            let color = color.ok_or_else(|| WriteError::Color(original.clone()))?;
-            krilla_stops.push(Stop { offset: normalized(*offset), color, opacity: NormalizedF32::ONE });
-        }
+        let colors = self.one_space(stops.iter().map(|(_, c)| c), overprint, "a gradient stop of the All or None colorant")?;
+        let krilla_stops =
+            stops.iter().zip(colors).map(|((offset, _), color)| Stop { offset: normalized(*offset), color, opacity: NormalizedF32::ONE }).collect();
         let to_drawing = |t: &Affine| to_transform(ctm.inverse() * *t);
         Ok(match geometry {
             GradientGeometry::Axial { start, end, extend: [true, true], transform } => LinearGradient {
@@ -622,6 +594,59 @@ impl<'a> Painter<'a, '_> {
             .into(),
             _ => return Err(WriteError::Unsupported("a gradient that doesn't extend at both ends")),
         })
+    }
+
+    /// `mesh` with its corners in one color space, as a Type 6 shading needs. Patches are split
+    /// where [`InkSet::resolve`] isn't linear (tints combining on one plate), so the written
+    /// blend follows the resolved colors as the image path's samples do.
+    fn mesh(&self, mesh: &Mesh, overprint: Overprint, ctm: Affine) -> Result<KPaint, WriteError> {
+        let mut resolve = |color: &InkColor| match self.inks.resolve(color, self.cms) {
+            InkColor::Tints(tints) => Some(merged(tints).into_values().collect()),
+            _ => None,
+        };
+        let all_or_none = "a mesh corner of the All or None colorant";
+        if mesh.patches.iter().flat_map(|p| &p.colors).any(|c| !matches!(c, InkColor::Tints(_))) {
+            return Err(WriteError::Unsupported(all_or_none));
+        }
+        // No image fallback here: past the limit the blend would be wrong, so it isn't written.
+        let mesh = &super::mesh::resolved(mesh, &mut resolve).ok_or(WriteError::Unsupported("a mesh whose inks combine past the patch limit"))?;
+        let colors = self.one_space(mesh.patches.iter().flat_map(|p| &p.colors), overprint, all_or_none)?;
+        let points = |p: &super::MeshPatch| p.points.map(|q| (q.x as f32, q.y as f32));
+        let patches = mesh.patches.iter().zip(colors.as_chunks::<4>().0);
+        let patches = patches.map(|(p, c)| MeshPatch { points: points(p), colors: c.clone(), opacities: [NormalizedF32::ONE; 4] });
+        Ok(MeshGradient { patches: patches.collect(), transform: to_transform(ctm.inverse()), anti_alias: false }.into())
+    }
+
+    /// `colors` in one color space: each lists every ink some color lists, so krilla writes
+    /// them all in the space a color of those inks gets. `what` names a color of the All or
+    /// None colorant, which can't share it.
+    fn one_space<'c>(&self, colors: impl Iterator<Item = &'c InkColor>, op: Overprint, what: &'static str) -> Result<Vec<PdfColor>, WriteError> {
+        let mut resolved: Vec<(BTreeMap<InkId, f32>, &InkColor)> = Vec::new();
+        for color in colors {
+            let InkColor::Tints(tints) = self.inks.resolve(color, self.cms) else { return Err(WriteError::Unsupported(what)) };
+            resolved.push((merged(tints), color));
+        }
+        let all: BTreeSet<InkId> = resolved.iter().flat_map(|(m, _)| m.keys().copied()).collect();
+        self.fits(all.len())?;
+        let partial_process = op.fill && all.len() < 4 && all.iter().all(|id| id.index() < 4);
+        let named: Vec<usize> = all.iter().map(|id| id.index()).collect();
+        let mut out = Vec::with_capacity(resolved.len());
+        for (merged, original) in &resolved {
+            let tint = |id: &InkId| merged.get(id).copied().unwrap_or(0.0);
+            let color = if partial_process {
+                let mut cmyk = [0.0; 4];
+                for id in &all {
+                    if let Some(c) = cmyk.get_mut(id.index()) {
+                        *c = tint(id);
+                    }
+                }
+                self.process_device_n(&named, cmyk)
+            } else {
+                to_pdf_color(&InkColor::Tints(all.iter().map(|id| (*id, tint(id))).collect()), self.inks, self.cms)
+            };
+            out.push(color.ok_or_else(|| WriteError::Color((*original).clone()))?);
+        }
+        Ok(out)
     }
 
     /// Ink `id` as a DeviceN colorant; a spot carries its CMYK alternate.
@@ -711,6 +736,16 @@ fn to_path(path: &BezPath) -> Option<Path> {
         }
     }
     b.finish()
+}
+
+/// `tints` by ink, tints on one ink combined as overlapping halftones.
+fn merged(tints: Vec<(InkId, f32)>) -> BTreeMap<InkId, f32> {
+    let mut merged = BTreeMap::new();
+    for (id, t) in tints {
+        let v = merged.entry(id).or_insert(0.0);
+        *v = 1.0 - (1.0 - *v) * (1.0 - unit(t));
+    }
+    merged
 }
 
 fn unit(v: f32) -> f32 {

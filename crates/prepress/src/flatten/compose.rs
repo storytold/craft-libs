@@ -585,7 +585,7 @@ impl<'a> Builder<'a> {
                 Some(s) => (!masked).then_some(s),
                 None => return Ok(None),
             },
-            Paint::Gradient { .. } => None,
+            Paint::Gradient { .. } | Paint::Mesh(_) => None,
         };
         Ok(self.leaf(path.clone(), rule, source))
     }

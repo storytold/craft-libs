@@ -25,6 +25,7 @@ mod compose;
 mod document;
 pub mod font;
 pub mod geom;
+mod mesh;
 pub mod pdf;
 pub mod raster;
 mod shade;
@@ -192,12 +193,29 @@ pub enum MaskKind {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     Solid(InkColor),
-    /// Stops are offsets `0.0..=1.0` in increasing order. Function-based and mesh shadings
-    /// arrive as images.
+    /// Stops are offsets `0.0..=1.0` in increasing order. Function-based shadings, and meshes
+    /// that can't be [`Paint::Mesh`], arrive as images.
     Gradient {
         stops: Vec<(f32, InkColor)>,
         geometry: GradientGeometry,
     },
+    /// Coons patches; it paints only where they lie.
+    Mesh(Arc<Mesh>),
+}
+
+/// A mesh of Coons patches, later patches over earlier ones.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mesh {
+    pub patches: Vec<MeshPatch>,
+}
+
+/// A Coons patch (ISO 32000-2 §8.7.4.5.7) in page space: 12 boundary points in the order a
+/// Type 6 shading lists them, and its corner colors at points 0, 3, 6 and 9. Colors blend
+/// bilinearly over the patch; the writer puts the corners of one mesh in one color space.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshPatch {
+    pub points: [Point; 12],
+    pub colors: [InkColor; 4],
 }
 
 /// Where a gradient runs, in gradient space.
