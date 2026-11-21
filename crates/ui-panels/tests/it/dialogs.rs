@@ -203,6 +203,20 @@ fn a_windowed_dialog_runs_in_its_own_window_and_stores_its_result() {
     assert_eq!(host.take::<Windowed>(), Some(DialogResult::Ok(7)));
 }
 
+/// A measuring run, which draws a window's body in its parent's pass to size it, opens no window: one opened there
+/// would be the parent's child for that pass only, closed and opened again pass after pass.
+#[trial]
+fn a_measuring_run_opens_no_dialog_window() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    host.open(Windowed { key: "panel", shows: 0, finish: None });
+    let ctx = frames.ctx.clone();
+    frames.frame(Vec::new(), |_ui| craft_ui::runtime::measure::run(&ctx, || host.run_windowed(&ctx)));
+    assert_eq!(host.get::<Windowed>().unwrap().shows, 0, "the measuring run left the dialog alone");
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    assert_eq!(host.get::<Windowed>().unwrap().shows, 1, "a real pass shows it");
+}
+
 /// A press on the document window behind a windowed modal dialog goes on: the pass that checks whether it began on a
 /// caption area does not wait on the context's lock (it hung the app).
 #[trial]

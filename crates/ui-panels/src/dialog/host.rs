@@ -520,6 +520,11 @@ impl DialogHost {
     /// one, so [`take`](DialogHost::take) and the `_by_id` calls see it. While a windowed dialog is
     /// not modeless, the document window behind it stays blocked.
     pub fn run_windowed(&mut self, ctx: &Context) {
+        // A measuring run draws its body in the parent's pass to size it: a window opened there would be the
+        // parent's child, closed again when the pass ends (a flashing window, and the textures queued for it lost).
+        if crate::runtime::measure::active(ctx) {
+            return;
+        }
         // A close asked for a windowed dialog without a `Context` lands here too, when the app runs
         // only `run_windowed` this pass.
         for id in std::mem::take(&mut self.closing) {
