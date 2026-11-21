@@ -263,12 +263,12 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
         let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
         check(&again, name, *want, "after a save");
     }
-    // Latin text and right-to-left text are left as they were.
+    // Latin text is left as it was; Arabic text in a run that says neither `w:rtl` nor `w:cs`
+    // follows the Thai rule (see `hebrew_and_arabic_text_outside_a_complex_script_run_takes_its_own_formatting`).
     let body = r#"<w:p><w:r><w:t>Latin only</w:t></w:r></w:p><w:p><w:r><w:t>سلام</w:t></w:r></w:p>"#;
     let d = craft_docx::read(&docx_with_styles(body, &defaults(""))).unwrap();
-    for p in paras(&d) {
-        assert_eq!(p.runs[0].props.cs, None, "{}", p.text);
-    }
+    let marks: Vec<_> = paras(&d).iter().map(|p| p.runs[0].props.cs).collect();
+    assert_eq!(marks, [None, Some(false)]);
     // Latin text follows the same rule (measured): a character style's `w:cs` or `w:rtl` leaves it in the
     // run's own formatting, a character style's `w:cs w:val="0"` under a paragraph style's
     // `w:cs` in the complex-script formatting.
@@ -288,6 +288,48 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
             })
             .collect();
         assert_eq!(drawn, [("Angsana New".to_string(), 22.0), ("Tahoma".to_string(), 11.0), ("Angsana New".to_string(), 22.0)], "{when}");
+    }
+}
+
+/// Measured in Word for Windows: Hebrew and Arabic text in a run that says neither `w:rtl` nor
+/// `w:cs` is drawn in the run's other font, size and bold, in a paragraph of either direction, as
+/// Thai is; `w:rtl` or `w:cs` on the run draws it in the complex-script ones. It reads that way, and
+/// after a save (where its pieces are written `w:rtl`) it still draws the same.
+#[test]
+fn hebrew_and_arabic_text_outside_a_complex_script_run_takes_its_own_formatting() {
+    let styles = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Tahoma"/><w:sz w:val="20"/><w:szCs w:val="40"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#;
+    let drawn = |d: &Document| {
+        let p = paras(d)[0];
+        let ch = p.text.chars().next().unwrap();
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        if rc.uses_complex(ch) { (rc.font_cs.clone(), rc.size_cs, rc.bold_cs) } else { (rc.font.clone(), rc.size, rc.bold) }
+    };
+    let ordinary = |bold| (String::from("Courier New"), 10.0, bold);
+    let complex = (String::from("Tahoma"), 20.0, false);
+    for (script, text) in [("Hebrew", "שלום עולם"), ("Arabic", "مرحبا بالعالم")] {
+        for (dir, ppr) in [("left to right", ""), ("right to left", "<w:pPr><w:bidi/></w:pPr>")] {
+            for (what, rpr, want) in [
+                ("nothing", "", ordinary(false)),
+                ("bold", "<w:b/>", ordinary(true)),
+                ("w:rtl", "<w:rtl/>", complex.clone()),
+                ("w:cs", "<w:cs/>", complex.clone()),
+            ] {
+                let case = format!("{script}, {dir} paragraph, a run with {what}");
+                let body = format!(r#"<w:p>{ppr}<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#);
+                let d = craft_docx::read(&docx_with_styles(&body, styles)).unwrap();
+                assert_eq!(drawn(&d), want, "{case}: read");
+                let saved = craft_docx::write(&d).unwrap();
+                assert_eq!(drawn(&craft_docx::read(&saved).unwrap()), want, "{case}: saved and read back");
+                if what == "nothing" {
+                    let xml = document_xml(&saved);
+                    assert!(
+                        xml.contains("<w:rtl/>") && xml.contains(r#"w:cs="Courier New""#) && xml.contains(r#"<w:szCs w:val="20"/>"#),
+                        "{case}: {xml}"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -326,4 +368,105 @@ fn a_fields_thai_result_takes_the_complex_script_formatting_only_in_a_complex_sc
         let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
         assert_eq!(drawn(&again), (want.0.to_string(), want.1), "a run with {what}: after a save");
     }
+}
+
+/// Hebrew in a run that says neither `w:rtl` nor `w:cs`, where nothing gives an ordinary font but
+/// the run defaults give a complex-script one: WordCraft draws it in its body font, and saving
+/// (which writes the Hebrew `w:rtl`) must name that font as the complex-script one, or the saved
+/// file draws the inherited Tahoma.
+#[test]
+fn hebrew_outside_a_complex_script_run_keeps_its_body_font_after_a_save() {
+    let styles = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:cs="Tahoma"/><w:sz w:val="20"/><w:szCs w:val="40"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#;
+    let drawn = |d: &Document| {
+        let p = paras(d)[0];
+        let ch = p.text.chars().next().unwrap();
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        if rc.uses_complex(ch) { (rc.font_cs.clone(), rc.size_cs) } else { (rc.font.clone(), rc.size) }
+    };
+    let body = r#"<w:p><w:r><w:t xml:space="preserve">שלום עולם</w:t></w:r></w:p>"#;
+    let d = craft_docx::read(&docx_with_styles(body, styles)).unwrap();
+    let want = (craft_wordmodel::styles::BODY_FONT.to_string(), 10.0);
+    assert_eq!(drawn(&d), want, "read");
+    let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(drawn(&again), want, "saved and read back");
+}
+
+/// Hebrew in a run that says neither `w:rtl` nor `w:cs`, where nothing names a font at all,
+/// ordinary or complex script: WordCraft draws it in its body font, and saving names that font as
+/// the complex-script one of the `w:rtl` piece, or the saved file draws whatever the run defaults
+/// give a right-to-left run instead (Times New Roman, read back).
+#[test]
+fn hebrew_with_no_font_named_anywhere_keeps_its_body_font_after_a_save() {
+    let mut d = Document::new();
+    let sheet = std::sync::Arc::make_mut(&mut d.styles);
+    sheet.default_chr = CharProps { size: Some(12.0), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("שלום עולם", CharProps::default()))];
+    let drawn = |d: &Document| {
+        let p = paras(d)[0];
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        assert!(rc.uses_complex('ש'));
+        (rc.font_cs.clone(), rc.size_cs)
+    };
+    let want = (craft_wordmodel::styles::BODY_FONT.to_string(), 12.0);
+    assert_eq!(drawn(&d), want, "in WordCraft");
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(&format!(r#"w:cs="{}""#, craft_wordmodel::styles::BODY_FONT)), "the right-to-left piece names the body font: {xml}");
+    assert_eq!(drawn(&craft_docx::read(&bytes).unwrap()), want, "saved and read back");
+}
+/// A table whose grid holds more columns than a file can (63): the file gets the first 63, and a
+/// cell's table style parts are those of the written grid, so Hebrew in its last column keeps the
+/// Last Column part's size (30 pt over the whole table's 10 pt) after a save.
+#[test]
+fn hebrew_in_a_too_wide_tables_last_column_keeps_its_size_after_a_save() {
+    let styles = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>
+<w:tblStylePr w:type="lastCol"><w:rPr><w:sz w:val="60"/><w:szCs w:val="60"/></w:rPr></w:tblStylePr></w:style>"#;
+    let grid: String = (0..63).map(|_| r#"<w:gridCol w:w="100"/>"#).collect();
+    let body = format!(
+        r#"<w:tbl><w:tblPr><w:tblStyle w:val="T"/><w:tblLook w:val="0080" w:lastColumn="1"/></w:tblPr><w:tblGrid>{grid}</w:tblGrid><w:tr><w:tc><w:tcPr><w:gridSpan w:val="63"/></w:tcPr><w:p><w:r><w:t>שלום</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#
+    );
+    let drawn = |d: &Document| {
+        let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+        let chr = d.styles.table_cells_chr(t).unwrap();
+        let p = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+        let rc = d.styles.resolve_char_in(p.props.style.as_deref(), Some(&chr[0][0]), &p.runs[0].props);
+        if rc.uses_complex('ש') { rc.size_cs } else { rc.size }
+    };
+    let mut d = craft_docx::read(&docx_with_styles(&body, styles)).unwrap();
+    assert_eq!(drawn(&d), 30.0, "read");
+    // The grid grows a 64th column (as editing can), past what a file holds.
+    for b in d.body.iter_mut() {
+        if let craft_wordmodel::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.grid.push(5.0);
+        }
+    }
+    assert_eq!(drawn(&d), 30.0, "64 columns in the model, 63 counted");
+    let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(drawn(&again), 30.0, "saved and read back");
+}
+
+/// Measured in Word for Windows: Hebrew in a run whose character style says `w:rtl` (or `w:cs`),
+/// the run itself saying neither, is drawn and ordered exactly as in a run that says nothing (the
+/// run defaults' Courier New 10 pt, not their complex-script Tahoma 20 pt). It reads that way and
+/// draws the same after a save.
+#[test]
+fn hebrew_in_a_right_to_left_character_style_is_drawn_as_word_draws_it() {
+    let styles = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Tahoma"/><w:sz w:val="20"/><w:szCs w:val="40"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="character" w:styleId="RtlChar"><w:name w:val="Rtl Char"/><w:rPr><w:rtl/></w:rPr></w:style>"#;
+    let body = r#"<w:p><w:r><w:rPr><w:rStyle w:val="RtlChar"/></w:rPr><w:t xml:space="preserve">שלום עולם abc</w:t></w:r></w:p>"#;
+    let drawn = |d: &Document| {
+        let p = paras(d)[0];
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        let ch = p.text.chars().next().unwrap();
+        if rc.uses_complex(ch) { (rc.font_cs.clone(), rc.size_cs) } else { (rc.font.clone(), rc.size) }
+    };
+    let want = (String::from("Courier New"), 10.0);
+    let d = craft_docx::read(&docx_with_styles(body, styles)).unwrap();
+    assert_eq!(drawn(&d), want, "read");
+    let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(paras(&again)[0].text, "שלום עולם abc", "saved and read back: the text in its order");
+    assert_eq!(drawn(&again), want, "saved and read back");
 }
