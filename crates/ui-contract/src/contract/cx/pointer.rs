@@ -255,7 +255,14 @@ impl<C: Component> Cx<'_, C> {
     /// participate. A control that uses this must sense both clicks and drags.
     pub fn swept_toggle(&self, on: Option<bool>) -> Option<bool> {
         let group = self.pointer_group?;
-        crate::runtime::toggle_sweep::value(self, group, on)
+        let target = crate::runtime::toggle_sweep::ToggleTarget {
+            id: self.id,
+            layer: self.response.layer_id,
+            visible: self.visible,
+            enabled: self.resolved.enabled && !self.resolved.read_only,
+            press: self.press().phase,
+        };
+        crate::runtime::toggle_sweep::value(&self.ctx, target, group, on)
     }
 }
 
