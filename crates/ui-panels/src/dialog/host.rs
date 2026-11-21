@@ -586,7 +586,14 @@ impl DialogHost {
                 let shown = crate::runtime::overlay::stack_place(&ui_ctx, place, id, || dialog.show_erased(ui, stack));
                 let child = dialog.take_child_erased();
                 // The content's size plus the window's margins; it never asks for more than it has, so it settles.
-                let want = (ui.min_rect().size() + egui::vec2(16.0, 16.0)).round();
+                // A sizing pass, or one that drew nothing across, keeps the size: the window would shrink to its
+                // margins and the content would never have the room to grow it back.
+                let drawn = ui.min_rect().size();
+                let want = if ui.is_sizing_pass() || drawn.min_elem() < 1.0 {
+                    size
+                } else {
+                    (drawn + egui::vec2(16.0, 16.0)).round()
+                };
                 if shown.is_some() {
                     close = true;
                 }

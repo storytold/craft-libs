@@ -218,6 +218,22 @@ fn a_windowed_dialog_blocks_the_document_window_behind_it() {
     assert!(ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
 }
 
+/// A pass where the dialog drew nothing (as a measuring pass draws it) leaves its window's size alone: the window
+/// shrunk to its margins would leave the content no room to grow it back, a sliver nobody can use while it blocks the
+/// document window.
+#[trial]
+fn a_pass_that_draws_nothing_keeps_the_window_size() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Windowed { key: "panel", shows: 0, finish: None });
+    let ctx = frames.ctx.clone();
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    let window = egui::ViewportId::from_hash_of(("craft_windowed_dialog", id));
+    let size = ctx.data(|m| m.get_temp::<egui::Vec2>(window.0));
+    assert!(size.is_none_or(|s| s.x > 100.0 && s.y > 100.0), "the window kept a usable size, not {size:?}");
+}
+
 /// A windowed dialog asked to close without a `Context` (`close_by_id`, as closing its window would
 /// arrive) is cancelled at the next `run_windowed`.
 #[trial]
