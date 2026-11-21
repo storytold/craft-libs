@@ -4,7 +4,7 @@ use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{FindBar, FindReplaceDialog, FindTab};
+use super::{FindBar, FindCheck, FindReplaceDialog, FindTab, ReplaceButtons};
 use crate::find::{FindMatches, FindOptions, FindPattern, MAX_COUNT};
 
 fn matches(text: &str, query: &str) -> FindMatches {
@@ -39,10 +39,14 @@ fn refused_pattern(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     FindBar::new(&mut query, &mut options, &mut found).show(ui).response.into()
 }
 
-/// The Word layout of the dialog on `tab`, with "craft" in Find what, while `open`. The dialog keeps what is typed
-/// in it until it closes; the card's Show dialog opens a fresh one.
-fn dialog(ui: &mut Ui, data: &mut StoryData, tab: FindTab) -> StoryOutput {
-    let fresh = || FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(vec!["Page".into(), "Line".into()]);
+/// The Word layout of the dialog on `tab`, with "craft" in Find what.
+fn word(tab: FindTab) -> FindReplaceDialog {
+    FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(vec!["Page".into(), "Line".into()])
+}
+
+/// The dialog `fresh` builds, while `open`. The dialog keeps what is typed in it until it closes; the card's Show
+/// dialog opens a fresh one.
+fn dialog(ui: &mut Ui, data: &mut StoryData, fresh: impl Fn() -> FindReplaceDialog) -> StoryOutput {
     if !*data.value("open", true) {
         return StoryOutput::default();
     }
@@ -63,10 +67,26 @@ fn dialog(ui: &mut Ui, data: &mut StoryData, tab: FindTab) -> StoryOutput {
 
 #[story(FindReplaceDialog, covers = [], drive = Drive::Never, title = "Dialog")]
 fn find_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    dialog(ui, data, FindTab::Find)
+    dialog(ui, data, || word(FindTab::Find))
 }
 
 #[story(FindReplaceDialog, covers = [], drive = Drive::Never)]
 fn replace_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    dialog(ui, data, FindTab::Replace)
+    dialog(ui, data, || word(FindTab::Replace))
+}
+
+#[story(FindReplaceDialog, covers = [], drive = Drive::Never)]
+fn find_tab_with_checks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let checks = || vec![FindCheck::new("backwards", "Search Backwards", false), FindCheck::new("hidden", "Check Hidden Layers", true)];
+    dialog(ui, data, move || word(FindTab::Find).checks(checks()))
+}
+
+#[story(FindReplaceDialog, covers = [], drive = Drive::Never)]
+fn replace_tab_separate_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    dialog(ui, data, || word(FindTab::Replace).replace_buttons(ReplaceButtons::Separate))
+}
+
+#[story(FindReplaceDialog, covers = [], drive = Drive::Never)]
+fn powerpoint_layout(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    dialog(ui, data, || FindReplaceDialog::new("craft", FindTab::Find).word(false))
 }

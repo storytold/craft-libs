@@ -98,6 +98,24 @@ pub(super) fn without(values: &RulerValues, at: usize) -> RulerValues {
     cleared
 }
 
+/// `values` with every stop moved by the offset that takes the stop `grab` to `to` points: spacing and kinds stay, the
+/// lowest stop stays at 0 or above and the highest within the column. A column the stops do not fit in moves none.
+pub(super) fn moved_all(values: &RulerValues, grab: usize, to: f32, width: f32) -> RulerValues {
+    let mut next = values.clone();
+    let Some(start) = values.stops.get(grab).map(|stop| stop.position) else { return next };
+    if !to.is_finite() {
+        return next;
+    }
+    let lowest = values.stops.iter().map(|stop| stop.position).fold(f32::INFINITY, f32::min);
+    let highest = values.stops.iter().map(|stop| stop.position).fold(f32::NEG_INFINITY, f32::max);
+    let (least, most) = (-lowest, width.max(0.0) - highest);
+    let offset = if least <= most { (to - start).clamp(least, most) } else { 0.0 };
+    for stop in &mut next.stops {
+        stop.position += offset;
+    }
+    next
+}
+
 /// `values` with `item` moved to `to` points (kept within the column), and where the item is
 /// afterwards (a stop moved past another has a new index).
 pub(super) fn moved(values: &RulerValues, item: RulerItem, to: f32, width: f32) -> (RulerValues, RulerItem) {

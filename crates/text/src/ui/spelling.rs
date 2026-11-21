@@ -149,9 +149,10 @@ impl SpellingItem {
 
     /// Sets the sentence's text before and after the word.
     #[must_use]
-    pub fn context(self, before: impl Into<String>, after: impl Into<String>) -> Self {
-        let _ = (before.into(), after.into());
-        todo!("ty.X97")
+    pub fn context(mut self, before: impl Into<String>, after: impl Into<String>) -> Self {
+        self.before = before.into();
+        self.after = after.into();
+        self
     }
 }
 
@@ -224,8 +225,8 @@ impl CheckSpellingDialog {
     /// Replaces the list and shows its first item (Change To from its first suggestion): a host that walks its text
     /// itself hands the dialog the words from its current place.
     pub fn restart(&mut self, items: Vec<SpellingItem>) {
-        let _ = items;
-        todo!("ty.X100")
+        self.index = 0;
+        self.set_items(items);
     }
 
     /// The misspellings found again after an action. The dialog keeps its position in the list (after Change, Ignore
@@ -278,7 +279,17 @@ impl CheckSpellingDialog {
         let shown = dialog.show(ui, |ui, _| {
             let word = item.as_ref().map_or_else(String::new, |i| i.word.clone());
             Field::new(words.not_in_dictionary.clone()).id_salt("word").show(ui, |ui, _| {
-                TextField::new(words.not_in_dictionary.clone(), Bind::given(word.clone())).enabled(false).show(ui);
+                // PLAN: the word should be strong, underlined and in the accent ink inside the sunken field; no display
+                // component takes a run of `Span`s (`Text::spans` wants `DocRun`s with fonts and data colours) and `Span`
+                // has no colour (contract-03 OQ1), so the context reads as one wrapped line.
+                match item.as_ref().filter(|i| !i.before.is_empty() || !i.after.is_empty()) {
+                    Some(i) => {
+                        Text::new(format!("{}{}{}", i.before, i.word, i.after)).show(ui);
+                    }
+                    None => {
+                        TextField::new(words.not_in_dictionary.clone(), Bind::given(word.clone())).enabled(false).show(ui);
+                    }
+                }
             });
             Field::new(words.change_to.clone()).id_salt("change-to").show(ui, |ui, _| {
                 TextField::new(words.change_to.clone(), Bind::bound(&mut *change_to)).enabled(has_item).show(ui);
@@ -326,6 +337,9 @@ impl CheckSpellingDialog {
 
         match body_press.get().or(button_press) {
             Some(Press::Ignore) => {
+                if let Some(item) = item {
+                    self.action = Some(SpellingAction::Ignore(item));
+                }
                 self.index = (self.index + 1).min(self.items.len());
                 self.change_to = self.items.get(self.index).and_then(|i| i.suggestions.first()).cloned().unwrap_or_default();
             }

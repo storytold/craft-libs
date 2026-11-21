@@ -360,8 +360,7 @@ impl TextRuler<'_> {
     /// The running drag of the ruler whose id is `ruler`, read outside its pass; `None` while no drag runs and while
     /// the dragged stop is off the ruler.
     pub fn dragging(ctx: &egui::Context, ruler: egui::Id) -> Option<RulerDrag> {
-        let _ = (ctx, ruler);
-        todo!("ty.X59")
+        craft_ui::runtime::edit::gesture_note::<RulerValues, Option<RulerDrag>>(ctx, ruler).flatten()
     }
 }
 

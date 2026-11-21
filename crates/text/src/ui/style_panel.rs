@@ -195,7 +195,7 @@ impl Facts {
             TextStyleCommand::Redefine => {
                 (self.target && self.current.is_some_and(|id| id != 0 || self.paragraph)).then_some(TextStyleAction::Redefine)
             }
-            TextStyleCommand::New => Some(TextStyleAction::New { from_selection: self.target, ask_name: false }),
+            TextStyleCommand::New => Some(TextStyleAction::new_style(self.target, false)),
             TextStyleCommand::Duplicate if several => Some(TextStyleAction::DuplicateHighlighted),
             TextStyleCommand::Delete if several => Some(TextStyleAction::DeleteHighlighted),
             TextStyleCommand::Duplicate => editable.map(TextStyleAction::Duplicate),
@@ -315,7 +315,7 @@ impl<'a> TextStylesPanel<'a> {
     /// Shows the panel and returns what the user asked for.
     pub fn show(self, ui: &mut Ui) -> TextStylesPanelOutput {
         let TextStylesPanel { label, kind, rows, mut selection, current, overridden, target, text_selected, highlighting, empty, reveal } = self;
-        let _ = reveal; // P3(type-w5): ty.X63
+
         let words = Env::of(ui).words::<TextStylesWords>();
         let paragraph = kind == TextStyleKind::Paragraph;
         let action = Cell::new(None::<TextStyleAction>);
@@ -364,7 +364,10 @@ impl<'a> TextStylesPanel<'a> {
             } else if let Some(command) = bar.picked.and_then(|at| FOOTER.get(at))
                 && let Some(found) = facts.action(*command)
             {
-                action.set(Some(found));
+                action.set(Some(match found {
+                    TextStyleAction::New { from_selection, .. } => TextStyleAction::new_style(from_selection, bar.mods.alt),
+                    other => other,
+                }));
             }
         };
 
@@ -403,6 +406,10 @@ impl<'a> TextStylesPanel<'a> {
                     .can_drag(move |_| highlighting)
                     .drag_payload(|drag: &ListDrag<u64>| Some(drag.clone()))
                     .selection(selection.reborrowed());
+                let list = match reveal {
+                    Some(id) => list.reveal(id),
+                    None => list,
+                };
                 let list = match &empty {
                     Some(text) => list.empty(text.clone()),
                     None => list,

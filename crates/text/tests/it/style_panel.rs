@@ -46,6 +46,27 @@ fn a_click_applies_alt_clears_overrides_and_a_double_click_opens_options_except_
 }
 
 #[trial]
+fn alt_on_new_asks_for_a_name() {
+    let state = Rc::new(RefCell::new((Selection::<u64>::default(), Vec::<TextStyleAction>::new())));
+    let shared = state.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let rows = [TextStyleRow::new(0, "None"), TextStyleRow::new(1, "Emphasis")];
+        let mut guard = shared.borrow_mut();
+        let (selection, actions) = &mut *guard;
+        let out = TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, Bind::bound(selection)).target(true).show(ui);
+        actions.extend(out.action);
+    });
+    fixture.idle(10);
+    let new = fixture.by_label("Create new style (from the selected type)").expect("the New footer button");
+    fixture.click(&new).idle(4);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![TextStyleAction::new_style(true, false)], "a plain click does not ask");
+    fixture.advance(1.0).hold(Modifiers::ALT);
+    fixture.click(&new).idle(4);
+    fixture.hold(Modifiers::NONE);
+    assert_eq!(std::mem::take(&mut state.borrow_mut().1), vec![TextStyleAction::new_style(true, true)], "an Alt-click asks for a name");
+}
+
+#[trial]
 fn every_attempt_to_apply_a_character_style_at_a_bare_caret_warns_and_applies_nothing() {
     let state = Rc::new(RefCell::new((Selection::<u64>::default(), Vec::<TextStyleAction>::new(), 0usize)));
     let shared = state.clone();

@@ -6,7 +6,7 @@ use craft_behavior::{SelectionChange, keyed};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked};
-use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
@@ -15,7 +15,7 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use craft_ui::text::TextField;
 use egui::{Context, Ui};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::FindLabels;
 use crate::find::FindOptions;
@@ -48,8 +48,7 @@ pub struct FindCheck {
 impl FindCheck {
     /// A check box `key` named `label`, `on` or off.
     pub fn new(key: impl Into<String>, label: impl Into<Label>, on: bool) -> Self {
-        let _ = (key.into(), label.into(), on);
-        todo!("ty.X84")
+        FindCheck { key: key.into(), label: label.into(), on }
     }
 }
 
@@ -126,14 +125,12 @@ impl FindRequest {
 
     /// Replace the current match of `query` with `with`.
     pub fn replace(query: impl Into<String>, with: impl Into<String>, options: FindOptions) -> Self {
-        // P3(type-w5): ty.X91
         FindRequest::Replace { query: query.into(), with: with.into(), options, find_next: true }
     }
 
     /// Replace the current match of `query` with `with` and stop there.
     pub fn replace_only(query: impl Into<String>, with: impl Into<String>, options: FindOptions) -> Self {
-        let _ = (query.into(), with.into(), options);
-        todo!("ty.X93")
+        FindRequest::Replace { query: query.into(), with: with.into(), options, find_next: false }
     }
 
     /// Replace every match of `query` with `with`.
@@ -163,6 +160,8 @@ enum Field {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Press {
     Replace,
+    /// Replace & Find, on the Separate arrangement.
+    ReplaceFind,
     ReplaceAll,
     Highlight(bool),
     /// PowerPoint's Replace… on the Find tab.
@@ -197,13 +196,10 @@ pub struct FindReplaceDialog {
     go_to_kind: usize,
     go_to_target: String,
     /// The host's check boxes, drawn after the layout's own options.
-    #[allow(dead_code)] // P3(type-w5): ty.X85
     checks: Vec<FindCheck>,
     /// The arrangement of the Replace buttons.
-    #[allow(dead_code)] // P3(type-w5): ty.X88
     replace_buttons: ReplaceButtons,
     /// Whether a match is current; the Replace buttons are enabled only while it is.
-    #[allow(dead_code)] // P3(type-w5): ty.X90
     matched: bool,
 }
 
@@ -254,35 +250,43 @@ impl FindReplaceDialog {
 
     /// The host's check boxes, drawn after the layout's own options, in order, in both layouts.
     #[must_use]
-    pub fn checks(self, checks: Vec<FindCheck>) -> Self {
-        let _ = checks;
-        todo!("ty.X85")
+    pub fn checks(mut self, checks: Vec<FindCheck>) -> Self {
+        self.checks = checks;
+        self
     }
 
     /// The current value of the host check `key`.
     pub fn checked(&self, key: &str) -> Option<bool> {
-        let _ = key;
-        todo!("ty.X86")
+        self.checks.iter().find(|check| check.key == key).map(|check| check.on)
     }
 
     /// The arrangement of the Replace buttons on the Replace tab, both layouts.
     #[must_use]
-    pub fn replace_buttons(self, buttons: ReplaceButtons) -> Self {
-        let _ = buttons;
-        todo!("ty.X88")
+    pub fn replace_buttons(mut self, buttons: ReplaceButtons) -> Self {
+        self.replace_buttons = buttons;
+        self
     }
 
     /// Opens with `with` in Replace with (the host's last search).
     #[must_use]
-    pub fn replace_with(self, with: impl Into<String>) -> Self {
-        let _ = with.into();
-        todo!("ty.X89")
+    pub fn replace_with(mut self, with: impl Into<String>) -> Self {
+        self.with = with.into();
+        self
     }
 
     /// Whether a match is current; the Replace buttons are enabled only while it is. Starts `true`.
     pub fn set_matched(&mut self, matched: bool) {
-        let _ = matched;
-        todo!("ty.X90")
+        self.matched = matched;
+    }
+
+    /// The search options the shown layout has, by their serde names: PowerPoint's layout has Match case and Whole
+    /// words only.
+    fn option_fields(&self) -> Map<String, Value> {
+        let Ok(Value::Object(mut fields)) = serde_json::to_value(self.options) else { return Map::new() };
+        if !self.word {
+            fields.retain(|name, _| matches!(name.as_str(), "matchCase" | "wholeWord"));
+        }
+        fields
     }
 
     /// The request the user made since the last call, if any.
@@ -319,10 +323,20 @@ impl StackDialog for FindReplaceDialog {
         let pending = self.insert.take();
         let kinds = self.go_to_kinds.clone();
         let message = self.message.clone();
+        let matched = self.matched;
+        let separate = self.replace_buttons == ReplaceButtons::Separate;
+        let mut checks = std::mem::take(&mut self.checks);
 
         let accept_label = if tab == FindTab::GoTo { words.go_to.clone() } else { words.find_next.clone() };
         let extras: Vec<(Label, Press)> = match (tab, word) {
-            (FindTab::Replace, _) => vec![(words.replace.clone(), Press::Replace), (words.replace_all.clone(), Press::ReplaceAll)],
+            (FindTab::Replace, _) => {
+                let mut extras = vec![(words.replace.clone(), Press::Replace)];
+                if separate {
+                    extras.push((words.replace_find.clone(), Press::ReplaceFind));
+                }
+                extras.push((words.replace_all.clone(), Press::ReplaceAll));
+                extras
+            }
             (FindTab::Find, true) => {
                 vec![(words.highlight_all.clone(), Press::Highlight(true)), (words.clear_highlight.clone(), Press::Highlight(false))]
             }
@@ -331,7 +345,10 @@ impl StackDialog for FindReplaceDialog {
         };
         let accept_enabled = if tab == FindTab::GoTo { !kinds.is_empty() } else { !query.is_empty() };
         let mut buttons = vec![FooterButton::new(accept_label, DialogRole::Accept).stays_open(true).enabled(accept_enabled)];
-        buttons.extend(extras.iter().map(|(label, _)| FooterButton::new(label.clone(), DialogRole::Other).stays_open(true)));
+        buttons.extend(extras.iter().map(|(label, which)| {
+            let needs_match = matches!(which, Press::Replace | Press::ReplaceFind);
+            FooterButton::new(label.clone(), DialogRole::Other).stays_open(true).enabled(matched || !needs_match)
+        }));
         buttons.push(FooterButton::new(words.close_button.clone(), DialogRole::Cancel));
         let close_at = buttons.len() - 1;
 
@@ -400,33 +417,40 @@ impl StackDialog for FindReplaceDialog {
             let check = |ui: &mut Ui, label: &Label, value: &mut bool, enabled: bool| {
                 Checkbox::new(Bind::bound(value)).label(label.clone()).enabled(enabled).show(ui);
             };
-            if !word {
-                check(ui, &words.match_case.clone(), &mut options.match_case, true);
-                check(ui, &words.whole_words.clone(), &mut options.whole_word, true);
-                return;
+            'options: {
+                if !word {
+                    check(ui, &words.match_case.clone(), &mut options.match_case, true);
+                    check(ui, &words.whole_words.clone(), &mut options.whole_word, true);
+                    break 'options;
+                }
+                if clicked(&Button::new(words.search_options.clone()).show(ui)) {
+                    more = !more;
+                }
+                if !more {
+                    break 'options;
+                }
+                // Word greys the case, word and ignore options out while wildcards are on.
+                let free = !options.wildcards || options.regex;
+                let no_regex = !options.regex;
+                check(ui, &words.match_case.clone(), &mut options.match_case, free);
+                check(ui, &words.whole_words.clone(), &mut options.whole_word, free);
+                check(ui, &words.use_wildcards.clone(), &mut options.wildcards, no_regex);
+                check(ui, &words.match_prefix.clone(), &mut options.prefix, free);
+                check(ui, &words.match_suffix.clone(), &mut options.suffix, free);
+                check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
+                check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
+                check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
+                let entries = special_entries(&words, tab == FindTab::Replace);
+                let button = Button::new(words.special.clone()).show(ui);
+                if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
+                    let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
+                    picked_code = Some((field, code.to_owned()));
+                }
             }
-            if clicked(&Button::new(words.search_options.clone()).show(ui)) {
-                more = !more;
-            }
-            if !more {
-                return;
-            }
-            // Word greys the case, word and ignore options out while wildcards are on.
-            let free = !options.wildcards || options.regex;
-            let no_regex = !options.regex;
-            check(ui, &words.match_case.clone(), &mut options.match_case, free);
-            check(ui, &words.whole_words.clone(), &mut options.whole_word, free);
-            check(ui, &words.use_wildcards.clone(), &mut options.wildcards, no_regex);
-            check(ui, &words.match_prefix.clone(), &mut options.prefix, free);
-            check(ui, &words.match_suffix.clone(), &mut options.suffix, free);
-            check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
-            check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
-            check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
-            let entries = special_entries(&words, tab == FindTab::Replace);
-            let button = Button::new(words.special.clone()).show(ui);
-            if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
-                let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
-                picked_code = Some((field, code.to_owned()));
+            if !word || more {
+                for host in &mut checks {
+                    Checkbox::new(Bind::bound(&mut host.on)).label(host.label.clone()).show(ui);
+                }
             }
             if !message.is_empty() {
                 Text::new(message.clone()).show(ui);
@@ -442,6 +466,7 @@ impl StackDialog for FindReplaceDialog {
         self.go_to_target = target;
         self.tab = next_tab;
         self.insert = picked_code;
+        self.checks = checks;
 
         let picked = shown.output.picked;
         if picked == Some(0) || (submitted && tab != FindTab::GoTo) {
@@ -458,22 +483,54 @@ impl StackDialog for FindReplaceDialog {
             match which {
                 Press::ShowReplace => self.tab = FindTab::Replace,
                 Press::Highlight(on) => self.request = Some(FindRequest::Highlight { query, options, on: *on }),
-                // P3(type-w5): ty.X91
-                Press::Replace if !query.is_empty() => self.request = Some(FindRequest::Replace { query, with, options, find_next: true }),
-                Press::ReplaceAll if !query.is_empty() => self.request = Some(FindRequest::ReplaceAll { query, with, options }),
-                Press::Replace | Press::ReplaceAll => {}
+                Press::Replace if !query.is_empty() && separate => self.request = Some(FindRequest::replace_only(query, with, options)),
+                Press::Replace | Press::ReplaceFind if !query.is_empty() => self.request = Some(FindRequest::replace(query, with, options)),
+                Press::ReplaceAll if !query.is_empty() => self.request = Some(FindRequest::replace_all(query, with, options)),
+                Press::Replace | Press::ReplaceFind | Press::ReplaceAll => {}
             }
         }
         (picked == Some(close_at) || shown.output.closed.is_some()).then_some(DialogResult::Ok(()))
     }
 
     fn json_fields(&self) -> Option<Value> {
-        todo!("ty.X95")
+        let mut fields = Map::new();
+        fields.insert("find".to_owned(), Value::String(self.query.clone()));
+        fields.insert("replace".to_owned(), Value::String(self.with.clone()));
+        fields.extend(self.option_fields());
+        for check in &self.checks {
+            fields.insert(check.key.clone(), Value::Bool(check.on));
+        }
+        fields.insert("message".to_owned(), Value::String(self.message.clone()));
+        Some(Value::Object(fields))
     }
 
-    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("ty.X95")
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
+        let rejects = || FieldRefusal::Rejects(&value).message(field);
+        match field {
+            "message" => Err(FieldRefusal::ReadOnly.message(field)),
+            "find" | "replace" => {
+                let text = value.as_str().ok_or_else(rejects)?.to_owned();
+                if field == "find" {
+                    self.query = text;
+                } else {
+                    self.with = text;
+                }
+                Ok(())
+            }
+            _ => {
+                if let Some(check) = self.checks.iter_mut().find(|check| check.key == field) {
+                    check.on = value.as_bool().ok_or_else(rejects)?;
+                    return Ok(());
+                }
+                if !self.option_fields().contains_key(field) {
+                    return Err(FieldRefusal::Unknown.message(field));
+                }
+                let Ok(Value::Object(mut all)) = serde_json::to_value(self.options) else { return Err(FieldRefusal::Unknown.message(field)) };
+                all.insert(field.to_owned(), value.clone());
+                self.options = serde_json::from_value(Value::Object(all)).map_err(|_| rejects())?;
+                Ok(())
+            }
+        }
     }
 }
 

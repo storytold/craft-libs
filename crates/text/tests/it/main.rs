@@ -3,10 +3,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod editor;
+mod find_dialog;
 mod notes;
 mod path_text;
 
 mod ruler;
+mod spelling;
 mod style_options;
 mod style_panel;
 mod tabs;
