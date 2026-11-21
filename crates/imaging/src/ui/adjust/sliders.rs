@@ -309,8 +309,21 @@ impl<'b, 'a, V: Value> Run<'b, 'a, V> {
     /// One row: `field`'s slider showing `value`, its edit lifted onto the editor's value by `set` with
     /// the number rounded to the field's step.
     pub(super) fn slider_row(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, field: &AdjustField, value: f64, set: impl Fn(&V, f64) -> V) {
+        self.slider_row_enabled(ui, cx, field, value, true, set);
+    }
+
+    /// [`Run::slider_row`], disabled unless `enabled`.
+    pub(super) fn slider_row_enabled(
+        &mut self,
+        ui: &mut Ui,
+        cx: &mut BodyCx<'_>,
+        field: &AdjustField,
+        value: f64,
+        enabled: bool,
+        set: impl Fn(&V, f64) -> V,
+    ) {
         let context = self.context;
-        let mut edit = field.slider(field.clamp(value), context).id_salt(field.key).show(ui).edit;
+        let mut edit = field.slider(field.clamp(value), context).id_salt(field.key).enabled(enabled).show(ui).edit;
         // A drag proposes the slider's own stops and the slider compares what it is shown with what it proposed, so
         // the running gesture carries them as they are; the value that ends the edit is rounded to the field's places.
         edit.events = std::mem::take(&mut edit.events)

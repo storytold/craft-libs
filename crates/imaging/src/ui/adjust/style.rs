@@ -35,7 +35,7 @@ pub(crate) mod balance {
     pub const YELLOW_BLUE: [DataColor; 2] = [rgb8(230, 210, 30), rgb8(40, 80, 230)];
 }
 
-/// The colours the Black & White and Channel Mixer rows move towards from black.
+/// The colours the Black & White and Channel Mixer rows move towards: from black for light, from white for ink.
 pub(crate) mod mix {
     use super::{DataColor, rgb8};
 
@@ -44,4 +44,6 @@ pub(crate) mod mix {
         [rgb8(230, 50, 50), rgb8(235, 215, 40), rgb8(50, 200, 70), rgb8(40, 200, 220), rgb8(50, 90, 235), rgb8(220, 50, 210)];
     /// Channel Mixer: the Red, Green and Blue sources.
     pub const SOURCES: [DataColor; 3] = [rgb8(225, 50, 50), rgb8(50, 190, 70), rgb8(60, 100, 235)];
+    /// CMYK Channel Mixer: the Cyan, Magenta, Yellow and Black inks, whose rows move towards them from paper white.
+    pub const INKS: [DataColor; 4] = [rgb8(0, 175, 225), rgb8(220, 40, 140), rgb8(245, 225, 30), rgb8(30, 30, 30)];
 }

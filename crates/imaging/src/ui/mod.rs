@@ -54,9 +54,10 @@ pub mod wide_angle;
 pub use adjust::{
     AdjustContext, AdjustDialogCx, AdjustField, AdjustSession, AdjustSliders, AdjustTrack, AdjustWords, AdjustmentKind, AdjustmentsPanel,
     AdjustmentsPanelOutput, BlackWhite, BlackWhiteEditor, BrightnessContrast, BrightnessContrastEditor, ChannelMixer, ChannelMixerEditor,
-    ColorBalance, ColorBalanceEditor, CurvesMode, CurvesPanel, CurvesPanelOutput, HostedAdjustDialog, HueSaturation, HueSaturationEditor, Levels,
-    LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsPanel, LevelsPanelOutput, LevelsWords, PhotoFilter, PhotoFilterEditor, SelectiveColor,
-    SelectiveColorEditor, ThresholdEditor, ToneChannelCommands, ToneCurves, TonePick, TonePickTool, TonePicker, TonePickerRow, TonePickerRowOutput,
+    CmykChannelMixer, CmykChannelMixerEditor, ColorBalance, ColorBalanceEditor, CurvesMode, CurvesPanel, CurvesPanelOutput, HostedAdjustDialog,
+    HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsPanel, LevelsPanelOutput, LevelsWords,
+    PhotoFilter, PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannelCommands, ToneCurves, TonePick, TonePickTool,
+    TonePicker, TonePickerRow, TonePickerRowOutput,
 };
 
 pub use blur_pins::{
