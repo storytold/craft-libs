@@ -4,8 +4,13 @@
 use craft_cdr::model::{
     Cap, Color, Drawing, Flags, Geometry, Join, Layer, LayerKind, Matrix, Object, Outline, Page, Path, Pt, Segment, Shape, SubPath,
 };
-use craft_cdr::{Error, Limits, MAX_CURVE_POINTS, is_cmx, read_cmx, write_cmx};
+use craft_cdr::{Error, Limits, MAX_CURVE_POINTS, Written, is_cmx, read_cmx};
 use proptest::prelude::*;
+
+/// [`craft_cdr::write_cmx`] within the default limits.
+fn write_cmx(d: &Drawing) -> Result<Written, Error> {
+    craft_cdr::write_cmx(d, Limits::default())
+}
 
 fn layer(name: &str, objects: Vec<Object>) -> Layer {
     Layer { name: name.into(), kind: LayerKind::Drawing, flags: Flags::default(), objects, guides: Vec::new() }
@@ -919,6 +924,48 @@ fn groups_nested_deeper_than_the_reader_reads_are_refused() {
     let deepest = Limits::default().depth;
     assert!(round_trip(&nest(deepest)).pages[0].layers.len() == 1, "as deep as the reader reads");
     assert_eq!(write_cmx(&nest(deepest + 1)), Err(Error::Limit("nesting depth")));
+}
+
+#[test]
+fn a_file_the_reader_would_not_take_whole_within_the_limits_is_refused() {
+    let dashed = Outline { dashes: vec![2.0, 1.0, 3.0], ..outline(Color::Gray(0.0)) };
+    let art = |x: f64| Object::Shape(Box::new(Shape::new(square(x, 0.0, 10.0), Matrix::IDENTITY, Some(Color::Gray(0.5)), Some(dashed.clone()))));
+    let group = Object::Group { objects: vec![art(0.0), art(20.0)], flags: Flags::default() };
+    let d = drawing(vec![Page { size: None, layers: vec![layer("L", vec![group, art(40.0)])] }]);
+    let whole = write_cmx(&d).unwrap().bytes;
+    let fields: [fn(&mut Limits) -> &mut usize; 5] =
+        [|l| &mut l.chunks, |l| &mut l.objects, |l| &mut l.coordinates, |l| &mut l.dashes, |l| &mut l.depth];
+    for (i, field) in fields.into_iter().enumerate() {
+        let (mut written, mut refused) = (false, false);
+        for v in 0..=80 {
+            let mut limits = Limits::default();
+            *field(&mut limits) = v;
+            // What the reader takes from the file written within the default limits.
+            let opens_whole = read_cmx(&whole, limits).is_ok_and(|back| back.warnings.is_empty());
+            match craft_cdr::write_cmx(&d, limits) {
+                Ok(w) => {
+                    written = true;
+                    assert!(opens_whole, "field {i} at {v}: written but not read whole");
+                    assert_eq!(w.bytes, whole, "field {i} at {v}");
+                }
+                Err(e) => {
+                    refused = true;
+                    assert!(matches!(e, Error::Limit(_)), "field {i} at {v}: {e:?}");
+                    assert!(!opens_whole, "field {i} at {v}: refused but read whole");
+                }
+            }
+        }
+        assert!(written && refused, "field {i}: both outcomes within 0 to 80");
+    }
+    let input = |n: usize| craft_cdr::write_cmx(&d, Limits { input: n, ..Limits::default() });
+    assert!(input(whole.len()).is_ok());
+    assert_eq!(input(whole.len() - 1), Err(Error::Limit("input size")));
+    // A pattern with no positive length is solid, and the reader takes no dashes for it.
+    let solid = Outline { dashes: vec![f64::NAN, 0.0], ..outline(Color::Gray(0.0)) };
+    let one = one_shape(Shape::new(square(0.0, 0.0, 10.0), Matrix::IDENTITY, None, Some(solid)));
+    let w = craft_cdr::write_cmx(&one, Limits { dashes: 0, ..Limits::default() }).unwrap();
+    assert!(w.rounded_dashes, "the length that is not a number");
+    assert!(read_cmx(&w.bytes, Limits { dashes: 0, ..Limits::default() }).unwrap().warnings.is_empty());
 }
 
 #[test]

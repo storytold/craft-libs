@@ -61,7 +61,8 @@ pub enum Error {
     Version(u16),
     /// A container structure that doesn't parse.
     Damaged(&'static str),
-    /// Past one of the [`Limits`].
+    /// Past one of the [`Limits`]; from [`write_cmx`], also past what a `.cmx` file holds, or an
+    /// outline width that is negative or NaN.
     Limit(&'static str),
     /// A file this reader doesn't open: an encrypted, ZIP64 or split package, or a RIFF file that
     /// names a version before 3; a big-endian `.cmx` file or one with 16-bit coordinates.
@@ -114,12 +115,29 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
 
 /// Write `drawing` as a `.cmx` exchange file with 32-bit coordinates, in the layouts
 /// [`read_cmx`] reads: its pages, layers, groups and shapes (as curves) with uniform fills and
-/// outlines. A coordinate past the 32-bit range, a page side that rounds to 0, more than 65,535
-/// pages, layers on a page or different colors, pens or outlines, a dash pattern of more than
-/// 32,765 lengths, groups nested deeper than [`Limits`]' default depth, or a chunk past its 32-bit
-/// size, is an [`Error::Limit`]. [`Written`] reports what the file could not hold as it was. The
-/// header's index offsets and the index chunks are not written, so a reader must find the chunks
-/// by their ids, as [`read_cmx`] does.
-pub fn write_cmx(drawing: &Drawing) -> Result<Written, Error> {
-    cmx_write::write(drawing)
+/// outlines. [`read_cmx`] reading the file within `limits` leaves nothing out because of them;
+/// what the file holds differently from the drawing, such as a name the reader shortens, is
+/// reported in [`Written`].
+///
+/// It fails with [`Error::Limit`], and writes nothing, for:
+/// - a coordinate, page side or outline width past the 32-bit range, a negative or NaN outline
+///   width, or a page side that rounds to 0;
+/// - more than 65,535 pages, layers on a page, or different colors, pens, line types, dash
+///   patterns or outlines, or a dash pattern of more than 32,765 lengths;
+/// - groups nested deeper than the depth of `limits`, or more chunks, objects, coordinates or
+///   dashes than a read within `limits` takes;
+/// - a file longer than the input size of `limits`, or a chunk past what its 32-bit size holds.
+///
+/// [`Written`] reports what the file holds differently from the drawing; its fields name each
+/// case. A rounded rectangle under a scale that keeps right angles but differs along its sides is
+/// written with round corners of its radii times the square root of the scales' product, not with
+/// stretched corners, and is not reported.
+///
+/// The header's index offsets, the index chunks (`LIST indx`), the instruction counts and offsets
+/// inside page, layer and group records, and the bounds inside layer and group records are not
+/// written, so a reader must find the chunks by their ids and walk the instructions in order, as
+/// [`read_cmx`] does. The record of a page with a size holds the edges of its curves, or of the
+/// page when it has none.
+pub fn write_cmx(drawing: &Drawing, limits: Limits) -> Result<Written, Error> {
+    cmx_write::write(drawing, limits)
 }

@@ -1,6 +1,7 @@
 # Where each layout comes from
 
-The reader relies on the record layouts below. Code cites a row by its id (`R1` ...), and
+The reader relies on the record layouts below, and the `.cmx` writer writes in them ("Written
+fields" lists each field it sets). Code cites a row by its id (`R1` ...), and
 `tests/it/provenance.rs` fails when a cited id has no row here.
 
 Sources:
@@ -52,7 +53,10 @@ Sources:
 
 Status: `public-spec` (K, KF, KR, Z, F or PR), `sample` (S), `public-notes` (a layout CN marks
 confirmed that no CX file shows), `unconfirmed` (a point no source states and no sample file shows;
-listed so it can be checked against a file, with what the reader does when it is wrong).
+listed so it can be checked against a file, with what the reader does when it is wrong). The
+"Written fields" table also uses `own` (a value the reader does not read, set as the synthetic test
+files of `src/synth_cmx.rs` set it) and `the writer's choice` (a value the reader does not read and
+the synthetic test files do not set, chosen by the writer).
 
 Public specifications cover only parts of versions 1 to 4: the rows that cite K, F or PR, such as
 the version 3 fill (R34) and page settings (R38). The other rows of those versions rest on the
@@ -132,8 +136,9 @@ file is committed.
 `src/cmx_write.rs` writes `.cmx` files in the layouts of the rows above, nothing else. The table
 lists every field it sets. `own` marks a value the reader does not read, which the writer sets as
 the synthetic test files of `src/synth_cmx.rs` set it. The header's offsets at bytes 84 to 95, the
-index chunks (`LIST indx`), and the instruction counts, file offsets and bounds that the CX files
-also keep in their page, layer and group records are not written: no public source describes
+index chunks (`LIST indx`), the instruction counts and file offsets that the CX files also keep in
+their page, layer and group records, and the bounds they keep in layer and group records are not
+written: no public source describes
 them, and the reader finds every chunk by its id and walks the instructions in order.
 
 | Field written | Rows | Status |

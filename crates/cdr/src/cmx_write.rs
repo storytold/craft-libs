@@ -1,8 +1,9 @@
 //! Writer for `.cmx` exchange files with 32-bit coordinates, in the layouts [`crate::read_cmx`]
 //! reads: the RIFF form `CMX1` (R53), its header (R54), the color, pen, line type, dash, outline and
-//! arrowhead tables (R55 to R59) and one `page` chunk of instructions for each page (R60): pages,
-//! layers, groups and curves (R61, R62) with uniform fills and outlines (R63). `PROVENANCE.md`'s
-//! "Written fields" lists every field the writer sets and where its layout comes from.
+//! arrowhead tables (R55 to R59), the screen table (R74) and one `page` chunk of instructions for
+//! each page (R60): pages, layers, groups and curves (R61, R62) with uniform fills and outlines
+//! (R63). `PROVENANCE.md`'s "Written fields" lists every field the writer sets and where its layout
+//! comes from.
 //!
 //! Rectangles and ellipses are written as curves. A clipping container is written as a group of
 //! its fill, the objects it clips, unclipped, and its outline. Hidden layers, groups and shapes,
@@ -56,6 +57,7 @@ const CLOSES: u8 = 0x08;
 /// A written file and what it changed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Written {
+    /// The file.
     pub bytes: Vec<u8>,
     /// A path held more than [`MAX_CURVE_POINTS`] points and was written as several curves in a
     /// group, so overlapping parts of its fill may draw differently.
@@ -65,7 +67,8 @@ pub struct Written {
     /// its dashes again, where the pieces meet.
     pub cut_subpaths: bool,
     /// A dash or gap length was rounded to a whole number of outline widths, the unit the dash
-    /// table stores (R57), or held to the 65,535 widths a length there holds.
+    /// table stores (R57), held to the 65,535 widths a length there holds, or, when it is not a
+    /// number, stored as 0.
     pub rounded_dashes: bool,
     /// A layer or spot color name is longer than the 256 UTF-16 units the reader keeps whole, or
     /// ends in NUL characters, which the reader drops, so it opens shortened. Past 4,096 units it
@@ -80,8 +83,8 @@ pub struct Written {
     /// A shape filled with the nonzero rule may fill differently with the even-odd rule every
     /// curve is written with: one of its cubics loops, one of its subpaths crosses or touches
     /// itself or loops over itself, or two turn the same way and their boxes overlap, measured
-    /// with each cubic flattened to 16 lines. Past 50,000,000 comparisons of edges and boxes in one file, a shape is taken to fill
-    /// differently.
+    /// with each cubic flattened to 16 lines. Past 50,000,000 comparisons of edges and boxes in one
+    /// file, a shape is taken to fill differently.
     pub nonzero_fills: bool,
     /// A spot color has no name, so it opens as a process color, its look at its tint: the reader
     /// takes a color without a name as a process color.
@@ -98,15 +101,14 @@ pub struct Written {
     pub left_out: bool,
 }
 
-/// Write `drawing` as a `.cmx` file. Coordinates are rounded to 0.1 µm. A page without its own
-/// size takes the drawing's; with neither, it opens with no size. A point, page
-/// size or outline width past what 32-bit coordinates hold is an [`Error::Limit`], as are a
-/// negative or NaN outline width, a page side that rounds to 0, more than 65,535 pages, layers on
-/// a page or different colors, pens or outlines, a stored dash pattern (an all-zero one is solid
-/// and stores none) of more than 32,765 lengths (one table entry), groups nested deeper than the reader reads, and a file past what its 32-bit
-/// chunk size holds; nothing is written then.
-pub fn write(drawing: &Drawing) -> Result<Written, Error> {
+/// Write `drawing` as a `.cmx` file that a read within `limits` takes all of, as
+/// [`crate::write_cmx`] describes. Coordinates are rounded to 0.1 µm. A page without its own size takes the drawing's;
+/// with neither, it opens with no size. An all-zero dash pattern is solid and stores no lengths.
+pub fn write(drawing: &Drawing, limits: crate::Limits) -> Result<Written, Error> {
     let mut w = Writer {
+        limits,
+        // The RIFF header, the form type and the `cont` chunk.
+        file_bytes: 12 + 8 + 180,
         looks: spot_looks(drawing),
         crossing_budget: CROSSING_BUDGET,
         left_out: !drawing.master.is_empty() || !drawing.guides.is_empty(),
@@ -129,10 +131,20 @@ pub fn write(drawing: &Drawing) -> Result<Written, Error> {
     if drawing.pages.is_empty() && drawing.page_size.is_some() {
         add(w.page(0, drawing.page_size, &[])?)?;
     }
-    for c in w.tables.chunks()? {
+    // The reader also counts every chunk (`cont`, the pages and the seven tables), every table entry
+    // and the one arrowhead pair.
+    let pages = if drawing.pages.is_empty() { usize::from(drawing.page_size.is_some()) } else { drawing.pages.len() };
+    let t = &w.tables;
+    let entries = t.colors.entries.len() + t.pens.entries.len() + t.line_types.entries.len() + t.dashes.entries.len() + t.outlines.entries.len() + 1;
+    w.read_cost.chunks = w.read_cost.chunks.saturating_add(1 + pages + 7 + entries);
+    w.read_cost.check(&w.limits)?;
+    for c in w.tables.chunks(w.limits.input.saturating_sub(w.file_bytes))? {
         add(c)?;
     }
     let total = usize::try_from(size).ok().and_then(|n| n.checked_add(8)).ok_or(Error::Limit("chunk size"))?;
+    if total > w.limits.input {
+        return Err(Error::Limit("input size"));
+    }
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(total).map_err(|_| Error::Limit("file size"))?;
     bytes.extend(b"RIFF");
@@ -277,14 +289,36 @@ struct Tables {
 }
 
 impl Tables {
-    fn chunks(&self) -> Result<Vec<Vec<u8>>, Error> {
+    /// The table chunks, or an [`Error::Limit`] once they take more than `left` bytes.
+    fn chunks(&self, left: usize) -> Result<Vec<Vec<u8>>, Error> {
+        // The bytes taken so far, charged as each entry is made and then for each table's header.
+        let used = std::cell::Cell::new(0usize);
+        let charge = |n: usize| {
+            used.set(used.get().saturating_add(n));
+            if used.get() > left { Err(Error::Limit("input size")) } else { Ok(()) }
+        };
         let table = |id: &[u8; 4], entries: Vec<Vec<u8>>| -> Result<Vec<u8>, Error> {
             let mut d = (entries.len() as u16).to_le_bytes().to_vec();
             d.extend(entries.concat());
-            chunk(id, &d)
+            let c = chunk(id, &d)?;
+            charge(c.len() + 2 - d.len())?;
+            Ok(c)
         };
-        let one = |tag: u8, data: &[u8]| field(tag, data).map(|f| fields(&[f])).ok_or(Error::Limit("table entry size"));
-        let colors = self.colors.entries.iter().map(color_entry).collect::<Result<Vec<_>, _>>()?;
+        let one = |tag: u8, data: &[u8]| -> Result<Vec<u8>, Error> {
+            let e = field(tag, data).map(|f| fields(&[f])).ok_or(Error::Limit("table entry size"))?;
+            charge(e.len())?;
+            Ok(e)
+        };
+        let colors = self
+            .colors
+            .entries
+            .iter()
+            .map(|k| -> Result<Vec<u8>, Error> {
+                let e = color_entry(k)?;
+                charge(e.len())?;
+                Ok(e)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         // A pen: the width, an aspect of 100 percent, an angle of 0 and a matrix of type 1
         // (R57).
         let pens = self
@@ -377,8 +411,44 @@ fn color_entry(k: &ColorKey) -> Result<Vec<u8>, Error> {
     Ok(fields(&[field(10, &rec).ok_or(Error::Limit("table entry size"))?]))
 }
 
+/// The counts [`crate::read_cmx`] holds to [`crate::Limits`] while it reads a file.
+#[derive(Default)]
+struct ReadCost {
+    chunks: usize,
+    objects: usize,
+    coordinates: usize,
+    dashes: usize,
+}
+
+impl ReadCost {
+    /// An [`Error::Limit`] when a read within `limits` would refuse the file or leave out part of
+    /// it.
+    fn check(&self, limits: &crate::Limits) -> Result<(), Error> {
+        if self.chunks > limits.chunks {
+            return Err(Error::Limit("chunk count"));
+        }
+        if self.objects > limits.objects {
+            return Err(Error::Limit("objects"));
+        }
+        if self.coordinates > limits.coordinates {
+            return Err(Error::Limit("coordinates"));
+        }
+        if self.dashes > limits.dashes {
+            return Err(Error::Limit("dashes"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct Writer {
+    /// What the file must open within.
+    limits: crate::Limits,
+    /// The bytes of the chunks written so far, with the RIFF header.
+    file_bytes: usize,
+    /// At least the bytes the table entries added so far take in the tables written at the end:
+    /// a dash pattern's lengths and a color's name.
+    table_bytes: usize,
     tables: Tables,
     /// The look of each named spot color, from [`spot_looks`].
     looks: HashMap<String, [f32; 3]>,
@@ -389,6 +459,10 @@ struct Writer {
     /// The smallest and largest x and y the curves written on the current page reach, in
     /// coordinate units.
     bounds: Option<[i32; 4]>,
+    /// What [`crate::read_cmx`] counts against [`crate::Limits`] in the instructions written so
+    /// far: instructions (chunks), groups and curves (objects), curve points (coordinates) and the
+    /// dash lengths of every curve's outline (dashes).
+    read_cost: ReadCost,
     split_paths: bool,
     cut_subpaths: bool,
     rounded_dashes: bool,
@@ -478,6 +552,10 @@ impl Writer {
             self.zero_tints |= key.values[3] == 0 || back.iter().zip(want).any(|(a, w)| (a - w.clamp(0.0, 1.0)).abs() > 2.0 / 255.0);
             self.unknown_looks |= look.is_none() && !self.looks.contains_key(name);
         }
+        if let Some(name) = key.name.as_ref().filter(|_| !self.tables.colors.index.contains_key(&key)) {
+            self.table_bytes = self.table_bytes.saturating_add(2 * utf16_prefix(name).len());
+            self.check_bytes(0)?;
+        }
         self.tables.colors.index(key)
     }
 
@@ -504,15 +582,34 @@ impl Writer {
             written += 1;
             self.objects(&layer.objects, &mut out)?;
             out.extend(instr(END_LAYER, &[]));
+            self.read_cost.chunks += 2;
+            self.read_cost.check(&self.limits)?;
+            self.check_bytes(out.len())?;
         }
         out.extend(instr(END_PAGE, &[]));
+        // The begin and end page instructions.
+        self.read_cost.chunks += 2;
+        self.read_cost.check(&self.limits)?;
         let begin = begin_page(n, size, self.bounds.take())?;
         if u32::try_from(begin.len() + out.len()).is_err() {
             return Err(Error::Limit("chunk size"));
         }
         let mut page = begin;
         page.extend(out);
-        chunk(b"page", &page)
+        let c = chunk(b"page", &page)?;
+        self.check_bytes(c.len())?;
+        self.file_bytes += c.len();
+        Ok(c)
+    }
+
+    /// An [`Error::Limit`] when the file would be longer than the input size of the limits with
+    /// `pending` more bytes.
+    fn check_bytes(&self, pending: usize) -> Result<(), Error> {
+        if self.file_bytes.saturating_add(self.table_bytes).saturating_add(pending) > self.limits.input {
+            Err(Error::Limit("input size"))
+        } else {
+            Ok(())
+        }
     }
 
     /// The shown `objects` (front to back) in the order they are drawn. Groups are walked with a
@@ -527,6 +624,7 @@ impl Writer {
             if u32::try_from(out.len()).is_err() {
                 return Err(Error::Limit("chunk size"));
             }
+            self.check_bytes(out.len())?;
             let Some(o) = iter.next() else {
                 if let Some((_, ends, over)) = stack.pop() {
                     if let Some(s) = over {
@@ -571,26 +669,49 @@ impl Writer {
         Ok(())
     }
 
-    /// Begin a group. A group inside as many groups as the reader opens ([`crate::Limits`]'s
-    /// default depth) is an [`Error::Limit`]: the reader leaves out what it holds.
+    /// Begin a group. A group inside as many groups as the reader opens (the depth of the
+    /// [`crate::Limits`] written for) is an [`Error::Limit`]: the reader leaves out what it holds.
     fn begin_group(&mut self, out: &mut Vec<u8>) -> Result<(), Error> {
-        if self.open_groups >= crate::Limits::default().depth {
+        if self.open_groups >= self.limits.depth {
             return Err(Error::Limit("nesting depth"));
         }
         self.open_groups += 1;
         out.extend(group());
-        Ok(())
+        self.read_cost.chunks += 1;
+        self.read_cost.objects += 1;
+        self.read_cost.check(&self.limits)
     }
 
     fn end_group(&mut self, out: &mut Vec<u8>) {
         self.open_groups = self.open_groups.saturating_sub(1);
         out.extend(instr(END_GROUP, &[]));
+        self.read_cost.chunks += 1;
     }
 
     /// A shape as one curve, or as a group of curves when its path holds more than
     /// [`MAX_CURVE_POINTS`] points.
     fn shape(&mut self, s: &Shape, out: &mut Vec<u8>) -> Result<(), Error> {
         self.left_out |= s.opacity < 1.0 || s.blend != Blend::Normal || s.flags.locked;
+        // A path's nodes are at least as many as its segments and starts; a path past what the
+        // limits leave is refused before its points are made.
+        if let Geometry::Path(p) = &s.geometry {
+            let nodes = p.subpaths.iter().filter(|sp| !sp.segments.is_empty()).fold(0usize, |n, sp| {
+                sp.segments.iter().fold(n.saturating_add(1), |n, seg| n.saturating_add(if matches!(seg, Segment::Line(_)) { 1 } else { 3 }))
+            });
+            // A path split into several curves is written once for its fill and once for its
+            // outline.
+            let passes = if s.fill.is_some() && s.outline.is_some() && nodes > MAX_CURVE_POINTS { 2 } else { 1 };
+            let nodes = nodes.saturating_mul(passes);
+            if self.read_cost.coordinates.saturating_add(nodes) > self.limits.coordinates {
+                return Err(Error::Limit("coordinates"));
+            }
+            // A path with segments takes at least one object and one instruction.
+            if nodes > 0 {
+                let cost = ReadCost { chunks: self.read_cost.chunks + 1, objects: self.read_cost.objects + 1, ..ReadCost::default() };
+                cost.check(&self.limits)?;
+            }
+            self.check_bytes(out.len().saturating_add(nodes.saturating_mul(9)))?;
+        }
         let points = points_of(&s.geometry, &s.matrix)?;
         let curves = split(&points);
         // A path with no segments draws nothing, and the file has no curve for it.
@@ -621,6 +742,19 @@ impl Writer {
             self.split_paths = true;
             self.begin_group(out)?;
         }
+        // Each pass writes every curve, and the reader takes the outline's dashes again for every
+        // curve that names it.
+        let points_count = curves.iter().fold(0usize, |n, c| n.saturating_add(c.len()));
+        for (_, dashes) in &attrs {
+            let cost = &mut self.read_cost;
+            cost.chunks = cost.chunks.saturating_add(curves.len());
+            cost.objects = cost.objects.saturating_add(curves.len());
+            cost.coordinates = cost.coordinates.saturating_add(points_count);
+            cost.dashes = cost.dashes.saturating_add(dashes.saturating_mul(curves.len()));
+        }
+        self.read_cost.check(&self.limits)?;
+        // Each curve instruction holds at least 9 bytes for each point.
+        self.check_bytes(out.len().saturating_add(points_count.saturating_mul(9).saturating_mul(attrs.len())))?;
         let mut bodies = Vec::with_capacity(curves.len());
         for c in &curves {
             let mut g = (c.len() as u16).to_le_bytes().to_vec();
@@ -648,10 +782,12 @@ impl Writer {
             g.extend(c.iter().map(|(_, t)| *t));
             bodies.push(field(2, &g).ok_or(Error::Limit("curve size"))?);
         }
-        for a in &attrs {
+        for (a, _) in &attrs {
             let f1 = field(1, a).ok_or(Error::Limit("rendering attributes size"))?;
             for f2 in &bodies {
-                out.extend(instr(CURVE, &fields(&[f1.clone(), f2.clone()])));
+                let i = instr(CURVE, &fields(&[f1.clone(), f2.clone()]));
+                self.check_bytes(out.len().saturating_add(i.len()))?;
+                out.extend(i);
             }
         }
         if curves.len() > 1 {
@@ -661,10 +797,12 @@ impl Writer {
     }
 
     /// Rendering attributes (R63): the mask, then the uniform fill's field list (fill type 1 and a
-    /// field 1 of the color entry and screen entry 1, R74) and the outline's (its `rotl` entry).
-    fn attributes(&mut self, fill: Option<&Color>, outline: Option<&Outline>, matrix: &Matrix) -> Result<Vec<u8>, Error> {
+    /// field 1 of the color entry and screen entry 1, R74) and the outline's (its `rotl` entry),
+    /// with the number of dash lengths the outline names.
+    fn attributes(&mut self, fill: Option<&Color>, outline: Option<&Outline>, matrix: &Matrix) -> Result<(Vec<u8>, usize), Error> {
         let mask = u8::from(fill.is_some()) | (u8::from(outline.is_some()) << 1);
         let mut a = vec![mask];
+        let mut dashes = 0;
         if let Some(c) = fill {
             let index = self.color(c)?;
             let mut v = 1u16.to_le_bytes().to_vec();
@@ -676,18 +814,22 @@ impl Writer {
             // shape takes the matrix's scale into its width, as the engine applies it (R50).
             let [m0, m1, m2, m3, _, _] = matrix.0;
             let scale = if o.scale_with { (m0 * m3 - m1 * m2).abs().sqrt() } else { 1.0 };
-            let index = self.outline(o, scale)?;
+            let (index, n) = self.outline(o, scale)?;
+            dashes = n;
             a.extend(fields(&[field(1, &index.to_le_bytes()).ok_or(Error::Limit("outline size"))?]));
         }
-        Ok(a)
+        Ok((a, dashes))
     }
 
     /// The `rotl` entry of an outline (R57, R58): its line type (2 solid, 4 dashed, 8 behind the
     /// fill, 16 scaled with the object; the caps in the low 4 bits and the join in the high 4
-    /// bits), color, pen and dash pattern. `scale` multiplies the width.
-    fn outline(&mut self, o: &Outline, scale: f64) -> Result<u16, Error> {
-        // A pattern of zero lengths draws a solid line (R57).
-        let lengths: &[f64] = if o.dashes.iter().all(|d| *d <= 0.0) { &[] } else { &o.dashes };
+    /// bits), color, pen and dash pattern, and the number of dash lengths stored. `scale`
+    /// multiplies the width.
+    fn outline(&mut self, o: &Outline, scale: f64) -> Result<(u16, usize), Error> {
+        // A pattern with no positive length draws a solid line (R57).
+        let lengths: &[f64] = if !o.dashes.iter().any(|d| *d > 0.0) { &[] } else { &o.dashes };
+        // A length that is not a number is stored as 0.
+        self.rounded_dashes |= o.dashes.iter().any(|d| d.is_nan());
         // One table entry holds a u16 count and the lengths in a field of at most 65,535 bytes.
         if lengths.len() > (usize::from(u16::MAX) - 3 - 2) / 2 {
             return Err(Error::Limit("table entry size"));
@@ -733,8 +875,13 @@ impl Writer {
         }
         let pen = self.tables.pens.index(if width > 0.0 { width_units(width)?.max(1) } else { 0 })?;
         // A solid outline names an empty pattern, as the sample files' solid outlines do (R58).
+        let stored = dashes.len();
+        if !self.tables.dashes.index.contains_key(&dashes) {
+            self.table_bytes = self.table_bytes.saturating_add(2 * stored);
+            self.check_bytes(0)?;
+        }
         let dash = self.tables.dashes.index(dashes)?;
-        self.tables.outlines.index([line, color, pen, dash])
+        Ok((self.tables.outlines.index([line, color, pen, dash])?, stored))
     }
 }
 
