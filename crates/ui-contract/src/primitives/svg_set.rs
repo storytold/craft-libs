@@ -8,6 +8,11 @@ use super::svg_tree;
 
 include!(concat!(env!("OUT_DIR"), "/icons.rs"));
 
+// The trials of the catalogue's drawings: beside the generated `svg`, `stroke_width` and `DIRECTIONAL`, whose routing
+// they read without a public accessor.
+#[cfg(feature = "testing")]
+mod inspector_trials;
+
 /// An app's own icon set: SVG documents drawn beside the built-in catalog in every `IconSet`.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
