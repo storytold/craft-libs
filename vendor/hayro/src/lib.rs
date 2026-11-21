@@ -61,6 +61,8 @@ use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
 #[cfg(test)]
+mod coverage_budget_tests;
+#[cfg(test)]
 mod no_zoom_tests;
 #[cfg(test)]
 #[cfg(test)]
@@ -76,7 +78,7 @@ pub use renderer::set_skip_offscreen_paths;
 pub use renderer::set_cmyk_band_pixels;
 /// PdfCraft patch (30): exported for its regression tests.
 #[doc(hidden)]
-pub use renderer::{OffscreenDraws, offscreen_draws};
+pub use renderer::{OffscreenDraws, coverage_budget, offscreen_draws, paths_drawn};
 
 /// A cache used by the renderer.
 ///
@@ -170,8 +172,8 @@ pub struct RenderSettings {
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
     /// PdfCraft patch (31): the most coverage values the rasterizer keeps for the page; paths
-    /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
-    /// as a strip's index reaches (2^31).
+    /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps the
+    /// page's `coverage_budget` (patch 34), never more than a strip's index reaches (2^31).
     pub max_coverage: Option<usize>,
 }
 

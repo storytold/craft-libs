@@ -693,6 +693,72 @@ pub fn offscreen_draws() -> OffscreenDraws {
         .unwrap_or_default()
 }
 
+thread_local! {
+    /// PdfCraft patch (34): see [`paths_drawn`].
+    static PATHS_DRAWN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (34): the paths (not glyphs) the renders on this thread were asked to fill or
+/// stroke, in every scene (the page, soft masks, tiling cells and the like), for tests that check
+/// how much of a page was drawn by counting rather than by timing it. The count only grows; a test takes
+/// the difference across a render.
+#[doc(hidden)]
+pub fn paths_drawn() -> u64 {
+    PATHS_DRAWN.try_with(std::cell::Cell::get).unwrap_or_default()
+}
+
+/// PdfCraft patch (34): coverage values a scene may hold however small its canvas. Every path's
+/// coverage stays in memory until the scene is rasterized, about three bytes a value with its
+/// strips and tile commands, so this keeps a scene to about 200 MB: forms that draw the next form
+/// twice, twenty deep (PDFBOX-5415), filled the 2^31 values a strip can index and peaked at
+/// 5.4 GB. Of 5,157 corpus pages (PDFBox issue attachments and pdf.js test files) rendered at
+/// 96 dpi, the most any used was 32.6 million, and half used under 44,000.
+pub(crate) const MIN_COVERAGE_BUDGET: usize = 1 << 26;
+
+/// PdfCraft patch (34): coverage values a scene may hold for each pixel of its canvas, when that
+/// is more than [`MIN_COVERAGE_BUDGET`]. The 5,157 pages used at most 17.9 a pixel (34 used
+/// over 2, half under 0.09), and each stayed under a third of its budget; the heaviest uses two
+/// fifths of it at 72 dpi. Coverage grows more slowly than the canvas: five of the heaviest a
+/// pixel, drawn again at 600 dpi, used at most 2.6.
+pub(crate) const COVERAGE_PER_PIXEL: usize = 16;
+
+/// PdfCraft patch (34): the coverage values a `width` × `height` scene may hold before later
+/// paths are left out (vello_cpu patch 1, never more than the 2^31 a strip indexes), and the
+/// interpreter stops drawing (`Device::out_of_room`, hayro-interpret patch 112).
+#[doc(hidden)]
+pub fn coverage_budget(width: u16, height: u16) -> usize {
+    usize::from(width)
+        .saturating_mul(usize::from(height))
+        .saturating_mul(COVERAGE_PER_PIXEL)
+        .max(min_coverage_budget())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The floor [`coverage_budget`] uses on this thread in place of [`MIN_COVERAGE_BUDGET`],
+    /// when set: tests lower it so that a page reaches its budget in a fraction of the paths an
+    /// unoptimised build would take minutes over.
+    pub(crate) static TEST_COVERAGE_FLOOR: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`MIN_COVERAGE_BUDGET`], or the floor a test set on this thread.
+fn min_coverage_budget() -> usize {
+    #[cfg(test)]
+    if let Some(floor) = TEST_COVERAGE_FLOOR.with(std::cell::Cell::get) {
+        return floor;
+    }
+    MIN_COVERAGE_BUDGET
+}
+
+/// PdfCraft patch (34): a render context for a `width` × `height` scene, kept to its
+/// [`coverage_budget`]. The page and every scene drawn apart from it (soft masks, image alpha
+/// masks, tiling cells, ink passes) are made here.
+fn budgeted_context(width: u16, height: u16, settings: RenderSettings) -> RenderContext {
+    let mut ctx = RenderContext::new_with(width, height, settings);
+    ctx.set_max_coverage(coverage_budget(width, height));
+    ctx
+}
+
 /// PdfCraft patch (30): a `width` × `height` pixmap to draw offscreen, counted in
 /// [`OffscreenDraws`]. Every pixmap the renderer renders into, besides the page, is made here.
 fn offscreen_pixmap(width: u16, height: u16, tiling_cell: bool) -> Pixmap {
@@ -1037,7 +1103,7 @@ impl Renderer {
         preview: bool,
     ) -> Self {
         Self {
-            ctx: RenderContext::new_with(width, height, settings),
+            ctx: budgeted_context(width, height, settings),
             color_replacement,
             in_annotations: false,
             knockout: Vec::new(),
@@ -1145,7 +1211,7 @@ impl Renderer {
                 alpha_data.interpolate = true;
             }
             let mut renderer = Self {
-                ctx: RenderContext::new_with(
+                ctx: budgeted_context(
                     self.ctx.width(),
                     self.ctx.height(),
                     derive_settings(self.ctx.render_settings()),
@@ -1692,7 +1758,7 @@ impl Renderer {
             return cell;
         }
         let mut renderer = Self {
-            ctx: RenderContext::new_with(size.0, size.1, derive_settings(self.ctx.render_settings())),
+            ctx: budgeted_context(size.0, size.1, derive_settings(self.ctx.render_settings())),
             // PdfCraft patch: a pattern cell is painted as one artwork, so its content is never
             // remapped by the reading-colours setting.
             color_replacement: None,
@@ -1766,7 +1832,7 @@ impl Renderer {
         height: u16,
     ) -> Option<Pixmap> {
         let mut renderer = Self {
-            ctx: RenderContext::new_with(width, height, derive_settings(self.ctx.render_settings())),
+            ctx: budgeted_context(width, height, derive_settings(self.ctx.render_settings())),
             color_replacement: None,
             in_annotations: self.in_annotations,
             inside_pattern: self.inside_pattern,
@@ -2433,6 +2499,12 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
+    // PdfCraft patch (34): once a path was left out for want of coverage, every later one is
+    // too (`room_for_path` asks room for a whole canvas), so nothing more would show.
+    fn out_of_room(&self) -> bool {
+        self.ctx.coverage_full()
+    }
+
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
@@ -2892,6 +2964,8 @@ impl<'a> Device<'a> for Renderer {
         paint: &Paint<'_>,
         draw_mode: &PathDrawMode,
     ) {
+        // PdfCraft patch (34): counted for `paths_drawn`.
+        let _ = PATHS_DRAWN.try_with(|n| n.set(n.get().saturating_add(1)));
         match draw_mode {
             PathDrawMode::Fill(f) => {
                 Self::fill_path(self, path, transform, paint, *f, false);
@@ -3112,7 +3186,7 @@ fn render_shading_texture(
 
 fn soft_mask_renderer(settings: &RenderSettings, width: u16, height: u16, preview: bool) -> Renderer {
     Renderer {
-        ctx: RenderContext::new_with(width, height, derive_settings(settings)),
+        ctx: budgeted_context(width, height, derive_settings(settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
         // content is never remapped by the reading-colours setting.
         color_replacement: None,
