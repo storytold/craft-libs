@@ -221,8 +221,8 @@ fn try_submeshes(submeshes: &[SubMesh], what: &'static str) -> Result<Vec<SubMes
 }
 
 /// `Invalid` unless the index count is a multiple of 3, every index names one of `positions` and
-/// every position is finite.
-pub(crate) fn check_triangles(positions: &[Vec3], indices: &[u32]) -> Result<()> {
+/// every position is finite. Positions are `Vec3` or `[f32; 3]`.
+pub(crate) fn check_triangles<V: Copy + Into<Vec3>>(positions: &[V], indices: &[u32]) -> Result<()> {
     let n = positions.len();
     if !indices.len().is_multiple_of(3) {
         return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
@@ -230,7 +230,7 @@ pub(crate) fn check_triangles(positions: &[Vec3], indices: &[u32]) -> Result<()>
     if let Some(bad) = indices.iter().find(|&&i| i as usize >= n) {
         return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({n} vertices)")));
     }
-    if positions.iter().any(|p| !p.is_finite()) {
+    if positions.iter().any(|&p| !p.into().is_finite()) {
         return Err(MeshOpsError::Invalid("non-finite position".into()));
     }
     Ok(())
@@ -281,17 +281,17 @@ fn exact_cross_component(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
 }
 
 /// `a + b` and the rounding error of that sum (Knuth's two-sum).
-fn two_sum(a: f64, b: f64) -> (f64, f64) {
+pub(crate) fn two_sum(a: f64, b: f64) -> (f64, f64) {
     let s = a + b;
     let bb = s - a;
     (s, (a - (s - bb)) + (b - bb))
 }
 
-/// The sum of at most 12 terms, kept exactly as an expansion of non-overlapping parts (Shewchuk's
+/// The sum of `N` terms, kept exactly as an expansion of non-overlapping parts (Shewchuk's
 /// grow-expansion, <https://people.eecs.berkeley.edu/~jrs/papers/robustr.pdf>) and added from the
 /// smallest part up: the sign is exact and the value is the exact sum rounded about once.
-fn exact_sum(terms: &[f64; 12]) -> f64 {
-    let mut parts = [0.0f64; 12];
+pub(crate) fn exact_sum<const N: usize>(terms: &[f64; N]) -> f64 {
+    let mut parts = [0.0f64; N];
     for (len, &t) in terms.iter().enumerate() {
         let mut q = t;
         for p in &mut parts[..len] {
@@ -325,8 +325,9 @@ pub(crate) struct FlatCorners {
 
 /// One vertex per corner of the triangles `indices` lists, with its triangle's [`face_normal`].
 /// The counts are checked against `limits` (the output has a vertex per index) and the
-/// triangles with [`check_triangles`] before any memory is reserved.
-pub(crate) fn flat_corners(positions: &[Vec3], indices: &[u32], limits: &Limits) -> Result<FlatCorners> {
+/// triangles with [`check_triangles`] before any memory is reserved. Positions are `Vec3` or
+/// `[f32; 3]`, read where a triangle uses them.
+pub(crate) fn flat_corners<V: Copy + Into<Vec3>>(positions: &[V], indices: &[u32], limits: &Limits) -> Result<FlatCorners> {
     check_limit("vertex count", positions.len(), limits.max_vertices)?;
     check_limit("triangle count", indices.len() / 3, limits.max_triangles)?;
     check_limit("vertex count", indices.len(), limits.max_vertices)?;
@@ -342,6 +343,7 @@ pub(crate) fn flat_corners(positions: &[Vec3], indices: &[u32], limits: &Limits)
         let (Some(&pa), Some(&pb), Some(&pc)) = (positions.get(a as usize), positions.get(b as usize), positions.get(c as usize)) else {
             return Err(MeshOpsError::Invalid(format!("triangle ({a}, {b}, {c}) is out of range ({} vertices)", positions.len())));
         };
+        let (pa, pb, pc) = (pa.into(), pb.into(), pc.into());
         let normal = face_normal(pa, pb, pc);
         out.positions.extend([pa, pb, pc]);
         out.normals.extend([normal; 3]);
@@ -774,7 +776,7 @@ impl Mesh {
         let mut g = Mikk { positions: &self.positions, normals, uvs, indices: &self.indices, scales, corners: &mut corners };
         usable = usable && g.affordable()?;
         if !usable || !mikktspace::generate_tangents(&mut g) {
-            corners = simple_tangents(&self.positions, normals, uvs, &self.indices, scales)?;
+            simple_tangents(&self.positions, normals, uvs, &self.indices, scales, &mut corners)?;
         }
         // Orthonormalize a tangent against the normal of vertex `v`; repair degenerate results.
         let frame = |v: usize, t: Vec4| {
@@ -883,12 +885,16 @@ impl Mesh {
     /// `Invalid`. The triangles the material's submeshes
     /// list (a triangle counts again for each submesh that lists it) over
     /// [`Limits::max_triangles`] are `TooLarge`, and a reservation that fails is `OutOfMemory`.
+    ///
+    /// A centroid gives the same tile here as the centroid [`Mesh::map_material_uvs_with`] passes
+    /// to its callback, rounded to `f32` the same way. The callback gets one triangle's centroid
+    /// per vertex, so it does not necessarily see every tile listed here.
     pub fn uv_tiles(&self, m: usize, limits: &Limits) -> Result<Vec<(i32, i32)>> {
-        let listed = self.listed_of(m, limits)?;
-        let mut tiles = try_vec(listed, "UV tiles")?;
-        // The tile is the floor of the f32 centroid that `map_material_uvs_with` passes, so a
-        // caller that maps each tile with it sees the same tiles. -2^31 and 2^31 are exact in
-        // f32; a floor in [-2^31, 2^31) fits in i32.
+        self.listed_of(m, limits)?;
+        // Each tile is kept once, so the memory follows the tiles, not the triangles.
+        let mut seen = std::collections::HashSet::new();
+        // The tile is the floor of the f32 centroid, as `map_material_uvs_with` rounds it. -2^31
+        // and 2^31 are exact in f32; a floor in [-2^31, 2^31) fits in i32.
         let tile = |x: f32| {
             let f = x.floor();
             (-2_147_483_648.0..2_147_483_648.0).contains(&f).then_some(f as i32)
@@ -903,11 +909,15 @@ impl Mesh {
             let (Some(x), Some(y)) = (tile(uv.x), tile(uv.y)) else {
                 return Err(MeshOpsError::Invalid(format!("UV centroid {uv} is outside the i32 tile range")));
             };
-            tiles.push((x, y));
+            if !seen.contains(&(x, y)) {
+                reserved(seen.try_reserve(1), "UV tiles")?;
+                seen.insert((x, y));
+            }
         }
+        let mut tiles = try_vec(seen.len(), "UV tiles")?;
+        tiles.extend(seen);
         // Sorting in place allocates nothing.
         tiles.sort_unstable();
-        tiles.dedup();
         Ok(tiles)
     }
 
@@ -1509,13 +1519,16 @@ impl Scales {
 /// the image, toward smaller v, lies against `cross(normal, tangent)`), and a corner takes the
 /// sum of its triangle's group with `w` -1 for the mirrored group and +1 otherwise, as MikkTSpace
 /// sets it. A vertex whose triangles are mirrored against each other so gets two frames, which
-/// [`Mesh::try_compute_tangents_splitting`] splits or refuses. A corner of a triangle without UV
-/// area takes the group that has a direction, +1 first. Edges, UV differences and sums are taken
-/// in `f64`, so an edge too small to survive division by the position scale in `f32` still sets
-/// the direction.
-fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: &[u32], scales: Scales) -> Result<Vec<Vec4>> {
-    // Per vertex: (tangent, up) sums of the triangles whose frame has w = +1, then w = -1.
-    let mut sums = try_filled(positions.len(), [(DVec3::ZERO, DVec3::ZERO); 2], "tangents")?;
+/// [`Mesh::try_compute_tangents_splitting`] splits or refuses. A triangle without UV area takes
+/// one group for all three corners: +1 when one of its vertices has a +1 direction or none has
+/// any, -1 otherwise. A UV triangle counts as without area only when its determinant is no larger
+/// than the rounding of its two products, so a small UV triangle keeps its frame. Edges, UV
+/// differences and sums are taken in `f64`, so an edge too small to survive division by the
+/// position scale in `f32` still sets the direction. The frames are written to `out`, one per
+/// index.
+fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: &[u32], scales: Scales, out: &mut [Vec4]) -> Result<()> {
+    // Per vertex: tangent sums of the triangles whose frame has w = +1, then w = -1.
+    let mut sums = try_filled(positions.len(), [DVec3::ZERO; 2], "tangents")?;
     // Per corner: the group of its triangle's frame at its vertex, None without UV area.
     let mut groups = try_filled(indices.len(), None::<usize>, "tangents")?;
     let (position_scale, uv_scale) = (f64::from(scales.position), f64::from(scales.uv));
@@ -1528,8 +1541,11 @@ fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: 
         let (ua, ub, uc) = (ua.as_dvec2(), ub.as_dvec2(), uc.as_dvec2());
         let (e1, e2) = ((pb - pa) / position_scale, (pc - pa) / position_scale);
         let (d1, d2) = ((ub - ua) / uv_scale, (uc - ua) / uv_scale);
-        let determinant = d1.x * d2.y - d2.x * d1.y;
-        if determinant.abs() < 1e-12 {
+        let (l, r) = (d1.x * d2.y, d2.x * d1.y);
+        let determinant = l - r;
+        // The differences, the products and their difference each round once; a determinant
+        // within that rounding may have no area. Both products 0 make the bound 0.
+        if determinant.abs() <= 8.0 * f64::EPSILON * (l.abs() + r.abs()) {
             continue;
         }
 
@@ -1539,8 +1555,7 @@ fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: 
         for (k, v) in [a, b, c].into_iter().enumerate() {
             let group = usize::from(normal(v).cross(tangent).dot(up) < 0.0);
             if let Some(pair) = sums.get_mut(v) {
-                pair[group].0 += tangent;
-                pair[group].1 += up;
+                pair[group] += tangent;
             }
             if let Some(g) = groups.get_mut(t * 3 + k) {
                 *g = Some(group);
@@ -1549,20 +1564,19 @@ fn simple_tangents(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2], indices: 
     }
 
     let frame = |v: usize, group: usize| -> Vec4 {
-        let t = sums.get(v).map_or(DVec3::ZERO, |pair| pair[group].0);
+        let t = sums.get(v).map_or(DVec3::ZERO, |pair| pair[group]);
         let t = t.try_normalize().map(|t| t.as_vec3()).and_then(unit).unwrap_or(Vec3::X);
         t.extend(if group == 1 { -1.0 } else { 1.0 })
     };
-    let mut tangents = try_vec(indices.len(), "tangents")?;
-    tangents.extend(indices.iter().zip(&groups).map(|(&v, group)| {
-        let v = v as usize;
+    let has = |v: u32, g: usize| sums.get(v as usize).is_some_and(|pair| pair[g] != DVec3::ZERO);
+    for (k, (slot, (&v, group))) in out.iter_mut().zip(indices.iter().zip(&groups)).enumerate() {
         let group = group.unwrap_or_else(|| {
-            let has = |g: usize| sums.get(v).is_some_and(|pair| pair[g].0 != DVec3::ZERO);
-            if !has(0) && has(1) { 1 } else { 0 }
+            let corners = indices.get(k - k % 3..(k - k % 3 + 3).min(indices.len())).unwrap_or(&[]);
+            if corners.iter().any(|&c| has(c, 0)) || !corners.iter().any(|&c| has(c, 1)) { 0 } else { 1 }
         });
-        frame(v, group)
-    }));
-    Ok(tangents)
+        *slot = frame(v as usize, group);
+    }
+    Ok(())
 }
 
 /// The arrays MikkTSpace reads, and the tangent of every triangle corner it writes.
@@ -3197,6 +3211,56 @@ mod tests {
                 assert!((tangent - Vec3::X.extend(w)).length() < 1e-5, "triangle {t}, vertex {v}: {tangent}");
             }
         }
+    }
+
+    #[test]
+    fn fallback_tangents_give_a_triangle_without_uv_area_one_handedness() {
+        // Past the valence limit: vertices 0 and 1 carry both frames, and vertex 4 only the
+        // mirrored one (from triangle 4-5-6). Triangle 0-1-4 has UVs on one line.
+        let (p, normals, uv, pair) = opposite_handedness();
+        let positions: Vec<[f32; 3]> = p.iter().copied().chain([[5.0, 3.0, 0.0], [6.0, 3.0, 0.0], [5.0, 4.0, 0.0]]).collect();
+        let uvs: Vec<[f32; 2]> = uv.iter().copied().chain([[2.0, 0.0], [3.0, 0.0], [2.0, 1.0]]).collect();
+        let normals = vec![normals[0]; positions.len()];
+        let mut indices: Vec<u32> = pair[..3].repeat(MAX_MIKKTSPACE_VALENCE + 1);
+        indices.extend_from_slice(&pair[3..]);
+        indices.extend_from_slice(&[0, 1, 4, 4, 5, 6]);
+        let mut m = Mesh::from_slices(&positions, Some(&normals), Some(&uvs), &indices, &Limits::default()).unwrap();
+        m.try_compute_tangents().unwrap();
+        m.validate().unwrap();
+        let flat = m.triangle_count() - 2;
+        let w: Vec<f32> = m.tri(flat).unwrap().into_iter().map(|v| m.tangents[v].w).collect();
+        assert!(w.iter().all(|&x| x == w[0]), "{w:?}");
+    }
+
+    #[test]
+    fn fallback_tangents_keep_a_small_uv_triangle_s_frame() {
+        // Past the valence limit vertex 0 has only the mirrored frame. Triangle 0-4-5 faces +Z,
+        // with edges +Y and -X and UV edges (1e-7, 0) and (0, -1e-7): its UV area is about 5e-15
+        // and its frame is +Y with w = +1.
+        let (p, normals, uv, pair) = opposite_handedness();
+        let positions: Vec<[f32; 3]> = p.iter().copied().chain([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]]).collect();
+        let uvs: Vec<[f32; 2]> = uv.iter().copied().chain([[1e-7, 0.0], [0.0, -1e-7]]).collect();
+        let normals = vec![normals[0]; positions.len()];
+        let mut indices: Vec<u32> = pair[..3].repeat(MAX_MIKKTSPACE_VALENCE + 1);
+        indices.extend_from_slice(&[0, 4, 5]);
+        let mut m = Mesh::from_slices(&positions, Some(&normals), Some(&uvs), &indices, &Limits::default()).unwrap();
+        m.try_compute_tangents().unwrap();
+        m.validate().unwrap();
+        let small = m.triangle_count() - 1;
+        for v in m.tri(small).unwrap() {
+            let t = m.tangents[v];
+            assert!((t - Vec3::Y.extend(1.0)).length() < 1e-5, "vertex {v}: {t}");
+        }
+        // One tangent per vertex cannot hold vertex 0's two frames.
+        assert!(matches!(crate::tangents(&positions, &normals, &uvs, &indices, &Limits::default()), Err(MeshOpsError::Invalid(_))));
+    }
+
+    #[test]
+    fn uv_tiles_keep_no_room_for_repeated_tiles() {
+        let m = listed_triangle(1000);
+        let tiles = m.uv_tiles(0, &Limits::default()).unwrap();
+        assert_eq!(tiles, vec![(0, 0)]);
+        assert!(tiles.capacity() < 16, "{}", tiles.capacity());
     }
 
     #[test]

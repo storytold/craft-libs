@@ -536,7 +536,7 @@ pub fn try_torus(major: f32, minor: f32, segs: usize, sides: usize, limits: &Lim
         let n = dir * theta.cos() - Vec3::Y * theta.sin();
         (dir * major + n * minor, n, Vec2::new(u, v))
     });
-    b.check_tube(0, segs + 1, sides)?;
+    b.check_tube(0, segs, sides)?;
     b.finish("Torus")
 }
 
@@ -645,7 +645,7 @@ pub fn try_shape(kind: ShapeKind, p: &ShapeParams, limits: &Limits) -> Result<Me
             }
             let (segs, rings) = (segs()?, rings(3)?);
             ring_torus_into(&mut b, radius, tube, segs, rings);
-            b.check_tube(0, segs + 1, rings)?;
+            b.check_tube(0, segs, rings)?;
         }
         ShapeKind::Cone | ShapeKind::Cylinder => {
             let (radius, half_height) = (positive("shape radius", p.radius)?, half("shape height", p.height)?);
@@ -673,12 +673,15 @@ impl Builder {
     /// An `Invalid` error when the cross-section of a torus is no longer a convex polygon once
     /// its points are rounded to `f32`, as when the tube is so thin next to the radius that the
     /// tube's points round onto one line and the surface folds flat. The cross-section is the
-    /// first column of the vertex grid at `base`: `count` vertices `stride` apart, which lie in
-    /// the YZ plane with Z the signed distance from the axis.
-    fn check_tube(&self, base: usize, stride: usize, count: usize) -> Result<()> {
+    /// first column of the vertex grid at `base`, whose rows hold `columns + 1` vertices: `count`
+    /// vertices that lie in the YZ plane with Z the signed distance from the axis. A builder that
+    /// already holds an error is not checked, and its error is returned when it finishes.
+    fn check_tube(&self, base: usize, columns: usize, count: usize) -> Result<()> {
         if self.error.is_some() || count < 3 {
             return Ok(());
         }
+        // The grid was built, so its vertex count, and with it `columns + 1`, fits in `u32`.
+        let stride = columns.saturating_add(1);
         let q = |k: usize| self.p.get(base + (k % count) * stride).map(|v| DVec2::new(f64::from(v.z), f64::from(v.y)));
         let turn = |k: usize| match (q(k), q(k + 1), q(k + 2)) {
             (Some(a), Some(b), Some(c)) => (b - a).perp_dot(c - b),
@@ -1422,6 +1425,16 @@ mod tests {
         assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.contains("tube")), "{r:?}");
         // A tube thicker than the radius folds through the axis but keeps a round cross-section.
         try_torus(0.5, 2.0, 8, 3, &l).unwrap();
+    }
+
+    #[test]
+    fn a_torus_with_the_largest_segment_count_returns_the_limit_error() {
+        let l = Limits { max_segments: usize::MAX, ..Limits::default() };
+        let r = try_torus(1.0, 0.25, usize::MAX, 3, &l);
+        assert!(matches!(r, Err(MeshOpsError::TooLarge { what: "vertex count", .. })), "{r:?}");
+        let p = ShapeParams { radius: 1.0, tube: 0.25, segments: usize::MAX, rings: 3, ..ShapeParams::default() };
+        let r = try_shape(ShapeKind::Torus, &p, &l);
+        assert!(matches!(r, Err(MeshOpsError::TooLarge { what: "vertex count", .. })), "{r:?}");
     }
 
     #[test]

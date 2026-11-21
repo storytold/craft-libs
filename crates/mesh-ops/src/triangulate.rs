@@ -8,8 +8,11 @@
 //! no point repeats), that every hole lies inside the outer contour and outside every other hole,
 //! and that the work stays within [`Limits::max_outline_work`]. Every geometric test works on
 //! differences of the coordinates as given, so a contour far from the origin keeps its shape and
-//! points far apart in scale stay apart.
+//! points far apart in scale stay apart. Every decision on which side of a line a point lies
+//! (convex and reflex corners, straight corners, crossings and containment) takes the exact sign
+//! of the cross product, computed again exactly when rounding could change it.
 
+use crate::mesh::{exact_sum, two_sum};
 use crate::{Limits, MeshOpsError, Result, check_limit, try_vec};
 
 type P = [f64; 2];
@@ -20,18 +23,21 @@ pub(crate) const MAX_OUTLINE_EXTENT: f64 = 1e150;
 
 /// Twice the signed area of a closed contour (last point not repeated): positive when the points
 /// run counterclockwise with y up, as for the shoelace formula on MathWorld
-/// (<https://mathworld.wolfram.com/PolygonArea.html>). The products are taken relative to the
-/// first point, so a contour far from the origin keeps its area. A contour with fewer than three
-/// points has area 0.
+/// (<https://mathworld.wolfram.com/PolygonArea.html>). The terms are the cross products of the
+/// edges seen from the contour's lowest point in x, then y, so the same terms come out wherever the
+/// contour starts and a contour far from the origin keeps its area. Each term has its sign exact
+/// and is rounded about once, and the terms are added with their rounding errors carried along. A
+/// contour with fewer than three points has area 0.
 pub fn signed_area(c: &[P]) -> f64 {
-    let Some(&o) = c.first() else { return 0.0 };
     let n = c.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (c[i], c[(i + 1) % n]);
-            (a[0] - o[0]) * (b[1] - o[1]) - (b[0] - o[0]) * (a[1] - o[1])
-        })
-        .sum()
+    let Some(o) = c.iter().copied().min_by(|p, q| p[0].total_cmp(&q[0]).then(p[1].total_cmp(&q[1]))).filter(|_| n >= 3) else { return 0.0 };
+    let (mut sum, mut error) = (0.0, 0.0);
+    for i in 0..n {
+        let (s, e) = two_sum(sum, cross(o, c[i], c[(i + 1) % n]));
+        sum = s;
+        error += e;
+    }
+    sum + error
 }
 
 /// Counts the steps of one outline call against [`Limits::max_outline_work`].
@@ -52,9 +58,36 @@ impl Work {
     }
 }
 
+/// `(a - o) × (b - o)`, with its sign exact: positive when `o`, `a`, `b` run counterclockwise with
+/// y up, negative when clockwise and 0 only when they lie on one line. A result larger than the
+/// error bound of the plain formula (Shewchuk's `ccwerrboundA` for `orient2d`,
+/// <https://people.eecs.berkeley.edu/~jrs/papers/robustr.pdf>) is returned as it is; any other is
+/// computed again exactly ([`exact_cross`]). Products that fall below the normal `f64` range
+/// (coordinate differences under about 1e-154) lose their rounding error.
 #[inline]
-fn cross(o: P, a: P, b: P) -> f64 {
-    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+pub(crate) fn cross(o: P, a: P, b: P) -> f64 {
+    let (l, r) = ((a[0] - o[0]) * (b[1] - o[1]), (a[1] - o[1]) * (b[0] - o[0]));
+    let det = l - r;
+    const U: f64 = f64::EPSILON / 2.0;
+    if det.abs() > (3.0 + 16.0 * U) * U * (l.abs() + r.abs()) { det } else { exact_cross(o, a, b) }
+}
+
+/// `(a - o) × (b - o)` from the exact differences of the coordinates: each difference is split
+/// into its rounded value and its rounding error, each of the eight products of those parts into
+/// its rounded value and its rounding error, and the sixteen parts are added exactly
+/// ([`exact_sum`]).
+fn exact_cross(o: P, a: P, b: P) -> f64 {
+    let diff = |x: f64, y: f64| two_sum(x, -y);
+    let ((ax, axe), (ay, aye)) = (diff(a[0], o[0]), diff(a[1], o[1]));
+    let ((bx, bxe), (by, bye)) = (diff(b[0], o[0]), diff(b[1], o[1]));
+    let products = [(ax, by), (ax, bye), (axe, by), (axe, bye), (-ay, bx), (-ay, bxe), (-aye, bx), (-aye, bxe)];
+    let mut terms = [0.0f64; 16];
+    for (k, (x, y)) in products.into_iter().enumerate() {
+        let p = x * y;
+        terms[2 * k] = p;
+        terms[2 * k + 1] = x.mul_add(y, -p);
+    }
+    exact_sum(&terms)
 }
 
 fn in_triangle(p: P, a: P, b: P, c: P) -> bool {
@@ -72,7 +105,9 @@ pub(crate) fn try_collect<T>(it: impl ExactSizeIterator<Item = T>, what: &'stati
 }
 
 /// Whether `p` is inside the closed contour `c` (even-odd rule). A contour with fewer than three
-/// points holds nothing.
+/// points holds nothing. An edge counts when one end is above `p` and the other is not (a ray
+/// through a vertex counts one of its two edges) and `p` lies strictly on its left seen from its
+/// lower end, by the exact sign of [`cross`].
 pub(crate) fn point_in(p: P, c: &[P]) -> bool {
     let n = c.len();
     if n < 3 {
@@ -82,8 +117,12 @@ pub(crate) fn point_in(p: P, c: &[P]) -> bool {
     let mut j = n - 1;
     for i in 0..n {
         let (a, b) = (c[i], c[j]);
-        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] - a[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) {
-            inside = !inside;
+        if (a[1] > p[1]) != (b[1] > p[1]) {
+            // `p` on the left of the edge seen upward: the edge crosses the ray +x from `p`.
+            let (lo, hi) = if a[1] < b[1] { (a, b) } else { (b, a) };
+            if cross(lo, hi, p) > 0.0 {
+                inside = !inside;
+            }
         }
         j = i;
     }
@@ -300,12 +339,13 @@ fn ray_hit(pts: &[P], ring: &[usize], mp: P) -> Option<(f64, usize)> {
     let mut best: Option<(f64, usize)> = None;
     for i in 0..n {
         let (a, b) = (pts[ring[i]], pts[ring[(i + 1) % n]]);
-        if !(a[1] <= mp[1] && mp[1] <= b[1] && a[1] < b[1]) {
+        // The edge reaches the ray at or past `mp` when `mp` lies on it or on its left.
+        if !(a[1] <= mp[1] && mp[1] <= b[1] && a[1] < b[1]) || cross(a, b, mp) < 0.0 {
             continue;
         }
         let t = (mp[1] - a[1]) / (b[1] - a[1]);
-        let x = a[0] + t * (b[0] - a[0]);
-        if x >= mp[0] && best.is_none_or(|(bx, _)| x < bx) {
+        let x = (a[0] + t * (b[0] - a[0])).max(mp[0]);
+        if best.is_none_or(|(bx, _)| x < bx) {
             best = Some((x, i));
         }
     }
@@ -533,6 +573,60 @@ mod tests {
         assert_edges_covered(&c, &[&c], &tris);
     }
 
+    /// The sign of `(b - a) × (c - a)` for points with integer coordinates up to 1e18, in `i128`.
+    fn exact_turn(a: P, b: P, c: P) -> i128 {
+        let i = |v: f64| v as i128;
+        ((i(b[0]) - i(a[0])) * (i(c[1]) - i(a[1])) - (i(b[1]) - i(a[1])) * (i(c[0]) - i(a[0]))).signum()
+    }
+
+    #[test]
+    fn a_reflex_corner_next_to_a_distant_point_is_not_clipped() {
+        // The first corner, (0, 0), is reflex, but the differences from (-1e18, -1e18) to (0, 0)
+        // and to (1, 0) round to one pair, so its cross product rounds to 0.
+        let outer = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 10.0], [-1e18, -1e18]];
+        assert_eq!(exact_turn(outer[3], outer[0], outer[1]), -1);
+        let tris = triangulate(&outer, &[], &Limits::default()).unwrap();
+        let at = |i: u32| outer[i as usize];
+        assert!(tris.iter().all(|t| exact_turn(at(t[0]), at(t[1]), at(t[2])) >= 0), "{tris:?}");
+        assert_edges_covered(&outer, &[&outer], &tris);
+    }
+
+    #[test]
+    fn a_hole_far_below_its_outer_edges_in_scale_is_inside() {
+        // The ray from (0.1, 1e-20) crosses the edge from (0, 0) to (1e20, 2) at x = 0.5; both
+        // sides of an interpolated comparison round to -1e20.
+        let outer = vec![[0.0, 0.0], [1e20, 2.0], [-10.0, 2.0]];
+        let hole = vec![[0.1, 1e-20], [0.2, 1e-20], [0.2, 2e-20], [0.1, 2e-20]];
+        assert!(hole.iter().all(|&p| point_in(p, &outer)));
+        let tris = triangulate(&outer, &[&hole], &Limits::default()).unwrap();
+        let pts: Vec<P> = outer.iter().chain(&hole).copied().collect();
+        assert_edges_covered(&pts, &[&outer, &hole], &tris);
+    }
+
+    #[test]
+    fn small_features_at_large_coordinates_and_large_features_near_the_origin_triangulate() {
+        let sq = |x: f64, y: f64, s: f64| vec![[x, y], [x + s, y], [x + s, y + s], [x, y + s]];
+        let check = |outer: &[P], holes: &[&[P]], area: f64| {
+            let tris = triangulate(outer, holes, &Limits::default()).unwrap();
+            let pts: Vec<P> = std::iter::once(outer).chain(holes.iter().copied()).flatten().copied().collect();
+            let at = |i: u32| pts[i as usize];
+            assert!(tris.iter().all(|t| signed_area(&[at(t[0]), at(t[1]), at(t[2])]) >= 0.0), "{tris:?}");
+            let contours: Vec<&[P]> = std::iter::once(outer).chain(holes.iter().copied()).collect();
+            assert_edges_covered(&pts, &contours, &tris);
+            assert!((area_of(&pts, &tris) - area).abs() <= area * 1e-9, "{} vs {area}", area_of(&pts, &tris));
+        };
+        // A unit square near 1e6 with a notch 1e-3 deep and a hole 1e-3 wide.
+        let (x, y) = (1e6, 1e6);
+        let notched =
+            vec![[x, y], [x + 0.5, y], [x + 0.5, y + 1e-3], [x + 0.501, y + 1e-3], [x + 0.501, y], [x + 1.0, y], [x + 1.0, y + 1.0], [x, y + 1.0]];
+        let hole = sq(x + 0.25, y + 0.25, 1e-3);
+        check(&notched, &[&hole], 1.0 - 1e-6 - 1e-6);
+        // A square 2e6 wide around the origin with holes 1e-3 wide near the origin.
+        let big = sq(-1e6, -1e6, 2e6);
+        let (h0, h1) = (sq(1e-3, 1e-3, 1e-3), sq(-2e-3, -2e-3, 1e-3));
+        check(&big, &[&h0, &h1], 4e12 - 2e-6);
+    }
+
     #[test]
     fn signed_area_keeps_a_contour_far_from_the_origin() {
         let sq = |o: f64| vec![[o, o], [o + 1.0, o], [o + 1.0, o + 1.0], [o, o + 1.0]];
@@ -544,6 +638,13 @@ mod tests {
         let far = sq(123_456_789.0);
         let tris = triangulate(&far, &[], &Limits::default()).unwrap();
         assert!((area_of(&far, &tris) - 1.0).abs() < 1e-9);
+        // Relative to (-1e20, -1e20), (0, 0) and (1, 0) round to one difference; the area is the
+        // same wherever the contour starts.
+        let mut tri = vec![[-1e20, -1e20], [0.0, 0.0], [1.0, 0.0]];
+        for _ in 0..3 {
+            assert_eq!(signed_area(&tri), -1e20, "{tri:?}");
+            tri.rotate_left(1);
+        }
     }
 
     #[test]

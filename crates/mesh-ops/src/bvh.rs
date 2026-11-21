@@ -13,6 +13,7 @@
 
 use glam::{DVec3, Vec3, Vec3A};
 
+use crate::mesh::face_cross;
 use crate::{Limits, Mesh, MeshOpsError, Result, check_limit, try_vec};
 
 #[derive(Clone, Copy, Debug)]
@@ -324,7 +325,10 @@ impl Bvh {
 
     /// The distance at which the ray from `o` with reciprocal direction `inv` (both `f64`, so
     /// the reciprocal of a nonzero `f32` component is finite) enters the box, if it does before
-    /// `tmax`.
+    /// `tmax`. Each exit distance is rounded three times (the difference, the reciprocal and the
+    /// product), so it is raised by more than that error, `1 + 2γ₃` as Ize's *Robust BVH Ray
+    /// Traversal* (2013, <https://jcgt.org/published/0002/02/02/>) gives it: a ray that meets the
+    /// box only where it enters on one axis and leaves on another still reaches it.
     fn slab(lo: Vec3A, hi: Vec3A, o: DVec3, inv: DVec3, tmax: f64) -> Option<f64> {
         let t0 = (lo.as_dvec3() - o) * inv;
         let t1 = (hi.as_dvec3() - o) * inv;
@@ -332,7 +336,8 @@ impl Bvh {
         // not bound the hit. A ray parallel to a slab outside it gives ±∞ on both sides.
         let open = t0.is_nan_mask() | t1.is_nan_mask();
         let tn = DVec3::select(open, DVec3::NEG_INFINITY, t0.min(t1)).max_element().max(0.0);
-        let tf = DVec3::select(open, DVec3::INFINITY, t0.max(t1)).min_element().min(tmax);
+        // 2γ₃ = 6u / (1 - 3u) with u = 2^-53 is below 4 · f64::EPSILON.
+        let tf = DVec3::select(open, DVec3::INFINITY, t0.max(t1) * (1.0 + 4.0 * f64::EPSILON)).min_element().min(tmax);
         // An entry distance past the `f32` range cannot be a hit distance.
         (tn <= tf && (tn as f32).is_finite()).then_some(tn)
     }
@@ -368,6 +373,11 @@ impl Bvh {
         let v = ax * cy - ay * cx;
         let w = bx * ay - by * ax;
         if (u < 0.0 || v < 0.0 || w < 0.0) && (u > 0.0 || v > 0.0 || w > 0.0) {
+            return None;
+        }
+        // The shear rounds, so corners on one line can leave one edge function nonzero. The cross
+        // product of the corners' edges is exactly zero for such a triangle.
+        if face_cross(t[0].as_dvec3(), t[1].as_dvec3(), t[2].as_dvec3()) == DVec3::ZERO {
             return None;
         }
         let det = u + v + w;
@@ -667,6 +677,52 @@ mod tests {
             let x = k as f32 / 1000.0;
             let o = Vec3::new(x, 1.0 - x, 1.0);
             assert!(square.closest(o, Vec3::NEG_Z, 10.0).is_some(), "ray through ({x}, {})", 1.0 - x);
+        }
+    }
+
+    #[test]
+    fn a_ray_through_a_shared_edge_on_the_box_corner_hits() {
+        // The ray from the origin along (49, 1, 64) meets the edge A-B at t = 1, where it also
+        // enters the box on y and leaves it on x; 49 · (1 / 49) rounds to just under 1.
+        let positions = [[49.0, 1.0, 32.0], [49.0, 1.0, 96.0], [0.0, 2.0, 64.0], [0.0, 3.0, 64.0]];
+        let bvh = Bvh::from_slices(&positions, &[0, 1, 2, 1, 0, 3], &Limits::default()).unwrap();
+        let d = Vec3::new(49.0, 1.0, 64.0);
+        let hit = bvh.closest(Vec3::ZERO, d, 10.0).unwrap();
+        assert!((hit.t - 1.0).abs() < 1e-6, "{hit:?}");
+        assert!(bvh.occluded(Vec3::ZERO, d, 10.0));
+    }
+
+    #[test]
+    fn a_triangle_without_area_is_not_hit() {
+        // The corners lie on one line; the ray meets that line at t = 1.
+        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 2.0, 4.0], [2.0, 4.0, 8.0]], &[0, 1, 2], &Limits::default()).unwrap();
+        let (o, d) = (Vec3::new(-1.0, -1.0, -3.0), Vec3::new(1.0, 1.0, 3.0));
+        assert!(!bvh.occluded(o, d, 10.0));
+        assert!(bvh.closest(o, d, 10.0).is_none());
+        // `nearest` still measures it as a segment.
+        // (3, 1, 4) lies √5 from (1, 2, 4) at right angles to the line.
+        let near = bvh.nearest(Vec3::new(3.0, 1.0, 4.0), 10.0, &|_| true).unwrap();
+        assert!((near.t - 5f32.sqrt()).abs() < 1e-5, "{near:?}");
+    }
+
+    #[test]
+    fn small_triangles_at_large_coordinates_and_large_triangles_near_the_origin_are_hit() {
+        let l = Limits::default();
+        // Near 1e6, f32 steps by 0.0625: squares one step wide, split along a diagonal, at two
+        // places; every ray down through the diagonal hits one of the triangles.
+        let s = 0.0625f32;
+        for (x, y) in [(1e6f32, 1e6f32), (-1e6, 1e6)] {
+            let square = [[x, y, 0.0], [x + s, y, 0.0], [x, y + s, 0.0], [x + s, y + s, 0.0]];
+            let bvh = Bvh::from_slices(&square, &[0, 1, 2, 1, 3, 2], &l).unwrap();
+            assert!(bvh.closest(Vec3::new(x + s, y, 1.0), Vec3::NEG_Z, 10.0).is_some(), "corner at ({x}, {y})");
+            assert!(bvh.closest(Vec3::new(x, y + s, 1.0), Vec3::NEG_Z, 10.0).is_some(), "corner at ({x}, {y})");
+        }
+        // Triangles 2e6 wide sharing an edge through the origin, hit 1e-3 from it.
+        let big = [[-1e6, -1e6, 0.0], [1e6, -1e6, 0.0], [1e6, 1e6, 0.0], [-1e6, 1e6, 0.0]];
+        let bvh = Bvh::from_slices(&big, &[0, 1, 2, 0, 2, 3], &l).unwrap();
+        for p in [[0.0, 0.0], [1e-3, 1e-3], [1e-3, -1e-3], [-1e-3, 1e-3]] {
+            let hit = bvh.closest(Vec3::new(p[0], p[1], 1e-3), Vec3::NEG_Z, 1.0).unwrap();
+            assert!((hit.t - 1e-3).abs() < 1e-9, "{p:?}: {hit:?}");
         }
     }
 

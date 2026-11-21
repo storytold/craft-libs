@@ -102,6 +102,11 @@ pub struct Outline {
 /// container of what lies wholly inside them. Repeated consecutive points and a last point equal to the first are
 /// removed, and contours left with fewer than three points or an area of 1e-9 or less are dropped.
 ///
+/// A contour that touches a larger contour, at a point or along an edge, still counts as inside it,
+/// so a hole can touch its outer contour. [`extrude`] and [`crate::triangulate::triangulate`]
+/// reject contours that touch: such a hole has to be moved off its outer contour, or merged into
+/// it, before the outline is extruded.
+///
 /// Errors: `Invalid` for a non-finite point and for contours that together span more than 1e150
 /// in x or y; `TooLarge` past [`Limits::max_outline_vertices`]
 /// (the points of every contour), past [`Limits::max_outline_contours`] (the contours left after
@@ -186,24 +191,26 @@ struct Nest {
 
 impl Nest {
     /// The larger contours that hold all of contour `i` and that `only` accepts: every point of
-    /// `i` and the middle of every edge of `i` lie inside or on the larger contour, and no edge of
-    /// `i` crosses one of its edges. None of these tests depends on where `i` starts. The larger
-    /// contour's bounding box has to hold `i`'s bounding box first.
+    /// `i` lies inside or on the larger contour, no edge of `i` crosses one of its edges, and
+    /// each edge of `i`, cut at the larger contour's points that lie on it, has the middle of every
+    /// piece inside or on the larger contour. None of these tests depends on where `i` starts. The
+    /// larger contour's bounding box has to hold `i`'s bounding box first.
     fn containers(&self, i: usize, only: impl Fn(usize) -> bool, work: &mut Work) -> Result<Vec<usize>> {
         let c = &self.cs[i];
         let [ilo, ihi] = self.bounds[i];
         work.add(self.cs.len() as u64)?;
         let mut out = Vec::new();
+        let mut cuts = Vec::new();
         for j in 0..self.cs.len() {
             let [lo, hi] = self.bounds[j];
             if j == i || self.area[j] <= self.area[i] || !only(j) || ilo[0] < lo[0] || ilo[1] < lo[1] || ihi[0] > hi[0] || ihi[1] > hi[1] {
                 continue;
             }
             let d = &self.cs[j];
-            // Each point and each edge middle of `i` against every edge of `d`, and each edge of
-            // `i` against every edge of `d`.
+            // Each point of `i` against every edge of `d`, each edge of `i` against every edge
+            // and every point of `d`; `holds` adds the pieces it tests.
             work.add((c.len() as u64).saturating_mul(d.len() as u64).saturating_mul(3))?;
-            if holds(d, c) {
+            if holds(d, c, &mut cuts, work)? {
                 out.try_reserve(1).map_err(|_| MeshOpsError::OutOfMemory("contour containers"))?;
                 out.push(j);
             }
@@ -218,15 +225,40 @@ fn inside_or_on(p: P, c: &[P]) -> bool {
     point_in(p, c) || (0..n).any(|k| on_edge(c[k], c[(k + 1) % n], p))
 }
 
-/// Whether contour `outer` holds all of contour `inner`, as [`Nest::containers`] tests it.
-fn holds(outer: &[P], inner: &[P]) -> bool {
+/// Whether contour `outer` holds all of contour `inner`, as [`Nest::containers`] tests it. An edge
+/// of `inner` may meet `outer` at its vertices and run along its edges. Between two such contacts
+/// the edge lies wholly inside `outer`, wholly outside it or along one of its edges, so the middle
+/// of each piece decides; a piece whose ends lie on one edge of `outer` runs along that edge.
+/// `cuts` is scratch space for the contacts along one edge.
+fn holds(outer: &[P], inner: &[P], cuts: &mut Vec<(f64, P)>, work: &mut Work) -> Result<bool> {
     let (n, m) = (inner.len(), outer.len());
-    (0..n).all(|k| {
+    let on_one_edge = |p: P, q: P| (0..m).any(|e| on_edge(outer[e], outer[(e + 1) % m], p) && on_edge(outer[e], outer[(e + 1) % m], q));
+    for k in 0..n {
         let (a, b) = (inner[k], inner[(k + 1) % n]);
-        inside_or_on(a, outer)
-            && inside_or_on([a[0] * 0.5 + b[0] * 0.5, a[1] * 0.5 + b[1] * 0.5], outer)
-            && !(0..m).any(|e| segments_cross(a, b, outer[e], outer[(e + 1) % m]))
-    })
+        if !inside_or_on(a, outer) || (0..m).any(|e| segments_cross(a, b, outer[e], outer[(e + 1) % m])) {
+            return Ok(false);
+        }
+        // The points of `outer` on a-b, by where they lie along it, between a and b.
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let along = |p: P| (p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1];
+        cuts.clear();
+        cuts.try_reserve(m + 2).map_err(|_| MeshOpsError::OutOfMemory("contour containment"))?;
+        cuts.push((f64::NEG_INFINITY, a));
+        cuts.extend(outer.iter().filter(|&&v| v != a && v != b && on_edge(a, b, v)).map(|&v| (along(v), v)));
+        cuts.push((f64::INFINITY, b));
+        cuts.sort_unstable_by(|x, y| x.0.total_cmp(&y.0));
+        work.add((cuts.len() as u64).saturating_mul(m as u64))?;
+        for w in cuts.windows(2) {
+            let (p, q) = (w[0].1, w[1].1);
+            if p == q {
+                continue;
+            }
+            if !inside_or_on([p[0] * 0.5 + q[0] * 0.5, p[1] * 0.5 + q[1] * 0.5], outer) && !on_one_edge(p, q) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn group<C: AsRef<[P]>>(contours: &[C], limits: &Limits, keep_largest: bool) -> Result<Vec<Outline>> {
@@ -1082,6 +1114,61 @@ mod tests {
         let g = group_contours(&[a, b, d], &Limits::default()).unwrap();
         assert_eq!(g.len(), 3);
         assert_eq!(g.iter().map(|o| o.holes.len()).sum::<usize>(), 0);
+    }
+
+    #[test]
+    fn an_edge_that_leaves_through_two_outer_vertices_is_not_held() {
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+        // Each candidate's top edge runs through two vertices of the outer contour and leaves it
+        // between them, while its ends and middle stay inside.
+        let notch =
+            vec![[0.0, 0.0], [12.0, 0.0], [12.0, 10.0], [4.0, 10.0], [4.0, 6.0], [4.0, 4.0], [2.0, 4.0], [2.0, 6.0], [2.0, 10.0], [0.0, 10.0]];
+        let vee = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [9.0, 10.0], [9.0, 5.0], [8.0, 4.0], [7.0, 5.0], [7.0, 10.0], [0.0, 10.0]];
+        for (outer, inner) in [(notch, rect(1.0, 3.0, 11.0, 6.0)), (vee, rect(1.0, 3.0, 9.5, 5.0))] {
+            for start in 0..inner.len() {
+                let mut rotated = inner.clone();
+                rotated.rotate_left(start);
+                let g = group_contours(&[outer.clone(), rotated], &Limits::default()).unwrap();
+                assert_eq!(g.len(), 2, "start {start}");
+                assert!(g.iter().all(|o| o.holes.is_empty()), "start {start}");
+            }
+        }
+        // A hole whose edge runs along part of the outer contour's edge is still held.
+        let g = group_contours(&[rect(0.0, 0.0, 10.0, 10.0), rect(0.0, 2.0, 4.0, 4.0)], &Limits::default()).unwrap();
+        assert_eq!(g.iter().map(|o| o.holes.len()).collect::<Vec<_>>(), [1]);
+        // Extrusion rejects a hole that touches its outer contour, as the grouping docs say.
+        assert!(matches!(extrude(&g, &ExtrudeParams::default(), &Limits::default()), Err(MeshOpsError::Invalid(_))));
+    }
+
+    #[test]
+    fn a_contour_is_kept_wherever_it_starts() {
+        // Relative to (-1e20, -1e20), the other two points round to one difference.
+        let mut tri = vec![[-1e20, -1e20], [0.0, 0.0], [1.0, 0.0]];
+        for start in 0..3 {
+            let g = group_contours(&[tri.clone()], &Limits::default()).unwrap();
+            assert_eq!(g.len(), 1, "start {start}");
+            tri.rotate_left(1);
+        }
+    }
+
+    #[test]
+    fn small_features_at_large_coordinates_and_large_features_near_the_origin_group_and_extrude() {
+        let sq = |x: f64, y: f64, s: f64| vec![[x, y], [x + s, y], [x + s, y + s], [x, y + s]];
+        let l = Limits::default();
+        // A unit square near 1e6 holding a square 1e-3 wide, and a square 2e6 wide around the
+        // origin holding two squares 1e-3 wide near the origin.
+        let near = group_contours(&[sq(1e6, 1e6, 1.0), sq(1e6 + 0.5, 1e6 + 0.5, 1e-3)], &l).unwrap();
+        assert_eq!(near.iter().map(|o| o.holes.len()).collect::<Vec<_>>(), [1]);
+        let far = group_contours(&[sq(-1e6, -1e6, 2e6), sq(1e-3, 1e-3, 1e-3), sq(-2e-3, -2e-3, 1e-3)], &l).unwrap();
+        assert_eq!(far.iter().map(|o| o.holes.len()).collect::<Vec<_>>(), [2]);
+        // f32 steps by 0.0625 near 1e6, so the small hole there rounds away: an error, not a mesh.
+        let flat = ExtrudeParams { bevel: BevelStyle::None, bevel_depth: 0.0, hole_bevel: 1.0, depth: 10.0 };
+        assert!(matches!(extrude(&near, &flat, &l), Err(MeshOpsError::Invalid(_))));
+        // Near the origin f32 keeps the holes: the mesh is closed and faces outward.
+        let m = extrude(&far, &flat, &l).unwrap();
+        assert_watertight(&m);
+        assert_normals_outward(&m);
+        assert!(volume(&m) > 0.0);
     }
 
     #[test]

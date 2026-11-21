@@ -191,22 +191,9 @@ pub struct FlatNormals {
 /// left out. The output vertex count (one per index) is checked against
 /// [`Limits::max_vertices`] as well as the input's.
 pub fn flat_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) -> Result<FlatNormals> {
-    check_limit("vertex count", positions.len(), limits.max_vertices)?;
-    check_limit("triangle count", indices.len() / 3, limits.max_triangles)?;
-    check_limit("vertex count", indices.len(), limits.max_vertices)?;
-    // The checks of `flat_corners`, made before the positions are copied.
-    if !indices.len().is_multiple_of(3) {
-        return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
-    }
-    if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
-        return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
-    }
-    if !positions.iter().flatten().all(|v| v.is_finite()) {
-        return Err(MeshOpsError::Invalid("non-finite position".into()));
-    }
-    let mut input = try_vec(positions.len(), "positions")?;
-    input.extend(positions.iter().map(|p| Vec3::from_array(*p)));
-    let corners = mesh::flat_corners(&input, indices, limits)?;
+    // `flat_corners` checks the counts, the indices and every position, then reads only the
+    // positions the triangles use.
+    let corners = mesh::flat_corners(positions, indices, limits)?;
     let mut positions = try_vec(corners.positions.len(), "positions")?;
     positions.extend(corners.positions.iter().map(|p| p.to_array()));
     let mut normals = try_vec(corners.normals.len(), "normals")?;
