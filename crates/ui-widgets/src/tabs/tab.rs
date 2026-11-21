@@ -292,11 +292,12 @@ impl Component for Tab<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let sizes = &cx.style.sizes;
-        if cx.proposal == Proposal::Min {
+        if cx.proposal == Proposal::Min && self.kind != TabKind::Document {
             return Vec2::new(sizes.min_content, sizes.label_line);
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
-        let mut natural = sizes.tail + width(&self.label_run(cx.style, cx.resolved.label));
+        let label_width = width(&self.label_run(cx.style, cx.resolved.label));
+        let mut natural = sizes.tail + label_width;
         if self.icon.is_some() {
             natural += sizes.icon + sizes.gap;
         }
@@ -312,7 +313,15 @@ impl Component for Tab<'_> {
         if self.shows_close() {
             natural += sizes.gap + sizes.close_box;
         }
-        Vec2::new(natural, sizes.label_line)
+        let measured = if cx.proposal == Proposal::Min {
+            let end = cx.resolved.label.char_indices().nth(12).map_or(cx.resolved.label.len(), |(index, _)| index);
+            let prefix = cx.resolved.label.get(..end).unwrap_or(cx.resolved.label);
+            let readable = natural - label_width + width(&self.label_run(cx.style, prefix));
+            readable.max(sizes.min_content).min(natural)
+        } else {
+            natural
+        };
+        Vec2::new(measured, sizes.label_line)
     }
 
     fn sense(&self) -> Sense {

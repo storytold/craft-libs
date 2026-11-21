@@ -15,18 +15,37 @@ use std::rc::Rc;
 const TITLES: [&str; 3] = ["One", "Two", "Three"];
 
 #[trial]
-fn overflowing_document_tabs_remain_readable_and_have_scroll_arrows() {
+fn overflowing_document_tabs_remain_readable_and_list_every_document() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut reference = Fixture::new(|ui| {
+        let tabs = [DocumentTab::new(0, "Document num")];
+        let _ = DocumentTabs::new("Reference", &tabs).selected(0).show(ui);
+    });
+    reference.room(egui::vec2(600.0, 100.0)).settle();
+    let minimum = reference.by_label("Document num").expect("reference tab").rect.width();
     let mut fixture = Fixture::new(|ui| {
         let tabs: Vec<_> = (0..12).map(|i| DocumentTab::new(i, format!("Document number {i}, scanned.pdf"))).collect();
-        DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
     });
     fixture.room(egui::vec2(600.0, 100.0)).settle();
-    let first = fixture.by_label("Document number 0, scanned.pdf").expect("first tab").rect;
-    let second = fixture.by_label("Document number 1, scanned.pdf").expect("second tab remains visible").rect;
-    assert!(first.width() > 100.0 && second.width() > 100.0, "tabs remain readable: {first:?}, {second:?}");
-    assert!(fixture.by_label("Scroll tabs left").is_some());
-    assert!(fixture.by_label("Scroll tabs right").is_some());
+    let shown: Vec<_> = (0..12)
+        .filter_map(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).map(|node| node.rect))
+        .collect();
+    assert!(shown.len() > 1, "more than one tab remains visible: {shown:?}");
+    assert!(shown.iter().all(|tab| tab.width() + 0.5 >= minimum), "tabs fit their first 12 characters and close button: {shown:?}, minimum {minimum}");
+    let more = fixture.by_label("More tabs").expect("overflow button").center();
+    fixture.click_at(more).settle();
+    for i in 0..12 {
+        let name = format!("Document number {i}, scanned.pdf");
+        let tree = fixture.tree();
+        assert!(
+            [Role::MENU_ITEM, Role::MENU_ITEM_CHECK_BOX, Role::MENU_ITEM_RADIO]
+                .into_iter()
+                .flat_map(|role| tree.with_role(role))
+                .any(|key| tree.name_of(key) == Some(name.as_str())),
+            "overflow menu lists {name}"
+        );
+    }
 }
 
 #[trial]
