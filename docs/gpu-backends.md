@@ -9,7 +9,7 @@
 Feature flags on `craft-gpu-wgpu`:
 
 - `adapter-probe`: native only; opens the device through [`craft-gpu-device`](../crates/gpu-device/README.md) and builds real [`DeviceCaps`](../crates/gpu/src/caps.rs) from the created device (falls back to the staging path when no adapter opens). `craft-gpu-device` depends on wgpu with its default features, so this feature also turns on wgpu's default native backends. The context's instance uses `craft_gpu_device::native_descriptor`'s backends (no OpenGL on Windows) unless `WGPU_BACKEND` names others.
-- `native-vulkan`, `native-dx12`, `native-metal`, `native-gles`: enable the matching wgpu backend.
+- `native-vulkan`, `native-dx12`, `native-metal`, `native-gles`: enable the matching wgpu backend together with `adapter-probe`. On native targets wgpu is a dependency only when `adapter-probe` is on, so these features do nothing without it.
 
 ## Real device, device-truth caps (RFC-0022 requirement 1)
 
@@ -19,7 +19,7 @@ Buffers are real `wgpu::Buffer`s (`STORAGE | COPY_SRC | COPY_DST`). The host-sta
 
 **The no-adapter path is still a defined path.** Without a usable adapter (`adapter-probe` off, no backend feature on, no GPU present, or `wasm32`, see below), `WgpuContext` degrades to the same in-memory staging behavior as `craft-gpu-null`. `WgpuContext::has_device()` tells a caller which path it got; `probe_caps()` (no context) stays the quick, adapter-only, advisory estimate it always was.
 
-**`wasm32` gap, acknowledged, not hidden.** RFC-0022 itself describes browser capability probing moving "from static defaults to real adapter queries once async initialization lands in the worker". That landing hasn't happened yet. `request_adapter`/`request_device` are JS promises. Driving them synchronously the way `pollster::block_on` does natively is unavailable on `wasm32`. Wiring the async worker-init path is a larger, separate piece of work. Until then, `WgpuContext` on `wasm32` reports the same conservative, adapter-free defaults it always has. This is the RFC's own acknowledged follow-up, not new scope invented for this PR.
+**`wasm32` gap, acknowledged, not hidden.** RFC-0022 itself describes browser capability probing moving "from static defaults to real adapter queries once async initialization lands in the worker". That landing hasn't happened yet. `request_adapter`/`request_device` are JS promises. Driving them synchronously the way `pollster::block_on` does natively is unavailable on `wasm32`. Wiring the async worker-init path is a larger, separate piece of work. Until then, `WgpuContext` on `wasm32` reports the same conservative, adapter-free defaults it always has, and the crate does not depend on wgpu on `wasm32`. This is the RFC's own acknowledged follow-up, not new scope invented for this PR.
 
 ## Device loss (RFC-0022 requirement 1)
 

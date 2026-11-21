@@ -12,22 +12,20 @@ workspace = true
 [dependencies]
 craft-gpu = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { workspace = true, features = ["webgpu"] }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Chooses and opens the device, and watches it for a loss (`adapter-probe`).
 craft-gpu-device = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
-wgpu = { workspace = true }
+# Native code uses wgpu only with `adapter-probe`.
+wgpu = { workspace = true, optional = true }
 
 [features]
 default = []
-adapter-probe = ["dep:pollster", "dep:craft-gpu-device"]
-native-vulkan = ["wgpu/vulkan"]
-native-dx12 = ["wgpu/dx12"]
-native-metal = ["wgpu/metal"]
-native-gles = ["wgpu/gles"]
+adapter-probe = ["dep:pollster", "dep:craft-gpu-device", "dep:wgpu"]
+native-vulkan = ["wgpu?/vulkan"]
+native-dx12 = ["wgpu?/dx12"]
+native-metal = ["wgpu?/metal"]
+native-gles = ["wgpu?/gles"]
 
 [dev-dependencies]
 pollster = { workspace = true }
