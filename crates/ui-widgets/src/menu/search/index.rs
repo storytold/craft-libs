@@ -4,8 +4,9 @@
 //! matches however the label is written.
 
 use super::{HelpEntry, Synonyms};
-use crate::runtime::env::EnvView;
+use crate::runtime::env::{EnvView, Label};
 use crate::runtime::words::common::CommonWords;
+use craft_host::Host;
 use craft_i18n::Folder;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -269,16 +270,30 @@ impl SearchIndex {
     /// label are not stemmed (they may be in another language); a label with none is the English one. The path's words
     /// and the description words are stemmed.
     pub fn new(env: &EnvView<'_>, entries: &[HelpEntry], synonyms: &Synonyms) -> Self {
-        let folder = env.folder();
-        let fold = |text: &str| normalize(&folder, text);
-        let separator = fold(env.words::<CommonWords>().path_separator.as_str());
+        let separator = &env.words::<CommonWords>().path_separator;
+        Self::build(&env.folder(), separator.as_str(), &|label| env.resolve(label), entries, synonyms)
+    }
+
+    /// [`SearchIndex::new`] without a `Ui`, in the interface language of `host` (a command, which runs outside a
+    /// frame): the words, folding and path separator a scope under `host` reads.
+    pub fn for_host(host: &Host, entries: &[HelpEntry], synonyms: &Synonyms) -> Self {
+        let words = host.words();
+        let separator = &words.set::<CommonWords>().path_separator;
+        Self::build(&Folder::new(host.language_code()), separator.as_str(), &|label| label.resolved(&words), entries, synonyms)
+    }
+
+    /// The index of `entries` with labels shown through `resolve`, folded with `folder`, the path joined with
+    /// `separator`.
+    fn build(folder: &Folder, separator: &str, resolve: &dyn Fn(&Label) -> Label, entries: &[HelpEntry], synonyms: &Synonyms) -> Self {
+        let fold = |text: &str| normalize(folder, text);
+        let separator = fold(separator);
         let joiner = format!(" {separator} ");
         let mut found: Vec<(String, usize, u8)> = Vec::new();
         let mut names = Vec::with_capacity(entries.len());
         for (at, entry) in entries.iter().enumerate() {
-            let shown = fold(env.resolve(entry.label()).as_str());
-            let english = entry.english().map(|label| fold(env.resolve(label).as_str()));
-            let path = entry.path().iter().map(|label| fold(env.resolve(label).as_str())).collect::<Vec<_>>().join(&joiner);
+            let shown = fold(resolve(entry.label()).as_str());
+            let english = entry.english().map(|label| fold(resolve(label).as_str()));
+            let path = entry.path().iter().map(|label| fold(resolve(label).as_str())).collect::<Vec<_>>().join(&joiner);
             add_words(&mut found, &path, at, PATH, Some(PATH_STEMMED));
             let labels: Vec<(String, bool)> = std::iter::once((shown, english.is_none())).chain(english.map(|label| (label, true))).collect();
             let mut pairs = Vec::with_capacity(labels.len());
@@ -330,7 +345,7 @@ impl SearchIndex {
                 map.entry(form.into()).or_insert(g);
             }
         }
-        SearchIndex { folder, separator, entries: names, terms, synonyms: map }
+        SearchIndex { folder: *folder, separator, entries: names, terms, synonyms: map }
     }
 
     /// The text of the word at place `t` in `terms`.

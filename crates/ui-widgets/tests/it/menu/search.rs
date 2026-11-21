@@ -104,3 +104,28 @@ fn every_word_of_a_query_must_match_in_any_order_and_the_command_id_is_found() {
     assert_eq!(found, vec![0, 1], "the id matches in any case, as does the label that starts with it");
     assert_eq!(find(ids(), "slanted format.italic"), vec![0], "a word in the label and a word in the id");
 }
+
+/// The index built without a `Ui` (a command's search) ranks as the one a frame under the same host builds.
+#[trial]
+fn an_index_built_for_a_host_ranks_as_the_frame_under_it_does() {
+    let host = std::sync::Arc::new(craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).build());
+    let entries = vec![
+        entry("t0", "Zip").with_words("copy the layer"),
+        entry("t1", "Zzz").with_path(["Copy Tools"]),
+        entry("t2", "Make Copy"),
+        entry("t3", "Outline Stroke").with_path(["Object", "Path"]),
+    ];
+    let queries = ["copy", "tools", "object path", "outlines"];
+    let in_frame: Rc<RefCell<Vec<Vec<usize>>>> = Rc::default();
+    let (out, listed) = (in_frame.clone(), entries.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let index = SearchIndex::new(&Env::of(ui).view(), &listed, &english());
+        *out.borrow_mut() = queries.iter().map(|query| rank(&index, query, &[], &|_| 0)).collect();
+    });
+    fixture.host(host.clone());
+    fixture.settle();
+    let index = SearchIndex::for_host(&host, &entries, &english());
+    let without_ui: Vec<Vec<usize>> = queries.iter().map(|query| rank(&index, query, &[], &|_| 0)).collect();
+    assert!(without_ui.iter().all(|found| !found.is_empty()), "every query finds something: {without_ui:?}");
+    assert_eq!(without_ui, in_frame.take());
+}
