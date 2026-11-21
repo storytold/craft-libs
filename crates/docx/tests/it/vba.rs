@@ -579,18 +579,15 @@ fn a_reference_control_whose_ignored_sizes_are_bogus_does_not_stop_the_walk() {
         dir.extend(0u16.to_le_bytes()); // Reserved2
         if with_name {
             // NameRecordExtended, a REFERENCENAME record ([MS-OVBA] §2.3.4.2.2.2): Id (2),
-            // Size (4, ignored), SizeOfName (4), Name, Reserved (2), SizeOfNameUnicode (4),
-            // NameUnicode, Reserved (2) — `record` alone would leave the walker reading the
-            // name bytes as SizeOfName.
+            // SizeOfName (4), Name, Reserved (2, 0x003E), SizeOfNameUnicode (4), NameUnicode —
+            // no outer `Size` field, no trailing Reserved.
             let (name, name_unicode) = (b"Stdole", utf16("Stdole"));
             dir.extend(0x0016u16.to_le_bytes());
-            dir.extend(0xFFFFFFFFu32.to_le_bytes()); // Size, ignored
             dir.extend((name.len() as u32).to_le_bytes());
             dir.extend(&name[..]);
-            dir.extend(0u16.to_le_bytes()); // Reserved
+            dir.extend(0x003Eu16.to_le_bytes()); // Reserved
             dir.extend((name_unicode.len() as u32).to_le_bytes());
             dir.extend(&name_unicode);
-            dir.extend(0u16.to_le_bytes()); // Reserved
         }
         dir.extend(0x0030u16.to_le_bytes()); // Reserved3
         dir.extend(0xFFFFFFFFu32.to_le_bytes()); // SizeExtended, ignored

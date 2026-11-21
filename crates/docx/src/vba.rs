@@ -340,17 +340,14 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
             };
             // NameRecordExtended is optional: a REFERENCENAME record (0x0016) sits here when
             // present, Reserved3 (2, 0x0030) otherwise, so the peek is unambiguous. It skips
-            // by its own nested lengths (SizeOfName, Name, Reserved, SizeOfNameUnicode,
-            // NameUnicode, Reserved) ([MS-OVBA] §2.3.4.2.2.2).
+            // by its own nested lengths — Id (2), SizeOfName (4), Name, Reserved (2),
+            // SizeOfNameUnicode (4), NameUnicode; no outer `Size` field ([MS-OVBA]
+            // §2.3.4.2.2.2).
             if u16_at(dir, next) == Some(REC_REFERENCE_NAME) {
-                let Some(name_len) = u32_at(dir, next + 6).map(|n| n as usize) else { break };
-                let Some(uni_at) = next.checked_add(10).and_then(|at| at.checked_add(name_len)).and_then(|at| at.checked_add(2)) else {
-                    break;
-                };
+                let Some(name_len) = u32_at(dir, next + 2).map(|n| n as usize) else { break };
+                let Some(uni_at) = next.checked_add(8).and_then(|at| at.checked_add(name_len)) else { break };
                 let Some(uni_len) = u32_at(dir, uni_at).map(|n| n as usize) else { break };
-                let Some(end) =
-                    uni_at.checked_add(4).and_then(|at| at.checked_add(uni_len)).and_then(|at| at.checked_add(2)).filter(|&next| next <= dir.len())
-                else {
+                let Some(end) = uni_at.checked_add(4).and_then(|at| at.checked_add(uni_len)).filter(|&next| next <= dir.len()) else {
                     break;
                 };
                 next = end;
