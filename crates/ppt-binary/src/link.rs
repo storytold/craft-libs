@@ -9,6 +9,7 @@
 //! and a link to a specific slide of the same presentation, whose `LocationAtom` format
 //! [MS-PPT] does not specify.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use craft_pptx::text::{Action, Hyperlink};
@@ -40,6 +41,11 @@ const LT_OTHER_FILE: u8 = 0x0A;
 /// `MacroNameAtom`'s CString instance (§2.6.11).
 const MACRO_NAME: u16 = 2;
 
+/// The most link-target text a document's links copy out, in bytes. Many actions can name one
+/// target, so without a total a small file could ask for one long target over and over; a link
+/// past this total is left out.
+pub const MAX_LINK_TARGET_BYTES: usize = 16 << 20;
+
 /// An `InteractiveInfoAtom` (§2.6.10) and its container's `MacroNameAtom`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Info {
@@ -58,6 +64,7 @@ pub struct Info {
 pub fn read(container: &Rec) -> Option<Info> {
     let atom = container.child(rt::INTERACTIVE_INFO_ATOM)?;
     // soundIdRef (4), exHyperlinkIdRef (4), action, oleVerb, jump, flags, hyperlinkType.
+    let sound = atom.u32(0)?;
     let flags = atom.u8(11)?;
     let name = container
         .children()
@@ -68,17 +75,24 @@ pub fn read(container: &Rec) -> Option<Info> {
         link: atom.u32(4)?,
         action: atom.u8(8)?,
         jump: atom.u8(10)?,
-        // fAnimated is bit 0, fStopSound bit 1, fCustomShowReturn bit 2.
-        stop_sound: flags & 0x02 != 0,
+        // fAnimated is bit 0, fStopSound bit 1, fCustomShowReturn bit 2. fStopSound is ignored
+        // when soundIdRef names a sound to play.
+        stop_sound: flags & 0x02 != 0 && sound == 0,
         show_returns: flags & 0x04 != 0,
         link_type: atom.u8(12)?,
         name,
     })
 }
 
-/// The action `info` performs, with `targets` the document's hyperlink targets by id. `None` for
-/// no action, one the model can't hold, or a link whose target is missing.
-pub fn hyperlink(info: &Info, targets: &HashMap<u32, String>) -> Option<Hyperlink> {
+/// An action, or a link to a target not copied yet.
+enum Planned<'t> {
+    Action(Action),
+    Url(&'t str),
+}
+
+/// What `info` does, without copying a link target. `None` for no action, one the model can't
+/// hold, or a link whose target is missing.
+fn plan<'t>(info: &Info, targets: &'t HashMap<u32, String>) -> Option<Planned<'t>> {
     let named = || Some(info.name.clone()).filter(|n| !n.is_empty());
     let action = match info.action {
         // InteractiveInfoJumpEnum (§2.13.14).
@@ -96,13 +110,34 @@ pub fn hyperlink(info: &Info, targets: &HashMap<u32, String>) -> Option<Hyperlin
             LT_PREVIOUS_SLIDE => Action::PreviousSlide,
             LT_FIRST_SLIDE => Action::FirstSlide,
             LT_LAST_SLIDE => Action::LastSlide,
-            LT_URL | LT_OTHER_PRESENTATION | LT_OTHER_FILE => Action::Url { url: targets.get(&info.link).filter(|t| !t.is_empty())?.clone() },
+            LT_URL | LT_OTHER_PRESENTATION | LT_OTHER_FILE => {
+                return Some(Planned::Url(targets.get(&info.link).filter(|t| !t.is_empty())?));
+            }
             _ => return None,
         },
         CUSTOM_SHOW => Action::CustomShow { name: named()?, returns: info.show_returns },
         RUN_PROGRAM => Action::Program { path: named()? },
         MEDIA => Action::PlayMedia,
         _ => return None,
+    };
+    Some(Planned::Action(action))
+}
+
+/// Whether [`hyperlink`] gives `info` an action, given enough of the link-target budget.
+pub fn resolves(info: &Info, targets: &HashMap<u32, String>) -> bool {
+    plan(info, targets).is_some()
+}
+
+/// The action `info` performs, with `targets` the document's hyperlink targets by id. A link's
+/// target is copied out of `budget` (bytes left of [`MAX_LINK_TARGET_BYTES`]). `None` for no
+/// action, one the model can't hold, a link whose target is missing, or one past the budget.
+pub fn hyperlink(info: &Info, targets: &HashMap<u32, String>, budget: &Cell<usize>) -> Option<Hyperlink> {
+    let action = match plan(info, targets)? {
+        Planned::Action(action) => action,
+        Planned::Url(target) => {
+            budget.set(budget.get().checked_sub(target.len())?);
+            Action::Url { url: target.to_owned() }
+        }
     };
     Some(Hyperlink { action, tooltip: String::new(), highlight_click: false, sound: None, stop_sound: info.stop_sound, zoom_return: None })
 }

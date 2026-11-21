@@ -27,7 +27,8 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 - Shapes and text ranges keep their click and mouse-over actions: web and file links, jumps to
   the next, previous, first, last or last viewed slide and to the end of the show, named shows,
   programs and media, and "stop other sounds". Macros, OLE verbs, the sound to play and links to a
-  specific slide (whose location format [MS-PPT] doesn't give) are left out.
+  specific slide (whose location format [MS-PPT] doesn't give) are left out. Links copy at most
+  16 MiB of target text in all; links past that are left out.
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
   bounded.

@@ -1369,3 +1369,64 @@ fn unknown_actions_are_left_out() {
     assert!(p.slides[0].shapes.len() >= 3);
     assert!(p.slides[0].shapes.iter().all(|s| s.click.is_none() && s.hover.is_none()));
 }
+
+/// "Stop other sounds" is ignored when the action plays a sound of its own ([MS-PPT] §2.6.10),
+/// even though this reader leaves that sound out.
+#[test]
+fn stop_sound_is_ignored_when_the_action_plays_a_sound() {
+    let atom_bytes = [&le32(&[1, 0])[..], &[0x03, 0, 0x01, 0x02, 0, 0, 0, 0]].concat();
+    let with_sound = container(rt::INTERACTIVE_INFO, 0, &[atom(rt::INTERACTIVE_INFO_ATOM, 0, &atom_bytes)]);
+    let shape = container(rt::SP_CONTAINER, 0, &[fsp(1, 2049, 0xA00), anchor(400, 500, 2000, 1200), container(rt::CLIENT_DATA, 0, &[with_sound])]);
+    let p = file_with_shapes(&[shape], &[]);
+    let click = p.slides[0].shapes.iter().find_map(|s| s.click.as_ref()).unwrap();
+    assert_eq!(click.action, craft_pptx::text::Action::NextSlide);
+    assert!(!click.stop_sound);
+}
+
+/// A range that starts or ends inside a surrogate pair is left out, so the character stays whole;
+/// a range around the whole pair keeps its link.
+#[test]
+fn a_text_range_never_splits_a_surrogate_pair() {
+    let boxed = |spid: u32, begin: u32, end: u32| {
+        let text = text_box(0, "\u{1F600}X", &[interactive(0, 0x04, 0, 9, 0x08, 0), atom(rt::TEXT_INTERACTIVE_INFO_ATOM, 0, &le32(&[begin, end]))]);
+        container(rt::SP_CONTAINER, 0, &[fsp(202, spid, 0xA00), anchor(400, 500, 2000, 1200), text])
+    };
+    let p = file_with_shapes(&[boxed(2049, 1, 2), boxed(2050, 0, 2)], &[(9, "https://example.com/")]);
+    let runs: Vec<_> = p.slides[0].shapes.iter().filter_map(|s| s.text.as_ref()).map(|t| &t.paragraphs[0].runs).collect();
+    assert_eq!(runs.len(), 2);
+    for r in &runs {
+        let text: String = r.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(text, "\u{1F600}X", "the text is unchanged");
+    }
+    assert!(runs[0].iter().all(|r| r.props.link.is_none()), "a range inside the pair is left out");
+    let linked: Vec<&str> = runs[1].iter().filter(|r| r.props.link.is_some()).map(|r| r.text.as_str()).collect();
+    assert_eq!(linked, ["\u{1F600}"]);
+}
+
+/// Many actions naming one long target copy no more target text, in total, than the budget
+/// allows: the links past it are left out, the ones before it are kept.
+#[test]
+fn links_copy_no_more_target_text_than_the_budget() {
+    let target = format!("https://example.com/{}", "a".repeat(1 << 20));
+    let count = crate::link::MAX_LINK_TARGET_BYTES / target.len() + 4;
+    // Every other character is linked, so each link stays a run of its own.
+    let text: String = "x".repeat(2 * count);
+    let mut extra = Vec::new();
+    for i in 0..count as u32 {
+        extra.push(interactive(0, 0x04, 0, 9, 0x08, 0));
+        extra.push(atom(rt::TEXT_INTERACTIVE_INFO_ATOM, 0, &le32(&[2 * i, 2 * i + 1])));
+    }
+    let shape = container(rt::SP_CONTAINER, 0, &[fsp(202, 2049, 0xA00), anchor(400, 500, 2000, 1200), text_box(0, &text, &extra)]);
+    let p = file_with_shapes(&[shape], &[(9, &target)]);
+    let runs = &p.slides[0].shapes.iter().find_map(|s| s.text.as_ref()).unwrap().paragraphs[0].runs;
+    let urls: Vec<usize> = runs
+        .iter()
+        .filter_map(|r| match &r.props.link.as_ref()?.action {
+            craft_pptx::text::Action::Url { url } => Some(url.len()),
+            _ => None,
+        })
+        .collect();
+    assert!(!urls.is_empty(), "links within the budget are kept");
+    assert!(urls.len() < count, "links past the budget are left out");
+    assert!(urls.iter().sum::<usize>() <= crate::link::MAX_LINK_TARGET_BYTES);
+}

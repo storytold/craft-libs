@@ -6,7 +6,7 @@
 //! of its main master. Slide shapes keep their own boxes, and their text carries its formatting
 //! resolved against the master's text styles, so it draws the same whatever the layouts hold.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -94,6 +94,8 @@ struct Ctx<'a> {
     app: &'a dyn Defaults,
     /// Hyperlink targets by `exHyperlinkId` ([`doc::hyperlink_targets`]).
     link_targets: HashMap<u32, String>,
+    /// Bytes of link targets the links may still copy ([`crate::link::MAX_LINK_TARGET_BYTES`]).
+    link_budget: Cell<usize>,
     /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
     /// it goes to the first of them only, so its text isn't copied into every one.
     used_notes: HashSet<usize>,
@@ -124,6 +126,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         app,
         used_notes: HashSet::new(),
         link_targets: doc::hyperlink_targets(&d.document),
+        link_budget: Cell::new(crate::link::MAX_LINK_TARGET_BYTES),
     };
     let environment = d.document.child(rt::ENVIRONMENT);
     if let Some(hf) = doc::headers_footers(&d.document, 3) {
@@ -580,8 +583,8 @@ impl<'a> Ctx<'a> {
             xfrm: Some(xfrm(&anchor, map, rot, raw.flip_h, raw.flip_v)),
             descr: props.string(prop::DESCRIPTION).unwrap_or_default(),
             hidden: props.flag(prop::GROUP_BOOLS, 1).unwrap_or(false),
-            click: raw.click.as_ref().and_then(|i| crate::link::hyperlink(i, &self.link_targets)),
-            hover: raw.hover.as_ref().and_then(|i| crate::link::hyperlink(i, &self.link_targets)),
+            click: raw.click.as_ref().and_then(|i| crate::link::hyperlink(i, &self.link_targets, &self.link_budget)),
+            hover: raw.hover.as_ref().and_then(|i| crate::link::hyperlink(i, &self.link_targets, &self.link_budget)),
             ..Default::default()
         };
         if raw.is_group {
@@ -976,25 +979,33 @@ impl<'a> Ctx<'a> {
     /// `block`'s text, as (begin, end, action): inside the text, sorted, and not overlapping (a
     /// range that overlaps an earlier one is left out), so a run's action is a binary search.
     fn text_links(&self, block: &TextBlock, instance: u16) -> Vec<(usize, usize, Hyperlink)> {
-        let total = block.chars.len();
-        let mut ranges: Vec<(usize, usize, Hyperlink)> = block
+        let chars = &block.chars;
+        // A boundary between a high and a low surrogate would split one character.
+        let splits_pair = |at: usize| {
+            at > 0 && chars.get(at - 1).is_some_and(|u| (0xD800..0xDC00).contains(u)) && chars.get(at).is_some_and(|u| (0xDC00..0xE000).contains(u))
+        };
+        // Which ranges survive is decided before any target is copied, so ranges that overlap,
+        // or that name a missing target, cost nothing.
+        let mut ranges: Vec<(usize, usize, &crate::link::Info)> = block
             .links
             .iter()
             .filter(|(k, ..)| *k == instance)
             .filter_map(|(_, begin, end, info)| {
                 let (begin, end) = (usize::try_from(*begin).ok()?, usize::try_from(*end).ok()?);
-                (begin < end && end <= total).then_some(())?;
-                Some((begin, end, crate::link::hyperlink(info, &self.link_targets)?))
+                (begin < end && end <= chars.len() && !splits_pair(begin) && !splits_pair(end)).then_some(())?;
+                crate::link::resolves(info, &self.link_targets).then_some((begin, end, info))
             })
             .collect();
         ranges.sort_by_key(|r| r.0);
-        let mut kept: Vec<(usize, usize, Hyperlink)> = Vec::with_capacity(ranges.len());
+        let mut kept: Vec<(usize, usize, &crate::link::Info)> = Vec::with_capacity(ranges.len());
         for r in ranges {
             if kept.last().is_none_or(|last| last.1 <= r.0) {
                 kept.push(r);
             }
         }
-        kept
+        kept.into_iter()
+            .filter_map(|(begin, end, info)| Some((begin, end, crate::link::hyperlink(info, &self.link_targets, &self.link_budget)?)))
+            .collect()
     }
 
     fn run_props(&self, cf: &Cf, scheme: &Scheme) -> RunProps {
