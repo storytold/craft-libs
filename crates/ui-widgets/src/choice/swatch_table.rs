@@ -257,7 +257,7 @@ impl Component for SwatchTable<'_> {
             CollectionEvent::Activate(key) => Some(*key),
             _ => None,
         });
-        let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })); // P3(mechanical): dp.C12
+        let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. }));
         let delete = response
             .events
             .iter()

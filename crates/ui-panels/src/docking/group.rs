@@ -500,7 +500,6 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             }
             for event in strip.response.events {
                 if let crate::contract::CollectionEvent::Selection { change: craft_behavior::SelectionChange::Set(keys), .. } = event {
-                    // P3(mechanical): dp.C12
                     reported.picked = keys.last().copied().or(reported.picked);
                 }
             }

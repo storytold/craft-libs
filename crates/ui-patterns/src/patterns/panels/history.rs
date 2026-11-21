@@ -387,7 +387,6 @@ impl<'a> HistoryPanel<'a> {
             for event in out.events {
                 match event {
                     CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                        // P3(mechanical): dp.C12
                         if let Some(key) = keys.last() {
                             picked.push(HistoryEvent::Select(*key));
                         }

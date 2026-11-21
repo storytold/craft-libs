@@ -311,7 +311,6 @@ impl CheckSpellingDialog {
             for event in events {
                 match event {
                     CollectionEvent::Selection { change: SelectionChange::Set(rows), .. } => {
-                        // P3(mechanical): dp.C12
                         if let Some(row) = rows.last() {
                             change_to.clone_from(&suggestions[*row]);
                         }

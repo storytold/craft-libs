@@ -478,7 +478,7 @@ impl CollectionKind {
     /// The kind of `event`, `None` for an edit event of a kind the runner does not know.
     pub fn of<K, E>(event: &CollectionEvent<K, E>) -> Option<CollectionKind> {
         Some(match event {
-            CollectionEvent::Selection { .. } => CollectionKind::Selection, // P3(mechanical): dp.C12
+            CollectionEvent::Selection { .. } => CollectionKind::Selection,
             CollectionEvent::LeadMoved { .. } => CollectionKind::LeadMoved,
             CollectionEvent::Activate(_) => CollectionKind::Activate,
             CollectionEvent::Rested(_) => CollectionKind::Rested,

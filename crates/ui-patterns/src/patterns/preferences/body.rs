@@ -151,7 +151,7 @@ pub(super) fn show_body<H: PreferencesModel + ?Sized>(
                 if entry.is_some_and(|entry| entry.dimmed) { row.ink(RowInk::Dimmed) } else { row }
             });
         for event in listed.events {
-            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(key) = keys.into_iter().last()
             {
                 state.selected = key;

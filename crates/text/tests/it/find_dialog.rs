@@ -34,7 +34,7 @@ fn find_fields_set_by_automation_reach_the_next_request() {
     });
     fixture.settle();
     let ctx = fixture.ctx().clone();
-    let mut set = |field: &str, value: serde_json::Value| dialog.borrow_mut().set_json_field(&ctx, field, value);
+    let set = |field: &str, value: serde_json::Value| dialog.borrow_mut().set_json_field(&ctx, field, value);
     set("find", json!("teh")).unwrap();
     set("replace", json!("the")).unwrap();
     set("matchCase", json!(true)).unwrap();

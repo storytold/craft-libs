@@ -556,7 +556,7 @@ impl<'a> PdfExportDialog<'a> {
                     .selection(Bind::given(Selection::single(section)))
                     .show_items(ui, &pages, &mut |key, _| ListRow::new(key.title(&words).clone()));
                 for event in listed.events {
-                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                         && let Some(key) = keys.into_iter().last()
                     {
                         section = key;

@@ -126,7 +126,7 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
         .shown(session.tab)
         .show_items(ui, &source, &mut |tab, _| Tab::new(tab_title(*tab, read.categories, words)));
     for event in strip.response.events {
-        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
+        if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
             && let Some(tab) = keys.last()
         {
             left.tab = Some(*tab);
@@ -191,7 +191,6 @@ fn route<E, S: DocumentSettings>(events: Vec<CollectionEvent<usize, E>>, cards: 
     for event in events {
         match event {
             CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                // P3(mechanical): dp.C12
                 if let Some(index) = keys.last() {
                     pick(left, cards, *index, false);
                 }

@@ -654,7 +654,7 @@ fn seen<K: Clone, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<Seen<K>> {
                     _ => None,
                 };
                 out.push(Seen::Selection(change));
-                out.extend(picked.map(Seen::Select)); // P3(mechanical): dp.C12
+                out.extend(picked.map(Seen::Select));
             }
             CollectionEvent::Activate(key) => out.push(Seen::Activate(key)),
             CollectionEvent::Open(change) => out.push(Seen::Open(change)),

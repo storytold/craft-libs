@@ -352,7 +352,7 @@ impl<'a> PageThumbnails<'a> {
         };
         for event in shown.response.events {
             match event {
-                CollectionEvent::Selection { change, .. } => events.push(ThumbnailEvent::Selection(change)), // P3(mechanical): dp.C12
+                CollectionEvent::Selection { change, .. } => events.push(ThumbnailEvent::Selection(change)),
                 CollectionEvent::LeadMoved { key, .. } if key < count => events.push(ThumbnailEvent::Go(key)),
                 CollectionEvent::Activate(page) if page < count => events.push(ThumbnailEvent::Activate(page)),
                 CollectionEvent::Activate(key) if key == new_page => events.push(ThumbnailEvent::NewPage),

@@ -278,7 +278,7 @@ impl<'a> PageList<'a> {
                 let mut events = events.borrow_mut();
                 for event in shown.events {
                     match event {
-                        CollectionEvent::Selection { change, .. } => events.push(PageListEvent::Selection(change)), // P3(mechanical): dp.C12
+                        CollectionEvent::Selection { change, .. } => events.push(PageListEvent::Selection(change)),
                         CollectionEvent::LeadMoved { key, .. } => events.push(PageListEvent::Go(key)),
                         CollectionEvent::Activate(row) => events.push(PageListEvent::Activate(row)),
                         CollectionEvent::Rename(edit) => {

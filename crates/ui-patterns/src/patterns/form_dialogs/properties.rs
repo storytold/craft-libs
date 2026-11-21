@@ -272,7 +272,7 @@ impl<'a> PropertiesDialog<'a> {
                     .shown(current)
                     .show_items(ui, &Titles(&tabs), &mut |key, _| Tab::new(tabs[*key].title.clone()));
                 for event in strip.response.events {
-                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                         && let Some(key) = keys.into_iter().last()
                     {
                         current = key.min(last);

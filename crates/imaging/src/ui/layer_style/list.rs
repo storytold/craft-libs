@@ -222,7 +222,6 @@ pub(super) fn effect_list(
                 other => other.page().map(ListAction::Select),
             }),
             CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                // P3(mechanical): dp.C12
                 first(keys.last().and_then(EffectRow::page).filter(|page| *page != draft.page).map(ListAction::Select));
             }
             _ => {}

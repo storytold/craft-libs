@@ -669,7 +669,6 @@ fn apply(env: &mut Env<'_>, state: &mut DialogState, now: f64, lines: &[Line], o
     for event in out.events {
         match event {
             CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                // P3(mechanical): dp.C12
                 if let Some(Line::Row(row)) = keys.last().and_then(|key| lines.get(*key)) {
                     state.select_row(&row.command);
                 }

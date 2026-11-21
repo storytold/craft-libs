@@ -244,7 +244,6 @@ fn map_events<K: Clone + PartialEq>(
     for event in list {
         match event {
             CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                // P3(mechanical): dp.C12
                 if let Some(key) = keys.last() {
                     events.push(ChannelsEvent::Target { key: key.clone(), extend: keys.len() > 1 });
                 }

@@ -207,9 +207,8 @@ fn map_events<K: Clone + PartialEq>(
         .collect();
     for event in list {
         match event {
-            CollectionEvent::Selection { change: SelectionChange::Clear, .. } => events.push(PathsEvent::Select(None)), // P3(mechanical): dp.C12
+            CollectionEvent::Selection { change: SelectionChange::Clear, .. } => events.push(PathsEvent::Select(None)),
             CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                // P3(mechanical): dp.C12
                 if matches!(keys.as_slice(), [only] if loaded.contains(only)) {
                     continue;
                 }

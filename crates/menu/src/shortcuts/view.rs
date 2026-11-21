@@ -112,7 +112,7 @@ pub(super) fn tab_strip(ui: &mut Ui, name: &'static str, titles: &[String], show
         .shown(shown)
         .show_items(ui, &Titles(titles), &mut |key, _| Tab::new(titles[*key].clone()).id_salt(("tab", *key)));
     strip.response.events.into_iter().find_map(|event| match event {
-        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(), // P3(mechanical): dp.C12
+        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(),
         _ => None,
     })
 }

@@ -86,7 +86,7 @@ impl<'a> TokenBrowser<'a> {
                     match event {
                         CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                             picked = keys.last().and_then(|row| row.pick(explained))
-                        } // P3(mechanical): dp.C12
+                        }
                         CollectionEvent::Activate(row) => match row.pick(explained) {
                             Some(pick) => picked = Some(pick),
                             None => session.open.set(&row, !rows.is_open(&row)),

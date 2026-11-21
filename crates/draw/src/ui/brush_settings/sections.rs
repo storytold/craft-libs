@@ -385,7 +385,6 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                     });
                 }
                 CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
-                    // P3(mechanical): dp.C12
                     for slot in keys.iter().filter(|slot| !toggled.contains(slot)) {
                         let Slot::Section(key) = slot else { continue };
                         let pane_row = rows.section(key).is_some_and(|section| section.kind == BrushSectionKind::Pane);

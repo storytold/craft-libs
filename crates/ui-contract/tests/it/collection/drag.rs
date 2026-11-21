@@ -42,7 +42,6 @@ impl Scene {
         let mut selection = Selection::<usize>::default();
         for event in self.events.borrow().iter() {
             if let CollectionEvent::Selection { change, .. } = event {
-                // P3(mechanical): dp.C12
                 selection.apply(change.clone());
             }
         }

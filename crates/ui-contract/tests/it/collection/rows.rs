@@ -468,7 +468,7 @@ fn a_selected_lead_that_leaves_the_source_moves_the_lead_and_leaves_the_selectio
     rows.borrow_mut().remove(2);
     frames.idle(2, &mut show);
     assert_eq!(selection.borrow().items, vec![12], "the selection is the host's: no neighbour is picked");
-    assert!(!events.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "no selection change is reported"); // P3(mechanical): dp.C12
+    assert!(!events.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "no selection change is reported");
     let leads: Vec<usize> =
         events.borrow().iter().filter_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None }).collect();
     assert_eq!(leads.last(), Some(&13), "the lead moves to the key now in its place");

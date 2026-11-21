@@ -152,7 +152,7 @@ fn pointer_commands_name_the_thumbnail_and_leave_the_selection() {
     let commands: Vec<usize> =
         seen.borrow().iter().filter_map(|event| if let CollectionEvent::CommandClick { key, .. } = event { Some(*key) } else { None }).collect();
     assert_eq!(commands, [0, 2], "a Cmd/Ctrl click on the label and one on the thumbnail are commands on their rows");
-    assert!(!seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "the selection is left alone"); // P3(mechanical): dp.C12
+    assert!(!seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "the selection is left alone");
 }
 
 /// A thumbnails-only row is its thumbnails: no label band, so it is narrower than a plain row, it paints no label, and
@@ -250,7 +250,7 @@ fn a_click_on_the_selected_event_deselects_it() {
         .borrow()
         .iter()
         .filter_map(|event| if let CollectionEvent::Selection { change, .. } = event { Some(change.clone()) } else { None })
-        .collect(); // P3(mechanical): dp.C12
+        .collect();
     assert!(
         matches!(changes.as_slice(), [SelectionChange::Set(keys), SelectionChange::Clear] if keys == &[1]),
         "selected, then deselected: {changes:?}"
@@ -865,7 +865,7 @@ fn a_right_click_below_the_rows_asks_for_the_lists_own_menu() {
     fixture.frame(vec![pointer::secondary(below, false)]).settle();
     let events = seen.borrow();
     assert!(events.iter().any(|event| matches!(event, CollectionEvent::EmptyContextMenu { .. })), "{events:?}");
-    assert!(!events.iter().any(|event| matches!(event, CollectionEvent::ContextMenu(_) | CollectionEvent::Selection { .. })), "{events:?}"); // P3(mechanical): dp.C12
+    assert!(!events.iter().any(|event| matches!(event, CollectionEvent::ContextMenu(_) | CollectionEvent::Selection { .. })), "{events:?}");
 }
 
 /// A list with the edge press `edge` (none without), and what it reported.
@@ -909,7 +909,7 @@ fn an_edge_press_takes_the_alt_click_on_the_line_it_accepts() {
     {
         let events = seen.borrow();
         assert!(events.iter().any(|event| matches!(event, CollectionEvent::EdgePressed { above: 0, below: 1, .. })), "{events:?}");
-        assert!(!events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "no row is picked: {events:?}"); // P3(mechanical): dp.C12
+        assert!(!events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "no row is picked: {events:?}");
     }
     seen.borrow_mut().clear();
     let second = line(&fixture, NAMES[1]);
@@ -917,7 +917,7 @@ fn an_edge_press_takes_the_alt_click_on_the_line_it_accepts() {
     fixture.hold(Modifiers::NONE);
     let events = seen.borrow();
     assert!(!events.iter().any(|event| matches!(event, CollectionEvent::EdgePressed { .. })), "a refused line: {events:?}");
-    assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "the row takes the click: {events:?}"); // P3(mechanical): dp.C12
+    assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "the row takes the click: {events:?}");
 }
 
 /// A list without an edge press is unchanged: an Alt-click on the line between two rows picks a row.
@@ -930,7 +930,7 @@ fn a_list_without_an_edge_press_gives_the_line_to_the_rows() {
     fixture.hold(Modifiers::NONE);
     let events = seen.borrow();
     assert!(!events.iter().any(|event| matches!(event, CollectionEvent::EdgePressed { .. })), "{events:?}");
-    assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "{events:?}"); // P3(mechanical): dp.C12
+    assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "{events:?}");
 }
 
 /// A revealed row far below the view, past rows no pass built yet and taller than the list's estimate, shows wholly
@@ -1063,7 +1063,6 @@ fn double_clicked(
         let (events, selection) = &mut *held.borrow_mut();
         for event in &out.events {
             if let CollectionEvent::Selection { change, .. } = event {
-                // P3(mechanical): dp.C12
                 selection.apply(change.clone());
             }
         }
@@ -1091,7 +1090,7 @@ fn a_double_click_selects_the_row_activates_it_once_and_changes_nothing_after() 
         let activations: Vec<usize> =
             events.iter().enumerate().filter_map(|(at, event)| matches!(event, CollectionEvent::Activate(1)).then_some(at)).collect();
         assert_eq!(activations.len(), 1, "{select:?}: one activation: {events:?}");
-        let last_change = events.iter().rposition(|event| matches!(event, CollectionEvent::Selection { .. })); // P3(mechanical): dp.C12
+        let last_change = events.iter().rposition(|event| matches!(event, CollectionEvent::Selection { .. }));
         assert!(last_change.is_some_and(|at| at < activations[0]), "{select:?}: selected before the activation, not after: {events:?}");
     }
 }

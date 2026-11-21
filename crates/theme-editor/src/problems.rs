@@ -96,7 +96,7 @@ impl<'a> Problems<'a> {
                     .events;
                 for event in events {
                     let key = match event {
-                        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(), // P3(mechanical): dp.C12
+                        CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.last().copied(),
                         CollectionEvent::Activate(key) => Some(key),
                         _ => None,
                     };
