@@ -64,6 +64,10 @@ pub enum ParamLayout {
     /// Preview check box at their start: PhotoCraft's filter dialogs. The other rows keep the form's label and control
     /// columns.
     Stacked,
+    /// A workspace: the preview pane fills the dialog's room beside the rows, which keep their own width in a column at
+    /// the end edge, and the view opens fitting the whole picture. A dialog that previews has its buttons in a column
+    /// beside the body. For a dialog judged on the whole image in a large, resizable frame (Photoshop's Lens Blur).
+    Workspace,
 }
 
 impl ParamLayout {
@@ -76,7 +80,7 @@ impl ParamLayout {
     fn sliders(self) -> SliderFieldLayout {
         match self {
             ParamLayout::Stacked => SliderFieldLayout::Stacked,
-            ParamLayout::Beside | ParamLayout::Below => SliderFieldLayout::Inline,
+            ParamLayout::Beside | ParamLayout::Below | ParamLayout::Workspace => SliderFieldLayout::Inline,
         }
     }
 }
@@ -527,6 +531,10 @@ impl<'a> ParamDialog<'a> {
                 cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
             }
             live = cx.memory::<Live>().clone();
+            // A workspace opens on the whole picture.
+            if cx.first() && layout == ParamLayout::Workspace {
+                live.view = PreviewView::fitting();
+            }
             if let (Some(point), Some(texture)) = (centre, &preview) {
                 live.view = live.view.centred_on(point, texture.size);
             }
@@ -546,6 +554,14 @@ impl<'a> ParamDialog<'a> {
                         show_rows(ui, values);
                         Stack::new()
                             .show(ui, |ui, _| shown_preview = show_preview(ui, &preview_label, texture, click_centres, ZoomRow::Above, &mut live));
+                    });
+                }
+                (Some(texture), ParamLayout::Workspace) => {
+                    Row::new().fill().show(ui, |ui, _| {
+                        Stack::new()
+                            .fill()
+                            .show(ui, |ui, _| shown_preview = show_workspace_preview(ui, &preview_label, texture, click_centres, &mut live));
+                        Stack::new().show(ui, |ui, _| show_rows(ui, values));
                     });
                 }
                 (Some(texture), layout) => {
@@ -734,8 +750,36 @@ enum ZoomRow {
 
 /// The zoom row and the pane.
 fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, click_centres: bool, zoom_row: ZoomRow, live: &mut Live) -> ShownPreview {
+    show_preview_shaped(ui, label, texture, click_centres, zoom_row, None, live)
+}
+
+/// The zoom row's height under a workspace's pane, kept out of the room the pane fills.
+const WORKSPACE_ZOOM_ROW: f32 = 40.0;
+
+/// A workspace's zoom row and pane: the pane takes the room's width and its height less the zoom row's.
+fn show_workspace_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, click_centres: bool, live: &mut Live) -> ShownPreview {
+    let room = ui.available_size();
+    let height = room.y - WORKSPACE_ZOOM_ROW;
+    let aspect = (room.x.is_finite() && height.is_finite() && room.x > 0.0 && height > 0.0).then(|| room.x / height);
+    show_preview_shaped(ui, label, texture, click_centres, ZoomRow::Below, aspect, live)
+}
+
+/// [`show_preview`] with the pane's width over height `aspect` when one is given.
+fn show_preview_shaped(
+    ui: &mut Ui,
+    label: &Label,
+    texture: &SizedTexture,
+    click_centres: bool,
+    zoom_row: ZoomRow,
+    aspect: Option<f32>,
+    live: &mut Live,
+) -> ShownPreview {
     let above = (zoom_row == ZoomRow::Above).then(|| PreviewZoom::new(&live.view).show(ui));
-    let pane = PreviewPane::new(label.clone(), *texture, &live.view).click_centres(click_centres).show(ui);
+    let mut pane = PreviewPane::new(label.clone(), *texture, &live.view).click_centres(click_centres);
+    if let Some(aspect) = aspect {
+        pane = pane.aspect(aspect);
+    }
+    let pane = pane.show(ui);
     let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
     let centre = pane.shown.centre(texture.size);
     live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown);
