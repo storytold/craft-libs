@@ -285,11 +285,19 @@ pub fn keep(ctx: &Context, id: ToastId) {
     }
 }
 
-/// The cards of the window `window` in the running viewport, oldest first.
+/// The cards of the window `window` in the running viewport, oldest first. A tracked input (`Input::Toasts`).
 pub fn cards(ctx: &Context, window: &WindowKey) -> Vec<Card> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Toasts);
     PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| {
         let cards = queue.windows.iter().find(|(key, _)| key == window);
         cards.map_or_else(Vec::new, |(_, live)| live.iter().map(|live| live.card.clone()).collect())
+    })
+}
+
+/// The ids of the cards each window of the running viewport queues: what `Input::Toasts` observes.
+pub(crate) fn queued(ctx: &Context) -> Vec<(WindowKey, Vec<ToastId>)> {
+    PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| {
+        queue.windows.iter().map(|(key, live)| (key.clone(), live.iter().map(|live| live.card.id).collect())).collect()
     })
 }
 

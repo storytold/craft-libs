@@ -86,7 +86,7 @@ pub use histogram::{
 };
 pub use layer_style::{
     BlendIfBar, BlendIfWords, ContourField, ContourFieldOutput, ContourWords, HostedLayerStyle, LayerStyleAsk, LayerStyleDialog, LayerStyleOutput,
-    LayerStyleWords, StylePresets,
+    LayerStyleWords,
 };
 pub use liquify::{
     LiquifyCommands, LiquifyDone, LiquifyEvent, LiquifyOpen, LiquifyPanel, LiquifyPanelOutput, LiquifySession, LiquifySettings, LiquifySource,

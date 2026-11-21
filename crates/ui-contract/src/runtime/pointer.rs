@@ -237,6 +237,10 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         if events {
             inputs::bump(ctx, Input::Pointer);
         }
+        // A press or release, or an outside press the layer stack's input hook took before egui saw it.
+        if frame.press.is_some() || frame.release.is_some() || crate::runtime::overlay::absorbed_press_raw(ctx).is_some() {
+            inputs::bump(ctx, Input::Press);
+        }
     }
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
@@ -323,6 +327,13 @@ pub fn frame(ctx: &Context) -> PointerFrame {
 pub fn mods(ctx: &Context) -> Mods {
     crate::runtime::replay::note_input(ctx, Input::Modifiers);
     with_pass_raw(ctx, |pointer| pointer.frame.as_ref().map_or(Mods::NONE, |frame| frame.mods))
+}
+
+/// Where the primary press of the running pass started. A tracked input (`Input::Press`): a layer's dismissal decides by
+/// it, so a memoized view that shows a layer runs on a press anywhere, and a pointer move leaves it alone.
+pub(crate) fn primary_press(ctx: &Context) -> Option<Pos2> {
+    crate::runtime::replay::note_input(ctx, Input::Press);
+    frame_raw(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
 }
 
 /// `frame` without noting the read: for the steps of the component under the pointer and the pass machinery.
@@ -444,6 +455,7 @@ pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
 /// it the press where no widget on the layer is, and the press and hover there go to the layer's shapes as if egui
 /// had named no target.
 pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
+    crate::runtime::replay::journal(ctx, || widget, |ctx, &widget| record_layer_widget(ctx, widget));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_grounds.insert(widget);
     });
