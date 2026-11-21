@@ -369,7 +369,6 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
     }
 }
 
-/// The character style a CHPX grpprl names (`sprmCIstd`), if any: the last one.
 /// The character sprms whose values survive `sprmCIstd` ([MS-DOC] §2.6.1: "During steps 1 and 3,
 /// preserve the previous values of the following"): revision marks and their authors, dates and
 /// save IDs, right-to-left and complex-script text, hidden field and web text, special
@@ -416,6 +415,7 @@ pub(crate) fn after_istd<'g>(grpprl: &'g [u8]) -> impl Iterator<Item = Prl<'g>> 
     sprm::iter(grpprl).enumerate().filter(move |(i, p)| p.sgc() == 2 && last.is_none_or(|l| *i >= l || kept_by_istd(p.op))).map(|(_, p)| p)
 }
 
+/// The character style a CHPX grpprl names (`sprmCIstd`), if any: the last one.
 pub(crate) fn char_style_istd(grpprl: &[u8]) -> Option<u16> {
     sprm::iter(grpprl).filter(|p| p.op == C_ISTD).filter_map(|p| u16_of(&p)).last()
 }
@@ -599,7 +599,7 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 kind @ (1 | 2) => {
                     p.drop_cap = Some(((v >> 3) & 0x1F).clamp(1, 10) as u8);
                     p.drop_cap_margin = Some(kind == 2);
-                    p.drop_cap_distance = p.frame.as_ref().map(|f| f.h_space).filter(|d| *d > 0.0);
+                    p.drop_cap_distance = p.frame.as_ref().map(|f| f.h_space);
                 }
                 _ => (p.drop_cap, p.drop_cap_margin) = (Some(0), None),
             }
@@ -671,15 +671,18 @@ fn apply_frame(p: &mut ParaProps, prl: &Prl) {
             f.wrap = match v {
                 1 => "notBeside",
                 2 => "around",
+                3 => "none",
+                4 => "tight",
+                5 => "through",
                 _ => "auto",
             }
             .into();
         }
         P_DXA_FROM_TEXT => {
+            // A drop cap's distance from the text, whether the cap is the paragraph's or its
+            // style's; 0 is a distance too, not the style's.
             f.h_space = tw(i32::from(v)).max(0.0);
-            if p.drop_cap.is_some() {
-                p.drop_cap_distance = Some(f.h_space).filter(|d| *d > 0.0);
-            }
+            p.drop_cap_distance = Some(f.h_space);
         }
         P_DYA_FROM_TEXT => f.v_space = tw(i32::from(v)).max(0.0),
         _ => {}

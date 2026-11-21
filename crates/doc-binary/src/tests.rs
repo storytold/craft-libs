@@ -1740,6 +1740,33 @@ fn a_custom_note_mark_is_the_references_run() {
 }
 
 #[test]
+fn a_custom_note_mark_stops_at_the_next_reference() {
+    // Two notes marked "a" and "b" side by side, in one superscript run: each reference has its
+    // own mark, and neither note is lost.
+    let text = "See ab here\r";
+    let ccp = text.chars().count() as u32;
+    let sup = grpprl(&[(0x2A48, &[1])]);
+    let spec = StructSpec {
+        text,
+        chpx_runs: vec![(0, Vec::new()), (4, sup), (6, Vec::new())],
+        note_stories: vec!["a Note\r", "b Note\r\r"],
+        extra_pairs: vec![(2, plc(&[4, 5, ccp], &[0, 0, 0, 0])), (3, plc(&[0, 7, 14, 15], &[]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = para0(&doc);
+    let marks: Vec<&str> = p0
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            craft_wordmodel::para::InlineObject::NoteRef { custom, .. } => Some(custom.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marks, ["a", "b"]);
+}
+
+#[test]
 fn a_custom_note_mark_can_be_a_symbol() {
     // Insert > Symbol as a mark: the placeholder U+0028 with sprmCSymbol (font 0, U+F071), as
     // the body text stores a symbol. The mark is the symbol's character, not "(".
@@ -1962,6 +1989,28 @@ fn bookmarks_become_objects() {
         p0.objects
     );
     assert_eq!(p0.text, "\u{FFFC}Hello\u{FFFC} world");
+}
+
+#[test]
+fn a_bookmark_starting_at_the_end_of_the_main_text_is_not_in_the_body() {
+    // The start CP is ccpText, the first character of the next story, so its end isn't in the body
+    // either: no start is left open in the body.
+    let text = "Hello\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        extra_pairs: vec![(21, sttbf_bkmk(&["bm1"])), (22, plc(&[ccp, ccp + 3], &[0, 0, 0, 0])), (23, plc(&[ccp + 2, ccp + 3], &[0, 0]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let starts = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| &p.objects)
+        .filter(|o| matches!(o, craft_wordmodel::para::InlineObject::BookmarkStart { .. }))
+        .count();
+    assert_eq!(starts, 0, "body: {:?}", doc.body);
 }
 
 #[test]
@@ -3742,6 +3791,59 @@ fn frames_and_drop_caps_are_read() {
         })
     );
     assert_eq!(props("In a cell").frame, None);
+}
+
+/// A drop cap is as far from the text as the paragraph's effective frame: its style's when it has
+/// none of its own, and its own distance (0 too) over a capped style's.
+#[test]
+fn a_drop_caps_distance_is_the_effective_frames() {
+    let u = |v: u16| v.to_le_bytes();
+    let framed = grpprl(&[(0x261B, &[0x90]), (0x842F, &u(120))]);
+    let capped = grpprl(&[(0x442C, &u(0x19)), (0x842F, &u(180))]);
+    let spec = RichSpec {
+        text: "a\rb\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "Framed", framed, Vec::new()), (1, 0, "Capped", capped, Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, grpprl(&[(0x442C, &u(0x19))])), (2, 2, grpprl(&[(0x842F, &u(0))]))],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let distance = |text: &str| {
+        let p = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == text).expect(text);
+        doc.styles.resolve_para(&p.props).drop_cap_distance
+    };
+    let style_distance = |id: &str| doc.styles.get(id).and_then(|s| s.para.drop_cap_distance).unwrap_or(0.0);
+    assert!(distance("a") > 0.0, "the style's frame distance");
+    assert!(distance("b") < style_distance("Capped"), "its own 0 over the style's");
+}
+
+/// A paragraph in a table cell has no frame, its style's included (the frame places the table);
+/// the same style's paragraph outside the table keeps it.
+#[test]
+fn a_cell_paragraph_has_no_frame_from_its_style() {
+    let framed = grpprl(&[(0x261B, &[0x90]), (0x2423, &[1])]);
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_table(&[0, 2880])].concat();
+    let spec = RichSpec {
+        text: "Body\rCell\u{7}\u{7}\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "Framed", framed, Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, Vec::new()), (5, 1, in_tbl), (10, 0, ttp), (11, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let mut paras: Vec<&craft_wordmodel::para::Paragraph> = Vec::new();
+    for b in &doc.body {
+        match &**b {
+            craft_wordmodel::Block::Para(p) => paras.push(p),
+            craft_wordmodel::Block::Table(t) => {
+                paras.extend(t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).filter_map(|b| b.as_para()))
+            }
+        }
+    }
+    let frame = |text: &str| paras.iter().find(|p| p.text == text).map(|p| doc.styles.resolve_para(&p.props).frame).expect(text);
+    assert!(frame("Body").is_some());
+    assert_eq!(frame("Cell"), None);
 }
 
 /// A paragraph's sprmPDcs overrides its style's drop cap: 0 turns it off and a dropped cap
