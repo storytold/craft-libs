@@ -626,7 +626,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             pinned: cx.color(cx.tokens.color.surface.panel),
             header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()),
             insert: cx.color(cx.tokens.color.accent.solid),
-            insert_width: cx.tokens.space.gap.stack,
+            insert_width: cx.tokens.size.icon.lg,
         }
     }
 

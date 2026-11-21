@@ -191,6 +191,9 @@ fn insert_gaps_keep_document_positions_when_rows_are_virtualised() {
     });
     fixture.room(Vec2::new(600.0, 300.0));
     fixture.settle();
+    let first_gap = fixture.by_label("Insert before 1").expect("the first gap").rect;
+    let first_tile = shown.borrow().tile(0);
+    assert!(first_gap.width() >= first_tile.width() / 8.0, "the insert control must be discoverable: {first_gap:?} beside {first_tile:?}");
     let view = shown.borrow().view;
     fixture.frame(vec![pointer::moved(view.center())]);
     for _ in 0..4 {
