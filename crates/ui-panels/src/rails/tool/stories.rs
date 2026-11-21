@@ -1,7 +1,9 @@
 //! Stories of `ToolRail`, and the commands its stories and the flyout's use as tools.
 
-use super::{LastUsed, RailTool, ToolRail, ToolSlot};
-use crate::contract::ThemeScope;
+use super::{LastUsed, RailTool, ToolRail, ToolRailOutput, ToolSlot, ToolTips};
+use crate::contract::{Show as _, ThemeScope};
+use crate::display::{Shade, Text};
+use crate::style::TypeRole;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -33,6 +35,9 @@ const SHORT_ROOM: f32 = 120.0;
 /// The id of the brush tool; the tools that follow it are the pencil and the eraser.
 pub(crate) const BRUSH: u8 = 1;
 
+/// The id of the eraser tool.
+const ERASER: u8 = 3;
+
 /// Tools with the given ids, each running the story command of its id.
 pub(crate) fn tools(ids: &[u8]) -> Vec<RailTool<u8>> {
     const ALL: [StoryTools; 5] = [StoryTools::Move, StoryTools::Brush, StoryTools::Pencil, StoryTools::Eraser, StoryTools::Stamp];
@@ -40,11 +45,36 @@ pub(crate) fn tools(ids: &[u8]) -> Vec<RailTool<u8>> {
 }
 
 fn slots() -> Vec<ToolSlot<u8>> {
-    vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1])), ToolSlot::new(2, tools(&[3])), ToolSlot::new(3, tools(&[4]))]
+    vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1])), ToolSlot::new(2, tools(&[ERASER])), ToolSlot::new(3, tools(&[4]))]
 }
 
-/// The rail in a room as wide as its grid at `columns` columns: the stage a dock column of that many steps gives it. A
-/// short room is lower than the rail's rows, so they scroll under the overlay bar.
+/// The story slots in two captioned groups: Move alone, then the painting tools.
+fn captioned_slots() -> Vec<ToolSlot<u8>> {
+    vec![
+        ToolSlot::ending_group(0, tools(&[0])).captioned("Select"),
+        ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1])).captioned("Paint and Retouch"),
+        ToolSlot::new(2, tools(&[ERASER])),
+        ToolSlot::new(3, tools(&[4])),
+    ]
+}
+
+/// Shows `rail` in a room as wide as the grid of `cells` cells at `columns` columns, the stage a dock column of that
+/// many steps gives it, and at most `height` high.
+fn in_columns(ui: &mut Ui, columns: u8, cells: usize, height: Option<f32>, rail: ToolRail<'_, u8>) -> ToolRailOutput<u8> {
+    let width = ToolRail::<u8>::dock_grid(ui.ctx(), &ThemeScope::new(), cells).width(u16::from(columns));
+    // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
+    ui.scope(|ui| {
+        ui.set_max_width(width);
+        if let Some(height) = height {
+            ui.set_max_height(height);
+        }
+        rail.show_rail(ui, |_, _| {})
+    })
+    .inner
+}
+
+/// The rail in a room as wide as its grid at `columns` columns. A short room is lower than the rail's rows, so they
+/// scroll under the overlay bar.
 #[story(ToolRail<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let columns = *data.ranged("columns", 1_u8, 1.0..=4.0);
@@ -53,17 +83,8 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         data.choice("hidden", Vec::<u8>::new(), &[("None", Vec::new()), ("Pencil", vec![2]), ("Stamp", vec![4]), ("Eraser", vec![3])]).clone();
     let slots = slots();
     let last = LastUsed::default();
-    let width = ToolRail::<u8>::dock_grid(ui.ctx(), &ThemeScope::new(), slots.len() + 1).width(u16::from(columns)); // P3(chrome-w4): ch.K18
-    // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
-    let out = ui
-        .scope(|ui| {
-            ui.set_max_width(width);
-            if short {
-                ui.set_max_height(SHORT_ROOM);
-            }
-            ToolRail::new("Tools", &slots, &BRUSH, &last).hidden(&hidden).edit_toolbar("Edit Toolbar").show_rail(ui, |_, _| {})
-        })
-        .inner;
+    let rail = ToolRail::new("Tools", &slots, &BRUSH, &last).hidden(&hidden).edit_toolbar("Edit Toolbar");
+    let out = in_columns(ui, columns, slots.len() + 1, short.then_some(SHORT_ROOM), rail);
     let note = data.note("note", "Nothing yet".to_owned());
     if let Some(tool) = out.select {
         *note = format!("selected {tool}");
@@ -75,4 +96,54 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let flyout = out.flyout.map_or_else(|| "closed".to_owned(), |slot| format!("of slot {slot} open"));
     let readout = format!("{note}; flyout {flyout}");
     StoryOutput::from(out).readout(readout)
+}
+
+/// The rail with its groups' captions in one or two columns: each caption heads its row group, cut at the rail's
+/// width.
+#[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
+fn tool_rail_captions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let columns = *data.ranged("columns", 1_u8, 1.0..=2.0);
+    let slots = captioned_slots();
+    let last = LastUsed::default();
+    in_columns(ui, columns, slots.len(), None, ToolRail::new("Tools", &slots, &0, &last).captions()).into()
+}
+
+/// The tips of the brush and the eraser: the tool's name over what it does.
+struct StoryTips;
+
+impl ToolTips<u8> for StoryTips {
+    fn has(&self, tool: &u8) -> bool {
+        matches!(*tool, BRUSH | ERASER)
+    }
+
+    fn show(&self, tool: &u8, ui: &mut Ui) {
+        let (name, does) = if *tool == BRUSH { ("Brush", "Paints with the foreground colour.") } else { ("Eraser", "Erases to transparency.") };
+        Text::new(name).show(ui);
+        Text::new(does).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+    }
+}
+
+/// The rail whose brush and eraser show a tip in place of their command tooltip, on their buttons and in the brush
+/// slot's flyout.
+#[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
+fn tool_rail_tips(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let slots = slots();
+    let last = LastUsed::default();
+    in_columns(ui, 1, slots.len(), None, ToolRail::new("Tools", &slots, &0, &last).tips(&StoryTips)).into()
+}
+
+/// The pencil marked while the brush slot shows the brush: the reveal of the first pass opens the slot's flyout, whose
+/// pencil row wears the mark; closed again, the slot's button wears it.
+#[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
+fn tool_rail_marked_in_a_closed_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let slots = slots();
+    let last = LastUsed::default();
+    let pencil = BRUSH + 1;
+    // The reveal is a request of one pass.
+    let revealed = std::mem::replace(data.note("revealed", false), true);
+    let mut rail = ToolRail::new("Tools", &slots, &0, &last).mark(&pencil);
+    if !revealed {
+        rail = rail.reveal(&pencil);
+    }
+    in_columns(ui, 1, slots.len(), None, rail).into()
 }

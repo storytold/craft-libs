@@ -556,6 +556,33 @@ impl<T: Copy> PressMachine<T> {
         self.open.is_some_and(|open| open.dragging)
     }
 
+    /// The press the open press began as.
+    pub fn start(&self) -> Option<PressStart> {
+        self.open.map(|open| open.start)
+    }
+
+    /// Takes over a press whose button is down and went down elsewhere, as a drag of `target` from `start`: the next
+    /// pass reports `DragStart`, and later ones the press's own `Drag`, `Release` or `Cancel` from their input. A
+    /// press this machine holds already stays as it is.
+    // PLAN: the sheet's Files table has no row for this file; the handover of a held press (decision q346) needs the
+    // machine to open a press that did not begin on it, which only the machine can build.
+    pub fn take_over(&mut self, target: T, sense: Sense, start: PressStart) {
+        if self.open.is_some() {
+            return;
+        }
+        self.open = Some(Open {
+            target,
+            sense: sense - Sense::CLICK,
+            start,
+            dragging: true,
+            abandoned: false,
+            left: false,
+            reported: true,
+            drag_reported: false,
+            released_at: None,
+        });
+    }
+
     /// Whether the button went up and the release waits for a later pass, which the caller must ask for: no input may
     /// come to start it.
     pub fn release_held(&self) -> bool {
@@ -768,6 +795,22 @@ mod tests {
             up.phase
         );
         assert!(machine.target().is_none(), "the release ends the press");
+    }
+
+    /// A press taken over from another machine reports its drag's start first, then the held button's own drag and
+    /// release, which never clicks.
+    #[test]
+    fn a_press_taken_over_reports_its_drag_start_then_its_own_phases() {
+        let origin = pos2(10.0, 0.0);
+        let mut machine = PressMachine::new();
+        machine.take_over(1u8, Sense::DRAG | Sense::CLICK, PressStart::new(origin, PointerButton::Primary, 1.0, 1));
+        let first = pass(&mut machine, &[], Sense::DRAG);
+        assert!(matches!(first.phase, Some(PressPhase::DragStart { start, .. }) if start.origin == origin), "{:?}", first.phase);
+        let moved = pass(&mut machine, &[PointerEvent::moved(pos2(30.0, 0.0), None)], Sense::DRAG);
+        assert!(matches!(moved.phase, Some(PressPhase::Drag { pos, .. }) if pos == pos2(30.0, 0.0)), "{:?}", moved.phase);
+        let up = pass(&mut machine, &[PointerEvent::released(pos2(30.0, 0.0))], Sense::DRAG);
+        assert!(matches!(up.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", up.phase);
+        assert_eq!(up.activated, None, "a taken-over press is no click");
     }
 
     /// The pointer leaving the window (a press on a window's edge grip pulled outward) ends the press's click but not

@@ -15,7 +15,7 @@ use craft_ui::canvas_controls::{Guides, Marquee};
 use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{
     Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
+    SweepApply, SweepStep, ThemeScope, ToggleColumn, WordSetCx as _,
 };
 use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
 use craft_ui::list::{ListRow, ToggleCell};
@@ -97,7 +97,7 @@ impl DockPanels<Panel> for Panels<'_> {
         match panel {
             Panel::Canvas => spec.canvas(),
             // The toolbar's column is whole tool columns wide.
-            Panel::Tools => spec.grid(ToolRail::<Tool>::dock_grid(self.ctx, Tool::slots().len())),
+            Panel::Tools => spec.grid(ToolRail::<Tool>::dock_grid(self.ctx, &ThemeScope::new(), Tool::slots().len())),
             _ => spec,
         }
     }
@@ -229,10 +229,8 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
                     *unit = picked;
                 }
             }
-            let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
-            if let Some(selected) = *guide {
-                controls = controls.selected_guide(selected);
-            }
+            let selected = *guide;
+            let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing).selected_guides(selected.as_slice());
             if let Some(drag) = pending {
                 controls = controls.pending(drag);
             }

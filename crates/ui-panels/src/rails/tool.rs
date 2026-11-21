@@ -9,13 +9,14 @@ use crate::contract::{
     ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::contract::{BodyCx, BodyLayout, ThemeScope};
+use crate::display::{Elide, Shade, TargetMark, Text};
 use crate::docking::DockGrid;
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
 use crate::runtime::access::Name;
 use crate::runtime::commands::Commands as _;
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind, TypeRole};
 use crate::tabs::TornOff;
 use craft_behavior::overlay::Side;
 use craft_behavior::{IconId, Metrics, NavShape, Proposal, Roving, Sense, Value};
@@ -89,11 +90,12 @@ struct Collected<T> {
     edit_toolbar: Option<Response>,
     flyout: Option<SlotId>,
     dropped: Option<ToolDropped>,
+    torn_off: Option<TornOff<SlotId>>,
 }
 
 impl<T> Default for Collected<T> {
     fn default() -> Self {
-        Collected { select: None, double_clicked: None, edit_toolbar: None, flyout: None, dropped: None }
+        Collected { select: None, double_clicked: None, edit_toolbar: None, flyout: None, dropped: None, torn_off: None }
     }
 }
 
@@ -110,6 +112,11 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// buttons show the rail's glyphs. The rail is exactly as tall as its rows and footer at the width it gets
 /// ([`measure_rail`](ToolRail::measure_rail)). The buttons are one roving group: arrow keys move between them by the
 /// grid. While the toolbar is edited the buttons are dragged and take drops, and report the drop in the output.
+///
+/// With `captions` the caption of the first slot of a row group that has one ([`ToolSlot::captioned`]) stands above
+/// the group in the caption type, cut at the rail's width; without it a caption takes no room. The grid's width
+/// ([`dock_grid`](ToolRail::dock_grid)) does not change for captions, which only add height. With `tear_off` a group
+/// torn off its flyout comes out in `torn_off`.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, probe(ToolRail<'static, u8>))]
 pub struct ToolRail<'a, T: Value + 'static> {
@@ -132,25 +139,21 @@ pub struct ToolRail<'a, T: Value + 'static> {
     /// The tools the user's toolbar settings hide.
     #[prop]
     hidden: &'a [T],
-    /// Whether each flyout shows a tear-off bar along its far side.
+    /// Whether each flyout shows a tear-off bar along its end edge: tearing a group off by it reports `torn_off`.
     #[prop(flag)]
-    #[allow(dead_code)] // P3(chrome-w4): ch.K15
     tear_off: bool,
     /// Whether the slots' captions show above their row groups.
     #[prop(flag)]
-    #[allow(dead_code)] // P3(chrome-w4): ch.K14
     captions: bool,
     /// The tool whose button, or whose row while that slot's flyout is open, wears the target mark.
     #[prop]
-    #[allow(dead_code)] // P3(chrome-w4): dp.T1
     mark: Option<&'a T>,
     /// A request of the pass: scrolls the tool's slot into view and opens its flyout when the slot shows another tool.
+    /// It selects nothing.
     #[prop]
-    #[allow(dead_code)] // P3(chrome-w4): dp.T1
     reveal: Option<&'a T>,
-    /// The tips the tools' buttons show.
+    /// The tips the tools' buttons and flyout rows show in place of the command tooltip, where a tool has one.
     #[prop]
-    #[allow(dead_code)] // P3(chrome-w4): ch.K17
     tips: Option<&'a dyn ToolTips<T>>,
     footer: Option<FooterFn<'a>>,
     /// The columns the rail lays out in this pass.
@@ -193,14 +196,24 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
 
     /// The grid of a rail of `cells` cells (its visible slots and the Edit Toolbar button) as its dock column sizes
     /// it ([`PanelSpec::grid`](crate::docking::PanelSpec::grid)): `first` is a button and the control padding on both
-    /// sides, `step` a button and the tight gap before it, and `most` the cells.
+    /// sides, `step` a button and the tight gap before it, and `most` the cells. The sizes are the tokens `scope`
+    /// resolves: a rail whose props carry a scope (a compact one) passes it, so its column fits its own buttons.
     pub fn dock_grid(ctx: &egui::Context, scope: &ThemeScope, cells: usize) -> DockGrid {
-        let _ = scope; // P3(chrome-w4): ch.K18
-        StyleCx::with_root(ctx, |cx| {
+        StyleCx::with_root_scoped(ctx, scope, |cx| {
             let button = cx.tokens.size.rail.button;
             let most = u16::try_from(cells).unwrap_or(u16::MAX).max(1);
             DockGrid::new(button + 2.0 * cx.tokens.space.pad.control, button + cx.tokens.space.gap.tight, most)
         })
+    }
+
+    /// The rail, what it shows and the flyouts it opens resolve their tokens through `scope` (a compact rail's
+    /// density), and its columns follow the grid of that scope ([`dock_grid`](ToolRail::dock_grid)).
+    // PLAN: the sheet has `prepare` read the rail's own `ContainerProps::theme`, which no builder of the rail set: a
+    // bare `#[container]` does not forward `theme`.
+    #[must_use]
+    pub fn theme(mut self, scope: ThemeScope) -> Self {
+        self.props = std::mem::take(&mut self.props).theme(scope);
+        self
     }
 
     /// The cells the rail lays out: its visible slots and the Edit Toolbar button.
@@ -208,10 +221,16 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
         visible_slots(self.slots, self.hidden).len() + usize::from(self.edit_toolbar.is_some())
     }
 
+    /// The grid of the rail's own scope (`ContainerProps::theme`, the root's when it has none) for `cells` cells.
+    fn grid(&self, ctx: &egui::Context, cells: usize) -> DockGrid {
+        let root = ThemeScope::new();
+        Self::dock_grid(ctx, self.props.theme.as_ref().unwrap_or(&root), cells)
+    }
+
     /// Sets up the pass for a rail `width` wide: its columns, its roving grid and its footer. Returns what the body
     /// draws from.
     fn prepare(&mut self, ctx: &egui::Context, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Draw<'a, T> {
-        self.columns = usize::from(Self::dock_grid(ctx, &self.props.theme.clone().unwrap_or_default(), self.cells()).steps_within(width));
+        self.columns = usize::from(self.grid(ctx, self.cells()).steps_within(width));
         self.props = std::mem::take(&mut self.props).roving(Roving::new(NavShape::wrapped_grid(self.columns)));
         self.footer = Some(Box::new(footer));
         Draw {
@@ -223,6 +242,11 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             edit_label: self.edit_toolbar.clone(),
             opens: self.opens,
             columns: self.columns,
+            captions: self.captions,
+            tear_off: self.tear_off,
+            tips: self.tips,
+            mark: self.mark,
+            reveal: self.reveal,
         }
     }
 }
@@ -237,22 +261,38 @@ struct Draw<'a, T> {
     edit_label: Option<Label>,
     opens: Side,
     columns: usize,
+    captions: bool,
+    tear_off: bool,
+    tips: Option<&'a dyn ToolTips<T>>,
+    mark: Option<&'a T>,
+    reveal: Option<&'a T>,
 }
 
 impl<T: Value + 'static> Draw<'_, T> {
-    /// The grid of buttons in rows of `columns`, with the pass's results in `collected`.
+    /// The grid of buttons in rows of `columns`, each row group under its caption while the rail shows captions, with
+    /// the pass's results in `collected`.
     fn run(&self, ui: &mut Ui, cx: &mut BodyCx<'_>, collected: &mut Collected<T>) {
-        let Draw { slots, current, last_used, hidden, editing, columns, opens, .. } = *self;
+        let Draw { slots, current, last_used, hidden, editing, columns, opens, captions, tear_off, tips, mark, reveal, .. } = *self;
         *collected = Collected::default();
         let visible = visible_slots(slots, hidden);
         let cells = visible.len() + usize::from(self.edit_label.is_some());
         let enabled = |tool: &RailTool<T>| cx.resolve_command(tool.command.clone()).is_some_and(|resolved| resolved.enabled);
         let at: Vec<usize> = visible.iter().map(|(index, _)| *index).collect();
+        // The first caption among a group's slots heads the group.
+        let caption_of = |group: &[usize]| {
+            let first = *group.first()?;
+            let end = group.last().map_or(first, |last| (last + columns).min(cells));
+            visible.get(first..end.min(visible.len()))?.iter().find_map(|(index, _)| slots[*index].caption.clone())
+        };
         // The grid of buttons sits at the centre of the rail's width.
         Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
             Stack::new().gap(Gap::Inline).show(ui, |ui, _| {
                 for group in row_groups(slots, &at, cells, columns) {
+                    let caption = captions.then(|| caption_of(&group)).flatten();
                     Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+                        if let Some(caption) = caption.clone() {
+                            Text::new(caption).id_salt(("caption", group[0])).role(TypeRole::Caption).shade(Shade::Muted).elide(Elide::End).show(ui);
+                        }
                         for &first in &group {
                             Row::new().gap(Gap::Tight).show(ui, |ui, _| {
                                 for k in first..(first + columns).min(cells) {
@@ -270,7 +310,31 @@ impl<T: Value + 'static> Draw<'_, T> {
                                             if editing {
                                                 button = button.edit(SlotEdit::new(slot.id, *index, slot.tools.len(), columns == 1));
                                             }
-                                            let out = button.show(ui);
+                                            if tear_off {
+                                                button = button.tear_off();
+                                            }
+                                            if let Some(tips) = tips {
+                                                button = button.tips(tips);
+                                            }
+                                            let row_of = |tool: Option<&T>| tool.and_then(|tool| owned.iter().position(|own| own.id == *tool));
+                                            let marked = row_of(mark);
+                                            if let Some(at) = marked {
+                                                button = button.marked_row(at);
+                                            }
+                                            if let Some(at) = row_of(reveal) {
+                                                button = button.reveal_row(at);
+                                            }
+                                            let out = match tips.filter(|tips| tips.has(&shown.id)) {
+                                                Some(tips) => button.show_with_tip(ui, |ui| tips.show(&shown.id, ui)),
+                                                None => button.show(ui),
+                                            };
+                                            // The slot wears the mark; while its flyout is open the tool's row does.
+                                            if marked.is_some() && !out.opened {
+                                                TargetMark::new(out.response.rect).id_salt(("mark", slot.id)).show_mark(ui);
+                                            }
+                                            if let Some(pointer) = out.torn_off {
+                                                collected.torn_off = Some(TornOff::new(vec![slot.id], slot.id, pointer));
+                                            }
                                             if out.select.is_some() {
                                                 collected.select = out.select;
                                             }
@@ -311,7 +375,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
     /// Shows the rail one column wide, for a host that lays it at the start of a row (the full-window workspaces'
     /// tool strips): the width `ui` has left belongs to what follows it in the row.
     pub fn show_column(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
-        let one = Self::dock_grid(ui.ctx(), &self.props.theme.clone().unwrap_or_default(), 1).first; // P3(chrome-w4): ch.K18
+        let one = self.grid(ui.ctx(), 1).first;
         self.show_within(ui, one, footer)
     }
 
@@ -327,7 +391,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             edit_toolbar: collected.edit_toolbar,
             flyout: collected.flyout,
             dropped: collected.dropped,
-            torn_off: None,
+            torn_off: collected.torn_off,
             last_used: last,
             ..shown.output
         }

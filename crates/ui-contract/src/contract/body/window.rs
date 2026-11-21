@@ -731,6 +731,12 @@ impl BodyHooks<'_> {
             if let Some(hit) = exclusive(WindowHit::Move).or(moves_window.then_some(WindowHit::Move)) {
                 part.exclusive(hit);
             }
+            // A layer that continues a press begun elsewhere takes it before step 8 reads this pass's presses, so its
+            // move begins in this pass from the window's own rect (`window_drag`). Only a layer can: the OS gives an
+            // OS window no press that went down in another window.
+            if let Some(grab) = overlay_of(props).and_then(|overlay| overlay.continue_move).filter(|_| os.is_none() && !moves_window) {
+                crate::primitives::sensing::hand_over_press(&ctx, pcx.id, MOVE_BAND.into(), rect.min + grab);
+            }
         }
         // The grips of a layer straddle its edge; those of a window lie inside it, where the window has pixels. They
         // stack above the body (`over`), so a root in the body never covers their inner half (8.3).

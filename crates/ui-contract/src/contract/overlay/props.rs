@@ -142,6 +142,12 @@ pub struct Overlay {
     /// title row, whose move docks the window). The window is opened knowing it, so its hit test never hands the band
     /// to the system. A layer is always moved by the app.
     pub moved_by_app: bool,
+    /// A request of the pass for a movable layer: its move band takes over the primary press that is held, with the
+    /// pointer at this point inside the layer, so the layer follows a press that began elsewhere (a group torn off a
+    /// tool rail's flyout). With no press held it does nothing.
+    // PLAN: the sheet's Files table has no row for this file; `FloatingGroup::continue_move` (ch.K16) reaches the move
+    // band only through the layer it mounts, as sheet note 6 says ("sets that state through the overlay").
+    pub continue_move: Option<Vec2>,
     /// What the layer is for; a progress window is left out of `any_open`.
     pub role: LayerRole,
     /// Set only by [`Overlay::full_window`].
@@ -182,6 +188,7 @@ impl Overlay {
             body_scroll: true,
             moves_window: false,
             moved_by_app: false,
+            continue_move: None,
             role: LayerRole::default(),
             full_window: false,
         }
@@ -457,6 +464,13 @@ impl Overlay {
     /// The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
     pub fn moved_by_app(mut self) -> Overlay {
         self.moved_by_app = true;
+        self
+    }
+
+    /// The move band takes over the held primary press in this pass, with the pointer at `grab` inside the layer
+    /// ([`Overlay::continue_move`]).
+    pub fn continue_move(mut self, grab: Vec2) -> Overlay {
+        self.continue_move = Some(grab);
         self
     }
 

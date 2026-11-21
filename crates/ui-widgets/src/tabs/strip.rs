@@ -32,7 +32,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 const OVERFLOW: PartKey = PartKey::new("overflow");
 
-/// A tab dragged away from every strip and released: the tabs the drag carried and where the pointer was.
+/// A tab dragged away from every strip and released: the tabs the drag carried and where the pointer was. A tool rail
+/// reports a group torn off a flyout as one too, its slot as both `keys` and `grabbed`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TornOff<K> {
@@ -45,10 +46,10 @@ pub struct TornOff<K> {
 }
 
 impl<K> TornOff<K> {
-    /// A tear-off of `keys`, the tab `grabbed` among them, released with the pointer at `pointer`.
+    /// A tear-off of `keys`, the tab `grabbed` among them, released with the pointer at `pointer`. The struct is
+    /// `#[non_exhaustive]`, so this is how another crate (a tool rail) reports one.
     pub fn new(keys: Vec<K>, grabbed: K, pointer: Pos2) -> Self {
-        let _ = (keys, grabbed, pointer);
-        todo!("ch.K15")
+        TornOff { keys, grabbed, pointer }
     }
 }
 

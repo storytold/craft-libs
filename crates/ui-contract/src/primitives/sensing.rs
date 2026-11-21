@@ -16,7 +16,8 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::pointer;
 use crate::runtime::pointer::PassPointer;
 use craft_behavior::{
-    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerSample, PressMachine, PressPhase, PressState, Sense, Shape, Winner,
+    Cursor, HitLevel, HitPriority, HitShape, PartKey, PartRef, PassInput, PointerButton, PointerSample, PressMachine, PressPhase, PressStart,
+    PressState, Sense, Shape, Winner,
 };
 use craft_keymap::Mods;
 use craft_theme::Flags;
@@ -268,6 +269,9 @@ struct ArenaState {
     outcome: Option<Outcome>,
     /// The host asked to end the open press (`cancel_press_of`): the arena's next lifecycle run ends it.
     host_cancel: bool,
+    /// The part the open press was handed to (`hand_over_press`) and the pass that handed it: it reads the press in
+    /// that pass, though it was first declared then.
+    handed: Option<(PartRef, u64)>,
 }
 
 #[derive(Default)]
@@ -391,6 +395,32 @@ pub fn cancel_press_of(ctx: &Context, owner: Id) {
                 state.host_cancel = true;
             }
         }
+    });
+}
+
+/// Gives the held primary press to the part `part` of the root `owner`, as a drag from `origin`: the move band of a
+/// window floated from a torn-off group carries on the press that tore it off (`Overlay::continue_move`). The arena
+/// that holds the press lets it go with no phase; the owner's next lifecycle run reports `DragStart`, and the runs
+/// after it the press's own `Drag`, `Release` or `Cancel` from their pass's input, so the handover turns no held
+/// button into an event. Nothing happens when no arena of the running viewport holds an open primary press other than
+/// `owner`'s, and so a rerun of the pass that asks again takes nothing. Call it before the owner's step 8 (in its parts
+/// step) for the press to show in the same pass.
+pub(crate) fn hand_over_press(ctx: &Context, owner: Id, part: PartRef, origin: Pos2) {
+    let read = PassRead::of(ctx);
+    let start = PerViewport::<Arenas>::with(ctx, read.viewport, |arenas| {
+        let (_, state) = arenas.by_root.iter_mut().find(|(root, state)| {
+            **root != owner && state.machine.button() == Some(PointerButton::Primary) && !state.machine.release_held()
+        })?;
+        let start = state.machine.start()?;
+        state.machine = PressMachine::default();
+        state.host_cancel = false;
+        Some(start)
+    });
+    let Some(start) = start else { return };
+    let target = Hit { owner, part: Some(part), sense: Sense::DRAG, local: false };
+    with_arena_in(ctx, read.viewport, ArenaId::new(owner), read.pass_nr, |state| {
+        state.machine.take_over(target, Sense::DRAG, PressStart::new(origin, PointerButton::Primary, start.time, 1));
+        state.handed = Some((part, read.pass_nr));
     });
 }
 
@@ -966,7 +996,8 @@ fn known_in(state: &ArenaState, owner: Id) -> Vec<(PartKey, Option<u64>)> {
     } else {
         state.previous.iter().find(|member| member.id == owner).map_or(&[], |member| member.parts.as_slice())
     };
-    parts.iter().map(|part| (part.key, part.index)).collect()
+    let handed = state.handed.filter(|(_, pass)| *pass == state.pass).map(|(part, _)| part).filter(|_| state.root.is_some_and(|root| root.id == owner));
+    parts.iter().map(|part| (part.key, part.index)).chain(handed.map(|part| (part.key, part.index))).collect()
 }
 
 /// The part results of one owner: a part reads the press phase when it is the press winner, `Hover` when it is
