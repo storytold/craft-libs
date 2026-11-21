@@ -79,7 +79,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let (state, flags) = self.known_row(row, known, odd);
                 let measure = RowMeasure { at: row, rect, cells, state, flags, tree };
                 let (size, _) = crate::contract::steps::measuring(&ctx, || {
-                    self.measure_row(comp, ui, (id, view_env, installed), &mut memory, measure, |measure| measure(Proposal::Width(rect.width())))
+                    self.measure_row(comp, ui, (id, view_env, installed), &mut memory, measure, |measure, _| measure(Proposal::Width(rect.width())))
                 });
                 let height_id = rows::measured_id(id, &self.source.key(row));
                 #[cfg(feature = "testing")]
