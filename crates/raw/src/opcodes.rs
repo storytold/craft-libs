@@ -218,6 +218,13 @@ pub struct OpcodeLists {
     pub list1: Vec<Opcode>,
     pub list2: Vec<Opcode>,
     pub list3: Vec<Opcode>,
+    /// Not a DNG opcode: a Sony file's lens warp that no validated conversion put in `list3`. Either the camera did
+    /// not apply it to its own JPEG (its distortion menu was Off, Low or another non-Auto value), or the body has no
+    /// validated conversion and the general one made it. `list3` keeps describing what a validated camera did; a
+    /// renderer that corrects the lens applies this when `list3` has no warp. The DNG reader leaves it `None` and the
+    /// writer never writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_warp: Option<Opcode>,
 }
 
 struct Rd<'a> {
