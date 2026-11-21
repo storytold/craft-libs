@@ -744,6 +744,32 @@ fn character_formatting_applied() {
     assert!(p.runs.first().is_some_and(|r| r.props.bold.is_none()));
 }
 
+/// storytold/wordcraft#7131: `sprmCBrc80` and `sprmCBrc` are one border around the run, as DOCX
+/// `w:bdr` is. Both the Word 97 (Brc80) and the newer (BrcOperand) storage forms are read.
+#[test]
+fn character_border_from_sprm_cbrc() {
+    use craft_wordmodel::props::BorderStyle as S;
+    for border_sprm in [
+        (0x6865u16, [8u8, 1, 0, 0].as_slice()),                // sprmCBrc80: Brc80, single, 1 pt
+        (0xCA72u16, [8u8, 0, 0, 0, 0, 8, 1, 0, 0].as_slice()), // sprmCBrc: cb + Brc
+    ] {
+        let (op, operand) = border_sprm;
+        let spec = RichSpec {
+            text: "boxed plain\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, grpprl(&[(op, operand)])), (6, Vec::new())],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc(&spec)).expect("opens");
+        let p = para0(&doc);
+        assert_eq!(p.text, "boxed plain");
+        let b = p.props_of_char(0).border.expect("the boxed run keeps its character border");
+        assert_eq!((b.style, b.width, b.space), (S::Single, 1.0, 0.0), "sprm {op:#06x}");
+        assert!(p.props_of_char(7).border.is_none(), "the plain run has no border");
+    }
+}
+
 #[test]
 fn font_and_size_from_style_and_direct() {
     let spec = RichSpec {

@@ -15,6 +15,70 @@ impl Reader {
         }
     }
 
+    /// The border the current words describe: the run's character border under `\chbrdr`, else
+    /// the cell side's or paragraph side's. A character border lives in `Fmt::extra` as character
+    /// properties, the way the flow → document conversion reads every CharProps-only field.
+    fn active_border_slot(&mut self) -> Option<&mut Option<craft_wordmodel::props::Border>> {
+        if self.st.ch_brdr {
+            let extra = self.st.fmt.extra.get_or_insert_with(Default::default);
+            return Some(&mut extra.border);
+        }
+        self.cell_border_slot()
+    }
+
+    /// `\brdr…` line style, width and colour words, when a cell side, a paragraph side or a
+    /// `\chbrdr` character border is being described. Returns whether `w` was one of them.
+    fn border_word(&mut self, w: &str, pv: i32) -> bool {
+        if self.cell_side.is_none() && self.st.border_side.is_none() && !self.st.ch_brdr {
+            return false;
+        }
+        use craft_wordmodel::props::{Border, BorderStyle};
+        match w {
+            "brdrs" | "brdrth" | "brdrsh" | "brdrdb" | "brdrdot" | "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" | "brdrhair"
+            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrtnthtnsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrtnthtnmg" | "brdrthtnlg"
+            | "brdrtnthlg" | "brdrtnthtnlg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil" | "brdrtbl" => {
+                let style = match w {
+                    "brdrnone" | "brdrnil" | "brdrtbl" => BorderStyle::None,
+                    "brdrth" => BorderStyle::Thick,
+                    "brdrdb" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrtnthsg" => BorderStyle::ThinThickSmallGap,
+                    "brdrthtnsg" => BorderStyle::ThickThinSmallGap,
+                    "brdrtnthtnsg" => BorderStyle::ThinThickThinSmallGap,
+                    "brdrtnthmg" => BorderStyle::ThinThickMediumGap,
+                    "brdrthtnmg" => BorderStyle::ThickThinMediumGap,
+                    "brdrtnthtnmg" => BorderStyle::ThinThickThinMediumGap,
+                    "brdrtnthlg" => BorderStyle::ThinThickLargeGap,
+                    "brdrthtnlg" => BorderStyle::ThickThinLargeGap,
+                    "brdrtnthtnlg" => BorderStyle::ThinThickThinLargeGap,
+                    "brdrdot" => BorderStyle::Dotted,
+                    "brdrdash" | "brdrdashsm" => BorderStyle::Dashed,
+                    "brdrdashd" | "brdrdashdd" => BorderStyle::DotDash,
+                    "brdrtriple" => BorderStyle::Triple,
+                    "brdrwavy" => BorderStyle::Wave,
+                    _ => BorderStyle::Single,
+                };
+                let b = (style != BorderStyle::None).then_some(Border { style, ..Border::single(0.5) });
+                if let Some(slot) = self.active_border_slot() {
+                    *slot = b;
+                }
+            }
+            "brdrw" => {
+                let width = (pv as f32 / 20.0).clamp(0.25, 6.0);
+                if let Some(Some(b)) = self.active_border_slot() {
+                    b.width = width;
+                }
+            }
+            "brdrcf" => {
+                let color = self.colors.get(pv.max(0) as usize).copied().flatten();
+                if let Some(Some(b)) = self.active_border_slot() {
+                    b.color = color;
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
         // Every control word ends a multibyte run: the code page it is read in may change here
         // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
@@ -76,6 +140,9 @@ impl Reader {
         if self.destination_word(w, p, on, pv) {
             return;
         }
+        if self.border_word(w, pv) {
+            return;
+        }
         match w {
             "par" => self.end_para_mark(),
             "sect" => self.end_section(),
@@ -120,13 +187,16 @@ impl Reader {
                 self.st.rev = RevSt::default();
                 self.st.chg_c = FmtRevSt::default();
                 self.st.hidden = false;
+                self.st.ch_brdr = false;
             }
             "pard" => {
                 let field = self.st.field;
-                // Revision marks are character formatting, which `\pard` leaves alone.
-                let (dest, fmt, rev, uc, hidden) = (self.st.dest, self.st.fmt.clone(), self.st.rev, self.st.uc, self.st.hidden);
+                // Revision marks and character borders are character formatting, which `\pard`
+                // leaves alone.
+                let (dest, fmt, rev, uc, hidden, ch_brdr) =
+                    (self.st.dest, self.st.fmt.clone(), self.st.rev, self.st.uc, self.st.hidden, self.st.ch_brdr);
                 let chg_c = std::mem::take(&mut self.st.chg_c);
-                self.st = St { dest, fmt, rev, chg_c, uc, hidden, field, ..Default::default() };
+                self.st = St { dest, fmt, rev, chg_c, uc, hidden, ch_brdr, field, ..Default::default() };
             }
             "revised" => self.st.rev.ins = on,
             "deleted" => self.st.rev.del = on,
@@ -188,6 +258,14 @@ impl Reader {
             "cf" => self.st.fmt.color = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "highlight" | "chcbpat" | "cb" => self.st.fmt.background = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "v" => self.st.hidden = on,
+            // `\chbrdr` is character formatting: the border words that follow describe one border
+            // around the run, as DOCX `w:bdr` does (storytold/wordcraft#7131).
+            "chbrdr" => {
+                self.st.ch_brdr = on;
+                if !on && let Some(x) = self.st.fmt.extra.as_mut() {
+                    x.border = None;
+                }
+            }
             "ql" => self.st.align = Some(self.side_align(Align::Left)),
             "qc" => self.st.align = Some(Align::Center),
             "qr" => self.st.align = Some(self.side_align(Align::Right)),
@@ -203,7 +281,7 @@ impl Reader {
             "intbl" => self.st.intbl = true,
             "ls" => self.st.ls = Some(pv),
             "ilvl" => self.st.ilvl = pv.clamp(0, 8) as u8,
-            "brdrb" | "brdrt" | "brdrl" | "brdrr" if self.cell_side.is_none() => {
+            "brdrb" | "brdrt" | "brdrl" | "brdrr" if self.cell_side.is_none() && !self.st.ch_brdr => {
                 if w == "brdrb" && self.st.dest == Dest::Body {
                     self.rule_pending = true;
                 }
@@ -234,49 +312,6 @@ impl Reader {
             "clbrdrl" => self.cell_side = Some('l'),
             "clbrdrb" => self.cell_side = Some('b'),
             "clbrdrr" => self.cell_side = Some('r'),
-            "brdrs" | "brdrth" | "brdrsh" | "brdrdb" | "brdrdot" | "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" | "brdrhair"
-            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrtnthtnsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrtnthtnmg" | "brdrthtnlg"
-            | "brdrtnthlg" | "brdrtnthtnlg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil" | "brdrtbl"
-                if self.cell_side.is_some() || self.st.border_side.is_some() =>
-            {
-                use craft_wordmodel::props::{Border, BorderStyle};
-                let style = match w {
-                    "brdrnone" | "brdrnil" | "brdrtbl" => BorderStyle::None,
-                    "brdrth" => BorderStyle::Thick,
-                    "brdrdb" | "brdrwavydb" => BorderStyle::Double,
-                    "brdrtnthsg" => BorderStyle::ThinThickSmallGap,
-                    "brdrthtnsg" => BorderStyle::ThickThinSmallGap,
-                    "brdrtnthtnsg" => BorderStyle::ThinThickThinSmallGap,
-                    "brdrtnthmg" => BorderStyle::ThinThickMediumGap,
-                    "brdrthtnmg" => BorderStyle::ThickThinMediumGap,
-                    "brdrtnthtnmg" => BorderStyle::ThinThickThinMediumGap,
-                    "brdrtnthlg" => BorderStyle::ThinThickLargeGap,
-                    "brdrthtnlg" => BorderStyle::ThickThinLargeGap,
-                    "brdrtnthtnlg" => BorderStyle::ThinThickThinLargeGap,
-                    "brdrdot" => BorderStyle::Dotted,
-                    "brdrdash" | "brdrdashsm" => BorderStyle::Dashed,
-                    "brdrdashd" | "brdrdashdd" => BorderStyle::DotDash,
-                    "brdrtriple" => BorderStyle::Triple,
-                    "brdrwavy" => BorderStyle::Wave,
-                    _ => BorderStyle::Single,
-                };
-                let b = (style != BorderStyle::None).then_some(Border { style, ..Border::single(0.5) });
-                if let Some(slot) = self.cell_border_slot() {
-                    *slot = b;
-                }
-            }
-            "brdrw" if self.cell_side.is_some() || self.st.border_side.is_some() => {
-                let width = (pv as f32 / 20.0).clamp(0.25, 6.0);
-                if let Some(Some(b)) = self.cell_border_slot() {
-                    b.width = width;
-                }
-            }
-            "brdrcf" if self.cell_side.is_some() || self.st.border_side.is_some() => {
-                let color = self.colors.get(pv.max(0) as usize).copied().flatten();
-                if let Some(Some(b)) = self.cell_border_slot() {
-                    b.color = color;
-                }
-            }
             "paperw" => self.page.w = Some(pv),
             "paperh" => self.page.h = Some(pv),
             "margl" => self.page.left = Some(pv),
