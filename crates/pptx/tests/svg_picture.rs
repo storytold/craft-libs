@@ -110,6 +110,39 @@ fn a_vector_picture_is_written_with_a_png_fallback_beside_it() {
 }
 
 #[test]
+fn an_item_without_a_content_type_is_still_a_vector() {
+    // The name says what the part is, as the package layer reads it: an item that carries no
+    // content type still gets its PNG fallback.
+    let mut p = deck();
+    let svg = add_media(&mut p, "logo.svg", "", SVG);
+    add_picture(&mut p, svg);
+    let bytes = craft_pptx::export_with(&p, &Plain, &|_m| Some(PNG.to_vec())).expect("export");
+    let (embed, svg_blip) = blip_rels(&part(&bytes, SLIDE));
+    assert!(target(&part(&bytes, RELS), &embed).ends_with(".png"), "a raster fallback is written");
+    assert!(svg_blip.is_some(), "the vector rides in the extension");
+}
+
+const OTHER: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><rect width='4' height='4' fill='#00ff00'/></svg>";
+
+#[test]
+fn a_fill_names_its_own_vector_over_the_one_the_media_implies() {
+    // A fill whose media is one SVG and whose `svg` field names another writes the field's part.
+    let mut p = deck();
+    let a = add_media(&mut p, "a.svg", "image/svg+xml", SVG);
+    let b = add_media(&mut p, "b.svg", "image/svg+xml", OTHER);
+    add_picture(&mut p, a);
+    if let ShapeKind::Picture { fill } = &mut Arc::make_mut(p.slides.first_mut().expect("slide")).shapes[0].kind {
+        fill.svg = Some(b);
+    }
+    let bytes = craft_pptx::export_with(&p, &Plain, &|_m| Some(PNG.to_vec())).expect("export");
+    let rels = part(&bytes, RELS);
+    let (_, svg_blip) = blip_rels(&part(&bytes, SLIDE));
+    let vector = target(&rels, svg_blip.as_deref().expect("the vector extension"));
+    let part_name = format!("ppt/{}", vector.trim_start_matches("../"));
+    assert_eq!(bytes_of(&bytes, &part_name), OTHER, "the fill's own vector, not the media's");
+}
+
+#[test]
 fn without_a_rasterizer_the_vector_stays_in_the_blip() {
     let bytes = export(&svg_deck());
     let slide = part(&bytes, SLIDE);

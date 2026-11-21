@@ -172,7 +172,8 @@ pub fn blip_fill(w: &mut Writer, out: &mut dyn Sink, tag: &str, pf: &PictureFill
             w.close();
             w.close();
         }
-        if let Some(svg) = blip_svg.or_else(|| pf.svg.and_then(|id| out.media_rel(id, "image"))) {
+        // The fill's own vector wins over the one the package layer derived from the media.
+        if let Some(svg) = pf.svg.and_then(|id| out.media_rel(id, "image")).or(blip_svg) {
             w.open("a:extLst", &[]);
             w.tag("a:ext").attr("uri", "{96DAC541-7B7A-43D3-8B79-37D633B846F1}").open();
             w.tag("asvg:svgBlip").attr("xmlns:asvg", "http://schemas.microsoft.com/office/drawing/2016/SVG/main").attr("r:embed", &svg).empty();

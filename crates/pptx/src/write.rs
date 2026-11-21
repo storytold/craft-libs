@@ -208,6 +208,14 @@ impl<'a> Exp<'a> {
         let p: &'a Presentation = self.p;
         self.media_at.get(&id).and_then(|&i| p.media.get(i))
     }
+    /// The content type a part is written with: the item's own, or the one its extension means
+    /// when it carries none.
+    fn content_type(m: &crate::MediaItem) -> String {
+        if !m.content_type.is_empty() && m.content_type.contains('/') {
+            return m.content_type.clone();
+        }
+        crate::mime_for(&format!("x.{}", ext_for(&m.content_type, &m.name, &m.data))).to_string()
+    }
     fn media_part(&mut self, id: MediaId) -> Option<String> {
         if let Some(p) = self.media_parts.get(&id) {
             return Some(p.clone());
@@ -217,11 +225,7 @@ impl<'a> Exp<'a> {
             return None;
         }
         let ext = ext_for(&m.content_type, &m.name, &m.data);
-        let ct = if m.content_type.is_empty() || !m.content_type.contains('/') {
-            crate::mime_for(&format!("x.{ext}")).to_string()
-        } else {
-            m.content_type.clone()
-        };
+        let ct = Self::content_type(m);
         let name = if ct.starts_with("image/") {
             self.n_image += 1;
             format!("ppt/media/image{}.{ext}", self.n_image)
@@ -235,7 +239,7 @@ impl<'a> Exp<'a> {
     }
     /// Is this item an SVG picture with bytes: written as a raster fallback plus the vector?
     fn is_svg(&self, id: MediaId) -> bool {
-        self.media(id).is_some_and(|m| m.content_type == "image/svg+xml" && !m.data.is_empty())
+        self.media(id).is_some_and(|m| !m.data.is_empty() && Self::content_type(m) == "image/svg+xml")
     }
     /// The part written for an SVG picture's raster fallback, made once per media id.
     fn svg_png_part(&mut self, id: MediaId) -> Option<String> {
