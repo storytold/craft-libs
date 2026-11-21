@@ -147,7 +147,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 |---|---|---|
 | `max_vertices` | 20,000,000 | every slice function, `flat_normals` and `Mesh::try_flat_normals` (input and output: one vertex per index), `try_subdivided`, the `try_` primitives (also after their tangents split vertices), `UvGBuffer::try_new`, `unwrap::auto_unwrap` (input and output), `Mesh::map_material_uvs` (the mesh's vertices and the copies of the vertices it shares with other materials) |
 | `max_triangles` | 20,000,000 | the same except `auto_unwrap`, and `Bvh::from_slices`; the UV G-buffer also counts a triangle again each time another submesh of the material lists it; `Mesh::wire_edges`, `Mesh::uv_seam_edges`, `Mesh::uv_tiles` and `Mesh::map_material_uvs` count the triangles the submeshes list in the same way |
-| `max_segments` | 2,048 | the `try_` primitives (segments, rings or subdivisions along one direction, after a count under the primitive's minimum is raised to it; a box face has 12, or 22 with a bevel) |
+| `max_segments` | 2,048 | the `try_` primitives (segments, rings or subdivisions along one direction; a count under the primitive's minimum is `Invalid`, and the builders without `try_` raise it; a box face has 12, or 22 with a bevel) |
 | `max_gbuffer_side` | 8,192 | `UvGBuffer::try_new`, `UvGBuffer::from_slices`; `UvGBuffer::new` clamps each side to `1..=8192` |
 | `max_gbuffer_texels` | 2^26 (8,192 × 8,192) | the same |
 | `max_gbuffer_work` | 2^32 | the same: the texels the rasterizer visits, summed over each triangle's bounding box clipped to the buffer |
@@ -282,7 +282,7 @@ For EffectCraft:
 | `extrude` builds a cap from a bevel that collapses or turns the contour inside out, and from an outline whose contours cross | an `Invalid` error |
 | `extrude` converts to `f32` without a check, so a point past the `f32` range becomes infinite and neighboring points can round to one position | an `Invalid` error |
 | `extrude` returns an `effectcraft_model::Primitive` with material 0, and `Surface` names the parts | an `OutlineMesh` of positions, normals, UVs and indices, and `OutlineSurface` names the parts; `BevelStyle` has no labels |
-| `mesh(PrimitiveKind, &PrimParams)` takes absolute values of negative sizes and clamps segments to 3..=512 and rings to 2..=512 | `try_shape(ShapeKind, &ShapeParams, &Limits)` returns `Invalid` for a size that is not finite and positive or whose half is 0 in `f32` and for a shape whose triangle corners round to one `f32` position, and `TooLarge` past `max_segments`; counts under 3 segments, 2 sphere rings or 3 torus tube sides are raised to them |
+| `mesh(PrimitiveKind, &PrimParams)` takes absolute values of negative sizes and clamps segments to 3..=512 and rings to 2..=512 | `try_shape(ShapeKind, &ShapeParams, &Limits)` returns `Invalid` for a size that is not finite and positive or whose half is 0 in `f32`, for a shape whose triangle corners round to one `f32` position and for fewer than 3 segments, 2 sphere rings or 3 torus tube sides, and `TooLarge` past `max_segments` |
 | `PrimitiveKind::Cube` | `ShapeKind::Cuboid` |
 | A torus whose tube is as wide as its radius or wider | an `Invalid` error |
 | A torus whose tube is so thin that its cross-section rounds flat in `f32` | an `Invalid` error |

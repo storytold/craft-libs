@@ -172,9 +172,11 @@ fn positive(what: &str, value: f32) -> Result<f32> {
     if value.is_finite() && value > 0.0 { Ok(value) } else { Err(MeshOpsError::Invalid(format!("{what} {value} is not a finite positive number"))) }
 }
 
-/// `count`, raised to `min`, when the raised count is within the segment limit.
+/// `count`, when it is `min` or more and within the segment limit.
 fn segments(what: &'static str, count: usize, min: usize, limits: &Limits) -> Result<usize> {
-    let count = count.max(min);
+    if count < min {
+        return Err(MeshOpsError::Invalid(format!("{what} {count} is under {min}")));
+    }
     crate::check_limit(what, count, limits.max_segments)?;
     Ok(count)
 }
@@ -184,17 +186,18 @@ fn box_segments(bevel: f32) -> (usize, usize) {
     if bevel > 0.0 { (6, 10) } else { (0, 12) }
 }
 
-/// A segment count clamped to the default limit, for the builders without `try_`.
-fn clamped(count: usize) -> usize {
-    count.min(Limits::default().max_segments)
+/// A segment count raised to `min` and clamped to the default limit, for the builders without
+/// `try_`.
+fn clamped(count: usize, min: usize) -> usize {
+    count.max(min).min(Limits::default().max_segments)
 }
 
-/// UV sphere of `radius` around the origin.
+/// UV sphere of `radius` around the origin, with at least 3 segments and 2 rings.
 pub fn sphere(radius: f32, segments: usize, rings: usize) -> Mesh {
-    try_sphere(radius, clamped(segments), clamped(rings), &Limits::default()).unwrap_or_else(|_| empty("Sphere"))
+    try_sphere(radius, clamped(segments, 3), clamped(rings, 2), &Limits::default()).unwrap_or_else(|_| empty("Sphere"))
 }
 
-/// [`sphere`] with its parameters checked.
+/// [`sphere`] with its parameters checked: fewer than 3 segments or 2 rings is `Invalid`.
 pub fn try_sphere(radius: f32, segs: usize, rings: usize, limits: &Limits) -> Result<Mesh> {
     let radius = positive("sphere radius", radius)?;
     let (segs, rings) = (segments("sphere segments", segs, 3, limits)?, segments("sphere rings", rings, 2, limits)?);
@@ -500,13 +503,13 @@ fn disk_into(b: &mut Builder, center: Vec3, radius: f32, up: bool, segs: usize, 
     }
 }
 
-/// A capped cylinder along Y.
+/// A capped cylinder along Y, with at least 3 segments.
 pub fn cylinder(radius: f32, height: f32, segs: usize) -> Mesh {
-    try_cylinder(radius, height, clamped(segs), &Limits::default()).unwrap_or_else(|_| empty("Cylinder"))
+    try_cylinder(radius, height, clamped(segs, 3), &Limits::default()).unwrap_or_else(|_| empty("Cylinder"))
 }
 
-/// [`cylinder`] with its parameters checked. A height whose half is 0 in `f32` is an `Invalid`
-/// error.
+/// [`cylinder`] with its parameters checked. A height whose half is 0 in `f32` and fewer than 3
+/// segments are `Invalid` errors.
 pub fn try_cylinder(radius: f32, height: f32, segs: usize, limits: &Limits) -> Result<Mesh> {
     let (radius, h) = (positive("cylinder radius", radius)?, half("cylinder height", height)?);
     let segs = segments("cylinder segments", segs, 3, limits)?;
@@ -517,13 +520,14 @@ pub fn try_cylinder(radius: f32, height: f32, segs: usize, limits: &Limits) -> R
     b.finish("Cylinder")
 }
 
-/// A torus around Y.
+/// A torus around Y, with at least 3 segments and 3 sides.
 pub fn torus(major: f32, minor: f32, segs: usize, sides: usize) -> Mesh {
-    try_torus(major, minor, clamped(segs), clamped(sides), &Limits::default()).unwrap_or_else(|_| empty("Torus"))
+    try_torus(major, minor, clamped(segs, 3), clamped(sides, 3), &Limits::default()).unwrap_or_else(|_| empty("Torus"))
 }
 
 /// [`torus`] with its parameters checked. A minor radius so small next to the major radius that
-/// the tube's cross-section rounds flat in `f32` is an `Invalid` error.
+/// the tube's cross-section rounds flat in `f32`, and fewer than 3 segments or sides, are
+/// `Invalid` errors.
 pub fn try_torus(major: f32, minor: f32, segs: usize, sides: usize, limits: &Limits) -> Result<Mesh> {
     let (major, minor) = (positive("torus major radius", major)?, positive("torus minor radius", minor)?);
     let (segs, sides) = (segments("torus segments", segs, 3, limits)?, segments("torus sides", sides, 3, limits)?);
@@ -540,12 +544,12 @@ pub fn try_torus(major: f32, minor: f32, segs: usize, sides: usize, limits: &Lim
     b.finish("Torus")
 }
 
-/// A subdivided plane facing +Y.
+/// A subdivided plane facing +Y, with at least 1 subdivision.
 pub fn plane(size: f32, subdivisions: usize) -> Mesh {
-    try_plane(size, clamped(subdivisions), &Limits::default()).unwrap_or_else(|_| empty("Plane"))
+    try_plane(size, clamped(subdivisions, 1), &Limits::default()).unwrap_or_else(|_| empty("Plane"))
 }
 
-/// [`plane`] with its parameters checked.
+/// [`plane`] with its parameters checked: 0 subdivisions is `Invalid`.
 pub fn try_plane(size: f32, subdivisions: usize, limits: &Limits) -> Result<Mesh> {
     let size = positive("plane size", size)?;
     let s = segments("plane subdivisions", subdivisions, 1, limits)?;
@@ -606,9 +610,9 @@ pub struct ShapeParams {
     pub tube: f32,
     /// Height of a cone or cylinder.
     pub height: f32,
-    /// Segments around; at least 3 are built.
+    /// Segments around: 3 or more.
     pub segments: usize,
-    /// Rings of a sphere (at least 2 are built) or sides of a torus's tube (at least 3).
+    /// Rings of a sphere (2 or more) or sides of a torus's tube (3 or more).
     pub rings: usize,
 }
 
@@ -624,7 +628,8 @@ impl Default for ShapeParams {
 /// Errors: `Invalid` for a size, radius, tube or height the shape reads that is not finite and
 /// positive, a size or height whose half is 0 in `f32`, a torus tube that is not smaller than
 /// its radius, a torus tube so thin next to its radius that its cross-section rounds flat in
-/// `f32`, coordinates that overflow `f32`, and a shape so small that corners of a triangle
+/// `f32`, coordinates that overflow `f32`, a segment or ring count the shape reads that is under
+/// its minimum, and a shape so small that corners of a triangle
 /// round to one `f32` position; `TooLarge` for a segment or ring count over [`Limits::max_segments`] and for vertex or
 /// triangle counts over the limits.
 pub fn try_shape(kind: ShapeKind, p: &ShapeParams, limits: &Limits) -> Result<Mesh> {
@@ -1125,10 +1130,22 @@ mod tests {
         let few = Limits { max_vertices: 100, ..l };
         assert!(matches!(try_plane(1.0, 10, &few), Err(MeshOpsError::TooLarge { .. })));
         assert!(try_plane(1.0, 8, &few).is_ok());
-        // A count under the builder's minimum is raised first, and the raised count is checked.
-        let two = Limits { max_segments: 2, ..l };
-        assert!(try_sphere(1.0, 1, 2, &two).is_err(), "a sphere has at least 3 segments");
-        assert!(try_plane(1.0, 0, &two).is_ok());
+        // A count under the builder's minimum is an error; the builders without `try_` raise it.
+        for (what, r) in [
+            ("sphere segments", try_sphere(1.0, 2, 2, &l)),
+            ("sphere rings", try_sphere(1.0, 3, 1, &l)),
+            ("cylinder segments", try_cylinder(1.0, 1.0, 2, &l)),
+            ("torus segments", try_torus(1.0, 0.3, 2, 3, &l)),
+            ("torus sides", try_torus(1.0, 0.3, 3, 2, &l)),
+            ("plane subdivisions", try_plane(1.0, 0, &l)),
+        ] {
+            assert!(matches!(r, Err(MeshOpsError::Invalid(ref e)) if e.starts_with(what)), "{what}: {r:?}");
+        }
+        assert!(try_sphere(1.0, 3, 2, &l).is_ok() && try_plane(1.0, 1, &l).is_ok());
+        assert_eq!(sphere(1.0, 0, 0), try_sphere(1.0, 3, 2, &l).unwrap());
+        assert_eq!(cylinder(1.0, 1.0, 0), try_cylinder(1.0, 1.0, 3, &l).unwrap());
+        assert_eq!(torus(1.0, 0.3, 0, 0), try_torus(1.0, 0.3, 3, 3, &l).unwrap());
+        assert_eq!(plane(1.0, 0), try_plane(1.0, 1, &l).unwrap());
         // A box face has 12 segments along each axis, or 22 with a bevel.
         let eleven = Limits { max_segments: 11, ..l };
         assert!(try_cube(1.0, &eleven).is_err());
@@ -1136,8 +1153,8 @@ mod tests {
         assert!(try_cube(1.0, &twelve).is_ok());
         assert!(try_rounded_box(Vec3::ONE, 0.1, &twelve).is_err());
         // The builders without `try_` clamp to the limit.
-        assert_eq!(clamped(usize::MAX), l.max_segments);
-        assert_eq!(clamped(7), 7);
+        assert_eq!(clamped(usize::MAX, 3), l.max_segments);
+        assert_eq!(clamped(7, 3), 7);
     }
 
     #[test]
@@ -1362,12 +1379,18 @@ mod tests {
             try_shape(ShapeKind::Cuboid, &ok, &Limits { max_triangles: 11, ..l }),
             Err(MeshOpsError::TooLarge { what: "triangle count", .. })
         ));
-        // Counts under the minimum are raised to it.
-        let m = try_shape(ShapeKind::Sphere, &ShapeParams { segments: 0, rings: 0, ..ok }, &l).unwrap();
+        // Counts under the minimum are errors; the smallest counts build.
+        for (k, segments, rings) in [(ShapeKind::Sphere, 2, 2), (ShapeKind::Sphere, 3, 1), (ShapeKind::Torus, 3, 2), (ShapeKind::Cone, 2, 0)] {
+            let r = try_shape(k, &ShapeParams { segments, rings, ..ok }, &l);
+            assert!(matches!(r, Err(MeshOpsError::Invalid(_))), "{k:?} {segments} {rings}: {r:?}");
+        }
+        let m = try_shape(ShapeKind::Sphere, &ShapeParams { segments: 3, rings: 2, ..ok }, &l).unwrap();
         assert_eq!(m.triangle_count(), 2 * 3);
         // A torus tube needs three sides to enclose any volume.
-        let m = try_shape(ShapeKind::Torus, &ShapeParams { segments: 0, rings: 0, ..ok }, &l).unwrap();
+        let m = try_shape(ShapeKind::Torus, &ShapeParams { segments: 3, rings: 3, ..ok }, &l).unwrap();
         assert_eq!(m.triangle_count(), 3 * 3 * 2);
+        // Shapes that do not read the rings take any ring count.
+        assert!(try_shape(ShapeKind::Cylinder, &ShapeParams { segments: 3, rings: 0, ..ok }, &l).is_ok());
     }
 
     #[test]
