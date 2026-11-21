@@ -153,6 +153,9 @@ const MAX_GSTACK: usize = 10_000;
 const MAX_NAME_DEPTH: usize = 48;
 const MAX_CALL_DEPTH: usize = 48;
 
+/// A dictionary entry's previous state recorded for `restore`: (dict, key, previous entry).
+type JournalEntry = (PDict, crate::read::obj::Key, Option<(Obj, Obj)>);
+
 pub struct Interp {
     pub o: Vec<Obj>,
     pub d: Vec<PDict>,
@@ -165,7 +168,7 @@ pub struct Interp {
     /// Journal lengths at each open `save`, so `restore` puts dictionary entries back.
     pub journal_marks: Vec<usize>,
     /// Dictionary entries changed while a `save` is open: (dict, key, previous entry).
-    pub journal: Vec<(PDict, crate::read::obj::Key, Option<(Obj, Obj)>)>,
+    pub journal: Vec<JournalEntry>,
     pub gstates: Vec<GState>,
     pub systemdict: PDict,
     pub globaldict: PDict,
