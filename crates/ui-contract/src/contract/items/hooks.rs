@@ -812,15 +812,25 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 }
 
-/// Apply the collection's wheel displacement and any reveal left by a descendant.
+/// Apply the collection's wheel displacement, the page and end moves a descendant left untaken and any reveal left by
+/// a descendant.
 fn scroll_rows(core: &mut CxCore<'_>, rect: Rect, scrolls: bool, mut offset: f64, maximum: f64) -> f64 {
     if let Some(range) = core.scroll_moved(SCROLL) {
         offset = range.start;
     }
     if scrolls {
-        // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
         let (ctx, id) = (core.ctx.clone(), core.id);
         let quiet = core.memory.is_peek() || crate::runtime::measure::active(&ctx);
+        // A control in a row left a page or end move untaken: the collection, its rows' scroll owner, pages the rows
+        // (taken in the real run, peeked while measuring).
+        let view = f64::from(rect.height());
+        for (mv, _) in crate::contract::steps::scroll_moves(&ctx, id, quiet) {
+            let span = ScrollSpan::new(0.0..maximum + view, offset..offset + view);
+            if let Some(range) = craft_behavior::scroll::jump(&span, mv) {
+                offset = range.start;
+            }
+        }
+        // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
         if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
             // The rows scroll along y only: the reveal moves them along it and passes the rest on.
             let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
