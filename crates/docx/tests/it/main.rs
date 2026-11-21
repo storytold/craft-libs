@@ -57,6 +57,7 @@ mod toc_ranges;
 mod twips_wrap;
 mod undefined_style;
 mod vml_shapes;
+mod widow_control_default;
 mod word_xml;
 mod wordml2003_write;
 mod wps_fallback;

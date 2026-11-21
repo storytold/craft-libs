@@ -40,10 +40,19 @@ pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
     }
     w.close("w:rPr");
     w.close("w:rPrDefault");
-    if s.default_para_present || s.default_para != craft_wordmodel::props::ParaProps::default() {
+    // A .docx that sets no widow/orphan control has it off (ECMA-376 §17.3.1.44)
+    // while the model's unset default is on: an unset default is written as on, and an off one
+    // read from a file is written back by omission, as it was read.
+    let mut default_para = s.default_para.clone();
+    default_para.widow_control = match default_para.widow_control {
+        None => Some(true),
+        Some(false) => None,
+        on => on,
+    };
+    if s.default_para_present || default_para != craft_wordmodel::props::ParaProps::default() {
         w.open("w:pPrDefault", &[]);
         w.open("w:pPr", &[]);
-        props::ppr_inner(&mut w, &s.default_para, false, None);
+        props::ppr_inner(&mut w, &default_para, false, None);
         w.close("w:pPr");
         w.close("w:pPrDefault");
     }
