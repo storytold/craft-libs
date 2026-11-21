@@ -13,6 +13,7 @@
     "In `docs/sweep.typ`, the intersection scan to the left compares each segment with `alpha^(i+1)`, the segment the lemma after it is stated for, instead of `alpha^i`.",
     "In `docs/sweep.typ`, the typo \"condi0.2tions\" reads \"conditions\", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false.",
     "In `docs/sweep.typ`, the lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, as the bidirectional lemma uses it, and the argument for the order invariant cites the crossing invariant instead of a \"third invariant\".",
+    "In `examples/bus.rs`, the SVG's `viewBox` is the size of the one composite the example draws, with its padding, instead of 3 composites wide and 2 tall.",
     "In `src/sweep/sweep_line.rs` and `src/topology.rs`, two changes make clippy 1.100.0 with `-D warnings` and every feature pass on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check passes `self.line` to `assert!` without a `&`, and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them. The behavior does not change."
   ],
   "files": [
@@ -30,7 +31,7 @@
     { "path": "benches/synthetic.rs", "source_sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810", "source_git_blob": null, "sha256": "7ce59bef2e1c4f28b00cb89feb15bc71ca4b098a8d27e7b02ea699aca9bcc810" },
     { "path": "docs/sweep.typ", "source_sha256": "4766082c8672a7bb4356b5581043489c13b4e3fb8931ba3a5f0a473fab0172f3", "source_git_blob": null, "sha256": "c151c2c47032eca41914139b105177d10996b6ece9c93622aaeb31a371cfe17b" },
     { "path": "examples/boolean_op.rs", "source_sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f", "source_git_blob": null, "sha256": "3b38a1ccda7e736cce4b191a3a45ab4824c4c365190e3eb637b2fb39b5996c9f" },
-    { "path": "examples/bus.rs", "source_sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33", "source_git_blob": null, "sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33" },
+    { "path": "examples/bus.rs", "source_sha256": "e206a08be73899f564188052c8ecc15526b54606e52ee2935a64ce6b5723da33", "source_git_blob": null, "sha256": "cadc2829c1f4dde6948e0246286a07e0c1cf6bb71960859a3f2b77020cd84691" },
     { "path": "examples/curve_metrics.rs", "source_sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2", "source_git_blob": null, "sha256": "0db6a5327fd2119a03a9a66624fea3e04b6bbb519655667ad30487aee6c787d2" },
     { "path": "examples/visualize_op.rs", "source_sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79", "source_git_blob": null, "sha256": "a5210ed389ceb1e9c43b952b992e29e65065d129d2b2f4be62fffc747376bf79" },
     { "path": "examples/winding-numbers.rs", "source_sha256": "4a756c908564703b165257001e73d2f7235476cd536580091f3a7a70d2eab242", "source_git_blob": null, "sha256": "4a756c908564703b165257001e73d2f7235476cd536580091f3a7a70d2eab242" },
