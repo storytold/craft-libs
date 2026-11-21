@@ -179,7 +179,13 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
             }
         }
         Kind::CustomRows => {
-            Stack::new().id_salt(key).show(ui, |ui, _| host.custom_row(ui, key));
+            // The host draws the rows and their labels; the rule's enabled state and help apply to them as to a field.
+            Stack::new().id_salt(key).enabled(row.enabled).show(ui, |ui, _| {
+                host.custom_row(ui, key);
+                if let Some(help) = &row.help {
+                    Help::Text(help.clone()).show(ui);
+                }
+            });
         }
         Kind::Custom => {
             field().show(ui, |ui, _| {
