@@ -89,12 +89,16 @@ pub enum TextureInput {
     Opacity,
     /// Clearcoat weight in R.
     Clearcoat,
-    /// Clearcoat roughness in G.
+    /// glTF's clearcoat roughness texture: roughness in G.
     ClearcoatRoughness,
+    /// Clearcoat roughness in the first channel.
+    ClearcoatRoughnessFirst,
     /// Sheen color in RGB.
     SheenColor,
-    /// Sheen roughness in A.
+    /// glTF's sheen roughness texture: roughness in A.
     SheenRoughness,
+    /// Sheen roughness in the first channel.
+    SheenRoughnessFirst,
     /// Displacement height in the first channel.
     Displacement,
     /// A source input with no slot above, by its source name.

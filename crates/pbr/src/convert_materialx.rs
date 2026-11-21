@@ -406,9 +406,9 @@ fn image_binding(f: &Field, file: &str, space: Option<&str>, tiling: Option<[f32
         Role::EmissionColor => TextureInput::Emissive,
         Role::Opacity => TextureInput::Opacity,
         Role::CoatWeight => TextureInput::Clearcoat,
-        Role::CoatRoughness => TextureInput::ClearcoatRoughness,
+        Role::CoatRoughness => TextureInput::ClearcoatRoughnessFirst,
         Role::SheenColor => TextureInput::SheenColor,
-        Role::SheenRoughness => TextureInput::SheenRoughness,
+        Role::SheenRoughness => TextureInput::SheenRoughnessFirst,
         _ => TextureInput::Other(f.name.to_owned()),
     };
     let encoding = if matches!(f.kind, Kind::Color(_)) { encoding(space) } else { TextureEncoding::Linear };

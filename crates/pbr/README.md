@@ -122,8 +122,10 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
     strength, and the coat, fuzz or sheen become the layers. Color constants are decoded to linear
     Rec.709 from the color space in effect (`srgb_texture`, `srgb_rec709_scene`, the Rec.709
     gamma spaces, `lin_rec709`, `lin_rec709_scene`, `data`); another color space is an error. An
-    image becomes a texture binding and the core holds 1 times any weight in its place. Other
-    inputs of the shader's table are kept in `other_inputs`.
+    image becomes a texture binding and the core holds 1 times any weight in its place. A coat or
+    sheen roughness image binds as `ClearcoatRoughnessFirst` or `SheenRoughnessFirst`, which read
+    the first channel; the glTF bindings `ClearcoatRoughness` and `SheenRoughness` read G and A.
+    Other inputs of the shader's table are kept in `other_inputs`.
 - **Features.** `parallel` computes rows on several threads with rayon. `mesh` and `materialx`
   add the conversions and depend on craft-mesh and craft-materialx. The default build has none of
   them, is serial and builds for `wasm32-unknown-unknown`, as do `mesh` and `materialx`. Results

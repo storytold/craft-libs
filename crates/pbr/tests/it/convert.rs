@@ -403,6 +403,31 @@ fn materialx_coat_and_sheen_are_kept_only_when_they_are_on() {
 }
 
 #[test]
+fn materialx_coat_and_sheen_roughness_images_read_their_first_channel() {
+    let cases = [
+        (Shader::OpenPbr, [("coat_weight", k(&[1.0])), ("fuzz_weight", k(&[1.0]))], ["coat_roughness", "fuzz_roughness"]),
+        (Shader::StandardSurface, [("coat", k(&[1.0])), ("sheen", k(&[1.0]))], ["coat_roughness", "sheen_roughness"]),
+        (Shader::GltfPbr, [("clearcoat", k(&[1.0])), ("sheen_color", k(&[1.0, 1.0, 1.0]))], ["clearcoat_roughness", "sheen_roughness"]),
+    ];
+    for (shader, [coat, sheen], [coat_roughness, sheen_roughness]) in cases {
+        let c = try_from_materialx(&mx(
+            shader,
+            &[coat, sheen, (coat_roughness, img("coat_r.png", None, None)), (sheen_roughness, img("sheen_r.png", None, None))],
+        ))
+        .unwrap();
+        let inputs: Vec<_> = c.surface.textures.iter().map(|t| (t.input.clone(), t.source.clone())).collect();
+        assert_eq!(
+            inputs,
+            [
+                (TextureInput::ClearcoatRoughnessFirst, TextureSource::File("coat_r.png".into())),
+                (TextureInput::SheenRoughnessFirst, TextureSource::File("sheen_r.png".into())),
+            ],
+            "{shader:?}"
+        );
+    }
+}
+
+#[test]
 fn materialx_coat_only_inputs_are_dropped_while_the_coat_is_off() {
     let coat_only = [
         (Shader::OpenPbr, "coat_weight", ["geometry_coat_normal", "coat_color", "coat_ior"]),
