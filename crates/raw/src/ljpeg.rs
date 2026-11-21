@@ -244,7 +244,7 @@ impl<'a> BitReader<'a> {
         v
     }
     /// Discard buffered bits and skip to just after the next `RSTn` marker. Returns false if none found.
-    fn restart(&mut self) -> bool {
+    pub(crate) fn restart(&mut self) -> bool {
         self.buf = 0;
         self.bits = 0;
         self.marker = None;
@@ -257,6 +257,45 @@ impl<'a> BitReader<'a> {
             self.pos += 1;
         }
         false
+    }
+    /// Whether a read so far took any of the zero bits fed past the end of the data or a marker (synthetic bits sit at
+    /// the tail of the buffer, so they were consumed once more were fed than are still buffered).
+    pub(crate) fn consumed_synthetic(&self) -> bool {
+        self.overrun > self.bits
+    }
+    /// A strict restart for DCT scans (T.81 F.1.2.3, B.2.1): only the final byte's padding (< 8 bits) may remain
+    /// before the marker, which must be `RST{expected}` (optionally after `FF` fill bytes); no other data is
+    /// skipped. Returns false otherwise; [`Self::restart`] keeps the lenient search the lossless decoders use.
+    pub(crate) fn restart_exact(&mut self, expected: u8) -> bool {
+        let real_buffered = (self.bits - self.overrun.min(self.bits)) as usize;
+        let d = self.data;
+        let mut p = self.pos;
+        let mut unread = 0usize;
+        while p < d.len() {
+            if d[p] == 0xff {
+                if d.get(p + 1) != Some(&0) {
+                    break;
+                }
+                p += 1;
+            }
+            p += 1;
+            unread += 8;
+        }
+        if real_buffered + unread >= 8 {
+            return false;
+        }
+        while d.get(p) == Some(&0xff) && d.get(p + 1) == Some(&0xff) {
+            p += 1;
+        }
+        if d.get(p) != Some(&0xff) || d.get(p + 1) != Some(&(0xd0 + (expected & 7))) {
+            return false;
+        }
+        self.pos = p + 2;
+        self.buf = 0;
+        self.bits = 0;
+        self.marker = None;
+        self.overrun = 0;
+        true
     }
     /// Bytes consumed so far (approximate while bits are buffered).
     pub fn position(&self) -> usize {
