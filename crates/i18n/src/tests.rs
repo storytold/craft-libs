@@ -31,6 +31,19 @@ fn lang(i: &I18n, code: &str) -> Lang {
     i.from_code(code).unwrap()
 }
 
+#[test]
+fn translated_labels_share_storage_across_clones_and_follow_their_own_overlay() {
+    let word = Word::plain("Save");
+    let words = Words::new(|_| Some("Enregistrer".to_owned()));
+    let first = words.translated_label(word).unwrap();
+    let cloned = words.clone().translated_label(word).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &cloned));
+
+    let overlay = words.overlay(&WordRows::new().row(word, "Sauvegarder"));
+    assert_eq!(overlay.translated_label(word).as_deref(), Some("Sauvegarder"));
+    assert_eq!(words.translated_label(word).as_deref(), Some("Enregistrer"));
+}
+
 static P: &Embedded = &[
     ("fr", "@plural\t{n} page|{n} pages\t{n} page|{n} pages\n", ""),
     ("ru", "@plural\t{n} file|{n} files\t{n} файл|{n} файла|{n} файлов\n", ""),
@@ -103,6 +116,77 @@ fn script_subtag_never_picks_another_script() {
         ("be_BY", Some("be")),
     ] {
         assert_eq!(i.match_tag(tag).map(|l| i.code(l)), want, "{tag}");
+    }
+}
+
+#[test]
+fn system_tags_match_languages_in_order() {
+    let i = all(&[("fr", "", ""), ("pt-br", "", ""), ("zh-hant", "", ""), ("de", "", "")]).0;
+    for (tag, want) in [
+        ("fr_CA.UTF-8", Some("fr")),
+        ("fr-FR", Some("fr")),
+        ("pt-BR", Some("pt-br")),
+        ("zh-Hant-MO", Some("zh-hant")),
+        ("de_DE@euro", Some("de")),
+        ("xx-YY", None),
+    ] {
+        assert_eq!(i.match_tag(tag).map(|l| i.code(l)), want, "{tag}");
+    }
+    assert!(i.match_tag("C") == Some(Lang::EN) && i.match_tag("POSIX") == Some(Lang::EN));
+    assert_eq!(i.code(i.match_tags(["xx", "de", "fr"])), "de", "the first known tag wins");
+    assert!(i.match_tags(["xx", "yy"]) == Lang::EN && i.match_tags([]) == Lang::EN, "English when none fits");
+}
+
+#[test]
+fn lookup_falls_back_to_english_and_context_never_borrows_the_plain_row() {
+    let (i, _) = all(E);
+    let fr = lang(&i, "fr");
+    assert_eq!(i.t(fr, "Save"), "Sauvegarder", "the app's row wins over the shared one");
+    assert_eq!(i.t(fr, "Open"), "Ouvrir");
+    assert_eq!(i.tc(fr, "menu", "Open"), "Ouvrir le menu");
+    assert_eq!(i.tid(fr, "file.save", "Save file"), "Enregistrer le fichier");
+    assert_eq!(i.t(fr, "Not translated"), "Not translated");
+    assert_eq!(i.get(fr, "menu", "Save"), None, "a context row is not the plain row");
+    assert_eq!(i.t(Lang::EN, "Save"), "Save");
+}
+
+#[test]
+fn plurals_take_the_languages_categories() {
+    let i = all(P).0;
+    let ru = lang(&i, "ru");
+    for (n, want) in [(1, "1 файл"), (2, "2 файла"), (5, "5 файлов"), (11, "11 файлов"), (21, "21 файл"), (22, "22 файла")]
+    {
+        assert_eq!(i.trn(ru, n, "{n} file", "{n} files"), want, "{n}");
+    }
+}
+
+#[test]
+fn a_file_name_or_path_keeps_its_extension_and_separators_left_to_right_in_a_right_to_left_text() {
+    let rtl = Direction::Rtl;
+    let lrm = '\u{200E}';
+    // What the isolates and marks wrap is the input, unchanged.
+    let bare = |shown: &str| strip_isolates(shown).replace(lrm, "");
+
+    let named = file_name("تقرير 2.docx", rtl);
+    assert!(named.contains(&format!("{lrm}.docx")), "a mark directly before the extension: {named:?}");
+    assert_eq!(bare(&named), "تقرير 2.docx");
+    for text in ["ملاحظات", "v1.2 تقرير"] {
+        let shown = file_name(text, rtl);
+        assert!(!shown.contains(lrm), "no extension, no mark: {shown:?}");
+        assert_eq!(bare(&shown), text);
+    }
+
+    for sep in ['/', '\\'] {
+        let input = format!("C:{sep}ملفات{sep}تقرير.docx");
+        let shown = path(&input, rtl);
+        assert_eq!(shown.matches(&format!("{sep}{lrm}")).count(), 2, "a mark after every {sep:?}: {shown:?}");
+        assert!(shown.contains(&format!("{lrm}.docx")), "a mark before the extension: {shown:?}");
+        assert_eq!(bare(&shown), input);
+    }
+
+    for text in ["تقرير 2.docx", "v1.2 تقرير", "C:/ملفات/تقرير.docx"] {
+        assert_eq!(file_name(text, Direction::Ltr), text);
+        assert_eq!(path(text, Direction::Ltr), text);
     }
 }
 

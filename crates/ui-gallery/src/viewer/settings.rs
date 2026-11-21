@@ -1,6 +1,6 @@
 //! What the viewer keeps between runs, in the gallery's own `config.toml`.
 
-use super::appearance::{CONTRASTS, DENSITIES, DIRECTIONS, MODES, MOTIONS, SCALES, TEXT_SIZES, theme_named};
+use super::appearance::{CONTRASTS, DENSITIES, DIRECTIONS, MODES, MOTIONS, SCALES, SETS, TEXT_SIZES, theme_named};
 use super::catalog::Catalog;
 use super::layout;
 use super::state::{Preview, Viewer, Workspace};
@@ -25,6 +25,8 @@ pub struct GallerySettings {
     pub text_size: String,
     /// The density preset.
     pub density: String,
+    /// The component set.
+    pub set: String,
     /// The motion mode.
     pub motion: String,
     /// The interface scale in percent.
@@ -68,17 +70,18 @@ impl GallerySettings {
             contrast: CONTRASTS.name(env.contrast).to_owned(),
             text_size: TEXT_SIZES.name(env.text_size).to_owned(),
             density: DENSITIES.name(env.density).to_owned(),
+            set: SETS.name(env.component_set()).to_owned(),
             motion: MOTIONS.name(env.motion).to_owned(),
             scale: SCALES.name(env.scale).to_owned(),
             direction: DIRECTIONS.name(env.direction).to_owned(),
             workspace: workspace_name(viewer.workspace).to_owned(),
             preview: preview_name(viewer.preview).to_owned(),
-            level: browser.level.clone(),
+            level: (*browser.level).clone(),
             stories: browser.story_of.iter().map(|(component, story)| ((*component).to_owned(), (*story).to_owned())).collect(),
-            filter: browser.filter.clone(),
+            filter: (*browser.filter).clone(),
             selected: viewer.selected_type().unwrap_or_default().to_owned(),
             open_levels: viewer.open_levels(),
-            dock: layout::save(&browser.dock),
+            dock: layout::save(&viewer.dock),
             theme_dock: layout::save(&viewer.theme_dock),
         }
     }
@@ -91,6 +94,7 @@ impl GallerySettings {
         env.contrast = CONTRASTS.parse(&self.contrast).unwrap_or(default.contrast);
         env.text_size = TEXT_SIZES.parse(&self.text_size).unwrap_or(default.text_size);
         env.density = DENSITIES.parse(&self.density).unwrap_or(default.density);
+        env.values.set(SETS.parse(&self.set).unwrap_or(default.component_set()));
         env.motion = MOTIONS.parse(&self.motion).unwrap_or(default.motion);
         env.scale = SCALES.parse(&self.scale).unwrap_or(default.scale);
         env.direction = DIRECTIONS.parse(&self.direction).unwrap_or(default.direction);

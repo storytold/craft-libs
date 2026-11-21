@@ -152,7 +152,7 @@ name = "RulerTick"
 old = "craft_ui::canvas::rulers::RulerTick"
 new = "craft_ui::canvas::RulerTick"
 status = "moved"
-note = "`RulerTick { value, rank: primitives::TickRank, step }`: the label text is written at paint time from `RulerText::tick_label`, and the rank is Major at a labelled step, Mid halfway between labels in an even subdivision, Minor otherwise (`primitives::ticks` draws the length by rank; the mid length is the token `size.ruler.tick.mid`)."
+note = "`RulerTick { value, rank: primitives::TickRank, step }`: the label text is written at paint time from `RulerText::tick_label`, and the rank is Major at a labelled step, Mid halfway between labels in an even subdivision, Minor otherwise (`primitives::ticks` draws the length by rank; the minor and mid lengths are the constants `TICK_MINOR` and `TICK_MID` in `primitives/kit.rs`)."
 
 [[type]]
 name = "TickRule"

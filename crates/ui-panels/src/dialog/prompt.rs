@@ -14,8 +14,8 @@ use craft_keymap::{Chord, mnemonic};
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// One answer of a prompt before its button exists: the label, what the button means, whether it has a letter and
 /// whether it is available.

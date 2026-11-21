@@ -22,6 +22,10 @@ pub(crate) fn save_placement(ctx: &Context, key: &str, placement: &Placement) {
 
 /// Keeps the window's placement in the store, as [`placement_of`] records it.
 pub(super) fn record_placement(ctx: &Context, viewport: ViewportId, key: &str, facts: &viewports::Facts) {
+    // Some systems report a parked rectangle for a minimized window.
+    if facts.minimized {
+        return;
+    }
     let Some(inner) = facts.inner else { return };
     let geometry = Geometry { inner, outer: facts.outer, scale: facts.native_scale, maximized: facts.maximized, fullscreen: facts.fullscreen };
     let unchanged = PerViewport::<Record>::with(ctx, viewport, |record| record.placed.replace(geometry) == Some(geometry));

@@ -84,8 +84,9 @@ impl<'a> Body<'a> {
     }
 
     /// The compare block, the colour being edited over the one the picker started from, with the warnings column after
-    /// it; a click on the current half or on a warning sets that colour.
-    fn compare_block(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
+    /// it; a click on the current half or on a warning sets that colour. The Compact layout shows it beside its area
+    /// when the host gives a compare colour.
+    pub(super) fn compare_block(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
         let current = match pass.compare {
             Mixed::Same(current) => Mixed::Same(current.color),
             Mixed::Mixed => Mixed::Mixed,

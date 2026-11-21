@@ -21,7 +21,7 @@ use std::num::NonZeroU8;
 type TrailingFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 
 /// What a bar is for; it picks the bar's role, spacing and name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum BarKind {
     /// A strip of tools or commands.
@@ -89,6 +89,10 @@ impl Outcome for BarOutput {
 /// `Divider::vertical()`; it shows only with the member after it. A bar with `commit_cancel` ends with a
 /// cancel and a commit button in its end region, outside the scroll, `space.gap.stack` from the body and on the
 /// members' line; they run `BarCommands`.
+///
+/// The bar is a plain container; its members are the host's. A host memoizes them with a `MemoView` inside the body
+/// closure, over props that hold what the members read (`BarItem`, `StatusMessage`, `StatusProgress` and the other
+/// member types derive `MemoProps`), and sends the members' events through an `Outbox`.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {
@@ -150,6 +154,14 @@ impl<'a> Bar<'a> {
     #[must_use]
     pub fn tab_stops(mut self) -> Self {
         self.props.roving = None;
+        self
+    }
+
+    /// Paints `kind` behind the bar instead of the chrome: a bar that floats on its own, as a canvas's task bar does,
+    /// is a floating surface with its corners and shadow.
+    #[must_use]
+    pub fn surface(mut self, kind: SurfaceKind) -> Self {
+        self.props = self.props.surface(kind);
         self
     }
 

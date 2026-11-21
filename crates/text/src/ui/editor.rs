@@ -23,8 +23,8 @@
 
 mod commands;
 mod edits;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::ops::Range;
 

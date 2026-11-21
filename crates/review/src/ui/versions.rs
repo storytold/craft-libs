@@ -29,8 +29,8 @@ use crate::versions::{Branch, BranchId, BranchState, HistoryRow, Version, Versio
 /// The most lines of a version's description a row shows.
 const DESCRIPTION_LINES: u8 = 3;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The panel's words, English by default.

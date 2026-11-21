@@ -5,10 +5,10 @@
 //! button opens the calendar; the day under the pointer is proposed while it is open and a pick commits it. Escape
 //! or a press outside closes it and restores the value.
 
-mod calendar;
+pub(crate) mod calendar;
 mod codec;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use calendar::{Calendar, CalendarOutput, CalendarStyle, CalendarView, local_month_grid, month_grid};
 pub use codec::DateCodec;

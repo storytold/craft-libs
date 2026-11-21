@@ -2,14 +2,13 @@
 //! `WindowHost::caption_regions`.
 
 use craft_behavior::{PartKey, Sense};
-use craft_ui::contract::{Common, Component, Cx, Lazy, MeasureCx, PartsCx, Props as _, Role, Show as _};
+use craft_ui::contract::{Common, Component, Cx, MeasureCx, MemoView, PartsCx, Props as _, Role, Show as _};
 use craft_ui::runtime::windows::{ResizeEdge, WindowHit, WindowHost};
 use craft_ui::shell::Caption;
-use craft_ui::testing::trial;
+use craft_ui::testing::{MemoRun, last_pass_memo_runs, trial};
 use craft_ui_test_kit::contract::PlainStyle;
 use craft_ui_test_kit::windows::Windows;
 use egui::{Rect, Response, Vec2, ViewportId, pos2, vec2};
-use std::cell::Cell;
 
 const MOVE: PartKey = PartKey::new("move");
 const CLOSE: PartKey = PartKey::new("close");
@@ -85,30 +84,29 @@ fn exclusive_parts_are_the_caption_record() {
     assert_eq!(host.caption_regions(ViewportId::ROOT), None, "a bar that stops registering leaves no record");
 }
 
-/// A title bar that settles (`Lazy::settles`) keeps its caption record while it replays its last run, so the
-/// Windows hit test still finds its drag area and buttons.
+/// A title bar shown as a memoized view keeps its caption record while it replays its last run, so the Windows hit test
+/// still finds its drag area and buttons.
 #[trial]
-fn a_settled_bar_keeps_its_caption_record() {
+fn a_replayed_bar_keeps_its_caption_record() {
     let windows = Windows::new();
     let host = WindowHost::of(&windows.ctx);
-    let ran = Cell::new(false);
     let frame = || {
-        ran.set(false);
         windows.frame(vec![], vec![], |ui| {
-            Lazy::new("bar", 0.0).settles(true).content(1).show(ui, |ui| {
-                ran.set(true);
-                Bar { common: Common::new() }.id_salt("bar").show(ui);
-            });
+            let _ = MemoView::new("bar", (), title_bar).show(ui);
         });
-        ran.get()
+        last_pass_memo_runs(&windows.ctx).iter().any(|(_, _, run)| *run == MemoRun::Ran)
     };
     assert!(frame(), "the bar runs in its first frame");
     for _ in 0..3 {
         frame();
     }
-    assert!(!frame(), "the bar settles");
-    let regions = host.caption_regions(ViewportId::ROOT).expect("the settled bar keeps its parts");
+    assert!(!frame(), "the bar replays");
+    let regions = host.caption_regions(ViewportId::ROOT).expect("the replayed bar keeps its parts");
     assert_eq!(regions.buttons.len() + regions.edges.len() + regions.moves.len(), 3, "every part stays: {regions:?}");
+}
+
+fn title_bar(_: &mut (), ui: &mut egui::Ui) {
+    Bar { common: Common::new() }.id_salt("bar").show(ui);
 }
 
 /// The maximize button under a window procedure that owns the pointer there (Windows 11 snap layouts answer the hit

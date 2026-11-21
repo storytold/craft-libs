@@ -5,7 +5,7 @@ use craft_behavior::geometry::{
 };
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Axis, CancelReason, CanvasView, EditEvent};
-use craft_ui::canvas::{Canvas, CanvasTool, CropOverlay, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass};
+use craft_ui::canvas::{Canvas, CanvasTool, CropOverlay, CropScope, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
@@ -41,6 +41,8 @@ struct Setup {
     guide: Option<(CropGuide, u8)>,
     guide_show: GuideShow,
     view: CanvasView,
+    /// The overlay crops one placed picture with this source.
+    object: Option<Rect>,
 }
 
 impl Setup {
@@ -59,6 +61,7 @@ impl Setup {
             guide: None,
             guide_show: GuideShow::Auto,
             view: CanvasView::new(egui::Rect::ZERO, Point::new(200.0, 150.0), 1.0),
+            object: None,
         }
     }
 
@@ -156,6 +159,9 @@ impl Rig {
                 if s.hidden {
                     overlay = overlay.hidden();
                 }
+                if let Some(source) = s.object {
+                    overlay = overlay.scope(CropScope::object(source));
+                }
                 let out = overlay.show_at(ui, body.rect);
                 // A measuring run of the canvas body (a sizing ui) senses nothing: only the real run of a pass reports.
                 if ui.is_sizing_pass() {
@@ -224,6 +230,22 @@ impl Rig {
         let room = egui::Rect::from_min_size(Pos2::ZERO, ROOM);
         let show = &mut self.show;
         Look::of(&self.frames.frame_shapes(|ui| layout::in_region(ui, room, |ui| show(ui))))
+    }
+
+    /// The screen rect the translucent shield meshes of one frame cover together; `None` when there are none.
+    fn shield_extent(&mut self) -> Option<egui::Rect> {
+        let room = egui::Rect::from_min_size(Pos2::ZERO, ROOM);
+        let show = &mut self.show;
+        let shapes = self.frames.frame_shapes(|ui| layout::in_region(ui, room, |ui| show(ui)));
+        let points: Vec<Pos2> = shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| (1..255).contains(&v.color.a())) => Some(mesh),
+                _ => None,
+            })
+            .flat_map(|mesh| mesh.vertices.iter().map(|v| v.pos))
+            .collect();
+        (!points.is_empty()).then(|| egui::Rect::from_points(&points))
     }
 
     fn view(&self) -> CanvasView {
@@ -779,4 +801,43 @@ fn a_shift_corner_follows_the_diagonal_and_snaps_along_it() {
     drag(&mut rig, corner, by);
     assert!(near(&rig.crop(), &want), "as with no guide: {:?} vs {want:?}", rig.crop());
     assert!(rig.seen.borrow().snapped.is_empty(), "no snap line reported");
+}
+
+#[trial]
+fn an_object_crop_is_bounded_by_its_source_and_a_press_outside_it_reaches_what_lies_beneath() {
+    let source = Rect::new(50.0, 50.0, 350.0, 250.0);
+    let mut setup = Setup::new();
+    setup.object = Some(source);
+    let mut rig = Rig::new(CropBox::upright(RECT), setup);
+    // The shield dims the source minus the frame: its extent is the source on screen, not the canvas.
+    let (low, high) = (rig.at(source.x0, source.y0), rig.at(source.x1, source.y1));
+    let shield = rig.shield_extent().expect("a started crop shows a shield");
+    for (got, want) in [(shield.min.x, low.x), (shield.min.y, low.y), (shield.max.x, high.x), (shield.max.y, high.y)] {
+        assert!((got - want).abs() < 1.0, "the shield stops at the source: {shield:?} against {low:?} {high:?}");
+    }
+    // A corner dragged past the source stops at it.
+    let corner = rig.at(RECT.x1, RECT.y1);
+    let past = rig.at(390.0, 290.0);
+    rig.drag(corner, past, Modifiers::NONE);
+    let r = rig.rect();
+    assert!(r.x1 <= source.x1 + 1e-6 && r.y1 <= source.y1 + 1e-6, "the frame stays inside its source: {r:?}");
+    assert!(r.x1 > RECT.x1 && r.y1 > RECT.y1, "and the corner still grew toward it: {r:?}");
+    // A press outside the source is not taken: no turn part under it, and a drag from there changes nothing.
+    let (before, events) = (rig.crop(), rig.events());
+    let outside = rig.at(20.0, 20.0);
+    rig.move_to(outside);
+    assert_eq!(rig.seen.borrow().hovered, None, "nothing outside the source is hovered");
+    rig.drag(outside, rig.at(60.0, 60.0), Modifiers::NONE);
+    assert_eq!(rig.crop(), before, "a drag from outside the source leaves the frame");
+    assert_eq!(rig.events(), events, "and sends no edit");
+    // A click inside is taken but does not move the frame.
+    let middle = rig.at(before.rect.center().x, before.rect.center().y);
+    rig.click(middle);
+    assert_eq!(rig.crop(), before, "a click inside leaves the frame");
+    assert_eq!(rig.events(), events, "and sends no edit");
+    // Enter applies and Escape discards.
+    rig.frame(vec![input::key_press(egui::Key::Enter, Modifiers::NONE)]);
+    assert!(rig.seen.borrow().applied, "Enter applies");
+    rig.frame(vec![input::key_press(egui::Key::Escape, Modifiers::NONE)]);
+    assert!(rig.seen.borrow().discarded, "Escape discards");
 }

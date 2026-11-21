@@ -2,7 +2,7 @@
 
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::testing::{Drive, Fixture, Grip, StoryData, StoryOutput, pointer, story};
 use egui::{Ui, vec2};
 
@@ -38,26 +38,26 @@ fn hover_middle(fixture: &mut Fixture) {
 
 #[story(WarpGrid<'static>, covers = [Default])]
 fn one_patch_with_thirds(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mesh = data.value("mesh", WarpMesh::identity(picture(), 1, 1));
-    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", Bind::bound(mesh), picture()).show_at(ui, rect))
+    let (mesh, mesh_at) = data.value_at("mesh", WarpMesh::identity(picture(), 1, 1));
+    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", mesh_at.bind(mesh), picture()).show_at(ui, rect))
 }
 
 #[story(WarpGrid<'static>, covers = [Default], drive = Drive::Drag(Grip::part(POINT.at(0)).toward(vec2(24.0, 16.0))))]
 fn three_by_three_after_a_drag(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mesh = data.value("mesh", WarpMesh::identity(picture(), 3, 3));
-    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", Bind::bound(mesh), picture()).show_at(ui, rect))
+    let (mesh, mesh_at) = data.value_at("mesh", WarpMesh::identity(picture(), 3, 3));
+    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", mesh_at.bind(mesh), picture()).show_at(ui, rect))
 }
 
 #[story(WarpGrid<'static>, covers = [Default], drive = Drive::Custom(hover_middle))]
 fn cross_split_over_a_patch(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mesh = data.value("mesh", WarpMesh::identity(picture(), 3, 3));
-    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", Bind::bound(mesh), picture()).split(WarpSplit::Cross).show_at(ui, rect))
+    let (mesh, mesh_at) = data.value_at("mesh", WarpMesh::identity(picture(), 3, 3));
+    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", mesh_at.bind(mesh), picture()).split(WarpSplit::Cross).show_at(ui, rect))
 }
 
 #[story(WarpGrid<'static>, covers = [Default])]
 fn lines_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mesh = data.value("mesh", WarpMesh::identity(picture(), 3, 3));
-    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", Bind::bound(mesh), picture()).lines_only().show_at(ui, rect))
+    let (mesh, mesh_at) = data.value_at("mesh", WarpMesh::identity(picture(), 3, 3));
+    on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", mesh_at.bind(mesh), picture()).lines_only().show_at(ui, rect))
 }
 
 /// The app's style list: None, four presets, Custom and Cylinder.

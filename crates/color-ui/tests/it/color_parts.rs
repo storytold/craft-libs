@@ -41,8 +41,8 @@ fn the_wheel_geometry_round_trips() {
 }
 
 fn web_safe_area(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.4, 0.6, 0.8)));
-    ColorArea::new("Saturation and brightness", AreaMode::Hue, Bind::bound(values)).quantize(6).show(ui).into()
+    let (values, values_at) = data.value_at("values", HsbModel.from_srgb(Srgba::rgb(0.4, 0.6, 0.8)));
+    ColorArea::new("Saturation and brightness", AreaMode::Hue, values_at.bind(values)).quantize(6).show(ui).into()
 }
 
 /// A key on a quantising area steps by the channel's step and goes on until the colour is a different one, so each

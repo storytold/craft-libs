@@ -490,7 +490,7 @@ mod aco;
 mod ase;
 mod reader;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod text;
 
 use aco::{AcoColor, act_used, from_aco, parse_aco, to_aco, write_aco};

@@ -1,14 +1,14 @@
 //! The item step: scrolling, the lead and selection, rename, the empty state, trees and large sources, over
 //! collections written on the contract only.
 
-mod drag;
-mod drops;
-mod keys;
+pub(crate) mod drag;
+pub(crate) mod drops;
+pub(crate) mod keys;
 pub(crate) mod kit;
-mod list;
-mod reorder_groups;
-mod review;
-mod rows;
-mod sweep_apply;
+pub(crate) mod list;
+pub(crate) mod reorder_groups;
+pub(crate) mod review;
+pub(crate) mod rows;
+pub(crate) mod sweep_apply;
 pub(crate) mod table;
-mod table_trials;
+pub(crate) mod table_trials;

@@ -7,15 +7,15 @@
 //! on an object, the handles (a canvas control) take a press on the selected connector's ends and
 //! bends before the tool sees it.
 
-mod bar;
-mod handles;
+pub(crate) mod bar;
+pub(crate) mod handles;
 mod overlay;
 mod place;
 mod tool;
 mod words;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::EditEvent;
 use kurbo::{Point, Rect};

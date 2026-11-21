@@ -127,7 +127,8 @@ impl TimeAxis {
 }
 
 /// The env value that carries the axis of the innermost [`TimelineView`]; `None` outside one.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
+#[memo_props(every_pass = "the axis the timeline rebuilds each pass from its view")]
 struct InTimeline(Option<TimeAxis>);
 
 impl EnvValue for InTimeline {
@@ -632,5 +633,5 @@ impl Outcome for TimelineViewOutput {
     }
 }
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;

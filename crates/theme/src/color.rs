@@ -226,7 +226,7 @@ impl From<Rgba> for Oklch {
 
 /// An encoded sRGB colour with float channels in 0..=1 and straight alpha: the value a colour
 /// picker edits. Eight bits lose the precision that HSB and OKLCH edits need.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize, craft_ui_macros::PlainData)]
 pub struct Srgba {
     /// Red, encoded.
     pub r: f32,
