@@ -312,8 +312,6 @@ pub struct ParagraphDialog {
     tab: ParagraphTab,
     /// Whether OK files its answer for the app to judge instead of closing.
     hold: bool,
-    /// Whether the dialog shows in an OS window of its own (`Dialog::viewport`).
-    own_window: bool,
     held: HeldAnswer<ParagraphAnswer>,
 }
 
@@ -327,7 +325,6 @@ impl ParagraphDialog {
             word: false,
             tab: ParagraphTab::default(),
             hold: false,
-            own_window: false,
             held: HeldAnswer::new(),
         }
     }
@@ -859,14 +856,6 @@ impl ParagraphDialog {
         self
     }
 
-    /// Shows the dialog in an OS window of its own, sized to the page shown, where the platform has windows
-    /// (`Dialog::viewport`); elsewhere it stays a dialog over the window.
-    #[must_use]
-    pub fn own_window(mut self, on: bool) -> Self {
-        self.own_window = on;
-        self
-    }
-
     /// The answer OK filed, once, for the app to judge.
     pub fn take_ok(&mut self) -> Option<ParagraphAnswer> {
         self.held.take()
@@ -914,9 +903,7 @@ impl StackDialog for ParagraphDialog {
             FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
             FooterButton::new(words.tabs.clone(), DialogRole::Other).stays_open(self.hold),
         ];
-        let dialog = Dialog::new(words.title.clone());
-        let dialog = if self.own_window { dialog.viewport() } else { dialog };
-        let shown = dialog
+        let shown = Dialog::new(words.title.clone())
             .button_place(ButtonPlace::Side)
             .buttons(buttons)
             .settle_buttons(|_, buttons| {
