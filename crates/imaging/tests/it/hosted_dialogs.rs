@@ -5,8 +5,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_imaging::layer_style::{EffectId, EffectInstance, EffectKind, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams};
-use craft_imaging::ui::adjust::{BrightnessContrast, BrightnessContrastEditor, HostedAdjustDialog};
+use craft_imaging::ui::adjust::{BrightnessContrast, BrightnessContrastEditor, CurvesPanel, HostedAdjustDialog, ToneChannels, ToneCurves, ToneSpace};
+use craft_imaging::ui::curve::Curve;
 use craft_imaging::ui::layer_style::{HostedLayerStyle, LayerStyleAsk};
+use craft_ui::contract::Role;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog, dialog_id};
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
@@ -225,4 +227,52 @@ fn a_held_adjustment_ok_refused_stays_open_and_an_accepted_one_closes() {
     fixture.idle(4);
     let answered = host.borrow_mut().take_keyed::<Adjust>().and_then(|(result, _)| result.ok()).map(|value| value.brightness);
     assert_eq!(answered, Some(5.0), "the accepted OK closes the dialog with the held value");
+}
+
+/// The Curves value of the dialog trial: three points on the composite curve.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Curves(ToneCurves);
+
+impl Default for Curves {
+    fn default() -> Self {
+        let mut curves = ToneCurves::identity(&ToneChannels::of(ToneSpace::Rgb, false));
+        curves.curves[0] = Curve::smooth(vec![[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]]);
+        Curves(curves)
+    }
+}
+
+type CurvesDialog = HostedAdjustDialog<Curves, &'static str>;
+
+// The dialog sizes its content column from what the editor takes, and the graph is a square picture that shows across
+// that column: everything under it (its tone bar, the selected point's Input and Output, the hint) lies inside the
+// dialog, not pushed past its edge.
+#[trial]
+fn the_curves_dialog_shows_the_tone_bar_the_point_fields_and_the_hint() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(CurvesDialog::new("image.adjustments.curves", "Curves", Curves::default(), |ui, value, cx| {
+        let mut panel =
+            CurvesPanel::new("Curves", craft_ui::contract::Bind::bound(&mut value.0), ToneChannels::of(ToneSpace::Rgb, false)).context(cx.context);
+        if let Some(point) = cx.select_point {
+            panel = panel.select(point);
+        }
+        let _ = panel.show(ui);
+        None
+    }));
+    fixture.idle(10);
+    if let Some(dialog) = host.borrow_mut().get_mut::<CurvesDialog>() {
+        dialog.select_point(1);
+    }
+    fixture.settle();
+    let dialog = fixture.by_role(Role::DIALOG).first().map(|dialog| dialog.rect).expect("the Curves dialog shows");
+    let point = fixture.by_label("Point 2 of 3").expect("the middle point");
+    let tree = fixture.tree();
+    let graph = tree.parent_of_key(point.node).and_then(|graph| tree.bounds_of(graph)).expect("the graph holds its points");
+    let input = fixture.by_label("Input").expect("the Input field").rect;
+    let output = fixture.by_label("Output").expect("the Output field").rect;
+    let hint = fixture.texts().iter().find(|text| text.text.starts_with("Click to add a point")).expect("the hint is painted").rect;
+    for (part, rect) in [("the graph and its tone bar", graph), ("Input", input), ("Output", output), ("the hint", hint)] {
+        assert!(dialog.contains_rect(rect), "{part} {rect:?} lies inside the dialog {dialog:?}");
+    }
+    assert!(input.top() >= graph.bottom() && hint.top() >= input.bottom(), "graph, fields, hint top to bottom: {graph:?} {input:?} {hint:?}");
 }

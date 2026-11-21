@@ -237,6 +237,108 @@ fn a_held_fill_width_child_measures_again_only_when_a_sibling_widens_the_column(
     assert!(unbounded >= 1 && bounded == 0, "the narrower sibling: the held child measured again: {unbounded} and {bounded}");
 }
 
+/// A square picture: as wide as `picture_width` gives it from `least` up to `MOST_PICTURE`, as tall as wide.
+#[derive(Component)]
+struct Square<'a> {
+    #[common]
+    common: Common,
+    least: f32,
+    seen: &'a RefCell<Seen>,
+    measures: &'a Measures,
+}
+
+/// The widest a `Square` takes.
+const MOST_PICTURE: f32 = 1000.0;
+
+impl Component for Square<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: SquareStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if cx.proposal == Proposal::Ideal && is_measuring(cx.ui.ctx()) {
+            let count = if cx.room.is_some() { &self.measures.bounded } else { &self.measures.unbounded };
+            count.set(count.get() + 1);
+        }
+        Vec2::splat(cx.picture_width(self.least, MOST_PICTURE))
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        self.seen.borrow_mut().rect = cx.rect;
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// What a content-sized column shows with a square picture of least width `least` (none when `None`), a `Wrap` and a
+/// probe under them `sibling` wide: the column's rect, the picture's and the probe's, the picture's ideal measures in
+/// measuring runs without a room and in one, and the wrap's.
+struct PictureColumn {
+    rects: [Rect; 3],
+    picture: (usize, usize),
+    wrap: (usize, usize),
+}
+
+fn picture_in_column(least: Option<f32>, sibling: f32) -> PictureColumn {
+    let (square, under, wrap) =
+        (Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())));
+    let (pictures, wraps, column) = (Rc::new(Measures::default()), Rc::new(Measures::default()), Rc::new(Cell::new(Rect::NOTHING)));
+    let (shown_square, shown_under, shown_wrap) = (Rc::clone(&square), Rc::clone(&under), Rc::clone(&wrap));
+    let (counted_pictures, counted_wraps, shown_column) = (Rc::clone(&pictures), Rc::clone(&wraps), Rc::clone(&column));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = Panel::new().id_salt("column").show(ui, |ui, _| {
+            if let Some(least) = least {
+                Square { common: Common::new(), least, seen: &shown_square, measures: &counted_pictures }.id_salt("picture").show(ui);
+            }
+            Wrap::new(&shown_wrap, &counted_wraps).id_salt("wrap").show(ui);
+            Probe::new(&shown_under).size(Vec2::new(sibling, LINE)).id_salt("under").show(ui);
+        });
+        shown_column.set(shown.output.rect);
+    });
+    fixture.room(Vec2::splat(800.0)).settle();
+    let rects = [column.get(), square.borrow().rect, under.borrow().rect];
+    PictureColumn { rects, picture: (pictures.unbounded.get(), pictures.bounded.get()), wrap: (wraps.unbounded.get(), wraps.bounded.get()) }
+}
+
+// A square picture in a content-sized column takes no width of its own there; the column settles on its siblings'
+// width and the picture shows across it, as tall as wide, with what follows it laid out below the shown square.
+#[trial]
+fn a_square_picture_in_a_content_column_pushes_what_follows_below_its_shown_size() {
+    let PictureColumn { rects: [column, picture, under], .. } = picture_in_column(Some(60.0), 300.0);
+    let dump = format!("column {column:?}, picture {picture:?}, under {under:?}");
+    assert!(picture.width() > 60.0 + SLACK, "the picture shows wider than its least, across the column: {dump}");
+    assert!((picture.width() - picture.height()).abs() < SLACK, "a square picture is as tall as it shows wide: {dump}");
+    assert!(under.top() >= picture.bottom() - SLACK, "what follows lies below the shown picture: {dump}");
+    assert!(column.bottom() >= under.bottom() - SLACK, "the column holds everything it shows: {dump}");
+}
+
+// Count trial: a column whose picture took its least sweeps again once at its settled width; a column without a
+// picture, or whose picture is its widest child, sweeps once.
+#[trial]
+fn a_content_column_sweeps_again_only_for_a_picture_narrower_than_it() {
+    let none = picture_in_column(None, 300.0);
+    let wide = picture_in_column(Some(400.0), 300.0);
+    let narrow = picture_in_column(Some(60.0), 300.0);
+    assert!(none.wrap.0 >= 1 && none.wrap.1 == 0, "no picture: the column sweeps its children: {:?}", none.wrap);
+    assert_eq!(wide.wrap, none.wrap, "a picture as wide as the column adds no sweep");
+    assert!(wide.picture.0 >= 1 && wide.picture.1 == 0, "the widest picture keeps its first measure: {:?}", wide.picture);
+    let (unbounded, bounded) = narrow.picture;
+    assert!(
+        bounded >= 1 && bounded == unbounded,
+        "a narrower picture measures once more per measuring run, at the column: {unbounded} and {bounded}"
+    );
+}
+
 #[trial]
 fn a_space_between_child_leaves_room_for_the_siblings_after_it() {
     let (first, last) = (Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())));

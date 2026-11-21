@@ -820,7 +820,7 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
         let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y), line });
         // The column's first sweep learns which of its held children measured narrower than it settles on.
         if let Some(ColumnSweep::Count(column)) = env.column {
-            crate::layout::report_held(&ctx, column, flowed.width());
+            crate::layout::report_held(&ctx, column, id, crate::layout::HeldKind::Fill, flowed.width());
         }
         let across = Vec2::new(size.x.max(flowed.width()).max(column), flowed.height());
         if rtl { Rect::from_min_size(Pos2::new(flowed.max.x - across.x, flowed.min.y), across) } else { Rect::from_min_size(flowed.min, across) }
@@ -1570,9 +1570,14 @@ fn room_step(t: &mut dyn Erased, ui: &Ui, at: ShowAt, begun: &Begun) -> Room {
     let room = match at {
         ShowAt::Rect(rect) => Some(rect.width()),
         // A measuring run in a content column asks for what the content needs: nothing there fills the room. Once the
-        // column settled its width, a child that fills its width measures at that width.
+        // column settled its width, a child that fills its width, or a picture its first sweep held, measures at
+        // that width.
         ShowAt::Flow => match env.column {
-            Some(ColumnSweep::Column(width)) if env.content_column && t.fills_width() => Some(width),
+            Some(ColumnSweep::Column(column, width))
+                if env.content_column && (t.fills_width() || crate::layout::held_kind(ctx, column, id) == Some(crate::layout::HeldKind::Picture)) =>
+            {
+                Some(width)
+            }
             _ => Some(crate::layout::flow_room(ui).x)
                 .filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(ctx))),
         },

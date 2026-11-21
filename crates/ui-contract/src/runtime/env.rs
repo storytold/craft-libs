@@ -284,9 +284,9 @@ pub(crate) enum ColumnSweep {
     /// The first sweep of the measuring run of the column `Id`: each held fill-width child reports the width it
     /// measured at (`layout::report_held`).
     Count(Id),
-    /// The width the column settled on, in its second sweep and in the real run after one: a held fill-width child
-    /// measures and shows across it.
-    Column(f32),
+    /// The width the content-sized `Stack` column `Id` settled on, in its second sweep and in the real run after one:
+    /// a held fill-width child measures and shows across it, and a held picture measures in it.
+    Column(Id, f32),
 }
 
 /// The line of an unwrapped `Row` body, as its direct children placed in flow see it: a child of one line sits with

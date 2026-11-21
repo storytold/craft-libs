@@ -81,12 +81,21 @@ impl<C: Component> MeasureCx<'_, C> {
     /// The width a picture sizes at (a plot, a wheel, a well): it takes the room it is offered, down to `least` and up
     /// to `most`. At its least, where the width is unbounded, and in a measuring run of a column that sizes its width
     /// from its content (which offers no room), it is `least`: a picture needs no width of its own, so it never sets
-    /// that column's width, and the real run shows it across the width the column settles on. A band picture keeps a
-    /// height of its own; a square one is as tall as this.
+    /// that column's width. There it is a held child of the column (`layout::HeldKind::Picture`): when the column
+    /// settles wider, its second sweep offers the picture that width, so the picture measures at the width it shows.
+    /// A band picture keeps a height of its own; a square one is as tall as this.
     pub fn picture_width(&self, least: f32, most: f32) -> f32 {
-        match self.room.filter(|_| self.proposal != Proposal::Min) {
+        if self.proposal == Proposal::Min {
+            return least;
+        }
+        match self.room {
             Some(room) => room.clamp(least, most.max(least)),
-            None => least,
+            None => {
+                if let Some(column) = self.env.column_first_sweep() {
+                    crate::layout::report_held(self.ui.ctx(), column, self.id, crate::layout::HeldKind::Picture, least);
+                }
+                least
+            }
         }
     }
 

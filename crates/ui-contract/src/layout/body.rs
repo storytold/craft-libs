@@ -137,19 +137,37 @@ pub(crate) struct Cursors(IdMap<Cursor>);
 #[derive(Default)]
 pub(crate) struct FillCounts(IdMap<u32>);
 
-/// The narrowest width a held fill-width child of each content-sized `Stack` column measured at in the first sweep of
-/// the column's measuring run (`report_held`), by column id.
-#[derive(Default)]
-pub(crate) struct HeldWidths(IdMap<f32>);
+/// What makes a child of a content-sized `Stack` column a held child: it measures at its own width while the column
+/// settles its width from the others, and the column's second sweep gives it the settled width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeldKind {
+    /// A fill-width child: it shows across the width the column settles on.
+    Fill,
+    /// A picture that took its least for want of room (`MeasureCx::picture_width`): it shows at the width it sizes
+    /// at in the column's width, which may be narrower than the column.
+    Picture,
+}
 
-/// Reports a held fill-width child of the content-sized column `column` in its first sweep: the `width` it measured
-/// at. A column with no first sweep open takes no report.
-pub(crate) fn report_held(ctx: &egui::Context, column: Id, width: f32) {
+/// The held children of each content-sized `Stack` column in its measuring run, by column id: each child's kind and
+/// the narrowest width it measured at in the column's first sweep, by child id.
+#[derive(Default)]
+pub(crate) struct HeldWidths(IdMap<IdMap<(HeldKind, f32)>>);
+
+/// Reports a held child `child` of the content-sized column `column` in its first sweep: its kind and the `width` it
+/// measured at. A column with no first sweep open takes no report.
+pub(crate) fn report_held(ctx: &egui::Context, column: Id, child: Id, kind: HeldKind, width: f32) {
     pass_state::with::<HeldWidths, _>(ctx, |held| {
-        if let Some(narrowest) = held.0.get_mut(&column) {
-            *narrowest = narrowest.min(width);
+        if let Some(children) = held.0.get_mut(&column) {
+            let entry = children.entry(child).or_insert((kind, width));
+            entry.1 = entry.1.min(width);
         }
     });
+}
+
+/// The kind of the held child `child` of the column `column`, as its first sweep reported it, while the column's
+/// second sweep runs.
+pub(crate) fn held_kind(ctx: &egui::Context, column: Id, child: Id) -> Option<HeldKind> {
+    pass_state::with::<HeldWidths, _>(ctx, |held| held.0.get(&column).and_then(|children| children.get(&child)).map(|(kind, _)| *kind))
 }
 
 /// What the first child a measuring sweep placed in flow in each open target reported (`Scoped::first_line`): the y
@@ -908,13 +926,14 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
 /// is bounded: each sweep is `run_sharing`'s, with the column's sweep (`ColumnSweep`) in its children's env. It adds no
 /// `Ui` of its own, so the children have the ids `run_sharing` gives them when the column's width is not bounded.
 ///
-/// A held fill-width child measures at its own width while the column settles its width from the others, so it may
-/// measure narrower than it shows. A measuring run sweeps the children once, each held child reporting the width it
-/// measured at (`report_held`). When one of them measured narrower than the column settled on, it sweeps them again
-/// with that width, at which the held children measure across the column and the others reuse their records; else the
-/// first sweep stands, and each held child keeps the record it made at its own width, which is the column's. It
-/// records which (`sub(id, "column")`): the real run gives the held children the width the column shows at only after
-/// a second sweep, so each shows as its records were made.
+/// A held child (`HeldKind`: a fill-width child, or a picture that took its least for want of room) measures at its
+/// own width while the column settles its width from the others, so it may measure narrower than it shows. A
+/// measuring run sweeps the children once, each held child reporting the width it measured at (`report_held`). When
+/// one of them measured narrower than the column settled on, it sweeps them again with that width, at which the held
+/// children measure in the column's width and the others reuse their records; else the first sweep stands, and each
+/// held child keeps the record it made at its own width, which is the column's. It records which
+/// (`sub(id, "column")`): the real run gives the held children the width the column shows at only after a second
+/// sweep, so each shows as its records were made.
 // PLAN: the second sweep's need is decided once for the column, not per held container at body/hooks.rs's reuse
 // rule: a container that reused its content-sized record there would be laid out across in the real run under records
 // not made across.
@@ -931,29 +950,34 @@ fn run_column<R>(ui: &mut Ui, env: &Env, id: Id, layout: egui::Layout, mut body:
     };
     if !measure::active(&ctx) {
         let across = this_pass(&ctx, false, key).is_some_and(|took| took.x > 0.0);
-        let column = across.then(|| ColumnSweep::Column(flow_room(ui).x));
+        let column = across.then(|| ColumnSweep::Column(id, flow_room(ui).x));
         return sweep(ui, column, &mut body);
     }
     let (inner, rect, again) = crate::contract::keeping_ids(&ctx, || {
-        pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.insert(id, f32::INFINITY));
+        pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.insert(id, IdMap::default()));
         let env = column_env(Some(ColumnSweep::Count(id)));
         let installed = Env::install_for(ui, env.clone());
         let (inner, rect) = measure_sharing(ui, &env, id, Axis::Y, layout, &mut body);
         Env::restore(&ctx, installed);
-        let narrowest = pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.remove(&id));
+        let narrowest = pass_state::with::<HeldWidths, _>(&ctx, |held| {
+            held.0.get(&id).map_or(f32::INFINITY, |children| children.values().fold(f32::INFINITY, |least, (_, width)| least.min(*width)))
+        });
         // Half a point: less than a pixel shows at any scale the box runs.
-        let again = narrowest.is_some_and(|narrowest| narrowest < rect.width() - 0.5);
+        let again = narrowest < rect.width() - 0.5;
         ((inner, rect, again), again)
     });
     let column = rect.width();
     // 0 when the first sweep stands, so nothing an earlier run of the pass left is read.
     found(&ctx, true, key, Vec2::ZERO, Vec2::new(if again { column } else { 0.0 }, 0.0));
-    if again {
-        sweep(ui, Some(ColumnSweep::Column(column)), &mut body)
+    // The second sweep reads the held children's kinds (`held_kind`); the column's record closes after it.
+    let inner = if again {
+        sweep(ui, Some(ColumnSweep::Column(id, column)), &mut body)
     } else {
         ui.advance_cursor_after_rect(rect);
         inner
-    }
+    };
+    pass_state::with::<HeldWidths, _>(&ctx, |held| held.0.remove(&id));
+    inner
 }
 
 /// What places the children in flow of a body that places them itself.

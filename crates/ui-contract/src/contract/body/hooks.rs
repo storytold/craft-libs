@@ -295,7 +295,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.fixed_height = self.fixed_height(props, at);
         self.passes = self.passes_width(props, &env, at);
         self.held = self.held(props, &env);
-        self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(_)));
+        self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(..)));
         self.in_column = label::in_column(ui);
         self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
@@ -1827,9 +1827,9 @@ impl BodyHooks<'_> {
         self.fixed_height = self.fixed_height(&props, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
         self.held = self.held(&props, at.env);
-        self.across = self.held && matches!(at.env.column, Some(ColumnSweep::Column(_)));
+        self.across = self.held && matches!(at.env.column, Some(ColumnSweep::Column(..)));
         // A held container across its column measures at the column's width.
-        if let Some(ColumnSweep::Column(width)) = at.env.column.filter(|_| self.across && at.width.is_none()) {
+        if let Some(ColumnSweep::Column(_, width)) = at.env.column.filter(|_| self.across && at.width.is_none()) {
             self.room.x = width;
         }
         self.in_column = label::in_column(at.ui);
