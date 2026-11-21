@@ -53,9 +53,21 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
     // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
     // it from egui's input, so no egui text widget reads it in this pass (`withdraw_taken`).
+    if !batch.space_released && !batch.space_release_pending {
+        // A Space pressed in an earlier pass is still down: the pass that brings its release activates the stop then.
+        space_held::clear(ctx);
+    }
     let mut taken_texts = vec![false; batch.texts.len()];
     let mut withdrawn_texts: Vec<usize> = batch.texts.iter().enumerate().filter(|(_, typed)| typed.claimed).map(|(at, _)| at).collect();
     if let Some(rec) = &target {
+        // A held Space activates on its release, as a mouse release clicks, and it activates the stop that was
+        // pressed even when the focus has moved since: the held stop's member and root are what the release has.
+        if (batch.space_released || batch.space_release_pending)
+            && let Some(held) = space_held::held(ctx)
+        {
+            space_held::clear(ctx);
+            route_activate(ctx, &held.record(), &mut routed, &mut activated);
+        }
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             *taken = if stale_repeat(&mut stale, press) {
                 Taken::Yes
@@ -502,6 +514,8 @@ enum PressRoute {
     Move(NavMove, MoveMods),
     /// The stop's activation.
     Activate,
+    /// The press of Space on a stop that activates on it: the release is the activation.
+    Space,
     /// A close of the dropdown layer whose opener has the focus.
     Close(Id),
     /// An intent of the stop.
@@ -560,7 +574,11 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
         // app's.
         None if press.key == Key::Enter && stop.keys.activate.enter() && (plain || !commands::binds_scoped(ctx, &chord)) => PressRoute::Activate,
         None if press.key == Key::Enter && !press.mods.cmd && !press.mods.ctrl => PressRoute::Intent(Intent::Submit),
-        None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
+        // Space activates only a stop that asks for it (a button, a rail tool, a member of a roving group): the
+        // release activates, as a mouse release does, and the press alone does nothing. `apply_press` holds the
+        // button down for the frames between. Every other stop leaves Space to the app, where it is the canvas's Hand
+        // key.
+        None if press.key == Key::Space && plain && stop.keys.space_activates => PressRoute::Space,
         None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => PressRoute::Intent(Intent::Tab),
         // A document canvas's editor reads Shift+Tab itself (a word processor's outdent, the previous slot of an
         // equation). No other stop that keeps Tab gets it as an intent.
@@ -604,12 +622,66 @@ fn apply_press(
                 push(routed, id, Intent::Move(mv, mods), horizontal);
             }
         }
-        PressRoute::Activate => route_activate(ctx, rec, routed, activated),
+        PressRoute::Activate => {
+            space_held::clear(ctx);
+            route_activate(ctx, rec, routed, activated);
+        }
+        // The Space key activates: the input hook holds a tap's press until its release, so both reach this pass and
+        // the stop activates once, as a click does.
+        PressRoute::Space => {
+            space_held::clear(ctx);
+            route_activate(ctx, rec, routed, activated);
+        }
         PressRoute::Close(layer) => overlay::request_close(ctx, layer, overlay::CloseReason::Requested),
         PressRoute::Intent(intent) => push(routed, id, intent, false),
         PressRoute::Nudge(nudge) => routed.entry(id).or_default().nudge = Some(nudge),
     }
     Taken::Yes
+}
+
+/// The stop whose Space is down: the press takes nothing, and the pass that brings the release activates the stop,
+/// which is what a mouse release does. A button that pressed its widget down here would stay pressed forever when the
+/// key up came before that widget was drawn.
+mod space_held {
+    use crate::runtime::focus::{Stop, StopRec};
+    use egui::{Context, Id};
+
+    /// The stop a Space is down on. The runtime keeps it rather than that pass's record: the release may come with
+    /// another stop focused, and the activation belongs to the one that was pressed.
+    #[derive(Clone, Debug)]
+    pub(super) struct Held {
+        pub(super) id: Id,
+        pub(super) root: Id,
+        pub(super) group: Option<Id>,
+    }
+
+    /// The key of the hold in `ctx`'s temporary data: one per context, so two fixtures never share a hold.
+    fn key(ctx: &Context) -> Id {
+        egui::Id::unique(("craft_ui.keys.space_held", ctx.viewport_id()))
+    }
+
+    /// The stop whose Space was released this pass.
+    pub(super) fn held(ctx: &Context) -> Option<Held> {
+        ctx.memory(|memory| memory.data.get_temp::<Held>(key(ctx)))
+    }
+
+    /// The pass is over: the stop is no longer the one being activated.
+    pub(super) fn clear(ctx: &Context) {
+        if held(ctx).is_some() {
+            ctx.memory_mut(|memory| memory.data.remove::<Held>(key(ctx)));
+        }
+    }
+
+    impl Held {
+        /// The stop the release activates, as a record of its own: the release may come with nothing focused or with
+        /// another stop focused.
+        pub(super) fn record(&self) -> StopRec {
+            let mut stop = Stop::new(self.id, crate::runtime::focus::KeyUse::of(craft_behavior::Input::Pointer));
+            stop.root = self.root;
+            stop.group = self.group;
+            StopRec { stop, scope: None, group_position: false }
+        }
+    }
 }
 
 /// `Activate` of a group member goes to the group's root, which reads `activated_member`. A child or part of a

@@ -171,7 +171,7 @@ pub fn path_crumbs(path: &str) -> Vec<Entry<String>> {
 
 impl<K: Value + 'static> Component for BreadcrumbBar<'_, K> {
     const ROLE: Role = Role::NAVIGATION;
-    const KEYS: KeyUse = KeyUse::of(crate::contract::Input::Pointer).with_activate(ActivateKeys::Both);
+    const KEYS: KeyUse = KeyUse::of(crate::contract::Input::Pointer).with_activate(ActivateKeys::Enter);
     type Style = BreadcrumbBarStyle;
     type Output = BreadcrumbOutput<K>;
 

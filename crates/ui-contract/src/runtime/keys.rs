@@ -152,6 +152,11 @@ struct Batch {
     tabs: Vec<TabPress>,
     /// A lone Alt in a field that holds drafts was refused: the input hook calls `frame::refuse`.
     refused: bool,
+    /// A bare Space release of the pass: it ends a held Space activation (`route::space_held`).
+    space_released: bool,
+    /// A Space release the pass skipped because its press had not come yet: the hook reads it once, so it waits for
+    /// a press in a later pass (`route::space_held`).
+    space_release_pending: bool,
     /// The place of the event the strip reads now among the events the IME engine left in the frame's input: the
     /// engine places its edits by the same count (`ime::take_placed`), so an editor part reads the two in the order
     /// they arrived.

@@ -60,15 +60,16 @@ fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
     {
         return Ok(());
     }
-    let keys = [(Key::Enter, subject.probe.keys.activate.enter()), (Key::Space, subject.probe.keys.activate.space())];
+    // Space is not an activation key: it is the canvas's Hand.
+    let keys = [(Key::Enter, subject.probe.keys.activate.enter())];
     for story in &subject.stories {
         let fixture = &subject.base(story).fixture;
         let Some(id) = fixture.root_id() else { continue };
         let mut parts = crate::runtime::pointer::sensing_parts(fixture.ctx(), id, craft_behavior::Sense::CLICK);
         parts.dedup();
         for part in parts {
-            // Paths: 0 click, 1 AccessKit Click, 2 and 3 the activation keys.
-            for path in 0..4 {
+            // Paths: 0 click, 1 AccessKit Click, 2 the activation key.
+            for path in 0..3 {
                 let mut fixture = input_fixture(story);
                 let Some(target) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
                 if fixture.tree().data_of(target.node).is_some_and(|node| node.is_disabled()) {
@@ -79,7 +80,6 @@ fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
                     0 => "a click",
                     1 if declares(&fixture, Declared::Click) => "AccessKit Click",
                     2 if keys[0].1 && declares(&fixture, Declared::Focus) => "Enter",
-                    3 if keys[1].1 && declares(&fixture, Declared::Focus) => "Space",
                     _ => continue,
                 };
                 fixture.take_outputs();
@@ -176,7 +176,6 @@ fn every_intent_has_a_declared_action(subject: &Subject) -> Result<(), String> {
     }
     let keys = [
         (Key::Enter, probe.keys.activate.enter(), None),
-        (Key::Space, probe.keys.activate.space(), None),
         (Key::ArrowRight, true, Some(Declared::Increment)),
         (Key::ArrowUp, true, Some(Declared::Increment)),
         (Key::ArrowLeft, true, Some(Declared::Decrement)),

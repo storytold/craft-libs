@@ -297,6 +297,11 @@ pub struct KeyUse {
     /// Typed letters reach the component as `Intent::Text` (`take_text`): a closed select that opens its list on the
     /// first entry they begin.
     pub type_ahead: bool,
+    /// Space activates the component: a button, a tool in a rail, a member of a roving group. The mouse tells a held
+    /// pointer button from a tap, and Space does what a tap does — press on the press and activate on the release, so
+    /// one tap activates once. A control takes it by declaring it here; every other stop leaves Space to the app, where
+    /// it is the canvas's Hand key.
+    pub space_activates: bool,
     /// The component is a text field whose draft a press on a part declared `holds_drafts`, or on a popup layer above
     /// it, leaves unapplied; a lone Alt in the field only alerts and a window deactivation does not commit the draft.
     pub holds_drafts: bool,
@@ -336,6 +341,7 @@ impl KeyUse {
         session: false,
         type_ahead: false,
         holds_drafts: false,
+        space_activates: false,
     };
     /// A divider between panes: it takes the arrows as moves of its value, but it is no document and no canvas tool, so
     /// it marks no window as showing a document and takes no nudges.
@@ -347,7 +353,11 @@ impl KeyUse {
     /// The default key use of a component that takes `input`. The only place egui key filters start from.
     pub const fn of(input: Input) -> KeyUse {
         let (keep, activate, owner) = match input {
-            Input::Pointer => (KeepKeys::None, ActivateKeys::Both, OwnerClass::Widget),
+            // Enter activates a pointer control, as it always has. Space reaches a control that asks for it: the
+            // runtime holds the button down on the press and activates on the release, so one tap of Space
+            // activates once. A control that does not ask leaves Space to the app, where it is the canvas's Hand
+            // key (photocraft: Space over a canvas opened the File menu, whose first item the next press ran).
+            Input::Pointer => (KeepKeys::None, ActivateKeys::Enter, OwnerClass::Widget),
             Input::Text => (KeepKeys::InlineArrows, ActivateKeys::Neither, OwnerClass::Text),
             Input::Editor => (KeepKeys::BlockArrows, ActivateKeys::Neither, OwnerClass::Text),
             _ => (KeepKeys::None, ActivateKeys::Neither, OwnerClass::Widget),
@@ -377,7 +387,20 @@ impl KeyUse {
             session: false,
             type_ahead: false,
             holds_drafts: false,
+            space_activates: false,
         }
+    }
+
+    /// The same use activating on Space as well as Enter, as a button or a rail tool does.
+    pub const fn with_space_activation(mut self) -> Self {
+        self.space_activates = true;
+        self
+    }
+
+    /// The same use declaring that Space activates the stop, for a trial or a host that sets Space on the use itself.
+    pub const fn with_space(mut self) -> Self {
+        self.space_activates = true;
+        self
     }
 
     /// The same use declaring that a press that would apply the focused draft leaves it unapplied (`holds_drafts`).
@@ -413,6 +436,7 @@ impl KeyUse {
     /// The same use with `activate` as the keys that activate: a value control that arrow and Page keys step takes none.
     pub const fn with_activate(mut self, activate: ActivateKeys) -> Self {
         self.activate = activate;
+
         self
     }
 

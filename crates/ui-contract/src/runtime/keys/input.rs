@@ -73,6 +73,15 @@ impl Strip<'_> {
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
     /// with the press, in this pass or a later one. `at` is the event's arrival time (`Arrived::at`).
     fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent, at: Option<f64>) -> bool {
+        // A bare Space release ends a Space activation the focused stop held (`route::space_held`); the canvas's
+        // Space keeps its release, since that release ends its command. It waits for a press when the release comes in
+        // the pass before it, since the hook reads this pass's keys once.
+        if let KeyEvent::Release { input } = &event {
+            let key = input.physical.or(input.typed);
+            if key == Some(Key::Space) && !input.mods.shift && !input.mods.alt && !self.canvas_space {
+                batch.space_release_pending = true;
+            }
+        }
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
             batch.last_press = None;
@@ -124,6 +133,7 @@ impl Strip<'_> {
                 if key == Some(Key::Enter) {
                     batch.enter_down = Some(false);
                 }
+
                 batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at });
                 true
             }
@@ -342,10 +352,14 @@ impl Strip<'_> {
     /// key input of this pass, which the focused component reads in the pass. The begin hook moves focus before any
     /// component runs, so the press and every event after it wait for the next frame (`HeldInput`): the component
     /// reads what came before the move, and the move and what follows it apply in the order they arrived.
-    fn ends_pass(&self, batch: &Batch, event: &KeyEvent) -> bool {
+    fn ends_pass(&self, batch: &Batch, event: &KeyEvent, next: Option<&KeyEvent>) -> bool {
+        // A Space and its release before the next key event wait for one pass together: they are a tap, and the pass
+        // that reports them presses and releases the stop at once (`batch.space_release_pending`).
+        let tap = matches!(event, KeyEvent::Press { key: Key::Space, .. }) && batch.space_release_pending && !self.canvas_space;
         let KeyEvent::Press { key, input, .. } = event else { return false };
         let typed = !batch.texts.is_empty() || !batch.presses.is_empty() || !batch.clips.is_empty() || !batch.claimed.is_empty() || batch.escapes > 0;
-        typed && matches!(self.use_of(*key, input), PressUse::Tab | PressUse::Pane(_))
+        let _ = next;
+        tap || typed && matches!(self.use_of(*key, input), PressUse::Tab | PressUse::Pane(_))
     }
 }
 
@@ -476,6 +490,16 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
     let bound = |chord: &Chord| commands::runs_now(ctx, chord);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
+        // The pass's bare Space release, read from the input itself: a press the one-press rule or an input sweep held
+        // back must still hand its release to the stop it pressed (`route::space_held`).
+        let space_releases = events
+            .iter()
+            .filter(|arrived| {
+                matches!(&raw_input::key_event(&arrived.event, os, latin), KeyEvent::Release { input }
+                if input.physical.or(input.typed) == Some(Key::Space) && !input.mods.shift && !input.mods.alt)
+            })
+            .count()
+            > 0;
         let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
         stage.layout.set_latin(input.keyboard_layout_is_latin);
@@ -500,7 +524,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             alt_code_ended,
             bound: &bound,
         };
-        let mut batch = Batch::default();
+        let mut batch = Batch {
+            space_release_pending: space_releases && !hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
+            ..Batch::default()
+        };
         let mut visible = None;
         let mut later = Vec::new();
         stage.keyed = false;
@@ -510,8 +537,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             batch.place = place;
             place += 1;
             let read = raw_input::key_event(&arrived.event, os, latin);
-            if !later.is_empty() || strip.ends_pass(&batch, &read) {
+            let ends = strip.ends_pass(&batch, &read, None);
+            if !later.is_empty() || ends {
                 later.push(arrived.clone());
+                // A held press does not take this pass's Space release with it: the stop it was pressed on activates
+                // now, and the press waits for the pass after.
                 return false;
             }
             note_down(&mut stage.down, &read);

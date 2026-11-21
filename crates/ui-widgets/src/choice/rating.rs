@@ -93,7 +93,7 @@ impl<'a> Rating<'a> {
 impl Component for Rating<'_> {
     const ROLE: Role = Role::RADIO_GROUP;
     const OVERLAYS: bool = false;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Space).with_moves();
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Enter).with_moves();
     type Style = RatingStyle;
     type Output = EditResponse<u8>;
 

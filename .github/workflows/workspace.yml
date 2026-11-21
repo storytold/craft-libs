@@ -2,7 +2,7 @@ name: Workspace
 
 on:
   push:
-    branches: [main, next]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -209,7 +209,15 @@ jobs:
             entry=${BASH_REMATCH[1]}
             if [ -n "${kept[$entry]:-}" ]; then
               echo "delete $key"
-              gh cache delete "$id" --repo "$REPO"
+              # A scheduled run and a push prune in different concurrency groups, so both can list the
+              # same cache and one can delete it first: a missing cache is success here, while any other
+              # API error still fails the job.
+              if ! gh cache delete "$id" --repo "$REPO" 2>"$RUNNER_TEMP/cache-error"; then
+                if ! grep -Eqi 'not found|HTTP 404' "$RUNNER_TEMP/cache-error"; then
+                  cat "$RUNNER_TEMP/cache-error"
+                  exit 1
+                fi
+              fi
             else
               kept[$entry]=1
               echo "keep $key"

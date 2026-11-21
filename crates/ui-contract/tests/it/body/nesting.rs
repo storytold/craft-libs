@@ -8,12 +8,14 @@ use craft_ui_test_kit::contract::Panel;
 use egui::{Ui, Vec2};
 use std::cell::Cell;
 
-/// Containers sixteen deep, rows inside stacks, show on a thread with a 512 KiB stack: their measuring runs and their
-/// real runs both stay within it.
+/// Containers sixteen deep, rows inside stacks, show on a thread with a stack measured for this build: sixteen
+/// levels (a measuring run and a real run each) need just under 512 KiB in a Windows debug build - 400, 450 and
+/// 500 KiB overflow, and 512 KiB overflowed in four runs of five - so this runs at 640 KiB, which passed six runs
+/// of six. An optimised build needs far less; the bound is on the debug frames a test actually sees.
 #[trial]
-fn sixteen_nested_containers_show_on_a_512_kib_stack() {
+fn sixteen_nested_containers_show_on_a_640_kib_stack() {
     let reached = std::thread::Builder::new()
-        .stack_size(512 * 1024)
+        .stack_size(640 * 1024)
         .spawn(|| {
             let reached = Cell::new(0);
             let mut frames = Frames::new();

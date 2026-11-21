@@ -195,7 +195,7 @@ impl<'a> AddBesideHandles<'a> {
 
 impl Component for AddBesideHandles<'_> {
     const ROLE: Role = Role::GROUP;
-    const KEYS: KeyUse = KeyUse::CANVAS.with_activate(ActivateKeys::Both).with_moves().with_chrome_key(false);
+    const KEYS: KeyUse = KeyUse::CANVAS.with_activate(ActivateKeys::Enter).with_moves().with_chrome_key(false);
     const OVERLAYS: bool = false;
     type Style = AddBesideStyle;
     type Output = AddBesideOutput;

@@ -198,6 +198,36 @@ fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() 
     }
 }
 
+#[trial]
+fn classifies_japanese_and_cjk_families() {
+    use craft_font_manager::picker::FontClass;
+    const NONE: [u8; 10] = [0; 10];
+    assert_eq!(FontClass::classify("MS Mincho", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("ＭＳ 明朝", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("Yu Gothic", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("游ゴシック", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("Meiryo", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("メイリオ", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("HG行書体", 0, NONE, false), Some(FontClass::Script));
+    assert_eq!(FontClass::classify("HG正楷書体-PRO", 0, NONE, false), Some(FontClass::Script));
+    assert_eq!(FontClass::classify("UD デジタル 教科書体", 0, NONE, false), Some(FontClass::Handwritten));
+    assert_eq!(FontClass::classify("HG創英角ﾎﾟｯﾌﾟ体", 0, NONE, false), Some(FontClass::Handwritten));
+    assert_eq!(FontClass::classify("MS Gothic 等幅", 0, NONE, false), Some(FontClass::Monospace));
+    // A Latin word that merely ends in `song` is not a CJK serif (WindSong is a script family); the foundry stems
+    // keep their Song/Songti reading.
+    assert_eq!(FontClass::classify("WindSong", 0, NONE, false), None, "an English word ending in song is not a serif");
+    assert_eq!(FontClass::classify("STSong", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("STZhongsong", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("FZFangSong-Z02", 0, NONE, false), Some(FontClass::Serif));
+    // A generic `pop` fallback sits after the Script markers: `Pop Script` keeps Script, a bare `Pop` is the rounded
+    // display face.
+    assert_eq!(FontClass::classify("Pop Script", 0, NONE, false), Some(FontClass::Script));
+    assert_eq!(FontClass::classify("Pop", 0, NONE, false), Some(FontClass::Handwritten));
+    // A `hei` (黑) suffix is a CJK sans, but not against an explicit script marker: `Xhei Script` is a script.
+    assert_eq!(FontClass::classify("SimHei", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("Xhei Script", 0, NONE, false), Some(FontClass::Script));
+}
+
 /// A `Plain` picker over `family` with `recent` families, `actions` rows and the face `shown_as`.
 fn plain_rig(
     catalog: Arc<Catalog>,

@@ -1,3 +1,4 @@
+pub(crate) mod activation;
 pub(crate) mod alt_code;
 pub(crate) mod chord_fallthrough;
 // `clipboard.rs` is platform-w3's trial (F-28); this file is shell-w1's, so its line is written here.

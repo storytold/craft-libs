@@ -39,7 +39,12 @@ pub(crate) fn widget(ui: &Ui, id: Id, rect: Rect, sense: Sense) -> Response {
     let rect = if rect.any_nan() { Rect::NOTHING } else { rect };
     let ctx = ui.ctx();
     let held = ctx.memory(|memory| memory.has_focus(id));
-    let response = ui.interact(rect, id, to_egui(sense));
+    // Enter activates the focused widget; Space does not. egui makes Space the keyboard's activation of
+    // whatever widget holds the focus, and it drops that focus as it does, so a canvas's Hand key would press
+    // a toolbar button or a panel row that was clicked last instead of taking the key — and only sometimes,
+    // depending on what was clicked before. Enter keeps every control reachable from the keyboard.
+    let options = egui::InteractOptions { activate_on_space: false, ..Default::default() };
+    let response = ui.interact_opt(rect, id, to_egui(sense), options);
     if sense.contains(Sense::FOCUS) && !ui.is_enabled() {
         ctx.memory_mut(|memory| {
             memory.interested_in_focus(id, ui.layer_id());

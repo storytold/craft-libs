@@ -125,6 +125,11 @@ impl FontClass {
     pub fn of(catalog: &Catalog, family: &str) -> Option<FontClass> {
         rank::class_of(catalog, family)
     }
+
+    /// Classify a font family from its name, `sFamilyClass`, PANOSE, and fixed-pitch flag.
+    pub fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_pitch: bool) -> Option<FontClass> {
+        rank::classify(family, family_class, panose, fixed_pitch)
+    }
 }
 
 /// Photoshop's Font Preview Size (Type › Font Preview Size): how large the sample in each row is,
@@ -396,7 +401,7 @@ struct FamilyCodec {
 
 impl FamilyCodec {
     fn shown(&self, family: &str, info: &Info) -> String {
-        shown_name(info, family, &self.language, false)
+        shown_name(&info.localized, family, &self.language, false)
     }
 }
 

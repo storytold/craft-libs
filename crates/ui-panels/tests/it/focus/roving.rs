@@ -20,7 +20,7 @@ fn a_roving_group_is_one_tab_stop_and_its_members_read_their_own_focus() {
         control(ui, "before");
         widget(ui, id("group"));
         for member in ["m1", "m2", "m3"] {
-            register_stop(ui.ctx(), Stop::new(id(member), KeyUse::of(Input::Pointer)).root(id("group")).in_group(id("group")));
+            register_stop(ui.ctx(), Stop::new(id(member), KeyUse::of(Input::Pointer)).root(id("group")).in_group(id("group")).space());
         }
         register_group(ui.ctx(), Group::new(id("group"), Roving::new(NavShape::Flat)).selected((id("m2"), None)));
         let ctx = ui.ctx();

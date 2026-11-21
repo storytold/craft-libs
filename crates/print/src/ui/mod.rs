@@ -226,7 +226,10 @@ impl State {
             match receiver.try_recv() {
                 Ok(printers) => {
                     self.printers = printers;
-                    if !self.printers.iter().any(|p| p.name == self.settings.printer) {
+                    // An empty list says the spooler could not be asked just now (it is busy, or the system
+                    // gave nothing back), not that the remembered printer is gone: keep it and let the panel
+                    // say there are none. Only a list that does not contain it says it went away.
+                    if !self.printers.is_empty() && !self.printers.iter().any(|p| p.name == self.settings.printer) {
                         self.settings.printer =
                             self.printers.iter().find(|p| p.default).or(self.printers.first()).map(|p| p.name.clone()).unwrap_or_default();
                     }
