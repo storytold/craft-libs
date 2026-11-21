@@ -15,6 +15,8 @@
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
+//! - `pins` (feature `pins`): the version, source and features of pinned dependencies, and packages
+//!   an app forbids, read from `cargo metadata` (`cargo xtask pdf-deps`).
 //!
 //! ```no_run
 //! use std::path::Path;
@@ -41,6 +43,8 @@
 pub mod assets;
 #[cfg(feature = "lock")]
 pub mod lock;
+#[cfg(feature = "pins")]
+pub mod pins;
 #[cfg(feature = "report")]
 pub mod report;
 pub mod runner;
