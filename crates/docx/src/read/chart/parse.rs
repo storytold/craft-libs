@@ -23,6 +23,8 @@ impl Chart {
         } else {
             series.iter().map(|s| s.values.len()).max().unwrap_or(0).max(cats.len())
         };
+        // Counted before the cell budget drops any series: Word counts them all.
+        let series_n = series.iter().enumerate().map(|(j, s)| s.idx.unwrap_or(j).saturating_add(1)).max().unwrap_or(0);
         // Every series is padded to `n` points, so keep only as many as the cell budget holds.
         if let Some(keep) = MAX_CELLS.checked_div(n) {
             series.truncate(keep.max(1));
@@ -79,6 +81,7 @@ impl Chart {
                 || vary
                 || (can_vary && series.iter().any(|s| s.points.iter().any(PointFmt::coloured))),
             n,
+            series_n,
             cats,
             title: title_of(chart, &series),
             series,
@@ -97,20 +100,34 @@ impl Chart {
         self.grouping != Grouping::Clustered
     }
 
-    fn accent(&self, i: usize) -> Rgb {
-        self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK)
+    /// Automatic colour `i` of `n`, as Word picks it: accent `i % 6`, with the `n` colours in
+    /// `n / 6 + 1` groups of six (so six colours already make two), the early groups shaded and
+    /// the late ones tinted, the further from the middle the more (measured in Word, #5961).
+    fn auto_colour(&self, i: usize, n: usize) -> Rgb {
+        let accent = self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK);
+        let groups = (n / 6 + 1) as f64;
+        // From the middle group: < 0 for the early groups, > 0 for the late ones.
+        let d = 2.0 * (i / 6) as f64 - (groups - 1.0);
+        let f = 1.0 - 0.7 * d.abs() / (groups + 1.0);
+        if d < 0.0 {
+            shade_linear(accent, f)
+        } else if d > 0.0 {
+            tint_linear(accent, f)
+        } else {
+            accent
+        }
     }
 
-    /// Colour of series `j`: its own, else the accent its `c:idx` picks (as Word does; `c:order`
-    /// doesn't matter), else the one its place in the file picks.
+    /// Colour of series `j`: its own, else the automatic colour its `c:idx` picks (as Word does;
+    /// `c:order` doesn't matter), else the one its place in the file picks.
     pub(super) fn series_colour(&self, j: usize) -> Rgb {
         let s = self.series.get(j);
-        s.and_then(|s| s.color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
+        s.and_then(|s| s.color).unwrap_or_else(|| self.auto_colour(s.and_then(|s| s.idx).unwrap_or(j), self.series_n))
     }
 
-    /// Colour of point `i` of series `j`: its `c:dPt` fill, else the varied accent when the
-    /// chart varies and the series has no colour of its own (Word lets a series' `c:spPr` colour
-    /// win over `c:varyColors`), else the series colour.
+    /// Colour of point `i` of series `j`: its `c:dPt` fill, else the varied automatic colour when
+    /// the chart varies and the series has no colour of its own (Word lets a series' `c:spPr`
+    /// colour win over `c:varyColors`), else the series colour.
     pub(super) fn point_colour(&self, j: usize, i: usize) -> Rgb {
         self.point(j, i).and_then(|p| p.fill).unwrap_or_else(|| self.auto_point_colour(j, i))
     }
@@ -134,7 +151,11 @@ impl Chart {
         if let Some(c) = s.and_then(|s| s.marker_color) {
             return c;
         }
-        if self.vary && s.is_some_and(|s| s.color.is_none()) { self.accent(i) } else { self.accent(s.and_then(|s| s.idx).unwrap_or(j)) }
+        if self.vary && s.is_some_and(|s| s.color.is_none()) {
+            self.auto_colour(i, self.n)
+        } else {
+            self.auto_colour(s.and_then(|s| s.idx).unwrap_or(j), self.series_n)
+        }
     }
 
     /// Whether series `j`'s line is drawn a segment at a time, each in its point's line colour:
@@ -167,7 +188,7 @@ impl Chart {
 
     /// A point's colour when it has none of its own: the varied accent, or the series colour.
     pub(super) fn auto_point_colour(&self, j: usize, i: usize) -> Rgb {
-        if self.vary && self.series.get(j).is_some_and(|s| s.color.is_none()) { self.accent(i) } else { self.series_colour(j) }
+        if self.vary && self.series.get(j).is_some_and(|s| s.color.is_none()) { self.auto_colour(i, self.n) } else { self.series_colour(j) }
     }
 
     /// The legend: one entry per category, in its point's colour, for pie and doughnut charts,
@@ -477,6 +498,32 @@ fn varies(kind: Kind, radar_style: Option<&str>, series: usize) -> bool {
         Kind::Radar if radar_style == Some("filled") => false,
         Kind::Bar | Kind::Line | Kind::Scatter | Kind::Radar => series == 1,
     }
+}
+
+/// `c` darkened as Word shades an automatic chart colour: each channel × `f` in linear RGB.
+fn shade_linear(c: Rgb, f: f64) -> Rgb {
+    let ch = |v: u8| to_srgb(to_linear(v) * f);
+    Rgb(ch(c.0), ch(c.1), ch(c.2))
+}
+
+/// `c` lightened as Word tints an automatic chart colour: each channel's distance from white × `f`
+/// in linear RGB.
+fn tint_linear(c: Rgb, f: f64) -> Rgb {
+    let ch = |v: u8| to_srgb(1.0 - (1.0 - to_linear(v)) * f);
+    Rgb(ch(c.0), ch(c.1), ch(c.2))
+}
+
+/// An sRGB channel as linear light, 0..1.
+fn to_linear(v: u8) -> f64 {
+    let v = f64::from(v) / 255.0;
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Linear light (clamped to 0..1) as an sRGB channel.
+fn to_srgb(x: f64) -> u8 {
+    let x = x.clamp(0.0, 1.0);
+    let v = if x <= 0.003_130_8 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+    (v * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 fn truthy(v: &str) -> bool {

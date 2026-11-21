@@ -237,6 +237,9 @@ struct Chart {
     point_legend: bool,
     /// Number of categories (scatter: points per series at most).
     n: usize,
+    /// How many automatic series colours Word counts: the highest series `c:idx` (else place in
+    /// the file) + 1.
+    series_n: usize,
     cats: Vec<String>,
     series: Vec<Series>,
     accents: Vec<Rgb>,
