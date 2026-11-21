@@ -777,11 +777,14 @@ impl Trigger {
         matches!(self.press, PressKind::Hold)
     }
 
-    /// Reads a chord as [`Chord::parse`] does, or the same chord twice separated by whitespace
-    /// (`A A`) as a double press. Two different chords are [`ParseError::Sequence`].
+    /// Reads a chord as [`Chord::parse`] does, `Hold ` and a chord as a hold (`Hold H`), or the same chord twice
+    /// separated by whitespace (`A A`) as a double press. Two different chords are [`ParseError::Sequence`].
     pub fn parse(text: &str) -> Result<Trigger, ParseError> {
         if text.len() > MAX_CHORD_TEXT {
             return Err(ParseError::TooLong);
+        }
+        if let Some(rest) = text.strip_prefix("Hold ") {
+            return Chord::parse(rest.trim()).map(Trigger::hold);
         }
         let single = match Chord::parse(text) {
             Ok(chord) => return Ok(Trigger::single(chord)),
@@ -807,16 +810,23 @@ impl Trigger {
         Trigger { chord: self.chord.effective(platform), press: self.press }
     }
 
-    /// [`Chord::display`], twice with a space between for a double press.
+    /// [`Chord::display`], twice with a space between for a double press, after `Hold ` for a hold.
     pub fn display(&self, platform: Platform) -> String {
-        let one = self.chord.display(platform);
-        if self.is_double() { format!("{one} {one}") } else { one } // P3(shortcuts-w3): kb.C13b
+        self.written(self.chord.display(platform))
     }
 
-    /// [`Chord::display_for`], twice with a space between for a double press.
+    /// [`Chord::display_for`], twice with a space between for a double press, after `Hold ` for a hold.
     pub fn display_for(&self, platform: Platform, layout: &Layout) -> String {
-        let one = self.chord.display_for(platform, layout);
-        if self.is_double() { format!("{one} {one}") } else { one } // P3(shortcuts-w3): kb.C13b
+        self.written(self.chord.display_for(platform, layout))
+    }
+
+    /// `one`, the chord's text, as this kind of press writes it.
+    fn written(&self, one: String) -> String {
+        match self.press {
+            Press::Single => one,
+            Press::Double => format!("{one} {one}"),
+            Press::Hold => format!("Hold {one}"),
+        }
     }
 }
 
@@ -828,7 +838,7 @@ impl From<Chord> for Trigger {
 
 impl fmt::Display for Trigger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_double() { write!(f, "{0} {0}", self.chord) } else { write!(f, "{}", self.chord) } // P3(shortcuts-w3): kb.C13b
+        f.write_str(&self.written(self.chord.to_string()))
     }
 }
 

@@ -99,6 +99,12 @@ impl Matcher {
     pub fn single(layout: &Layout, keymap: &Keymap, input: &KeyInput, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
         Chords::of(layout, input)?.single(keymap, active, outer)
     }
+
+    /// The command a hold of `input` runs: for a key that stays down past the hold time. Keeps no state.
+    // PLAN: `Keymap::hold_of` ranks without the outer panels, so `outer` has no effect yet.
+    pub fn hold(layout: &Layout, keymap: &Keymap, input: &KeyInput, active: &Active<'_>, _outer: &[&str]) -> Option<Hit> {
+        Chords::of(layout, input)?.hold(keymap, active)
+    }
 }
 
 /// The chords one press can run, most specific first: the layout's candidates, then Delete and Backspace standing
@@ -136,7 +142,16 @@ impl Chords {
                 Trigger { chord, press: if double { PressKind::Double } else { PressKind::Single } },
                 chord == first,
             )
-        }) // P3(shortcuts-w3): kb.C13b
+        })
+    }
+
+    /// The first chord a hold is bound to.
+    fn hold(&self, keymap: &Keymap, active: &Active<'_>) -> Option<Hit> {
+        let first = self.first();
+        self.0.iter().find_map(|&chord| {
+            let command = keymap.hold_of(&chord, active)?;
+            Some(Hit { command, cycle: Vec::new(), trigger: Trigger::hold(chord), exact: chord == first, alt_variant: false })
+        })
     }
 
     /// The single press's binding, else its Alt variant.
@@ -154,7 +169,6 @@ impl Chords {
             let plain = Chord::new(Mods { alt: false, ..chord.mods }, chord.key);
             match keymap.lookup_nested(&plain, false, &Active { typing: false, ..*active }, outer) {
                 Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => {
-                    // P3(shortcuts-w3): kb.C13b
                     Some(Hit {
                         command,
                         cycle: Vec::new(),

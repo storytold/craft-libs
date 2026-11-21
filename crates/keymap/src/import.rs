@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::chord::Trigger;
+use crate::chord::{Chord, Press, Trigger};
 use crate::chord::foreign::{Flavor, ForeignError, ReadNote, read_foreign};
 use crate::command::CommandRef;
 use crate::keymap::{Binding, CommandDef, CommandKind, Keymap, MAX_BINDINGS, Policy};
@@ -31,6 +31,12 @@ pub const MAX_PATH_SEGMENTS: usize = 32;
 /// Most unmatched entries [`ImportOptions::suggest`] looks for commands for; the rest are counted
 /// in [`ImportReport::truncated`]. Entries without keys get no suggestion and do not count.
 pub const MAX_SUGGESTIONS: usize = 200;
+/// The fewest matched commands that must vote for a code before agreement decodes it.
+const MIN_VOTES: usize = 2;
+/// The share of a code's votes that must name one text: 4 in 5.
+const AGREE: (usize, usize) = (4, 5);
+/// Most entry names [`DecodedCode::entries`] lists.
+const NAMES_SHOWN: usize = 3;
 
 /// A shortcut set as an app's reader found it. Build it with [`ForeignSet::new`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -43,23 +49,24 @@ pub struct ForeignSet {
     /// Entries the reader dropped at its own limits; [`plan`] counts them in
     /// [`ImportReport::truncated`].
     pub truncated: usize,
-    /// Lines of the file the reader could not read.
+    /// Lines of the source the reader could not read, in source order; [`plan`] copies them to
+    /// [`ImportReport::not_read`].
     pub not_read: Vec<NotRead>,
 }
 
-/// A line of the source file the reader could not read.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// One line of a source file that the reader could not read.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct NotRead {
     /// The line's number in the source file, when the reader gives one.
     pub line: Option<usize>,
-    /// The line as written.
+    /// The line's text.
     pub text: String,
 }
 
 impl NotRead {
-    /// A line the reader could not read.
+    /// A line of `text` at `line`.
     pub fn new(line: Option<usize>, text: impl Into<String>) -> NotRead {
         NotRead { line, text: text.into() }
     }
@@ -111,7 +118,7 @@ impl ForeignSet {
         self
     }
 
-    /// Lines of the file the reader could not read ([`ForeignSet::not_read`]).
+    /// The lines of the source the reader could not read ([`ForeignSet::not_read`]).
     pub fn with_not_read(mut self, lines: Vec<NotRead>) -> ForeignSet {
         self.not_read = lines;
         self
@@ -193,8 +200,7 @@ impl ForeignKey {
     /// A key whose key or modifier code the reader leaves undecided: `trigger` is
     /// `Err(ForeignError::Undecided { key, mods })`, `text` is kept for reports.
     pub fn code(context: Option<&str>, text: &str, key: Option<u32>, mods: Option<u32>) -> ForeignKey {
-        let _ = (context, text, key, mods);
-        todo!("kb.C19a")
+        ForeignKey { context: context.map(str::to_string), text: text.to_string(), trigger: Err(ForeignError::Undecided { key, mods }), notes: Vec::new() }
     }
 }
 
@@ -420,6 +426,8 @@ pub enum UnmatchedReason {
     Context,
     /// Only a command of the other kind fits: a tool entry naming a command, or the other way round.
     Tool,
+    /// The user answered "No equivalent" for the entry ([`ImportOptions::remembered`]).
+    NoEquivalent,
 }
 
 /// An entry with keys that was not used, or keys of a matched entry in unlisted contexts.
@@ -549,8 +557,7 @@ pub struct ImportReport {
     /// use each.
     #[serde(default)]
     pub codes: Vec<DecodedCode>,
-    /// Lines of the file the reader could not read; [`plan`] copies them from the set, capped, and
-    /// counts the cut in [`ImportReport::truncated`].
+    /// Lines of the source the reader could not read, as [`ForeignSet::not_read`] lists them, cut at the caps.
     #[serde(default)]
     pub not_read: Vec<NotRead>,
 }
@@ -590,7 +597,12 @@ pub fn plan(set: &ForeignSet, keymap: &Keymap, options: &ImportOptions) -> Impor
     let mut cut = 0usize;
     let mut report = ImportReport { set: set.name.as_deref().map(|n| cap_text(n, &mut cut)), ..ImportReport::default() };
     cut = cut.saturating_add(set.entries.len().saturating_sub(MAX_IMPORT_ENTRIES)).saturating_add(set.truncated);
+    report.not_read = set.not_read.iter().take(MAX_IMPORT_ENTRIES).map(|n| NotRead { line: n.line, text: cap_text(&n.text, &mut cut) }).collect();
+    cut = cut.saturating_add(set.not_read.len().saturating_sub(MAX_IMPORT_ENTRIES));
     let index = Index::new(keymap);
+    let capped_entries: Vec<ForeignEntry> = set.entries.iter().take(MAX_IMPORT_ENTRIES).map(|e| capped(e, &mut cut)).collect();
+    let (entries, codes) = decode(capped_entries, &index, keymap, options);
+    report.codes = codes;
     let contexts: Vec<(String, &ContextRule)> = options.contexts.iter().map(|(n, r)| (n.to_lowercase(), r)).collect();
     let mut commands: Vec<Planned> = Vec::new();
     let mut planned_at: HashMap<usize, usize> = HashMap::new();
@@ -606,10 +618,10 @@ pub fn plan(set: &ForeignSet, keymap: &Keymap, options: &ImportOptions) -> Impor
         }
     };
 
-    for (order, raw) in set.entries.iter().take(MAX_IMPORT_ENTRIES).enumerate() {
-        let entry = capped(raw, &mut cut);
+    for (order, entry) in entries.iter().enumerate() {
         let item = entry.item();
-        let found = index.find(&entry, entry.is_tool, &options.remembered);
+        let no_equivalent = no_equivalent(options, entry);
+        let found = if no_equivalent { Found::None } else { index.find(entry, entry.is_tool, &options.remembered) };
         let Found::One(i, by_panel) = found else {
             // Keys in skipped contexts would bind nothing, so they neither make a row nor count
             // toward the suggestion cap.
@@ -620,10 +632,11 @@ pub fn plan(set: &ForeignSet, keymap: &Keymap, options: &ImportOptions) -> Impor
             }
             let reason = match found {
                 Found::Many => UnmatchedReason::Ambiguous,
+                _ if no_equivalent => UnmatchedReason::NoEquivalent,
                 _ if matches!(index.find(&entry, !entry.is_tool, &BTreeMap::new()), Found::One(..)) => UnmatchedReason::Tool,
                 _ => UnmatchedReason::NoMatch,
             };
-            if options.suggest && reason != UnmatchedReason::Tool {
+            if options.suggest && !matches!(reason, UnmatchedReason::Tool | UnmatchedReason::NoEquivalent) {
                 if to_suggest.len() < MAX_SUGGESTIONS {
                     let label = entry.path.last().cloned().unwrap_or_default();
                     to_suggest.push(ToSuggest { item: item.clone(), line: entry.line, label, tool: entry.is_tool });
@@ -941,6 +954,117 @@ fn in_default_order(keymap: &Keymap, command: &CommandRef, list: &[Binding]) -> 
     if a == d { defaults } else { list.to_vec() }
 }
 
+/// Whether the user answered "No equivalent" for `entry`.
+fn no_equivalent(options: &ImportOptions, entry: &ForeignEntry) -> bool {
+    options.remembered.get(&entry.remember_key()) == Some(&None)
+}
+
+/// The codes an undecided key carries as `key:N` and `mods:N`, each with whether it is the key code.
+fn key_codes(k: &ForeignKey) -> Vec<(String, bool)> {
+    let Err(ForeignError::Undecided { key, mods }) = &k.trigger else { return Vec::new() };
+    key.iter().map(|n| (format!("key:{n}"), true)).chain(mods.iter().map(|n| (format!("mods:{n}"), false))).collect()
+}
+
+/// The first unscoped single-press default of command `i` as (modifiers text, key text), the forms codes decode to.
+fn default_parts(keymap: &Keymap, i: usize) -> Option<(String, String)> {
+    let command = &keymap.catalog().get(i)?.command;
+    let chord = keymap.default_bindings(command).into_iter().find(|b| b.scope.is_none() && b.trigger.press == Press::Single)?.trigger.chord;
+    let (key, full) = (chord.key.name(), chord.to_string());
+    let mods = full.strip_suffix(key).unwrap_or_default().trim_end_matches('+');
+    Some((mods.to_string(), key.to_string()))
+}
+
+/// `k` with its codes read through `answers`: decoded to a trigger, dropped (`None`) when a code has no
+/// equivalent, and unchanged when a code is still undecided, so it stays unreadable.
+fn decode_key(answers: &BTreeMap<String, Option<String>>, k: ForeignKey) -> Option<ForeignKey> {
+    let Err(ForeignError::Undecided { key, mods }) = &k.trigger else { return Some(k) };
+    let (key, mods) = (*key, *mods);
+    let Some(key) = key else { return Some(k) };
+    let name = match answers.get(&format!("key:{key}")) {
+        None => return Some(k),
+        Some(None) => return None,
+        Some(Some(name)) => name,
+    };
+    // A key with no modifier code takes none.
+    let mods = match mods {
+        None => "",
+        Some(m) => match answers.get(&format!("mods:{m}")) {
+            None => return Some(k),
+            Some(None) => return None,
+            Some(Some(text)) => text.as_str(),
+        },
+    };
+    let text = if mods.is_empty() { name.clone() } else { format!("{mods}+{name}") };
+    match Chord::parse(&text) {
+        Ok(chord) => Some(ForeignKey { trigger: Ok(Trigger::single(chord)), ..k }),
+        Err(_) => Some(k),
+    }
+}
+
+/// Decodes the undecided codes of `entries`: a code the user answered ([`ImportOptions::codes`]) takes the answer;
+/// otherwise at least [`MIN_VOTES`] matched commands' defaults must vote for one text with [`AGREE`] of the votes.
+/// Keys whose codes are all decoded become triggers, keys with a code answered "No equivalent" are dropped (an entry
+/// left with none is left out), and the others stay undecided.
+fn decode(entries: Vec<ForeignEntry>, index: &Index, keymap: &Keymap, options: &ImportOptions) -> (Vec<ForeignEntry>, Vec<DecodedCode>) {
+    let mut used: Vec<(String, Vec<String>)> = Vec::new();
+    let mut slot: HashMap<String, usize> = HashMap::new();
+    let mut votes: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    for entry in &entries {
+        let mut codes: Vec<(String, bool)> = Vec::new();
+        for (code, is_key) in entry.keys.iter().flat_map(key_codes) {
+            if !codes.iter().any(|(c, _)| *c == code) {
+                codes.push((code, is_key));
+            }
+        }
+        if codes.is_empty() {
+            continue;
+        }
+        let default = match index.find(entry, entry.is_tool, &options.remembered) {
+            Found::One(i, _) if !no_equivalent(options, entry) => default_parts(keymap, i),
+            _ => None,
+        };
+        let item = entry.item();
+        for (code, is_key) in codes {
+            let at = *slot.entry(code.clone()).or_insert_with(|| {
+                used.push((code.clone(), Vec::new()));
+                used.len() - 1
+            });
+            if let Some((_, names)) = used.get_mut(at)
+                && names.len() < NAMES_SHOWN
+            {
+                names.push(item.clone());
+            }
+            if options.codes.contains_key(&code) {
+                continue;
+            }
+            if let Some((mods, key)) = &default {
+                *votes.entry(code).or_default().entry(if is_key { key.clone() } else { mods.clone() }).or_default() += 1;
+            }
+        }
+    }
+    let mut answers = options.codes.clone();
+    for (code, tally) in votes {
+        let total: usize = tally.values().sum();
+        let Some((text, best)) = tally.into_iter().max_by_key(|(t, n)| (*n, std::cmp::Reverse(t.clone()))) else { continue };
+        if total >= MIN_VOTES && best * AGREE.1 >= total * AGREE.0 {
+            answers.insert(code, Some(text));
+        }
+    }
+    let decoded = used
+        .into_iter()
+        .filter_map(|(code, names)| answers.get(&code).map(|text| DecodedCode { text: text.clone(), code, entries: names }))
+        .collect();
+    let entries = entries
+        .into_iter()
+        .filter_map(|mut e| {
+            let had = e.keys.len();
+            e.keys = std::mem::take(&mut e.keys).into_iter().filter_map(|k| decode_key(&answers, k)).collect();
+            (had == 0 || !e.keys.is_empty()).then_some(e)
+        })
+        .collect();
+    (entries, decoded)
+}
+
 fn keys_text<'a>(keys: impl Iterator<Item = &'a ForeignKey>) -> String {
     keys.map(|k| match &k.context {
         Some(c) => format!("{c}: {}", k.text),
@@ -1171,7 +1295,7 @@ impl Index {
     /// without a leading Show/Hide. A panel-menu entry's last segment alone matches only when
     /// its first segment, the panel, is a segment of some catalog path.
     fn find(&self, entry: &ForeignEntry, tool: bool, remembered: &BTreeMap<String, Option<CommandRef>>) -> Found {
-        if let Some(c) = remembered.get(&entry.remember_key()).and_then(Option::as_ref) // P3(shortcuts-w3): kb.C28
+        if let Some(c) = remembered.get(&entry.remember_key()).and_then(Option::as_ref)
             && let Some(&i) = self.keys.get(&c.key())
             && self.tool.get(i) == Some(&tool)
         {
