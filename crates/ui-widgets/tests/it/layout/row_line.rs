@@ -172,32 +172,45 @@ const GRID_ROWS: usize = 3;
 type GridBoxes = [(Rect, Rect); GRID_ROWS];
 
 /// Two columns of labelled check boxes in an `egui::Grid`, each box run through `wrap` (`ui.show` or a scope around
-/// it): the box rects of each row.
-fn boxes_grid(ui: &mut egui::Ui, wrap: fn(&mut egui::Ui, Checkbox<'_>) -> Rect) -> GridBoxes {
+/// it) with its index: the box rects of each row.
+fn boxes_grid(ui: &mut egui::Ui, wrap: Wrap) -> GridBoxes {
     let mut boxes = [(Rect::NOTHING, Rect::NOTHING); GRID_ROWS];
     egui::Grid::new("boxes").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
         for (row, rect) in boxes.iter_mut().enumerate() {
-            rect.0 = wrap(ui, Checkbox::new(Bind::given(true)).label(format!("Left {row}")));
-            rect.1 = wrap(ui, Checkbox::new(Bind::given(false)).label(format!("Right {row}")));
+            rect.0 = wrap(ui, 2 * row, Checkbox::new(Bind::given(true)).label(format!("Left {row}")));
+            rect.1 = wrap(ui, 2 * row + 1, Checkbox::new(Bind::given(false)).label(format!("Right {row}")));
             ui.end_row();
         }
     });
     boxes
 }
 
-fn plain(ui: &mut egui::Ui, check: Checkbox<'_>) -> Rect {
+/// How `boxes_grid` shows each check box in its cell.
+type Wrap = fn(&mut egui::Ui, usize, Checkbox<'_>) -> Rect;
+
+fn plain(ui: &mut egui::Ui, _: usize, check: Checkbox<'_>) -> Rect {
     check.show(ui).response.rect
 }
 
-fn read_only(ui: &mut egui::Ui, check: Checkbox<'_>) -> Rect {
+fn read_only(ui: &mut egui::Ui, _: usize, check: Checkbox<'_>) -> Rect {
     with_env(ui, |set| set.read_only = Some(true), |ui| check.show(ui).response.rect)
 }
 
+fn pushed(ui: &mut egui::Ui, index: usize, check: Checkbox<'_>) -> Rect {
+    ui.push_id(index, |ui| check.show(ui).response.rect).inner
+}
+
 /// The grid of `boxes_grid` in a 300 pt column, inside an unwrapped `Row` or a `Stack`, with a button after it.
-fn grid_in(in_row: bool, wrap: fn(&mut egui::Ui, Checkbox<'_>) -> Rect) -> (GridBoxes, Rect) {
+fn grid_in(in_row: bool, wrap: Wrap) -> (GridBoxes, Rect) {
+    let (boxes, after, _) = grid_shown(in_row, wrap);
+    (boxes, after)
+}
+
+/// `grid_in`, with the fixture it ran in.
+fn grid_shown(in_row: bool, wrap: Wrap) -> (GridBoxes, Rect, Fixture) {
     let seen = Rc::new(Cell::new(([(Rect::NOTHING, Rect::NOTHING); GRID_ROWS], Rect::NOTHING)));
     let out = Rc::clone(&seen);
-    let _fixture = settled(move |ui| {
+    let fixture = settled(move |ui| {
         let room = Rect::from_min_size(ui.available_rect_before_wrap().min, egui::vec2(300.0, 600.0));
         let out = Rc::clone(&out);
         Stack::new().fill().show_at(ui, room, move |ui, _| {
@@ -211,7 +224,8 @@ fn grid_in(in_row: bool, wrap: fn(&mut egui::Ui, Checkbox<'_>) -> Rect) -> (Grid
             out.set((boxes, after));
         });
     });
-    seen.get()
+    let (boxes, after) = seen.get();
+    (boxes, after, fixture)
 }
 
 fn pitch(boxes: &GridBoxes) -> f32 {
@@ -229,13 +243,26 @@ fn check_boxes_in_an_egui_grid_in_a_row_keep_their_own_rows() {
     assert!(after.top() >= boxes[GRID_ROWS - 1].0.bottom() - ROUNDING, "the button {after:?} is under the grid {boxes:?}");
 }
 
-/// The same check boxes, each in an env scope (`with_env`): the scope copies the env it finds in the grid's `Ui`,
-/// which holds none of the row's facts, so the grid's rows stay as high as the same grid's outside a row.
+/// The same check boxes, each in a scope of its own in its cell (an env scope, `with_env`, or `ui.push_id`): the scope
+/// holds none of the row's facts, so the grid's rows stay as high as the same grid's outside a row, and the boxes are
+/// still in the grid's cells: the labels stay on one line and the two columns share each row.
 #[trial]
-fn check_boxes_in_env_scopes_in_an_egui_grid_in_a_row_keep_their_own_rows() {
-    let (alone, _) = grid_in(false, read_only);
-    let (boxes, _) = grid_in(true, read_only);
-    assert!((pitch(&boxes) - pitch(&alone)).abs() <= ROUNDING, "the grid rows in a row {boxes:?} are as high as outside one {alone:?}");
+fn check_boxes_in_scopes_in_an_egui_grid_in_a_row_keep_their_own_rows_and_lines() {
+    for (scope, wrap) in [("with_env", read_only as Wrap), ("push_id", pushed)] {
+        let (alone, _) = grid_in(false, wrap);
+        let (boxes, after, fixture) = grid_shown(true, wrap);
+        assert!((pitch(&boxes) - pitch(&alone)).abs() <= ROUNDING, "{scope}: the grid rows in a row {boxes:?} are as high as outside one {alone:?}");
+        let line = text(&fixture, "After").height();
+        for (row, (left, right)) in boxes.iter().enumerate() {
+            for name in [format!("Left {row}"), format!("Right {row}")] {
+                let label = text(&fixture, &name);
+                assert!(label.height() < line * 1.5, "{scope}: the label {name} {label:?} stays on one line");
+            }
+            assert!((left.center().y - right.center().y).abs() <= ROUNDING, "{scope}: the two columns share each row: {left:?} {right:?}");
+            assert!(right.left() >= left.right() - ROUNDING, "{scope}: the right column {right:?} follows the left {left:?}");
+        }
+        assert!(after.top() >= boxes[GRID_ROWS - 1].0.bottom() - ROUNDING, "{scope}: the button {after:?} is under the grid {boxes:?}");
+    }
 }
 
 /// Two columns of labelled check boxes in an `egui::Grid` share each row: the first column's labels are decided at
@@ -339,43 +366,82 @@ fn a_check_box_in_a_narrow_horizontal_wraps_its_label_at_the_rooms_end() {
     assert!(label.height() > one_line.height() * 1.5, "the label {label:?} wraps to a second line beside its box {two:?}");
 }
 
-/// Under right-to-left, labelled check boxes in an `egui::Grid` whose labels lengthen stay in their cells: egui lays
-/// the cells out from their left edges in any direction, so on the frame the labels change, the first column's box and
-/// label stay right of the grid's left edge, and once settled the second column stays clear of the first.
-#[trial]
-fn check_boxes_in_an_egui_grid_stay_in_their_cells_under_rtl() {
-    let name = |column: usize, long: bool| if long { format!("Column {column} with a longer name") } else { format!("C{column}") };
-    let long = Rc::new(Cell::new(false));
+/// One row of two labelled check boxes in an `egui::Grid` shown directly in a `Stack`, or in a `Row` in it (a dialog's
+/// custom row), in a 400 pt room under `direction`; `long` lengthens the labels. Records the two boxes and the grid's
+/// rect.
+fn one_row_grid(in_row: bool, direction: craft_i18n::Direction, long: &Rc<Cell<bool>>) -> (Fixture, Rc<Cell<[Rect; 3]>>) {
     let seen = Rc::new(Cell::new([Rect::NOTHING; 3]));
-    let (out, lengthen) = (Rc::clone(&seen), Rc::clone(&long));
+    let (out, lengthen) = (Rc::clone(&seen), Rc::clone(long));
     let mut fixture = Fixture::new(move |ui| {
         let (out, long) = (Rc::clone(&out), lengthen.get());
-        Stack::new().fill().show(ui, move |ui, _| {
+        let grid = move |ui: &mut egui::Ui| {
             let mut boxes = [Rect::NOTHING; 3];
-            // egui lays a grid out left to right only: in a right-to-left egui layout its cursor has no left edge.
-            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                boxes[2] = Rect::from_min_size(ui.available_rect_before_wrap().min, egui::Vec2::ZERO);
-                egui::Grid::new("boxes").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
+            boxes[2] = egui::Grid::new("boxes")
+                .num_columns(2)
+                .spacing([24.0, 6.0])
+                .show(ui, |ui| {
                     for (column, rect) in boxes.iter_mut().take(2).enumerate() {
-                        *rect = Checkbox::new(Bind::given(true)).label(name(column, long)).show(ui).response.rect;
+                        *rect = Checkbox::new(Bind::given(true)).label(column_name(column, long)).show(ui).response.rect;
                     }
                     ui.end_row();
-                });
-            });
+                })
+                .response
+                .rect;
             out.set(boxes);
+        };
+        Stack::new().fill().show(ui, move |ui, _| {
+            if in_row {
+                Row::new().fill().show(ui, |ui, _| grid(ui));
+            } else {
+                grid(ui);
+            }
         });
     });
-    fixture.direction(craft_i18n::Direction::Rtl).room(egui::vec2(400.0, 200.0)).settle();
-    let left = seen.get()[2].left();
-    long.set(true);
-    fixture.frame(vec![]);
-    for (part, rect) in [("box", seen.get()[0]), ("label", text(&fixture, &name(0, true)))] {
-        assert!(rect.left() >= left - ROUNDING, "the first column's {part} {rect:?} stays right of the grid's left edge {left}");
+    fixture.direction(direction).room(egui::vec2(400.0, 200.0)).settle();
+    (fixture, seen)
+}
+
+fn column_name(column: usize, long: bool) -> String {
+    if long { format!("Column {column} with a longer name") } else { format!("C{column}") }
+}
+
+/// What the cells of `one_row_grid` show: each column's box and label.
+fn cells(fixture: &Fixture, boxes: [Rect; 3]) -> [Rect; 2] {
+    [0, 1].map(|column| boxes[column].union(text(fixture, &column_name(column, true))))
+}
+
+/// Under right-to-left, labelled check boxes in an `egui::Grid` shown directly in a right-to-left body, or in a row
+/// there, stay in their cells: egui lays a grid out from its left edge in any direction, so the grid's rect is finite,
+/// on the frame the labels lengthen the first column's box and label stay right of the grid's left edge, once settled
+/// the second column stays clear of the first, and the cells take as much width as under left-to-right: the last
+/// column is as wide as its box and label, not the rest of the room.
+#[trial]
+fn check_boxes_in_an_egui_grid_stay_in_their_cells_under_rtl() {
+    for in_row in [false, true] {
+        let ltr = {
+            let long = Rc::new(Cell::new(true));
+            let (mut fixture, seen) = one_row_grid(in_row, craft_i18n::Direction::Ltr, &long);
+            fixture.settle();
+            cells(&fixture, seen.get())
+        };
+        let long = Rc::new(Cell::new(false));
+        let (mut fixture, seen) = one_row_grid(in_row, craft_i18n::Direction::Rtl, &long);
+        let grid = seen.get()[2];
+        assert!(grid.is_finite(), "in a row {in_row}: the grid's rect {grid:?} is finite");
+        long.set(true);
+        fixture.frame(vec![]);
+        for (part, rect) in [("box", seen.get()[0]), ("label", text(&fixture, &column_name(0, true)))] {
+            assert!(
+                rect.left() >= grid.left() - ROUNDING,
+                "in a row {in_row}: the first column's {part} {rect:?} stays right of the grid's left edge {grid:?}"
+            );
+        }
+        fixture.settle();
+        let [first, second] = cells(&fixture, seen.get());
+        assert!(second.left() >= first.right() - ROUNDING, "in a row {in_row}: the second column {second:?} is clear of the first {first:?}");
+        let (width, ltr_width) = (first.union(second).width(), ltr[0].union(ltr[1]).width());
+        assert!((width - ltr_width).abs() <= ROUNDING, "in a row {in_row}: the cells take {width} under RTL, as under LTR ({ltr_width})");
     }
-    fixture.settle();
-    let first = seen.get()[0].union(text(&fixture, &name(0, true)));
-    let second = seen.get()[1].union(text(&fixture, &name(1, true)));
-    assert!(second.left() >= first.right() - ROUNDING, "the second column {second:?} is clear of the first {first:?}");
 }
 
 /// A labelled container in an `egui::Grid`'s first column decides its label at its own width: the label stays on one
