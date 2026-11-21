@@ -4,13 +4,29 @@ Operations on triangle meshes, for apps that paint, bake or preview materials on
 crate has no UI, does no file or network I/O and has no `unsafe` code. File formats stay in
 [`craft-mesh`](../mesh/README.md).
 
-- **Slice functions.** `bounds`, `smooth_normals`, `tangents`, `weld` and `unwrap_uvs` at the crate
-  root, `UvGBuffer::from_slices` and `Bvh::from_slices` take plain slices: positions and normals
+- **Slice functions.** `bounds`, `smooth_normals`, `flat_normals`, `tangents`, `weld` and
+  `unwrap_uvs` at the crate root, `UvGBuffer::from_slices` and `Bvh::from_slices` take plain slices: positions and normals
   as `[f32; 3]`, UVs as `[f32; 2]`, triangle indices as `u32`. They check the counts against
   `Limits`, every index and every value (finite) before any work, and return a `MeshOpsError`.
   Values are `f32`; a caller that holds `f64` converts first and rejects values outside the `f32`
   range.
-- **Normals and tangents.** Smooth normals are area weighted. Tangents come from MikkTSpace, which
+- **Normals and tangents.** Smooth normals are area weighted: each triangle adds the cross
+  product of its edges, twice its area times its unit normal, to its three vertices, and each sum
+  is brought to unit length, the weighting described in Caltech's CS 171 notes
+  (<https://courses.cms.caltech.edu/cs171/assignments/hw5/hw5-notes/notes-hw5.html>). Vertices are
+  told apart by index, so the two copies of a vertex on a UV seam keep their own normals; a caller
+  that wants one normal across the seam passes the ids `weld` returns as the triangles' vertices
+  and copies each id's normal back. A vertex no triangle uses, or whose sum is zero, gets +Y.
+  `flat_normals` and `Mesh::try_flat_normals` give every triangle corner its own vertex with the
+  triangle's unit normal, which glTF 2.0 asks a loader to compute when a mesh has no normals; a
+  triangle without area gets +Z. `flat_normals` returns the input vertex each output vertex
+  copies, so a caller can carry UVs, colors, joints and weights over; `Mesh::try_flat_normals`
+  carries UVs and colors, keeps submeshes and polygon diagonals, and computes the tangents again
+  when the mesh had them. Both builders take the cross products in `f64`, so a triangle with a
+  side of 1e-15 or 1e20 keeps its normal. `Mesh::try_compute_normals` and `try_flat_normals`
+  return `Invalid` for an index count that is not a multiple of 3, an index past the last vertex
+  or a non-finite position, with the mesh unchanged; `compute_normals` skips a triangle with an
+  index out of range. Tangents come from MikkTSpace, which
   glTF 2.0 recommends for meshes without tangents
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign, and
   UVs have `(0, 0)` at the upper-left corner with `v` increasing downward. A mesh MikkTSpace
@@ -79,7 +95,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 
 | Field | Default | Checked by |
 |---|---|---|
-| `max_vertices` | 20,000,000 | every slice function, `try_subdivided`, the `try_` primitives (also after their tangents split vertices), `UvGBuffer::try_new`, `unwrap::auto_unwrap` (input and output), `Mesh::map_material_uvs` (the mesh's vertices and the copies of the vertices it shares with other materials) |
+| `max_vertices` | 20,000,000 | every slice function, `flat_normals` and `Mesh::try_flat_normals` (input and output: one vertex per index), `try_subdivided`, the `try_` primitives (also after their tangents split vertices), `UvGBuffer::try_new`, `unwrap::auto_unwrap` (input and output), `Mesh::map_material_uvs` (the mesh's vertices and the copies of the vertices it shares with other materials) |
 | `max_triangles` | 20,000,000 | the same except `auto_unwrap`, and `Bvh::from_slices`; the UV G-buffer also counts a triangle again each time another submesh of the material lists it; `Mesh::wire_edges`, `Mesh::uv_seam_edges`, `Mesh::uv_tiles` and `Mesh::map_material_uvs` count the triangles the submeshes list in the same way |
 | `max_segments` | 2,048 | the `try_` primitives (segments, rings or subdivisions along one direction, after a count under the primitive's minimum is raised to it; a box face has 12, or 22 with a bevel) |
 | `max_gbuffer_side` | 8,192 | `UvGBuffer::try_new`, `UvGBuffer::from_slices`; `UvGBuffer::new` clamps each side to `1..=8192` |
@@ -92,7 +108,7 @@ A BVH holds at most `bvh::MAX_BVH_TRIANGLES` (2^31 − 1) triangles.
 
 `Bvh::from_slices`, `Bvh::try_new`, `UvGBuffer::try_new` and `UvGBuffer::from_slices` reserve all
 their memory before using it. The other slice functions, `weld`, `Mesh::try_compute_normals`,
-`Mesh::try_compute_tangents`, `Mesh::try_subdivided`, the `try_` primitives, `unwrap::weld_ids`
+`Mesh::try_flat_normals`, `Mesh::try_compute_tangents`, `Mesh::try_subdivided`, the `try_` primitives, `unwrap::weld_ids`
 and the unwrap functions reserve their working memory and their results as they grow. Each
 returns `MeshOpsError::OutOfMemory` when a reservation fails. `Bvh::new` then returns an empty
 tree, `UvGBuffer::new` a 1 × 1 uncovered buffer, and `compute_normals` and `compute_tangents`
@@ -120,6 +136,7 @@ MikkTSpace comes from the `mikktspace` crate; its notice is in [ATTRIBUTION.md](
 |---|---|
 | TextureCraft | `texturecraft-geom` is the source. The app switches to this crate in its own pull request. |
 | MaterialCraft | `materialcraft-geom` is the source of `subdivided`. The app switches in its own pull request. |
+| EffectCraft | `effectcraft-model`'s `Primitive::compute_normals` and `flat_normals` give the same normals as `smooth_normals` and `flat_normals`, apart from the rows below. The app switches in its own pull request. |
 
 For both apps:
 
@@ -155,3 +172,16 @@ For both apps:
 | `auto_unwrap` joins faces whose projections overlap into one chart | such a face starts another chart |
 | `auto_unwrap` accepts a layout that fits only at scale zero | the packing square grows until the charts fit at a positive scale |
 | `weld_ids` returns the ids | it returns `Result`, with `OutOfMemory` when the ids or the grid cannot be reserved |
+| `Mesh::compute_normals` sums the cross products in `f32`, so a vertex of a triangle with sides of 1e-15 or 1e20 gets +Y | the sums are in `f64`, and the vertex keeps its normal |
+| `Mesh::compute_normals` skips a triangle with an index out of range and ignores a trailing index | `compute_normals` still does; `try_compute_normals` returns `Invalid` for those and for a non-finite position |
+| TextureCraft's mesh import welds vertices at one position before summing | `smooth_normals` keeps them apart; weld with `weld` first to share a normal across a seam |
+
+For EffectCraft:
+
+| `effectcraft-model` `Primitive` | craft-mesh-ops |
+| --- | --- |
+| `compute_normals` gives +Z to a vertex no triangle uses or whose sum is zero | `smooth_normals` gives +Y; `flat_normals` gives +Z to a triangle without area, as `Primitive::flat_normals` does |
+| `compute_normals` and `flat_normals` panic on an index out of range | an `Invalid` error |
+| `flat_normals` panics when the UVs, joints or weights are shorter than the positions | `flat_normals` returns `source`, and the caller copies each array through it; `Mesh::try_flat_normals` returns `Invalid` for short UVs or colors |
+| The cross products are taken in `f32`, so a triangle with sides of 1e-15 or 1e20 gets +Z | they are taken in `f64`, and the triangle keeps its normal |
+| `flat_normals` copies each vertex's tangent to its corners | `Mesh::try_flat_normals` computes the tangents again for the new normals |

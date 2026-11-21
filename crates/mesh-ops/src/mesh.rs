@@ -216,6 +216,82 @@ fn try_submeshes(submeshes: &[SubMesh], what: &'static str) -> Result<Vec<SubMes
     Ok(v)
 }
 
+/// `Invalid` unless the index count is a multiple of 3, every index names one of `positions` and
+/// every position is finite.
+pub(crate) fn check_triangles(positions: &[Vec3], indices: &[u32]) -> Result<()> {
+    let n = positions.len();
+    if !indices.len().is_multiple_of(3) {
+        return Err(MeshOpsError::Invalid("index count is not a multiple of 3".into()));
+    }
+    if let Some(bad) = indices.iter().find(|&&i| i as usize >= n) {
+        return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({n} vertices)")));
+    }
+    if positions.iter().any(|p| !p.is_finite()) {
+        return Err(MeshOpsError::Invalid("non-finite position".into()));
+    }
+    Ok(())
+}
+
+/// The unit normal of the triangle `a, b, c`, on the side from which its corners run
+/// counterclockwise, or +Z when the triangle has no area. The cross product of its edges is
+/// taken in `f64`, where it neither overflows nor rounds to zero for finite `f32` corners.
+pub(crate) fn face_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    let (a, b, c) = (a.as_dvec3(), b.as_dvec3(), c.as_dvec3());
+    (b - a).cross(c - a).try_normalize().map_or(Vec3::Z, |n| n.as_vec3())
+}
+
+/// A mesh with one vertex per triangle corner, as [`flat_corners`] makes it.
+pub(crate) struct FlatCorners {
+    pub positions: Vec<Vec3>,
+    /// The [`face_normal`] of each vertex's triangle.
+    pub normals: Vec<Vec3>,
+    /// `0, 1, 2, ...`: the triangles in the input's order.
+    pub indices: Vec<u32>,
+    /// The input vertex each vertex copies.
+    pub source: Vec<u32>,
+}
+
+/// One vertex per corner of the triangles `indices` lists, with its triangle's [`face_normal`].
+/// The counts are checked against `limits` (the output has a vertex per index) and the
+/// triangles with [`check_triangles`] before any memory is reserved.
+pub(crate) fn flat_corners(positions: &[Vec3], indices: &[u32], limits: &Limits) -> Result<FlatCorners> {
+    check_limit("vertex count", positions.len(), limits.max_vertices)?;
+    check_limit("triangle count", indices.len() / 3, limits.max_triangles)?;
+    check_limit("vertex count", indices.len(), limits.max_vertices)?;
+    let count = u32::try_from(indices.len()).map_err(|_| MeshOpsError::Invalid("index count does not fit in u32".into()))?;
+    check_triangles(positions, indices)?;
+    let mut out = FlatCorners {
+        positions: try_vec(indices.len(), "positions")?,
+        normals: try_vec(indices.len(), "normals")?,
+        indices: try_vec(indices.len(), "indices")?,
+        source: try_vec(indices.len(), "vertex sources")?,
+    };
+    for &[a, b, c] in indices.as_chunks::<3>().0 {
+        let (Some(&pa), Some(&pb), Some(&pc)) = (positions.get(a as usize), positions.get(b as usize), positions.get(c as usize)) else {
+            return Err(MeshOpsError::Invalid(format!("triangle ({a}, {b}, {c}) is out of range ({} vertices)", positions.len())));
+        };
+        let normal = face_normal(pa, pb, pc);
+        out.positions.extend([pa, pb, pc]);
+        out.normals.extend([normal; 3]);
+        out.source.extend([a, b, c]);
+    }
+    out.indices.extend(0..count);
+    Ok(out)
+}
+
+/// The value of `values` for each of `source`, or an empty array when `values` is empty.
+fn gather<T: Copy>(values: &[T], source: &[u32], what: &'static str) -> Result<Vec<T>> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = try_vec(source.len(), what)?;
+    for &s in source {
+        let value = values.get(s as usize).ok_or_else(|| MeshOpsError::Invalid(format!("vertex {s} has no {what}")))?;
+        out.push(*value);
+    }
+    Ok(out)
+}
+
 impl Mesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
@@ -473,15 +549,76 @@ impl Mesh {
         Ok(())
     }
 
-    /// Area-weighted smooth normals over the index buffer. Leaves the normals unchanged when the
-    /// memory for them cannot be reserved.
+    /// Area-weighted smooth normals over the index buffer, as [`Mesh::try_compute_normals`]
+    /// computes them. A triangle with an index past the last vertex is skipped, and a vertex
+    /// whose sum is not finite gets +Y. Leaves the normals unchanged when the memory for them
+    /// cannot be reserved.
     pub fn compute_normals(&mut self) {
-        let _ = self.try_compute_normals();
+        if let Ok(normals) = self.smooth_normals() {
+            self.normals = normals;
+        }
     }
 
-    /// [`Mesh::compute_normals`], or `OutOfMemory` with the mesh unchanged.
+    /// Area-weighted smooth normals, one per vertex: each triangle adds the cross product of its
+    /// edges, twice its area times its unit normal, to its three vertices, and each sum is brought
+    /// to unit length. Vertices are told apart by index, so two vertices at one position (a UV
+    /// seam) keep their own normals; [`crate::weld`] gives the ids to merge them first. A vertex
+    /// no triangle uses, or whose sum is zero, gets +Y. Tangents are left as they are; call
+    /// [`Mesh::try_compute_tangents`] for tangents that follow the new normals.
+    ///
+    /// An index count that is not a multiple of 3, an index past the last vertex or a non-finite
+    /// position is `Invalid`, and a failed reservation is `OutOfMemory`, each with the mesh
+    /// unchanged.
     pub fn try_compute_normals(&mut self) -> Result<()> {
+        check_triangles(&self.positions, &self.indices)?;
         self.normals = self.smooth_normals()?;
+        Ok(())
+    }
+
+    /// Flat normals: every triangle corner gets its own vertex, with its triangle's unit normal
+    /// (on the side from which its corners run counterclockwise, from the cross product of its
+    /// edges in `f64`) and the UV and color of the vertex it copies. A triangle without area gets
+    /// +Z. The indices become `0, 1, 2, ...`, so submeshes, materials and polygon diagonals
+    /// keep their triangles, and vertices no triangle uses are dropped. When the mesh has one
+    /// tangent per vertex, tangents are computed again for the new normals
+    /// ([`Mesh::try_compute_tangents`], from zero UVs when the mesh has none, and the UVs stay
+    /// empty); otherwise they stay empty.
+    ///
+    /// An index count that is not a multiple of 3, an index past the last vertex, a non-finite
+    /// position, UV or color, or UVs, colors or tangents that are neither empty nor one per vertex
+    /// are `Invalid`. More output vertices (one per corner) than [`Limits::max_vertices`], or more
+    /// triangles than [`Limits::max_triangles`], are `TooLarge`, and a failed reservation is
+    /// `OutOfMemory`. Every error leaves the mesh unchanged.
+    pub fn try_flat_normals(&mut self, limits: &Limits) -> Result<()> {
+        let n = self.positions.len();
+        for (what, len) in [("UVs", self.uvs.len()), ("vertex colors", self.colors.len()), ("tangents", self.tangents.len())] {
+            if len != 0 && len != n {
+                return Err(MeshOpsError::Invalid(format!("{len} {what} for {n} vertices")));
+            }
+        }
+        if self.uvs.iter().any(|v| !v.is_finite()) || self.colors.iter().any(|v| !v.is_finite()) {
+            return Err(MeshOpsError::Invalid("non-finite UV or color".into()));
+        }
+        let corners = flat_corners(&self.positions, &self.indices, limits)?;
+        let mut flat = Mesh {
+            uvs: gather(&self.uvs, &corners.source, "UVs")?,
+            colors: gather(&self.colors, &corners.source, "colors")?,
+            positions: corners.positions,
+            normals: corners.normals,
+            indices: corners.indices,
+            ..Mesh::default()
+        };
+        if per_vertex(self.tangents.len(), n) {
+            flat.try_compute_tangents()?;
+            // Tangents for a mesh without UVs come from zero UVs, which the mesh does not keep.
+            if self.uvs.is_empty() {
+                flat.uvs = Vec::new();
+            }
+        }
+        flat.submeshes = std::mem::take(&mut self.submeshes);
+        flat.materials = std::mem::take(&mut self.materials);
+        flat.diagonals = std::mem::take(&mut self.diagonals);
+        *self = flat;
         Ok(())
     }
 
@@ -881,7 +1018,7 @@ impl Mesh {
             }
             let mut w = m.vertex_copy()?;
             if need_normals && !has_normals {
-                w.try_compute_normals()?;
+                w.normals = w.smooth_normals()?;
             }
             if need_uvs && !has_uvs {
                 w.uvs = try_filled(w.positions.len(), Vec2::ZERO, "UVs")?;
@@ -1916,6 +2053,405 @@ mod tests {
         assert_eq!(unit(Vec3::new(0.0, 0.0, 2e19)), Some(Vec3::Z));
         assert_eq!(unit(Vec3::new(-1e-25, 0.0, 0.0)), Some(Vec3::NEG_X));
         assert_eq!((unit(Vec3::ZERO), unit(Vec3::new(f32::NAN, 0.0, 0.0)), unit(Vec3::new(f32::INFINITY, 0.0, 0.0))), (None, None, None));
+    }
+
+    /// A cube from -1 to 1: eight shared corners (bit 0 of the index is +X, bit 1 +Y, bit 2 +Z)
+    /// and two triangles per face, counterclockwise seen from outside.
+    fn cube_corners() -> (Vec<[f32; 3]>, Vec<u32>) {
+        let positions = (0..8u32).map(|i| [0, 1, 2].map(|axis| if i >> axis & 1 == 1 { 1.0 } else { -1.0 })).collect();
+        let quads = [[0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6]];
+        (positions, quads.iter().flat_map(|[a, b, c, d]| [*a, *b, *c, *a, *c, *d]).collect())
+    }
+
+    /// A UV sphere of radius 1 around the origin, counterclockwise seen from outside: a vertex at
+    /// each pole and `segments` vertices on each of `rings - 1` rings. With `seam`, every ring
+    /// repeats its first vertex at its end, as a UV seam needs; the third value lists the
+    /// vertices on the seam.
+    fn uv_sphere(segments: u32, rings: u32, seam: bool) -> (Vec<[f32; 3]>, Vec<u32>, Vec<usize>) {
+        let columns = segments + u32::from(seam);
+        let at = |ring: u32, column: u32| 1 + (ring - 1) * columns + if seam { column } else { column % segments };
+        let south = 1 + (rings - 1) * columns;
+        let mut positions = vec![[0.0, 1.0, 0.0]];
+        let mut on_seam = Vec::new();
+        for ring in 1..rings {
+            let theta = std::f32::consts::PI * ring as f32 / rings as f32;
+            for column in 0..columns {
+                // The repeated vertex at the end of a ring is at the same position as the first.
+                let phi = std::f32::consts::TAU * (column % segments) as f32 / segments as f32;
+                if seam && (column == 0 || column == segments) {
+                    on_seam.push(positions.len());
+                }
+                positions.push([theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin()]);
+            }
+        }
+        positions.push([0.0, -1.0, 0.0]);
+        let mut indices = Vec::new();
+        for column in 0..segments {
+            indices.extend([0, at(1, column + 1), at(1, column)]);
+            for ring in 1..rings - 1 {
+                let (a, b, c, d) = (at(ring, column), at(ring, column + 1), at(ring + 1, column), at(ring + 1, column + 1));
+                indices.extend([a, b, d, a, d, c]);
+            }
+            indices.extend([south, at(rings - 1, column), at(rings - 1, column + 1)]);
+        }
+        (positions, indices, on_seam)
+    }
+
+    fn smooth(positions: &[[f32; 3]], indices: &[u32]) -> Vec<Vec3> {
+        crate::smooth_normals(positions, indices, &Limits::default()).unwrap().into_iter().map(Vec3::from_array).collect()
+    }
+
+    fn flat(positions: &[[f32; 3]], indices: &[u32]) -> crate::FlatNormals {
+        crate::flat_normals(positions, indices, &Limits::default()).unwrap()
+    }
+
+    #[test]
+    fn flat_normals_of_a_cube_are_its_face_normals() {
+        let (positions, indices) = cube_corners();
+        let f = flat(&positions, &indices);
+        assert_eq!(f.indices, (0..36).collect::<Vec<u32>>());
+        assert_eq!(f.source, indices);
+        for (k, n) in f.normals.iter().enumerate() {
+            assert_eq!(f.positions[k], positions[f.source[k] as usize]);
+            // The face's center lies on the axis it faces.
+            let corners = &indices[k / 3 * 3..k / 3 * 3 + 3];
+            let center = corners.iter().map(|&v| Vec3::from_array(positions[v as usize])).sum::<Vec3>() / 3.0;
+            let axis = (0..3).max_by(|&a, &b| center[a].abs().total_cmp(&center[b].abs())).unwrap();
+            let mut face = Vec3::ZERO;
+            face[axis] = center[axis].signum();
+            assert_eq!(Vec3::from_array(*n), face, "corner {k}");
+        }
+    }
+
+    #[test]
+    fn smooth_normals_of_a_sphere_point_outward() {
+        let (positions, indices, _) = uv_sphere(32, 16, false);
+        for (p, n) in positions.iter().zip(smooth(&positions, &indices)) {
+            let p = Vec3::from_array(*p);
+            assert!((n.length() - 1.0).abs() < 1e-6, "{n}");
+            assert!(n.dot(p) > 0.995, "{p} {n}");
+        }
+        let f = flat(&positions, &indices);
+        for (corners, normals) in f.positions.chunks(3).zip(f.normals.chunks(3)) {
+            let center = corners.iter().map(|p| Vec3::from_array(*p)).sum::<Vec3>().normalize();
+            assert!(Vec3::from_array(normals[0]).dot(center) > 0.99, "{center} {:?}", normals[0]);
+        }
+    }
+
+    #[test]
+    fn a_zero_area_triangle_adds_nothing_and_makes_no_nan() {
+        // A unit square in the YZ plane facing +X, a triangle along its edge from vertex 0 through
+        // vertex 1 to vertex 4, and a triangle with a repeated corner.
+        let positions = [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0], [0.0, 2.0, 0.0]];
+        let square = [0, 1, 2, 0, 2, 3];
+        let with_degenerate = [0, 1, 2, 0, 2, 3, 0, 1, 4, 2, 2, 3];
+        let normals = smooth(&positions, &with_degenerate);
+        assert_eq!(normals, smooth(&positions, &square));
+        assert_eq!(normals, vec![Vec3::X, Vec3::X, Vec3::X, Vec3::X, Vec3::Y]);
+        let f = flat(&positions, &with_degenerate);
+        let expected = [[1.0, 0.0, 0.0]; 6].into_iter().chain([[0.0, 0.0, 1.0]; 6]).collect::<Vec<_>>();
+        assert_eq!(f.normals, expected);
+    }
+
+    #[test]
+    fn normals_of_an_empty_mesh_are_empty() {
+        let l = Limits::default();
+        assert_eq!(crate::smooth_normals(&[], &[], &l).unwrap(), Vec::<[f32; 3]>::new());
+        assert_eq!(
+            crate::flat_normals(&[], &[], &l).unwrap(),
+            crate::FlatNormals { positions: vec![], normals: vec![], indices: vec![], source: vec![] }
+        );
+        // A vertex without triangles gets +Y from the smooth builder and is left out by the flat one.
+        assert_eq!(crate::smooth_normals(&[[1.0, 2.0, 3.0]], &[], &l).unwrap(), vec![[0.0, 1.0, 0.0]]);
+        assert!(crate::flat_normals(&[[1.0, 2.0, 3.0]], &[], &l).unwrap().positions.is_empty());
+        let mut m = Mesh::default();
+        m.try_flat_normals(&l).unwrap();
+        m.try_compute_normals().unwrap();
+        assert_eq!(m, Mesh::default());
+    }
+
+    #[test]
+    fn normal_builders_reject_bad_indices_and_non_finite_positions() {
+        let l = Limits::default();
+        let good = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let nan = [[0.0, 0.0, 0.0], [f32::NAN, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let infinite = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, f32::INFINITY, 0.0]];
+        let cases: [(&[[f32; 3]], &[u32]); 5] =
+            [(&good, &[0, 1, 3]), (&good, &[0, 1, 2, 0]), (&good, &[0, 1, 2, 2, 1]), (&nan, &[0, 1, 2]), (&infinite, &[0, 1, 2])];
+        for (positions, indices) in cases {
+            assert!(matches!(crate::smooth_normals(positions, indices, &l), Err(MeshOpsError::Invalid(_))), "{positions:?} {indices:?}");
+            assert!(matches!(crate::flat_normals(positions, indices, &l), Err(MeshOpsError::Invalid(_))), "{positions:?} {indices:?}");
+            let mut m = Mesh {
+                positions: positions.iter().map(|p| Vec3::from_array(*p)).collect(),
+                normals: vec![Vec3::X; 3],
+                indices: indices.to_vec(),
+                ..Mesh::default()
+            };
+            // Debug output compares NaN positions too.
+            let before = format!("{m:?}");
+            assert!(matches!(m.try_compute_normals(), Err(MeshOpsError::Invalid(_))), "{positions:?} {indices:?}");
+            assert!(matches!(m.try_flat_normals(&l), Err(MeshOpsError::Invalid(_))), "{positions:?} {indices:?}");
+            assert_eq!(format!("{m:?}"), before);
+        }
+        // `compute_normals` skips a triangle with an index out of range.
+        let mut m = Mesh { positions: good.iter().map(|p| Vec3::from_array(*p)).collect(), indices: vec![0, 1, 2, 0, 1, 3], ..Mesh::default() };
+        m.compute_normals();
+        assert_eq!(m.normals, vec![Vec3::Z; 3]);
+    }
+
+    #[test]
+    fn flat_normals_check_the_output_against_the_limits() {
+        // Two triangles over four vertices make six output vertices.
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let indices = [0, 1, 2, 0, 2, 3];
+        let five = Limits { max_vertices: 5, ..Limits::default() };
+        let over = Err(MeshOpsError::TooLarge { what: "vertex count", got: 6, limit: 5 });
+        assert_eq!(crate::flat_normals(&positions, &indices, &five), over);
+        let mut m = quad();
+        let before = m.clone();
+        assert_eq!(m.try_flat_normals(&five), over.map(|_: crate::FlatNormals| ()));
+        assert_eq!(m, before);
+        let one = Limits { max_triangles: 1, ..Limits::default() };
+        assert_eq!(m.try_flat_normals(&one), Err(MeshOpsError::TooLarge { what: "triangle count", got: 2, limit: 1 }));
+        assert_eq!(m, before);
+        assert!(crate::flat_normals(&positions, &indices, &Limits { max_vertices: 6, ..Limits::default() }).is_ok());
+    }
+
+    #[test]
+    fn flat_normals_carry_vertex_data_and_compute_tangents_again() {
+        // The quad's two triangles in two materials, its diagonal hidden, and tangents that no
+        // longer match its normals.
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes = vec![
+            SubMesh { name: "first".into(), material: 0, start: 0, count: 3 },
+            SubMesh { name: "second".into(), material: 1, start: 3, count: 3 },
+        ];
+        m.diagonals = vec![0b100, 0b001];
+        m.colors = (0..4).map(|i| Vec4::new(i as f32 / 4.0, 0.5, 0.25, 1.0)).collect();
+        m.tangents = vec![Vec4::new(0.0, 1.0, 0.0, 1.0); 4];
+        let before = m.clone();
+        m.try_flat_normals(&Limits::default()).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.indices, (0..6).collect::<Vec<u32>>());
+        for (k, s) in [0, 1, 2, 0, 2, 3].into_iter().enumerate() {
+            assert_eq!((m.positions[k], m.uvs[k], m.colors[k], m.normals[k]), (before.positions[s], before.uvs[s], before.colors[s], Vec3::Z));
+            assert!((m.tangents[k] - quad().tangents[s]).length() < 1e-4, "{:?}", m.tangents[k]);
+        }
+        assert_eq!((&m.submeshes, &m.materials, &m.diagonals), (&before.submeshes, &before.materials, &before.diagonals));
+        // A mesh without tangents, UVs or colors gets none.
+        let mut bare = Mesh { positions: before.positions.clone(), indices: before.indices.clone(), ..Mesh::default() };
+        bare.try_flat_normals(&Limits::default()).unwrap();
+        assert_eq!((bare.normals.len(), bare.uvs.len(), bare.colors.len(), bare.tangents.len()), (6, 0, 0, 0));
+        // A mesh with tangents and no UVs keeps tangents and gets no UVs.
+        let mut no_uvs = Mesh { uvs: Vec::new(), ..before };
+        no_uvs.try_flat_normals(&Limits::default()).unwrap();
+        assert_eq!((no_uvs.uvs.len(), no_uvs.tangents.len()), (0, 6));
+    }
+
+    #[test]
+    fn flat_normals_reject_short_or_non_finite_vertex_data() {
+        let changes: [fn(&mut Mesh); 4] =
+            [|m| m.uvs.truncate(3), |m| m.colors = vec![Vec4::ONE; 2], |m| m.tangents.truncate(3), |m| m.uvs[0].x = f32::NAN];
+        for (k, change) in changes.into_iter().enumerate() {
+            let mut m = quad();
+            change(&mut m);
+            let before = format!("{m:?}");
+            assert!(matches!(m.try_flat_normals(&Limits::default()), Err(MeshOpsError::Invalid(_))), "change {k}");
+            assert_eq!(format!("{m:?}"), before, "change {k}");
+        }
+    }
+
+    /// TextureCraft `geom`'s `Mesh::compute_normals`, written out for comparison: edge cross
+    /// products summed per vertex index in `f32`, +Y where a sum has no direction.
+    fn texturecraft_smooth(p: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
+        let mut sums = vec![Vec3::ZERO; p.len()];
+        for t in indices.as_chunks::<3>().0 {
+            let face = f32_cross(p, t);
+            for v in t {
+                sums[*v as usize] += face;
+            }
+        }
+        sums.into_iter().map(|s| s.try_normalize().unwrap_or(Vec3::Y)).collect()
+    }
+
+    /// The cross product of the edges of triangle `t`, in `f32`.
+    fn f32_cross(p: &[Vec3], t: &[u32; 3]) -> Vec3 {
+        let [a, b, c] = t.map(|i| p[i as usize]);
+        (b - a).cross(c - a)
+    }
+
+    /// TextureCraft's mesh import, written out for comparison: the same sums over welded
+    /// vertices, so the copies of a vertex on a UV seam share one normal.
+    fn texturecraft_welded(p: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
+        let weld = crate::unwrap::weld_ids(p).unwrap();
+        let mut sums = vec![Vec3::ZERO; p.len()];
+        for t in indices.as_chunks::<3>().0 {
+            let face = f32_cross(p, t);
+            for v in t {
+                sums[weld[*v as usize] as usize] += face;
+            }
+        }
+        weld.iter().map(|w| sums[*w as usize].try_normalize().unwrap_or(Vec3::Y)).collect()
+    }
+
+    /// EffectCraft `model`'s unit length: only for a length above 1e-20 that is finite.
+    fn effectcraft_unit(v: Vec3) -> Option<Vec3> {
+        let length = v.dot(v).sqrt();
+        (length > 1e-20 && length.is_finite()).then(|| v / length)
+    }
+
+    /// EffectCraft `model`'s `Primitive::compute_normals`, written out for comparison: `f32` sums
+    /// per vertex index, +Z where a sum has no direction.
+    fn effectcraft_smooth(p: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
+        let mut sums = vec![Vec3::ZERO; p.len()];
+        for t in indices.as_chunks::<3>().0 {
+            let face = f32_cross(p, t);
+            for v in t {
+                sums[*v as usize] += face;
+            }
+        }
+        sums.into_iter().map(|s| effectcraft_unit(s).unwrap_or(Vec3::Z)).collect()
+    }
+
+    /// EffectCraft `model`'s `Primitive::flat_normals`, written out for comparison: positions,
+    /// normals and source vertices of the corners, +Z for a face without direction.
+    fn effectcraft_flat(p: &[Vec3], indices: &[u32]) -> (Vec<Vec3>, Vec<Vec3>, Vec<u32>) {
+        let (mut positions, mut normals, mut source) = (Vec::new(), Vec::new(), Vec::new());
+        for t in indices.as_chunks::<3>().0 {
+            let normal = effectcraft_unit(f32_cross(p, t)).unwrap_or(Vec3::Z);
+            for v in t {
+                positions.push(p[*v as usize]);
+                normals.push(normal);
+                source.push(*v);
+            }
+        }
+        (positions, normals, source)
+    }
+
+    /// The vertices whose normals in `a` and `b` are more than about 0.1° apart.
+    fn apart(a: &[Vec3], b: &[Vec3]) -> Vec<usize> {
+        assert_eq!(a.len(), b.len());
+        (0..a.len()).filter(|&v| a[v].dot(b[v]) < 1.0 - 2e-6).collect()
+    }
+
+    /// A mesh for the comparison with the app builders, and where its normals are expected to
+    /// differ from theirs.
+    struct Case {
+        name: &'static str,
+        positions: Vec<[f32; 3]>,
+        indices: Vec<u32>,
+        /// Vertices whose sum has no direction: +Y here and in TextureCraft, +Z in EffectCraft.
+        no_direction: Vec<usize>,
+        /// Vertices on a UV seam, which TextureCraft's import welds.
+        seam: Vec<usize>,
+        /// Triangles whose `f32` cross product overflows or underflows, which the apps give a
+        /// fallback direction and this crate, working in `f64`, its real normal.
+        extreme: Vec<usize>,
+    }
+
+    fn comparison_cases() -> Vec<Case> {
+        let (cube_positions, cube_indices) = cube_corners();
+        let (sphere_positions, sphere_indices, _) = uv_sphere(16, 8, false);
+        let (seam_positions, seam_indices, seam) = uv_sphere(16, 8, true);
+        let none = Vec::new;
+        vec![
+            Case { name: "cube", positions: cube_positions, indices: cube_indices, no_direction: none(), seam: none(), extreme: none() },
+            Case { name: "sphere", positions: sphere_positions, indices: sphere_indices, no_direction: none(), seam: none(), extreme: none() },
+            Case { name: "sphere with a seam", positions: seam_positions, indices: seam_indices, no_direction: none(), seam, extreme: none() },
+            Case {
+                // A square, a triangle along its edge out to vertex 4, a triangle with a repeated
+                // corner, and vertex 5, which no triangle uses.
+                name: "zero-area triangles",
+                positions: vec![[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0], [0.0, 2.0, 0.0], [5.0, 5.0, 5.0]],
+                indices: vec![0, 1, 2, 0, 2, 3, 0, 1, 4, 2, 2, 3],
+                no_direction: vec![4, 5],
+                seam: none(),
+                extreme: none(),
+            },
+            Case {
+                // Three triangles on the edge from vertex 0 to vertex 1.
+                name: "non-manifold edge",
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [0.5, -0.5, 0.8], [0.5, -0.5, -0.8]],
+                indices: vec![0, 1, 2, 1, 0, 3, 0, 1, 4],
+                no_direction: none(),
+                seam: none(),
+                extreme: none(),
+            },
+            Case {
+                // One triangle listed with both windings.
+                name: "opposite windings",
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                indices: vec![0, 1, 2, 0, 2, 1],
+                no_direction: vec![0, 1, 2],
+                seam: none(),
+                extreme: none(),
+            },
+            Case {
+                // Triangles facing +X with sides of 1e-15 and 1e20.
+                name: "tiny and huge triangles",
+                positions: vec![[0.0, 0.0, 0.0], [0.0, 1e-15, 0.0], [0.0, 0.0, 1e-15], [1.0, 0.0, 0.0], [1.0, 1e20, 0.0], [1.0, 0.0, 1e20]],
+                indices: vec![0, 1, 2, 3, 4, 5],
+                no_direction: none(),
+                seam: none(),
+                extreme: vec![0, 1],
+            },
+        ]
+    }
+
+    #[test]
+    fn normal_builders_differ_from_texturecraft_and_effectcraft_only_where_expected() {
+        let l = Limits::default();
+        for case in comparison_cases() {
+            let p: Vec<Vec3> = case.positions.iter().map(|p| Vec3::from_array(*p)).collect();
+            let extreme_vertices: Vec<usize> = case.extreme.iter().flat_map(|t| case.indices[t * 3..t * 3 + 3].iter().map(|v| *v as usize)).collect();
+            let sorted = |mut v: Vec<usize>| {
+                v.sort_unstable();
+                v.dedup();
+                v
+            };
+            let ours = smooth(&case.positions, &case.indices);
+            assert!(ours.iter().all(|n| (n.length() - 1.0).abs() < 1e-6), "{}: {ours:?}", case.name);
+            assert_eq!(apart(&ours, &texturecraft_smooth(&p, &case.indices)), sorted(extreme_vertices.clone()), "{}", case.name);
+            assert_eq!(
+                apart(&ours, &effectcraft_smooth(&p, &case.indices)),
+                sorted([case.no_direction.clone(), extreme_vertices.clone()].concat()),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                apart(&ours, &texturecraft_welded(&p, &case.indices)),
+                sorted([case.seam.clone(), extreme_vertices.clone()].concat()),
+                "{}",
+                case.name
+            );
+
+            // Welding first, then copying each id's normal back, shares the normal across a seam.
+            let ids = crate::weld(&case.positions, &l).unwrap();
+            let mut first = Vec::new();
+            for (v, id) in ids.iter().enumerate() {
+                if *id as usize == first.len() {
+                    first.push(case.positions[v]);
+                }
+            }
+            let welded_indices: Vec<u32> = case.indices.iter().map(|v| ids[*v as usize]).collect();
+            let by_id = smooth(&first, &welded_indices);
+            let scattered: Vec<Vec3> = ids.iter().map(|id| by_id[*id as usize]).collect();
+            assert_eq!(apart(&scattered, &texturecraft_welded(&p, &case.indices)), sorted(extreme_vertices.clone()), "{}", case.name);
+
+            let f = flat(&case.positions, &case.indices);
+            let (positions, normals, source) = effectcraft_flat(&p, &case.indices);
+            assert_eq!(f.positions.iter().map(|p| Vec3::from_array(*p)).collect::<Vec<_>>(), positions, "{}", case.name);
+            assert_eq!(f.source, source, "{}", case.name);
+            let extreme_corners: Vec<usize> = case.extreme.iter().flat_map(|t| t * 3..t * 3 + 3).collect();
+            let normals_here: Vec<Vec3> = f.normals.iter().map(|n| Vec3::from_array(*n)).collect();
+            assert!(normals_here.iter().all(|n| (n.length() - 1.0).abs() < 1e-6), "{}: {normals_here:?}", case.name);
+            assert_eq!(apart(&normals_here, &normals), extreme_corners, "{}", case.name);
+        }
+        // Working in `f64`, the tiny and huge triangles keep their real normal.
+        let case = comparison_cases().pop().unwrap();
+        assert_eq!(smooth(&case.positions, &case.indices), vec![Vec3::X; 6]);
+        assert_eq!(flat(&case.positions, &case.indices).normals, vec![[1.0, 0.0, 0.0]; 6]);
     }
 
     #[test]

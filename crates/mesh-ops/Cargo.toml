@@ -1,6 +1,6 @@
 [package]
 name = "craft-mesh-ops"
-description = "Triangle mesh operations: smooth normals, MikkTSpace tangents, welding, UV unwrapping, a UV-space G-buffer, primitives with UVs and a BVH, bounded on hostile input"
+description = "Triangle mesh operations: smooth and flat normals, MikkTSpace tangents, welding, UV unwrapping, a UV-space G-buffer, primitives with UVs and a BVH, bounded on hostile input"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

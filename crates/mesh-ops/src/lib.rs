@@ -1,7 +1,7 @@
 //! # craft-mesh-ops
 //!
-//! Operations on triangle meshes: area-weighted smooth normals, MikkTSpace tangents, welding,
-//! automatic UV unwrapping, the UV-space [`UvGBuffer`] that maps texels to surface points,
+//! Operations on triangle meshes: area-weighted smooth normals, flat normals, MikkTSpace
+//! tangents, welding, automatic UV unwrapping, the UV-space [`UvGBuffer`] that maps texels to surface points,
 //! built-in [`primitives`] with UVs, a [`Bvh`] for ray casts and box queries (feature `bvh`) and
 //! the [`OrbitCamera`].
 //!
@@ -141,13 +141,48 @@ pub fn bounds(positions: &[[f32; 3]]) -> Result<Option<([f32; 3], [f32; 3])>> {
     Ok(found.map(|(lo, hi)| (lo.to_array(), hi.to_array())))
 }
 
-/// Area-weighted smooth normals, one per vertex. A vertex no triangle uses gets +Y.
+/// Area-weighted smooth normals, one per vertex, as [`Mesh::try_compute_normals`] computes them.
+/// Vertices are told apart by index, so two vertices at one position keep their own normals; to
+/// share one normal across a UV seam, give the triangles the ids [`weld`] returns and copy each
+/// id's normal back to its vertices. A vertex no triangle uses, or whose triangles' products sum
+/// to zero, gets +Y.
 pub fn smooth_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) -> Result<Vec<[f32; 3]>> {
     let mut mesh = Mesh::from_slices(positions, None, None, indices, limits)?;
     mesh.try_compute_normals()?;
     let mut out = try_vec(mesh.normals.len(), "normals")?;
     out.extend(mesh.normals.iter().map(|n| n.to_array()));
     Ok(out)
+}
+
+/// The result of [`flat_normals`]: one vertex per triangle corner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlatNormals {
+    /// The position of each output vertex.
+    pub positions: Vec<[f32; 3]>,
+    /// The unit normal of each output vertex's triangle, +Z for a triangle without area.
+    pub normals: Vec<[f32; 3]>,
+    /// Triangles over the output vertices, in the input's triangle order: `0, 1, 2, ...`.
+    pub indices: Vec<u32>,
+    /// The input vertex each output vertex copies, for carrying other per-vertex data (UVs,
+    /// colors, skin joints and weights) over to the output.
+    pub source: Vec<u32>,
+}
+
+/// Flat normals: each triangle corner becomes its own vertex, with the unit normal of its
+/// triangle on the side from which the corners run counterclockwise. The cross product of the
+/// edges is taken in `f64`. A triangle without area gets +Z, and vertices no triangle uses are
+/// left out. The output vertex count (one per index) is checked against
+/// [`Limits::max_vertices`] as well as the input's.
+pub fn flat_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) -> Result<FlatNormals> {
+    check_limit("vertex count", positions.len(), limits.max_vertices)?;
+    let mut input = try_vec(positions.len(), "positions")?;
+    input.extend(positions.iter().map(|p| Vec3::from_array(*p)));
+    let corners = mesh::flat_corners(&input, indices, limits)?;
+    let mut positions = try_vec(corners.positions.len(), "positions")?;
+    positions.extend(corners.positions.iter().map(|p| p.to_array()));
+    let mut normals = try_vec(corners.normals.len(), "normals")?;
+    normals.extend(corners.normals.iter().map(|n| n.to_array()));
+    Ok(FlatNormals { positions, normals, indices: corners.indices, source: corners.source })
 }
 
 /// MikkTSpace tangents, one per vertex: xyz tangent and the bitangent sign in `w`, so that
