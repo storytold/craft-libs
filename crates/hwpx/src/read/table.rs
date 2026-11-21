@@ -12,7 +12,7 @@ use craft_wordmodel::{Block, Cell, Paragraph, Row, Table};
 use super::place::dist_pt;
 use super::props::{border, border_style, pt, rgb};
 use super::text::floor_div;
-use super::{Blk, Converter, Item, P};
+use super::{Blk, Converter, P};
 use crate::header::{BorderFill, num, num_or, truthy};
 use crate::units::{round_even, tw};
 use crate::xml::Element;
@@ -485,12 +485,4 @@ fn cell_rule(c: &CellInfo, last_row: bool) -> i64 {
     }
     let mm: f64 = sides.iter().filter(|b| border_style(&b.kind).is_some()).map(|b| b.width_mm).sum();
     round_even(mm * 7200.0 / 25.4)
-}
-
-impl Converter<'_> {
-    /// A table on a text line, in a text box of its own (see step 5).
-    pub(crate) fn inline_table(&mut self, el: &Element, _props: &craft_wordmodel::props::CharProps) -> Vec<Item> {
-        self.missing(&el.tag);
-        vec![]
-    }
 }

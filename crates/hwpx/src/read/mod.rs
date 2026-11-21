@@ -7,6 +7,8 @@
 //!
 //! 본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
 
+mod drawing;
+mod media;
 mod place;
 mod props;
 mod section;
@@ -176,6 +178,10 @@ pub(crate) struct Converter<'a> {
     depth: usize,
     /// Table cells the file doesn't hold that may still be made, for the whole document.
     pub made_cells_left: i64,
+    /// Drawing ids handed out so far (shapes keep theirs).
+    pub pic_n: u32,
+    /// Pictures stored so far, by package entry: their media key.
+    pub media_keys: HashMap<String, String>,
 }
 
 /// Read an opened package.
@@ -214,6 +220,8 @@ pub(crate) fn read(pkg: &Package) -> Result<Document> {
         in_story: false,
         depth: 0,
         made_cells_left: section::MAX_MADE_CELLS,
+        pic_n: 0,
+        media_keys: HashMap::new(),
     };
     c.doc.body.clear();
     c.convert()?;
@@ -561,9 +569,28 @@ impl Converter<'_> {
         }
     }
 
-    /// Pictures, drawings, equations and form objects in a run (read in later steps).
-    fn para_object(&mut self, child: &Element, _props: &CharProps, _acc: &mut ParaOut) {
-        self.missing(&child.tag);
+    /// Pictures, drawings, equations and form objects in a run.
+    fn para_object(&mut self, child: &Element, props: &CharProps, acc: &mut ParaOut) {
+        let tag = child.tag.as_str();
+        match tag {
+            "hp:equation" => acc.items.extend(self.equation(child, props)),
+            _ if tag == "hp:pic" || SHAPES.contains(&tag) || tag == "hp:container" => {
+                acc.items.extend(self.drawing(child, props));
+                // The caption of an object on a text line: its own paragraphs above or below
+                // that line.
+                if child.find("hp:pos").is_some_and(|x| truthy(x.get("treatAsChar")))
+                    && let Some((side, cap)) = self.caption(child)
+                    && !cap.is_empty()
+                {
+                    if side == "TOP" { acc.cap_above.extend(cap) } else { acc.cap_below.extend(cap) }
+                }
+            }
+            _ if FORMS.contains(&tag) => {
+                let f = self.form(child, props);
+                acc.items.extend(f);
+            }
+            _ => self.missing(tag),
+        }
     }
 
     fn para_table(&mut self, child: &Element, props: &CharProps, ctx: &ParaCtx, acc: &mut ParaOut) {
