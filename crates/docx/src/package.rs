@@ -516,10 +516,7 @@ mod tests {
         // allowance without allocating millions of elements just to reach that boundary.
         let parts = 9usize;
         let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
-        let chart_xml = format!(
-            r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">{}</c:chart>"#,
-            "<a/>".repeat(199)
-        );
+        let chart_xml = format!(r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">{}</c:chart>"#, "<a/>".repeat(199));
         let mut document = format!(
             r#"<w:document {ns} xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><w:body>"#
         );
@@ -536,10 +533,8 @@ mod tests {
             ));
         }
         rels.push_str("</Relationships>");
-        let mut entries = vec![
-            ("word/document.xml".to_string(), document.into_bytes()),
-            ("word/_rels/document.xml.rels".to_string(), rels.into_bytes()),
-        ];
+        let mut entries =
+            vec![("word/document.xml".to_string(), document.into_bytes()), ("word/_rels/document.xml.rels".to_string(), rels.into_bytes())];
         for i in 0..parts {
             entries.push((format!("word/charts/chart{i}.xml"), chart_xml.as_bytes().to_vec()));
         }
@@ -560,8 +555,7 @@ mod tests {
     #[test]
     fn the_element_budget_accepts_the_exact_cap_and_refuses_one_more_element() {
         let part = format!("<root>{}</root>", "<a/>".repeat(199));
-        let mut entries: Vec<(String, Vec<u8>)> =
-            (0..8).map(|i| (format!("part{i}.xml"), part.as_bytes().to_vec())).collect();
+        let mut entries: Vec<(String, Vec<u8>)> = (0..8).map(|i| (format!("part{i}.xml"), part.as_bytes().to_vec())).collect();
         entries.push(("one-more.xml".to_string(), b"<root/>".to_vec()));
         let z = zip_entries(&entries).unwrap();
         let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 1_600).unwrap();
