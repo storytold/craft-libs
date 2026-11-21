@@ -11,6 +11,8 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+    /// Thai-specific distributed paragraph alignment (`w:jc` value `thaiDistribute`).
+    ThaiDistribute,
 }
 
 impl Align {

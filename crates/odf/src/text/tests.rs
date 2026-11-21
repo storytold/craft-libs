@@ -1,4 +1,14 @@
 use super::*;
+
+#[test]
+fn thai_distributed_exports_as_justified() {
+    let mut p = craft_wordmodel::Paragraph::with_text("ภาษาไทย", Default::default());
+    p.props.align = Some(Align::ThaiDistribute);
+    let mut doc = Document::new();
+    doc.body = vec![craft_wordmodel::para_block(p)];
+    let xml = String::from_utf8(export_flat(&doc).unwrap()).unwrap();
+    assert!(xml.contains("fo:text-align=\"justify\""));
+}
 use std::io::{Cursor, Write};
 
 #[test]

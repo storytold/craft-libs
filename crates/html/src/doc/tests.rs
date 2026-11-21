@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn thai_distributed_exports_as_justified() {
+    let mut p = craft_wordmodel::Paragraph::with_text("ภาษาไทย", Default::default());
+    p.props.align = Some(Align::ThaiDistribute);
+    let mut doc = Document::new();
+    doc.body = vec![craft_wordmodel::para_block(p)];
+    assert!(export(&doc).contains("text-align:justify"));
+}
+
+#[test]
 fn widthless_columns_do_not_change_cell_width_resolution() {
     let widths = |columns: &str, cells: &str| {
         let flow = parse(&format!("<table>{columns}<tr>{cells}</tr></table>"));
