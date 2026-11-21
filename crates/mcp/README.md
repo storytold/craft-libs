@@ -15,7 +15,10 @@ This crate does not enforce every MCP lifecycle or capability rule; applications
 must validate any additional requirements they depend on.
 
 `roots::Roots` confines the file paths in tool arguments to read and write roots.
-`Roots::check` resolves a path, following links, and returns it only when it lies
+`Roots::check` first compares the text of the path, made absolute with its `.` and
+`..` names removed, with the roots as given and as resolved, before any file system
+call, so every path outside the roots gets the same `Outside` error whatever exists
+there. It then resolves the path, following links, and returns it only when it lies
 inside a root of the requested kind. On Windows it also refuses, in the path as
 given and in the path its links lead to, device names, alternate data streams,
 names that end in a dot or a space, `\\.\` and `\??\` paths, and `\\?\` paths
