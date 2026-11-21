@@ -227,6 +227,9 @@ pub struct ResolvedPara {
     pub kinsoku: bool,
     /// Latin words wrap whole (`false`: they may break at any character).
     pub word_wrap: bool,
+    /// Hangul words wrap whole (see `ParaProps::keep_hangul_words`); `None`: not said (a
+    /// document from another format), laid out as off.
+    pub keep_hangul_words: Option<bool>,
     pub overflow_punct: bool,
     pub top_line_punct: bool,
     pub auto_space_de: bool,
@@ -315,6 +318,7 @@ impl ResolvedPara {
             suppress_line_numbers: p.suppress_line_numbers.unwrap_or(false),
             kinsoku: p.kinsoku.unwrap_or(true),
             word_wrap: p.word_wrap.unwrap_or(true),
+            keep_hangul_words: p.keep_hangul_words,
             overflow_punct: p.overflow_punct.unwrap_or(true),
             top_line_punct: p.top_line_punct.unwrap_or(false),
             auto_space_de: p.auto_space_de.unwrap_or(true),
@@ -530,6 +534,25 @@ mod tests {
         assert_eq!(s.resolve_para(&direct).space_after, 7.0);
         // A defined style is unchanged.
         assert_eq!(s.resolve_para(&ParaProps { style: Some("Heading1".into()), ..Default::default() }).space_after, 4.0);
+    }
+
+    /// Keeping Hangul words whole comes through the paragraph style chain like the other
+    /// line-breaking settings, and direct formatting still wins; a paragraph that says nothing
+    /// resolves to "not said".
+    #[test]
+    fn keeping_hangul_words_whole_is_inherited_from_the_style() {
+        let mut s = StyleSheet::builtin();
+        s.styles.push(crate::styles::Style {
+            id: "Korean".into(),
+            based_on: Some("Normal".into()),
+            para: ParaProps { keep_hangul_words: Some(true), ..Default::default() },
+            ..Default::default()
+        });
+        let styled = ParaProps { style: Some("Korean".into()), ..Default::default() };
+        assert_eq!(s.resolve_para(&styled).keep_hangul_words, Some(true));
+        let direct = ParaProps { keep_hangul_words: Some(false), ..styled };
+        assert_eq!(s.resolve_para(&direct).keep_hangul_words, Some(false));
+        assert_eq!(s.resolve_para(&ParaProps::default()).keep_hangul_words, None);
     }
 
     #[test]
