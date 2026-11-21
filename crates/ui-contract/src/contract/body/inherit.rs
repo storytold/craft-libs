@@ -102,6 +102,10 @@ impl BodyHooks<'_> {
         if props.arena {
             scoped.arena = Some(ArenaId::new(id));
         }
+        // The body's flow starts after a rule when the container draws one under its header, or when the container
+        // draws nothing of its own (no header, surface or mount) and itself started after a rule.
+        scoped.after_rule = props.header.is_some_and(|header| header.rule && !header.inline)
+            || (props.header.is_none() && props.surface.is_none() && props.mount == Mount::Inline && self.after_rule);
         scoped.flow_body = None;
         scoped.column_row =
             self.in_column && matches!(props.layout, crate::layout::BodyLayout::Row { wrap: false, align: crate::layout::RowAlign::Start });

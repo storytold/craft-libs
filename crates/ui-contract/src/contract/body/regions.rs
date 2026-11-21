@@ -84,12 +84,13 @@ pub(super) struct RuleBands {
 }
 
 impl RuleBands {
-    /// The bands of `props`' rules in `tokens` on a display of `pixels_per_point`.
-    pub(super) fn of(props: &ContainerProps, tokens: &UiTokens, pixels_per_point: f32) -> Self {
+    /// The bands of `props`' rules in `tokens` on a display of `pixels_per_point`. A rule above separates the
+    /// container from what precedes it in flow: right after a rule (`after_rule`) there is none.
+    pub(super) fn of(props: &ContainerProps, tokens: &UiTokens, pixels_per_point: f32, after_rule: bool) -> Self {
         let width = rule_look(tokens, RuleKind::Divider).width.points(pixels_per_point);
         let on = |rule: bool| if rule { width } else { 0.0 };
         RuleBands {
-            above: on(props.header.is_some_and(|header| header.rule_above)),
+            above: on(!after_rule && props.header.is_some_and(|header| header.rule_above)),
             under: on(props.header.is_some_and(|header| header.rule && !header.inline)),
             footer: on(props.footer.is_some_and(|footer| footer.rule)),
             end: on(props.end.is_some_and(|end| end.rule)),

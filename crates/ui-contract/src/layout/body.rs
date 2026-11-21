@@ -10,7 +10,7 @@ use crate::runtime::measure;
 use crate::runtime::memory::sub;
 use crate::runtime::pass_state;
 use craft_behavior::{Axis, ColumnWidth, Flow, GridCursor, GridMeasure};
-use egui::{Id, IdMap, IdSet, Rect, Ui, Vec2};
+use egui::{Id, IdMap, Rect, Ui, Vec2};
 use std::borrow::Cow;
 
 /// How a body lays out its children, in reading order: mirrored under a right-to-left direction.
@@ -211,14 +211,22 @@ fn report_first_line(ctx: &egui::Context, target: Id, at: Option<f32>) {
     });
 }
 
-/// The bodies whose flow has placed nothing yet in the sweep or run under way.
+/// The bodies whose flow has placed nothing yet in the sweep or run under way, by body id, each with whether a rule
+/// precedes the body's start (`Scoped::after_rule`).
 #[derive(Default)]
-pub(crate) struct FlowStarts(IdSet);
+pub(crate) struct FlowStarts(IdMap<bool>);
 
-/// Whether the next child placed in flow under `env` starts its body's flow: the body that places it has placed
-/// nothing yet in this sweep or run. False outside a body.
+/// Where the next child placed in flow under `env` starts: `Some(edge)` while the body that places it has placed
+/// nothing yet in this sweep or run, with `after_rule` when a rule precedes that body's start (`Scoped::after_rule`);
+/// `None` once a child took room there, and outside a body.
+pub(crate) fn flow_start(ctx: &egui::Context, env: &Env) -> Option<bool> {
+    let body = env.flow_body?;
+    pass_state::with::<FlowStarts, _>(ctx, |starts| starts.0.get(&body).copied())
+}
+
+/// Whether the next child placed in flow under `env` starts its body's flow (`flow_start`).
 pub(crate) fn at_flow_start(ctx: &egui::Context, env: &Env) -> bool {
-    env.flow_body.is_some_and(|body| pass_state::with::<FlowStarts, _>(ctx, |starts| starts.0.contains(&body)))
+    flow_start(ctx, env).is_some()
 }
 
 /// A child took room in the flow of the body that places the children under `env`: its flow start closes.
@@ -1682,10 +1690,10 @@ pub(crate) fn run_body_measured<R>(
     let target = env.first_line.filter(|_| sizing);
     let row = (sizing && matches!(layout, BodyLayout::Row { wrap: false, .. })).then_some(id);
     // Each sweep and the real run start the body's flow, and a bracketed row's reports, afresh.
-    let bracket = env.bracket == Some(id);
+    let (after_rule, bracket) = (env.after_rule, env.bracket == Some(id));
     let body = |ui: &mut Ui| {
         open_sweep(&ctx, target, row);
-        pass_state::with::<FlowStarts, _>(&ctx, |starts| starts.0.insert(id));
+        pass_state::with::<FlowStarts, _>(&ctx, |starts| starts.0.insert(id, after_rule));
         if bracket {
             pass_state::with::<Brackets, _>(&ctx, |brackets| brackets.0.insert(id, BracketTook::default()));
         }

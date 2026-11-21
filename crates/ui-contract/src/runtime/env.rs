@@ -141,6 +141,9 @@ pub struct Scoped {
     /// The body whose flow places the scope's direct children: the flow start a child reads (`layout::flow_start`)
     /// and the one a child placed in flow closes.
     pub(crate) flow_body: Option<Id>,
+    /// A rule precedes the start of the body this scope opens: its container draws one under its header, or draws
+    /// nothing of its own and itself follows one. The body's layout opens its flow start with it.
+    pub(crate) after_rule: bool,
     /// The body is an unwrapped `Row` placed from its start whose container is a row of a vertical flow: its first
     /// child in flow starts where the rows of that flow start (`label::in_column`).
     pub(crate) column_row: bool,
@@ -568,6 +571,7 @@ impl Env {
                 row_line: None,
                 first_line: None,
                 flow_body: None,
+                after_rule: false,
                 column_row: false,
                 bracket: None,
                 footer_slot: None,

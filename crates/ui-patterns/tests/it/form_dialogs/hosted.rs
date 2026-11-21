@@ -560,3 +560,21 @@ fn image_size_brackets_width_and_height_and_starts_resample_in_the_control_colum
         "the method follows Resample on its line: {method:?} {check:?}"
     );
 }
+
+/// Canvas Size draws one rule between its title and Current Size, the title's: the first section's rule above would
+/// stand right under it. The rule between the two sections stays.
+#[trial]
+fn canvas_size_draws_one_rule_under_its_title() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(canvas_size());
+    fixture.settle();
+    let text = |fixture: &Fixture, text: &str| {
+        fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect).unwrap_or_else(|| panic!("{text} is painted"))
+    };
+    let (title, current, new) = (text(&fixture, "Canvas Size"), text(&fixture, "Current Size"), text(&fixture, "New Size"));
+    let lines = horizontal_lines(&mut fixture);
+    let across = |top: f32, bottom: f32| lines.iter().filter(|(y, from, to)| *y > top && *y < bottom && to - from > current.width()).count();
+    assert_eq!(across(title.max.y, current.min.y), 1, "one rule between the title and Current Size: {lines:?}");
+    assert_eq!(across(current.max.y, new.min.y), 1, "a rule between Current Size and New Size: {lines:?}");
+}
