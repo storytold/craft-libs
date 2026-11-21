@@ -556,8 +556,8 @@ fn a_compressed_mesh_is_read_to_its_end() {
             let t = ctx.file_structure_tessellation().unwrap();
             assert_eq!(ctx.r.position(), w.len(), "full={full} v={v}");
             assert!(matches!(t[1], Tessellation::Mesh(_)), "full={full} v={v}: {t:?}");
-            // Stored normals and the one-status-per-triangle form are not rebuilt; the
-            // recalculated 3T seed is.
+            // The one-status-per-triangle form is not rebuilt, nor the full form, whose four
+            // slots are one too many for its one triangle; the recalculated 3T seed is.
             if full || !three_t {
                 assert!(matches!(t[0], Tessellation::Compressed { triangles: 1, .. }), "full={full} v={v}: {t:?}");
             } else {
@@ -573,10 +573,9 @@ fn a_compressed_mesh_is_read_to_its_end() {
     }
 }
 
-/// A `TESS_3D_Compressed` (authoring version 8137, origin 0) whose normals are recalculated,
-/// with `points` in units of `tolerance`, the 3T `status`, each triangle's face, the slots'
-/// reference flags, the references and one line attribute per face; every other optional
-/// branch absent.
+/// A `TESS_3D_Compressed` (authoring version 8137, origin 0), with `points` in units of `tolerance`, the 3T `status`, each triangle's face, the slots'
+/// reference flags, the references, one line attribute per face and the normals; every other
+/// optional branch absent.
 struct Packed<'a> {
     tolerance: f64,
     points: &'a [i64],
@@ -587,6 +586,9 @@ struct Packed<'a> {
     is_ref: &'a [bool],
     refs: &'a [u32],
     line_attributes: &'a [u16],
+    /// Stored normals instead of recalculated ones: `normal_binary_data`, the 10-bit angles
+    /// and `is_face_planar`.
+    normals: Option<(&'a [bool], &'a [i32], &'a [bool])>,
 }
 
 /// A `CompressedIndiceArray` [WD 11.9] of `bits`-wide deltas, `implicit` with no compressed
@@ -629,13 +631,28 @@ fn packed(w: &mut W, c: &Packed<'_>) {
     }
     assert!(c.refs.len() <= 3, "more than three references are Huffman-coded");
     indices(w, c.refs, true, 8);
-    // must_recalculate_normals, normal_is_reversed, crease angle, flags; no colours, no
-    // multiple line attributes.
-    w.bit(true);
-    for _ in c.face_of {
-        w.bit(false);
+    if let Some((binary, angles, planar)) = c.normals {
+        w.bit(false).put(10, 8).uint(u32::try_from(binary.len()).unwrap());
+        for &b in binary {
+            w.bit(b);
+        }
+        w.bit(false).uint(u32::try_from(angles.len()).unwrap());
+        for &a in angles {
+            w.put(u64::try_from(a).unwrap() & 0xff, 8).put(u64::try_from(a).unwrap() >> 8, 8);
+        }
+        for &p in planar {
+            w.bit(p);
+        }
+    } else {
+        // must_recalculate_normals, normal_is_reversed, crease angle, flags.
+        w.bit(true);
+        for _ in c.face_of {
+            w.bit(false);
+        }
+        w.double(0.5).put(0, 8);
     }
-    w.double(0.5).put(0, 8).bit(false).bit(false);
+    // No colours, no multiple line attributes.
+    w.bit(false).bit(false);
     w.bit(false).uint(u32::try_from(c.line_attributes.len()).unwrap());
     for &a in c.line_attributes {
         w.put(u64::from(a & 0xff), 8).put(u64::from(a >> 8), 8);
@@ -660,6 +677,7 @@ fn a_recalculated_compressed_mesh_is_rebuilt_by_face() {
             is_ref: &[false, false, false, false, true, true],
             refs: &[0, 1],
             line_attributes: &[3, 0],
+            normals: None,
         },
     );
     let w = section(1, &b);
@@ -678,6 +696,107 @@ fn a_recalculated_compressed_mesh_is_rebuilt_by_face() {
     assert!(m.normals_recalculated);
 }
 
+/// A panel of one planar face whose third apex lies off its parent's plane: its stored face
+/// normal folds it [WD 7.8.9, 7.8.9.3], so it rebuilds with that normal on every corner;
+/// recalculated, the same arrays take the default fold.
+#[test]
+fn a_compressed_mesh_with_stored_normals_is_rebuilt_with_them() {
+    let read = |normals| {
+        let mut b = W::default();
+        packed(
+            &mut b,
+            &Packed {
+                tolerance: 0.5,
+                points: &[0, 0, 0, 4, 0, 0, -2, 4, 0, 0, -3, 0, 1, 3, 1],
+                status: &[3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                face_of: &[0; 4],
+                face_bits: 8,
+                is_ref: &[false, false, false, false, false, true],
+                refs: &[0],
+                line_attributes: &[0],
+                normals,
+            },
+        );
+        let w = section(1, &b);
+        let bytes = w.bytes();
+        let schema = Schema::default();
+        let mut ctx = Ctx::new(BitReader::new(&bytes), &schema, 8137);
+        let t = ctx.file_structure_tessellation().unwrap();
+        assert_eq!(ctx.r.position(), w.len());
+        mesh(&t[0]).clone()
+    };
+    let m = read(Some((&[false; 4], &[0, 1023], &[true])));
+    assert_eq!(m.triangles, [[0, 1, 2], [2, 1, 3], [3, 1, 4], [3, 4, 0]]);
+    assert_eq!(m.faces, std::slice::from_ref(&(0..4)));
+    assert!(!m.normals_recalculated);
+    assert_eq!(m.normals.len(), 1);
+    assert!((m.normals[0][2] - 1.0).abs() < 1e-9, "{:?}", m.normals);
+    assert_eq!(m.triangle_normals, [[0; 3]; 4]);
+    let plain = read(None);
+    assert_eq!(plain.triangles[3], [4, 1, 0]);
+    assert!(plain.normals_recalculated && plain.normals.is_empty() && plain.triangle_normals.is_empty());
+}
+
+/// A stored-normal rebuild spends the stream's step allowance and is left compressed without
+/// one; a recalculated mesh spends none.
+#[test]
+fn a_stored_normal_rebuild_spends_the_stream_steps() {
+    let read = |normals, rebuild| {
+        let mut b = W::default();
+        packed(
+            &mut b,
+            &Packed {
+                tolerance: 0.5,
+                points: &[0, 0, 0, 4, 0, 0, -2, 4, 0, 0, -3, 0, 1, 3, 1],
+                status: &[3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                face_of: &[0; 4],
+                face_bits: 8,
+                is_ref: &[false, false, false, false, false, true],
+                refs: &[0],
+                line_attributes: &[0],
+                normals,
+            },
+        );
+        let w = section(1, &b);
+        let bytes = w.bytes();
+        let schema = Schema::default();
+        let budget = crate::bits::Budget { rebuild, ..crate::bits::Budget::FULL };
+        let mut ctx = Ctx::new(BitReader::with_budget(&bytes, budget), &schema, 8137);
+        let t = ctx.file_structure_tessellation().unwrap();
+        (matches!(t[0], Tessellation::Mesh(_)), crate::MAX_REBUILD_STEPS - ctx.r.rebuild_steps_left())
+    };
+    let stored: Option<(&[bool], &[i32], &[bool])> = Some((&[false; 4], &[0, 1023], &[true]));
+    let (rebuilt, spent) = read(stored, crate::MAX_REBUILD_STEPS);
+    assert!(rebuilt && spent >= 4, "{spent}");
+    assert_eq!(read(None, crate::MAX_REBUILD_STEPS), (true, 0));
+    assert!(!read(stored, 0).0);
+}
+
+/// Stored normals the walk does not use up leave the mesh rebuilt on the default fold, its
+/// normals to be recalculated.
+#[test]
+fn stored_normals_that_do_not_fit_are_dropped() {
+    let mut b = W::default();
+    packed(
+        &mut b,
+        &Packed {
+            tolerance: 0.5,
+            points: &[0, 0, 0, 4, 0, 0, -2, 4, 0, 0, -3, 0, 1, 3, 1],
+            status: &[3, 3, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            face_of: &[0; 4],
+            face_bits: 8,
+            is_ref: &[false, false, false, false, false, true],
+            refs: &[0],
+            line_attributes: &[0],
+            normals: Some((&[false, false, false, false, true], &[0, 1023], &[true])),
+        },
+    );
+    let t = decode(&section(1, &b), &Schema::default(), 8137).unwrap();
+    let m = mesh(&t[0]);
+    assert_eq!(m.triangles[3], [4, 1, 0]);
+    assert!(m.normals_recalculated && m.normals.is_empty() && m.triangle_normals.is_empty());
+}
+
 /// Arrays the walk cannot fit stay a [`Tessellation::Compressed`], read to their end.
 #[test]
 fn a_compressed_mesh_that_does_not_fit_is_left_compressed() {
@@ -692,6 +811,7 @@ fn a_compressed_mesh_that_does_not_fit_is_left_compressed() {
         is_ref: &[false; 3],
         refs: &[],
         line_attributes: &[0],
+        normals: None,
     };
     packed(&mut b, &c);
     let w = section(1, &b);
@@ -714,6 +834,7 @@ fn a_huge_face_index_is_charged_not_allocated() {
         is_ref: &[false; 3],
         refs: &[],
         line_attributes: &[],
+        normals: None,
     };
     packed(&mut b, &c);
     let r = decode(&section(1, &b), &Schema::default(), 8137);
@@ -734,6 +855,7 @@ fn arrays_that_do_not_fit_spend_no_triangles_or_faces() {
         is_ref: &[false; 3],
         refs: &[],
         line_attributes: &[],
+        normals: None,
     };
     packed(&mut b, &c);
     let t = decode(&section(1, &b), &Schema::default(), 8137).unwrap();
@@ -755,6 +877,7 @@ fn panel(last_ref: u32) -> W {
             is_ref: &[false, false, false, false, true, true],
             refs: &[0, last_ref],
             line_attributes: &[3, 0],
+            normals: None,
         },
     );
     section(1, &b)
@@ -805,7 +928,12 @@ fn a_compressed_face_behaviour_alone_styles_its_triangles() {
 }
 
 fn rebuilt(triangles: usize) -> compressed::Rebuilt {
-    compressed::Rebuilt { positions: vec![[0.0; 3]; 3], triangles: (0..triangles).map(|i| [0, 1, u32::try_from(i).unwrap()]).collect() }
+    compressed::Rebuilt {
+        positions: vec![[0.0; 3]; 3],
+        triangles: (0..triangles).map(|i| [0, 1, u32::try_from(i).unwrap()]).collect(),
+        normals: Vec::new(),
+        triangle_normals: Vec::new(),
+    }
 }
 
 /// Triangles are grouped by face in walk order within each, faces no triangle names (between

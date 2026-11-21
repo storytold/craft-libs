@@ -8,6 +8,7 @@
     clippy::unwrap_used
 )]
 
+use super::tests::unlimited;
 use super::*;
 
 const S: f64 = std::f64::consts::SQRT_2;
@@ -62,6 +63,9 @@ impl Encoded {
             triangles: self.triangles.len(),
             is_reference: &self.is_reference,
             references: &self.references,
+            normals: None,
+            ortho_turned: false,
+            steps: unlimited(),
             limit,
         }
     }

@@ -1,9 +1,9 @@
-//! Triangle reconstruction for a `TESS_3D_Compressed` (173) whose normals are recalculated
-//! [WD 7.8.9, 7.8.9.2, 7.8.9.7].
+//! Triangle reconstruction for a `TESS_3D_Compressed` (173) [WD 7.8.9, 7.8.9.1-7.8.9.4,
+//! 7.8.9.7].
 //!
 //! The WD names the arrays but not the traversal that wrote them; the rules below are the ones
-//! the arrays fit when every slot, reference and point is consumed exactly. They are inferred
-//! from compressed tessellations and are not WD text.
+//! the arrays fit when every slot, reference, point and stored normal is consumed exactly. They
+//! are inferred from compressed tessellations and are not WD text.
 //!
 //! Traversal. A component starts with a seed triangle of three slots; every later triangle
 //! takes one slot, its apex. A slot flagged in `point_is_reference` takes the next
@@ -12,8 +12,8 @@
 //! `edge_status & 3`: bit 1 continues across `[C B]`, bit 0 across `[A C]`; with both,
 //! `[C B]` is taken and `[A C]` pushed. With neither, pushed edges are popped, skipping any
 //! already shared by two triangles; an empty stack starts the next component. A triangle
-//! whose continuation edge is already shared by two triangles, while the other edge is open,
-//! continues across the open one.
+//! whose fold no stored normal signalled, whose continuation edge is already shared by two
+//! triangles while the other edge is open, continues across the open one.
 //!
 //! Geometry, in units of `tolerance`:
 //! - seed: `V0 = origin + d`, `V1 = V0 + d`, `V2 = mid(V0, V1) + d`;
@@ -27,20 +27,68 @@
 //! apex to apex. `unitize` therefore matches the WD's `PrcPt::Unitize` pseudocode [WD 12.3] as
 //! read, whose length is not exact, and the operations keep the order above.
 //!
-//! Fold. A triangle folded against its parent swaps bits 1 and 0 for its own continuation.
-//! Without stored normals to orient it, a new apex lying in its parent's plane on the parent's
-//! side (`d.z == 0`, `d.y > 0`) is folded. A component that does not fit is rewound and walked
-//! again with the fold inverted at its second triangle, where an apex that is a reference
-//! leaves no other trace of its fold.
+//! Fold. A triangle folded against its parent swaps bits 1 and 0 for its own continuation. A
+//! triangle whose walk-order winding `(B - A) x (C - A)` points against its stored normal
+//! [WD 7.8.9, 7.8.9.1] is folded; [`decide`] says which normal applies. Without one, an apex
+//! in its parent's plane on the parent's side (`d.z == 0`, `d.y > 0`) is folded. A component
+//! that does not fit is walked again with the fold inverted at its second triangle, then at
+//! its last unoriented triangle before the failure. A planar face must rebuild flat
+//! ([`bend`], [`MAX_BEND`]). A mesh no retried walk fits is searched ([`search`]) and kept
+//! only when one geometry fits.
 //!
 //! Only the three-statuses-per-triangle `edge_status` form is reconstructed (the first `T`
 //! are read); the one-per-triangle form walks differently.
 
-use std::collections::HashMap;
+use std::cell::Cell;
+
+mod bend;
+mod decide;
+mod normals;
+mod search;
+mod walk;
+
+pub(super) use normals::NormalArrays;
+use normals::{NormalReader, stored_normals};
+use walk::Walk;
 
 type V = [f64; 3];
 
+/// Below this sine of its angle at `A` a triangle is a sliver whose winding no normal can
+/// orient [WD 7.8.9].
+const MIN_SINE: f64 = 1e-6;
+
+/// Below this height within its planar face, in tolerances, a triangle's winding against the
+/// face normal is quantisation noise: the WD quantises each vertex to the tolerance and
+/// requires every triangle to be taller than one [WD 7.8.9], so a triangle tall in space but
+/// flat along the face cannot be oriented by it.
+const MIN_PLANE_HEIGHT: f64 = 0.5;
+
+/// Below this cosine between a fresh record's normal and the triangle's winding, the record's
+/// `triangle_normal_reversed` bit is noise: a vertex normal lying in the triangle's plane has
+/// no side for the encoder to agree with [WD 7.8.9.4].
+const BLIND_NORMAL: f64 = 0.01;
+
+/// How far, in tolerances, a planar face's vertices may stray from the plane through their
+/// centroid.
+const MAX_BEND: f64 = 20.0;
+
+/// The height of a triangle within the plane of normal `n`: `|w . n| / |n|`, twice its area
+/// projected onto that plane, over its longest edge, where `s` is `w . n` for the winding `w`;
+/// zero when either length is.
+fn plane_height(s: f64, n: V, edges: [V; 3]) -> f64 {
+    let long = edges.iter().map(|v| dot(*v, *v).sqrt()).fold(0.0, f64::max);
+    let nn = dot(n, n).sqrt();
+    if long > 0.0 && nn > 0.0 { s.abs() / nn / long } else { 0.0 }
+}
+
+/// `a` over its length, or `a` itself when that is zero.
+fn unit(a: V) -> V {
+    let l = dot(a, a).sqrt();
+    if l > 0.0 { scale(a, 1.0 / l) } else { a }
+}
+
 /// The arrays of one `TESS_3D_Compressed` the walk reads.
+#[derive(Clone, Copy)]
 pub(super) struct Arrays<'a> {
     pub(super) tolerance: f64,
     pub(super) origin: V,
@@ -49,28 +97,66 @@ pub(super) struct Arrays<'a> {
     pub(super) triangles: usize,
     pub(super) is_reference: &'a [bool],
     pub(super) references: &'a [u32],
-    /// Budget elements the walk may hold at once (see [`Walk::held`]).
+    /// The stored normals, when the mesh has them.
+    pub(super) normals: Option<NormalArrays<'a>>,
+    /// Whether a `MakeOrthoRep` frame whose residue is exactly zero is turned a half-turn
+    /// about `X` (see [`apex`]).
+    pub(super) ortho_turned: bool,
+    /// Budget elements the walk may hold at once.
     pub(super) limit: usize,
+    /// Triangle steps every walk of this rebuild may still take together; each step spends
+    /// one.
+    pub(super) steps: &'a Cell<u64>,
 }
 
-/// The rebuilt vertices and triangles, in walk order.
+/// The rebuilt vertices and triangles in walk order, and the stored normals with each
+/// triangle's corner normals; both empty when the normals are recalculated or do not fit.
 #[derive(Debug)]
 pub(super) struct Rebuilt {
     pub(super) positions: Vec<V>,
     pub(super) triangles: Vec<[u32; 3]>,
+    pub(super) normals: Vec<V>,
+    pub(super) triangle_normals: Vec<[u32; 3]>,
 }
 
-/// Rebuilds the mesh, or says why the arrays do not fit the traversal.
+fn rebuilt(positions: Vec<V>, triangles: Vec<[u32; 3]>, stored: (Vec<V>, Vec<[u32; 3]>)) -> Rebuilt {
+    Rebuilt { positions, triangles, normals: stored.0, triangle_normals: stored.1 }
+}
+
+/// Rebuilds the mesh, or says why the arrays do not fit the traversal. A mesh with stored
+/// normals is walked oriented by them, which must then be consumed exactly too; failing that
+/// it is walked on the default fold alone and its normals read afterwards, kept only if they
+/// fit; failing that, searched. The WD frame is tried before the turned one
+/// ([`Arrays::ortho_turned`]), which is kept only as a fit the stored normals confirm.
 pub(super) fn rebuild(a: &Arrays<'_>) -> Result<Rebuilt, &'static str> {
     if a.edge_status.len() != a.triangles.saturating_mul(3) {
         return Err("the one-status-per-triangle edge form is not reconstructed");
     }
-    let mut w = Walk::new(a.triangles, a.limit);
-    w.walk(a)?;
-    if w.slot != a.is_reference.len() || w.ri != a.references.len() || w.pi != a.points.len() {
-        return Err("the decoded triangles do not use up the stored arrays");
+    reconstruct_oriented(a)
+}
+
+fn reconstruct_oriented(a: &Arrays<'_>) -> Result<Rebuilt, &'static str> {
+    if let Some(m) = oriented_fit(a) {
+        return Ok(m);
     }
-    Ok(Rebuilt { positions: w.pos, triangles: w.tris })
+    let turned = Arrays { ortho_turned: true, ..*a };
+    match walk(a, None) {
+        Ok(w) => {
+            if let Some(m) = oriented_fit(&turned) {
+                return Ok(m);
+            }
+            let stored = a.normals.as_ref().and_then(|n| stored_normals(&w.pos, &w.tris, n)).unwrap_or_default();
+            Ok(rebuilt(w.pos, w.tris, stored))
+        }
+        Err(e) => search::unique_fit_either(a, &turned).ok_or(e),
+    }
+}
+
+/// The mesh the stored normals orient, if every array and normal is consumed exactly.
+fn oriented_fit(a: &Arrays<'_>) -> Option<Rebuilt> {
+    let w = walk(a, Some(NormalReader::new(a.normals.as_ref()?))).ok()?;
+    let stored = w.normals.as_ref()?.finished(&w.pos)?;
+    Some(rebuilt(w.pos, w.tris, stored))
 }
 
 fn add(a: V, b: V) -> V {
@@ -128,224 +214,86 @@ fn make_ortho_rep_z(x: V) -> Option<V> {
 }
 
 /// The apex across `[lo hi]` (`lo` the lower-numbered vertex) opposite `w`, `d` already scaled
-/// by the tolerance [WD 7.8.9.2]. A null `Z` or `Y` takes `MakeOrthoRep(X)`'s `Z` as the WD
-/// prescribes, with `Y = unitize(Z x X)` from the frame's own `X` (not the copy `MakeOrthoRep`
-/// unitized again, whose last bits differ), turned a half-turn about `X` when the residue of
-/// `(W - O) x X` points against that `Z`. A null `X`, an edge the WD's non-degeneracy rule
-/// excludes, is used as it is.
-fn apex(lo: V, hi: V, w: V, d: V) -> V {
+/// by the tolerance [WD 7.8.9.2], and whether its frame was degenerate. A null `Z` or `Y` takes
+/// `MakeOrthoRep(X)`'s `Z` as the WD prescribes, with `Y = unitize(Z x X)` from the frame's own
+/// `X` (not the copy `MakeOrthoRep` unitized again, whose last bits differ), turned a
+/// half-turn about `X` when the residue of `(W - O) x X` points against that `Z`, and by
+/// `turned` when the residue is exactly zero; `invert` reverses the turn, for the search. A
+/// null `X`, an edge the WD's non-degeneracy rule excludes, is used as it is.
+fn apex(lo: V, hi: V, w: V, d: V, turned: bool, invert: bool) -> (V, bool) {
     let o = scale(add(lo, hi), 0.5);
     let x = sub(lo, hi);
     let x = unitize(x).unwrap_or(x);
     let residue = cross(sub(w, o), x);
-    let (y, z) = unitize(residue)
-        .and_then(|z| Some((unitize(cross(z, x))?, z)))
+    let frame = unitize(residue).and_then(|z| Some((unitize(cross(z, x))?, z)));
+    let degenerate = frame.is_none();
+    let (y, z) = frame
         .or_else(|| {
             let z = make_ortho_rep_z(x)?;
             let y = unitize(cross(z, x))?;
-            Some(if dot(residue, z) < 0.0 { (scale(y, -1.0), scale(z, -1.0)) } else { (y, z) })
+            let along = dot(residue, z);
+            let turn = if along == 0.0 { turned } else { along < 0.0 };
+            Some(if turn != invert { (scale(y, -1.0), scale(z, -1.0)) } else { (y, z) })
         })
         .unwrap_or_default();
-    sub(sub(add(o, scale(x, d[0])), scale(y, d[1])), scale(z, d[2]))
+    (sub(sub(add(o, scale(x, d[0])), scale(y, d[1])), scale(z, d[2])), degenerate)
 }
 
-/// Traversal state; `log` records every edge-count increment so a component can be rewound.
-/// Everything it holds is checked against [`Arrays::limit`] after each triangle.
-#[derive(Default)]
-struct Walk {
-    pos: Vec<V>,
-    tris: Vec<[u32; 3]>,
-    edges: HashMap<(u32, u32), u8>,
-    log: Vec<(u32, u32)>,
-    stack: Vec<(u32, u32, u32)>,
-    next: Option<(u32, u32, u32)>,
-    slot: usize,
-    ri: usize,
-    pi: usize,
+/// Walks every component, oriented by `normals` when given, and checks every slot, reference
+/// and point is consumed.
+fn walk<'n>(a: &Arrays<'_>, normals: Option<NormalReader<'n>>) -> Result<Walk<'n>, &'static str> {
+    let mut w = Walk::new(a.triangles, a.limit, normals);
+    walk_into(a, &mut w)?;
+    if !w.used_up(a) {
+        return Err("the decoded triangles do not use up the stored arrays");
+    }
+    Ok(w)
 }
 
-/// Where a component starts, to rewind to.
-#[derive(Clone, Copy)]
-struct Mark {
-    tri: usize,
-    pos: usize,
-    log: usize,
-    slot: usize,
-    ri: usize,
-    pi: usize,
+/// Walks every component into `w`. One that fails, or whose planar faces bend, is rewound and
+/// walked again with the fold inverted at its second triangle, then at the last sliver its
+/// first walk met; so each component is walked at most three times.
+fn walk_into(a: &Arrays<'_>, w: &mut Walk<'_>) -> Result<(), &'static str> {
+    let mut start = w.mark(0);
+    let (mut flip_at, mut sliver) = (None, None);
+    let mut i = 0;
+    while i < a.triangles {
+        if w.next.is_none() && !(flip_at.is_some() && i == start.tri) {
+            start = w.mark(i);
+            flip_at = None;
+        }
+        let status = a.edge_status.get(i).copied().unwrap_or(0);
+        let stepped = w.step(a, status, flip_at == Some(i)).and_then(|()| {
+            if w.next.is_none() && !search::flat(a, &w.pos, &w.tris, start.tri) { Err("a planar face does not rebuild flat") } else { Ok(()) }
+        });
+        match stepped {
+            Ok(()) => i = i.saturating_add(1),
+            Err(e) => {
+                let Some(f) = retry(i, start.tri, flip_at, &mut sliver, w.sliver) else {
+                    return Err(e);
+                };
+                w.rewind(start);
+                flip_at = Some(f);
+                i = start.tri;
+            }
+        }
+    }
+    Ok(())
 }
 
-impl Walk {
-    /// Reserves room for `t` triangles, no more than `limit` elements' worth (two each).
-    fn new(t: usize, limit: usize) -> Self {
-        Walk { tris: Vec::with_capacity(t.min(limit / 2).min(1 << 20)), ..Walk::default() }
-    }
-
-    fn mark(&self, tri: usize) -> Mark {
-        Mark { tri, pos: self.pos.len(), log: self.log.len(), slot: self.slot, ri: self.ri, pi: self.pi }
-    }
-
-    fn rewind(&mut self, m: Mark) {
-        for k in self.log.drain(m.log..) {
-            if let Some(n) = self.edges.get_mut(&k) {
-                *n = n.saturating_sub(1);
-            }
+/// Where a component starting at `start` that failed at `i` is next walked with its fold
+/// inverted, given where it was inverted (`flip_at`), the sliver saved for the third walk and
+/// the walk's `last` sliver.
+fn retry(i: usize, start: usize, flip_at: Option<usize>, sliver: &mut Option<usize>, last: Option<usize>) -> Option<usize> {
+    let second = start.saturating_add(1);
+    match flip_at {
+        _ if i == start => None,
+        None => {
+            *sliver = last.filter(|&s| s > second);
+            Some(second)
         }
-        self.pos.truncate(m.pos);
-        self.tris.truncate(m.tri);
-        self.stack.clear();
-        self.next = None;
-        (self.slot, self.ri, self.pi) = (m.slot, m.ri, m.pi);
-    }
-
-    /// One slot: `Some(v)` a reference to vertex `v`, `None` a new point.
-    fn take(&mut self, a: &Arrays<'_>) -> Result<Option<u32>, &'static str> {
-        let flagged = *a.is_reference.get(self.slot).ok_or("slots run out")?;
-        self.slot = self.slot.saturating_add(1);
-        if !flagged {
-            return Ok(None);
-        }
-        let v = *a.references.get(self.ri).ok_or("references run out")?;
-        self.ri = self.ri.saturating_add(1);
-        self.get(v)?;
-        Ok(Some(v))
-    }
-
-    fn point(&mut self, a: &Arrays<'_>) -> Result<V, &'static str> {
-        let Some(&[x, y, z]) = a.points.get(self.pi..self.pi.saturating_add(3)) else {
-            return Err("points run out");
-        };
-        self.pi = self.pi.saturating_add(3);
-        let tol = a.tolerance;
-        Ok([x as f64 * tol, y as f64 * tol, z as f64 * tol])
-    }
-
-    fn get(&self, v: u32) -> Result<V, &'static str> {
-        self.pos.get(v as usize).copied().ok_or("a triangle refers to a vertex not yet decoded")
-    }
-
-    fn push(&mut self, p: V) -> Result<u32, &'static str> {
-        let id = u32::try_from(self.pos.len()).map_err(|_| "too many vertices")?;
-        self.pos.push(p);
-        Ok(id)
-    }
-
-    /// The next triangle and its default fold: the seed, or the apex across the edge to
-    /// continue from.
-    fn triangle(&mut self, a: &Arrays<'_>) -> Result<([u32; 3], bool), &'static str> {
-        if let Some((p, q, w)) = self.next.take() {
-            if let Some(r) = self.take(a)? {
-                return Ok(([p, q, r], false));
-            }
-            let (pp, qq, ww) = (self.get(p)?, self.get(q)?, self.get(w)?);
-            let (lo, hi) = if p < q { (pp, qq) } else { (qq, pp) };
-            let fold = matches!(a.points.get(self.pi..self.pi.saturating_add(3)), Some(&[_, dy, 0]) if dy > 0);
-            let d = self.point(a)?;
-            let r = self.push(apex(lo, hi, ww, d))?;
-            return Ok(([p, q, r], fold));
-        }
-        let mut v = [0u32; 3];
-        for k in 0..3 {
-            let id = match self.take(a)? {
-                Some(r) => r,
-                None => {
-                    let d = self.point(a)?;
-                    let p = match k {
-                        0 => add(a.origin, d),
-                        1 => add(self.get(v[0])?, d),
-                        _ => add(scale(add(self.get(v[0])?, self.get(v[1])?), 0.5), d),
-                    };
-                    self.push(p)?
-                }
-            };
-            if let Some(s) = v.get_mut(k) {
-                *s = id;
-            }
-        }
-        Ok((v, false))
-    }
-
-    /// Budget elements (8 bytes each) the walk's arrays hold, by length: growth can add up to
-    /// as much again in spare capacity.
-    fn held(&self) -> usize {
-        let pos = self.pos.len().saturating_mul(3);
-        let tris = self.tris.len().saturating_mul(2);
-        let edges = self.edges.len().saturating_mul(2);
-        let stack = self.stack.len().saturating_mul(2);
-        pos.saturating_add(tris).saturating_add(edges).saturating_add(self.log.len()).saturating_add(stack)
-    }
-
-    fn closed(&self, e: (u32, u32, u32)) -> bool {
-        self.edges.get(&key(e.0, e.1)).copied().unwrap_or(0) >= 2
-    }
-
-    /// Adds one triangle; `flip` inverts its fold.
-    fn step(&mut self, a: &Arrays<'_>, status: i32, flip: bool) -> Result<(), &'static str> {
-        let ([ta, tb, tc], fold) = self.triangle(a)?;
-        for (x, y) in [(ta, tb), (tb, tc), (tc, ta)] {
-            let n = self.edges.entry(key(x, y)).or_insert(0);
-            *n = n.saturating_add(1);
-            let shared = *n;
-            self.log.push(key(x, y));
-            if shared > 2 {
-                return Err("an edge is shared by more than two triangles");
-            }
-        }
-        self.tris.push([ta, tb, tc]);
-        if self.held() > a.limit {
-            return Err("the rebuild needs more than the decoded-element allowance left");
-        }
-        let (mut left, mut right) = ((tc, tb, ta), (ta, tc, tb));
-        if fold != flip {
-            std::mem::swap(&mut left, &mut right);
-        }
-        let (taken, other) = if status & 2 != 0 { (left, right) } else { (right, left) };
-        if status & 3 != 0 && self.closed(taken) && !self.closed(other) {
-            std::mem::swap(&mut left, &mut right);
-        }
-        match (status & 2 != 0, status & 1 != 0) {
-            (true, true) => {
-                self.next = Some(left);
-                self.stack.push(right);
-            }
-            (true, false) => self.next = Some(left),
-            (false, true) => self.next = Some(right),
-            (false, false) => {}
-        }
-        while self.next.is_none() {
-            let Some(e) = self.stack.pop() else { break };
-            if !self.closed(e) {
-                self.next = Some(e);
-            }
-        }
-        Ok(())
-    }
-
-    /// Walks every component. One that fails is rewound and walked once more with the fold
-    /// inverted at its second triangle, so the walk is at most twice the triangle count.
-    fn walk(&mut self, a: &Arrays<'_>) -> Result<(), &'static str> {
-        let mut start = self.mark(0);
-        let mut flip_at = None;
-        let mut i = 0;
-        while i < a.triangles {
-            if self.next.is_none() && !(flip_at.is_some() && i == start.tri) {
-                start = self.mark(i);
-                flip_at = None;
-            }
-            let status = a.edge_status.get(i).copied().unwrap_or(0);
-            match self.step(a, status, flip_at == Some(i)) {
-                Ok(()) => i = i.saturating_add(1),
-                Err(e) => {
-                    if flip_at.is_some() || i == start.tri {
-                        return Err(e);
-                    }
-                    self.rewind(start);
-                    flip_at = Some(start.tri.saturating_add(1));
-                    i = start.tri;
-                }
-            }
-        }
-        Ok(())
+        Some(f) if f == second => sliver.take(),
+        Some(_) => None,
     }
 }
 

@@ -2,15 +2,17 @@
 //! (172) with its `TESS_Face`s (174), `TESS_3D_Wire` (175), `TESS_Markup` (176) and
 //! `TESS_3D_Compressed` (173) [WD 7.3.7, 7.8].
 //!
-//! `TESS_3D_Compressed` is read field by field to its end [WD 7.8.9.7]. One whose normals are
-//! recalculated is rebuilt into triangles ([`compressed`]); one that stores its normals, or
-//! whose arrays do not fit the traversal, is not.
+//! `TESS_3D_Compressed` is read field by field to its end [WD 7.8.9.7] and rebuilt into
+//! triangles ([`compressed`]) when its arrays fit the traversal, with its stored normals when
+//! it has them and they fit too.
 //!
 //! The schema runs after the fields of each concrete type read here (201, 172, 173, 174, 175,
 //! 176, 305), not for the abstract levels (`PRCBase`, `TESS`).
 
 mod compressed;
 mod triangulate;
+
+use std::cell::Cell;
 
 use crate::arrays;
 use crate::bits::{BitReader, Budget};
@@ -39,6 +41,9 @@ const WIRE_IS_CONTINUOUS: u32 = 0x2000_0000;
 
 /// Normal angles wider than this are not a `ShortArray` [WD 7.8.9.7].
 const MAX_ANGLE_BITS: u32 = 16;
+
+/// A compressed mesh's angle width, `normal_binary_data`, angles and `is_face_planar`.
+type StoredNormals = (u32, Vec<bool>, Vec<i32>, Vec<bool>);
 
 /// A `TESS_3D_Wire` [WD 7.8.7]: polylines in the entity's own frame. A closing wire ends on a
 /// repeat of its first point; a continuous one is already joined to the wire before it.
@@ -73,8 +78,8 @@ pub enum Tessellation {
     Wire(WireTessellation),
     /// A `TESS_Markup` (PMI drawing), read past but not decoded.
     Markup,
-    /// A `TESS_3D_Compressed` mesh, read past but not rebuilt: it stores its normals, or its
-    /// arrays do not fit the traversal. One that is rebuilt is a [`Tessellation::Mesh`].
+    /// A `TESS_3D_Compressed` mesh, read past but not rebuilt: its arrays do not fit the
+    /// traversal. One that is rebuilt is a [`Tessellation::Mesh`].
     #[non_exhaustive]
     Compressed {
         /// The entity's triangle count.
@@ -343,8 +348,8 @@ impl Ctx<'_, '_> {
     }
 
     /// `TESS_3D_Compressed` (173) after its type code [WD 7.8.9.7]: rebuilt into a mesh when
-    /// its normals are recalculated and its arrays fit, else read past to its end. prc-rs: the
-    /// field order and version gates follow its schema.
+    /// its arrays fit, else read past to its end. prc-rs: the field order and version gates
+    /// follow its schema.
     ///
     /// Sizes the WD leaves unstated: the face count is the largest face index + 1,
     /// `normal_is_reversed` is one bit per triangle, and the point-reference array's
@@ -375,11 +380,11 @@ impl Ctx<'_, '_> {
         if references.len() != flagged {
             return Err(malformed(format!("{} point references for {flagged} flagged points", references.len())));
         }
-        let recalc = self.compressed_normals(t, faces)?;
+        let stored = self.compressed_normals(t, faces)?;
         let attributes = self.compressed_attributes(faces)?;
-        if !recalc {
-            return Ok(Tessellation::Compressed { triangles: t });
-        }
+        // Only a mesh with stored normals can need the search, so only it spends the stream's
+        // step allowance; a recalculated one walks each component at most three times.
+        let steps = Cell::new(stored.as_ref().map_or(u64::MAX, |_| self.r.rebuild_steps_left()));
         let arrays = compressed::Arrays {
             tolerance,
             origin,
@@ -388,41 +393,56 @@ impl Ctx<'_, '_> {
             triangles: t,
             is_reference: &is_reference,
             references: &references,
+            normals: stored.as_ref().map(|(bits, binary, angles, planar)| compressed::NormalArrays {
+                bits: *bits,
+                binary,
+                angles,
+                planar,
+                face_of: &face_of,
+            }),
+            ortho_turned: false,
             limit: self.r.elements_left(),
+            steps: &steps,
         };
         // A walk that would outgrow the allowance left stops there, and the arrays stay
         // compressed, as do arrays the walk does not fit.
-        let Ok(m) = compressed::rebuild(&arrays) else {
+        let rebuilt = compressed::rebuild(&arrays);
+        if stored.is_some() {
+            self.r.take_rebuild_steps(self.r.rebuild_steps_left().saturating_sub(steps.get()));
+        }
+        let Ok(m) = rebuilt else {
             return Ok(Tessellation::Compressed { triangles: t });
         };
-        // The rebuilt triangles, their styles and every face range are charged once the arrays
-        // fit and before any of them is made, so arrays that do not fit spend nothing.
+        // The rebuilt triangles, their normals, styles and every face range are charged once the
+        // arrays fit and before any of them is made, so arrays that do not fit spend nothing.
         let styled = attributes.styled(faces);
-        let kept = m.triangles.len().saturating_mul(triangle_elements(false, 0, styled));
-        self.r.take_elements(kept.saturating_add(faces.saturating_mul(RANGE_ELEMENTS)))?;
+        let kept = m.triangles.len().saturating_mul(triangle_elements(!m.normals.is_empty(), 0, styled));
+        let normals = m.normals.len().saturating_mul(3);
+        self.r.take_elements(kept.saturating_add(normals).saturating_add(faces.saturating_mul(RANGE_ELEMENTS)))?;
         let styles = if styled { attributes.styles(&face_of, faces) } else { Vec::new() };
         Ok(Tessellation::Mesh(by_face(m, &face_of, faces, &styles)))
     }
 
-    /// A compressed tessellation's normals, from `must_recalculate_normals` on, read past;
-    /// returns whether they are recalculated.
-    fn compressed_normals(&mut self, triangles: usize, faces: usize) -> Result<bool, PrcError> {
+    /// A compressed tessellation's normals, from `must_recalculate_normals` on: `None` when
+    /// they are recalculated, else the angle width, `normal_binary_data`, the angles and
+    /// `is_face_planar`.
+    fn compressed_normals(&mut self, triangles: usize, faces: usize) -> Result<Option<StoredNormals>, PrcError> {
         let r = &mut self.r;
         if r.bit()? {
             arrays::bool_array(r, triangles)?; // normal_is_reversed
             r.double()?; // crease_angle
             r.character()?; // normal_recalculation_flags
-            return Ok(true);
+            return Ok(None);
         }
         let angle_bits = u32::from(r.character()?);
         if angle_bits > MAX_ANGLE_BITS {
             return Err(malformed(format!("{angle_bits}-bit normal angles")));
         }
         let n = r.unsigned_integer()? as usize;
-        arrays::bool_array(r, n)?; // is_binary_normal
-        arrays::short_array(r, angle_bits)?; // normal angles
-        arrays::bool_array(r, faces)?; // is_face_planar
-        Ok(false)
+        let binary = arrays::bool_array(r, n)?;
+        let angles = arrays::short_array(r, angle_bits)?;
+        let planar = arrays::bool_array(r, faces)?;
+        Ok(Some((angle_bits, binary, angles, planar)))
     }
 
     /// A compressed tessellation's colours, line attributes, texture and behaviours, through
@@ -508,7 +528,8 @@ impl FaceAttributes {
 fn by_face(m: compressed::Rebuilt, face_of: &[u32], faces: usize, styles: &[TriangleStyle]) -> TriangleMesh {
     let mut order: Vec<usize> = (0..m.triangles.len()).collect();
     order.sort_by_key(|&i| face_of.get(i).copied().unwrap_or(0));
-    let mut mesh = TriangleMesh { positions: m.positions, normals_recalculated: true, ..TriangleMesh::default() };
+    let normals_recalculated = m.normals.is_empty();
+    let mut mesh = TriangleMesh { positions: m.positions, normals: m.normals, normals_recalculated, ..TriangleMesh::default() };
     mesh.faces = Vec::with_capacity(faces);
     for &i in &order {
         let f = face_of.get(i).map_or(0, |&f| f as usize);
@@ -519,6 +540,9 @@ fn by_face(m: compressed::Rebuilt, face_of: &[u32], faces: usize, styles: &[Tria
         if let (Some(&t), Some(r)) = (m.triangles.get(i), mesh.faces.last_mut()) {
             mesh.triangles.push(t);
             r.end = mesh.triangles.len();
+        }
+        if let Some(&n) = m.triangle_normals.get(i) {
+            mesh.triangle_normals.push(n);
         }
         if let Some(&s) = styles.get(i) {
             mesh.triangle_styles.push(s);
