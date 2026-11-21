@@ -43,6 +43,19 @@ craft_ui::words! {
     }
 }
 
+/// Which direction toggles the Paragraph controls show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DirectionRow {
+    /// Automatic, Left to Right and Right to Left.
+    #[default]
+    Automatic,
+    /// Left to Right and Right to Left only.
+    Explicit,
+    /// No direction row.
+    Hidden,
+}
+
 /// The range of the indent fields, points.
 pub(super) const INDENT_RANGE: RangeInclusive<f64> = -1296.0..=1296.0;
 /// The range of the space fields, points.
@@ -191,16 +204,35 @@ pub struct ParagraphControls<'a> {
     /// Shows the Hyphenate check box. Default true.
     #[prop]
     hyphenate: bool,
+    /// Which direction toggles the direction row shows.
+    #[prop]
+    direction_row: DirectionRow,
 }
 
 impl<'a> ParagraphControls<'a> {
     /// Controls named `label` for the paragraph attributes `values`.
     pub fn new(label: impl Into<Label>, values: &'a ParagraphValues) -> Self {
-        ParagraphControls { label: label.into(), values, unit: DocUnit::points(), point_text: false, vertical: false, hyphenate: true }
+        ParagraphControls {
+            label: label.into(),
+            values,
+            unit: DocUnit::points(),
+            point_text: false,
+            vertical: false,
+            hyphenate: true,
+            direction_row: DirectionRow::default(),
+        }
+    }
+
+    /// Draws the host's rows after the alignment and direction rows, before the indents, and returns the changes the
+    /// user made.
+    pub fn show_with(self, ui: &mut Ui, between: impl FnOnce(&mut Ui)) -> ParagraphControlsOutput {
+        let _ = (self, ui, between);
+        todo!("ty.X38")
     }
 
     /// Shows the controls and returns the changes the user made.
     pub fn show(self, ui: &mut Ui) -> ParagraphControlsOutput {
+        let _ = (self.direction_row,); // P3(type-w3): ty.X37
         let values = self.values;
         let point_text = self.point_text;
         let vertical = self.vertical;

@@ -1,7 +1,7 @@
 //! One pass of the ruler's input: the gestures on the items, the strip and the column borders, keys and the
 //! screen reader's requests.
 
-use super::items::{COLUMN, Item, STRIP, moved, place, without};
+use super::items::{COLUMN, RulerItem, STRIP, moved, place, without};
 use super::{ColumnBorder, ColumnDrag, RulerValues, SAME_POSITION, TabLeader, TabStop, TextRuler, dropped_off, snap_stop};
 use crate::ui::length::{DocUnit, shown};
 use craft_behavior::{CancelReason, GesturePhase, Granularity, Intent, NavMove, PointerButton, PressPhase, RulerUnits, Ticks};
@@ -19,11 +19,11 @@ pub(super) struct Held {
     /// The values when the gesture began.
     anchor: Option<RulerValues>,
     /// The item grabbed (a stop by its index when the gesture began).
-    from: Option<Item>,
+    from: Option<RulerItem>,
     /// A new stop is being placed, not an existing one moved.
     placing: bool,
     /// Where the item is now (a stop's index follows it through the sorted stops).
-    pub(super) now: Option<Item>,
+    pub(super) now: Option<RulerItem>,
     /// The pointer is far enough off the ruler to clear the stop on release.
     pub(super) off: bool,
     /// The borders of the table when a column border drag began.
@@ -110,7 +110,7 @@ impl TextRuler<'_> {
             held.anchor = None;
         }
 
-        for item in Item::all(&values) {
+        for item in RulerItem::all(&values) {
             self.run_item(cx, &layout.g, step, &mut held, &text, item);
         }
         self.run_strip(cx, &layout.g, step, &mut held, &text, &values);
@@ -127,14 +127,15 @@ impl TextRuler<'_> {
     }
 
     /// The pointer on one marker or stop.
-    fn run_item(&mut self, cx: &mut Cx<'_, Self>, g: &super::Geometry, step: f32, held: &mut Held, text: &RulerText, item: Item) {
+    fn run_item(&mut self, cx: &mut Cx<'_, Self>, g: &super::Geometry, step: f32, held: &mut Held, text: &RulerText, item: RulerItem) {
         let part = item.part();
         // A stop set in this pass has no part until the next one.
         let Some(press) = cx.part_if_declared(part).map(|declared| declared.press) else { return };
         match press.phase {
             PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
-                if let Item::Stop(at) = item {
-                    self.report.picked = Some(at);
+                if let RulerItem::Stop(at) = item {
+                    // P3(type-w5): ty.X57
+                    self.report.picked = Some(RulerItem::Stop(at));
                     if start.clicks >= 2 {
                         self.report.open_tabs_dialog = true;
                     }
@@ -157,7 +158,7 @@ impl TextRuler<'_> {
             PressPhase::Release { start, click: false, pos, .. } if start.button == PointerButton::Primary && held.from == Some(item) => {
                 self.drag_item(cx, g, step, held, text, start.origin, pos, press.mods.alt);
                 if held.off
-                    && let (Some(anchor), Some(Item::Stop(grab))) = (held.anchor.clone(), held.from)
+                    && let (Some(anchor), Some(RulerItem::Stop(grab))) = (held.anchor.clone(), held.from)
                 {
                     cx.propose(without(&anchor, grab));
                 }
@@ -192,7 +193,7 @@ impl TextRuler<'_> {
         let start = from.position(&anchor, g.width);
         let target = snap_stop(start + (pos.x - origin.x) / g.scale * g.sign(), step, g.width, free);
         let (value, now) = moved(&anchor, from, target, g.width);
-        held.off = matches!(from, Item::Stop(_)) && dropped_off(pos.y, g.strip);
+        held.off = matches!(from, RulerItem::Stop(_)) && dropped_off(pos.y, g.strip);
         if !held.off {
             held.now = Some(now);
             cx.propose(value.clone());
@@ -201,7 +202,7 @@ impl TextRuler<'_> {
     }
 
     /// The position of the dragged item at the pointer.
-    fn show_position(&self, cx: &Cx<'_, Self>, text: &RulerText, at: Pos2, item: Item, values: &RulerValues, width: f32) {
+    fn show_position(&self, cx: &Cx<'_, Self>, text: &RulerText, at: Pos2, item: RulerItem, values: &RulerValues, width: f32) {
         let words = cx.words::<super::TextRulerWords>();
         let name = Self::item_name(&words, item, values).to_owned();
         let value = text.format_value(&cx.env.units(), f64::from(item.position(values, width)), 0.0);
@@ -237,7 +238,8 @@ impl TextRuler<'_> {
             PressPhase::Release { start, click: true, pos, .. } if start.button == PointerButton::Primary && g.column().contains(pos) => {
                 let (value, at) = place(values, stop_at(pos.x, press.mods.alt));
                 cx.set(value);
-                self.report.picked = Some(at);
+                // P3(type-w5): ty.X57
+                self.report.picked = Some(RulerItem::Stop(at));
             }
             _ => {}
         }
@@ -248,9 +250,9 @@ impl TextRuler<'_> {
         held.off = dropped_off(pos.y, g.strip);
         if !held.off {
             let (value, at) = place(&anchor, *stop);
-            held.now = Some(Item::Stop(at));
+            held.now = Some(RulerItem::Stop(at));
             cx.propose(value.clone());
-            self.show_position(cx, text, pos, Item::Stop(at), &value, g.width);
+            self.show_position(cx, text, pos, RulerItem::Stop(at), &value, g.width);
         }
     }
 
@@ -306,7 +308,7 @@ impl TextRuler<'_> {
             return;
         }
         let values = cx.value().cloned().unwrap_or_default();
-        for item in Item::all(&values) {
+        for item in RulerItem::all(&values) {
             if let Some(to) = cx.intents().take_set_value_at(item.part()) {
                 let (value, now) = moved(&values, item, to as f32, g.width);
                 cx.set(value);
@@ -330,7 +332,7 @@ impl TextRuler<'_> {
             }
             return;
         }
-        let Some(item) = Item::of_part(part) else { return };
+        let Some(item) = RulerItem::of_part(part) else { return };
         let by = take_steps(cx, g, step);
         if by != 0.0 {
             let (value, now) = moved(&values, item, item.position(&values, g.width) + by, g.width);
@@ -340,11 +342,11 @@ impl TextRuler<'_> {
         let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
         let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
         if (forward || backward)
-            && let Item::Stop(at) = item
+            && let RulerItem::Stop(at) = item
         {
             cx.set(without(&values, at));
             let left = values.stops.len().saturating_sub(1);
-            let next = left.checked_sub(1).map(|last| Item::Stop(at.saturating_sub(1).min(last))).unwrap_or(Item::LeftBox);
+            let next = left.checked_sub(1).map(|last| RulerItem::Stop(at.saturating_sub(1).min(last))).unwrap_or(RulerItem::LeftBox);
             cx.focus_part(next.part());
         }
         let _ = held;

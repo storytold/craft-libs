@@ -122,6 +122,8 @@ pub enum TextStyleAction {
     New {
         /// Whether to start from the selected type's attributes.
         from_selection: bool,
+        /// Whether Alt was held on the New footer button: the host asks for the new style's name.
+        ask_name: bool,
     },
     /// Duplicate the selected row's style.
     Duplicate(u64),
@@ -187,7 +189,7 @@ impl Facts {
             TextStyleCommand::Redefine => {
                 (self.target && self.current.is_some_and(|id| id != 0 || self.paragraph)).then_some(TextStyleAction::Redefine)
             }
-            TextStyleCommand::New => Some(TextStyleAction::New { from_selection: self.target }),
+            TextStyleCommand::New => Some(TextStyleAction::New { from_selection: self.target, ask_name: false }),
             TextStyleCommand::Duplicate if several => Some(TextStyleAction::DuplicateHighlighted),
             TextStyleCommand::Delete if several => Some(TextStyleAction::DeleteHighlighted),
             TextStyleCommand::Duplicate => editable.map(TextStyleAction::Duplicate),
@@ -254,6 +256,9 @@ pub struct TextStylesPanel<'a> {
     /// The list's text with no rows, passed to the collection's `empty` prop.
     #[prop(into)]
     empty: Option<Label>,
+    /// Scrolls the row of this id into view in this pass.
+    #[prop]
+    reveal: Option<u64>,
 }
 
 impl TextStylesPanel<'_> {
@@ -290,6 +295,7 @@ impl<'a> TextStylesPanel<'a> {
             text_selected: true,
             highlighting: false,
             empty: None,
+            reveal: None,
         }
     }
 
@@ -302,7 +308,8 @@ impl<'a> TextStylesPanel<'a> {
 
     /// Shows the panel and returns what the user asked for.
     pub fn show(self, ui: &mut Ui) -> TextStylesPanelOutput {
-        let TextStylesPanel { label, kind, rows, mut selection, current, overridden, target, text_selected, highlighting, empty } = self;
+        let TextStylesPanel { label, kind, rows, mut selection, current, overridden, target, text_selected, highlighting, empty, reveal } = self;
+        let _ = reveal; // P3(type-w5): ty.X63
         let words = Env::of(ui).words::<TextStylesWords>();
         let paragraph = kind == TextStyleKind::Paragraph;
         let action = Cell::new(None::<TextStyleAction>);

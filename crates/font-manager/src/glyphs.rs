@@ -10,8 +10,8 @@ use std::sync::Arc;
 use craft_behavior::Selection;
 use craft_host::Section;
 use craft_ui::contract::{
-    ActivateOn, Bind, CollectionEvent, Entry, NoValue, Outcome, Pad, Pattern, Props, Remember as _, SelectMode, Show as _, ShowCollection as _,
-    ShowContainer as _,
+    ActivateOn, Bind, CollectionEvent, CommandSet, Entry, NoValue, Outcome, Pad, Pattern, Props, Remember as _, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _,
 };
 use craft_ui::display::{Shade, Spinner, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -48,6 +48,12 @@ craft_ui::words! {
         selected: template "glyphs.selected" = "U+{code}  ·  {count}";
         /// `{char}` the glyph, `{code}` its code point.
         cell: template "glyphs.cell" = "{char}, U+{code}";
+        /// `{code}` the lead character's code point, `{gid}` its glyph id, `{count}` the count word.
+        selected_glyph: template "glyphs.selectedGlyph" = "U+{code}  glyph {gid}  ·  {count}";
+        /// `{gid}` the lead glyph's id, `{count}` the count word.
+        unencoded: template "glyphs.unencoded" = "glyph {gid}  ·  {count}";
+        /// `{name}` the glyph's name, `{gid}` its id.
+        glyph_cell: template "glyphs.glyphCell" = "{name}, glyph {gid}";
         punctuation: "glyphs.categoryPunctuation" = "Punctuation";
         alternates: "glyphs.categoryAlternates" = "Alternates for Selection";
         numbers: "glyphs.categoryNumbers" = "Numbers";
@@ -108,14 +114,43 @@ impl GlyphsWords {
     }
 }
 
+/// A grid cell: a character the face maps, or a glyph no character maps (unencoded, positional forms).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GlyphCell {
+    /// A character the face maps.
+    Char(char),
+    /// A glyph id no character maps.
+    Glyph(u32),
+}
+
+/// What the source says about one shown cell this pass.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct CellInfo {
+    /// The glyph id.
+    pub gid: Option<u32>,
+    /// The glyph's name.
+    pub name: Option<String>,
+    /// A note line.
+    pub note: Option<String>,
+    /// Whether the cell is shown dimmed.
+    pub dimmed: bool,
+    /// Whether the cell has alternate glyphs.
+    pub has_alternates: bool,
+}
+
 /// Where glyph cells come from: the app's text engine draws a glyph of a face at a pixel size and lists the
 /// characters a face has. Apps plug in their own.
 pub trait GlyphSource: Send + Sync {
     /// Every character the face (family, style) has a glyph for, in code point order.
     fn charmap(&self, family: &str, style: &str) -> Vec<char>;
-    /// The glyph of `c` in the face, `px` pixels tall, as an image for a texture; `None` when the face lacks it.
-    /// The panel tints the image with the text colour, so a glyph is white with its coverage in the alpha channel.
-    fn glyph(&self, family: &str, style: &str, c: char, px: u32) -> Option<ColorImage>;
+    /// The cells of a category: characters in code point order, then unencoded glyphs. `"Entire Font"` is every
+    /// cell; any other id is a [`CATEGORIES`] id or one of the source's [`categories`](GlyphSource::categories).
+    fn cells(&self, family: &str, style: &str, category: &str) -> Vec<GlyphCell>;
+    /// The glyph of a character or glyph id in the face, `px` pixels tall, as an image for a texture; `None` when
+    /// the face lacks it. The panel tints the image with the text colour, so a glyph is white with its coverage in
+    /// the alpha channel.
+    fn glyph(&self, family: &str, style: &str, cell: GlyphCell, px: u32) -> Option<ColorImage>;
     /// Whether `c` is in `category` (one of [`CATEGORIES`]).
     fn in_category(&self, c: char, category: &str) -> bool;
     /// Whether the fonts are read. Not ready, the panel shows a spinner and muted text and no grid, and asks for a
@@ -126,6 +161,21 @@ pub trait GlyphSource: Send + Sync {
     /// Changes when the source's faces change, so the pictures and the character lists are read again.
     fn revision(&self) -> u64 {
         0
+    }
+    /// The face's own categories (id, shown name), listed after [`CATEGORIES`].
+    fn categories(&self, family: &str, style: &str) -> Vec<(String, String)> {
+        let _ = (family, style);
+        Vec::new()
+    }
+    /// Glyph id and name, a note line, dimmed, alternates; called for shown cells only.
+    fn describe(&self, family: &str, style: &str, cell: GlyphCell) -> CellInfo {
+        let _ = (family, style, cell);
+        CellInfo::default()
+    }
+    /// The popup's cells, the cell's own glyph first; called when the popup opens.
+    fn alternates(&self, family: &str, style: &str, cell: GlyphCell) -> Vec<GlyphCell> {
+        let _ = (family, style, cell);
+        Vec::new()
     }
 }
 
@@ -155,8 +205,50 @@ pub struct GlyphsPanelOutput {
     pub response: Response,
     /// A glyph to insert at the caret (double-click, Enter on the focused cell); only where the app can insert.
     pub insert: Option<String>,
+    /// Double-click or Enter on a cell (grid or recents) while `can_insert`; the host inserts or applies it. A
+    /// `Char` cell still enters the recents.
+    pub activated: Option<GlyphCell>,
+    /// A pick in a cell's alternates popup.
+    pub alternate: Option<AlternatePick>,
     /// The family or style changed in the panel's own pickers.
     pub font_changed: bool,
+}
+
+/// The cell whose popup was used and the picked glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AlternatePick {
+    /// The cell whose alternates popup was used.
+    pub cell: GlyphCell,
+    /// The picked glyph.
+    pub glyph: GlyphCell,
+}
+
+/// The label, tooltip and state of the cell's corner action; the panel takes it in its own scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet)]
+#[command(prefix = "glyphs", scope = "glyphs")]
+#[non_exhaustive]
+pub enum GlyphsCommand {
+    /// Opens the cell's alternates popup.
+    #[command(label = "Show Alternates")]
+    Alternates,
+}
+
+/// The one way to paint a glyph cell (thumbnail cache, inset, tint): the panel's grid, recents and popup, and an
+/// app's own glyph cells. The painter owns a clone of `ctx` and copies of `family` and `style`, so it borrows only
+/// `source`.
+pub fn glyph_painter<'s>(
+    ctx: &egui::Context,
+    source: &'s dyn GlyphSource,
+    family: &str,
+    style: &str,
+    cell: GlyphCell,
+) -> impl Fn(&ContentPainterCx, Rect) + use<'s> {
+    let _ = (ctx, family, style, cell);
+    move |_, _| {
+        let _ = source;
+        todo!("ty.X54")
+    }
 }
 
 impl Outcome for GlyphsPanelOutput {
@@ -193,7 +285,8 @@ impl ThumbSource<GlyphKey> for GlyphPictures<'_> {
     }
 
     fn render(&self, key: &GlyphKey, request: &ThumbRequest) -> ThumbRender {
-        match self.0.glyph(&key.family, &key.style, key.c, request.side) {
+        // P3(type-w4): ty.X43
+        match self.0.glyph(&key.family, &key.style, GlyphCell::Char(key.c), request.side) {
             Some(image) => ThumbRender::Ready(image),
             None => ThumbRender::Blank,
         }
@@ -284,6 +377,16 @@ pub struct GlyphsPanel<'a> {
     /// Whether the app has a place to insert a glyph: a double click or Enter inserts.
     #[prop]
     can_insert: bool,
+    /// The host's cell (the selected character); the grid selects it.
+    #[prop]
+    marked: Option<GlyphCell>,
+    /// In this pass only, the grid moves its lead to that cell and scrolls it into view. The host passes it in the
+    /// pass its marked cell changes.
+    #[prop]
+    reveal: Option<GlyphCell>,
+    /// Shown in place of the grid when the category has no cells.
+    #[prop(into)]
+    empty: Option<Label>,
 }
 
 impl<'a> GlyphsPanel<'a> {
@@ -295,12 +398,25 @@ impl<'a> GlyphsPanel<'a> {
         style: Bind<'a, String>,
         settings: Bind<'a, GlyphsPanelSettings>,
     ) -> Self {
-        GlyphsPanel { label: label.into(), source, family, style, settings, families: &[], styles: &[], can_insert: false }
+        GlyphsPanel {
+            label: label.into(),
+            source,
+            family,
+            style,
+            settings,
+            families: &[],
+            styles: &[],
+            can_insert: false,
+            marked: None,
+            reveal: None,
+            empty: None,
+        }
     }
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> GlyphsPanelOutput {
-        let GlyphsPanel { label, source, mut family, mut style, mut settings, families, styles, can_insert } = self;
+        let GlyphsPanel { label, source, mut family, mut style, mut settings, families, styles, can_insert, marked, reveal, empty } = self;
+        let _ = (marked, reveal, empty); // P3(type-w4): ty.X47, ty.X48
         let env = Env::of(ui);
         let words = env.words::<GlyphsWords>();
         if !source.ready() {
@@ -311,7 +427,7 @@ impl<'a> GlyphsPanel<'a> {
                 });
             });
             craft_ui::runtime::frame::request_repaint_after(ui.ctx(), SCAN_POLL_SECONDS);
-            return GlyphsPanelOutput { response: shown.output, insert: None, font_changed: false };
+            return GlyphsPanelOutput { response: shown.output, insert: None, activated: None, alternate: None, font_changed: false };
         }
         let thumbs = Thumbnails::<GlyphKey>::in_context(ui.ctx(), "craft-font-manager-glyphs", ThumbnailOptions::new());
         let pictures = GlyphPictures(source);
@@ -455,6 +571,6 @@ impl<'a> GlyphsPanel<'a> {
                 write_bind(&mut settings, cx, state, "Glyphs panel");
             }
         });
-        GlyphsPanelOutput { response: shown.output, insert, font_changed }
+        GlyphsPanelOutput { response: shown.output, insert, activated: None, alternate: None, font_changed }
     }
 }

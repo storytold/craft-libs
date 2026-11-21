@@ -14,7 +14,8 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use craft_ui::text::TextField;
-use egui::Ui;
+use egui::{Context, Ui};
+use serde_json::Value;
 
 use super::FindLabels;
 use crate::find::FindOptions;
@@ -32,6 +33,37 @@ pub enum FindTab {
     GoTo,
 }
 
+/// A check box the host adds to the search options (Search Backwards, Check Hidden Layers).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct FindCheck {
+    /// The key the host reads the check's value by.
+    pub key: String,
+    /// The check box's label.
+    pub label: Label,
+    /// Whether the check is on.
+    pub on: bool,
+}
+
+impl FindCheck {
+    /// A check box `key` named `label`, `on` or off.
+    pub fn new(key: impl Into<String>, label: impl Into<Label>, on: bool) -> Self {
+        let _ = (key.into(), label.into(), on);
+        todo!("ty.X84")
+    }
+}
+
+/// How the Replace tab arranges its buttons.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ReplaceButtons {
+    /// One Replace that replaces and finds the next.
+    #[default]
+    Combined,
+    /// Replace (replaces only) and Replace & Find.
+    Separate,
+}
+
 /// A request the dialog makes while open; the app runs it and reports back with [`FindReplaceDialog::set_message`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,7 +76,7 @@ pub enum FindRequest {
         /// How the Find what text is read.
         options: FindOptions,
     },
-    /// Replace the current match, then find the next.
+    /// Replace the current match, then find the next when `find_next`.
     #[non_exhaustive]
     Replace {
         /// The Find what text.
@@ -53,6 +85,8 @@ pub enum FindRequest {
         with: String,
         /// How the Find what text is read.
         options: FindOptions,
+        /// `true`: replace the current match, then find the next; `false`: replace only.
+        find_next: bool,
     },
     /// Replace every match.
     #[non_exhaustive]
@@ -92,7 +126,14 @@ impl FindRequest {
 
     /// Replace the current match of `query` with `with`.
     pub fn replace(query: impl Into<String>, with: impl Into<String>, options: FindOptions) -> Self {
-        FindRequest::Replace { query: query.into(), with: with.into(), options }
+        // P3(type-w5): ty.X91
+        FindRequest::Replace { query: query.into(), with: with.into(), options, find_next: true }
+    }
+
+    /// Replace the current match of `query` with `with` and stop there.
+    pub fn replace_only(query: impl Into<String>, with: impl Into<String>, options: FindOptions) -> Self {
+        let _ = (query.into(), with.into(), options);
+        todo!("ty.X93")
     }
 
     /// Replace every match of `query` with `with`.
@@ -155,6 +196,15 @@ pub struct FindReplaceDialog {
     insert: Option<(Field, String)>,
     go_to_kind: usize,
     go_to_target: String,
+    /// The host's check boxes, drawn after the layout's own options.
+    #[allow(dead_code)] // P3(type-w5): ty.X85
+    checks: Vec<FindCheck>,
+    /// The arrangement of the Replace buttons.
+    #[allow(dead_code)] // P3(type-w5): ty.X88
+    replace_buttons: ReplaceButtons,
+    /// Whether a match is current; the Replace buttons are enabled only while it is.
+    #[allow(dead_code)] // P3(type-w5): ty.X90
+    matched: bool,
 }
 
 impl FindReplaceDialog {
@@ -174,6 +224,9 @@ impl FindReplaceDialog {
             insert: None,
             go_to_kind: 0,
             go_to_target: String::new(),
+            checks: Vec::new(),
+            replace_buttons: ReplaceButtons::default(),
+            matched: true,
         }
     }
 
@@ -197,6 +250,39 @@ impl FindReplaceDialog {
     pub fn go_to_kinds(mut self, kinds: Vec<String>) -> Self {
         self.go_to_kinds = kinds;
         self
+    }
+
+    /// The host's check boxes, drawn after the layout's own options, in order, in both layouts.
+    #[must_use]
+    pub fn checks(self, checks: Vec<FindCheck>) -> Self {
+        let _ = checks;
+        todo!("ty.X85")
+    }
+
+    /// The current value of the host check `key`.
+    pub fn checked(&self, key: &str) -> Option<bool> {
+        let _ = key;
+        todo!("ty.X86")
+    }
+
+    /// The arrangement of the Replace buttons on the Replace tab, both layouts.
+    #[must_use]
+    pub fn replace_buttons(self, buttons: ReplaceButtons) -> Self {
+        let _ = buttons;
+        todo!("ty.X88")
+    }
+
+    /// Opens with `with` in Replace with (the host's last search).
+    #[must_use]
+    pub fn replace_with(self, with: impl Into<String>) -> Self {
+        let _ = with.into();
+        todo!("ty.X89")
+    }
+
+    /// Whether a match is current; the Replace buttons are enabled only while it is. Starts `true`.
+    pub fn set_matched(&mut self, matched: bool) {
+        let _ = matched;
+        todo!("ty.X90")
     }
 
     /// The request the user made since the last call, if any.
@@ -372,12 +458,22 @@ impl StackDialog for FindReplaceDialog {
             match which {
                 Press::ShowReplace => self.tab = FindTab::Replace,
                 Press::Highlight(on) => self.request = Some(FindRequest::Highlight { query, options, on: *on }),
-                Press::Replace if !query.is_empty() => self.request = Some(FindRequest::Replace { query, with, options }),
+                // P3(type-w5): ty.X91
+                Press::Replace if !query.is_empty() => self.request = Some(FindRequest::Replace { query, with, options, find_next: true }),
                 Press::ReplaceAll if !query.is_empty() => self.request = Some(FindRequest::ReplaceAll { query, with, options }),
                 Press::Replace | Press::ReplaceAll => {}
             }
         }
         (picked == Some(close_at) || shown.output.closed.is_some()).then_some(DialogResult::Ok(()))
+    }
+
+    fn json_fields(&self) -> Option<Value> {
+        todo!("ty.X95")
+    }
+
+    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
+        let _ = (ctx, field, value);
+        todo!("ty.X95")
     }
 }
 

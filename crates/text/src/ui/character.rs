@@ -10,12 +10,13 @@ use craft_font_manager::Catalog;
 #[cfg(feature = "font-picker")]
 use craft_font_manager::axes::AxisSliders;
 #[cfg(feature = "font-picker")]
-use craft_font_manager::picker::{FontFilters, FontPickerSettings};
+use craft_font_manager::picker::{FamilySet, FilterLayout, FontFilters, FontPickerSettings, FontScript};
 use std::ops::RangeInclusive;
 #[cfg(feature = "font-picker")]
 use std::sync::Arc;
 
 use crate::ui::length::DocUnit;
+use crate::ui::type_options::TextAntiAlias;
 use craft_behavior::{ColumnWidth, EditEvent, IconId, Preview};
 use craft_theme::{Rgba, Srgba};
 use craft_ui::choice::Swatch;
@@ -36,7 +37,9 @@ pub(crate) mod rows;
 mod stories;
 mod style_options;
 
-pub use paragraph::{ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign};
+pub use paragraph::{
+    DirectionRow, ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign,
+};
 pub use paragraph_dialog::{
     LineSpacing, ParagraphAlign, ParagraphAnswer, ParagraphDialog, ParagraphDialogWords, ParagraphFormat, ParagraphPreview, ParagraphPreviewStyle,
     SpacingKind, SpecialIndent,
@@ -90,7 +93,106 @@ craft_ui::words! {
         ordinals: "character.ordinals" = "Ordinals";
         fractions: "character.fractions" = "Fractions";
         language: "character.language" = "Language";
+        rotation: "character.rotation" = "Rotation";
+        anti_alias: "character.antiAlias" = "Anti-aliasing";
+        font_height: "character.fontHeight" = "Set Font Height Reference";
+        em_box: "character.emBox" = "Em Box";
+        cap_height: "character.capHeight" = "Cap Height";
+        x_height: "character.xHeight" = "x-Height";
+        icf_box: "character.icfBox" = "ICF Box";
+        aki_left: "character.akiLeft" = "Insert Aki Left";
+        aki_right: "character.akiRight" = "Insert Aki Right";
+        tsume: "character.tsume" = "Tsume";
+        diacritic_x: "character.diacriticX" = "Horizontal Diacritic Position";
+        diacritic_y: "character.diacriticY" = "Vertical Diacritic Position";
+        variable_font: "character.variableFont" = "Variable Font";
     }
+}
+
+/// The document keys of the family, size, leading, kerning and tracking fields, which a host focuses with
+/// `runtime::focus::request(ctx, FocusTarget::Doc(keys::SIZE))`.
+pub mod keys {
+    use craft_behavior::DocKey;
+
+    /// The family field.
+    pub const FAMILY: DocKey = DocKey::new("craft-text.character.family");
+    /// The size field.
+    pub const SIZE: DocKey = DocKey::new("craft-text.character.size");
+    /// The leading field.
+    pub const LEADING: DocKey = DocKey::new("craft-text.character.leading");
+    /// The kerning field.
+    pub const KERNING: DocKey = DocKey::new("craft-text.character.kerning");
+    /// The tracking field.
+    pub const TRACKING: DocKey = DocKey::new("craft-text.character.tracking");
+}
+
+/// The groups of rows the Character controls show, as named sets the host turns on or off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CharacterRows(u16);
+
+impl CharacterRows {
+    /// The colour swatch beside the baseline shift.
+    pub const COLOR: CharacterRows = CharacterRows(1 << 0);
+    /// Faux Bold and Faux Italic.
+    pub const FAUX: CharacterRows = CharacterRows(1 << 1);
+    /// Vertical and horizontal scale and baseline shift.
+    pub const SCALES: CharacterRows = CharacterRows(1 << 2);
+    /// Rotation.
+    pub const ROTATION: CharacterRows = CharacterRows(1 << 3);
+    /// Anti-aliasing.
+    pub const ANTI_ALIAS: CharacterRows = CharacterRows(1 << 4);
+    /// Set Font Height Reference.
+    pub const FONT_HEIGHT: CharacterRows = CharacterRows(1 << 5);
+    /// Superscript and Subscript.
+    pub const SUPERSCRIPT: CharacterRows = CharacterRows(1 << 6);
+    /// The OpenType buttons.
+    pub const OPENTYPE: CharacterRows = CharacterRows(1 << 7);
+    /// Insert Aki Left and Right, Tsume.
+    pub const EAST_ASIAN: CharacterRows = CharacterRows(1 << 8);
+    /// Horizontal and vertical diacritic positions.
+    pub const MIDDLE_EASTERN: CharacterRows = CharacterRows(1 << 9);
+    /// The set `show` draws by default.
+    pub const PHOTOSHOP: CharacterRows = CharacterRows(Self::COLOR.0 | Self::FAUX.0 | Self::SCALES.0 | Self::OPENTYPE.0);
+
+    /// Whether every group in `rows` is on.
+    pub const fn contains(self, rows: CharacterRows) -> bool {
+        self.0 & rows.0 == rows.0
+    }
+
+    /// The set with every group in `rows` turned on or off.
+    #[must_use]
+    pub const fn with(self, rows: CharacterRows, on: bool) -> Self {
+        CharacterRows(if on { self.0 | rows.0 } else { self.0 & !rows.0 })
+    }
+}
+
+impl std::ops::BitOr for CharacterRows {
+    type Output = CharacterRows;
+
+    fn bitor(self, other: CharacterRows) -> CharacterRows {
+        CharacterRows(self.0 | other.0)
+    }
+}
+
+impl Default for CharacterRows {
+    fn default() -> Self {
+        CharacterRows::PHOTOSHOP
+    }
+}
+
+/// The Set Font Height Reference values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FontHeightReference {
+    /// The em box.
+    #[default]
+    EmBox,
+    /// The cap height.
+    CapHeight,
+    /// The x-height.
+    XHeight,
+    /// The ideographic character face box.
+    IcfBox,
 }
 
 /// The font size menu's presets, in points (PhotoCraft's `SIZE_PRESETS`, Photoshop's list); the
@@ -134,6 +236,26 @@ const SHIFT_RANGE: RangeInclusive<f64> = -1296.0..=1296.0;
 const TRACKING_RANGE: RangeInclusive<f64> = -1000.0..=10000.0;
 /// The range of the scale fields, percent.
 const SCALE_RANGE: RangeInclusive<f64> = 0.0..=1000.0;
+/// The rotation presets, degrees.
+pub const ROTATION_PRESETS: [f32; 9] = [-180.0, -135.0, -90.0, -45.0, 0.0, 45.0, 90.0, 135.0, 180.0];
+/// The Insert Aki Left and Right presets, thousandths of an em.
+pub const AKI_PRESETS: [f32; 4] = [0.0, 250.0, 500.0, 1000.0];
+/// The Tsume presets, percent.
+pub const TSUME_PRESETS: [f32; 5] = [0.0, 25.0, 50.0, 75.0, 100.0];
+/// The diacritic position presets, thousandths of an em.
+pub const DIACRITIC_PRESETS: [f32; 7] = [-200.0, -100.0, -50.0, 0.0, 50.0, 100.0, 200.0];
+/// The range of the rotation field, degrees.
+#[allow(dead_code)] // P3(type-w3): ty.X34
+const ROTATION_RANGE: RangeInclusive<f64> = -360.0..=360.0;
+/// The range of the Insert Aki fields, thousandths of an em.
+#[allow(dead_code)] // P3(type-w3): ty.X34
+const AKI_RANGE: RangeInclusive<f64> = 0.0..=1000.0;
+/// The range of the Tsume field, percent.
+#[allow(dead_code)] // P3(type-w3): ty.X34
+const TSUME_RANGE: RangeInclusive<f64> = 0.0..=100.0;
+/// The range of the diacritic position fields, thousandths of an em.
+#[allow(dead_code)] // P3(type-w3): ty.X34
+const DIACRITIC_RANGE: RangeInclusive<f64> = -1000.0..=1000.0;
 /// Two columns of the same share, for the rows of two fields.
 const TWO_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 
@@ -172,6 +294,18 @@ impl<'a> FaceAxes<'a> {
     }
 }
 
+/// How the axes show: the sliders under the style row, or one button that opens them.
+#[cfg(feature = "font-picker")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AxesLayout {
+    /// The sliders under the style row.
+    #[default]
+    Sliders,
+    /// `AxesButton` under the style row.
+    Button,
+}
+
 /// What the family field's font picker takes: the catalog, the app's stars, recents and filters, and the preview.
 #[cfg(feature = "font-picker")]
 #[non_exhaustive]
@@ -186,13 +320,28 @@ pub struct FontPickerSource<'a> {
     pub preview_text: Option<&'a str>,
     /// The families the app serves.
     pub served: &'a [String],
+    /// The host's family sets.
+    pub sets: &'a [FamilySet<'a>],
+    /// The scripts the script row offers.
+    pub scripts: &'a [FontScript],
+    /// The layout of the list's filter area.
+    pub filter_layout: FilterLayout,
 }
 
 #[cfg(feature = "font-picker")]
 impl<'a> FontPickerSource<'a> {
     /// A source over `catalog` with the app's `settings` and `filters`.
     pub fn new(catalog: &'a Arc<Catalog>, settings: Bind<'a, FontPickerSettings>, filters: Bind<'a, FontFilters>) -> Self {
-        FontPickerSource { catalog, settings, filters, preview_text: None, served: &[] }
+        FontPickerSource {
+            catalog,
+            settings,
+            filters,
+            preview_text: None,
+            served: &[],
+            sets: &[],
+            scripts: &[],
+            filter_layout: FilterLayout::default(),
+        }
     }
 
     /// The text the previews show.
@@ -205,6 +354,24 @@ impl<'a> FontPickerSource<'a> {
     pub fn served(mut self, served: &'a [String]) -> Self {
         self.served = served;
         self
+    }
+
+    /// The host's family sets, passed on to the family field's picker.
+    pub fn sets(self, sets: &'a [FamilySet<'a>]) -> Self {
+        let _ = sets;
+        todo!("ty.X31")
+    }
+
+    /// The scripts the picker's script row offers.
+    pub fn scripts(self, scripts: &'a [FontScript]) -> Self {
+        let _ = scripts;
+        todo!("ty.X31")
+    }
+
+    /// The layout of the picker's filter area.
+    pub fn filter_layout(self, layout: FilterLayout) -> Self {
+        let _ = layout;
+        todo!("ty.X31")
     }
 }
 
@@ -340,6 +507,25 @@ pub struct CharacterValues {
     pub language: Option<String>,
     /// The variable-font axis values of the selection, by axis tag; `None` while the selection mixes them or has none.
     pub axes: Option<Vec<([u8; 4], f32)>>,
+    /// Rotation in degrees.
+    pub rotation: Option<f32>,
+    /// Insert Aki Left, thousandths of an em.
+    pub aki_left: Option<f32>,
+    /// Insert Aki Right, thousandths of an em.
+    pub aki_right: Option<f32>,
+    /// Tsume, percent.
+    pub tsume: Option<f32>,
+    /// Horizontal diacritic position, thousandths of an em.
+    pub diacritic_x: Option<f32>,
+    /// Vertical diacritic position, thousandths of an em.
+    pub diacritic_y: Option<f32>,
+    /// The pair kerning Metrics or Optical gives at the caret; while the kerning is one of them the field shows it in
+    /// parentheses, and typing a number sets `Manual`.
+    pub auto_kerning: Option<f32>,
+    /// The anti-aliasing method.
+    pub anti_alias: Option<TextAntiAlias>,
+    /// The Set Font Height Reference value.
+    pub font_height: Option<FontHeightReference>,
 }
 
 impl CharacterValues {
@@ -366,6 +552,15 @@ impl CharacterValues {
             opentype: self.opentype.iter().copied().filter(|tag| other.opentype.contains(tag)).collect(),
             language: agree(&self.language, &other.language),
             axes: agree(&self.axes, &other.axes),
+            rotation: agree(&self.rotation, &other.rotation),
+            aki_left: agree(&self.aki_left, &other.aki_left),
+            aki_right: agree(&self.aki_right, &other.aki_right),
+            tsume: agree(&self.tsume, &other.tsume),
+            diacritic_x: agree(&self.diacritic_x, &other.diacritic_x),
+            diacritic_y: agree(&self.diacritic_y, &other.diacritic_y),
+            auto_kerning: agree(&self.auto_kerning, &other.auto_kerning),
+            anti_alias: agree(&self.anti_alias, &other.anti_alias),
+            font_height: agree(&self.font_height, &other.font_height),
         }
     }
 }
@@ -416,6 +611,22 @@ pub enum CharacterChange {
     Language(String),
     /// The variable-font axis values, by axis tag.
     Axes(Vec<([u8; 4], f32)>),
+    /// Rotation in degrees.
+    Rotation(f32),
+    /// Anti-aliasing.
+    AntiAlias(TextAntiAlias),
+    /// Set Font Height Reference.
+    FontHeight(FontHeightReference),
+    /// Insert Aki Left, thousandths of an em.
+    AkiLeft(f32),
+    /// Insert Aki Right, thousandths of an em.
+    AkiRight(f32),
+    /// Tsume, percent.
+    Tsume(f32),
+    /// Horizontal diacritic position, thousandths of an em.
+    DiacriticX(f32),
+    /// Vertical diacritic position, thousandths of an em.
+    DiacriticY(f32),
 }
 
 /// What the Character controls did this pass.
@@ -436,6 +647,9 @@ pub struct CharacterControlsOutput {
     /// The colour swatch was clicked: the app opens its colour picker for this request (key [`COLOR_KEY`]) and sets
     /// the colour. Set for the one pass of the click.
     pub requests: HostRequests,
+    /// The family `FontPicker`'s id this pass, which `FrameOutput::ended_previews` names when the controls stop
+    /// showing with a preview.
+    pub picker: Option<egui::Id>,
 }
 
 impl Outcome for CharacterControlsOutput {
@@ -493,6 +707,16 @@ pub struct CharacterControls<'a> {
     #[cfg(feature = "font-picker")]
     #[prop]
     axes: Option<FaceAxes<'a>>,
+    /// How `axes` shows: the sliders under the style row, or `AxesButton` under it.
+    #[cfg(feature = "font-picker")]
+    #[prop]
+    axes_layout: AxesLayout,
+    /// The row groups shown.
+    #[prop]
+    rows: CharacterRows,
+    /// The methods the Anti-aliasing select offers (with `CharacterRows::ANTI_ALIAS`).
+    #[prop]
+    anti_alias_methods: &'a [TextAntiAlias],
 }
 
 impl<'a> CharacterControls<'a> {
@@ -510,6 +734,10 @@ impl<'a> CharacterControls<'a> {
             picker: None,
             #[cfg(feature = "font-picker")]
             axes: None,
+            #[cfg(feature = "font-picker")]
+            axes_layout: AxesLayout::default(),
+            rows: CharacterRows::default(),
+            anti_alias_methods: &TextAntiAlias::BAR,
         }
     }
 
@@ -518,6 +746,9 @@ impl<'a> CharacterControls<'a> {
         let values = self.values;
         let (families, styles, languages) = (self.families, self.styles, self.languages);
         let (unit, superscript) = (self.unit, self.superscript);
+        let _ = (self.rows, self.anti_alias_methods); // P3(type-w3): ty.X23, ty.X27
+        #[cfg(feature = "font-picker")]
+        let _ = (self.axes_layout,); // P3(type-w3): ty.X26
         #[cfg(feature = "font-picker")]
         let mut picker = self.picker;
         #[cfg(feature = "font-picker")]
@@ -708,7 +939,7 @@ impl<'a> CharacterControls<'a> {
                 edits.extend(select_row(ui, &words.language, hidden_side(), mixed(values.language.clone()), entries, CharacterChange::Language));
             }
         });
-        CharacterControlsOutput { response: shown.output, edits, preview_family, rested_family, requests }
+        CharacterControlsOutput { response: shown.output, edits, preview_family, rested_family, requests, picker: None }
     }
 }
 
