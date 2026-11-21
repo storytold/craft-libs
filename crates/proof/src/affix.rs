@@ -38,6 +38,7 @@
 
 use std::collections::HashMap;
 use std::hash::Hasher;
+use std::rc::Rc;
 
 use crate::patterns::{FxHasher, FxMap};
 
@@ -659,6 +660,35 @@ fn split_fields(line: &str) -> impl Iterator<Item = &str> {
 /// A rule as parsed from text, before flags get ids: `(flag, cross, strip, add, cont, cond)`.
 type RawRule = (FlagKey, bool, String, String, String, String);
 
+/// Parsed continuation flags used only while building the dictionary. Final AF aliases share
+/// their strict parse; literal continuations keep their own flags.
+enum ContinuationFlags {
+    Literal(Vec<FlagKey>),
+    Alias(Rc<[FlagKey]>),
+}
+
+impl ContinuationFlags {
+    fn read(rules: &Rules, written: &str, aliases: &mut FxMap<usize, Rc<[FlagKey]>>) -> Result<Self, String> {
+        if let Some(index) = rules.alias_index(written) {
+            if let Some(flags) = aliases.get(&index) {
+                return Ok(Self::Alias(Rc::clone(flags)));
+            }
+            let flags: Rc<[FlagKey]> = rules.mode.parse(rules.flags(written))?.into();
+            aliases.insert(index, Rc::clone(&flags));
+            Ok(Self::Alias(flags))
+        } else {
+            rules.mode.parse(rules.flags(written)).map(Self::Literal)
+        }
+    }
+
+    fn as_slice(&self) -> &[FlagKey] {
+        match self {
+            Self::Literal(flags) => flags.as_slice(),
+            Self::Alias(flags) => flags.as_ref(),
+        }
+    }
+}
+
 /// Most distinct `TRY` characters kept; a hostile `.aff` could otherwise make every suggestion
 /// round cost time and memory proportional to the file size.
 const MAX_TRY_CHARS: usize = 128;
@@ -1177,12 +1207,11 @@ fn parse_aff(aff: &str, english: bool) -> Result<Rules, String> {
             }
         }
     }
-    // Aliases may be declared after the rules that use them; resolve once all are read.
+    // Continuation aliases are resolved by build after every directive has been read.
     // Hunspell removes `IGNORE` characters from the appended text only: a stripped text that
     // holds one never matches a stem (stems lose them too), so the rule never applies.
     let resolve = |rules: &mut Vec<RawRule>, r: &Rules| {
         for rule in rules.iter_mut() {
-            rule.4 = r.flags(&rule.4).to_string();
             rule.3 = r.strip_ignored(&rule.3);
         }
     };
@@ -1327,12 +1356,17 @@ impl AffixDict {
         let mode = rules.mode;
         let exclusion_keys = [rules.forbidden, rules.no_suggest, rules.substandard];
         let (mut stems, stem_keys) = AffixDict::read_stem_flags(&rules, stems, entry_cap, max_flags)?;
-        let conts = |rs: &[RawRule]| rs.iter().map(|r| mode.parse(&r.4)).collect::<Result<Vec<_>, _>>();
-        let (pfx_cont, sfx_cont) = (conts(&rules.prefixes)?, conts(&rules.suffixes)?);
+        // This strict cache is separate from the stem reader's lenient alias ranges.
+        let mut aliases: FxMap<usize, Rc<[FlagKey]>> = FxMap::default();
+        let mut conts = |rs: &[RawRule]| {
+            rs.iter().map(|r| ContinuationFlags::read(&rules, &r.4, &mut aliases)).collect::<Result<Vec<_>, _>>()
+        };
+        let pfx_cont = conts(&rules.prefixes)?;
+        let sfx_cont = conts(&rules.suffixes)?;
         // Flags: every one a rule, a stem or a directive uses gets an id, in key order.
         let mut distinct: FxMap<FlagKey, u16> = FxMap::default();
         let all = rules.prefixes.iter().chain(&rules.suffixes).map(|r| r.0);
-        let all = all.chain(pfx_cont.iter().chain(&sfx_cont).flatten().copied()).chain(stem_keys.iter().copied());
+        let all = all.chain(pfx_cont.iter().chain(&sfx_cont).flat_map(ContinuationFlags::as_slice).copied()).chain(stem_keys.iter().copied());
         // NEEDAFFIX and CIRCUMFIX flags may only ever appear in rules' continuation classes.
         let directives =
             [rules.forbidden, rules.no_suggest, rules.substandard, rules.keepcase, rules.only_in_compound, rules.need_affix, rules.circumfix];
@@ -1534,12 +1568,12 @@ impl AffixDict {
         if dropped > 0 {
             log::debug!("affix dictionary: {dropped} homonym entries past {MAX_FLAGS_PER_STEM} merged flags kept only their exclusions");
         }
-        let mut build_rules = |raw: Vec<RawRule>, conts: Vec<Vec<FlagKey>>, d: &mut AffixDict| -> Result<Vec<Rule>, String> {
+        let mut build_rules = |raw: Vec<RawRule>, conts: Vec<ContinuationFlags>, d: &mut AffixDict| -> Result<Vec<Rule>, String> {
             raw.into_iter()
                 .zip(conts)
                 .map(|((flag, cross, strip, add, _, cond), cont)| {
                     let flag = id_of(flag).ok_or("affix flag without an id")?;
-                    let cont = d.intern(&mut set_ids, &mut cont.iter().filter_map(|&k| id_of(k)).collect())?;
+                    let cont = d.intern(&mut set_ids, &mut cont.as_slice().iter().filter_map(|&k| id_of(k)).collect())?;
                     Ok(Rule { flag, cross, strip: strip.into(), add: add.into(), cont, cond: parse_cond(&cond)?, cond_text: cond.into() })
                 })
                 .collect()
