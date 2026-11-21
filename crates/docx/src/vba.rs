@@ -1,0 +1,587 @@
+//! A read-only look inside `word/vbaProject.bin` ([MS-OVBA]): which modules it holds and what
+//! source they carry. The project is never run; parsing exists so agents and users can audit
+//! what a document would have run elsewhere (steps 1–2 of the macro work: banner + source
+//! audit, no execution — #5444).
+//!
+//! The project is a compound file ([MS-CFB]) whose `/VBA/dir` stream lists modules; each
+//! module's stream holds a performance cache, then the source at [`Module::text_offset`],
+//! compressed with the MS-OVBA container format ([`decompress`]). The reader is lenient
+//! (unknown dir records are skipped; a module whose stream can't be read is listed without
+//! source) and bounded (stream, source and total-source sizes are capped), so hostile input
+//! yields an error or a best-effort report, never a panic.
+//!
+//! Names and source are MBCS in the project's code page ([`Project::code_page`]): a
+//! single-byte code page (cp1252 and the other Windows, DOS and Mac ones) decodes through its
+//! table ([`craft_codepage`]), so a cp1252 `0xE9` is `é`; an East Asian multibyte page or one
+//! the table does not know is recorded and read as lossy UTF-8, exact for the ASCII macro
+//! source almost always is. The Unicode name records (MODULENAMEUNICODE, MODULESTREAMNAMEUNICODE) are used when the project has them:
+//! stream names are UTF-16 there, so a cp1252 name such as `Módulo1` opens its stream.
+
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::sync::Arc;
+
+use crate::DocxError;
+
+fn bad(msg: impl Into<String>) -> DocxError {
+    DocxError::NotWord(msg.into())
+}
+
+/// How large a `/VBA/dir` stream may be ([`MAX_DIR`] bytes; real ones are a few KiB).
+pub const MAX_DIR: u64 = 1 << 20;
+/// How many modules a project may list before the report says `truncated`.
+pub const MAX_MODULES: usize = 256;
+/// How large one module's source may be before the module says `truncated`.
+pub const MAX_SOURCE: u64 = 1 << 20;
+/// How much source all modules together may carry before the rest are listed without it
+/// ([`MAX_TOTAL_SOURCE`] bytes of decoded text): a project of many modules naming one large
+/// stream stays bounded instead of holding the source once per module.
+pub const MAX_TOTAL_SOURCE: u64 = 4 << 20;
+/// How large a module stream read may be: the compressed container for [`MAX_SOURCE`] of
+/// source plus slack — all-literal chunks expand the data by 9/8 and raw chunks 1:1, so a
+/// source of [`MAX_SOURCE`] never needs more than twice as many container bytes.
+pub const MAX_MODULE_STREAM: u64 = 2 * MAX_SOURCE;
+/// How many bytes of module streams the cache may hold: a project naming more distinct
+/// streams than fit reads the extra ones again (each read is bounded by
+/// [`MAX_MODULE_STREAM`]), so a re-read costs time, not memory — a project of 256 streams
+/// sharing one sector chain can't make the cache retain 512 MiB of bytes no module decodes.
+pub const MAX_CACHED_STREAMS: u64 = 2 * MAX_TOTAL_SOURCE;
+
+/// What [MS-OVBA] §2.4.1.1.5 names a compressed chunk's signature: bits 12..15 of the header.
+const CHUNK_SIGNATURE: u16 = 0xB000;
+/// The container's first byte ([MS-OVBA] §2.4.1.1.4).
+const CONTAINER_SIGNATURE: u8 = 0x01;
+/// How many bytes an uncompressed (raw) chunk carries.
+const RAW_CHUNK: usize = 4096;
+
+/// Dir record ids ([MS-OVBA] §2.3.4.2). Only the ones the audit reads are named.
+const REC_CODE_PAGE: u16 = 0x0003;
+const REC_PROJECT_VERSION: u16 = 0x0009;
+/// REFERENCEREGISTERED: [MS-OVBA] §2.3.4.2.2 says the record's `Size` field is ignored on
+/// read; the payload's own nested lengths say where the next record starts.
+const REC_REFERENCE_REGISTERED: u16 = 0x000D;
+/// REFERENCEPROJECT: its `Size` is ignored on read too ([MS-OVBA] §2.3.4.2.2.6).
+const REC_REFERENCE_PROJECT: u16 = 0x000E;
+/// REFERENCENAME, the optional extended name inside a REFERENCECONTROL record.
+const REC_REFERENCE_NAME: u16 = 0x0016;
+/// REFERENCECONTROL: `SizeTwiddled` and `SizeExtended` are ignored on read ([MS-OVBA]
+/// §2.3.4.2.2.5).
+const REC_REFERENCE_CONTROL: u16 = 0x002F;
+const REC_MODULES_COUNT: u16 = 0x000F;
+const REC_MODULE_NAME: u16 = 0x0019;
+const REC_MODULE_STREAM_NAME: u16 = 0x001A;
+/// MODULESTREAMNAMEUNICODE: the stream name in UTF-16, which is how the compound file stores
+/// stream names — the MBCS record decoded as lossy UTF-8 can't open a cp1252 name.
+const REC_MODULE_STREAM_NAME_UNICODE: u16 = 0x0032;
+const REC_MODULE_PROCEDURAL: u16 = 0x0021;
+const REC_MODULE_DOCUMENT: u16 = 0x0022;
+const REC_MODULE_READ_ONLY: u16 = 0x0025;
+const REC_MODULE_PRIVATE: u16 = 0x0028;
+const REC_MODULE_END: u16 = 0x002B;
+const REC_MODULE_OFFSET: u16 = 0x0031;
+const REC_MODULE_NAME_UNICODE: u16 = 0x0047;
+
+/// A VBA project: the modules its `dir` stream lists, each with its source when it could be
+/// read. [`Project::truncated`] says the project lists more than [`MAX_MODULES`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Project {
+    /// The modules in `dir` order.
+    pub modules: Vec<Module>,
+    /// The project's code page (the MBCS encoding its names and source use).
+    pub code_page: u16,
+    /// The project lists more modules than [`MAX_MODULES`] (the rest are left out).
+    pub truncated: bool,
+}
+
+/// One VBA module: where its stream lives and what source it carries.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Module {
+    /// The module's name (`MODULENAME`, or its Unicode variant when the project has one).
+    pub name: String,
+    /// The name of the stream under `/VBA/` that holds the module.
+    pub stream_name: String,
+    /// Where in the stream the source starts (the performance cache comes first).
+    pub text_offset: u64,
+    /// Is the module procedural (rather than document or class)?
+    pub procedural: bool,
+    /// The module is marked read-only.
+    pub read_only: bool,
+    /// The module is marked private.
+    pub private: bool,
+    /// The module's source, decoded as UTF-8 with replacement ([`MAX_SOURCE`] cap);
+    /// `None` when the stream could not be read.
+    pub source: Option<String>,
+    /// The source is longer than [`MAX_SOURCE`] (it is cut at the cap).
+    pub truncated: bool,
+}
+
+/// The project inside `word/vbaProject.bin`. Nothing here runs anything.
+pub fn project(bytes: &[u8]) -> Result<Project, DocxError> {
+    let comp = craft_cfb::CompoundFile::open(bytes).map_err(|e| bad(format!("not a readable compound file ({e})")))?;
+    let dir = stream(&comp, "/VBA/dir", MAX_DIR)?;
+    let dir = decompress(&dir, MAX_DIR as usize)?;
+    let mut project = walk_dir(&dir)?;
+    // Each distinct stream is read once, and the decoded source all modules carry counts
+    // against [`MAX_TOTAL_SOURCE`]: 256 modules naming one large stream used to read and hold
+    // it once per module — about 768 MiB decoded with lossy replacement from a small file.
+    // The stream cache is bounded by [`MAX_CACHED_STREAMS`]: a project naming more distinct
+    // streams than fit reads the extra ones again, so a re-read costs time, not memory.
+    let mut streams: HashMap<String, Option<Arc<(Vec<u8>, bool)>>> = HashMap::new();
+    let mut cached = 0u64;
+    let mut budget = MAX_TOTAL_SOURCE;
+    for module in &mut project.modules {
+        // A stream name is a single path segment; anything else can't name a module stream.
+        if module.stream_name.is_empty() || module.stream_name.contains(['/', '\\', '\0']) {
+            module.source = None;
+            continue;
+        }
+        let path = format!("/VBA/{}", module.stream_name);
+        let shared = match streams.entry(module.stream_name.clone()) {
+            Entry::Occupied(e) => e.get().clone(),
+            Entry::Vacant(e) => {
+                let read = match module_stream(&comp, &path) {
+                    Ok(v) => Some(Arc::new(v)),
+                    Err(err) => {
+                        log::warn!("docx: can't read the VBA module {path:?} ({err})");
+                        None
+                    }
+                };
+                // A stream the cache can't hold isn't kept: the next module naming it reads
+                // it again. A failed read is remembered, so a stream no module can read
+                // isn't re-read once per module.
+                let fits = match &read {
+                    Some(v) => {
+                        let fits = cached + v.0.len() as u64 <= MAX_CACHED_STREAMS;
+                        if fits {
+                            cached += v.0.len() as u64;
+                        }
+                        fits
+                    }
+                    None => true,
+                };
+                if fits {
+                    e.insert(read.clone());
+                }
+                read
+            }
+        };
+        let Some(bytes) = shared else {
+            module.source = None;
+            continue;
+        };
+        read_source(module, &bytes.0, bytes.1, project.code_page, &mut budget);
+    }
+    Ok(project)
+}
+
+/// A module's source from its stream bytes: a performance cache, then the source at
+/// [`Module::text_offset`] — compressed when it starts with the container signature
+/// ([MS-OVBA] §2.4.1.1.4), raw otherwise. The output stops at [`MAX_SOURCE`] or what is left
+/// of `budget` — decoded first (lossy decoding can only expand), then cut to the remaining
+/// budget at a character boundary, so an ASCII source keeps its full bytes while they fit —
+/// and the module says `truncated` when anything was cut, instead of the source vanishing.
+fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, code_page: u16, budget: &mut u64) {
+    let at = module.text_offset.min(stream.len() as u64) as usize;
+    let rest = &stream[at..];
+    let (raw, truncated) = if rest.first() == Some(&CONTAINER_SIGNATURE) {
+        match decompress_to_cap(rest, MAX_SOURCE as usize) {
+            Ok((raw, overflow)) => (raw, overflow),
+            Err(e) => {
+                log::warn!("docx: can't decompress the VBA module {:?} ({e})", module.stream_name);
+                module.source = None;
+                return;
+            }
+        }
+    } else {
+        // A raw source: the stream read stops at [`MAX_MODULE_STREAM`], so a source longer
+        // than [`MAX_SOURCE`] is cut at the cap and says so below.
+        (rest.to_vec(), stream_cut)
+    };
+    let take = raw.len().min(MAX_SOURCE as usize);
+    if craft_codepage::is_byte_code_page(code_page) {
+        // A byte of a single-byte code page becomes one to three UTF-8 bytes, so the text is
+        // decoded character by character and stops at the first one the remaining total
+        // budget (or [`MAX_SOURCE`]) cannot hold: nothing past the cut is decoded and thrown
+        // away, and a repeated reference to a cached stream never re-decodes a spent budget.
+        let mut out = String::new();
+        let mut consumed = 0usize;
+        for (i, &b) in raw[..take].iter().enumerate() {
+            let c = craft_codepage::code_page_byte(code_page, b);
+            let len = c.len_utf8();
+            if out.len() + len > MAX_SOURCE as usize || out.len() + len > *budget as usize {
+                break;
+            }
+            out.push(c);
+            consumed = i + 1;
+        }
+        if out.is_empty() && !raw.is_empty() {
+            // The budget is spent (or only part of one character fits): the module is listed
+            // without source rather than with an empty one, marked truncated so a caller can
+            // tell a budget cut from an unreadable stream.
+            log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
+            module.truncated = true;
+            module.source = None;
+            return;
+        }
+        *budget = budget.saturating_sub(out.len() as u64);
+        module.truncated = truncated || raw.len() > take || consumed < take;
+        module.source = Some(out);
+        return;
+    }
+    if *budget == 0 && !raw.is_empty() {
+        // The total-source budget is spent: not decoding at all, a repeated reference to a
+        // cached stream would otherwise decode (and throw away) the full prefix per module.
+        log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
+        module.truncated = true;
+        module.source = None;
+        return;
+    }
+    let decoded = decode(&raw[..take], code_page);
+    // The decoded form is what the budget and [`MAX_SOURCE`] cap: replacement decoding can
+    // only expand (each dropped byte becomes three bytes), so the text of a
+    // `MAX_SOURCE`-byte raw source can outgrow the per-module cap and is cut with the rest.
+    let mut end = decoded.len().min(*budget as usize).min(MAX_SOURCE as usize);
+    while !decoded.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == 0 && !decoded.is_empty() {
+        // Only part of one character fits: the module is listed without source rather than
+        // with a cut one, and marked truncated so a caller can tell a budget cut from an
+        // unreadable stream.
+        log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
+        module.truncated = true;
+        module.source = None;
+        return;
+    }
+    *budget = budget.saturating_sub(end as u64);
+    module.truncated = truncated || raw.len() > take || end < decoded.len();
+    module.source = Some(decoded[..end].into());
+}
+
+/// A module stream: at most [`MAX_MODULE_STREAM`] bytes, with whether the stream was longer.
+/// A large module is cut instead of refused, so its code still shows in the audit.
+fn module_stream(comp: &craft_cfb::CompoundFile, path: &str) -> Result<(Vec<u8>, bool), DocxError> {
+    let name = path.trim_start_matches('/');
+    // craft-cfb reads whole streams, so a module stream over the cap is taken in one bounded
+    // read (four caps: real ones are far below) and its source is cut; a bigger one is refused
+    // and the module is listed without source, like the audit's other lenient paths.
+    match comp.read_path_capped(path, MAX_MODULE_STREAM) {
+        Ok(v) => Ok((v, false)),
+        Err(_) => {
+            let v = comp.read_path_capped(path, 4 * MAX_MODULE_STREAM).map_err(|e| bad(format!("can't read {name} ({e})")))?;
+            Ok((v, true))
+        }
+    }
+}
+
+/// The `dir` stream: a flat list of `id + size + payload` records ([MS-OVBA] §2.3.4.2).
+/// Unknown records are skipped; a cut record ends the walk (lenient).
+fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
+    let mut project = Project::default();
+    let mut modules: Vec<Module> = Vec::new();
+    let mut count: Option<u32> = None;
+    let mut in_module = false;
+    let mut skipping = false;
+    // The code page the MBCS records are in: PROJECTCODEPAGE precedes the name records in
+    // every real project; a hostile file that withholds it decodes as cp1252, which is what
+    // the spec's projects write ([MS-OVBA] §2.3.4.2.1.5).
+    let mut cp = 1252u16;
+    let mut at = 0;
+    while at + 6 <= dir.len() {
+        let (Some(id), Some(size)) = (u16_at(dir, at), u32_at(dir, at + 2)) else { break };
+        let size = size as usize;
+        // PROJECTVERSION: id, reserved size (4), then 4 + 2 bytes of version; not a sized
+        // payload ([MS-OVBA] §2.3.4.2.1.11), so the generic walk would stop on real projects.
+        // All 12 bytes must remain before advancing: a cut record ends the walk, like any
+        // other, instead of stepping past the stream.
+        if id == REC_PROJECT_VERSION {
+            let Some(next) = at.checked_add(12).filter(|&next| next <= dir.len()) else { break };
+            at = next;
+            continue;
+        }
+        // The reference records' outer `Size` is ignored on read ([MS-OVBA] §2.3.4.2.2) —
+        // real writers have put 0xFFFFFFFF there — so the walk advances by their own nested
+        // lengths. The generic bound check below would refuse the record and stop before the
+        // module records, listing none.
+        if id == REC_REFERENCE_REGISTERED {
+            // SizeOfLibid (4), Libid, Reserved1 (4), Reserved2 (2) ([MS-OVBA] §2.3.4.2.2.3).
+            let Some(libid_len) = u32_at(dir, at + 6).map(|n| n as usize) else { break };
+            let Some(next) =
+                at.checked_add(10).and_then(|at| at.checked_add(libid_len)).and_then(|at| at.checked_add(6)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
+            at = next;
+            continue;
+        }
+        if id == REC_REFERENCE_PROJECT {
+            // SizeOfLibidAbsolute (4), LibidAbsolute, SizeOfLibidRelative (4), LibidRelative,
+            // MajorVersion (4), MinorVersion (2) ([MS-OVBA] §2.3.4.2.2.6).
+            let Some(abs_len) = u32_at(dir, at + 6).map(|n| n as usize) else { break };
+            let Some(rel_at) = at.checked_add(10).and_then(|at| at.checked_add(abs_len)) else { break };
+            let Some(rel_len) = u32_at(dir, rel_at).map(|n| n as usize) else { break };
+            let Some(next) =
+                rel_at.checked_add(4).and_then(|at| at.checked_add(rel_len)).and_then(|at| at.checked_add(6)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
+            at = next;
+            continue;
+        }
+        if id == REC_REFERENCE_CONTROL {
+            // SizeTwiddled and SizeExtended are ignored on read ([MS-OVBA] §2.3.4.2.2.5), so
+            // the walk advances by the nested fields: SizeOfLibidTwiddled (4), LibidTwiddled,
+            // Reserved1 (4), Reserved2 (2).
+            let Some(tw_len) = u32_at(dir, at + 6).map(|n| n as usize) else { break };
+            let Some(mut next) =
+                at.checked_add(10).and_then(|at| at.checked_add(tw_len)).and_then(|at| at.checked_add(6)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
+            // NameRecordExtended is optional: a REFERENCENAME record (0x0016) sits here when
+            // present, Reserved3 (2, 0x0030) otherwise, so the peek is unambiguous. It skips
+            // by its own nested lengths — Id (2), SizeOfName (4), Name, Reserved (2),
+            // SizeOfNameUnicode (4), NameUnicode; no outer `Size` field ([MS-OVBA]
+            // §2.3.4.2.2.2).
+            if u16_at(dir, next) == Some(REC_REFERENCE_NAME) {
+                let Some(name_len) = u32_at(dir, next + 2).map(|n| n as usize) else { break };
+                let Some(uni_at) = next.checked_add(8).and_then(|at| at.checked_add(name_len)) else { break };
+                let Some(uni_len) = u32_at(dir, uni_at).map(|n| n as usize) else { break };
+                let Some(end) = uni_at.checked_add(4).and_then(|at| at.checked_add(uni_len)).filter(|&next| next <= dir.len()) else {
+                    break;
+                };
+                next = end;
+            }
+            // Reserved3 (2), SizeExtended (4, ignored), SizeOfLibidExtended (4),
+            // LibidExtended, Reserved4 (4), Reserved5 (2), OriginalTypeLib (16), Cookie (4).
+            let Some(ext_len) = u32_at(dir, next + 6).map(|n| n as usize) else { break };
+            let Some(next) =
+                next.checked_add(10).and_then(|at| at.checked_add(ext_len)).and_then(|at| at.checked_add(26)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
+            at = next;
+            continue;
+        }
+        let Some(end) = at.checked_add(6).and_then(|a| a.checked_add(size)) else { break };
+        let Some(payload) = dir.get(at + 6..end) else { break };
+        at = end;
+        // A module beyond the cap is skipped whole: its records must not touch the last
+        // kept one.
+        match (id, in_module && !skipping) {
+            (REC_CODE_PAGE, _) => {
+                project.code_page = u16_at(payload, 0).unwrap_or(1252);
+                cp = project.code_page;
+            }
+            (REC_MODULES_COUNT, false) => count = u16_at(payload, 0).map(u32::from),
+            (REC_MODULE_NAME, _) => {
+                in_module = true;
+                if modules.len() < MAX_MODULES {
+                    skipping = false;
+                    modules.push(Module { name: decode(payload, cp), ..Module::default() });
+                } else {
+                    skipping = true;
+                    project.truncated = true;
+                }
+            }
+            (REC_MODULE_NAME_UNICODE, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.name = decode_utf16(payload).unwrap_or_else(|| module.name.clone());
+                }
+            }
+            (REC_MODULE_STREAM_NAME, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.stream_name = decode(payload, cp);
+                }
+            }
+            // The Unicode stream name is how the compound file stores it: the MBCS record
+            // decoded as lossy UTF-8 can't open a cp1252 name such as `Módulo1`.
+            (REC_MODULE_STREAM_NAME_UNICODE, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.stream_name = decode_utf16(payload).unwrap_or_else(|| module.stream_name.clone());
+                }
+            }
+            (REC_MODULE_OFFSET, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.text_offset = u32_at(payload, 0).unwrap_or(0) as u64;
+                }
+            }
+            (REC_MODULE_PROCEDURAL, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.procedural = true;
+                }
+            }
+            (REC_MODULE_DOCUMENT, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.procedural = false;
+                }
+            }
+            (REC_MODULE_READ_ONLY, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.read_only = true;
+                }
+            }
+            (REC_MODULE_PRIVATE, true) => {
+                if let Some(module) = modules.last_mut() {
+                    module.private = true;
+                }
+            }
+            (REC_MODULE_END, _) => {
+                in_module = false;
+                skipping = false;
+            }
+            _ => {}
+        }
+    }
+    if count.is_some_and(|c| c as usize > MAX_MODULES) {
+        project.truncated = true;
+    }
+    project.modules = modules;
+    Ok(project)
+}
+
+/// The MS-OVBA compressed-container format ([MS-OVBA] §2.4.1): a signature byte, then chunks —
+/// each a header (signature bits, and how many bytes the chunk carries) followed by flag bytes
+/// with literals and copy tokens. `cap` bounds the total decompressed size; a container that
+/// decompresses past it says [`DocxError::Limit`].
+pub fn decompress(bytes: &[u8], cap: usize) -> Result<Vec<u8>, DocxError> {
+    let (out, overflow) = decompress_to_cap(bytes, cap)?;
+    if overflow {
+        return Err(DocxError::Limit("the decompressed source exceeds the cap".into()));
+    }
+    Ok(out)
+}
+
+/// [`decompress`] that stops at `cap` instead of failing: the output is cut at the cap and the
+/// bool says anything was left out (a chunk stopped early, or the cap reached with input
+/// still to come), so a module with more source than the cap still reports what it holds.
+pub fn decompress_to_cap(bytes: &[u8], cap: usize) -> Result<(Vec<u8>, bool), DocxError> {
+    if bytes.first() != Some(&CONTAINER_SIGNATURE) {
+        return Err(bad("the compressed container doesn't start with the signature byte"));
+    }
+    let mut out = Vec::new();
+    let mut at = 1;
+    let mut overflow = false;
+    while at < bytes.len() && !overflow {
+        let Some(header) = u16_at(bytes, at) else { return Err(bad("the chunk header is cut")) };
+        at += 2;
+        if header & 0xF000 == CHUNK_SIGNATURE {
+            // Bits 0..11 are the chunk size - 3, counting the header: data = size - 2.
+            let size = (header & 0x0FFF) as usize + 3;
+            let end = at.checked_add(size.saturating_sub(2)).ok_or_else(|| bad("the chunk is too large"))?;
+            let chunk = bytes.get(at..end).ok_or_else(|| bad("the compressed chunk is cut"))?;
+            at = end;
+            overflow = decompress_chunk(chunk, &mut out, cap)?;
+        } else {
+            // An uncompressed chunk carries RAW_CHUNK literal bytes.
+            let chunk =
+                bytes.get(at..at.checked_add(RAW_CHUNK).ok_or_else(|| bad("the chunk is too large"))?).ok_or_else(|| bad("the raw chunk is cut"))?;
+            let take = RAW_CHUNK.min(cap - out.len());
+            out.extend_from_slice(&chunk[..take]);
+            at += RAW_CHUNK;
+            overflow = take < RAW_CHUNK;
+        }
+    }
+    Ok((out, overflow))
+}
+
+/// One compressed chunk: flag bytes whose bits name literals (bit clear) and copy tokens
+/// (bit set) ([MS-OVBA] §2.4.1.3.7). Copy tokens reach back into the chunk only. Emits until
+/// `out` reaches `cap`, then stops (`Ok(true)`, the cut told of); a caller that must not lose
+/// bytes treats the bool as overflow ([`decompress_to_cap`], [`decompress`]).
+fn decompress_chunk(chunk: &[u8], out: &mut Vec<u8>, cap: usize) -> Result<bool, DocxError> {
+    let base = out.len();
+    let mut at = 0;
+    while at < chunk.len() {
+        if out.len() >= cap {
+            return Ok(true);
+        }
+        let flags = chunk[at];
+        at += 1;
+        for bit in 0..8u8 {
+            if at >= chunk.len() {
+                break;
+            }
+            if out.len() >= cap {
+                return Ok(true);
+            }
+            if flags & (1 << bit) == 0 {
+                out.push(chunk[at]);
+                at += 1;
+            } else {
+                let Some(token) = u16_at(chunk, at) else { return Err(bad("the copy token is cut")) };
+                at += 2;
+                let difference = out.len() - base;
+                let (length_bits, offset_bits) = split(difference);
+                let length_mask = 0xFFFFu16 >> offset_bits;
+                let offset = (token >> length_bits) as usize + 1;
+                let length = (token & length_mask) as usize + 3;
+                let from = base
+                    .checked_add(difference.checked_sub(offset).ok_or_else(|| bad("the copy token reaches past the chunk"))?)
+                    .ok_or_else(|| bad("the copy token reaches past the chunk"))?;
+                for i in 0..length {
+                    // The source advances with the copy: overlapping tokens copy runs. The cap
+                    // is checked before each byte, so a copy that ends exactly at the cap is
+                    // complete, not cut — what is cut is a byte that would go past it.
+                    if out.len() >= cap {
+                        return Ok(true);
+                    }
+                    let byte = out.get(from + i).copied().ok_or_else(|| bad("the copy token reaches past the chunk"))?;
+                    out.push(byte);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// How a copy token splits into length and offset bits, per how much the chunk has already
+/// decompressed ([MS-OVBA] §2.4.1.3.19.4): the offset takes `max(ceil(log2(difference)), 4)`
+/// bits, capped at 12, and the length takes the other 16.
+fn split(difference: usize) -> (u32, u32) {
+    let mut offset_bits = 4u32;
+    while offset_bits < 12 && (1usize << offset_bits) < difference {
+        offset_bits += 1;
+    }
+    (16 - offset_bits, offset_bits)
+}
+
+/// A root-level stream, at most `cap` bytes (the same shape the encrypted reader uses).
+fn stream(comp: &craft_cfb::CompoundFile, path: &str, cap: u64) -> Result<Vec<u8>, DocxError> {
+    let name = path.trim_start_matches('/');
+    let id = comp.find(path).map_err(|e| bad(format!("can't read {name} ({e})")))?;
+    let v = comp.read_capped(id, cap).map_err(|e| bad(format!("can't read {name} ({e})")))?;
+    if v.len() as u64 > cap {
+        return Err(DocxError::Limit(format!("{name} is too large")));
+    }
+    Ok(v)
+}
+
+/// MBCS text as UTF-8. A single-byte code page ([`craft_codepage::is_byte_code_page`]) decodes
+/// through its table — cp1252's `0xE9` is `é`, not three replacement bytes — and any other code
+/// page (an East Asian multibyte one, or one the table does not know) falls back to lossy UTF-8,
+/// exact for the ASCII macro source almost always is; the code page is in the report either way.
+fn decode(bytes: &[u8], code_page: u16) -> String {
+    if craft_codepage::is_byte_code_page(code_page) {
+        bytes.iter().map(|&b| craft_codepage::code_page_byte(code_page, b)).collect()
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+/// UTF-16LE text ([MS-OVBA] §2.3.4.2.3), `None` when the bytes are cut mid-pair.
+fn decode_utf16(bytes: &[u8]) -> Option<String> {
+    let (units, rest) = bytes.as_chunks::<2>();
+    if !rest.is_empty() {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&units.iter().map(|b| u16::from_le_bytes(*b)).collect::<Vec<u16>>()))
+}
+
+fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
+    bytes.get(at..at.checked_add(2)?).map(|b| u16::from_le_bytes([b[0], b[1]]))
+}
+
+fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
+    bytes.get(at..at.checked_add(4)?).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
