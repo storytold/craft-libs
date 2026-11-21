@@ -82,6 +82,10 @@ pub struct FileDialog {
     pub kind: Kind,
     /// The dialog's title, or its message line on macOS, where panels have no title bar.
     pub title: Option<String>,
+    /// The default button's label, where the platform lets an app set it: the Open and Folder
+    /// panels on macOS. rfd's dialogs (Windows, Linux and the BSDs, and Save on macOS) have no
+    /// such setting, so their button stays as the system draws it.
+    pub accept_label: Option<String>,
     /// The file types to offer. Extensions match in any letter case on every platform.
     pub filters: Vec<Filter>,
     /// The folder the dialog starts in.
@@ -93,7 +97,7 @@ pub struct FileDialog {
 impl FileDialog {
     /// A dialog of `kind` with nothing else set.
     pub fn new(kind: Kind) -> Self {
-        Self { kind, title: None, filters: Vec::new(), directory: None, file_name: None }
+        Self { kind, title: None, accept_label: None, filters: Vec::new(), directory: None, file_name: None }
     }
 
     /// Choose one existing file.
@@ -119,6 +123,13 @@ impl FileDialog {
     /// Sets the dialog's title (its message line on macOS).
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    /// Sets the default button's label, where the platform lets an app set it; see
+    /// [`accept_label`](FileDialog::accept_label).
+    pub fn accept_label(mut self, label: impl Into<String>) -> Self {
+        self.accept_label = Some(label.into());
         self
     }
 
