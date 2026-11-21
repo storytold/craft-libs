@@ -20,7 +20,7 @@
 | `refresh` | `Tracker` (poll, epoch bump, relink) and `write_atomic` for linked files |
 | `fetch` | `FrameFetcher`: ticket, a few `BulkClient` workers, a RAM cache keyed `FrameKey` with a byte budget and LRU eviction. `fetch` never waits past its `wait` argument. A late frame still lands in the cache |
 | `watch` | `Watcher` thread that polls `Tracker`s: shallow every second, deep every 30 seconds. `IntervalTicker` runs on real time and `ManualTicker` is for tests |
-| `trust`, `cache` | `check_executable` guards every launch (absolute path, regular file, executable, owner and mode checks). `private_cache_dir`, `write_private` and `read_private` make a `0700` cache with no `/tmp` fallback |
+| `trust`, `cache` | `check_executable` guards every launch (absolute path, regular file, executable, owner, world-write and group-write checks on the file and on every directory above it). `verified_executable` returns the real path that passed, and `launch_at` runs that path. `private_cache_dir`, `write_private` and `read_private` make a `0700` cache with no `/tmp` fallback |
 
 - `server::Limits` holds the connection limits: auth deadline 2 s, started line 10 s, idle 1 h for unsubscribed control connections, 4 unauthenticated of 16.
 - `payload::check_peer_path` is the one path filter: absolute, no NUL, no `..`. The media probe only touches regular files and never opens a FIFO.
