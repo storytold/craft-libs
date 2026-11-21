@@ -36,19 +36,48 @@ struct RawLvl {
 }
 
 /// A bullet level's character: a symbol-font character (0xF000 to 0xF0FF, the font's own code
-/// in the low byte) with the common Symbol/Wingdings glyphs mapped to their Unicode equivalents
-/// so every font renders them; any other character is itself.
-fn bullet_char(c: u16) -> char {
+/// in the low byte) with the common bullet glyphs mapped to their Unicode equivalents so every
+/// font renders them; any other character is itself.
+///
+/// The same byte is a different glyph in Symbol and in Wingdings, so a level in either font maps
+/// it from that font's own table: Symbol from the Unicode Consortium's Adobe Symbol to Unicode
+/// table (`MAPPINGS/VENDORS/ADOBE/symbol.txt`, table version 1.0, 2011-07-12), Wingdings from WG2
+/// N4384 (L2/12-368, 2012-11-02), whose ID w-1nnn is Wingdings byte nnn in decimal. A level in
+/// another font, or with none, reads as before.
+fn bullet_char(c: u16, font: Option<&str>) -> char {
     if !(0xF000..=0xF0FF).contains(&c) {
         return char::from_u32(u32::from(c)).unwrap_or('\u{2022}');
     }
-    match c & 0x00FF {
-        0xB7 => '\u{2022}',        // Symbol bullet
-        0xA7 => '\u{25AA}',        // Wingdings small square
-        0x6F => '\u{25CB}',        // Symbol open circle
-        0x77 | 0x78 => '\u{25CF}', // Wingdings filled circles
-        other => char::from_u32(u32::from(other)).unwrap_or('\u{2022}'),
-    }
+    let byte = c & 0x00FF;
+    let is = |name: &str| font.is_some_and(|f| f.eq_ignore_ascii_case(name));
+    let mapped = if is("Symbol") {
+        match byte {
+            0xB7 => Some('\u{2022}'), // BULLET
+            0xA7 => Some('\u{2663}'), // BLACK CLUB SUIT
+            0x6F => Some('\u{03BF}'), // GREEK SMALL LETTER OMICRON
+            0x77 => Some('\u{03C9}'), // GREEK SMALL LETTER OMEGA
+            0x78 => Some('\u{03BE}'), // GREEK SMALL LETTER XI
+            _ => None,
+        }
+    } else if is("Wingdings") {
+        match byte {
+            0xA7 => Some('\u{25AA}'),  // w-1167 BLACK SMALL SQUARE
+            0x6F => Some('\u{1F78F}'), // w-1111 MEDIUM WHITE SQUARE
+            0x77 => Some('\u{1F799}'), // w-1119 BLACK MEDIUM SMALL DIAMOND
+            0x78 => Some('\u{2327}'),  // w-1120 X IN A RECTANGLE BOX
+            0xB7 => Some('\u{1F550}'), // w-1183 CLOCK FACE ONE OCLOCK
+            _ => None,
+        }
+    } else {
+        match byte {
+            0xB7 => Some('\u{2022}'),
+            0xA7 => Some('\u{25AA}'),
+            0x6F => Some('\u{25CB}'),
+            0x77 | 0x78 => Some('\u{25CF}'),
+            _ => None,
+        }
+    };
+    mapped.unwrap_or_else(|| char::from_u32(u32::from(byte)).unwrap_or('\u{2022}'))
 }
 
 /// MSONFC → model number format ([MS-OSHARED] §2.2.1.3; 0x17 = bullets, 0xFF = none). Codes
@@ -72,6 +101,31 @@ fn number_format_codes() {
     assert_eq!(num_format(0x25), NumFormat::ChineseCounting);
     assert_eq!(num_format(0x27), NumFormat::ChineseCountingThousand);
     assert_eq!(num_format(0x60), NumFormat::Decimal);
+}
+
+/// craft-libs#2764: a symbol-font bullet is read from its level's font, so the same byte in
+/// Symbol and in Wingdings gives different characters.
+#[cfg(test)]
+#[test]
+fn a_symbol_font_bullet_is_read_from_its_level_font() {
+    let fonts = ["Times New Roman".to_string(), "Symbol".to_string(), "Wingdings".to_string()];
+    let bullet = |c: u16, font: Option<u16>| {
+        // sprmCRgFtc0 naming the level's font by its index.
+        let chpx = font.map(|i| [&0x4A4Fu16.to_le_bytes()[..], &i.to_le_bytes()[..]].concat()).unwrap_or_default();
+        let raw = RawLvl { start: 1, nfc: 0x17, jc: 0, flags: 0, ixch_follow: 0, rgbxch_nums: [0; 9], papx: Vec::new(), chpx, xst: vec![c] };
+        level_of(&raw, 0, &fonts).text
+    };
+    for c in [0xF06F, 0xF077, 0xF0A7, 0xF0B7] {
+        let (symbol, wingdings) = (bullet(c, Some(1)), bullet(c, Some(2)));
+        assert_ne!(symbol, wingdings, "{c:#06x}");
+        assert_eq!(symbol.chars().count(), 1);
+        assert_eq!(wingdings.chars().count(), 1);
+    }
+    // Symbol's bullet is the bullet, and a level in another font, or none, reads as before.
+    assert_eq!(bullet(0xF0B7, Some(1)), "\u{2022}");
+    for c in [0xF06F, 0xF0A7, 0xF0B7] {
+        assert_eq!(bullet(c, Some(0)), bullet(c, None), "{c:#06x}");
+    }
 }
 
 /// Read the lists of a document; empty when the FIB carries none (or they are unreadable).
@@ -251,16 +305,30 @@ fn skip_lfodatas(table: &[u8], mut off: usize, n: u8) -> usize {
 
 /// Turn a stored LVL into a model level.
 fn level_of(l: &RawLvl, lvl_index: usize, fonts: &[String]) -> Level {
+    // The level's character formatting, whose font says which table a bullet's byte is from.
+    let mut chr = CharProps::default();
+    let base = chr.clone();
+    for prl in sprm::iter(&l.chpx) {
+        if prl.sgc() == 2 {
+            fmt::apply_char(&mut chr, &prl, &base, fonts);
+        }
+    }
     // Number text: characters listed in rgbxchNums are level placeholders (their value is
-    // the zero-based level); bullet chars carry 0xF000 flag bits to strip.
+    // the zero-based level); bullet chars carry 0xF000 flag bits to strip. A surrogate pair is
+    // one character outside the BMP, so it is decoded as a pair.
     let mut text = String::new();
-    for (i, &c) in l.xst.iter().enumerate() {
+    let mut i = 0;
+    while let Some(&c) = l.xst.get(i) {
         if l.rgbxch_nums.contains(&(i as u8 + 1)) && c <= 8 {
             text.push('%');
             text.push((b'1' + c as u8) as char);
+        } else if let Some(pair) = l.xst.get(i + 1).and_then(|&low| char::decode_utf16([c, low]).next()?.ok()).filter(|p| u32::from(*p) > 0xFFFF) {
+            text.push(pair);
+            i += 1;
         } else {
-            text.push(bullet_char(c));
+            text.push(bullet_char(c, chr.font.as_deref()));
         }
+        i += 1;
     }
     if text.is_empty() {
         text.push('\u{2022}');
@@ -274,13 +342,6 @@ fn level_of(l: &RawLvl, lvl_index: usize, fonts: &[String]) -> Level {
     }
     let indent = props.indent_left.unwrap_or(18.0 * (lvl_index as f32 + 1.0)).clamp(0.0, 1000.0);
     let hanging = props.indent_first.map(|f| (-f).clamp(0.0, 1000.0)).unwrap_or(18.0);
-    let mut chr = CharProps::default();
-    let base = chr.clone();
-    for prl in sprm::iter(&l.chpx) {
-        if prl.sgc() == 2 {
-            fmt::apply_char(&mut chr, &prl, &base, fonts);
-        }
-    }
     Level {
         start: l.start.max(1),
         format: num_format(l.nfc),
