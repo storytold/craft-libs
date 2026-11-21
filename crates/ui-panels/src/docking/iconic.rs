@@ -423,10 +423,12 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),
             name_gap: cx.tokens.space.gap.item,
-            grip: cx.color(colors.text.muted),
+            // A handle that is found when looked for, as the reference's faint grips: the faint ink in a hairline,
+            // the normal ink under the pointer.
+            grip: cx.color(colors.text.faint),
             grip_active: cx.color(colors.text.normal),
             grip_length: cx.tokens.size.rail.button * GRIP_BAR_IN_CELLS,
-            grip_thickness: cx.tokens.stroke.thick,
+            grip_thickness: cx.tokens.stroke.thin,
             grip_radius: UiTokens::corner(cx.tokens.shape.radius.pill),
         }
     }
