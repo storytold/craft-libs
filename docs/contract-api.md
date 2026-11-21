@@ -2910,7 +2910,9 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn scroll_bar(&self, look: &crate::style::ScrollBarLook, track: Rect, axis: craft_behavior::Axis, rtl: bool, span: &craft_behavior::ScrollSpan, state: &crate::style::StateSet,)`. Paints the scroll bar in `track` along `axis` for `span`, in the bar's `state` (`ScrollBar::shapes`;
   - `pub fn rule_width(&self, kind: RuleKind) -> f32`. The width in points of the line `rule` paints for `kind`.
   - `pub fn rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2)`. Paints the line `look` from `from` to `to`, snapped to physical pixels as `rule` is: a rule in a component's own
-  - `pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32)`. Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a grip's dotted line.
+  - `pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32)`. Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a dotted line.
+  - `pub fn ticked_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32, across: f32)`. Paints the line `look` from `from` to `to` as ticks `across` points long, `gap` points apart (`Rule::ticks`):
+  - `pub fn grip_ticks(&self, look: &crate::style::RuleLook, centre: Pos2, count: u16, gap: f32, across: f32)`. Paints `count` upright ticks of `look` centred on `centre`, side by side on a level line, `gap` points apart and
   - `pub fn surface(&self, rect: Rect, kind: SurfaceKind, corners: Corners)`. Paints a surface of `kind` (tracks, plot wells).
   - `pub fn surface_styled(&self, rect: Rect, style: &SurfaceStyle)`. Paints a surface of an already resolved `style` (a kind's look with one field changed, as a knob's round radius).
   - `pub fn surface_look(&self, rect: Rect, look: &crate::style::SurfaceLook, state: &crate::style::StateSet)`. Paints `look` over `rect` in `state`, as the paint step paints a component's surface: a part's own surface (an
@@ -3050,6 +3052,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::Rule`: `pub struct Rule`. The rule painter.
   - `pub fn shapes(look: &RuleLook, from: Pos2, to: Pos2, pixels_per_point: f32) -> Vec<Shape>`. The line from `from` to `to`, snapped across its direction: a line whose physical width is odd sits on a
   - `pub fn dotted(look: &RuleLook, from: Pos2, to: Pos2, gap: f32, pixels_per_point: f32) -> Vec<Shape>`. The dotted form of the line from `from` to `to`: square dots as wide as the line, `gap` points apart, the run
+  - `pub fn ticks(look: &RuleLook, from: Pos2, to: Pos2, gap: f32, across: f32, pixels_per_point: f32) -> Vec<Shape>`. The line from `from` to `to` as a run of ticks: marks as wide as the line along it and `across` points long
   - `pub fn edge(look: &RuleLook, rect: Rect, side: RectSide, pixels_per_point: f32) -> Vec<Shape>`. The line along the `side` edge of `rect`, on the physical pixels just inside it: a row's bottom rule or a
 - `craft_ui::primitives::RuleKind`: `pub enum RuleKind { Divider, Edge, Grid, DropMark }`. Which rule a look is for.
 - `craft_ui::primitives::RulerFace`: `pub enum RulerFace { Edge, Centred }`. How a ruler lays out its marks and numbers. A ruler takes a face from its `face` prop, else from the scope's
