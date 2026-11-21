@@ -18,10 +18,12 @@ struct App {
     other_clicks: usize,
     /// Key presses and typed text a panel drawn after the ring saw.
     later_keys: usize,
+    /// The radius the app asks the ring for.
+    radius: f32,
 }
 
 fn app(items: Vec<RadialItem>) -> App {
-    App { items, events: Vec::new(), other: None, other_rect: Rect::NOTHING, other_clicks: 0, later_keys: 0 }
+    App { items, events: Vec::new(), other: None, other_rect: Rect::NOTHING, other_clicks: 0, later_keys: 0, radius: RADIUS }
 }
 
 fn menu() -> RadialMenu {
@@ -35,7 +37,7 @@ fn items(count: usize) -> Vec<RadialItem> {
 fn harness(items: Vec<RadialItem>) -> Harness<'static, App> {
     let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
         |ui, app: &mut App| {
-            if let Some(event) = menu().show(ui.ctx(), &app.items, &RadialLabels::default()) {
+            if let Some(event) = menu().radius(app.radius).show(ui.ctx(), &app.items, &RadialLabels::default()) {
                 app.events.push(event);
             }
             // A panel drawn after the ring that also closes on Esc.
@@ -963,6 +965,112 @@ fn enter_acts_on_the_highlight_as_it_was_at_its_press() {
 }
 
 #[test]
+fn the_first_key_in_a_pass_that_ends_the_ring_acts() {
+    let press = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    let up = |key| Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE };
+    let run = |events: Vec<Event>| {
+        let mut h = harness(items(8));
+        open(&mut h, MIDDLE, false);
+        h.step();
+        h.input_mut().events.extend(events);
+        h.step();
+        h.state().events.clone()
+    };
+    // With Copy focused, Enter picks Copy before Right moves the highlight and Space acts.
+    assert_eq!(run(vec![press(Key::Enter), press(Key::ArrowRight), press(Key::Space)]), vec![RadialEvent::Picked("copy".into())]);
+    // The first Enter picks Group, before Up and the second Enter.
+    assert_eq!(
+        run(vec![press(Key::ArrowRight), press(Key::Enter), up(Key::Enter), press(Key::ArrowUp), press(Key::Enter)]),
+        vec![RadialEvent::Picked("group".into())]
+    );
+    // Enter before Esc picks; Esc before Enter closes.
+    assert_eq!(run(vec![press(Key::Enter), press(Key::Escape)]), vec![RadialEvent::Picked("copy".into())]);
+    assert_eq!(run(vec![press(Key::Escape), press(Key::Enter)]), vec![RadialEvent::Closed]);
+}
+
+#[test]
+fn an_enter_that_cannot_act_leaves_the_keys_after_it_to_act() {
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    // The app replaces the commands: Enter on the focused item does nothing, and Shift+Tab and
+    // Enter after it reach the close button.
+    h.state_mut().items.remove(0);
+    for (key, pressed, modifiers) in [
+        (Key::Enter, true, Modifiers::NONE),
+        (Key::Enter, false, Modifiers::NONE),
+        (Key::Tab, true, Modifiers::SHIFT),
+        (Key::Enter, true, Modifiers::NONE),
+    ] {
+        h.input_mut().events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+    }
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Closed]);
+}
+
+#[test]
+fn a_repeat_of_a_key_the_ring_did_not_take_does_not_move_the_highlight() {
+    let m = menu();
+    // egui marks a press of a key it already has down as a repeat.
+    let repeat = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: true, modifiers };
+    let down_before_open = |h: &mut Harness<'_, App>, key, modifiers| {
+        h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+        h.step();
+        open(h, MIDDLE, false);
+    };
+    // Right, Tab and Shift+Tab repeating from before the ring opened.
+    for (key, modifiers) in [(Key::ArrowRight, Modifiers::NONE), (Key::Tab, Modifiers::NONE), (Key::Tab, Modifiers::SHIFT)] {
+        let mut h = harness(items(8));
+        down_before_open(&mut h, key, modifiers);
+        h.input_mut().events.push(repeat(key, modifiers));
+        h.step();
+        h.step();
+        assert_eq!(focused(&h), Some(m.item_id(0)), "{key:?} with {modifiers:?}");
+    }
+    // A repeat of Right from before the ring opened is not part of a diagonal.
+    let mut h = harness(items(8));
+    down_before_open(&mut h, Key::ArrowRight, Modifiers::NONE);
+    h.input_mut().events.push(repeat(Key::ArrowRight, Modifiers::NONE));
+    h.step();
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(focused(&h), Some(m.item_id(0)), "Up alone");
+    // Right pressed with Alt, then repeating once Alt goes up, is not part of one either.
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    h.input_mut().events.push(Event::Key { key: Key::ArrowRight, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    h.step();
+    h.input_mut().events.push(repeat(Key::ArrowRight, Modifiers::NONE));
+    h.step();
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(focused(&h), Some(m.item_id(0)), "Up alone after Alt went up");
+    // Repeats of a press the ring took still move the highlight.
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    h.input_mut().events.push(Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(repeat(Key::Tab, Modifiers::NONE));
+    h.step();
+    h.input_mut().events.push(repeat(Key::Tab, Modifiers::NONE));
+    h.step();
+    h.step();
+    assert_eq!(focused(&h), Some(m.item_id(3)), "a press and two repeats");
+}
+
+#[test]
+fn a_repeat_of_an_arrow_from_before_the_ring_opened_does_not_stop_the_flick() {
+    let space = |pressed| Event::Key { key: Key::Space, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    let mut h = opened_by(Key::Space);
+    h.input_mut().events.push(Event::PointerMoved(MIDDLE));
+    h.input_mut().events.push(Event::Key { key: Key::ArrowRight, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.step();
+    h.input_mut().events.push(space(true));
+    h.step();
+    move_to(&mut h, MIDDLE + vec2(0.0, RADIUS * 3.0));
+    h.input_mut().events.push(Event::Key { key: Key::ArrowRight, physical_key: None, pressed: true, repeat: true, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(space(false));
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("lock".into())]);
+}
+
+#[test]
 fn each_tab_in_one_pass_moves_the_highlight() {
     let m = menu();
     for (modifiers, to) in [(Modifiers::NONE, 2), (Modifiers::SHIFT, 7)] {
@@ -1079,6 +1187,28 @@ fn a_button_held_open_aims_from_where_it_went_down() {
 }
 
 #[test]
+fn a_button_held_open_picks_from_where_it_went_up() {
+    let m = menu();
+    let mut h = harness(items(8));
+    move_to(&mut h, MIDDLE);
+    h.input_mut().events.push(Event::PointerButton { pos: MIDDLE, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    open(&mut h, MIDDLE, true);
+    // The button goes up to the right, and the pointer moves down after it in the same pass.
+    let right = MIDDLE + vec2(RADIUS * 3.0, 0.0);
+    for e in [
+        Event::PointerMoved(right),
+        Event::PointerButton { pos: right, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE },
+        Event::PointerMoved(MIDDLE + vec2(0.0, RADIUS * 3.0)),
+    ] {
+        h.input_mut().events.push(e);
+    }
+    m.release(&h.ctx);
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("group".into())]);
+}
+
+#[test]
 fn a_press_on_a_disabled_item_that_is_enabled_before_the_release_picks_nothing() {
     let mut list = items(8);
     list[2] = RadialItem::new("group", "Group").disabled("Select two objects");
@@ -1120,6 +1250,132 @@ fn a_press_on_a_ring_that_then_mirrors_picks_nothing() {
     h.input_mut().events.push(Event::PointerButton { pos: slot(2, 8), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.step();
     assert!(h.state().events.is_empty(), "pressed over Group, released over Undo: {:?}", h.state().events);
+
+    // The ring mirrors and the button goes down and up over the same place in one pass.
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    move_to(&mut h, slot(2, 8));
+    crate::direction::apply(&h.ctx, crate::direction::Direction::Rtl);
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos: slot(2, 8), button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.step();
+    assert!(h.state().events.is_empty(), "pressed over Group as drawn, released over Undo: {:?}", h.state().events);
+}
+
+#[test]
+fn a_held_press_on_a_ring_that_then_mirrors_leaves_the_keys_working() {
+    let m = menu();
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    move_to(&mut h, slot(2, 8));
+    h.input_mut().events.push(Event::PointerButton { pos: slot(2, 8), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    crate::direction::apply(&h.ctx, crate::direction::Direction::Rtl);
+    h.step();
+    // Right in a right-to-left ring goes to Undo, and Enter picks it while the button is down.
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(focused(&h), Some(m.item_id(6)));
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("undo".into())]);
+
+    // An assistive click on an item is not a pointer click either.
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    move_to(&mut h, slot(2, 8));
+    h.input_mut().events.push(Event::PointerButton { pos: slot(2, 8), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    crate::direction::apply(&h.ctx, crate::direction::Direction::Rtl);
+    h.step();
+    h.input_mut().events.push(Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+        action: egui::accesskit::Action::Click,
+        target_tree: egui::accesskit::TreeId::ROOT,
+        target_node: m.item_id(4).accesskit_id(),
+        data: None,
+    }));
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("lock".into())]);
+}
+
+#[test]
+fn a_press_held_while_only_the_asked_radius_changes_still_clicks() {
+    let ring = menu().radius(1.0);
+    // Items 40 pt across raise a radius of 1 or 2 pt to the same one, so the ring does not move.
+    assert_eq!(ring.ring_radius(), menu().radius(2.0).ring_radius());
+    let at = MIDDLE + slot_direction(2, 8) * ring.ring_radius();
+    let mut h = harness(items(8));
+    h.state_mut().radius = 1.0;
+    open(&mut h, MIDDLE, false);
+    move_to(&mut h, at);
+    h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.state_mut().radius = 2.0;
+    h.step();
+    h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("group".into())]);
+}
+
+#[test]
+fn a_click_in_one_pass_on_an_item_enabled_in_that_pass_picks_nothing() {
+    let mut list = items(8);
+    list[2] = RadialItem::new("group", "Group").disabled("Select two objects");
+    let mut h = harness(list);
+    open(&mut h, MIDDLE, false);
+    move_to(&mut h, slot(2, 8));
+    h.state_mut().items[2].enabled = true;
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos: slot(2, 8), button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.step();
+    assert!(h.state().events.is_empty(), "Group was disabled when it was pressed: {:?}", h.state().events);
+
+    // An item that was already enabled takes a click made in one pass.
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos: slot(4, 8), button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("lock".into())]);
+
+    // A press on Group while it was disabled ends, and a new click on it, now enabled, follows in
+    // one pass: the new press decides.
+    let mut list = items(8);
+    list[2] = RadialItem::new("group", "Group").disabled("Select two objects");
+    let mut h = harness(list);
+    open(&mut h, MIDDLE, false);
+    move_to(&mut h, slot(2, 8));
+    h.input_mut().events.push(Event::PointerButton { pos: slot(2, 8), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.state_mut().items[2].enabled = true;
+    h.step();
+    for pressed in [false, true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos: slot(2, 8), button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("group".into())]);
+}
+
+#[test]
+fn a_click_and_a_drag_while_another_button_is_held_pick_where_the_click_ended() {
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    move_to(&mut h, slot(2, 8));
+    let button = |pos, button, pressed| Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.push(button(slot(2, 8), PointerButton::Secondary, true));
+    h.step();
+    // A click on Group, then a drag to Lock; the other button goes up before the drag ends.
+    for e in [
+        button(slot(2, 8), PointerButton::Primary, true),
+        button(slot(2, 8), PointerButton::Primary, false),
+        button(slot(2, 8), PointerButton::Primary, true),
+        Event::PointerMoved(slot(4, 8)),
+        button(slot(4, 8), PointerButton::Secondary, false),
+        button(slot(4, 8), PointerButton::Primary, false),
+    ] {
+        h.input_mut().events.push(e);
+    }
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("group".into())], "the drag that ended over Lock is not a click");
 }
 
 #[test]
@@ -1154,6 +1410,10 @@ fn a_ring_too_large_for_the_window_shrinks_to_fit() {
     h.step();
     h.step();
     assert_eq!(big().hit_test(&h.ctx, ring.item_center(center, 2, MAX_ITEMS, false), MAX_ITEMS), RingHit::Slot(2));
+    // The ring draws the item where the click lands.
+    let drawn = h.ctx.read_response(big().item_id(2)).map(|r| r.rect);
+    assert!(drawn.is_some_and(|r| screen.contains_rect(r)), "Group drawn at {drawn:?}");
+    assert!(drawn.is_some_and(|r| r.center().distance(ring.item_center(center, 2, MAX_ITEMS, false)) < 1e-3), "Group drawn at {drawn:?}");
     click(&mut h, ring.item_center(center, 2, MAX_ITEMS, false));
     assert_eq!(h.state().events, vec![RadialEvent::Picked("group".into())]);
 }
