@@ -315,7 +315,8 @@ impl<'a> Draw<'a> {
     pub fn doc(&self, rect: Rect, text: &DocText<'_>) -> TextLayout {
         let text = DocText { wrap: Some(rect.width()), ..*text };
         let layout = text.layout(self.painter.ctx(), self.env.tokens, self.text_direction);
-        let layout = TextLayout { galley: super::text::anchored_at_start(layout.galley.clone()), ..layout };
+        let anchored = super::text::anchored_at_start(layout.galley.clone());
+        let layout = layout.with_galley(anchored);
         let share = super::text::free_room_before(text.align, self.text_direction == Direction::Rtl);
         let x = rect.left() + (rect.width() - layout.size().x).max(0.0) * share;
         // The runs' colours are data.
@@ -366,7 +367,7 @@ impl<'a> Draw<'a> {
         let mut record = self.record.borrow_mut();
         record.baseline.get_or_insert(pos.y + layout.first_baseline);
         if layout.elided && record.elided.is_none() {
-            record.elided = Some(layout.full.clone());
+            record.elided = Some(layout.full().to_owned());
         }
         drop(record);
         super::text::note_painted(self.painter.ctx(), layout);

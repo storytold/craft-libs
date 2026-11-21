@@ -118,11 +118,6 @@ impl<C: Component> MeasureCx<'_, C> {
         run.least(self.ui.ctx(), &self.text_env())
     }
 
-    /// The readable least width of `run`.
-    pub fn least_width(&self, run: &TextRun<'_>) -> f32 {
-        run.least_width(self.ui.ctx(), &self.text_env())
-    }
-
     fn text_env(&self) -> TextEnv<'_> {
         TextEnv {
             tokens: self.tokens,

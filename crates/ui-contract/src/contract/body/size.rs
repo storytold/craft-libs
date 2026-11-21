@@ -163,6 +163,20 @@ impl<'b> BodyHooks<'b> {
         super::regions::pad_vec(tokens, props.pad, self.pad_edges(props))
     }
 
+    /// What the container's frame adds to its regions' size: the padding on each side, and on a layer that keeps
+    /// `band` clear above its header for its top grip (`window::top_band`), the part of the band the padding leaves.
+    pub(super) fn frame_size(&self, props: &ContainerProps, tokens: &crate::style::UiTokens, band: f32) -> Vec2 {
+        let pad = self.pads(props, tokens);
+        2.0 * pad + Vec2::new(0.0, (band - pad.y).max(0.0))
+    }
+
+    /// The rect the regions lie in within `content`: inside the padding, and below `band` at the top.
+    pub(super) fn inner_rect(&self, props: &ContainerProps, tokens: &crate::style::UiTokens, content: Rect, band: f32) -> Rect {
+        let mut inner = content.shrink2(self.pads(props, tokens));
+        inner.min.y = inner.min.y.max(content.min.y + band);
+        inner
+    }
+
     /// Whether the container's body is laid out across the width it is offered: the container is given the width,
     /// passes it on, or is held across the width its column settled on.
     pub(super) fn wide(&self) -> bool {
