@@ -326,10 +326,11 @@ fn damaged_and_cut_files_are_errors_or_results() {
     let mut broken = Parts { headers: p.headers.clone(), packets: Vec::new(), frames: p.frames.clone(), last_granule: p.last_granule };
     broken.headers[2] = [&b"\x05vorbis"[..], &[0xFF; 64]].concat();
     assert!(decode(&remux(&broken, &p.packets, 8, 0, p.last_granule), None).is_err());
-    // every audio packet damaged: an error when decoding reaches the declared length, with or
-    // without a lost page's silence before the last page
+    // every audio packet damaged but the first (which decodes to no frames): an error when
+    // decoding reaches the declared length, with or without a lost page's silence before the last
+    // page
     let mut damaged = p.packets.clone();
-    for packet in &mut damaged {
+    for packet in damaged.iter_mut().skip(1) {
         packet[0] |= 1; // not an audio packet any more
     }
     for last in [p.last_granule, p.last_granule + 50_000] {

@@ -473,7 +473,8 @@ impl<'a> Native<'a> {
                     }
                     match decoded {
                         Ok(block) => {
-                            if block.channels.is_empty() {
+                            // A block of no frames (a first Vorbis packet) is not decoded audio.
+                            if block.frames() == 0 {
                                 continue;
                             }
                             self.decoded = true;
