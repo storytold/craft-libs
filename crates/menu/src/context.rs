@@ -147,7 +147,7 @@ impl<'a> Rows<'a> {
                     RowLabels { label, shortcut: item.shortcut.as_ref().map(|chord| chord.display(platform)), children: LevelLabels::default() }
                 }
                 Node::Submenu { children, .. } => RowLabels { label, shortcut: None, children: self.level_labels(children, platform) },
-                Node::Separator | Node::Standard { .. } => RowLabels::default(),
+                Node::Separator | Node::Heading(_) | Node::Standard { .. } => RowLabels::default(),
             })
             .collect();
         LevelLabels { rows }
