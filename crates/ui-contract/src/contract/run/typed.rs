@@ -157,7 +157,7 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         let applied = if events.iter().any(|event| matches!(event, EditEvent::Cancel { before: Some(_), .. })) { 0 } else { events.len() };
         let mut cx = Cx::<C> { core, style, shown: self.shown.take(), mixed: self.mixed, events, applied, validity: Validity::Ok };
         let mut comp = self.comp.take();
-        let real = rest(&mut TypedPass { comp: &mut comp, hooks: &mut *self.hooks, cx: &mut cx });
+        let real = rest(&mut TypedPass { comp: &mut comp, hooks: &mut *self.hooks, cx: &mut cx, parts_value: None });
         let id = cx.core.id;
         let output = comp.finish(cx);
         debug_assert!(!real || crate::contract::Outcome::response(&output).id == id, "an output's Response is the component's own");
@@ -226,6 +226,7 @@ struct TypedPass<'r, 'a, C: Component> {
     comp: &'r mut C,
     hooks: &'r mut dyn ShapeHooks<C>,
     cx: &'r mut Cx<'a, C>,
+    parts_value: Option<Arc<ValueOf<C>>>,
 }
 
 impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
@@ -275,6 +276,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn parts(&mut self, rect: Rect, flow: Flow, content_rect: Rect, parts: &mut PartsStep, input: &MeasureIn<'_>, rtl: bool) {
+        self.parts_value = self.cx.shown.clone();
         let id = self.cx.core.id;
         let last = self.cx.core.memory.shown::<steps::Shown<ValueOf<C>>>(id).state.last_state;
         let measure = steps::measure_cx::<C>(input, self.cx.style, self.cx.core.resolved, self.cx.shown.as_deref());
@@ -294,6 +296,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         };
         self.comp.parts(rect, &mut pcx);
         self.hooks.parts(self.comp, rect, &mut pcx);
+    }
+
+    fn parts_value_changed(&self) -> bool {
+        self.parts_value.as_deref() != self.cx.shown.as_deref()
     }
 
     fn text(&mut self, ui: &mut Ui, step: &mut crate::contract::text::TextStep, keys: focus::KeyUse, rtl: bool, ink: egui::Color32, underline: f32) {

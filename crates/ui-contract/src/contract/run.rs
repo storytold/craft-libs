@@ -537,6 +537,7 @@ pub(crate) trait ErasedPass<'a> {
     fn padding(&self, rect: Rect) -> craft_behavior::Insets;
     /// Step 7: the component's parts, then the shape's.
     fn parts(&mut self, rect: Rect, flow: Flow, content_rect: Rect, parts: &mut PartsStep, input: &MeasureIn<'_>, rtl: bool);
+    fn parts_value_changed(&self) -> bool;
     /// Step 8b for a text part.
     fn text(&mut self, ui: &mut Ui, step: &mut super::text::TextStep, keys: focus::KeyUse, rtl: bool, ink: egui::Color32, underline: f32);
     /// Step 8b for an editor part.
@@ -1157,6 +1158,17 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     e.settle();
     let edit = e.settle_values();
     steps::rerun_after_edit(e, style, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
+    // Sensing used the parts before the edit. Report their new bounds alongside the value painted in this pass.
+    if !inert && declares_parts && e.parts_value_changed() {
+        let mut current = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
+        let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: p.room };
+        e.parts(rect, flow, content_rect, &mut current, &input, rtl);
+        for decl in current.decls.parts() {
+            if let Some(result) = e.core().results.get_mut(&(decl.key, decl.index)) {
+                result.rect = decl.shape.bounds();
+            }
+        }
+    }
     // 16 report, then the tooltip.
     p.trace.mark(Step::Report);
     let message = steps::report(

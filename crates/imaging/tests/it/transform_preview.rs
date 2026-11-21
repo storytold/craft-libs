@@ -66,6 +66,18 @@ fn unit_quad() -> [Point; 4] {
     [pt(0.0, 0.0), pt(100.0, 0.0), pt(100.0, 100.0), pt(0.0, 100.0)]
 }
 
+/// A clipped preview retains texture coordinates where its frame cuts the image.
+#[trial]
+fn a_preview_clipped_to_a_frame_keeps_its_texture_coordinates() {
+    let quad = [pt(25.0, 20.0), pt(75.0, 20.0), pt(75.0, 80.0), pt(25.0, 80.0)];
+    let mesh = PreviewMap::quad(unit_quad()).build(1.0, [1.0, 1.0]).clipped_to_quad(quad);
+    assert!(!mesh.indices.is_empty());
+    for (p, uv) in mesh.points.iter().zip(&mesh.uv) {
+        assert!(p.x >= 24.999 && p.x <= 75.001 && p.y >= 19.999 && p.y <= 80.001, "{p:?}");
+        assert!((f64::from(uv[0]) - p.x / 100.0).abs() < 1e-5 && (f64::from(uv[1]) - p.y / 100.0).abs() < 1e-5);
+    }
+}
+
 // A Distort dragged past the horizon leaves the cells with a corner on the far side out of the mesh; the cells in
 // front stay.
 #[trial]

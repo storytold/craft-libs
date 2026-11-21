@@ -351,6 +351,24 @@ fn drag(h: &mut Harness, from: Point, to: Point) {
     frame(h, Vec::new());
 }
 
+/// A handle's accessible location follows the box in the same frame as its painted preview.
+#[trial]
+fn a_dragged_corner_reports_its_current_location() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    let start = h.screen(Point::new(RECT.x1, RECT.y0));
+    let end = start + Vec2::new(-40.0, 20.0);
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    frame(&mut h, vec![pointer::moved(end)]);
+    let first_move_passes = h.fixture.passes();
+    frame(&mut h, vec![pointer::moved(end + Vec2::new(-10.0, 5.0))]);
+    assert!(h.fixture.passes() <= first_move_passes, "a continued drag needs no extra pass");
+    let shown = h.host.borrow().shown.unwrap();
+    let painted_corner = h.screen(shown.quad[1]);
+    let accessible_corner = h.fixture.by_label("Top right corner").unwrap().rect.center();
+    assert!((accessible_corner - painted_corner).length() < 0.5, "accessible {accessible_corner:?}, painted {painted_corner:?}");
+}
+
 #[trial]
 fn an_edge_takes_a_press_along_its_side_and_a_corner_wins_where_both_reach() {
     let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
