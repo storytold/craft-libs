@@ -29,6 +29,7 @@ craft_ui::words! {
         lines_per_centimetre: unit "units.linesPerCentimetre" = "{n} lpcm";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
+        characters: unit "units.characters" = "{n} ch";
         pixels_name: "units.pixelsName" = "Pixels";
         percent_name: "units.percentName" = "Percent";
         degrees_name: "units.degreesName" = "Degrees";
@@ -42,6 +43,7 @@ craft_ui::words! {
         pixels_per_centimetre_name: "units.pixelsPerCentimetreName" = "Pixels/Centimetre";
         minutes_name: "units.minutesName" = "Minutes";
         columns_name: "units.columnsName" = "Columns";
+        characters_name: "units.charactersName" = "Characters";
         lines_per_inch_name: "units.linesPerInchName" = "Lines/Inch";
         lines_per_centimetre_name: "units.linesPerCentimetreName" = "Lines/Centimetre";
     }
@@ -114,11 +116,19 @@ pub enum UnitKind {
     LinesPerInch,
     /// `{n} lpcm`: a halftone screen's frequency.
     LinesPerCentimetre,
+    /// `{n} ch`: characters, one being the paragraph's font size (East Asian indents).
+    Characters,
 }
 
 impl UnitKind {
     /// The kinds that measure a length, which [`per_inch`](Self::per_inch) answers for: what a length field offers.
     pub const LENGTHS: [UnitKind; 5] = [UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
+
+    /// The tag [`reader_over`](Units::reader_over) gives this kind in a [`Reader`](craft_behavior::Reader).
+    #[doc(hidden)]
+    pub fn tag(self) -> u32 {
+        Self::ALL.iter().position(|other| *other == self).unwrap_or(0) as u32
+    }
 
     /// The kind a [`Reader`](craft_behavior::Reader) tag names: the tags `reader_over` registers are indexes of `ALL`.
     #[doc(hidden)]
@@ -126,7 +136,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 15] = [
+    const ALL: [UnitKind; 16] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -142,6 +152,7 @@ impl UnitKind {
         UnitKind::Columns,
         UnitKind::LinesPerInch,
         UnitKind::LinesPerCentimetre,
+        UnitKind::Characters,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
@@ -156,7 +167,8 @@ impl UnitKind {
             | UnitKind::PixelsPerInch
             | UnitKind::PixelsPerCentimetre
             | UnitKind::LinesPerInch
-            | UnitKind::LinesPerCentimetre => 0..=2,
+            | UnitKind::LinesPerCentimetre
+            | UnitKind::Characters => 0..=2,
             UnitKind::Inches | UnitKind::Columns => 0..=3,
         }
     }
@@ -165,7 +177,7 @@ impl UnitKind {
     /// the kind steps by the kind's rule.
     pub const fn step(self) -> f64 {
         match self {
-            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres => 0.1,
+            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres | UnitKind::Characters => 0.1,
             _ => 1.0,
         }
     }
@@ -364,6 +376,7 @@ impl Units {
             UnitKind::Columns => words.columns.as_str(),
             UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
             UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
+            UnitKind::Characters => words.characters.as_str(),
         }
     }
 
@@ -386,6 +399,7 @@ impl Units {
             UnitKind::Columns => &words.columns_name,
             UnitKind::LinesPerInch => &words.lines_per_inch_name,
             UnitKind::LinesPerCentimetre => &words.lines_per_centimetre_name,
+            UnitKind::Characters => &words.characters_name,
         };
         name.clone()
     }
