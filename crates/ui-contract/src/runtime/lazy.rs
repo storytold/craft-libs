@@ -433,6 +433,12 @@ pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, meas
     });
 }
 
+/// The extent the child `id` took in the last measuring or real run that showed it (this pass's measuring run once it
+/// ran), at whatever room it had; `None` before any run showed it.
+pub(crate) fn last_extent(ctx: &Context, id: Id) -> Option<Vec2> {
+    with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.sizes[1].map(|measured| measured.size)))
+}
+
 /// Registers what the skipped child `id` registered with the focus service in the last real run that showed it, in
 /// the real run that skips it.
 pub(crate) fn replay(ctx: &Context, id: Id) {
