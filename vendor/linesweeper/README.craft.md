@@ -5,7 +5,8 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs` and `docs/sweep.typ`.
+The patched files are `Cargo.toml`, `src/sweep/sweep_line.rs`, `src/topology.rs`,
+`src/curve/mod.rs`, `src/curve/line.rs` and `docs/sweep.typ`.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -17,6 +18,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `Cargo.toml` | The `boolean_op` and `winding-numbers` examples, the `fonts` and `snapshots` tests and the `linebender_logo` bench are removed. Their source files stay unchanged. |
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/curve/mod.rs` | When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN. The `short_curve_chord_with_huge_x` test fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307. Code comments label the change `Craft patch (huge chord)`. |
 | `src/curve/line.rs` | `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height. The `subnormal_x` test checks that line and a line from x = -1.5e-323 to 1.5e-323. Code comments label the change `Craft patch (subnormal x)`. |
@@ -34,8 +36,8 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 - `.config/`, `.helix/`, `.typos.toml`, `.gitmodules`, `flake.nix`, `flake.lock` and `nix/`: the
   package's repository tooling.
 
-Only the targets listed under Tests read the font, the logos and the snapshot files, and those targets
-do not compile from the published package.
+Only the targets listed under Tests read the font, the logos and the snapshot files. Those targets do
+not compile from the published package, and `Cargo.toml` here does not register them.
 
 ## Using it
 
@@ -50,20 +52,24 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
-tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter lists this directory,
-so a pull request that changes files here starts `pdf.yml`. No workflow runs clippy on this copy. Run
-the tests and clippy from this directory:
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests, and checks that
+every registered target compiles with all features. The `craft-prepress` tests with the `flatten`
+feature run against this copy. `pdf.yml`'s path filter lists this directory, so a pull request that
+changes files here starts `pdf.yml`. No workflow runs clippy on this copy. Run the tests and clippy
+from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
 cargo test --locked --doc
+cargo check --locked --all-targets --all-features
 cargo clippy --locked --all-features --lib --test regression -- -D warnings
 cargo clippy --locked --all-features --lib --profile test -- -D warnings
 ```
 
 `Cargo.toml` leaves out the `kompari`, `linesweeper_util` and `path-bool` dev-dependencies, which
 `Cargo.toml.orig` gives as git or path dependencies. The `fonts` and `snapshots` tests, the
-`winding-numbers` and `boolean_op` examples and the `linebender_logo` bench do not compile here.
+`winding-numbers` and `boolean_op` examples and the `linebender_logo` bench need them, or the
+omitted `examples/linebender.svg`, and do not compile here. The package's `Cargo.toml` registers
+these five targets; the copy's `Cargo.toml` does not, and their source files are kept unchanged.
 
 Cargo writes to `target/` in this directory, which the root `.gitignore` excludes.
