@@ -33,6 +33,9 @@ use crate::ui::character::FontPickerSource;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
+/// The decimals the size field's out-of-range message writes the range's two ends at.
+const SIZE_ALERT_DECIMALS: std::ops::RangeInclusive<usize> = 2..=2;
+
 craft_ui::words! {
     /// The type bar's tooltips, English by default (PhotoCraft's). Family, alignment and direction names are
     /// [`CharacterWords`] and [`ParagraphWords`].
@@ -197,7 +200,12 @@ impl<'a> TypeBar<'a> {
             // The size glyph the Character panel's size row shows.
             let side = mark(GlyphLabel::text("tT"), None, FieldLayout::Inside);
             let size = LengthRow { label: bar_words.size.clone(), side, value: character.size, range: BAR_SIZE_RANGE, presets: &size_presets };
-            let (event, _, alert) = lengths.row_with_alert(ui, size);
+            let (event, _, mut alert) = lengths.row_with_alert(ui, size);
+            // The measured out-of-range message names both ends of the size range at two decimals ("0.01 pt" and
+            // "1296.00 pt"); the field's own display keeps its decimals as they are (PhotoCraft #12053).
+            if let Some(alert) = &mut alert {
+                alert.decimals = SIZE_ALERT_DECIMALS;
+            }
             size_out_of_range = alert;
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));
 

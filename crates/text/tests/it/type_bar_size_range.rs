@@ -94,6 +94,7 @@ fn a_size_typed_over_the_bar_max_becomes_it_and_is_reported() {
     assert_eq!((reports[0].typed, reports[0].kept), (2000.0, 1296.0), "the report carries the typed and the kept value");
     assert_eq!(*reports[0].range.start(), 0.01, "the bar's minimum");
     assert_eq!(*reports[0].range.end(), 1296.0, "the bar's maximum");
+    assert_eq!(reports[0].decimals, 2..=2, "both ends are named at two decimals, as the measured message writes them");
 }
 
 #[trial]
