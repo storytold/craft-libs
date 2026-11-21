@@ -2,6 +2,24 @@
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
 
+## [v1.0.4] — 2026-11-22
+
+- **Release Notes:** [GitHub Release v1.0.4](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.4)
+
+### Fork Technical Specification & Automated Preservation Infrastructure
+
+- **Comprehensive Fork Specification Architecture (`md/fork-technical-specification.md`):**
+  - Documented all 6 core fork pillars: Space key Hand tool isolation (`activate_on_space`, `with_space_activation`), ZIP 64-bit EOCD64 parser (`crates/zip`), PSD layer record and mask preservation (`craft-psd`), centralized CJK font classification (`craft-font-manager`), Windows directory flush durability (`craft-atomic`), and Lama Cleaner CUDA integration.
+  - Formulated strict preservation invariants across all format decoders and UI runtime components.
+- **Automated Upstream Synchronization & Merge Protection Protocol:**
+  - Codified upstream merge rules ensuring custom fork crates (`crates/zip`) are never overwritten or deleted by automated synchronization.
+  - Mandated automated x64 test suite verification (`craft-ui-canvas`, `craft-ui-widgets`, `craft-ui-panels`, `craft-psd`, `craft-zip`) as non-negotiable gates for upstream merges.
+- **Upstream UI Breaking Change Harmonization & egui Synchronization:**
+  - Verified runtime compatibility with upstream UI memoization contracts (`MemoProps`) and accessibility tree validation (`Context::with_accesskit_parents` via `storytold/egui:8a3c5ecb29`).
+  - Validated zero-regression downstream compilation and release build parity with `photocraft-ui-egui`.
+
+---
+
 ## [v1.0.3] — 2026-11-22
 
 - **Release Notes:** [GitHub Release v1.0.3](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.3)
