@@ -8,10 +8,14 @@ use crate::io::{Reader, WriteExt, write_pascal};
 pub mod ids {
     /// Resolution info (`ResolutionInfo` structure).
     pub const RESOLUTION_INFO: u16 = 1005;
+    /// Alpha channel names as unpadded Pascal strings.
+    pub const ALPHA_NAMES: u16 = 1006;
     /// Target layer index.
     pub const LAYER_STATE: u16 = 1024;
     /// Layer group ids (one u16 per layer).
     pub const LAYER_GROUP_INFO: u16 = 1026;
+    /// Grid and guides (legacy v1).
+    pub const GUIDES: u16 = 1032;
     /// Legacy (Photoshop 4) thumbnail, BGR.
     pub const THUMBNAIL_PS4: u16 = 1033;
     /// Thumbnail (JFIF).
@@ -20,6 +24,8 @@ pub mod ids {
     pub const GLOBAL_ANGLE: u16 = 1037;
     /// ICC profile.
     pub const ICC_PROFILE: u16 = 1039;
+    /// Unicode alpha channel names.
+    pub const UNICODE_ALPHA_NAMES: u16 = 1045;
     /// Global altitude.
     pub const GLOBAL_ALTITUDE: u16 = 1049;
     /// Version info (has real merged data flag).
@@ -32,6 +38,14 @@ pub mod ids {
     pub const TIMELINE_INFO: u16 = 1075;
     /// Selected layer ids (`u16` count followed by `u32` ids).
     pub const LAYER_SELECTION_IDS: u16 = 1069;
+    /// Clipping path name and flatness.
+    pub const CLIPPING_PATH: u16 = 2999;
+}
+
+/// Encode a name for a legacy Pascal field: printable ASCII up to 255 bytes, with other
+/// characters replaced by `?`.
+pub fn encode_legacy_name(s: &str) -> Vec<u8> {
+    crate::io::encode_legacy_name(s)
 }
 
 /// One image resource block.

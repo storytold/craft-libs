@@ -686,3 +686,73 @@ fn a_header_trickled_a_byte_at_a_time_is_found() {
     assert!(raw.ends_with(b"\r\n\r\nok"), "{:?}", String::from_utf8_lossy(&raw));
     server.join().unwrap();
 }
+fn language_value(language: &str, text: &[u8]) -> Vec<u8> {
+    let mut value = (language.len() as u16).to_be_bytes().to_vec();
+    value.extend_from_slice(language.as_bytes());
+    value.extend_from_slice(&(text.len() as u16).to_be_bytes());
+    value.extend_from_slice(text);
+    value
+}
+
+#[test]
+fn language_tagged_text_uses_byte_lengths_and_keeps_plain_text_lossy() {
+    for tag in [0x35, 0x36] {
+        let value = language_value("de", "Büro 東京".as_bytes());
+        let attribute = Attribute { group: TAG_PRINTER_GROUP, tag, name: "text".into(), values: vec![value, b"ignored".to_vec()] };
+        assert_eq!(attribute.text(), "Büro 東京");
+        let attribute = Attribute { values: vec![language_value("en", b"bad\xfftext")], ..attribute };
+        assert_eq!(attribute.text(), "bad\u{fffd}text");
+    }
+    for tag in [TAG_TEXT, TAG_NAME] {
+        let attribute = Attribute { group: TAG_PRINTER_GROUP, tag, name: "text".into(), values: vec![b"plain\xfftext".to_vec()] };
+        assert_eq!(attribute.text(), "plain\u{fffd}text");
+        assert_eq!(Attribute { values: Vec::new(), ..attribute }.text(), "");
+    }
+}
+
+#[test]
+fn malformed_language_lengths_do_not_become_printer_text() {
+    let malformed: &[&[u8]] = &[
+        b"",
+        b"\0",
+        b"\xff\xff",
+        b"\x80\0",
+        b"\0\x02e",
+        b"\0\x02en",
+        b"\0\x02en\0",
+        b"\0\x02en\xff\xff",
+        b"\0\x02en\x80\0",
+        b"\0\x02en\0\x02x",
+        b"\0\x02en\0\x01xy",
+        b"\x7f\xffen\0\0",
+        b"\0\x02en\x7f\xffx",
+    ];
+    for tag in [0x35, 0x36] {
+        for value in malformed {
+            let attribute = Attribute { group: TAG_PRINTER_GROUP, tag, name: "text".into(), values: vec![value.to_vec()] };
+            assert_eq!(attribute.text(), "", "tag {tag:#x}: {value:?}");
+        }
+        let attribute = Attribute { group: TAG_PRINTER_GROUP, tag, name: "text".into(), values: vec![language_value("en", b"")] };
+        assert_eq!(attribute.text(), "");
+    }
+}
+
+#[test]
+fn localized_queue_default_and_status_text_reach_callers() {
+    let name = language_value("en", b"Office");
+    let info = language_value("fr", "Imprimante générale".as_bytes());
+    let body = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(0x36, "printer-name", &[&name]), (0x35, "printer-info", &[&info])])]);
+    for chunked in [false, true] {
+        let (ep, _rx) = fake(body.clone(), chunked, 200);
+        let list = queues(&ep, OP_CUPS_GET_PRINTERS, false).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "Office");
+        assert_eq!(list[0].info, "Imprimante générale");
+        assert_eq!(queue_path(&list[0].name, false).unwrap(), "/printers/Office");
+        let (ep, _rx) = fake(body.clone(), chunked, 200);
+        assert_eq!(default_printer(&ep).unwrap().as_deref(), Some("Office"));
+        let reply = ipp(0x0506, &[ok_header(), (TAG_OPERATION_GROUP, &[(0x35, "status-message", &[&info])])]);
+        let (ep, _rx) = fake(reply, chunked, 200);
+        assert_eq!(queues(&ep, OP_CUPS_GET_PRINTERS, false), Err(Error::Status(0x0506, "Imprimante générale".into())));
+    }
+}

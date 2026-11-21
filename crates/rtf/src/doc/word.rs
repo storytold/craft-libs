@@ -21,8 +21,11 @@ impl Reader {
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
+        if self.info_word(w, p, starred, first_in_group) {
+            return;
+        }
         self.note_defshp(w);
-        if self.skip_destination_word(w, pv) {
+        if self.st.dest == Dest::Skip {
             return;
         }
         if self.shape_word(w, p, first_in_group) {
@@ -222,8 +225,8 @@ impl Reader {
             "clcbpat" => self.def_cur.shading = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "sb" => self.st.sb = Some(pv),
             "sa" => self.st.sa = Some(pv),
-            "sl" => self.st.sl = pv,
-            "slmult" => self.st.slmult = on,
+            "sl" => self.st.sl = Some(pv),
+            "slmult" => self.st.slmult = Some(on),
             "li" | "lin" => self.st.li = Some(pv),
             "ri" | "rin" => self.st.ri = Some(pv),
             "fi" => self.st.fi = Some(pv),
@@ -311,12 +314,7 @@ impl Reader {
             "fonttbl" => Some(Dest::FontTbl),
             "colortbl" => Some(Dest::ColorTbl),
             "stylesheet" => Some(Dest::StyleSheet),
-            "info" => Some(Dest::Skip),
-            "title" if self.st.dest == Dest::Skip && self.in_info() => Some(Dest::Info(1)),
-            "author" if self.in_info() => Some(Dest::Info(2)),
-            "subject" if self.in_info() => Some(Dest::Info(3)),
-            "keywords" if self.in_info() => Some(Dest::Info(4)),
-            "doccomm" if self.in_info() => Some(Dest::Info(5)),
+            "info" => Some(Dest::InfoRoot),
             "listtable" => Some(Dest::ListTable),
             "revtbl" => Some(Dest::RevTbl),
             "oldcprops" => Some(Dest::OldProps(false)),
@@ -348,10 +346,6 @@ impl Reader {
             | "nofwords" | "nofchars" | "edmins" | "vern" | "themedata" | "colorschememapping" | "latentstyles" | "datastore" | "xmlnstbl"
             | "rsidtbl" | "generator" | "mmathPr" | "pgdsctbl" | "filetbl" | "listpicture" | "userprops" | "docvar" | "objdata" | "fontemb"
             | "fontfile" | "panose" | "falt" | "mhtmltag" | "htmltag" | "pnseclvl" | "background" | "sp" | "pn" | "pgptbl" => Some(Dest::Skip),
-            "creatim" if self.in_info() => {
-                self.in_creatim = true;
-                Some(Dest::Skip)
-            }
             _ => None,
         }
     }
@@ -410,12 +404,7 @@ impl Reader {
 
     fn destination_word(&mut self, word: &str, param: Option<i32>, on: bool, value: i32) -> bool {
         match self.st.dest {
-            Dest::Skip => {
-                if self.in_creatim {
-                    self.record_created_part(word, value);
-                }
-                true
-            }
+            Dest::Skip | Dest::InfoRoot | Dest::Created => true,
             Dest::FontTbl if !matches!(word, "u" | "uc") => {
                 self.font_table_word(word, value);
                 true
@@ -483,7 +472,8 @@ impl Reader {
                 }
                 !matches!(word, "u" | "uc")
             }
-            Dest::Info(_) | Dest::FldInst | Dest::Bookmark if !matches!(word, "u" | "uc") => true,
+            Dest::Info(_) if !metadata_text_word(word) => true,
+            Dest::FldInst | Dest::Bookmark if !matches!(word, "u" | "uc") => true,
             Dest::Info(_) | Dest::FldInst | Dest::Bookmark => false,
             Dest::OldProps(false) if matches!(word, "crauth" | "crdate") => {
                 if word == "crauth" {
@@ -578,15 +568,42 @@ impl Reader {
         }
     }
 
-    fn skip_destination_word(&mut self, word: &str, value: i32) -> bool {
-        let kept_info = self.in_info() && matches!(word, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim");
-        if self.st.dest != Dest::Skip || kept_info {
-            return false;
+    /// Metadata groups use the same stack as the body, but never dispatch document-level
+    /// destinations (font tables, pictures, bookmarks and revisions) from inside a property.
+    fn info_word(&mut self, word: &str, value: Option<i32>, starred: bool, first_in_group: bool) -> bool {
+        match self.st.dest {
+            Dest::InfoRoot => {
+                if first_in_group {
+                    self.st.dest = match word {
+                        "title" => Dest::Info(1),
+                        "author" => Dest::Info(2),
+                        "subject" => Dest::Info(3),
+                        "keywords" => Dest::Info(4),
+                        "doccomm" => Dest::Info(5),
+                        "creatim" => Dest::Created,
+                        _ => Dest::Skip,
+                    };
+                }
+                true
+            }
+            Dest::Info(_) | Dest::Created => {
+                let text = metadata_text_word(word);
+                let date = self.st.dest == Dest::Created && matches!(word, "yr" | "mo" | "dy" | "hr" | "min");
+                if first_in_group && (starred || !(text || date || is_format_word(word))) {
+                    self.st.dest = Dest::Skip;
+                } else if date && let Some(value) = value {
+                    self.record_created_part(word, value);
+                } else if self.st.dest != Dest::Created {
+                    if word == "plain" {
+                        self.st.cp = self.font_cps.get(&self.deff).copied();
+                    } else if text {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => false,
         }
-        if self.in_creatim {
-            self.record_created_part(word, value);
-        }
-        true
     }
 
     fn record_created_part(&mut self, word: &str, value: i32) {
@@ -608,10 +625,27 @@ impl Reader {
             self.st.field = Some(self.fields.len() - 1);
         }
     }
+}
 
-    fn in_info(&self) -> bool {
-        self.info_depth.is_some_and(|d| self.depth() > d)
-    }
+/// Words that only select a group's font, set its Unicode fallback or emit text.
+fn metadata_text_word(word: &str) -> bool {
+    matches!(
+        word,
+        "f" | "u"
+            | "uc"
+            | "line"
+            | "softline"
+            | "tab"
+            | "emdash"
+            | "endash"
+            | "bullet"
+            | "lquote"
+            | "rquote"
+            | "ldblquote"
+            | "rdblquote"
+            | "emspace"
+            | "enspace"
+    )
 }
 
 /// The target of a `HYPERLINK` field instruction; `%22` is a quote, as the writer stores one.

@@ -458,7 +458,7 @@ fn packed_layout(w: usize, h: usize, bits: u32, strip: u64, stated: bool) -> Opt
     let tight = w.checked_mul(bits as usize)?.div_ceil(8);
     // Unmarked data must still match a measured complete-group layout: do not guess a packing for compressed
     // data. An explicit packed maker mode permits a final partial group, byte-aligned independently on each row.
-    if !stated && !(bits == 12 && w.is_multiple_of(2) || bits == 14 && w.is_multiple_of(4)) {
+    if !(stated || bits == 12 && w.is_multiple_of(2) || bits == 14 && w.is_multiple_of(4)) {
         return None;
     }
     let padded = tight.checked_next_multiple_of(16)?;
