@@ -38,6 +38,7 @@ pub struct HostRequests {
     listing: Option<ListingRequest>,
     preview_click: Option<Pos2>,
     footer_action: Option<String>,
+    help_link: Option<String>,
     /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
     previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
@@ -63,6 +64,14 @@ impl HostRequests {
         if let Some(request) = rows.listing.take() {
             self.request_listing(request);
         }
+        if let Some(link) = rows.help_link.take() {
+            self.help_link = Some(link);
+        }
+    }
+
+    /// The help link a row's button reported, once.
+    pub fn take_help_link(&mut self) -> Option<String> {
+        self.help_link.take()
     }
 
     /// Files a colour request; it replaces one not taken yet.
@@ -129,7 +138,8 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, previews, answers } = other;
+        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, help_link, previews, answers } = other;
+        self.help_link = help_link.or(self.help_link.take());
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());
         self.eyedropper = eyedropper.or(self.eyedropper.take());

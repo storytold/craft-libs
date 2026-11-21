@@ -138,8 +138,18 @@ pub trait StackDialog: Any + Send {
     /// default snapshots [`json_fields`](StackDialog::json_fields), sets each field in turn and, on the first
     /// refusal, restores the snapshot and returns the refusal.
     fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String> {
-        let _ = (ctx, fields);
-        todo!("sh.K23")
+        let snapshot = self.json_fields();
+        for (field, value) in fields {
+            if let Err(refusal) = self.set_json_field(ctx, field, value.clone()) {
+                if let Some(Value::Object(before)) = &snapshot {
+                    for (name, old) in before {
+                        let _ = self.set_json_field(ctx, name, old.clone());
+                    }
+                }
+                return Err(refusal);
+            }
+        }
+        Ok(())
     }
 
     /// Whether the dialog has a Reset now. `false` by default.
@@ -229,15 +239,10 @@ trait AnyStackDialog: Send {
     /// [`StackDialog::cancelled`].
     fn release(&mut self, ctx: &Context);
     fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>);
-    #[allow(dead_code)] // P3(forms-w1): co.K13
     fn take_color_request(&mut self) -> Option<ColorRequest>;
-    #[allow(dead_code)] // P3(forms-w1): co.K13
     fn answer_color(&mut self, key: &str, color: craft_theme::Srgba);
-    #[allow(dead_code)] // P3(forms-w1): sh.K23
     fn set_json_fields(&mut self, ctx: &Context, fields: &[(String, Value)]) -> Result<(), String>;
-    #[allow(dead_code)] // P3(forms-w1): wg.W18
     fn can_reset(&self) -> bool;
-    #[allow(dead_code)] // P3(forms-w1): wg.W18
     fn reset(&mut self, ctx: &Context) -> bool;
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -634,31 +639,46 @@ impl DialogHost {
     /// The top-most open dialog's pending [`ColorRequest`] with its id; the app opens a colour picker over it and
     /// answers through [`answer_color`](DialogHost::answer_color).
     pub fn take_color_request(&mut self) -> Option<(DialogId, ColorRequest)> {
-        todo!("co.K14")
+        self.open.iter_mut().rev().find_map(|dialog| {
+            let id = dialog.id();
+            dialog.take_color_request().map(|request| (id, request))
+        })
     }
 
     /// Writes the picked `color` into colour row `key` of the open dialog `id`.
     pub fn answer_color(&mut self, id: DialogId, key: &str, color: craft_theme::Srgba) {
-        let _ = (id, key, color);
-        todo!("co.K14")
+        if let Some(dialog) = self.open.iter_mut().find(|dialog| dialog.id() == id) {
+            dialog.answer_color(key, color);
+        }
     }
 
     /// Sets every field of `fields` on the open dialog `id` or none ([`StackDialog::set_json_fields`]).
     pub fn set_json_fields(&mut self, ctx: &Context, id: DialogId, fields: &[(String, Value)]) -> Result<(), String> {
-        let _ = (ctx, id, fields);
-        todo!("sh.K24")
+        match self.open.iter_mut().find(|dialog| dialog.id() == id) {
+            Some(dialog) => {
+                let answer = dialog.set_json_fields(ctx, fields);
+                if answer.is_ok() {
+                    ctx.request_repaint();
+                }
+                answer
+            }
+            None => Err("no such dialog".to_owned()),
+        }
     }
 
     /// Runs the reset of the open dialog `id`; `false` for an unknown id or a dialog without a Reset.
     pub fn reset_by_id(&mut self, ctx: &Context, id: DialogId) -> bool {
-        let _ = (ctx, id);
-        todo!("wg.W19")
+        let Some(dialog) = self.open.iter_mut().find(|dialog| dialog.id() == id) else { return false };
+        let done = dialog.reset(ctx);
+        if done {
+            ctx.request_repaint();
+        }
+        done
     }
 
     /// Whether the open dialog `id` has a Reset now; `false` for an unknown id.
     pub fn can_reset_by_id(&self, id: DialogId) -> bool {
-        let _ = id;
-        todo!("wg.W19")
+        self.open.iter().find(|dialog| dialog.id() == id).is_some_and(|dialog| dialog.can_reset())
     }
 
     /// The open dialog `id` ([`dialog_id`](super::dialog_id) of its key) as `Any`, for an app with

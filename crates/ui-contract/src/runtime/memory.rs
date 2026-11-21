@@ -301,14 +301,17 @@ pub enum Lifetime {
 /// The run-only value under `key`, in the session tier. It never reaches the host. It gives the default until a value
 /// is set, and it is readable outside a pass, as [`saved_value`] is.
 pub fn run_value<T: Slot>(ctx: &Context, key: &SaveKey) -> T {
-    let _ = (ctx, key);
-    todo!("od.OD2")
+    MemoryStage::peek_session(ctx, global("craft_ui.run", key))
 }
 
 /// Sets the run-only value under `key`; see [`run_value`].
 pub fn set_run_value<T: Slot>(ctx: &Context, key: &SaveKey, value: T) {
-    let _ = (ctx, key, value);
-    todo!("od.OD2")
+    let id = global("craft_ui.run", key);
+    let mut stage = MemoryStage::new(ctx, id, id, false);
+    // No component shows under the key's id, so the stage stamps no `Seen` for it.
+    stage.touched.get_mut().clear();
+    *stage.session::<T>(id) = value;
+    stage.write_back();
 }
 
 /// The saved value under `key`, outside a dialog: an app reads one SAVED value through the same store the dialogs'

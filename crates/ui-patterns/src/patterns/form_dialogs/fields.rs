@@ -86,11 +86,12 @@ pub struct DialogFields {
     opening: BTreeMap<String, FieldValue>,
     /// The keys marked mixed ([`DialogFields::set_mixed`]).
     #[serde(skip)]
-    #[allow(dead_code)] // P3(forms-w1): ty.X64
     mixed: BTreeSet<String>,
+    /// The marks the opening snapshot kept, which Reset restores.
+    #[serde(skip)]
+    opening_mixed: BTreeSet<String>,
     /// The keys of the tabs a reset button reset ([`DialogFields::mark_reset`]).
     #[serde(skip)]
-    #[allow(dead_code)] // P3(forms-w1): ty.FD1
     reset: BTreeSet<String>,
 }
 
@@ -113,26 +114,29 @@ impl DialogFields {
             values: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
             opening: BTreeMap::new(),
             mixed: BTreeSet::new(),
+            opening_mixed: BTreeSet::new(),
             reset: BTreeSet::new(),
         }
     }
 
-    /// Sets `key` to `value`, replacing any earlier value.
+    /// Sets `key` to `value`, replacing any earlier value. An edit answers a mixed mark, so it clears it.
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<FieldValue>) {
-        self.values.insert(key.into(), value.into());
+        let key = key.into();
+        self.mixed.remove(&key);
+        self.values.insert(key, value.into());
     }
 
     /// Marks `key` as differing over what the dialog or panel edits: its value is removed and its row shows blank. The
     /// marks are not serialized, so a mixed key is absent from `json_fields` and every answer.
     pub fn set_mixed(&mut self, key: impl Into<String>) {
-        let _ = (self, key);
-        todo!("ty.X64")
+        let key = key.into();
+        self.values.remove(&key);
+        self.mixed.insert(key);
     }
 
     /// Whether `key` is marked mixed.
     pub fn is_mixed(&self, key: &str) -> bool {
-        let _ = (self, key);
-        todo!("ty.X65")
+        self.mixed.contains(key)
     }
 
     /// The value under `key`, if any.
@@ -145,8 +149,9 @@ impl DialogFields {
         self.values.get_mut(key)
     }
 
-    /// Removes `key` and returns its value.
+    /// Removes `key` and returns its value; the key is no longer marked mixed.
     pub fn remove(&mut self, key: &str) -> Option<FieldValue> {
+        self.mixed.remove(key);
         self.values.remove(key)
     }
 
@@ -255,20 +260,20 @@ impl DialogFields {
 
     /// Marks the tab `key` as reset by a reset button.
     pub fn mark_reset(&mut self, key: impl Into<String>) {
-        let _ = (self, key);
-        todo!("ty.FD1")
+        self.reset.insert(key.into());
     }
 
     /// Whether a reset button reset the tab `key`; `snapshot` and `reset` clear the marks.
     pub fn was_reset(&self, key: &str) -> bool {
-        let _ = (self, key);
-        todo!("ty.FD1")
+        self.reset.contains(key)
     }
 
     /// Records the current values as the opening ones. Dialogs call it on open; a host that
     /// changes a value from outside the dialog (a script) does not move the snapshot.
     pub fn snapshot(&mut self) {
         self.opening = self.values.clone();
+        self.opening_mixed = self.mixed.clone();
+        self.reset.clear();
     }
 
     /// Restores the snapshot. Keys added since the snapshot are kept; keys removed since come
@@ -278,9 +283,17 @@ impl DialogFields {
         for (key, value) in &self.opening {
             if self.values.get(key) != Some(value) {
                 self.values.insert(key.clone(), value.clone());
+                self.mixed.remove(key);
                 changed = true;
             }
         }
+        for key in &self.opening_mixed {
+            if self.mixed.insert(key.clone()) {
+                self.values.remove(key);
+                changed = true;
+            }
+        }
+        self.reset.clear();
         changed
     }
 
