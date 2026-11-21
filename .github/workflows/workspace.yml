@@ -143,6 +143,12 @@ jobs:
     with:
       os: '["windows-latest","macos-latest"]'
       lint-cache: false
+      # Their workspace crates' compiled libraries go to sccache's bucket (Cloudflare R2), outside
+      # the 10 GB GitHub Actions cache budget. Off until the organization sets the bucket; runs
+      # without its secrets (fork pull requests) build them cold.
+      sccache: ${{ vars.SCCACHE_S3_BUCKET != '' }}
+      sccache-bucket: ${{ vars.SCCACHE_S3_BUCKET }}
+      sccache-endpoint: ${{ vars.SCCACHE_S3_ENDPOINT }}
       timeout-minutes: *timeout
       tools: *tools
       craft-fonts-ref: *craft-fonts
@@ -170,6 +176,12 @@ jobs:
         cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+    # gate.yml hands the read-write key only to runs that write caches (pushes to main).
+    secrets:
+      SCCACHE_S3_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY_ID }}
+      SCCACHE_S3_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_ACCESS_KEY }}
+      SCCACHE_S3_READ_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_READ_ACCESS_KEY_ID }}
+      SCCACHE_S3_READ_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_READ_SECRET_ACCESS_KEY }}
 
   # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
   # every run restores only the newest. This deletes the older ones as soon as the Linux leg is
