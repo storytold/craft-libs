@@ -1315,7 +1315,9 @@ impl StackDialog for HostedParamDialog {
         if let Some(presets) = &self.presets {
             dialog = dialog.presets(ParamPresets { rows: &presets.rows, values: &presets.values, built_in: &presets.built_in });
         }
-        if self.hold {
+        // The held answer also carries a refusal the host keeps on a dialog without a held OK: its notice shows the reason
+        // under the rows, and OK is off meanwhile, so nothing is filed.
+        if self.hold || self.held.refusal_blocks() {
             dialog = dialog.held(&mut self.held);
         }
         if let Some(point) = centre {
