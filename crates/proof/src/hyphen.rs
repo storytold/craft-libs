@@ -33,7 +33,9 @@ use std::sync::OnceLock;
 
 pub use crate::lang::ProofLang;
 pub use dict::Dictionary;
-pub use patterns::Patterns;
+pub use patterns::{Opportunity, Patterns};
+mod nonstandard;
+pub use nonstandard::{hyphen_opportunities_in, hyphen_opportunities_including_all_caps};
 
 // The embedded Language data (`language-data/` of craft-i18n, see `build.rs`); each is empty when
 // it isn't embedded. The TeX files are hyph-utf8's `hyph-pl.tex`, `hyph-pt.tex`, `hyph-it.tex` and
@@ -112,6 +114,27 @@ pub enum Source {
     /// A language's syllable rules (Bulgarian, [`crate::bg`]).
     Rules,
     None,
+}
+
+/// Per-run UTF-8 limit for automatic hyphenation. Longer runs stay unbroken;
+/// neighbouring words, source offsets and explicit soft hyphens are unaffected.
+pub const MAX_HYPHENATION_RUN_BYTES: usize = patterns::MAX_WORD_CHARS;
+
+/// Stream letter runs with source-character offsets without retaining the whole input.
+fn word_runs(word: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut chars = word.char_indices().enumerate().peekable();
+    std::iter::from_fn(move || {
+        while chars.peek().is_some_and(|(_, (_, c))| !is_word_char(*c)) {
+            chars.next();
+        }
+        let (offset, (start, _)) = *chars.peek()?;
+        let mut end = start;
+        while let Some(&(_, (byte, c))) = chars.peek().filter(|(_, (_, c))| is_word_char(*c)) {
+            end = byte + c.len_utf8();
+            chars.next();
+        }
+        word.get(start..end).map(|run| (offset, run))
+    })
 }
 
 fn is_apostrophe(c: char) -> bool {
@@ -336,6 +359,22 @@ pub fn hyphen_points(word: &str, lim: &Limits) -> Vec<usize> {
 /// Allowed hyphenation points in `word`, a word in `lang`, as char indices (a hyphen goes before
 /// that char), with the paragraph limits applied to each letter run.
 pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize> {
+    points_with_caps(word, lim, lang, false)
+}
+
+/// Collect bounded per-run points, with the requested all-caps policy.
+fn points_with_caps(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (offset, run) in word_runs(word) {
+        if run.len() <= MAX_HYPHENATION_RUN_BYTES {
+            out.extend(points_for_run(run, lim, lang, all_caps).into_iter().map(|at| offset + at));
+        }
+    }
+    out
+}
+
+/// Map a bounded run through normalization and pattern matching to source offsets.
+fn points_for_run(word: &str, lim: &Limits, lang: ProofLang, all_caps: bool) -> Vec<usize> {
     let chars: Vec<char> = word.chars().collect();
     let (pts, _) = word_breaks_in(word, lang);
     if pts.is_empty() {
@@ -385,7 +424,7 @@ pub fn hyphen_points_in(word: &str, lim: &Limits, lang: ProofLang) -> Vec<usize>
             if n < lim.min_word.max(2) {
                 return false;
             }
-            if n > 1 && count(&upper, a, b) == n {
+            if !all_caps && n > 1 && count(&upper, a, b) == n {
                 return false;
             }
             if !lim.capitalized && chars.get(a).is_some_and(|c| c.is_uppercase()) {
@@ -403,14 +442,23 @@ pub fn hyphenate_word(word: &str, lim: &Limits) -> String {
 
 /// `word`, a word in `lang`, with `-` at every hyphenation point (tests and diagnostics).
 pub fn hyphenate_word_in(word: &str, lim: &Limits, lang: ProofLang) -> String {
-    let mut pts = hyphen_points_in(word, lim, lang);
-    pts.sort_unstable();
+    hyphenated_output(word, hyphen_opportunities_in(word, lim, lang))
+}
+
+/// Render ordered break opportunities without repeatedly searching earlier points.
+fn hyphenated_output(word: &str, mut pts: Vec<Opportunity>) -> String {
+    pts.sort_unstable_by_key(|p| p.at);
     // Walk the points alongside the chars rather than searching them for each char.
     let mut next = pts.into_iter().peekable();
     let mut s = String::with_capacity(word.len() + 8);
     for (i, ch) in word.chars().enumerate() {
-        if next.next_if_eq(&i).is_some() {
-            while next.next_if_eq(&i).is_some() {}
+        if next.peek().is_some_and(|p| p.at == i) {
+            if let Some(p) = next.next() {
+                s.push_str(&p.suffix);
+            }
+            while next.peek().is_some_and(|p| p.at == i) {
+                next.next();
+            }
             s.push('-');
         }
         s.push(ch);
@@ -810,6 +858,7 @@ mod tests {
         }
     }
 
+    /// Regression: hyphenating a long word is linear.
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn hyphenating_a_long_word_is_linear() {
@@ -823,7 +872,7 @@ mod tests {
             .into_iter()
             .map(|(word, repeat)| {
                 let (small, big) = (word(400), word(8 * 400));
-                let time = |w: &str| (0..repeat).for_each(|_| drop(hyphen_points(w, &Limits::default())));
+                let time = |w: &str| (0..repeat).for_each(|_| drop(points_for_run(w, &Limits::default(), ProofLang::En, false)));
                 let (t1, t8, ratio) = cost_ratio(8, || time(&small), || time(&big));
                 let what = format!("{}…: t(n) {t1:.4} s, t(8n) {t8:.4} s, ratio {ratio:.1}", word(1).chars().take(10).collect::<String>());
                 eprintln!("{what}");
@@ -835,6 +884,7 @@ mod tests {
         }
     }
 
+    /// Regression: russian hyphenation and hyphenated output are linear.
     #[test]
     fn russian_hyphenation_and_hyphenated_output_are_linear() {
         // A Russian word breaks at every syllable: each break used to be checked against all the
@@ -844,8 +894,12 @@ mod tests {
         assert_eq!(hyphenate_word_in(&word(2), &Limits::default(), ProofLang::Ru), "ма-ма-ма-ма");
         // The breaks' rescan is a cheap one per break: it takes longer words to stand out.
         for (what, k, repeat, f) in [
-            ("points", 1000, 3, (|w: &str| drop(hyphen_points_in(w, &Limits::default(), ProofLang::Ru))) as fn(&str)),
-            ("hyphenated", 400, 20, |w: &str| drop(hyphenate_word_in(w, &Limits::default(), ProofLang::Ru))),
+            ("points", 1000, 3, (|w: &str| drop(points_for_run(w, &Limits::default(), ProofLang::Ru, false))) as fn(&str)),
+            ("hyphenated", 400, 20, |w: &str| {
+                let points = points_for_run(w, &Limits::default(), ProofLang::Ru, false);
+                assert!(!points.is_empty(), "the timing case must exercise actual breaks");
+                drop(hyphenated_output(w, points.into_iter().map(|at| Opportunity { at, suffix: Default::default() }).collect()));
+            }),
         ] {
             let (small, big) = (word(k), word(8 * k));
             let time = |w: &str| (0..repeat).for_each(|_| f(w));

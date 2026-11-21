@@ -19,3 +19,7 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 proptest = { workspace = true }
+tempfile = "3"
+
+[build-dependencies]
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
