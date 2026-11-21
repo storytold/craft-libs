@@ -429,7 +429,7 @@ impl AccessTree {
     pub(crate) fn reported_nodes(&self) -> impl Iterator<Item = (NodeKey, &Node)> + '_ {
         self.visible_entries().map(|(key, node)| {
             // On duplicate keys, lookups read the first matching entry, even if a later entry is the visible one.
-            let data = if self.ids_are_unique { node } else { self.lookup(*key).expect("the entry's key is present") };
+            let data = if self.ids_are_unique { node } else { self.lookup(*key).unwrap_or(node) };
             (NodeKey(key.0), data)
         })
     }
