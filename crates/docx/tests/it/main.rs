@@ -11,6 +11,7 @@ mod comment_save_cost;
 mod complex_script_inheritance;
 mod content_control_save_cost;
 mod content_controls;
+mod core_properties;
 mod custom_xml;
 mod default_size;
 mod drawing_payload;
