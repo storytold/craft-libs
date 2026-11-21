@@ -72,6 +72,11 @@ struct Sweep {
     visited: IdSet,
 }
 
+struct CompletedSweep {
+    sweep: Sweep,
+    path: Arc<Vec<Segment>>,
+}
+
 #[derive(Default)]
 struct Record {
     pass: u64,
@@ -80,6 +85,8 @@ struct Record {
     // A press and move may arrive together; siblings drawn before the pressed control get that
     // initial path on the following pass. Visited ids keep the edit from applying twice.
     replay_first_path: bool,
+    // The replay survives opening another gesture in the same pass.
+    completed: Option<CompletedSweep>,
 }
 
 impl Stored for Record {}
@@ -89,30 +96,41 @@ impl Record {
         if self.pass == pass {
             return;
         }
+        self.completed = None;
         if !self.replay_first_path {
             Arc::make_mut(&mut self.path).clear();
         }
         let replay = std::mem::take(&mut self.replay_first_path);
         let previous = std::mem::replace(&mut self.pass, pass);
-        if cancelled
-            || previous.saturating_add(1) != pass
-            || input.events.iter().any(|event| matches!(event, PointerEvent::Pressed { button: PointerButton::Primary, .. }))
-        {
+        if cancelled || previous.saturating_add(1) != pass {
             self.sweep = None;
             return;
         }
-        if let Some(sweep) = &mut self.sweep {
-            if sweep.travel.released {
-                if !replay {
-                    self.sweep = None;
-                }
-                return;
-            }
-            sweep.travel.advance(&input.events, input.frame.as_ref().map_or(0.0, |frame| frame.slop), Arc::make_mut(&mut self.path));
-            if !input.primary_down && !sweep.travel.released {
+        if self.sweep.as_ref().is_some_and(|sweep| sweep.travel.released) {
+            if replay {
+                self.finish();
+            } else {
                 self.sweep = None;
             }
+            return;
         }
+        let next_press = input.events.iter().position(|event| matches!(event, PointerEvent::Pressed { button: PointerButton::Primary, .. }));
+        if let Some(sweep) = &mut self.sweep {
+            // Input following the first press is held for the next pass, which can then carry both its release and a new press.
+            let events = &input.events[..next_press.unwrap_or(input.events.len())];
+            sweep.travel.advance(events, input.frame.as_ref().map_or(0.0, |frame| frame.slop), Arc::make_mut(&mut self.path));
+            if next_press.is_some() && sweep.travel.released {
+                self.finish();
+                return;
+            }
+        }
+        if next_press.is_some() || (!input.primary_down && self.sweep.as_ref().is_some_and(|sweep| !sweep.travel.released)) {
+            self.sweep = None;
+        }
+    }
+
+    fn finish(&mut self) {
+        self.completed = self.sweep.take().map(|sweep| CompletedSweep { sweep, path: std::mem::take(&mut self.path) });
     }
 
     fn start(&mut self, owner: Id, group: Id, press: PressStart, on: bool, input: &PassPointer) {
@@ -132,29 +150,52 @@ pub(crate) fn value(cx: &CxCore<'_>, group: Id, on: Option<bool>) -> Option<bool
     let input = pointer::pass_pointer(ctx);
     let cancelled = pointer::cancel_of_pass(ctx).is_some();
     let layer = cx.response.layer_id;
-    let ready = PerViewport::<Record>::with(ctx, viewport, |record| {
+    let enabled = cx.resolved.enabled && !cx.resolved.read_only;
+    let eligible = |sweep: &Sweep| enabled && sweep.group == group && sweep.travel.dragging;
+    let completed = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.advance(pass, &input, cancelled);
+        let finished = record.completed.as_ref().filter(|finished| eligible(&finished.sweep))?;
+        let sweep = &finished.sweep;
+        if sweep.owner == cx.id {
+            return Some((sweep.on, None));
+        }
+        (!sweep.visited.contains(&cx.id)).then(|| (sweep.on, Some(Arc::clone(&finished.path))))
+    })
+    .and_then(|(on, path)| {
+        if let Some(path) = path {
+            if !crosses_visible(ctx, layer, cx.visible, &path) {
+                return None;
+            }
+            PerViewport::<Record>::with(ctx, viewport, |record| {
+                if let Some(finished) = &mut record.completed {
+                    finished.sweep.visited.insert(cx.id);
+                }
+            });
+        }
+        Some(on)
+    });
+    let ready = PerViewport::<Record>::with(ctx, viewport, |record| {
         match cx.press().phase {
-            PressPhase::Down { start, .. } if start.button == PointerButton::Primary && cx.resolved.enabled && !cx.resolved.read_only => {
-                record.start(cx.id, group, start, !on.unwrap_or(false), &input);
+            PressPhase::Down { start, .. } if start.button == PointerButton::Primary && enabled => {
+                record.start(cx.id, group, start, !completed.or(on).unwrap_or(false), &input);
             }
             PressPhase::Cancel { .. } if record.sweep.as_ref().is_some_and(|sweep| sweep.owner == cx.id) => record.sweep = None,
             _ => {}
         }
-        let sweep =
-            record.sweep.as_ref().filter(|sweep| sweep.group == group && sweep.travel.dragging && cx.resolved.enabled && !cx.resolved.read_only)?;
+        let sweep = record.sweep.as_ref().filter(|sweep| eligible(sweep))?;
         if sweep.owner == cx.id {
             return Some((sweep.on, None, record.replay_first_path));
         }
         (!record.path.is_empty() && !sweep.visited.contains(&cx.id)).then(|| (sweep.on, Some(Arc::clone(&record.path)), false))
-    })?;
+    });
+    let Some(ready) = ready else { return completed };
     let (on, path, replay) = ready;
     if replay {
         ctx.request_repaint();
     }
     if let Some(path) = path {
         if !crosses_visible(ctx, layer, cx.visible, &path) {
-            return None;
+            return completed;
         }
         PerViewport::<Record>::with(ctx, viewport, |record| {
             if let Some(sweep) = &mut record.sweep {

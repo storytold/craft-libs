@@ -55,6 +55,31 @@ fn a_checkbox_sweep_includes_the_release_position() {
 }
 
 #[trial]
+fn a_completed_checkbox_sweep_replays_before_the_next_press() {
+    let values = Rc::new(RefCell::new([false; 3]));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut values = shown.borrow_mut();
+        for (value, label) in values.iter_mut().zip(["Earlier sibling", "Sweep start", "Next checkbox"]) {
+            Checkbox::new(Bind::bound(value)).label(label).show(ui);
+        }
+    });
+    fixture.settle();
+    let earlier = fixture.by_label("Earlier sibling").expect("earlier").center();
+    let start = fixture.by_label("Sweep start").expect("start").center();
+    let next = fixture.by_label("Next checkbox").expect("next").center();
+
+    fixture.frame(vec![pointer::moved(start)]);
+    fixture.frame(vec![pointer::press(start), pointer::moved(earlier), pointer::release(earlier)]);
+    assert_eq!(*values.borrow(), [false; 3], "the first frame only delivers the press");
+    fixture.frame(vec![pointer::moved(next), pointer::press(next)]);
+    assert_eq!(*values.borrow(), [true, true, false], "the completed sweep edits the earlier sibling even as the next press starts");
+    fixture.frame(vec![pointer::release(next)]);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [true, true, true], "the next click still toggles its own checkbox");
+}
+
+#[trial]
 fn a_checkbox_sweep_uses_an_exposed_sliver_but_skips_covered_and_clipped_boxes() {
     let values = Rc::new(RefCell::new([false; 5]));
     let shown = values.clone();
