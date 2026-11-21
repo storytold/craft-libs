@@ -164,6 +164,11 @@ impl Decoder {
         self.draft = on;
     }
 
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> bool {
+        self.draft
+    }
+
     /// Decode one chunk (a frame or a superframe, as stored in one IVF / WebM / MP4 sample).
     /// Returns the pictures finished so far, in order; each carries the `pts` of the chunk that
     /// showed it. With frame threads a picture may come out of a later call or [`Self::flush`].
