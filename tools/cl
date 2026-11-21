@@ -31,7 +31,7 @@ the story renderer each pull in different crates, which turn on different featur
 others below the framework, so each would build its own copy of the framework (minutes, and wgpu again). cl selects
 the `feature-root` package beside every command's package: its dependencies are the gallery's, with every domain
 crate, so every command resolves features as the gallery does and builds only the targets it names. The crate's own
-test feature (`screen-testing`, else `testing`) is added on top. Builds that take other features (CI's
+test feature (`suite`, else `screen-testing`, else `testing`) is added on top. Builds that take other features (CI's
 `--all-features`, wasm checks) belong on GitHub. docs/development.md has the whole picture.
 
 Records: every build cl composes passes cargo's --timings (a report per build in <target>/cargo-timings/, the newest
@@ -183,6 +183,8 @@ def package(packages, name):
 def canonical(packages, name):
     """The package's name and the features cl adds for it, qualified: its own test feature."""
     p = package(packages, name)
+    if "suite" in p["features"]:
+        return p["name"], [p["name"] + "/suite"]
     if "screen-testing" in p["features"]:
         return p["name"], [p["name"] + "/screen-testing"]
     if "testing" in p["features"] and p["name"] != "craft-ui-test-kit":
@@ -219,7 +221,7 @@ def doctor(top, packages, quiet=False):
     gallery = packages.get("craft-ui-gallery")
     if gallery:
         for d in gallery["dependencies"]:
-            if d["name"].startswith("craft-") and "screen-testing" in d["features"] and not d["optional"]:
+            if d["name"].startswith("craft-") and "suite" in d["features"] and not d["optional"]:
                 problems.append(f"crates/ui-gallery/Cargo.toml: {d['name']} must be optional (one feature per domain crate), or the story renderer links every crate")
     root = packages.get(ROOT)
     if not root:

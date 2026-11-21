@@ -1,5 +1,5 @@
 //! The popover family (15.5): popup lists and their dismissal.
 
-mod commands;
-mod one_at_a_time;
-mod popup;
+pub(crate) mod commands;
+pub(crate) mod one_at_a_time;
+pub(crate) mod popup;

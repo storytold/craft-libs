@@ -555,7 +555,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
-    let secondary = crate::runtime::pointer::frame(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
+    let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
     let shown = text_edit::show(input.ui, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
@@ -615,7 +615,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     state.focused = shown.focused || input.held;
     let full = display;
     let layout = TextLayout::new(shown.galley, false, full);
-    let baseline = (!layout.full.is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
+    let baseline = (!layout.full().is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
     AdapterOut { layout, focused: shown.focused, tab, clicked: shown.clicked, baseline }
 }
 
@@ -643,7 +643,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
     let ctx = ui.ctx().clone();
     let multiline = run.wrap == crate::primitives::Wrap::Wrap;
     let keep = if multiline { KeepKeys::BlockArrows } else { KeepKeys::InlineArrows };
-    let mut shown = layout.full.clone();
+    let mut shown = layout.full().to_owned();
     // A line longer than its room is cut at the room's edge, as a field's is.
     let mut cut = (layout.size().x > rect.width()).then(|| {
         let mut cut = crate::runtime::egui::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));

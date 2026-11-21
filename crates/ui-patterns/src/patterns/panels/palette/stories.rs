@@ -67,8 +67,7 @@ fn configured(
 ) -> StoryOutput {
     // The palette binds two story values; it edits a copy of `open`, which goes back after the pass.
     let mut open = *data.value("open", open_at_start);
-    let palette =
-        CommandPalette::new("Command palette", ENTRIES.as_slice(), Bind::bound(&mut open)).recents(Bind::bound(data.value("recents", recents)));
+    let palette = CommandPalette::new("Command palette", ENTRIES.as_slice(), Bind::bound(&mut open)).recents(data.bind("recents", recents));
     let out = configure(palette).show(ui);
     *data.value("open", open_at_start) = open;
     let last = data.value("last", None::<String>);

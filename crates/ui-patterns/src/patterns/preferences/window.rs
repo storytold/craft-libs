@@ -1,8 +1,8 @@
 //! `PreferencesWindow`: the preferences body in an app-modal `Dialog` that opens in its own OS window where windows
 //! exist.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 #[cfg(doc)]
 use super::model::PreferencesModel;
@@ -24,9 +24,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 /// The size the window opens at until the user resizes it.
-pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0); // design: allow[literal-size/vec2](the window's own opening size in points)
+pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0);
 /// The least size the window may be resized to.
-pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0); // design: allow[literal-size/vec2](the window's own least size in points)
+pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0);
 
 /// What the window keeps between passes; the host owns it and binds it with [`PreferencesWindow::new`].
 #[derive(Clone, Debug, Default, PartialEq)]

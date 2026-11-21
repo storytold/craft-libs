@@ -434,4 +434,4 @@ pub(crate) fn save_as(mut req: SaveRequest, cancel: &Cancel) -> SaveOutcome {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

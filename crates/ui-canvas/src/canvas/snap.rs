@@ -158,7 +158,8 @@ pub fn snap_tolerance(view: &CanvasView, mods: Mods, os: Platform, suspend: Snap
     (!snap_suspended(mods, os, suspend, gesture_reads_key)).then(|| view.doc_len(SNAP_PX as f32))
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InCanvasSnap(Option<Snap>);
 
 impl EnvValue for InCanvasSnap {

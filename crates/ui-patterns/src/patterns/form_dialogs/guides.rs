@@ -8,12 +8,12 @@
 //! the same `canvas::Guide`s.
 
 mod layout;
-mod new_guide;
+pub(crate) mod new_guide;
 
-#[cfg(feature = "testing")]
-mod stories;
-#[cfg(feature = "testing")]
-mod trials;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod trials;
 
 pub use layout::{GuideGroup, GuideLayoutError, GuideLayoutOptions, GuideLayoutPreset, GuideLength, GuideRect, GuideTarget, GuideUnits, MAX_COUNT};
 

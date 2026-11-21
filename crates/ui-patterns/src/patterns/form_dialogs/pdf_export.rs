@@ -4,8 +4,8 @@ mod sections;
 mod summary;
 mod words;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use self::sections::{ArtboardChoice, PasswordSwitches, Sections};
 pub use self::summary::RangeError;
@@ -21,7 +21,7 @@ use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow};
 use crate::notices::{Notice, NoticeLayout};
-use crate::patterns::presets::{NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetPicker, PresetRow, PresetState};
+use crate::patterns::presets::{NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetPicker, PresetRow, PresetState};
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, UnitKind};
 use crate::runtime::overlay::CloseReason;
@@ -350,7 +350,9 @@ impl<'a> PdfExportDialog<'a> {
             }
             let named = NamedPresetRow::new(words.preset.clone(), picker)
                 .suggest_name(words.new_preset_name.as_str().to_owned())
-                .check_name(|typed| presets.iter().any(|preset| preset.name.eq_ignore_ascii_case(typed)).then_some(PresetError::NameTaken))
+                .check_name(NameCheck::new(presets.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>(), |names, typed| {
+                    names.iter().any(|name| name.eq_ignore_ascii_case(typed)).then_some(PresetError::NameTaken)
+                }))
                 .built_in(|key| built_in.contains(key))
                 .show(ui);
             for event in named.events {

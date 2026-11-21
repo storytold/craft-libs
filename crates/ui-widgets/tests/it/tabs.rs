@@ -365,6 +365,53 @@ fn panel_tabs_keep_the_shown_tab_whole_and_overflow_from_the_end() {
     assert!(fewer < PANELS.len(), "the narrowest room overflows");
 }
 
+/// A strip places its tabs by their measure in its first frame: a panel strip too narrow for its tabs fits them by
+/// their measured widths and takes their measured height, in a frame that runs once and measures each tab's height
+/// at most twice (at its ideal width, and at the width the fit shrinks it to), and the strip and every tab have the
+/// rects they have once the strip settles.
+#[trial]
+fn a_tab_strip_takes_its_measured_extents_in_its_first_frame() {
+    let mut fixture = Fixture::new(|ui| {
+        ui.set_max_width(300.0);
+        let keys = [0_usize, 1, 2, 3, 4, 5];
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Panels").kind(TabKind::Panel).natural_height(true).shown(1);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(PANELS[*key]));
+    });
+    let rects = |fixture: &Fixture| {
+        let strip = fixture.by_label("Panels").expect("the strip's node").rect;
+        (strip, PANELS.map(|name| tab_rects(fixture.tree(), name).first().copied()))
+    };
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1, "the first frame runs once");
+    let measures = craft_ui::testing::row_measures(fixture.ctx());
+    assert!(measures.len() == PANELS.len() && measures.iter().all(|(_, count)| *count <= 2), "each tab is measured at most twice: {measures:?}");
+    let first = rects(&fixture);
+    fixture.idle(3);
+    assert_eq!(first, rects(&fixture), "the first frame places the strip and its tabs as the settled strip does");
+}
+
+/// A strip reports the rects of the tabs it places (`tab_rects`, where a dock registers its insertion spots) as it
+/// places them, in the frame a tab's title changes.
+#[trial]
+fn a_strip_reports_its_tab_rects_in_the_frame_a_title_changes() {
+    let titles = Rc::new(RefCell::new(TITLES.map(str::to_owned)));
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let (now, seen) = (titles.clone(), reported.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let names = now.borrow().clone();
+        let out = TabStrip::new("Documents").shown(0).show_items(ui, &source, &mut |key, _| Tab::new(names[*key].clone()));
+        *seen.borrow_mut() = out.tab_rects;
+    });
+    fixture.settle();
+    titles.borrow_mut()[0] = "A much longer first title".to_owned();
+    fixture.idle(1);
+    let placed: Vec<(usize, Rect)> = titles.borrow().iter().enumerate().map(|(key, name)| (key, tab_rect(fixture.tree(), name))).collect();
+    assert_eq!(*reported.borrow(), placed, "the strip reports the tabs where it places them");
+}
+
 /// The ribbon's tab names; the last is the contextual tab.
 const RIBBON: [&str; 6] = ["File", "Home", "Insert", "Layout", "Review", "Table Design"];
 

@@ -28,9 +28,10 @@ pub(super) struct MeasureKey {
     width: Option<f32>,
     /// Whether the body shows, and how much of it an animated collapse shows.
     shows: (bool, f32),
-    /// The content extent the view keeps, which decides the scroll bars' inset.
-    extent: (f32, f32),
     env: EnvFacts,
+    /// Where its parent flow showed the container: as a row of a vertical flow (`label::in_column`), and with a rule
+    /// just before it (a rule above its header is not drawn).
+    flow: (bool, bool),
 }
 
 /// The props a body was measured under, compared on the fields its measure reads.
@@ -93,8 +94,8 @@ impl<'b> BodyHooks<'b> {
             wide: self.wide(),
             width,
             shows: (self.open, self.presence.t),
-            extent: self.last_extent,
             env: EnvFacts::of(env),
+            flow: (self.in_column, self.after_rule),
         }
     }
 
@@ -164,6 +165,20 @@ impl<'b> BodyHooks<'b> {
     /// The container's padding on each side along each axis.
     pub(super) fn pads(&self, props: &ContainerProps, tokens: &crate::style::UiTokens) -> Vec2 {
         super::regions::pad_vec(tokens, props.pad, self.pad_edges(props))
+    }
+
+    /// What the container's frame adds to its regions' size: the padding on each side, and on a layer that keeps
+    /// `band` clear above its header for its top grip (`window::top_band`), the part of the band the padding leaves.
+    pub(super) fn frame_size(&self, props: &ContainerProps, tokens: &crate::style::UiTokens, band: f32) -> Vec2 {
+        let pad = self.pads(props, tokens);
+        2.0 * pad + Vec2::new(0.0, (band - pad.y).max(0.0))
+    }
+
+    /// The rect the regions lie in within `content`: inside the padding, and below `band` at the top.
+    pub(super) fn inner_rect(&self, props: &ContainerProps, tokens: &crate::style::UiTokens, content: Rect, band: f32) -> Rect {
+        let mut inner = content.shrink2(self.pads(props, tokens));
+        inner.min.y = inner.min.y.max(content.min.y + band);
+        inner
     }
 
     /// Whether the container's body is laid out across the width it is offered: the container is given the width,

@@ -1,7 +1,7 @@
 //! Stories of `UnitSelect`.
 
 use super::UnitSelect;
-use crate::contract::{Bind, Entry, Show as _, Validity};
+use crate::contract::{Bind, Entry, Props as _, Show as _, Sizing, Validity};
 use crate::runtime::env::{Message, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -14,16 +14,26 @@ fn units() -> [Entry<UnitKind>; 3] {
 #[story(UnitSelect<'static>, covers = [Default], drive = Drive::Type("42"))]
 fn unit_select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let units = units();
-    let width = data.value("width_and_unit", (Some(210.0), UnitKind::Millimetres));
+    let (width, width_at) = data.value_at("width_and_unit", (Some(210.0), UnitKind::Millimetres));
     let (width, unit) = (&mut width.0, &mut width.1);
-    UnitSelect::new("Width", Bind::bound(width), Bind::bound(unit), &units).show(ui).into()
+    UnitSelect::new("Width", width_at.bind(width), Bind::bound(unit), &units).show(ui).into()
+}
+
+/// Content-sized, as a compact form's rows show it: the field one number cell wide, the select as wide as its
+/// longest unit.
+#[story(UnitSelect<'static>, covers = [], drive = Drive::Type("42"))]
+fn unit_select_content_sized(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let units = units();
+    let (width, width_at) = data.value_at("compact_width_and_unit", (Some(210.0), UnitKind::Millimetres));
+    let (width, unit) = (&mut width.0, &mut width.1);
+    UnitSelect::new("Width", width_at.bind(width), Bind::bound(unit), &units).sizing(Sizing::Content).show(ui).into()
 }
 
 #[story(UnitSelect<'static>, covers = [Mixed], drive = Drive::Never)]
 fn unit_select_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let units = units();
-    let (width, unit) = data.value("mixed_width_and_unit", (Mixed::<Option<f64>>::Mixed, UnitKind::Millimetres));
-    UnitSelect::new("Width", Bind::bound_mixed(width), Bind::bound(unit), &units).show(ui).into()
+    let ((width, unit), mixed_width_and_unit_at) = data.value_at("mixed_width_and_unit", (Mixed::<Option<f64>>::Mixed, UnitKind::Millimetres));
+    UnitSelect::new("Width", mixed_width_and_unit_at.bind_mixed(width), mixed_width_and_unit_at.bind(unit), &units).show(ui).into()
 }
 
 #[story(UnitSelect<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -33,6 +43,8 @@ fn unit_select_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Some(width) if *width < 0.0 => Validity::Refuse(Message::new("Width cannot be negative")),
         _ => Validity::Ok,
     };
-    let (width, unit) = data.value("negative_width_and_unit", (Some(-5.0), UnitKind::Millimetres));
-    UnitSelect::new("Width", Bind::bound(width).check(refuse_negative), Bind::bound(unit), &units).show(ui).into()
+    let ((width, unit), negative_width_and_unit_at) = data.value_at("negative_width_and_unit", (Some(-5.0), UnitKind::Millimetres));
+    UnitSelect::new("Width", negative_width_and_unit_at.bind(width).check(refuse_negative), negative_width_and_unit_at.bind(unit), &units)
+        .show(ui)
+        .into()
 }

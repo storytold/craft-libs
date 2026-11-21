@@ -1,8 +1,8 @@
 //! `TransformFields`: the X, Y, W, H, angle and skew fields of a transform box, as an options-bar strip or a panel's
 //! rows.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod units;
 
 use self::units::Conversion;

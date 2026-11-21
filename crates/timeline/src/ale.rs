@@ -183,7 +183,7 @@ pub fn row_range(doc: &AleDoc, row: usize) -> Option<(Tick, Tick)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::timecode::format_timecode_frames;
     use craft_ui::testing::trial;

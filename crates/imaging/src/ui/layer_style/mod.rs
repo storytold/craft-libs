@@ -22,16 +22,16 @@
 //! }
 //! ```
 
-mod blend_if;
+pub(crate) mod blend_if;
 mod blending;
-mod contour;
-mod dialog;
-mod hosted;
+pub(crate) mod contour;
+pub(crate) mod dialog;
+pub(crate) mod hosted;
 mod labels;
 mod list;
 mod page;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod styles;
 
 pub use blend_if::{BlendIfBar, BlendIfWords};

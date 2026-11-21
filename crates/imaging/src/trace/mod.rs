@@ -15,7 +15,7 @@
 use std::hash::{Hash, Hasher};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// One boundary segment in document pixels, from one end to the other. Every segment is
 /// horizontal or vertical.

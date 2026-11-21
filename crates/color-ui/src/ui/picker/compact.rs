@@ -127,12 +127,14 @@ impl<'a> Body<'a> {
         }
     }
 
-    /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected. Enter in it
-    /// commits the typed digits and does not reach the dialog's OK, as in the production Colors dialog.
+    /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected. In the Compact
+    /// layout (the tabbed Colors dialog) Enter in it commits the typed digits and does not reach the dialog's OK, as in
+    /// the production Colors dialog. In the Full layout Enter commits the digits and confirms the dialog, as in the
+    /// reference image editor's Color Picker.
     pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
-        let field = TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba())))
-            .empty(pass.shown.color.to_rgba())
-            .submits();
+        let field =
+            TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba());
+        let field = if self.layout == ColorPickerLayout::Compact { field.submits() } else { field };
         let edit = match sizing {
             Some(sizing) => field.sizing(sizing),
             None => field,

@@ -68,16 +68,17 @@ pub struct StackEntry<P> {
 ///
 /// Serde reads every saved shape (see `floating_serde`); a window that is one expanded column with one plain group
 /// and no native rect writes the v1 shape `{panels, active, rect}`, so older builds can read files that use no
-/// newer feature. Every window writes its `id`; a window read without one gets a fresh one.
+/// newer feature. Every window writes its `id`; a window read without one, or with one an earlier window took, gets an
+/// id above every saved one.
 ///
 /// Equality ignores `id`: two windows with the same contents and place are the same layout.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Floating<P> {
     /// Names the window across panel moves, and its OS window.
-    /// Unique within a layout: [`Self::new`] draws a fresh id, [`Self::with_id`] sets one,
-    /// loading keeps the saved id (or draws one when it is missing or taken), and merging
-    /// windows keeps the receiving window's.
+    /// Unique within a layout: [`Self::new`] and [`Self::with_id`] take one from the caller (a window a layout adds
+    /// takes [`Layout::fresh_window_id`](super::Layout::fresh_window_id)), loading keeps the saved id (or gives one
+    /// above every saved id when it is missing or taken), and merging windows keeps the receiving window's.
     pub id: u64,
     /// The window's groups, top to bottom, and its collapsed state. Its `width` is unused: the window's width is
     /// `rect`'s.
@@ -126,35 +127,20 @@ impl<P> StackEntry<P> {
     }
 }
 
-/// A window id no other window of this process has drawn, from a random start so ids saved
-/// by earlier runs are unlikely to repeat.
-pub(super) fn fresh_window_id() -> u64 {
-    use std::hash::{BuildHasher, Hasher};
-    use std::sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    };
-    static NEXT: OnceLock<AtomicU64> = OnceLock::new();
-    let next = NEXT.get_or_init(|| AtomicU64::new(std::collections::hash_map::RandomState::new().build_hasher().finish() >> 1));
-    next.fetch_add(1, Ordering::Relaxed)
-}
-
 impl<P> Floating<P> {
-    /// A window holding `column`. Each call makes a new window, with a fresh [`Self::id`]: build
-    /// a layout once and keep it, or give its windows ids with [`Self::with_id`]. A layout
-    /// built anew each frame without them opens new OS windows each frame.
-    pub fn new(column: Column<P>, rect: Rect) -> Self {
-        Self { id: fresh_window_id(), column, rect, native: None, edge: None }
+    /// The window `id` holding `column`. Ids are unique within a layout; a window added to a live layout takes its id
+    /// from [`Layout::fresh_window_id`](super::Layout::fresh_window_id). The same id is the same window, and the same
+    /// OS window, on every frame.
+    pub fn new(id: u64, column: Column<P>, rect: Rect) -> Self {
+        Self { id, column, rect, native: None, edge: None }
     }
 
-    /// A window with one group. Each call makes a new window, as [`Self::new`] does.
-    pub fn single(panels: Vec<P>, active: usize, rect: Rect) -> Self {
-        Self::new(Column::new(vec![Group::new(panels, active)]), rect)
+    /// The window `id` with one group.
+    pub fn single(id: u64, panels: Vec<P>, active: usize, rect: Rect) -> Self {
+        Self::new(id, Column::new(vec![Group::new(panels, active)]), rect)
     }
 
-    /// The window with `id`, for a layout the app builds in code, such as a default layout:
-    /// built with the same id, it is the same window, and the same OS window, on every frame.
-    /// Ids must be unique within a layout.
+    /// The window with `id` in place of its own. Ids must be unique within a layout.
     pub fn with_id(mut self, id: u64) -> Self {
         self.id = id;
         self
@@ -165,10 +151,9 @@ impl<P> Floating<P> {
         self.column.panels()
     }
 
-    /// A window of `groups`, stacked top to bottom, expanded. `None` without groups. Each call makes a new window,
-    /// as [`Self::new`] does.
-    pub fn stack(groups: Vec<Group<P>>, rect: Rect) -> Option<Self> {
-        (!groups.is_empty()).then(|| Self::new(Column::new(groups), rect))
+    /// The window `id` of `groups`, stacked top to bottom, expanded. `None` without groups.
+    pub fn stack(id: u64, groups: Vec<Group<P>>, rect: Rect) -> Option<Self> {
+        (!groups.is_empty()).then(|| Self::new(id, Column::new(groups), rect))
     }
 
     /// The window's groups, top to bottom.
@@ -202,7 +187,7 @@ pub(super) mod floating_serde {
     use serde::de::IgnoredAny;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use super::{Column, DockEdge, Floating, Group, Node, fresh_window_id};
+    use super::{Column, DockEdge, Floating, Group, Node};
     use crate::dock::limits::MAX_NODES;
     use crate::dock::rect_serde::{from_array, to_array};
     use crate::dock::split::SplitSize;
@@ -339,9 +324,13 @@ pub(super) mod floating_serde {
         }
     }
 
+    /// A window as read, with the id it was saved with, if any.
+    type Saved<P> = (Option<u64>, Floating<P>);
+
     impl<P> Repr<P> {
-        /// The windows the saved window becomes, first to last.
-        fn into_windows<E: serde::de::Error>(self) -> Result<Vec<Floating<P>>, E> {
+        /// The windows the saved window becomes, first to last, each with its saved id: the first keeps the saved
+        /// window's, the others have none.
+        fn into_windows<E: serde::de::Error>(self) -> Result<Vec<Saved<P>>, E> {
             let Repr { id, column, root, groups, panels, active, rect, native, minimized, edge } = self;
             let rect = from_array(rect.ok_or_else(|| E::missing_field("rect"))?);
             let columns = match (column, root, groups, panels) {
@@ -367,11 +356,8 @@ pub(super) mod floating_serde {
                 return Err(E::invalid_length(0, &"at least one group"));
             }
             let native = native.and_then(|native| native.repaired());
-            let mut id = Some(id.unwrap_or_else(fresh_window_id));
-            Ok(columns
-                .into_iter()
-                .map(|(column, rect)| Floating { id: id.take().unwrap_or_else(fresh_window_id), column, rect, native: native.clone(), edge })
-                .collect())
+            let mut id = id;
+            Ok(columns.into_iter().map(|(column, rect)| (id.take(), Floating { id: 0, column, rect, native: native.clone(), edge })).collect())
         }
     }
 
@@ -419,20 +405,36 @@ pub(super) mod floating_serde {
         groups
     }
 
-    /// Floating windows as saved, each read into the windows it becomes, with a fresh id for each one whose id an
-    /// earlier window took.
+    /// Floating windows as saved, each read into the windows it becomes. A window keeps its saved id unless an
+    /// earlier window took it; one without an id, or with a taken one, gets the next id above every saved one, or,
+    /// should those run out (a saved `u64::MAX`), the least id no saved or given window holds.
     pub(in crate::dock) fn unique_ids<'de, D: Deserializer<'de>, P: Deserialize<'de>>(deserializer: D) -> Result<Vec<Floating<P>>, D::Error> {
         let mut windows = Vec::new();
         for saved in Vec::<Repr<P>>::deserialize(deserializer)? {
             windows.extend(saved.into_windows::<D::Error>()?);
         }
-        let mut seen = std::collections::HashSet::new();
-        for window in &mut windows {
-            while !seen.insert(window.id) {
-                window.id = fresh_window_id();
-            }
+        let saved: std::collections::HashSet<u64> = windows.iter().filter_map(|(id, _)| *id).collect();
+        let mut next = saved.iter().max().map_or(Some(0), |id| id.checked_add(1));
+        let mut given = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(windows.len());
+        for (id, window) in windows {
+            let id = match id.filter(|id| given.insert(*id)) {
+                Some(id) => id,
+                None => {
+                    let id = match next {
+                        Some(id) => {
+                            next = id.checked_add(1);
+                            id
+                        }
+                        None => (0..=u64::MAX).find(|id| !saved.contains(id) && !given.contains(id)).unwrap_or(0),
+                    };
+                    given.insert(id);
+                    id
+                }
+            };
+            out.push(Floating { id, ..window });
         }
-        Ok(windows)
+        Ok(out)
     }
 }
 

@@ -7,7 +7,7 @@ use super::predicate::{DropTest, RowTest, RowText};
 use super::{ListRow, RowEvent};
 use crate::contract::{
     Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnLayout, Common, Component, ContainerProps, Cx,
-    DropKind, EdgePress, EditResponse, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
+    DropKind, EdgePress, EditResponse, HoverLead, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
 };
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx};
@@ -119,7 +119,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             .select(SelectMode::Single)
             .activate(ActivateOn::Click)
             .lead_on_open(LeadOnOpen::First)
-            .lead_follows_hover(true)
+            .hover_lead(HoverLead::Lead)
             .focus_on_press(false)
             .type_ahead(true)
             .sizing(Sizing::Content)

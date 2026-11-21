@@ -17,7 +17,7 @@ use super::{memory, pass};
 
 pub use accesskit::TreeUpdate;
 pub(crate) use node::{NodeAction, NodeSpec, Toggle, write_node};
-pub(crate) use patch::{write_label_patch, write_merge_patch, write_status};
+pub(crate) use patch::{write_label_patch, write_merge_patch, write_set_position, write_status};
 pub(crate) use text::{
     NodeEnd, RunLink, RunNode, TextNode, fold_widget, is_text_request, requested_selection, requested_value, write_run, write_selection, write_text,
 };
@@ -121,7 +121,7 @@ pub(crate) fn node_id(id: Id) -> NodeId {
 pub(crate) type NodeRole = accesskit::Role;
 
 /// The AccessKit vocabulary the testing kit reads a tree in.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use accesskit::{Role, Toggled};
 
 /// The AccessKit node number of `id`, the key an action request's target is matched by.

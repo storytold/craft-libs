@@ -8,7 +8,7 @@ mod words;
 
 pub use limits::{MAX_TEXTURE, fit_image, reduce_image, texture_factor, texture_side};
 pub use loader::{LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, TextureLoader};
-pub use store::{CachedTexture, Revision, TextureBudget, TextureKey, TextureState, TextureStatistics, TextureStore, TextureStoreOptions};
+pub use store::{CachedTexture, Revision, Serials, TextureBudget, TextureKey, TextureState, TextureStatistics, TextureStore, TextureStoreOptions};
 pub use words::TextureWords;
 
 /// The tint that leaves a texture's own colours as they are: every texel is multiplied by white.

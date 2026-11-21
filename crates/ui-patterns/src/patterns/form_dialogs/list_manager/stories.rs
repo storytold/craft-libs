@@ -27,7 +27,7 @@ fn list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .name("Batch Export")
         .searchable(true)
         .note("This document also has a script project.".into())
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into()
 }
@@ -37,27 +37,24 @@ fn list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ListManager<'static>, covers = [], drive = Drive::Never)]
 fn list_manager_name_box(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<ListManagerWords>();
-    let mut name = data.value("name", String::new()).clone();
-    let mut open = *data.value("open", false);
+    let ((name, name_at), (open, open_at)) = data.pair_at(("name", String::new()), ("open", false));
     if clicked(&Button::new("Macros…").show(ui)) {
-        open = true;
+        *open = true;
     }
     let first = Cell::new(false);
     let actions = vec![ListManagerAction::run(&words), ListManagerAction::create(&words)];
     let shown = ListManager::new("Macros", "Macro name:", entries(), actions)
-        .name_box(Bind::bound(&mut name))
+        .name_box(name_at.bind(&mut *name))
         .under_list(|ui| {
             if clicked(&Button::new("Name the first macro").show(ui)) {
                 first.set(true);
             }
         })
-        .opened(Bind::bound(&mut open))
+        .opened(open_at.bind(&mut *open))
         .show(ui);
     if first.get() {
-        name = "Align Layers".to_owned();
+        *name = "Align Layers".to_owned();
     }
-    *data.value("name", String::new()) = name;
-    *data.value("open", false) = open;
     shown.into()
 }
 
@@ -74,7 +71,7 @@ fn list_manager_bookmark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut by_name = *data.value("sort by name", true);
     let mut hidden = *data.value("hidden", false);
     let mut gone = data.value("deleted", Vec::<String>::new()).clone();
-    let open = data.value("open", false);
+    let (open, open_at) = data.value_at("open", false);
     if clicked(&Button::new("Bookmarks…").show(ui)) {
         *open = true;
     }
@@ -103,7 +100,7 @@ fn list_manager_bookmark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 hidden = on;
             }
         })
-        .opened(Bind::bound(open))
+        .opened(open_at.bind(open))
         .show(ui);
     if let Some(choice) = &shown.choice
         && choice.action == "delete"
@@ -123,7 +120,7 @@ fn list_manager_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let actions = vec![ListManagerAction::run(&words), ListManagerAction::create(&words)];
     ListManager::new("Macros", "Macro name:", Vec::new(), actions)
         .empty("This document has no scripts or macros.".into())
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into()
 }

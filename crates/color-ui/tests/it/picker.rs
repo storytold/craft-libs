@@ -450,3 +450,29 @@ fn the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page() {
     let answered = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).map(|result| result.picked.color.to_hex());
     assert_eq!(answered.as_deref(), Some("#0000ff"));
 }
+
+/// The Full dialog opens with its hex field focused and selected; digits typed there and Enter commit the colour and
+/// confirm the dialog, as in the reference image editor's Color Picker (the tabbed Colors dialog keeps Enter in the
+/// field instead).
+#[trial]
+fn enter_in_the_full_dialogs_hex_field_confirms_the_typed_colour() {
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(vec2(900.0, 700.0));
+    fixture.host(std::sync::Arc::new(Host::builder(AppInfo { id: "picker-test", name: "Picker test", version: "0" }).build()));
+    let colour = |hex: &str| Srgba::from_hex(hex).expect("a colour");
+    dialogs
+        .borrow_mut()
+        .open(ColorPickerDialog::new("foreground", "Color Picker (Foreground Color)", colour("#000000")).web_colors_remembered(false));
+    fixture.idle(6);
+    assert!(dialogs.borrow().get::<ColorPickerDialog>().is_some(), "the picker is open");
+
+    fixture.type_text("336699");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(dialogs.borrow().get::<ColorPickerDialog>().is_none(), "Enter in the hex field confirms the dialog");
+    let answer = dialogs.borrow_mut().take::<ColorPickerDialog>();
+    let Some(DialogResult::Ok(result)) = answer else { panic!("the dialog answers OK") };
+    assert_eq!(result.picked.color.to_hex(), "#336699", "with the typed colour");
+}

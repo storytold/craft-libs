@@ -233,16 +233,20 @@ pub enum SnapGesture {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SnapTargets {
     targets: Vec<SnapTarget>,
+    /// Whether a target with a span catches a point or box anywhere along its line, the span only shaping the drawn
+    /// smart guide ([`reach_past_spans`](Self::reach_past_spans)).
+    past_spans: bool,
 }
 
 /// Distances closer than this are equal.
 const TIE: f64 = 1e-9;
 
 /// Whether `target` reaches a point or box spanning `across` on the other axis: a target with a span (a layer's
-/// edge on its page) only where the two overlap; a target without a span, or a query without an extent, always.
-fn reaches(target: &SnapTarget, across: Option<(f64, f64)>) -> bool {
+/// edge on its page) only where the two overlap, unless `past_spans`; a target without a span, or a query without an
+/// extent, always.
+fn reaches(target: &SnapTarget, across: Option<(f64, f64)>, past_spans: bool) -> bool {
     match (target.span, across) {
-        (Some((a, b)), Some((lo, hi))) => lo <= b && a <= hi,
+        (Some((a, b)), Some((lo, hi))) if !past_spans => lo <= b && a <= hi,
         _ => true,
     }
 }
@@ -258,6 +262,17 @@ impl SnapTargets {
     /// No targets.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// These targets with every span reaching past its extent: a target catches a point or box anywhere along its
+    /// line, and its span only shapes the drawn smart guide between the two objects. Photoshop snaps a moved layer's
+    /// edge to another layer's edge on the same line even when the two do not overlap across it (boxes side by side
+    /// align their tops); without this, a spanned target catches only what overlaps its span (a layer's edge on its
+    /// page).
+    #[must_use]
+    pub fn reach_past_spans(mut self) -> Self {
+        self.past_spans = true;
+        self
     }
 
     /// Add one target.
@@ -330,7 +345,7 @@ impl SnapTargets {
 
     /// Only the targets `keep` accepts (Snap To with one kind off).
     pub fn filtered(&self, keep: impl Fn(SnapKind) -> bool) -> SnapTargets {
-        SnapTargets { targets: self.targets.iter().copied().filter(|t| keep(t.kind)).collect() }
+        SnapTargets { targets: self.targets.iter().copied().filter(|t| keep(t.kind)).collect(), past_spans: self.past_spans }
     }
 
     /// Whether there is no target.
@@ -349,7 +364,7 @@ impl SnapTargets {
     /// span, it is `nearest_of`.
     pub fn nearest_within(&self, along: Axis, value: f64, across: Option<(f64, f64)>, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
         let mut best: Option<(f64, SnapTarget)> = None;
-        for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind) && reaches(t, across)) {
+        for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind) && reaches(t, across, self.past_spans)) {
             let distance = (target.position - value).abs();
             if distance > tolerance {
                 continue;
@@ -433,7 +448,9 @@ impl SnapTargets {
                 let hit = self
                     .targets
                     .iter()
-                    .filter(|t| t.along == along && kinds.contains(t.kind) && reaches(t, Some(other)) && (t.position - moved).abs() < 1e-6)
+                    .filter(|t| {
+                        t.along == along && kinds.contains(t.kind) && reaches(t, Some(other), self.past_spans) && (t.position - moved).abs() < 1e-6
+                    })
                     .min_by_key(|t| u8::from(t.kind != SnapKind::Guide));
                 if let Some(t) = hit {
                     lines.push(line(t, other.0, other.1));

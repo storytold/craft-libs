@@ -3,10 +3,10 @@
 //! drawn in their own face, favourites (stars), recent families at the top, class and feature filters above the
 //! list and a "similar fonts" filter. Behaviour follows Photoshop's font menu.
 
-mod rank;
+pub(crate) mod rank;
 mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 
@@ -28,7 +28,8 @@ use egui::{Rect, Response, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::missing::{DocumentFont, FontStatus, MissingFontsWords, document_fonts};
-use rank::{Info, infos, shown_name};
+pub use rank::FamilyInfos;
+use rank::{Info, shown_name};
 
 craft_ui::words! {
     /// The picker's words, English by default.
@@ -288,9 +289,11 @@ pub struct FamilyRow {
 
 /// The families `listing` would show, in list order: recents first (when the query is empty and no filter is on),
 /// then the matching families, the best match first and ties in the order of `language` (its code, `ja`, `pt-BR`).
-/// For apps that draw their own list from the picker's filtering.
+/// For apps that draw their own list from the picker's filtering. `infos` is [`FamilyInfos::of`] of `catalog`, built
+/// again by the app when the catalog's generation moves.
 pub fn family_rows(
     catalog: &Arc<Catalog>,
+    infos: &FamilyInfos,
     query: &str,
     settings: Option<&FontPickerSettings>,
     filters: &FontFilters,
@@ -299,7 +302,12 @@ pub fn family_rows(
 ) -> Vec<FamilyRow> {
     let (folder, collator) = (craft_i18n::Folder::new(language), craft_i18n::Collator::new(language));
     let listing = rank::Listing { query, settings, filters, current, language, served: &[] };
-    rank::list(catalog, &infos(catalog), &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
+    rank::list(catalog, infos, &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
+}
+
+/// The family data of `catalog` for the component `cx`: kept across passes while the catalog and its generation are unchanged.
+pub(super) fn infos_of(ctx: &egui::Context, id: egui::Id, catalog: &Catalog) -> Arc<FamilyInfos> {
+    craft_ui::runtime::derived::derived(ctx, id, &(catalog.id(), catalog.generation()), || FamilyInfos::of(catalog))
 }
 
 /// How a [`FontPicker`] lays out its list.
@@ -380,7 +388,7 @@ fn text_key() -> TextKey<String> {
 /// The family field's text: the family's name in the interface language, and a typed name read back as a family.
 #[derive(Clone)]
 struct FamilyCodec {
-    infos: Arc<rank::Infos>,
+    infos: Arc<FamilyInfos>,
     language: String,
     /// A typed name that is no installed family is a value too (Word's font box applies it as typed).
     free: bool,
@@ -566,13 +574,13 @@ impl<'a> FontPicker<'a> {
         Some(Label::from(note))
     }
 
-    fn codec(&self, env: &EnvView<'_>) -> FamilyCodec {
-        FamilyCodec { infos: infos(self.catalog), language: ui_language(env), free: self.kind == FontPickerKind::Plain }
+    fn codec(&self, infos: Arc<FamilyInfos>, env: &EnvView<'_>) -> FamilyCodec {
+        FamilyCodec { infos, language: ui_language(env), free: self.kind == FontPickerKind::Plain }
     }
 
     /// The families in list order without filters or recents, which the arrows and the wheel step through.
     fn ordered(&self, cx: &Cx<'_, Self>, settings: Option<&FontPickerSettings>) -> Vec<FamilyRow> {
-        let infos = infos(self.catalog);
+        let infos = infos_of(&cx.response.ctx, cx.id, self.catalog);
         let (folder, collator) = (cx.env.folder(), cx.env.collator());
         let filters = FontFilters::default();
         let language = ui_language(&cx.env);
@@ -631,7 +639,7 @@ impl Component for FontPicker<'_> {
                 .pointer_only("Alt+Down opens the list")
                 .toggles(POPUP);
         }
-        let codec = self.codec(&cx.env);
+        let codec = self.codec(infos_of(cx.ui.ctx(), cx.id, self.catalog), &cx.env);
         let mut options = TextOptions::new();
         options.select_on_focus = true;
         cx.text(text_key(), placed.text, &codec, &family, &options);

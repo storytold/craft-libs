@@ -58,11 +58,6 @@ impl<'a> EnvView<'a> {
         self.scoped.measure
     }
 
-    /// The roving group of the innermost body with `ContainerProps.roving`.
-    pub(crate) fn roving(&self) -> Option<Id> {
-        self.scoped.roving
-    }
-
     /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).
     pub(crate) fn inside_held(&self) -> Option<&'a Held> {
         self.scoped.inside_label.as_ref()
@@ -113,11 +108,13 @@ impl<'a> EnvView<'a> {
     /// The platform and the running viewport's window facts: the OS, the capabilities and the window's kind,
     /// chrome, state, insets and focus.
     pub fn shell(&self) -> &'a ShellInfo {
+        crate::runtime::replay::note_input(&self.scoped.ctx, crate::runtime::inputs::Input::Shell);
         &self.scoped.shell
     }
 
     /// The keyboard layout: which character each key position types, for text that names a key.
     pub fn keyboard_layout(&self) -> &'a craft_keymap::Layout {
+        crate::runtime::replay::note_input(&self.scoped.ctx, crate::runtime::inputs::Input::Keyboard);
         &self.scoped.keyboard
     }
 

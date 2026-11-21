@@ -2,8 +2,8 @@
 //! are not installed, and the dialog that lists them with a replacement for each (Photoshop's
 //! "missing fonts" warning on open; VectorCraft's and FigCraft's Document Fonts lists).
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::borrow::Cow;
 use std::sync::Arc;

@@ -14,8 +14,8 @@ use crate::style::{ComponentStyle, Flags, FocusLook, Stateful, States, StyleColo
 use craft_behavior::{Anchor9, Metrics, NavShape, PartKey, PartRef, Roving, Sense};
 use egui::{Pos2, Rect, Vec2, vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 const CELL: PartKey = PartKey::new("cell");
 

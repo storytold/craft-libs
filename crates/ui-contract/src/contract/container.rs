@@ -123,7 +123,7 @@ impl ShellPane {
 }
 
 /// The padding tier of a body.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Pad {
     /// No padding.
@@ -717,7 +717,7 @@ pub enum Gap {
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows
 /// of a menu touch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InMenu(pub bool);
 
@@ -725,6 +725,19 @@ impl EnvValue for InMenu {
     fn root() -> Self {
         InMenu(false)
     }
+}
+
+/// The bracket a `Row` draws from the labelled rows of its first child to the child after them (Image Size's width and
+/// height to their chain): a tick from each of the first and the last row's controls to the middle child's centre
+/// line, joined along that line. The middle child sits halfway between the two controls. The value is the link's
+/// state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Bracket {
+    /// The rows are linked: the bracket is drawn.
+    Linked,
+    /// The rows are not linked: the middle child keeps its place, with no bracket.
+    Unlinked,
 }
 
 /// What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
@@ -820,6 +833,9 @@ pub struct ContainerProps {
     pub label_column: bool,
     /// How the labelled rows under the container show their labels; `None` keeps the scheme of the scope.
     pub labels: Option<LabelScheme>,
+    /// The bracket an unwrapped `Row` placed from its start draws from its first child's labelled rows to the child
+    /// after them; any other body draws none.
+    pub bracket: Option<Bracket>,
     /// The component whose memory holds the container's shown memory and its layer's bookkeeping, when it is another:
     /// the body of a popup an `overlay` hook shows belongs to the component that shows it.
     pub(crate) owner: Option<egui::Id>,
@@ -860,6 +876,7 @@ impl ContainerProps {
             && self.outer_edit == other.outer_edit
             && self.collection_body == other.collection_body
             && self.labels == other.labels
+            && self.bracket == other.bracket
     }
 
     /// Props with every field at its default.
@@ -901,6 +918,7 @@ impl ContainerProps {
             collection_body: false,
             label_column: false,
             labels: None,
+            bracket: None,
             owner: None,
         }
     }
@@ -1119,6 +1137,12 @@ impl ContainerProps {
     /// their mark and icon columns through it.
     pub const fn label_column(mut self, on: bool) -> Self {
         self.label_column = on;
+        self
+    }
+
+    /// The bracket of a `Row` from its first child's labelled rows to the child after them ([`bracket`](Self::bracket)).
+    pub const fn bracket(mut self, bracket: Bracket) -> Self {
+        self.bracket = Some(bracket);
         self
     }
 

@@ -1,7 +1,7 @@
 //! `PreferencesPage`: the preferences body without a window, applying each value at once.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::model::{PageSpec, PreferencesModel};
 use super::rows::{RowsOut, ShownRow, reset_button, show_row};

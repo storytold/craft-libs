@@ -1,9 +1,0 @@
-config_version = 1
-
-[[exception]]
-name = "page-rulers-story-strip"
-kind = "marker"
-rule = "literal-size/vec2"
-path = "crates/pages/src/ui/page_rulers/stories.rs"
-reason = "The strip is the demo page margin in document points, story data."
-count = 1
