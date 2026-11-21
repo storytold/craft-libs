@@ -906,6 +906,11 @@ pub fn export_with_generator(doc: &Document, generator: &str) -> String {
     let mut body = String::new();
     // Every section starts with its own `\sectd`; `\sect` breaks only where there are several.
     let secs: Vec<craft_wordmodel::SectionProps> = doc.sections().into_iter().map(|(_, s)| s.clone()).collect();
+    // The preamble is the document default a reader applies before the first `\sectd`, so it
+    // describes the FIRST section: taking the last one re-opened an earlier portrait section
+    // as landscape when the document ended landscape (#7130). `secs` moves into the writer
+    // below, so the default is captured first.
+    let default = secs.first().unwrap_or(&doc.last_section).clone();
     if let Some(first) = secs.first() {
         body.push_str(&sect_words(first));
     }
@@ -913,7 +918,7 @@ pub fn export_with_generator(doc: &Document, generator: &str) -> String {
         w.sections = secs;
     }
     w.blocks(&flow.blocks, false, "\\par", &mut body, 0);
-    export_with(&flow.meta, &w, &body, &doc.last_section, generator)
+    export_with(&flow.meta, &w, &body, &default, generator)
 }
 
 fn export_with(m: &Meta, w: &Writer, body: &str, sec: &craft_wordmodel::SectionProps, generator: &str) -> String {
