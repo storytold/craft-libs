@@ -22,7 +22,7 @@ mod picker;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-pub use picker::{NamedStyleRow, StylePreview, style_rows};
+pub use picker::{NamedStyleRow, StylePreview, style_source};
 
 craft_ui::words! {
     /// The panels' words, English by default.

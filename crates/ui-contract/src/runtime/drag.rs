@@ -180,7 +180,7 @@ pub trait WindowDropTarget<P> {
 /// Where a drop target lies: a rect on an egui layer, in that layer's space. A component's own target lies over its
 /// visible rect on its layer; a component that takes drops over an area it does not draw (a preset browser's canvas)
 /// names the area with [`DropZone::new`] and registers with [`zone_target`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct DropZone {
     layer: Layer,
     rect: Rect,

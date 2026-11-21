@@ -3,17 +3,17 @@
 //! idle frames replay them, a change to what one holds runs only that one, and an event leaves through an `Outbox`.
 
 use craft_behavior::IconId;
-use craft_ui::bars::{Bar, BarItem, BarItems, BarKind, StatusMessage, StatusProgress};
+use craft_ui::bars::{Bar, BarHome, BarItem, BarItems, BarKind, StatusMessage, StatusProgress};
 use craft_ui::buttons::IconButton;
-use craft_ui::contract::{CommandSet, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::commands::CommandScope;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, last_frame_memo_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// The tool commands of the toolbar.
@@ -212,4 +212,43 @@ fn a_click_on_the_cancel_button_delivers_its_event_once() {
     assert_eq!(state.borrow().cancelled, 1, "the click delivered the cancel once");
     fixture.settle();
     assert_eq!(state.borrow().cancelled, 1);
+}
+
+/// The lead of an options bar as a member: Home and the vertical rule after it, which fills the bar's line.
+#[derive(MemoProps)]
+struct LeadProps {
+    on: bool,
+}
+
+fn lead(props: &mut LeadProps, ui: &mut Ui) -> Rect {
+    BarHome::new("Home", Bind::given(props.on)).show(ui);
+    ui.min_rect()
+}
+
+/// A bar offered far more height than its members need.
+const TALL_ROOM: Vec2 = Vec2::new(400.0, 300.0);
+
+/// A memoized member takes what its content used: its rule that fills the line is as long as without the view, so the
+/// bar with the member as a memoized view is as high as the bar with the same content shown plainly, both far below
+/// the room they are offered.
+#[trial]
+fn a_memoized_member_takes_the_height_its_content_used_not_the_bars_room() {
+    let (plain, memo, member) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
+    Frames::new().idle(4, |ui| {
+        let at = |x: f32| Rect::from_min_size(Pos2::new(x, 10.0), TALL_ROOM);
+        plain.set(in_region(ui, at(10.0), |ui| {
+            Bar::new("Plain", BarKind::Options).show(ui, |ui, _| BarHome::new("Home", Bind::given(false)).show(ui)).output.response.rect
+        }));
+        memo.set(in_region(ui, at(420.0), |ui| {
+            let shown = Bar::new("Memoized", BarKind::Options).show(ui, |ui, _| MemoView::new("lead", LeadProps { on: false }, lead).show(ui));
+            if let Some(Some(rect)) = shown.inner {
+                member.set(rect);
+            }
+            shown.output.response.rect
+        }));
+    });
+    let (plain, memo, member) = (plain.get(), memo.get(), member.get());
+    assert!(plain.height() < TALL_ROOM.y / 2.0, "the plain bar sizes from its members: {plain:?}");
+    assert!(member.height() < TALL_ROOM.y / 2.0, "the member takes what its content used, not the bar's room: {member:?}");
+    assert!((memo.height() - plain.height()).abs() <= 0.5, "the bar is as high with the member memoized: {memo:?} against {plain:?}");
 }
