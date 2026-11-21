@@ -974,7 +974,7 @@ struct BodyRun<'r> {
     room_x: f32,
     scroll: Option<Scroll>,
     layout: &'r layout::BodyLayout,
-    line: Option<f32>,
+    line: layout::BodyLine,
     columns: LabelColumns,
     env: &'r Env,
     /// While the body opens or closes, it shows only the part of its last height that the presence reaches.
@@ -1345,7 +1345,7 @@ impl BodyHooks<'_> {
             room_x: plan.room.x,
             scroll: plan.scroll,
             layout: &props.layout,
-            line: plan.line,
+            line: layout::BodyLine { shared: plan.line, least: props.least_height.unwrap_or(0.0) },
             columns: LabelColumns::of(props, !self.wide() && !self.held(props, env)),
             env: body_env,
             reveal_clip,

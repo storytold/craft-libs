@@ -777,6 +777,10 @@ pub struct ContainerProps {
     pub body_gap: Gap,
     /// The least width of the content, from a size role; the content may be wider.
     pub least_width: Option<LeastWidth>,
+    /// The least height of an unwrapped `Row` body's line, in points: the line is at least this high, as if a child of
+    /// more than one line this high stood in it, so the children that fill the line's height take at least it. Other
+    /// layouts ignore it.
+    pub least_height: Option<f32>,
     /// The line length of the body's paragraphs while the container takes its width from its content, from a size role.
     pub wrap_width: Option<WrapWidth>,
     /// A divider along the inner edge of a container mounted as an edge pane (`Mount::Pane` at an edge): the edge that
@@ -851,6 +855,7 @@ impl ContainerProps {
             && self.collapse == other.collapse
             && self.body_gap == other.body_gap
             && self.least_width == other.least_width
+            && self.least_height == other.least_height
             && self.wrap_width == other.wrap_width
             && self.child_size == other.child_size
             && self.child_glyphs == other.child_glyphs
@@ -883,6 +888,7 @@ impl ContainerProps {
             collapse: None,
             body_gap: Gap::Row,
             least_width: None,
+            least_height: None,
             wrap_width: None,
             edge_rule: false,
             child_size: None,
@@ -1020,6 +1026,12 @@ impl ContainerProps {
     /// The least width of the content, from a size role.
     pub const fn least_width(mut self, least: LeastWidth) -> Self {
         self.least_width = Some(least);
+        self
+    }
+
+    /// The least height of an unwrapped `Row` body's line ([`least_height`](Self::least_height)).
+    pub const fn least_height(mut self, points: f32) -> Self {
+        self.least_height = Some(points);
         self
     }
 

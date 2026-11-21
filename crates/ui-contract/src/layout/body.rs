@@ -1554,13 +1554,16 @@ fn on_line(body: Id, own: Option<(f32, f32)>, shared: Option<f32>) -> RowLine {
 }
 
 /// Starts a sweep of a body's children in a measuring run: the body's first-line `target` and, for the unwrapped
-/// `Row` body `row`, its line start afresh.
-fn open_sweep(ctx: &egui::Context, target: Option<Id>, row: Option<Id>) {
+/// `Row` body `row`, its line start afresh, `least` high at least (`ContainerProps::least_height`).
+fn open_sweep(ctx: &egui::Context, target: Option<Id>, row: Option<Id>, least: f32) {
     if let Some(target) = target {
         open_first_lines(ctx, &[target]);
     }
     if let Some(row) = row {
-        pass_state::with::<RowLines, _>(ctx, |rows| rows.0.insert(row, LineTook::default()));
+        // The least height counts as a child of more than one line that high.
+        let mut took = LineTook::default();
+        took.add(None, least.max(0.0));
+        pass_state::with::<RowLines, _>(ctx, |rows| rows.0.insert(row, took));
     }
 }
 
@@ -1607,21 +1610,32 @@ fn found(ctx: &egui::Context, sizing: bool, id: Id, room: Vec2, took: Vec2) {
 /// the gap and size columns from the cells as they come.
 #[cfg(feature = "testing")]
 pub(crate) fn run_body<R>(ui: &mut Ui, env: &Env, id: Id, layout: &BodyLayout, gap: Vec2, body: impl FnMut(&mut Ui) -> R) -> R {
-    run_body_measured(ui, env, id, layout, gap, None, body).0
+    run_body_measured(ui, env, id, layout, gap, BodyLine::default(), body).0
+}
+
+/// What an unwrapped `Row` body's line starts from besides its children: the line `shared` with its container's inline
+/// header or end region, which the children are centred on, and the `least` height of the line
+/// (`ContainerProps::least_height`), which counts as a child of more than one line that high.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BodyLine {
+    pub(crate) shared: Option<f32>,
+    pub(crate) least: f32,
 }
 
 /// `run_body`, with the width the children take at the gap alone for a `Row` that places its block itself (`End`,
-/// `Center`, `SpaceBetween`): the width the body asks for, where the room it is placed in spans wider. `shared` is the
-/// line the body shares with its container's inline header or end region: an unwrapped `Row` sets its children on it.
+/// `Center`, `SpaceBetween`): the width the body asks for, where the room it is placed in spans wider. `line` is what
+/// an unwrapped `Row` body's line starts from: the line it shares with its container's inline header or end region,
+/// which it sets its children on, and its least height.
 pub(crate) fn run_body_measured<R>(
     ui: &mut Ui,
     env: &Env,
     id: Id,
     layout: &BodyLayout,
     gap: Vec2,
-    shared: Option<f32>,
+    line: BodyLine,
     mut body: impl FnMut(&mut Ui) -> R,
 ) -> (R, Option<f32>) {
+    let BodyLine { shared, least } = line;
     let rtl = env.direction.is_rtl();
     let ctx = ui.ctx().clone();
     let sizing = measure::active(&ctx);
@@ -1629,7 +1643,7 @@ pub(crate) fn run_body_measured<R>(
     let target = env.first_line.filter(|_| sizing);
     let row = (sizing && matches!(layout, BodyLayout::Row { wrap: false, .. })).then_some(id);
     let body = |ui: &mut Ui| {
-        open_sweep(&ctx, target, row);
+        open_sweep(&ctx, target, row, least);
         body(ui)
     };
     // Each layout runs in its own function, so a body nested in bodies keeps only its own layout's frame on the stack.
