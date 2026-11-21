@@ -8,7 +8,23 @@ impl<'a> Mapper<'a> {
     pub(super) fn variable_bindings(&mut self, o: &mut Obj, v: &View<'a>) {
         let mut bound = Obj::new();
         let mut text_bound = Obj::new();
+        // Variant properties bound to variables: an expression picking the variant (see
+        // [`variant_bindings`]), kept in either map.
+        let mut props = Obj::new();
+        for map in ["variableConsumptionMap", "parameterConsumptionMap"] {
+            for e in v.get(map).and_then(|m| m.get("entries")).map(Kv::list).unwrap_or_default() {
+                if e.get("variableField").and_then(Kv::str) == Some("VARIANT_PROPERTIES") {
+                    variant_bindings(e.get("variableData"), &mut props);
+                }
+            }
+        }
+        if !props.is_empty() {
+            bound.insert("componentProperties".into(), Value::Object(props));
+        }
         for e in v.get("variableConsumptionMap").and_then(|m| m.get("entries")).map(Kv::list).unwrap_or_default() {
+            if e.get("variableField").and_then(Kv::str) == Some("VARIANT_PROPERTIES") {
+                continue;
+            }
             let Some(var) = alias(e.get("variableData")) else { continue };
             let a = json!({"type": "VARIABLE_ALIAS", "id": var});
             let field = e.get("variableField").and_then(Kv::str).unwrap_or("");
@@ -66,6 +82,26 @@ impl<'a> Mapper<'a> {
         }
         if !modes.is_empty() {
             o.insert("explicitVariableModes".into(), Value::Object(modes));
+        }
+    }
+}
+
+/// An instance's variant properties bound to variables, as REST `boundVariables.componentProperties`
+/// (`{property: alias}`): the file keeps them as a `RESOLVE_VARIANT` expression over a map from
+/// each property's name to the variable that picks its value. Properties set to a literal value
+/// there aren't bindings and are left out.
+fn variant_bindings(d: Option<&Kv>, out: &mut Obj) {
+    let Some(e) = d.filter(|d| d.get("dataType").and_then(Kv::str) == Some("EXPRESSION")).and_then(|d| d.get("value")?.get("expressionValue")) else {
+        return;
+    };
+    if e.get("expressionFunction").and_then(Kv::str) != Some("RESOLVE_VARIANT") {
+        return;
+    }
+    let args = e.get("expressionArguments").map(Kv::list).unwrap_or_default();
+    let values = args.iter().filter_map(|a| a.get("value")?.get("mapValue")?.get("values")).flat_map(Kv::list);
+    for entry in values.take(256) {
+        if let (Some(name), Some(var)) = (entry.get("key").and_then(Kv::str), alias(entry.get("value"))) {
+            out.insert(name.to_string(), json!({"type": "VARIABLE_ALIAS", "id": var}));
         }
     }
 }
