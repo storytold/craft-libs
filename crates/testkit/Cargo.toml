@@ -8,7 +8,16 @@ repository.workspace = true
 description = "Source-level platform regression guards and verification utilities for the Craft application suite"
 publish = false
 
+[features]
+default = []
+# Image comparison, PNG reading and writing, and golden reference checks.
+image = ["dep:png"]
+
 [dependencies]
+png = { version = "0.18", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

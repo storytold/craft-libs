@@ -14,6 +14,9 @@
 //!   where `std::time::Instant::now()` panics on `wasm32`.
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
+//! * `image` (feature `image`): RGBA8 and gray views, difference statistics, PSNR for `u8` and
+//!   `u16` planes, tolerances with an optional 3×3 neighborhood, a difference image, PNG reading
+//!   and writing with size limits, golden reference checks and `assert_similar!`.
 //!
 //! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
 //! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
@@ -39,6 +42,8 @@
 pub mod deadline;
 pub mod guards;
 pub mod hostile;
+#[cfg(feature = "image")]
+pub mod image;
 pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]
