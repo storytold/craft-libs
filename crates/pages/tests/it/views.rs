@@ -908,3 +908,40 @@ fn a_wheel_up_at_the_top_never_moves_the_page_with_rulers_on_or_off() {
         }
     }
 }
+
+/// Go To page `page` in a continuous view of 20 pages at 100 %, `rulers` on or off: the first page the view places and
+/// the offset, with where the page before ends.
+fn gone_to(page: usize, rulers: bool) -> (Option<usize>, f64, f64) {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+        s.continuous = true;
+    })));
+    let seen = Rc::new(RefCell::new((None, 0.0)));
+    let (kept, shown) = (Rc::clone(&state), Rc::clone(&seen));
+    let pages = DemoPages::new(20);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).rulers(rulers).show(ui, |_, _| ());
+        let before = page.checked_sub(1).map_or(0.0, |before| out.layout.rects[before].y0 + out.layout.bands[before].1);
+        *shown.borrow_mut() = (out.pages.first().map(|p| p.page), before);
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(1280.0, 760.0));
+    fixture.settle();
+    state.borrow_mut().go_to(page);
+    fixture.idle(3);
+    let (first, before) = *seen.borrow();
+    (first, state.borrow().offset.1, before)
+}
+
+/// Go To puts the view's top where the page before ends, so the gap above the page shows and nothing of the page
+/// before it, with rulers on or off.
+#[trial]
+fn go_to_shows_the_page_at_the_top_and_nothing_of_the_page_before() {
+    for rulers in [false, true] {
+        let (first, offset, before) = gone_to(5, rulers);
+        assert_eq!(first, Some(5), "rulers {rulers}: the first page in view is the one gone to");
+        assert!((offset - before).abs() < 0.01, "rulers {rulers}: the view's top {offset} is where the page before ends, {before}");
+    }
+}
