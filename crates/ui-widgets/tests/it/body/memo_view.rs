@@ -5,7 +5,7 @@ use crate::values::kit::Scrub;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked};
-use craft_ui::display::Text;
+use craft_ui::display::{Elide, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
@@ -1127,4 +1127,49 @@ fn a_view_in_a_content_sized_column_lays_out_its_fill_width_row_as_outside_a_vie
     let (outside, inside) = (shown(false), shown(true));
     assert!(outside.0.width() < outside.1.width(), "the column outside a view is as narrow as its button: {outside:?}");
     assert_eq!(inside, outside, "the view's column and its sibling lie as without the view");
+}
+
+#[derive(MemoProps)]
+struct Line {
+    line: String,
+}
+
+/// One line of text cut with an ellipsis where its room is short.
+fn line(props: &mut Line, ui: &mut Ui) -> Rect {
+    Text::new(props.line.clone()).elide(Elide::End).show(ui).rect
+}
+
+/// A memoized view is one unit of the shrinking row around it: with room it is as wide as its content, and when a
+/// sibling after it grows it narrows so the row fits, though the region it is offered stays the same. It replays while
+/// the row's width for it is unchanged and runs once when that width changes.
+#[trial]
+fn a_view_in_a_row_narrows_with_it_and_runs_only_when_its_width_changes() {
+    const ROOM: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(310.0, 50.0) };
+    let mut frames = Frames::new();
+    let frame = |frames: &mut Frames, after: &str| {
+        let mut rects = (Rect::NOTHING, Rect::NOTHING);
+        frames.frame(vec![], |ui| {
+            in_region(ui, ROOM, |ui| {
+                Row::new().fill_width().show(ui, |ui, _| {
+                    let view = MemoView::new("line", Line { line: "A line of text long enough to be cut".to_owned() }, line).show(ui);
+                    let after = Button::new(after.to_owned()).show(ui).response.rect;
+                    rects = (view.unwrap_or(Rect::NOTHING), after);
+                });
+            });
+        });
+        rects
+    };
+    for _ in 0..WARM {
+        frame(&mut frames, "B");
+    }
+    let (wide, _) = frame(&mut frames, "B");
+    assert_eq!(runs_of(&frames, "Line"), [MemoRun::Replayed], "an idle frame replays the view");
+    let (narrow, after) = frame(&mut frames, "A much longer button label");
+    assert_eq!(runs_of(&frames, "Line"), [MemoRun::Ran], "a new width runs the view");
+    assert!(narrow.width() < wide.width(), "the view narrows: {narrow:?} from {wide:?}");
+    assert!(narrow.right() <= after.left() && after.right() <= ROOM.right() + 0.5, "the row fits: {narrow:?}, {after:?} in {ROOM:?}");
+    for _ in 0..WARM {
+        frame(&mut frames, "A much longer button label");
+    }
+    assert_eq!(runs_of(&frames, "Line"), [MemoRun::Replayed], "at the same width it replays again");
 }

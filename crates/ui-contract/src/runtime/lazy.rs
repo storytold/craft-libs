@@ -166,7 +166,7 @@ pub(crate) struct Measured {
     pub(crate) room: Rect,
 }
 
-/// Where a memoized view ran: it replays only at a place of the same size, layer, layout and environment, and its
+/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, fit and environment, and its
 /// record moves with the room's position (`Place::shift_to`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
@@ -182,6 +182,9 @@ pub(crate) struct Place {
     /// The scope's environment (`Env::key`): its tokens (theme, density), scale, direction, language and whether the
     /// window is active.
     pub(crate) env: EnvKey,
+    /// Whether the view is a unit of the shrinking `Row` around it, so the leaves of its content fit the view's room
+    /// (`Scoped::start_view_room`).
+    pub(crate) fits: bool,
 }
 
 /// How a kept run replays at another place: the shift its record moves by, and whether the clip moved with the room.
@@ -211,7 +214,8 @@ impl Place {
             && now.layout == self.layout
             && now.pixels_per_point == self.pixels_per_point
             && now.atlas == self.atlas
-            && now.env == self.env;
+            && now.env == self.env
+            && now.fits == self.fits;
         let placeable = offset == Vec2::ZERO || (keeps_placement(rect.union(self.room), offset, now.pixels_per_point) && movable && !transformed);
         if !same || !placeable {
             return None;

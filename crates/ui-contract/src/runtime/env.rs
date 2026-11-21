@@ -409,6 +409,21 @@ impl Scoped {
         self.offered = None;
     }
 
+    /// Starts the layout room of a memoized view's content (`start_room`). A view in a shrinking `Row` is one of the
+    /// units the row narrows: its content's leaves fit the room the view is given (`Shrink::Fit`).
+    pub(crate) fn start_view_room(&mut self) {
+        let fits = self.row_unit();
+        self.start_room();
+        if fits {
+            self.shrink = Some(Shrink::Fit);
+        }
+    }
+
+    /// Whether a child shown in flow here is a unit of the shrinking `Row` around it.
+    pub(crate) const fn row_unit(&self) -> bool {
+        matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)))
+    }
+
     /// The key of everything a memoized view shown in this scope inherits beyond `key` (the style inputs, which its
     /// place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface, wheel, directions), the
     /// containers around it (arena, roving group, transform, collection item and row, inside label, footer slot, line
@@ -678,9 +693,12 @@ impl Env {
         Env { scoped: Arc::new(scoped) }
     }
 
-    /// Reuse a sweep's scope while it is uniquely held. A captured child env keeps its snapshot.
+    /// Reuse a sweep's scope while it is uniquely held. A captured child env keeps its snapshot. The scope key is
+    /// computed again by the first view that asks after the edit.
     pub(crate) fn local_mut(&mut self) -> &mut Scoped {
-        Arc::make_mut(&mut self.scoped)
+        let scoped = Arc::make_mut(&mut self.scoped);
+        scoped.scope_key = std::sync::OnceLock::new();
+        scoped
     }
 
     /// This env's container scope on top of `root`, the root env of the viewport the scope now runs in: the scale,
