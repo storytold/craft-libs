@@ -320,9 +320,16 @@ fn text_style(v: &View, size: Option<f64>) -> Obj {
         }
     }
     // OpenType features turned on or off (`SS16`: SF Pro's large symbols) as REST `opentypeFlags`.
+    // Each list comes from the topmost layer that has it; a tag in both takes the higher one's.
+    let topmost = |key: &str| v.layers.iter().enumerate().rev().find_map(|(i, l)| Some((i, l.get(key)?)));
+    let mut lists: Vec<(usize, &Kv, i32)> = [("toggledOnOTFeatures", 1), ("toggledOffOTFeatures", 0)]
+        .into_iter()
+        .filter_map(|(key, on)| topmost(key).map(|(i, list)| (i, list, on)))
+        .collect();
+    lists.sort_by_key(|(i, _, _)| *i);
     let mut flags = Obj::new();
-    for (key, on) in [("toggledOnOTFeatures", 1), ("toggledOffOTFeatures", 0)] {
-        for tag in v.get(key).map(Kv::list).unwrap_or_default().iter().filter_map(Kv::str) {
+    for (_, list, on) in lists {
+        for tag in list.list().iter().filter_map(Kv::str) {
             flags.insert(tag.to_string(), json!(on));
         }
     }
@@ -335,3 +342,6 @@ fn text_style(v: &View, size: Option<f64>) -> Obj {
     }
     s
 }
+
+#[cfg(test)]
+mod ot_flag_tests;
