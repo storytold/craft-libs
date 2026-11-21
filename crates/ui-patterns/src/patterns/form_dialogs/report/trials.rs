@@ -42,6 +42,7 @@ fn grouped_notes_copy_with_their_headings() {
         hosted.json_fields(),
         Some(json!({
             "lines": [],
+            "notes": [],
             "groups": [
                 { "heading": "Fonts", "notes": ["Missing Arial", "Cannot read Inter"] },
                 { "heading": "Images", "notes": ["hero.png"] },

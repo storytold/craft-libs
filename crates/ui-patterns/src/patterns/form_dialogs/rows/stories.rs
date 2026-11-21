@@ -3,6 +3,8 @@
 use super::{DialogFields, ParamRows};
 use crate::runtime::requests::PathKind;
 
+use crate::contract::Show as _;
+use crate::display::Text;
 use crate::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use crate::patterns::form_dialogs::{NumberUnit, Param, ParamKind};
 use crate::patterns::presets::{PresetFns, PresetRow, PresetSource};
@@ -169,7 +171,7 @@ fn param_rows_with_a_picture_beside(ui: &mut Ui, data: &mut StoryData) -> StoryO
         Param::number("width", "Width", 640.0, 1.0, 0),
         Param::number("height", "Height", 480.0, 1.0, 0),
         Param::new("smooth", "Smooth", ParamKind::bool(false)),
-        Param::custom("picture", "Picture", |ui, _, _| ui.label("Picture")).beside(),
+        Param::custom("picture", "Picture", |ui, _, _| Text::new("Picture").show(ui)).beside(),
     ];
     rows_story(ui, data, &params, |_| {})
 }

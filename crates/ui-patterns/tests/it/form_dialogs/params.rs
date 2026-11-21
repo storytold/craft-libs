@@ -612,9 +612,10 @@ fn a_mixed_key_shows_mixed_stays_out_of_the_answer_and_a_custom_row_sees_it_unti
 }
 
 // A drag of a slider is one gesture: one begin, updates and one commit with one gesture id, a second pass of every
-// frame lifts nothing new, Escape cancels with the whole values from before, and a typed value is one set.
+// frame lifts nothing new, Escape cancels with the whole values from before, and a typed value, which applies as it is
+// typed, lifts as the field's one gesture.
 #[trial]
-fn a_row_drag_lifts_to_one_gesture_and_a_typed_value_to_one_set() {
+fn a_row_drag_lifts_to_one_gesture_and_a_typed_value_to_the_fields_one() {
     let params =
         vec![Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, SliderScale::Linear)), Param::number("width", "Width", 640.0, 1.0, 0)];
     let values = Rc::new(RefCell::new(DialogFields::new()));
@@ -642,8 +643,10 @@ fn a_row_drag_lifts_to_one_gesture_and_a_typed_value_to_one_set() {
     let field = fixture.by_label("Width").expect("the width row");
     fixture.click(&field).settle();
     fixture.key(Key::A, Modifiers::COMMAND).type_text("7").key(Key::Enter, Modifiers::NONE).settle();
-    let sets = log.borrow().iter().filter(|event| event.phase().is_none() && event.value().is_some()).count();
-    assert_eq!(sets, 1, "a typed value is one set: {:?}", log.borrow());
+    let typed = phases(&log.borrow());
+    let count = |wanted: GesturePhase| typed.iter().filter(|phase| **phase == wanted).count();
+    assert_eq!((count(GesturePhase::Begin), count(GesturePhase::Commit)), (1, 1), "a typed value is one gesture: {:?}", log.borrow());
+    assert_eq!(values.borrow().number("width"), Some(7.0), "that lands the typed value");
 }
 
 /// The rects of two rows' fields in a form of `params` shown in a room of `room`.
@@ -657,7 +660,7 @@ fn placed(params: Vec<Param>, room: Vec2, first: &str, second: &str) -> [egui::R
 }
 
 // A section beside the one before it, and a full-width custom row beside its section's rows, stand side by side with
-// room and fall under without it.
+// room and fall under in a room that ends before the pair does.
 #[trial]
 fn a_beside_row_sits_beside_its_section_with_room_and_under_it_without() {
     let sections = || {
@@ -670,7 +673,7 @@ fn a_beside_row_sits_beside_its_section_with_room_and_under_it_without() {
     };
     let [alpha, beta] = placed(sections(), Vec2::new(1400.0, 600.0), "Alpha", "Beta");
     assert!(left_of(alpha, beta), "with room the second section stands beside the first");
-    let [alpha, beta] = placed(sections(), Vec2::new(300.0, 900.0), "Alpha", "Beta");
+    let [alpha, beta] = placed(sections(), Vec2::new(beta.max.x - 1.0, 900.0), "Alpha", "Beta");
     assert!(above(alpha, beta), "without room it falls under");
 
     let picture = || {
@@ -678,7 +681,7 @@ fn a_beside_row_sits_beside_its_section_with_room_and_under_it_without() {
     };
     let [alpha, pic] = placed(picture(), Vec2::new(1400.0, 600.0), "Alpha", "Picture");
     assert!(left_of(alpha, pic), "with room the picture stands beside the rows");
-    let [alpha, pic] = placed(picture(), Vec2::new(300.0, 900.0), "Alpha", "Picture");
+    let [alpha, pic] = placed(picture(), Vec2::new(pic.max.x - 1.0, 900.0), "Alpha", "Picture");
     assert!(above(alpha, pic), "without room it falls under");
 }
 

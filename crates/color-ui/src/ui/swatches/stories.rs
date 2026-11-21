@@ -4,6 +4,8 @@ use super::{SwatchKey, SwatchLibrary, SwatchesPanel, SwatchesState};
 use crate::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchPaint};
 use craft_theme::Srgba;
 use craft_ui::choice::SwatchFace;
+use craft_ui::contract::Show as _;
+use craft_ui::display::Text;
 use craft_ui::patterns::presets::ThumbInfo;
 use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -61,7 +63,7 @@ fn swatches_panel_host_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             _ => Vec::new(),
         })
         .tools(|ui| {
-            ui.label("Host tools");
+            Text::new("Host tools").show(ui);
         })
         .footer(None)
         .show(ui);

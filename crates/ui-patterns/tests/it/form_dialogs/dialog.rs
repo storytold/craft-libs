@@ -887,7 +887,7 @@ fn shift_enter_in_a_row_answers_ok() {
     assert_eq!(answered.borrow().as_ref().and_then(|fields| fields.text("notes").map(str::to_owned)).as_deref(), Some("a"));
 }
 
-// Enter in an open select picks the highlighted option; it does not answer OK, and the dialog stays open.
+// Enter in an open select picks the highlighted option; it does not answer OK, and the dialog stays open with the pick.
 #[trial]
 fn an_open_select_takes_enter_and_the_dialog_stays_open() {
     let options = vec![("spin".to_owned(), Label::from("Spin")), ("zoom".to_owned(), Label::from("Zoom"))];
@@ -899,7 +899,8 @@ fn an_open_select_takes_enter_and_the_dialog_stays_open() {
     fixture.key(Key::Enter, Modifiers::NONE).settle();
     assert!(answered.borrow().is_none(), "Enter in the open select does not answer OK");
     assert!(fixture.by_label("Row").is_some(), "the dialog stays open");
-    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    let ok = fixture.by_label("OK").expect("the footer has OK");
+    fixture.click(&ok).settle();
     assert_eq!(answered.borrow().as_ref().and_then(|fields| fields.text("method").map(str::to_owned)).as_deref(), Some("zoom"), "the pick stood");
 }
 
