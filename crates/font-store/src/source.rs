@@ -12,10 +12,22 @@ use crate::index::{
 pub(crate) const MAX_STR: usize = 1024;
 const MAX_LIST: usize = 4096;
 const MAX_FAMILIES: usize = 50_000;
-const MAX_FILES: usize = 200_000;
+pub(crate) const MAX_FILES: usize = 200_000;
 const MAX_SEGMENT: usize = 64;
 const MAX_FILE_NAME: usize = 200;
 const MAX_TEMPLATES: usize = 8;
+
+// The limit a test has set for its own thread, so that it is reachable.
+#[cfg(test)]
+thread_local!(pub(crate) static TEST_MAX_FILES: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_FILES) });
+
+/// The most files an index lists; a test can lower the limit for its own thread.
+fn max_files() -> usize {
+    #[cfg(test)]
+    return TEST_MAX_FILES.get();
+    #[cfg(not(test))]
+    MAX_FILES
+}
 
 /// Where an index file comes from.
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +36,9 @@ pub(crate) enum Origin<'a> {
     Trusted,
     /// A source the user added by URL: never curated, its ID prefixed with `user:<host>/`.
     User { url: &'a str },
+    /// An index the build's host supplies: never curated, its ID `host:<id>`. The caller has
+    /// checked `id` ([`check_host_id`]).
+    Host { id: &'a str },
 }
 
 #[derive(Deserialize)]
@@ -230,6 +245,14 @@ pub(crate) fn fill(templates: &[String], path: &str, repo: Option<&str>, git_ref
     Ok(urls)
 }
 
+/// The longest ID a host may give its index.
+const MAX_HOST_ID: usize = 64;
+
+/// A host's name for its index: 1 to 64 of `[A-Za-z0-9._-]`, not starting with `.`.
+pub(crate) fn check_host_id(id: &str) -> Result<(), IndexError> {
+    if id.len() <= MAX_HOST_ID && is_ref(id) { Ok(()) } else { invalid(format!("`{}` is not a valid ID for a host's index", short(id))) }
+}
+
 /// The host of an https URL, lowercased: `fonts.example.org`.
 pub(crate) fn https_host(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
@@ -287,11 +310,14 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
     if !declared.split('/').all(is_ref) || declared.len() > 128 {
         return invalid(format!("source `{}` is not a valid ID", short(&declared)));
     }
-    let host = match origin {
-        Origin::Trusted => None,
-        Origin::User { url } => Some(https_host(url).ok_or_else(|| IndexError::Invalid("the source's URL is not https".into()))?),
+    let (id, outside) = match origin {
+        Origin::Trusted => (declared.clone(), None),
+        Origin::User { url } => {
+            let host = https_host(url).ok_or_else(|| IndexError::Invalid("the source's URL is not https".into()))?;
+            (format!("user:{host}/{declared}"), Some(host))
+        }
+        Origin::Host { id } => (format!("host:{id}"), Some(format!("host:{id}"))),
     };
-    let id = host.as_ref().map_or_else(|| declared.clone(), |h| format!("user:{h}/{declared}"));
     for u in raw.base_url.iter().chain(&raw.fallback_base_url) {
         check_base_url(u)?;
     }
@@ -312,11 +338,11 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
         None => {
             let Some(base) = &raw.base_url else { return invalid("an index without source_info needs base_url") };
             let templates = std::iter::once(base).chain(&raw.fallback_base_url).map(|b| format!("{b}{{path}}")).collect();
-            let name = host.clone().unwrap_or_else(|| "Google Fonts".into());
+            let name = outside.clone().unwrap_or_else(|| "Google Fonts".into());
             (name, None, true, templates)
         }
     };
-    let curated = curated && host.is_none();
+    let curated = curated && outside.is_none();
     if raw.families.len() > MAX_FAMILIES || raw.languages.len() > MAX_FAMILIES * 4 || raw.scripts.len() > MAX_LIST {
         return invalid("too many families, languages or scripts");
     }
@@ -326,12 +352,13 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
     for s in &raw.scripts {
         check_str("script", &s.id)?;
     }
-    let slug = if host.is_some() { user_slug(&id) } else { slug(&id) };
+    let slug = if outside.is_some() { user_slug(&id) } else { slug(&id) };
+    let host = matches!(origin, Origin::Host { .. });
     let ctx = Ctx {
         declared: &declared,
         id: &id,
         slug: &slug,
-        google: host.is_none() && declared == GOOGLE_FONTS,
+        google: outside.is_none() && declared == GOOGLE_FONTS,
         curated,
         templates: &templates,
         repo: raw.repo.as_deref(),
@@ -350,15 +377,47 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
             continue;
         }
         check_family(&mut fam, &ctx)?;
-        total = total.saturating_add(fam.files.len());
-        if total > MAX_FILES {
-            return invalid("too many files");
-        }
         if !names.insert(fam.family.to_lowercase()) {
             return invalid(format!("family `{}` is listed twice", fam.family));
         }
         if !dirs.insert(fam.dir.clone()) {
             return invalid(format!("folder `{}` holds more than one family", fam.dir));
+        }
+        // Every file counts, collections included, so a host's index meets the user rule exactly.
+        total = total.saturating_add(fam.files.len());
+        if total > max_files() {
+            return invalid("too many files");
+        }
+        // `verify_face` refuses every collection, so one listed in a host's index can only fail
+        // later: it is left out, by its extension, once the rules above have held the whole
+        // family (a collection named `.ttf` is refused when it is fetched).
+        if host {
+            let is_collection = |path: &str| {
+                let tail = path.len().checked_sub(4).and_then(|i| path.as_bytes().get(i..));
+                tail.is_some_and(|t| t.eq_ignore_ascii_case(b".ttc") || t.eq_ignore_ascii_case(b".otc"))
+            };
+            let count = fam.files.iter().filter(|f| is_collection(&f.path)).count();
+            if count > 0 {
+                let shown = fam
+                    .files
+                    .iter()
+                    .filter(|f| is_collection(&f.path))
+                    .take(3)
+                    .map(|f| format!("`{}`", short(f.path.rsplit('/').next().unwrap_or(&f.path))))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                fam.files.retain(|f| !is_collection(&f.path));
+                let what = match (fam.files.is_empty(), count) {
+                    (true, _) => "is left out",
+                    (false, 1) => "has a file left out",
+                    (false, _) => "has files left out",
+                };
+                let more = if count > 3 { format!(" and {} more", count - 3) } else { String::new() };
+                warnings.push(format!("{} {what}: a host's index can't list font collections ({shown}{more})", short(&fam.family)));
+                if fam.files.is_empty() {
+                    continue;
+                }
+            }
         }
         families.push(fam);
     }
@@ -372,6 +431,7 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
         user_url: match origin {
             Origin::Trusted => None,
             Origin::User { url } => Some(url.to_string()),
+            Origin::Host { .. } => None,
         },
         changed: false,
         warnings,
