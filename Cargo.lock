@@ -5419,7 +5419,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "bytemuck",
  "emath",
@@ -5475,7 +5475,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5510,7 +5510,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "accesskit",
  "ahash",
@@ -5529,7 +5529,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5548,7 +5548,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -5568,7 +5568,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "bytemuck",
  "egui",
@@ -5581,7 +5581,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "eframe",
  "egui",
@@ -5658,7 +5658,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "bytemuck",
 ]
@@ -5731,7 +5731,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5757,7 +5757,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 
 [[package]]
 name = "equator"
@@ -14340,7 +14340,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/storytold/winit.git?rev=a517b3846ee8457d84ee4975110bfda6797c44dc#a517b3846ee8457d84ee4975110bfda6797c44dc"
+source = "git+https://github.com/mocenigo/winit-mine.git?rev=97ca31df6d9d033176d2564eb18aa8523795d83f#97ca31df6d9d033176d2564eb18aa8523795d83f"
 dependencies = [
  "android-activity",
  "atomic-waker",
@@ -15086,19 +15086,19 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 
 [[patch.unused]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/mocenigo/egui-mine.git?rev=21bfd0257494ba9e77b01917200526a03efb2c95#21bfd0257494ba9e77b01917200526a03efb2c95"

@@ -576,6 +576,8 @@ impl DialogHost {
             });
             let mut builder =
                 egui::ViewportBuilder::default().with_inner_size(size).with_resizable(false).with_minimize_button(false).with_maximize_button(false);
+            // macOS: a utility panel, with the small title bar; elsewhere an ordinary window.
+            builder = builder.with_panel(true);
             if let Some(title) = title {
                 builder = builder.with_title(title);
             }
