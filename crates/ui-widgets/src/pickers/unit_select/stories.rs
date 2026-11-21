@@ -1,7 +1,7 @@
 //! Stories of `UnitSelect`.
 
 use super::UnitSelect;
-use crate::contract::{Bind, Entry, Show as _, Validity};
+use crate::contract::{Bind, Entry, Props as _, Show as _, Sizing, Validity};
 use crate::runtime::env::{Message, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -17,6 +17,16 @@ fn unit_select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (width, width_at) = data.value_at("width_and_unit", (Some(210.0), UnitKind::Millimetres));
     let (width, unit) = (&mut width.0, &mut width.1);
     UnitSelect::new("Width", width_at.bind(width), Bind::bound(unit), &units).show(ui).into()
+}
+
+/// Content-sized, as a compact form's rows show it: the field one number cell wide, the select as wide as its
+/// longest unit.
+#[story(UnitSelect<'static>, covers = [], drive = Drive::Type("42"))]
+fn unit_select_content_sized(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let units = units();
+    let (width, width_at) = data.value_at("compact_width_and_unit", (Some(210.0), UnitKind::Millimetres));
+    let (width, unit) = (&mut width.0, &mut width.1);
+    UnitSelect::new("Width", width_at.bind(width), Bind::bound(unit), &units).sizing(Sizing::Content).show(ui).into()
 }
 
 #[story(UnitSelect<'static>, covers = [Mixed], drive = Drive::Never)]

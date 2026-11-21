@@ -195,7 +195,7 @@ impl BodyHooks<'_> {
             let content = Vec2::new(if scroll.horizontal_on() { ex } else { view.width() }, if scroll.vertical_on() { ey } else { view.height() });
             let offset = Vec2::new(self.offset.x as f32, self.offset.y as f32);
             let background = surface_style(tokens, SurfaceKind::under(own_surface(props, cx), env.surface)).fill;
-            ui.painter().extend(ScrollBar::fades(&look, view, HiddenContent::new(content, view.size(), offset, rtl), background));
+            ui.painter().extend(ScrollBar::fades(view, HiddenContent::new(content, view.size(), offset, rtl), background));
         }
         if let Some(view) = self.view {
             use crate::contract::Pointer as _;

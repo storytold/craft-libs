@@ -1,5 +1,6 @@
 //! `PanelSpec`: what the dock asks of a panel before it shows its body.
 
+use super::DockSizes;
 use crate::contract::SizeLimits;
 use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
@@ -52,26 +53,61 @@ impl DockHeights {
 /// whole number of content columns wide, its steps ([`Column::steps`](craft_behavior::dock::Column::steps)), and as
 /// tall as the content measures at that width: docked from the top of the dock, floating under the title row. A drag
 /// of the column's edge sets whole steps; the content lays out as many columns as fit the width it gets.
+///
+/// A tool rail's grid is [`DockGrid::rail`]: the dock computes its widths from its own style
+/// ([`resolved`](Self::resolved)), so the grid follows the theme and density without the panel's spec reading them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DockGrid {
-    /// The content's width at one column: a cell and the content's own padding on both sides.
-    pub first: f32,
-    /// The width each further column adds: a cell and the gap before it.
-    pub step: f32,
+    widths: GridWidths,
     /// The most columns the content fills, its cell count: more steps show it no wider.
     pub most: u16,
+}
+
+/// The widths of a [`DockGrid`]'s columns.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GridWidths {
+    /// `first`: the content's width at one column, a cell and the content's own padding on both sides; `step`: the
+    /// width each further column adds, a cell and the gap before it.
+    Content { first: f32, step: f32 },
+    /// A tool rail's cells, sized by the dock's style.
+    Rail,
 }
 
 impl DockGrid {
     /// A grid `first` wide at one column, `step` wider for each further column, up to `most` columns.
     pub const fn new(first: f32, step: f32, most: u16) -> Self {
-        DockGrid { first, step, most }
+        DockGrid { widths: GridWidths::Content { first, step }, most }
     }
 
-    /// Whether the widths are finite and positive and the grid has a column.
+    /// The grid of a tool rail of `cells` cells: a rail button and the control padding on both sides at one column,
+    /// a button and the tight gap for each further column, in the style the dock shows it in.
+    pub fn rail(cells: usize) -> Self {
+        DockGrid { widths: GridWidths::Rail, most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+    }
+
+    /// The grid with its widths in points: a [`rail`](Self::rail) grid takes the rail widths of `sizes`.
+    pub fn resolved(self, sizes: &DockSizes) -> Self {
+        match self.widths {
+            GridWidths::Content { .. } => self,
+            GridWidths::Rail => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+        }
+    }
+
+    /// The content's width at one column and the width each further column adds; zero for a rail grid not yet
+    /// [`resolved`](Self::resolved).
+    fn first_step(self) -> (f32, f32) {
+        match self.widths {
+            GridWidths::Content { first, step } => (first, step),
+            GridWidths::Rail => (0.0, 0.0),
+        }
+    }
+
+    /// Whether the widths are finite and positive and the grid has a column. A rail grid not yet
+    /// [`resolved`](Self::resolved) is not.
     pub fn valid(self) -> bool {
-        self.first.is_finite() && self.first > 0.0 && self.step.is_finite() && self.step > 0.0 && self.most > 0
+        let (first, step) = self.first_step();
+        first.is_finite() && first > 0.0 && step.is_finite() && step > 0.0 && self.most > 0
     }
 
     /// `steps` kept between one column and [`most`](Self::most).
@@ -81,7 +117,8 @@ impl DockGrid {
 
     /// The content's width at `steps` columns, kept within the grid's columns.
     pub fn width(self, steps: u16) -> f32 {
-        self.first + f32::from(self.clamp(steps) - 1) * self.step
+        let (first, step) = self.first_step();
+        first + f32::from(self.clamp(steps) - 1) * step
     }
 
     /// The most columns whose width fits `width`, at least one.

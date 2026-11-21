@@ -5,7 +5,7 @@ use std::fmt;
 /// What may happen to a panel. `Layout::apply_with_permissions` enforces these for every
 /// action, whoever issues it. They also decide which gestures and menu items the renderer
 /// offers; a renderer hides the built-in close controls of a panel that stays closable by command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 #[non_exhaustive]
 pub struct Permissions {
     /// The panel may be moved.

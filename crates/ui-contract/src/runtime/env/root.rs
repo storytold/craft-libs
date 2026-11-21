@@ -8,7 +8,7 @@ use craft_behavior::MotionMode;
 use craft_i18n::CalendarDate;
 use craft_i18n::Direction;
 use craft_theme::{
-    AppSizes, Appearance, Contrast, ContrastChoice, Mode, ModeChoice, MotionChoice, Size, SystemAppearance, TextSize, ThemeDef, ThemeId,
+    AppSizes, Appearance, ComponentSet, Contrast, ContrastChoice, Mode, ModeChoice, MotionChoice, Size, SystemAppearance, TextSize, ThemeDef, ThemeId,
 };
 use egui::Context;
 use std::sync::Arc;
@@ -196,6 +196,17 @@ impl RootEnv {
     pub fn density(mut self, density: Size) -> Self {
         self.density = density;
         self
+    }
+
+    /// Sets the component set (`Selection::set`): a root app value, so a container can set another for its subtree.
+    pub fn set(mut self, set: ComponentSet) -> Self {
+        self.values.set(set);
+        self
+    }
+
+    /// The component set the root's values carry.
+    pub fn component_set(&self) -> ComponentSet {
+        self.values.get::<ComponentSet>()
     }
 
     /// Sets today's date, as the host's clock and time zone give it.

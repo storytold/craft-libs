@@ -377,6 +377,7 @@ impl Registration {
 #[macro_export]
 #[cfg(feature = "suite")]
 macro_rules! __register_contract {
+    (@suite $($item:item)*) => { $($item)* };
     ($ty:ty, $shape:ident, $overlay:expr, [$(($case:expr, $reason:expr)),*], [], $purpose:expr) => {
         const _: () = {
             $crate::__register_probe!($ty, $shape, $overlay, [$(($case, $reason)),*], $purpose,);
@@ -450,5 +451,6 @@ macro_rules! __register_pattern {
 #[macro_export]
 #[cfg(not(feature = "suite"))]
 macro_rules! __register_contract {
+    (@suite $($item:item)*) => {};
     ($ty:ty, $shape:ident, $overlay:expr, [$(($case:expr, $reason:expr)),*], [$($sample:path)?], $purpose:expr) => {};
 }

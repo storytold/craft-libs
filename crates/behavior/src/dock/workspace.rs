@@ -6,6 +6,8 @@
 
 use std::{collections::HashSet, hash::Hash};
 
+use craft_tracked::{Revision, Tracked};
+
 use super::{
     DockSide,
     action::{Action, DockPlacement, Location},
@@ -19,10 +21,12 @@ use super::{
 
 /// A saved arrangement of panels: the [`Layout`] and the closed panels' former places.
 ///
-/// Its [`revision`](Self::revision) changes when another arrangement replaces it (switch, reset, load): replace a
+/// Two signals name its state. [`revision`](Self::revision) moves with every write: the fields are private and every
+/// method that writes moves it, and a clone is a new source, so two workspace values never share a revision.
+/// [`generation`](Self::generation) moves only when another arrangement replaces it (switch, reset, load): replace a
 /// shown workspace with [`replace`](Self::replace) or the [`WorkspaceSet`](super::WorkspaceSet) operations, never by
 /// assignment, so a running drag on it ends. Edits ([`apply`](Self::apply), [`set_visible`](Self::set_visible), the
-/// dock's own) keep the revision.
+/// dock's own) keep the generation.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = "P: serde::Deserialize<'de>"))]
 #[non_exhaustive]
@@ -30,25 +34,29 @@ pub struct Workspace<P> {
     /// Format version; files without one are v1 (`{layout, hidden}`). Always written as
     /// [`Workspace::VERSION`].
     #[serde(default = "first_version", serialize_with = "write_version")]
-    pub version: u32,
+    version: u32,
     /// The current arrangement, changes included. A save without one is no workspace: it does not load.
-    pub layout: Layout<P>,
+    layout: Layout<P>,
     /// Closed panels, and panels the application does not register now, with where each one
     /// goes back.
     #[serde(default)]
-    pub hidden: Vec<(P, Location<P>)>,
+    hidden: Vec<(P, Location<P>)>,
     /// Floating panels with the docked location each one left, so Dock Panel can return it. Saved with the
     /// workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub floated: Vec<(P, Location<P>)>,
+    floated: Vec<(P, Location<P>)>,
     /// Counts the replacements of this live workspace. Not saved, and not part of equality.
     #[serde(skip)]
-    revision: u64,
+    generation: u64,
+    /// Moves with every write; a clone is a new source. Not saved, and not part of equality.
+    #[serde(skip)]
+    revision: Tracked<()>,
 }
 
 impl<P: PartialEq> PartialEq for Workspace<P> {
     fn eq(&self, other: &Self) -> bool {
-        self.version == other.version && self.layout == other.layout && self.hidden == other.hidden && self.floated == other.floated
+        self.revision.revision() == other.revision.revision()
+            || (self.version == other.version && self.layout == other.layout && self.hidden == other.hidden && self.floated == other.floated)
     }
 }
 
@@ -73,18 +81,83 @@ impl<P> Workspace<P> {
 
     /// A workspace of `layout`, with no hidden panels.
     pub fn new(layout: Layout<P>) -> Self {
-        Self { version: Self::VERSION, layout, hidden: Vec::new(), floated: Vec::new(), revision: 0 }
+        Self::from_parts(layout, Vec::new(), Vec::new())
     }
 
-    /// The revision of this live workspace: it changes with every [`replace`](Self::replace) and nothing else.
-    pub fn revision(&self) -> u64 {
-        self.revision
+    /// A workspace of `layout` with the closed panels' places `hidden` and the floating panels' docked places
+    /// `floated`, unchecked, as a saved one loads; [`validate`](Self::validate) checks it.
+    pub fn from_parts(layout: Layout<P>, hidden: Vec<(P, Location<P>)>, floated: Vec<(P, Location<P>)>) -> Self {
+        Self { version: Self::VERSION, layout, hidden, floated, generation: 0, revision: Tracked::default() }
     }
 
-    /// Replaces the arrangement with `with` and moves to the next revision.
+    /// The format version the workspace was read with.
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// The current arrangement.
+    pub fn layout(&self) -> &Layout<P> {
+        &self.layout
+    }
+
+    /// The closed panels, and panels the application does not register now, with where each one goes back.
+    pub fn hidden(&self) -> &[(P, Location<P>)] {
+        &self.hidden
+    }
+
+    /// The floating panels with the docked location each one left.
+    pub fn floated(&self) -> &[(P, Location<P>)] {
+        &self.floated
+    }
+
+    /// The revision of this workspace value: it moves with every write, and no other value has it.
+    pub fn revision(&self) -> Revision {
+        self.revision.revision()
+    }
+
+    /// The generation of this live workspace: it moves with every [`replace`](Self::replace) and nothing else.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The workspace with its arrangement replaced by `layout`, for a stored set whose saved arrangement is kept apart.
+    pub(super) fn with_layout(mut self, layout: Layout<P>) -> Self {
+        self.layout = layout;
+        self.touch();
+        self
+    }
+
+    /// Keeps the ids of new floating windows at or above `floor`. A dock that showed windows below `floor` raises a
+    /// workspace an undo brings back to it, so no id, and no OS window, goes to a second window.
+    pub fn raise_window_floor(&mut self, floor: u64) {
+        if self.layout.raise_window_floor(floor) {
+            self.touch();
+        }
+    }
+
+    /// Drops the closed-panel records of the panels `forget` names, so reopening them does not restore their place.
+    pub fn forget_hidden(&mut self, forget: impl Fn(&P) -> bool) {
+        let before = self.hidden.len();
+        self.hidden.retain(|(panel, _)| !forget(panel));
+        if self.hidden.len() != before {
+            self.touch();
+        }
+    }
+
+    /// Moves the revision. Every method that writes the workspace calls it.
+    fn touch(&mut self) {
+        self.revision.edit(|()| ());
+    }
+
+    /// Replaces the arrangement with `with` and moves to the next generation. The windows of `with` take ids this
+    /// workspace never gave out, so no OS window passes to another window.
     pub fn replace(&mut self, with: Workspace<P>) {
-        let revision = self.revision.wrapping_add(1);
-        *self = Workspace { revision, ..with };
+        let generation = self.generation.wrapping_add(1);
+        let revision = std::mem::take(&mut self.revision);
+        let mut with = with;
+        self.layout.hand_ids_to(&mut with.layout);
+        *self = Workspace { generation, revision, ..with };
+        self.touch();
     }
 }
 
@@ -168,7 +241,9 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         let mut seen = HashSet::new();
         all_closed.retain(|p| !visible.contains(p) && seen.insert(p.clone()));
         proposed.validate()?;
-        *self = proposed;
+        let Workspace { layout, hidden, floated, .. } = proposed;
+        (self.layout, self.hidden, self.floated) = (layout, hidden, floated);
+        self.touch();
         Ok(all_closed)
     }
 
@@ -291,6 +366,15 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
     /// [`Permissions::locked`] ones.
     /// `hidden` keeps at most [`MAX_PANELS`] entries, dropping the oldest unregistered ones first.
     pub fn reconcile(&mut self, registered: impl Fn(&P) -> bool, permissions: impl Fn(&P) -> Permissions, default: &Workspace<P>) {
+        let before = self.clone();
+        self.reconcile_parts(registered, permissions, default);
+        if *self != before {
+            self.touch();
+        }
+    }
+
+    /// [`Self::reconcile`]'s work, which leaves the revision to it.
+    fn reconcile_parts(&mut self, registered: impl Fn(&P) -> bool, permissions: impl Fn(&P) -> Permissions, default: &Workspace<P>) {
         if self.validate().is_err() {
             self.replace(default.clone());
         }

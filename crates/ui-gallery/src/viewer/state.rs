@@ -8,6 +8,7 @@ use super::layout::{self, PanelId};
 use super::picks::Cells;
 use super::settings::GallerySettings;
 use super::tree::{self, TreeKey};
+use crate::chrome::GallerySpecs;
 use crate::mock::MockState;
 use craft_behavior::Selection;
 use craft_behavior::dock::Workspace as Dock;
@@ -90,9 +91,11 @@ pub struct Viewer {
     /// What the theme panels share.
     pub themes: ThemeWorkspace,
     /// The components workspace's dock layout.
-    pub dock: Dock<PanelId>,
+    pub dock: Arc<Dock<PanelId>>,
     /// The theme workspace's dock layout.
-    pub theme_dock: Dock<PanelId>,
+    pub theme_dock: Arc<Dock<PanelId>>,
+    /// The panel specs both docks show.
+    pub specs: Tracked<GallerySpecs>,
     /// The mock application the theme workspace's App preview shows.
     pub mock: MockState,
     /// The drawings the inspector shows over the selected card's stories.
@@ -125,8 +128,9 @@ impl Viewer {
             more_open: false,
             browser,
             themes: ThemeWorkspace::new(),
-            dock: layout::default_components(),
-            theme_dock: layout::default_theme(),
+            dock: Arc::new(layout::default_components()),
+            theme_dock: Arc::new(layout::default_theme()),
+            specs: Tracked::new(GallerySpecs),
             mock: MockState::default(),
             inspect_layers: Tracked::new(InspectLayers::default()),
             sizes_synced: None,
@@ -154,8 +158,8 @@ impl Viewer {
         *browser.tree_seen = Some(browser.selected_type());
         browser.level.edit(|level| level.clone_from(&settings.level));
         *browser.story_of = settings.story_of(&browser.catalog);
-        self.dock = layout::load(&settings.dock, Workspace::Components, &browser.catalog);
-        self.theme_dock = layout::load(&settings.theme_dock, Workspace::Theme, &browser.catalog);
+        Arc::make_mut(&mut self.dock).replace(layout::load(&settings.dock, Workspace::Components, &browser.catalog));
+        Arc::make_mut(&mut self.theme_dock).replace(layout::load(&settings.theme_dock, Workspace::Theme, &browser.catalog));
     }
 
     /// Makes the root's app sizes the theme workspace's app layer, when the layer was edited since the last sync.
@@ -181,26 +185,27 @@ impl Viewer {
     /// The dock layout of the shown workspace.
     pub fn dock_mut(&mut self) -> &mut Dock<PanelId> {
         match self.workspace {
-            Workspace::Components => &mut self.dock,
-            Workspace::Theme => &mut self.theme_dock,
+            Workspace::Components => Arc::make_mut(&mut self.dock),
+            Workspace::Theme => Arc::make_mut(&mut self.theme_dock),
         }
     }
 
     /// Opens the tab of the component registered as `type_name` beside the Overview and shows it.
     pub fn open_component(&mut self, type_name: &str) {
-        let _ = self.dock.set_visible(PanelId::component(type_name), true, Some(PanelId::Overview), false, |panel| panel.permissions());
+        let _ = Arc::make_mut(&mut self.dock)
+            .set_visible(PanelId::component(type_name), true, Some(PanelId::Overview), false, |panel| panel.permissions());
     }
 
     /// Puts the shown workspace's panels back at their default places. The open component tabs are documents and stay.
     pub fn reset_layout(&mut self) {
         let workspace = self.workspace;
         let tabs = layout::open_tabs(&self.dock);
-        *self.dock_mut() = layout::default_for(workspace);
+        self.dock_mut().replace(layout::default_for(workspace));
         if workspace == Workspace::Components {
             for tab in tabs {
                 self.open_component(&tab);
             }
-            let _ = self.dock.set_visible(PanelId::Overview, true, None, false, |panel| panel.permissions());
+            let _ = Arc::make_mut(&mut self.dock).set_visible(PanelId::Overview, true, None, false, |panel| panel.permissions());
         }
     }
 

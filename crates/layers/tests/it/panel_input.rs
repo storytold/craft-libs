@@ -5,7 +5,7 @@ use craft_behavior::{EditEvent, EditHistory, Mixed, SelectionChange};
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerColumn, LayerDrop, LayerPosition, LayerToggle, LayersEvent, LayersPanel};
 use craft_layers::ui::tree::{LayerKind, LayerPart, LayerSelection};
-use craft_ui::contract::{MemoProps, MemoView, Outbox, PlainData, Tracked};
+use craft_ui::contract::{MemoProps, MemoView, Outbox, Tracked};
 use craft_ui::testing::access::focused_key;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 /// The app around the panel: the tree it shows and what it reported.
 struct App {
-    tree: FakeLayers,
+    tree: Tracked<FakeLayers>,
     events: Vec<LayersEvent<u32>>,
 }
 
@@ -68,7 +68,7 @@ fn apply(tree: &mut FakeLayers, event: &LayersEvent<u32>) {
 
 fn show(ui: &mut Ui, app: &mut App) {
     let App { tree, events } = app;
-    let out = LayersPanel::new(&*tree).show(ui);
+    let out = LayersPanel::new(tree).show(ui);
     for event in &out.events {
         apply(tree, event);
     }
@@ -77,7 +77,7 @@ fn show(ui: &mut Ui, app: &mut App) {
 
 /// The panel over `tree`, in a room tall enough for every row.
 fn rig(tree: FakeLayers) -> (Fixture, Shared) {
-    let app = Rc::new(RefCell::new(App { tree, events: Vec::new() }));
+    let app = Rc::new(RefCell::new(App { tree: Tracked::new(tree), events: Vec::new() }));
     let shared = Rc::clone(&app);
     let mut fixture = Fixture::new(move |ui| show(ui, &mut shared.borrow_mut()));
     fixture.room(PANEL);
@@ -246,24 +246,17 @@ fn shift_right_and_left_open_and_close_the_active_layers_effects() {
     assert_eq!(fx(take(&app)), [(7, false)], "Shift+Left closes them");
 }
 
-/// The tree a memoized view of the panel shows, as the app's model.
-#[derive(PlainData)]
-struct Model {
-    #[plain_data(assume = "a mock tree: its only interior mutability is call counters, which no view shows")]
-    tree: FakeLayers,
-}
-
 /// A memoized view of the panel over the app's model; it applies what the panel reports to the model and sends it on.
 #[derive(MemoProps)]
 struct PanelView<'a> {
-    model: &'a mut Tracked<Model>,
+    model: &'a mut Tracked<FakeLayers>,
     events: Outbox<'a, LayersEvent<u32>>,
 }
 
 fn panel_view(props: &mut PanelView<'_>, ui: &mut Ui) {
-    let out = LayersPanel::new(&props.model.tree).show(ui);
+    let out = LayersPanel::new(props.model).show(ui);
     for event in out.events {
-        props.model.edit(|model| apply(&mut model.tree, &event));
+        apply(props.model, &event);
         props.events.send(event);
     }
 }
@@ -274,7 +267,7 @@ fn panel_view(props: &mut PanelView<'_>, ui: &mut Ui) {
 #[trial]
 fn a_rows_access_focus_action_leads_the_focused_rows_to_it() {
     let settled = || {
-        let mut model = Tracked::new(Model { tree: FakeLayers::sample() });
+        let mut model = Tracked::new(FakeLayers::sample());
         let mut events = Vec::new();
         let mut fixture = Fixture::new(move |ui| {
             MemoView::new("layers", PanelView { model: &mut model, events: Outbox::new(&mut events) }, panel_view).show(ui);

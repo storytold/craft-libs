@@ -3118,6 +3118,8 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-settings",
+ "craft-tracked",
+ "craft-ui-macros",
  "craft-xml",
  "egui",
  "serde",
@@ -4174,6 +4176,8 @@ name = "craft-theme"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "craft-tracked",
+ "craft-ui-macros",
  "ecolor",
  "log",
  "proptest",

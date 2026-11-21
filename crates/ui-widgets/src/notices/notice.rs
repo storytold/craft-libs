@@ -155,8 +155,6 @@ pub struct NoticeStyle {
     /// The icon's side and colour.
     #[style(icon)]
     icon: IconLook,
-    /// The width of every card, padding included, where the room allows.
-    card_width: f32,
     /// The widest column of the centred layout.
     reading_width: f32,
 }
@@ -164,6 +162,9 @@ pub struct NoticeStyle {
 /// The widest column of a centred notice, in body text sizes: about 460 at the 12 point body, the empty states'
 /// column in the source apps.
 const READING_IN_BODY_SIZES: f32 = 38.5;
+
+/// The width of every card of a toast stack, padding included, where the room allows, in points, in every density.
+const CARD_WIDTH: f32 = 360.0;
 
 /// A message in a tone. The tone picks the icon and the colours; the neutral tone reads muted and has no icon. The
 /// message is the label; a title above it is optional. A centred notice can host the app's own leaves under its
@@ -541,7 +542,6 @@ impl Component for Notice<'_> {
             line,
             more,
             icon: IconLook::new(control.icon, stateful(tone)),
-            card_width: cx.tokens.size.notice.width,
             reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
         }
     }
@@ -554,7 +554,7 @@ impl Component for Notice<'_> {
             // The card is the card width wide, its padding included, where the room allows.
             (NoticeLayout::Card, room) => {
                 let padding = cx.style.metrics.padding;
-                let width = cx.style.card_width - padding.start - padding.end;
+                let width = CARD_WIDTH - padding.start - padding.end;
                 room.map_or(width, |room| width.min(room))
             }
             (NoticeLayout::Centred, None) => natural.min(cx.style.reading_width),

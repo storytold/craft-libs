@@ -2,7 +2,8 @@
 //! layout and the workspace switch at the end.
 
 use crate::viewer::{
-    CONTRASTS, DENSITIES, DIRECTIONS, GalleryCommands, MODES, MOTIONS, Preview, SCALES, TEXT_SIZES, VariantAxis, Viewer, Workspace, theme_entries,
+    CONTRASTS, DENSITIES, DIRECTIONS, GalleryCommands, MODES, MOTIONS, Preview, SCALES, SETS, TEXT_SIZES, VariantAxis, Viewer, Workspace,
+    theme_entries,
 };
 use craft_behavior::{IconId, Value};
 use craft_ui::bars::{Bar, BarKind};
@@ -40,15 +41,21 @@ fn line(ui: &mut Ui, mut add: impl FnMut(&mut Ui)) {
 fn more_form(ui: &mut Ui, viewer: &mut Viewer) {
     let env = &mut viewer.env;
     let (contrasts, densities, motions) = (CONTRASTS.entries(), DENSITIES.entries(), MOTIONS.entries());
-    let (directions, text_sizes, scales) = (DIRECTIONS.entries(), TEXT_SIZES.entries(), SCALES.entries());
+    let (directions, text_sizes, scales, sets) = (DIRECTIONS.entries(), TEXT_SIZES.entries(), SCALES.entries(), SETS.entries());
+    // The set is a root app value, not a field of the root.
+    let mut set = env.component_set();
     Stack::new().show(ui, |ui, _| {
         line(ui, |ui| choose(ui, "Contrast", &mut env.contrast, &contrasts));
         line(ui, |ui| choose(ui, "Size", &mut env.density, &densities));
+        line(ui, |ui| choose(ui, "Set", &mut set, &sets));
         line(ui, |ui| choose(ui, "Reduced motion", &mut env.motion, &motions));
         line(ui, |ui| choose(ui, "Direction", &mut env.direction, &directions));
         line(ui, |ui| choose(ui, "Text", &mut env.text_size, &text_sizes));
         line(ui, |ui| pick(ui, "Scale", &mut env.scale, &scales));
     });
+    if set != env.component_set() {
+        env.values.set(set);
+    }
 }
 
 /// The Variants toggle and its menu of axes: the toggle shows whether a Variants view is open, and a press opens the

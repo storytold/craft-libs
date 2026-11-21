@@ -23,7 +23,7 @@ pub(crate) use host::{Layer, forget_layer, host, host_window};
 pub(crate) use opener::{LayerFloor, anchor_floor};
 pub use opener::{Opener, Trigger};
 pub use place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, SizeLimits, ViewportShare};
-pub use placement::PopupRegion;
+pub use placement::{PopupRegion, layer_room};
 pub(crate) use placement::{measuring_room, region_for, resolve_anchor, screen_for};
 pub(crate) use popups::dwell;
 pub use popups::{HOLD, Overlays, PopupHandle};
