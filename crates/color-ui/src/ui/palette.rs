@@ -13,6 +13,9 @@ use std::sync::Arc;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
+/// The table's drag mapper, type-erased so the palette needs no payload parameter.
+type TableMap<'a> = Arc<dyn Fn(SwatchTable<'a>) -> SwatchTable<'a> + 'a>;
+
 /// What a [`SwatchPalette`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -49,38 +52,46 @@ pub struct SwatchPalette<'a> {
     label: Label,
     color: Bind<'a, Srgba>,
     swatches: &'a [(Label, Srgba)],
+    spacing: SwatchSpacing,
+    drag: Option<TableMap<'a>>,
 }
 
 impl<'a> SwatchPalette<'a> {
     /// A palette named `label` of `swatches`, each a name and a colour, choosing the colour bound to `color`.
     pub fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, swatches: &'a [(Label, Srgba)]) -> Self {
-        SwatchPalette { label: label.into(), color, swatches }
+        SwatchPalette { label: label.into(), color, swatches, spacing: SwatchSpacing::Touching, drag: None }
     }
 
     /// The gap between the cells, passed on to its `SwatchTable`.
     #[must_use]
-    pub fn spacing(self, spacing: SwatchSpacing) -> Self {
-        let _ = spacing;
-        todo!("co.K7")
+    pub fn spacing(mut self, spacing: SwatchSpacing) -> Self {
+        self.spacing = spacing;
+        self
     }
 
     /// The payload a cell drags, passed on to its `SwatchTable`.
     #[must_use]
-    pub fn drag_payload<P: Send + Sync + 'static>(self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
-        let _ = map;
-        todo!("co.K7")
+    pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
+        let map = Arc::new(map);
+        self.drag = Some(Arc::new(move |table| {
+            let map = Arc::clone(&map);
+            table.drag_payload(move |drag| map(drag))
+        }));
+        self
     }
 
     /// Shows the palette.
     pub fn show(self, ui: &mut Ui) -> SwatchPaletteOutput {
-        let SwatchPalette { label, color, swatches } = self;
+        let SwatchPalette { label, color, swatches, spacing, drag } = self;
         let mut held = Held::new(color);
         let name = label.clone();
         let mut shown = Stack::new().show(ui, |ui, cx| {
             let before = held.read(cx)?;
             let selected = swatches.iter().position(|(_, c)| c.to_rgba() == before.to_rgba());
             let mut current = selected.map_or_else(Selection::default, Selection::single);
-            let table = SwatchTable::new(label.clone(), swatches).tips(true).wells(true).selection(Bind::bound(&mut current)).show_all(ui);
+            let table = SwatchTable::new(label.clone(), swatches).tips(true).wells(true).spacing(spacing).selection(Bind::bound(&mut current));
+            let table = drag.as_ref().map_or(table, |map| map(table));
+            let table = table.show_all(ui);
             let picked = table.selected.or(table.open)?;
             let after = swatches.get(picked)?.1;
             if after.to_rgba() == before.to_rgba() {

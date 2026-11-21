@@ -5,7 +5,6 @@ use crate::contract::{
     ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, ListDrag, NoValue, Outcome,
     Props, Role, SelectMode, ShowCollection as _, Sizing,
 };
-use crate::list::RowTest;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{DisplayOrder, ItemSource, Metrics, Selection, TileLayout};
@@ -58,12 +57,17 @@ pub enum SwatchSpacing {
 }
 
 /// The marks of the cell of a key: `SwatchTable::marks`.
-pub struct RowMarks<'a, K>(#[allow(dead_code)] Box<dyn Fn(&K) -> CellMarks + 'a>); // P3(color-w1): ex.E20
+pub struct RowMarks<'a, K>(Box<dyn Fn(&K) -> CellMarks + 'a>);
 
 impl<'a, K> RowMarks<'a, K> {
     /// The marks `marks` gives.
     pub fn new(marks: impl Fn(&K) -> CellMarks + 'a) -> Self {
         RowMarks(Box::new(marks))
+    }
+
+    /// The marks of the cell of `key`.
+    pub fn of(&self, key: &K) -> CellMarks {
+        (self.0)(key)
     }
 }
 
@@ -94,7 +98,7 @@ impl Outcome for SwatchTableOutput {
 
 /// A table of touching colour cells, one per entry, wrapping to the width or to a fixed count per row. Entries are
 /// told apart by index, so duplicates select one cell. With [`span`](Self::span) and a count per row, the cells share
-/// the table's width edge to edge; [`marked`](Self::marked) cells draw the swatch mark.
+/// the table's width edge to edge; [`marks`](Self::marks) gives each cell its marks.
 ///
 /// - A click or Space selects the cell; a double click or Enter reports `open` and the Enter is the table's, so a
 ///   dialog around it does not also answer OK.
@@ -120,9 +124,6 @@ pub struct SwatchTable<'a> {
     /// With `per_row`, the cells of a row divide the table's width among them, at the cell height.
     #[prop]
     span: bool,
-    /// The cells that draw the swatch mark, by index.
-    #[prop(func = "Fn(&usize) -> bool")]
-    marked: Option<RowTest<'a, usize>>,
     /// Whether each cell's name is its tooltip.
     #[prop]
     tips: bool,
@@ -131,12 +132,13 @@ pub struct SwatchTable<'a> {
     wells: bool,
     /// How the cells sit: touching, or the theme's item gap apart.
     #[prop]
-    #[allow(dead_code)] // P3(color-w1): co.K5
     spacing: SwatchSpacing,
-    /// The marks of each cell, by index, given to the cell's `Swatch::marks`; in place of `marked`.
+    /// The marks of each cell, by index, given to the cell's `Swatch::marks`.
     #[prop(func = "Fn(&usize) -> CellMarks")]
-    #[allow(dead_code)] // P3(color-w1): ex.E20
     marks: Option<RowMarks<'a, usize>>,
+    /// Only the cells of the first `n` rows at the laid-out column count are items; the rest are not shown.
+    #[prop]
+    max_rows: Option<usize>,
 }
 
 impl<'a> SwatchTable<'a> {
@@ -151,16 +153,21 @@ impl<'a> SwatchTable<'a> {
         SwatchTable {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::FillWidth),
-            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::DoubleClick).arrows_select(false).natural_height(true),
+            items: CollectionProps::new()
+                .select(SelectMode::Single)
+                .activate(ActivateOn::DoubleClick)
+                .arrows_select(false)
+                .natural_height(true)
+                .deletable(true),
             swatches,
             selection: None,
             per_row: None,
             span: false,
-            marked: None,
             tips: false,
             wells: false,
             spacing: SwatchSpacing::Touching,
             marks: None,
+            max_rows: None,
         }
         .label(label)
     }
@@ -168,8 +175,37 @@ impl<'a> SwatchTable<'a> {
     /// Hands the drag of the cells to the host as `map` gives its payload, as `TileGrid::drag_payload` does.
     #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
-        let _ = map;
-        todo!("co.K6")
+        self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// What activates a cell: a double click by default.
+    #[must_use]
+    pub fn activate(mut self, on: ActivateOn) -> Self {
+        self.items = self.items.activate(on);
+        self
+    }
+
+    /// The gap between two cells.
+    fn gap(&self, cx: &StyleCx<'_>) -> f32 {
+        match self.spacing {
+            SwatchSpacing::Spaced => cx.tokens.space.gap.item,
+            _ => 0.0,
+        }
+    }
+
+    /// The layout of the cells of `source` in `width`.
+    fn tiles(&self, source: &dyn ItemSource<usize>, width: f32, cx: &StyleCx<'_>) -> TileLayout {
+        let (cell, gap) = (self.cell(cx), self.gap(cx));
+        match self.per_row {
+            Some(columns) => {
+                let columns = columns.max(1);
+                let spans = self.span && width.is_finite() && width > 0.0;
+                let tile = if spans { Vec2::new((width - gap * (columns - 1) as f32) / columns as f32, cell) } else { Vec2::splat(cell) };
+                TileLayout::new(source, width, tile, gap).in_columns(columns)
+            }
+            None => TileLayout::new(source, width, Vec2::splat(cell), gap),
+        }
     }
 
     /// Whether Shift or Cmd adds cells to the selection.
@@ -182,12 +218,15 @@ impl<'a> SwatchTable<'a> {
     /// Shows the table.
     pub fn show_all(mut self, ui: &mut Ui) -> SwatchTableOutput {
         let (swatches, tips, wells) = (self.swatches, self.tips, self.wells);
-        let marked = self.marked.take();
+        let marks = self.marks.take();
         self.show_items(ui, &SwatchRows::new(swatches), &mut |key, _| {
             let (name, color) = &swatches[*key];
             let cell = Swatch::new(name.clone(), *color).cell();
             let cell = if wells { cell.well() } else { cell };
-            let cell = if marked.as_ref().is_some_and(|test| test.passes(key)) { cell.marked() } else { cell };
+            let cell = match &marks {
+                Some(marks) => cell.marks(marks.of(key)),
+                None => cell,
+            };
             if tips { cell.tooltip(name.clone()) } else { cell }
         })
     }
@@ -220,13 +259,16 @@ impl Component for SwatchTable<'_> {
             _ => None,
         });
         let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })); // P3(mechanical): dp.C12
-        SwatchTableOutput {
-            response: response.response,
-            selected: selection.lead.filter(|_| changed),
-            chosen: selection.items,
-            open,
-            delete: Vec::new(),
-        } // P3(color-w1): ex.E20
+        let delete = response
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Delete(keys) => Some(keys.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        SwatchTableOutput { response: response.response, selected: selection.lead.filter(|_| changed), chosen: selection.items, open, delete }
     }
 }
 
@@ -251,19 +293,14 @@ impl Collection for SwatchTable<'_> {
     fn ideal_width(&self, _item: Option<Vec2>, cx: &StyleCx<'_>) -> f32 {
         let columns = self.per_row.map_or(self.swatches.len(), |columns| columns.max(1).min(self.swatches.len()));
         // Half a point over, so the division that counts the columns back never rounds below `columns`.
-        columns as f32 * self.cell(cx) + 0.5
+        columns as f32 * self.cell(cx) + columns.saturating_sub(1) as f32 * self.gap(cx) + 0.5
     }
 
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, cx: &StyleCx<'_>) -> TileLayout {
-        let cell = self.cell(cx);
-        match self.per_row {
-            Some(columns) => {
-                let columns = columns.max(1);
-                let spans = self.span && width.is_finite() && width > 0.0;
-                let tile = if spans { Vec2::new(width / columns as f32, cell) } else { Vec2::splat(cell) };
-                TileLayout::new(source, width, tile, 0.0).in_columns(columns)
-            }
-            None => TileLayout::new(source, width, Vec2::splat(cell), 0.0),
-        }
+        let layout = self.tiles(source, width, cx);
+        let Some(rows) = self.max_rows else { return layout };
+        // The cap is a count of the cells the room lays out in `rows` rows, so it follows the layout's columns.
+        let keep = rows.saturating_mul(layout.columns()).min(self.swatches.len());
+        self.tiles(&SwatchRows::new(&self.swatches[..keep]), width, cx)
     }
 }

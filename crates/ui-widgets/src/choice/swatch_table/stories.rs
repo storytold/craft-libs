@@ -1,7 +1,7 @@
 //! Stories of `SwatchTable`.
 
-use super::{SwatchTable, SwatchTableOutput};
-use crate::contract::Bind;
+use super::{CellMarks, SwatchSpacing, SwatchTable, SwatchTableOutput};
+use crate::contract::{ActivateOn, Bind};
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::Selection;
@@ -47,6 +47,60 @@ fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Selection::new(vec![2usize, 3, 18], Some(18), Some(2));
     let shown =
         SwatchTable::new("Color Table", &entries).multiple(true).selection(Bind::bound(data.value("selected", start))).per_row(16).show_all(ui);
+    with_readout(data, shown)
+}
+
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_spaced(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries();
+    let shown = SwatchTable::new("Color Table", &entries)
+        .spacing(SwatchSpacing::Spaced)
+        .selection(Bind::bound(data.value("selected", Selection::single(5usize))))
+        .per_row(16)
+        .show_all(ui);
+    with_readout(data, shown)
+}
+
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_spaced_draggable(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries();
+    let shown = SwatchTable::new("Color Table", &entries)
+        .spacing(SwatchSpacing::Spaced)
+        .drag_payload(|_| Some(String::from("swatch")))
+        .selection(Bind::bound(data.value("selected", Selection::single(5usize))))
+        .per_row(16)
+        .show_all(ui);
+    with_readout(data, shown)
+}
+
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_marks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries();
+    let start = Selection::new(vec![2usize, 3], Some(3), Some(2));
+    let shown = SwatchTable::new("Color Table", &entries)
+        .multiple(true)
+        .marks(|&at| match at {
+            1 => CellMarks::default().edge(true),
+            3 => CellMarks::default().locked(true),
+            5 => CellMarks::default().web_safe(true),
+            7 => CellMarks::default().transparent(true),
+            9 => CellMarks::default().source(Srgba::rgb(0.9, 0.2, 0.1)),
+            _ => CellMarks::default(),
+        })
+        .selection(Bind::bound(data.value("selected", start)))
+        .per_row(16)
+        .show_all(ui);
+    with_readout(data, shown)
+}
+
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_one_row_click(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries();
+    let shown = SwatchTable::new("Color Table", &entries)
+        .max_rows(1)
+        .activate(ActivateOn::Click)
+        .selection(Bind::bound(data.value("selected", Selection::single(5usize))))
+        .show_all(ui);
     with_readout(data, shown)
 }
 
