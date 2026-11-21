@@ -4405,6 +4405,7 @@ dependencies = [
  "eframe",
  "egui",
  "serde",
+ "serde_json",
  "web-time",
 ]
 

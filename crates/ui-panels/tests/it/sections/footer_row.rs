@@ -4,7 +4,7 @@
 use craft_behavior::IconId;
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::Segmented;
-use craft_ui::contract::{Bind, Entry, ListDrag, RowAlign, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, ListDrag, Props as _, RowAlign, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::sections::{DropAction, FooterAction, FooterBar, ReorderableSections, SectionKey, SectionLayout, SectionSpec};
 use craft_ui::testing::{Fixture, pointer, trial};

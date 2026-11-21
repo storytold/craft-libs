@@ -659,7 +659,7 @@ impl<'a, S> AppShell<'a, S> {
                 if let Some(bar) = bar_extent.filter(|_| !bare) {
                     let target = PlaceTarget { body: regions.body, bar, held };
                     let zone = DropZone::new(ui.layer_id(), regions.body);
-                    landed = zone_target::<OptionsBarDrag, _>(ui, ui.id().with("options_place"), zone, &target);
+                    landed = zone_target::<OptionsBarDrag, _>(ui, ui.scope_id().with("options_place"), zone, &target);
                 }
                 show_slots(ui, true, app);
                 if let Some(dialogs) = WindowDialogs::existing(ui.ctx(), &window) {
