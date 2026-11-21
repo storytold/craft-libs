@@ -26,12 +26,15 @@ fn on_guides_canvas(ui: &mut Ui, mut control: impl FnMut(&mut Ui, Rect, Id) -> G
     on_canvas_with(ui, room, Canvas::new("Document").id(canvas).view(view), Some(document), |ui, at| control(ui, at, canvas))
 }
 
+/// Every line a guide draws: solid, dotted and dashed, and a locked one.
 fn guides() -> Vec<Guide> {
+    let mut dotted = Guide::new(GuideKey::new(2), Axis::X, 120.0);
+    dotted.line = GuideLine::Dots;
     let mut dashed = Guide::new(GuideKey::new(3), Axis::X, 280.0);
     dashed.line = GuideLine::Dashed;
     let mut locked = Guide::new(GuideKey::new(4), Axis::Y, 480.0);
     locked.locked = true;
-    vec![Guide::new(GuideKey::new(1), Axis::Y, 160.0), Guide::new(GuideKey::new(2), Axis::X, 120.0), dashed, locked]
+    vec![Guide::new(GuideKey::new(1), Axis::Y, 160.0), dotted, dashed, locked]
 }
 
 /// Drags the first guide across itself by twice the drag threshold.

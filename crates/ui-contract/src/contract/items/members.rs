@@ -46,6 +46,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
         shown_rows: &mut [ShownRow<C::Key>],
     ) {
         let enabled = cx.core.resolved.enabled;
+        let reported = cx.core.node;
         let parent = access::fold::owner_of(ctx, id).unwrap_or(id);
         let hover = sensing::read_outcome(ctx, ArenaId::new(id)).hover;
         let mut prepared: Vec<Prepared<C::Key, C::Item<'r>>> = members
@@ -75,7 +76,7 @@ impl<'r, C: Collection> ItemsHooks<'_, 'r, C> {
         let clip = ui.clip_rect();
         for ((member, member_id, on, item_sense, prep), sensed) in prepared.drain(..).zip(sensed) {
             let Member { at, key, row, clip: row_clip, flags, position, renaming, openers, shown, .. } = member;
-            let node = run::MemberNode { owner: id, part: ITEM_NODE.at(key_hash(&key)), parent, position, flags, enabled: on, item_sense };
+            let node = run::MemberNode { owner: id, part: ITEM_NODE.at(key_hash(&key)), parent, position, flags, enabled: on, item_sense, reported };
             ui.set_clip_rect(row_clip);
             let run::MemberShown { output, tip } = run::member_show(ui, env, (member_id, row), prep, sensed, &node);
             ui.set_clip_rect(clip);

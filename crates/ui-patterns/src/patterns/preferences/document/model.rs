@@ -91,7 +91,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
             (PrefValue::Int(n), Value::Float(_)) => Value::Float(clamp_float(n as f64)),
             (PrefValue::Float(x), Value::Float(_)) if x.is_finite() => Value::Float(clamp_float(x)),
             (PrefValue::Float(x), Value::Integer(_)) if x.is_finite() => Value::Integer(clamp_int(x.round() as i64)),
-            (PrefValue::Text(text), Value::String(_)) if matches!(kind, None | Some(RuleKind::Custom)) => Value::String(text),
+            (PrefValue::Text(text), Value::String(_)) if matches!(kind, None | Some(RuleKind::Custom | RuleKind::CustomRows)) => Value::String(text),
             (PrefValue::Choice(id), Value::String(_) | Value::Integer(_)) => match kind {
                 Some(RuleKind::Choice(options)) if options.iter().any(|(option, _)| *option == id) => match id.parse::<i64>() {
                     Ok(n) if self.rules.get(key).is_some_and(|rule| rule.integer) => Value::Integer(n),

@@ -78,16 +78,33 @@ impl<C: Component> MeasureCx<'_, C> {
         }
     }
 
-    /// The width a picture sizes at (a plot, a wheel, a well): it takes the room it is offered, down to `least` and up
-    /// to `most`. At its least, where the width is unbounded, and in a measuring run of a column that sizes its width
-    /// from its content (which offers no room), it is `least`: a picture needs no width of its own, so it never sets
-    /// that column's width, and the real run shows it across the width the column settles on. A band picture keeps a
-    /// height of its own; a square one is as tall as this.
+    /// The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes
+    /// the room it is offered, down to `least` and up to `most`. At its least, where the width is unbounded, and in a
+    /// measuring run of a column that sizes its width from its content (which offers no room), it is `least`: a
+    /// picture needs no width of its own, so it never sets that column's width, and the real run shows it across the
+    /// width the column settles on.
     pub fn picture_width(&self, least: f32, most: f32) -> f32 {
         match self.room.filter(|_| self.proposal != Proposal::Min) {
             Some(room) => room.clamp(least, most.max(least)),
             None => least,
         }
+    }
+
+    /// The size of a picture whose height follows from its width (a square graph, a wheel, an image at its aspect):
+    /// [`picture_width`](Self::picture_width)'s width, and `height` of it. Where a content column's measuring run
+    /// offers it no room, it is a held child of the column (`layout::HeldKind::Picture`): when the column settles
+    /// wider than the picture, the column sweeps again and offers it that width, so the picture is measured as tall
+    /// as it shows.
+    pub fn picture_size(&self, least: f32, most: f32, height: impl FnOnce(f32) -> f32) -> Vec2 {
+        // The width it reports is its placed width, which the place step gives (`run::place_root`).
+        if self.room.is_none()
+            && self.proposal != Proposal::Min
+            && let Some(column) = self.env.column_first_sweep()
+        {
+            crate::layout::report_held(self.ui.ctx(), column, self.id, crate::layout::HeldKind::Picture, f32::INFINITY);
+        }
+        let width = self.picture_width(least, most);
+        Vec2::new(width, height(width))
     }
 
     /// The label as given.
@@ -131,7 +148,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// editor draws past its last letter, so the caret stays inside the control and the text never scrolls.
     pub fn field_text(&self, run: &TextRun<'_>) -> Vec2 {
         let text = self.layout(run).size();
-        Vec2::new(text.x + self.ui.visuals().text_cursor.stroke.width, text.y)
+        Vec2::new(text.x + crate::runtime::egui::style::caret_width(self.ui.ctx()), text.y)
     }
 
     /// Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content

@@ -708,8 +708,6 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let mut mem = cx.memory::<Memory>().clone();
     let (vw, vh) = (build.viewport.width, build.viewport.height);
     let count = build.sizes.len();
-    let spacing = build.spacing;
-
     // The layout the canvas was given its view for: what this pass draws, whatever the pass makes of the state.
     let drawn = build.of(&state);
     let drawn_frame = Frame::of(&drawn);
@@ -806,9 +804,23 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         geo = build.of(&state);
         state.zoom = geo.scale / SCREEN_POINTS_PER_POINT;
         want.1 = match geo.layout.rects.get(state.current) {
+            // A point inside the page goes to the view's top. The page's own top puts the view's top where what shows
+            // of the row above ends (the document's start for the first row), so the space the layout keeps above the
+            // page shows and nothing of the page before it.
             Some(r) if state.continuous => {
                 let (top, bottom) = geo.layout.bands[state.current];
-                r.y0 + top + fraction * (bottom - top) - spacing.margin
+                let start = r.y0 + top;
+                if fraction > 0.0 {
+                    start + fraction * (bottom - top)
+                } else {
+                    geo.layout
+                        .rects
+                        .iter()
+                        .zip(&geo.layout.bands)
+                        .map(|(r, band)| r.y0 + band.1)
+                        .filter(|&end| end <= start)
+                        .fold(geo.doc.y0, f64::max)
+                }
             }
             _ => geo.doc.y0,
         };

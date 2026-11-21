@@ -57,6 +57,7 @@ enum Shape {
     Choice(Vec<(String, Label)>, Option<UnitKind>),
     Color,
     Custom,
+    CustomRows,
 }
 
 /// The range of a number without a rule.
@@ -65,8 +66,10 @@ pub(super) const OPEN_RANGE: f64 = 1e9;
 fn shape_of(rule: Option<&SettingRule>, value: Option<&toml::Value>) -> Option<Shape> {
     use toml::Value;
     let kind = rule.and_then(|rule| rule.kind.as_ref());
-    if matches!(kind, Some(RuleKind::Custom)) {
-        return Some(Shape::Custom);
+    match kind {
+        Some(RuleKind::Custom) => return Some(Shape::Custom),
+        Some(RuleKind::CustomRows) => return Some(Shape::CustomRows),
+        _ => {}
     }
     Some(match (kind, value?) {
         (Some(RuleKind::Choice(options)), Value::String(_) | Value::Integer(_)) => {
@@ -169,7 +172,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         let prefix = format!("{}.", page.id);
         for (path, rule) in self.rules.range(prefix.clone()..).take_while(|(path, _)| path.starts_with(&prefix)) {
             let key = &path[prefix.len()..];
-            if matches!(rule.kind, Some(RuleKind::Custom)) && !keys.iter().any(|k| k == key) {
+            if matches!(rule.kind, Some(RuleKind::Custom | RuleKind::CustomRows)) && !keys.iter().any(|k| k == key) {
                 keys.push(key.to_owned());
             }
         }
@@ -235,6 +238,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
             (Shape::Choice(options, counted), Some(Value::String(id))) => choice_kind(options, *counted, id),
             (Shape::Color, Some(Value::String(text))) => RowKind::Color(Rgba::from_hex(text).unwrap_or(Rgba::rgb(128, 128, 128))),
             (Shape::Custom, _) => RowKind::Custom,
+            (Shape::CustomRows, _) => RowKind::CustomRows,
             _ => return None,
         };
         let spec = RowSpec::new(&row.key, &row.label, kind).keywords(&row.keywords).visible(self.row_visible(&row.key));

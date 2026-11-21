@@ -97,6 +97,10 @@ pub struct PlaceRequest {
     /// Beside the anchor, the overlay lines up with the anchor's other end when it runs past the bounds from the
     /// aligned end and fits from the other, instead of sliding: a submenu of a low row opens upward.
     pub flips_across: bool,
+    /// Below or above the anchor, an overlay that fits on neither side but fits the bounds keeps its height and slides
+    /// over the anchor from the preferred side; only one taller than the bounds is capped. For a context menu, whose
+    /// anchor is a point or a row.
+    pub covers_anchor: bool,
     /// After side, alignment and the bounds clamp, the overlay shifts by this and clamps again.
     pub offset: Vec2,
     /// When the shifted overlay would cover this rect, the unshifted one wins.
@@ -117,6 +121,7 @@ impl PlaceRequest {
             bounds,
             kept: None,
             flips_across: false,
+            covers_anchor: false,
             offset: Vec2::ZERO,
             clear: None,
         }
@@ -181,6 +186,12 @@ impl PlaceRequest {
         self.flips_across = on;
         self
     }
+
+    /// Below or above the anchor, slides over the anchor when the overlay fits neither side but fits the bounds.
+    pub const fn covers_anchor(mut self, on: bool) -> Self {
+        self.covers_anchor = on;
+        self
+    }
 }
 
 /// Where `place` put the overlay.
@@ -218,10 +229,12 @@ fn room(anchor: Rect, bounds: Rect, side: Side, rtl: bool, gap: f32) -> f32 {
 }
 
 /// Places an overlay: the preferred side unless the other has more room and the content does not fit, shifted to
-/// stay inside the bounds, its height (or width, beside the anchor) capped to the room. Beside the anchor, a request that
-/// flips across lines up with the anchor's other end when it runs past the bounds from the aligned end and fits from the
-/// other. The rect is then shifted by the request's `offset` and clamped again, unless the shifted rect would cover
-/// `clear`, in which case the unshifted one stays. The rect is always finite and inside the bounds.
+/// stay inside the bounds, its height (or width, beside the anchor) capped to the room. Below or above the anchor, a
+/// request that covers its anchor and fits neither side keeps the preferred side and its height up to the bounds' and
+/// slides over the anchor. Beside the anchor, a request that flips across lines up with the anchor's other end when it
+/// runs past the bounds from the aligned end and fits from the other. The rect is then shifted by the request's
+/// `offset` and clamped again, unless the shifted rect would cover `clear`, in which case the unshifted one stays. The
+/// rect is always finite and inside the bounds.
 pub fn place(request: &PlaceRequest) -> Placement {
     let anchor = clean(request.anchor);
     let bounds = clean(request.bounds);
@@ -232,12 +245,15 @@ pub fn place(request: &PlaceRequest) -> Placement {
     let need = if request.side.vertical() { wanted.y } else { wanted.x };
     let preferred = room(anchor, bounds, request.side, rtl, gap);
     let other = room(anchor, bounds, request.side.flipped(), rtl, gap);
+    let covers = request.covers_anchor && request.side.vertical();
     let side = match request.kept {
         Some(kept) => kept,
         None if preferred >= need || preferred >= other => request.side,
+        None if covers && other < need => request.side,
         None => request.side.flipped(),
     };
-    let available = room(anchor, bounds, side, rtl, gap).max(0.0);
+    // Covering the anchor, the overlay may take the bounds' height: the shift inside them moves it over the anchor.
+    let available = if covers { bounds.height() } else { room(anchor, bounds, side, rtl, gap).max(0.0) };
     let size = if side.vertical() {
         Vec2::new(wanted.x.min(bounds.width()), wanted.y.min(available).min(bounds.height()))
     } else {
@@ -269,8 +285,8 @@ pub fn place(request: &PlaceRequest) -> Placement {
     let keep = |min: Pos2| Pos2::new(min.x.clamp(bounds.left(), max_min.x), min.y.clamp(bounds.top(), max_min.y));
     let min = keep(min);
     let shifted = keep(min + Vec2::new(finite(request.offset.x), finite(request.offset.y)));
-    let covers = request.clear.map(clean).is_some_and(|clear| clear.intersects(Rect::from_min_size(shifted, size)));
-    let min = if covers { min } else { shifted };
+    let hides_clear = request.clear.map(clean).is_some_and(|clear| clear.intersects(Rect::from_min_size(shifted, size)));
+    let min = if hides_clear { min } else { shifted };
     Placement { rect: Rect::from_min_size(min, size), side }
 }
 
@@ -296,6 +312,20 @@ mod tests {
         let mid = rect(100.0, 250.0, 200.0, 24.0);
         let neither = place(&PlaceRequest { anchor: mid, ..request }.size(Vec2::new(150.0, 400.0))).rect;
         assert_eq!(neither.bottom(), BOUNDS.bottom(), "fits neither way: slides up to stay inside");
+    }
+
+    #[test]
+    fn a_menu_that_covers_its_anchor_and_fits_neither_side_keeps_its_height_and_slides_over_the_anchor() {
+        let point = rect(300.0, 400.0, 0.0, 0.0);
+        let request = PlaceRequest::new(point, Vec2::new(200.0, 450.0), BOUNDS).covers_anchor(true);
+        let placed = place(&request).rect;
+        assert_eq!(placed.height(), 450.0, "fits the bounds: its whole height");
+        assert!(BOUNDS.contains_rect(placed) && placed.top() < point.top(), "slides up over the point: {placed:?}");
+        assert_eq!(place(&request.size(Vec2::new(200.0, 700.0))).rect.height(), BOUNDS.height(), "taller than the bounds: capped");
+        let above = place(&request.size(Vec2::new(200.0, 350.0)));
+        assert!(above.side == Side::Above && above.rect.bottom() == point.top(), "fits above: opens above the point: {above:?}");
+        let without = place(&request.covers_anchor(false));
+        assert!(without.side == Side::Above && without.rect.height() < 450.0, "without it: capped to the larger side: {without:?}");
     }
 
     #[test]
@@ -338,6 +368,7 @@ mod tests {
                                     .align(align)
                                     .rtl(i % 2 == 0)
                                     .gap(if i == 1 { 4.0 } else { 0.0 })
+                                    .covers_anchor(align != Align::Start)
                                     .offset(Vec2::new(w, y))
                                     .clear(Some(rect(h, x, w.abs(), y.abs())));
                                 let placed = place(&request).rect;

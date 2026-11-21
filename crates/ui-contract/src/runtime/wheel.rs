@@ -10,7 +10,7 @@ use crate::runtime::sampler;
 use craft_behavior::wheel::split;
 use craft_behavior::{GESTURE_GAP, PointerButton, PointerEvent, Wheel, WheelFocus, WheelGesture, WheelPhase, WheelSource, WheelTaker, WheelUnit};
 use craft_keymap::Mods;
-use egui::{Context, Id, Pos2, Rect, Vec2};
+use egui::{Context, Id, Pos2, Vec2};
 
 #[derive(Default)]
 pub(crate) struct State {
@@ -27,21 +27,6 @@ pub(crate) struct State {
 pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
     crate::runtime::replay::journal(ctx, || taker, |ctx, &taker| register(ctx, taker));
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.this.push(taker));
-}
-
-/// The innermost scroll region of last pass whose view meets `rect`: where a reveal request or a page move goes from
-/// outside every declared scroll owner. A taker that is no scroll region (a canvas) owns only what it declares.
-pub(crate) fn nearest_scroll_owner(ctx: &Context, rect: Rect) -> Option<Id> {
-    PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
-        state
-            .last
-            .iter()
-            // Takers register outer first: of equal views the later one is the inner.
-            .rev()
-            .filter(|taker| taker.scrolls && !taker.gated && taker.rect.intersects(rect))
-            .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
-            .map(|taker| taker.owner)
-    })
 }
 
 /// The innermost scroll owner inside the field `owner` under `at` that can still move by the vertical scroll `dy`: the
