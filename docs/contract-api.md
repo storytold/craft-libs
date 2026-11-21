@@ -2058,7 +2058,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Common`: `pub struct Common { pub label: Label, pub tooltip: Option<Tooltip>, pub description: Option<String>, pub selected: Option<bool> }`. What every component carries: the props the pipeline reads at step 1.
   - `pub const fn new() -> Common`. A `Common` with every prop unset, which the derive's constructors start from.
 - `craft_ui::contract::Component`: re-export of `craft_ui_macros::Component` (outside these crates).
-- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub pad_edges: PadEdges, pub sizing: Sizing, pub content_in_bar: bool, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub wrap_width: Option<WrapWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme>, pub bracket: Option<Bracket> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
+- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub pad_edges: PadEdges, pub sizing: Sizing, pub content_in_bar: bool, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub least_height: Option<f32>, pub wrap_width: Option<WrapWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme>, pub bracket: Option<Bracket> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
   - `pub const fn new() -> Self`. Props with every field at its default.
   - `pub fn mount(mut self, mount: Mount) -> Self`. Where the container lives.
   - `pub const fn surface(mut self, surface: SurfaceKind) -> Self`. The surface the container paints.
@@ -2079,6 +2079,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn collapse(mut self, collapse: Collapse) -> Self`. Collapse configuration.
   - `pub const fn body_gap(mut self, gap: Gap) -> Self`. The spacing between the children of the body.
   - `pub const fn least_width(mut self, least: LeastWidth) -> Self`. The least width of the content, from a size role.
+  - `pub const fn least_height(mut self, points: f32) -> Self`. The least height of an unwrapped `Row` body's line ([`least_height`](Self::least_height)).
   - `pub const fn wrap_width(mut self, wrap: WrapWidth) -> Self`. The line length of the body's paragraphs while the container takes its width from its content, from a size role.
   - `pub const fn edge_rule(mut self, on: bool) -> Self`. Draws a divider along the inner edge of a container mounted as an edge pane.
   - `pub const fn child_size(mut self, size: ControlSize) -> Self`. A scope size for the regions: header, body, end region and footer.
@@ -2203,7 +2204,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn focus_arrived_by_key(&self) -> Option<PartRef>`. [`focus_arrived`](Focus::focus_arrived) when the focus record says the keyboard or a
   - `fn is_focused(&self) -> bool`. The component holds key focus.
   - `fn focus_visible(&self) -> bool`. The component holds focus and shows it.
-  - `fn reveal(&mut self, rect: Rect)`. Asks the nearest scroll owner to bring `rect` into view.
+  - `fn reveal(&mut self, rect: Rect)`. Asks the scroll owner around the component to bring `rect` into view.
   - `fn take_scroll_moves(&mut self) -> Vec<(NavMove, MoveMods)>`. For a container that is its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`): the
   - `fn take_reveal(&mut self, view: Rect) -> Option<Vec2>`. For a container that is its body's scroll owner with a view of its own: the reveal a child asked of it, as the
   - `fn register_menu_bar(&mut self)`. Registers that this component is a menu bar that takes the menu-bar keys of the next input hook (9.7).
@@ -5133,7 +5134,6 @@ Reading text parts in trials: the widget id, the caret and the text a frame pain
 The wheel service from a trial's side: registering takers and reading their shares.
 
 - `craft_ui::testing::wheel::focus`: `pub fn focus(ctx: &Context, id: Id)`. Gives key focus to the widget `id`.
-- `craft_ui::testing::wheel::nearest_scroll_owner`: `pub fn nearest_scroll_owner(ctx: &Context, rect: egui::Rect) -> Option<Id>`. The taker of last pass a reveal of `rect` goes to outside every declared scroll owner: the innermost scroll region
 - `craft_ui::testing::wheel::register`: `pub fn register(ctx: &Context, taker: WheelTaker<Id>)`. Registers `taker` for the next pass's split.
 - `craft_ui::testing::wheel::take`: `pub fn take(ctx: &Context, id: Id) -> Option<Vec2>`. The scroll `id` takes this pass, if it has a share.
 - `craft_ui::testing::wheel::take_share`: `pub fn take_share(ctx: &Context, id: Id) -> Option<craft_behavior::Wheel>`. The whole share `id` takes this pass: scroll, zoom and the pointer a zoom is about.
