@@ -235,9 +235,10 @@ fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_cha
 fn a_double_press_on_a_ruler_places_a_guide_at_once() {
     let placed = |mods: Modifiers, at: &dyn Fn(Rect) -> Pos2| -> Vec<Guide> {
         let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
-        let (mut fixture, body) = ruled(1.0, &guides);
+        let mut fixture = ruled(1.0, &guides);
+        let rect = fixture.canvas().rect;
         fixture.fixture().hold(mods);
-        fixture.double_press_at(at(body.get()));
+        fixture.double_press_at(at(rect));
         fixture.fixture().hold(Modifiers::NONE);
         let placed = guides.borrow().clone();
         placed
@@ -257,8 +258,8 @@ fn a_double_press_on_a_ruler_places_a_guide_at_once() {
     assert!(placed(Modifiers::ALT, &top(650.0)).is_empty(), "a double press outside the bounds adds none");
 
     let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
-    let (mut fixture, body) = ruled(1.0, &guides);
-    let rect = body.get();
+    let mut fixture = ruled(1.0, &guides);
+    let rect = fixture.canvas().rect;
     drag_with(&mut fixture, Modifiers::NONE, pos2(300.0, rect.min.y + 4.0), pos2(300.0, 247.6));
     assert_eq!(guides.borrow().len(), 1, "a press and drag out of a strip adds exactly one guide: {:?}", guides.borrow());
 }

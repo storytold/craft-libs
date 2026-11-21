@@ -1,7 +1,8 @@
 //! A heading is a caption over the rows after it: structure, never a command.
 
 use craft_host::target::Os;
-use craft_menu::{CommandRef, Item, Labeled, LayoutOptions, Menu, MenuBar, MenuBarUi, Node, Target, tidy};
+use craft_menu::{Item, LayoutOptions, Menu, MenuBar, MenuBarUi, Node, Target, tidy};
+use craft_ui::contract::Tracked;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
 
@@ -12,36 +13,31 @@ use crate::sample::ids;
 /// they are and runs nothing when clicked.
 #[trial]
 fn a_heading_is_structure_and_never_a_command() {
-    let nodes = tidy(vec![
+    let mut nodes = vec![
         Node::heading("最近"),
-        Item::new("file.new", "新建").into(),
-        Item::new("file.open", "打开").into(),
+        Item::new("file.new", "新建").english("New").into(),
+        Item::new("file.open", "打开").english("Open").into(),
         Node::Separator,
         Node::heading("Empty"),
         Node::Separator,
-        Item::new("file.close", "关闭").into(),
+        Item::new("file.close", "关闭").english("Close").into(),
         Node::heading("Trailing"),
-    ]);
+    ];
+    tidy(&mut nodes);
     assert_eq!(
         ids(&nodes),
         ["#最近", "file.new", "file.open", "---", "file.close"],
         "a heading with no item after it goes, and the separators it leaves collapse"
     );
 
-    let bar = MenuBar::new(vec![Menu::new("文件", nodes)]);
-    let entries = bar.help_entries(Target::Linux, &LayoutOptions::new("Trial"), None);
+    let bar = MenuBar::new(vec![Menu::new("文件", nodes).english("File")]);
+    let entries = bar.help_entries(Target::Linux, &LayoutOptions::new("Trial"));
     let listed: Vec<String> = entries.iter().map(|entry| entry.command().key()).filter(|key| key.starts_with("file.")).collect();
     assert_eq!(listed, ["file.new", "file.open", "file.close"], "the help search lists the items, never the heading");
 
-    let english = |labeled: Labeled<'_>| match labeled {
-        Labeled::Title("文件") => Some("File".to_owned()),
-        Labeled::Command(command) if *command == CommandRef::new("file.new") => Some("New".to_owned()),
-        Labeled::Command(command) if *command == CommandRef::new("file.open") => Some("Open".to_owned()),
-        Labeled::Command(command) if *command == CommandRef::new("file.close") => Some("Close".to_owned()),
-        _ => None,
-    };
+    let bar = Tracked::new(bar);
     let mut fixture = Fixture::new(move |ui| {
-        MenuBarUi::new(&bar).english(&english).show(ui);
+        MenuBarUi::new(&bar).show(ui);
     });
     // A Mac bar has no letters.
     fixture.os(Os::Linux);

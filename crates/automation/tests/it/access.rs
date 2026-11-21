@@ -51,7 +51,7 @@ impl Rig {
 
     /// Sends `method`; when it is accepted, runs frames until the host has processed the input.
     fn send(&mut self, method: &str, params: Value) -> Result<(), String> {
-        input_method(method, &params, &self.host, ViewportId::ROOT, &|_| None).expect("an input method")?;
+        input_method(method, &params, &self.host, ViewportId::ROOT, &|_, _| None).expect("an input method")?;
         for _ in 0..32 {
             self.fx.frame(Vec::new());
             if self.host.injected_idle() {
