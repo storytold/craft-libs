@@ -337,6 +337,10 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 let removed: Vec<Cell> = cells.drain(a + 1..b).collect();
                 if let Some(first) = cells.get_mut(a) {
                     first.props.span = ((b - a) as u32).min(63);
+                    let right = removed.last().and_then(|cell| cell.props.borders).and_then(|borders| borders.right);
+                    if first.props.borders.is_some() || right.is_some() {
+                        first.props.borders.get_or_insert_with(Borders::default).right = right;
+                    }
                     for c in removed {
                         first.blocks.extend(c.blocks.into_iter().filter(|x| x.as_para().is_none_or(|p| !p.is_empty())));
                     }

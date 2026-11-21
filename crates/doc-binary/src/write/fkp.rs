@@ -167,11 +167,31 @@ fn papx_in_fkp(istd: u16, grpprl: &[u8]) -> Vec<u8> {
 pub(crate) const MAX_PAPX_GRPPRL: usize = 480;
 
 /// Page the paragraphs into `PapxFkp`s.
-pub(crate) fn papx_pages(paras: &[PapxRun<'_>]) -> Paged {
+pub(crate) fn papx_pages(paras: &[PapxRun<'_>], data_stream: &mut Vec<u8>) -> Result<Paged, crate::DocbinError> {
     let mut out = Paged { pages: Vec::new(), fcs: Vec::new() };
     let mut page = Page::new();
     for p in paras {
-        let data = papx_in_fkp(p.istd, p.grpprl.get(..MAX_PAPX_GRPPRL).unwrap_or(p.grpprl));
+        let data = if p.grpprl.len() <= MAX_PAPX_GRPPRL {
+            papx_in_fkp(p.istd, p.grpprl)
+        } else {
+            // A GrpPrlAndIstd containing sprmPHugePapx must have istd zero
+            // ([MS-DOC] §2.6.2). Apply the original style first in the external list.
+            let mut prefix = super::grpprl::Grpprl::default();
+            if p.istd != 0 {
+                prefix.u16(crate::P_ISTD, p.istd);
+            }
+            let size = prefix.len() + p.grpprl.len();
+            if size > crate::MAX_PRC_DATA || data_stream.len() as u64 + 2 + size as u64 > crate::MAX_STREAM {
+                return Err(crate::DocbinError::Limit("paragraph properties exceed the DOC Data stream limits".into()));
+            }
+            let offset = data_stream.len() as u32;
+            data_stream.extend_from_slice(&(size as u16).to_le_bytes());
+            data_stream.extend_from_slice(&prefix.0);
+            data_stream.extend_from_slice(p.grpprl);
+            let mut reference = super::grpprl::Grpprl::default();
+            reference.u32(crate::P_HUGE_PAPX, offset);
+            papx_in_fkp(0, &reference.0)
+        };
         // Even an unformatted paragraph names its style, so every BX points at a PAPX.
         let off = if page.offs.len() < MAX_PAPX_RUNS { page.place(&data, page.offs.len() + 1, BX) } else { None };
         let off = match off {
@@ -193,7 +213,7 @@ pub(crate) fn papx_pages(paras: &[PapxRun<'_>]) -> Paged {
         out.fcs.push(first);
     }
     out.fcs.push(end);
-    out
+    Ok(out)
 }
 
 /// A PLC ([MS-DOC] §2.2.2): `cps` (one more than the data elements), then the elements.
@@ -252,6 +272,24 @@ mod tests {
     }
 
     #[test]
+    fn huge_papx_uses_a_bounded_data_record_and_preserves_style() {
+        let properties = [0x03, 0x24, 1].repeat(161);
+        let run = PapxRun { fc_start: 0x400, fc_end: 0x410, istd: 7, grpprl: &properties };
+        let mut data = vec![42; 16]; // Existing Data stream content (e.g. pictures).
+        let pages = papx_pages(&[run], &mut data).expect("page");
+        let bte = pages.plc_bte(0);
+        let bins = Bins::parse(&bte, 0, bte.len() as u32).expect("bin table");
+        let inline = bins.papx(&pages.pages[0], 0x400);
+        assert_eq!(inline, (0, &[0x46, 0x66, 16, 0, 0, 0][..]));
+        assert_eq!(&data[..16], &[42; 16]);
+        assert_eq!(&data[16..22], &[0xe7, 1, 0, 0x46, 7, 0]);
+        let work = crate::Work::new(487);
+        assert!(crate::external_papx(inline, &data[..22], &work).1.is_empty());
+        assert_eq!(crate::external_papx(inline, &data, &work), (7, properties.as_slice()));
+        assert!(crate::external_papx(inline, &data, &work).1.is_empty());
+    }
+
+    #[test]
     fn papx_pages_read_back_odd_and_even_sizes() {
         let odd = [0x03u8, 0x24, 1]; // 2 + 3 = 5 bytes with the istd
         let even = [0x03u8, 0x24, 1, 0]; // padded to 6 by the istd
@@ -263,7 +301,7 @@ mod tests {
                 grpprl: if i % 2 == 0 { &odd } else { &even[..3] },
             })
             .collect();
-        let paged = papx_pages(&paras);
+        let paged = papx_pages(&paras, &mut Vec::new()).expect("formatting pages");
         assert!(paged.pages.len() >= 3);
         let mut word = vec![0u8; 0x1000];
         for p in &paged.pages {

@@ -3308,3 +3308,21 @@ fn doc_full_colour_cell_border_survives_save() {
         assert_ne!(cells[0].props.borders.and_then(|b| b.bottom).and_then(|b| b.color), bottom.color);
     }
 }
+
+#[test]
+fn merged_cell_uses_outer_source_borders() {
+    for outer in [[0, 0, 0, 0, 16, 1, 0, 0], [0, 0, 0, 0, 255, 255, 255, 255]] {
+        let mut row = t_def_edges(&[0, 100, 200, 300, 400, 500]);
+        row.extend(sprm_cb(0xD620, &[0, 1, 10, 8, 1, 1, 0]));
+        let mut override_right = vec![1, 2, 8];
+        override_right.extend(outer);
+        row.extend(sprm_cb(0xD62F, &override_right));
+        row.extend(grpprl(&[(0x5624, &[0, 2])]));
+        let doc = word_table_doc(row, vec![], vec![]);
+        let merged = &doc.body[0].as_table().expect("table").rows[0].cells[0];
+        assert_eq!(merged.span(), 2);
+        let borders = merged.props.borders.expect("outer borders");
+        assert_eq!(borders.left.expect("first cell left").width, 1.0);
+        assert_eq!(borders.right.expect("last cell right"), crate::fmt::brc_bytes(&outer).expect("expected border"));
+    }
+}
