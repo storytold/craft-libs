@@ -187,7 +187,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 struct AreaMemory<P> {
     /// The open flyout when the host binds none.
     open: Option<P>,
-    /// The running move or resize of a floating window.
+    /// The running resize or keyboard move of a floating window.
     moving: Option<Moving<P>>,
     /// The least window id above every id the workspaces this area showed held: an undo that brings back an older
     /// workspace keeps its new windows above it ([`Workspace::raise_window_floor`]).
@@ -1270,6 +1270,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// where it would sit in the app window ([`native::in_app`]), and the end of each of its moves and resizes records
     /// that rect and edge; its placement keeps its expanded rect while its column is collapsed ([`WindowColumn::kept`]).
     ///
+    /// A window whose every group is minimized shows its title row and their strips at its rect's place and width
+    /// ([`WindowColumn::minimized`]): its sides resize its width, and its placement keeps its expanded height, so a
+    /// restore shows it at that height again.
+    ///
     /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
     /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
     /// bottom the fewest whose content fits the height, and the window keeps its place; a drag of its left side keeps
@@ -1297,6 +1301,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
             let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
+            // An OS window lays out at its own monitor's scale, which sizes its chrome; one in the app window at the
+            // main window's.
+            let scale = opening
+                .spec
+                .as_ref()
+                .and_then(|_| WindowHost::of(&ctx).viewport_of(group_id))
+                .and_then(|viewport| native::pixels_per_point(&ctx, viewport));
+            let window_sizes = scale.map_or(scene.sizes, |scale| scene.sizes.at_scale(scale));
             let movable = rights.iter().all(|rights| rights.movable);
             // The title row is the column's bar: its double arrow and Close; the menu opens from a context request on
             // its band.
@@ -1330,6 +1342,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 WindowColumn::collapsed(edge, size, scene.sizes.iconic_bounds(&window.column, &spec_of))
             } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
                 WindowColumn::fitted(edge, Vec2::new(width, content))
+            } else if let Some(strips) = scene.sizes.minimized_height(&window.column) {
+                WindowColumn::minimized(edge, strips)
             } else {
                 WindowColumn::expanded(edge)
             }
@@ -1343,6 +1357,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .takes_drops(target, &dropped)
                 .command_scope(DockCommands::SCOPE)
                 .id(group_id);
+            if let Some(scale) = scale {
+                group = group.scale(scale);
+            }
             group = match opening.spec.clone() {
                 Some(window_spec) => group.native(window_spec),
                 None => group.bounds(scene.bounds),
@@ -1363,7 +1380,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 while let Some((command, _)) = body.take_command::<DockCommands>() {
                     commands.push(command);
                 }
-                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within: scene.bounds, open: open.clone() };
+                // An OS window's flyouts and other layers take the room around the window (`overlay::layer_room`); an
+                // in-app window's stay in the float area.
+                let within = if opening.spec.is_some() { Rect::NOTHING } else { scene.bounds };
+                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within, open: open.clone() };
                 self.column(ui, body, &window.column, at);
             });
             self.dock = area_dock;
@@ -1373,8 +1393,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
             }
-            // The height above the window's body: the title row, and in the app window the band over it.
-            let chrome = scene.sizes.window_chrome(opening.spec.is_none());
+            // The height above the window's body at its scale: the title row, the rule under it, and in the app window
+            // the band over it.
+            let chrome = window_sizes.window_chrome(opening.spec.is_none());
             // A resize of a window whose column has steps: the steps it sets, and the window's rect at them.
             let resized = output
                 .placed
@@ -1406,8 +1427,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, chrome, scene.rtl));
                     self.report.actions.extend(reported);
                 }
-            } else if let Some(mut change) = output.placed {
-                // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
+            } else if let Some(mut change) = output.placed.filter(|change| change.kind != PlacementKind::Move || change.phase == GesturePhase::Commit)
+            {
+                // The layer host shows a window its title row moves under the pointer, so the move reaches the workspace
+                // once, when it ends: one edit. A collapsed window keeps its edge until then, and the move ends where its
+                // strip was dropped.
                 let mut keeps = shape.collapsed.map(|_| edge);
                 if change.phase == GesturePhase::Commit && output.collapsed_width.is_none() {
                     (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
@@ -1470,8 +1494,9 @@ fn split_changes<P>(from: &Node<P>, to: &Node<P>) -> Vec<(Vec<bool>, SplitSize)>
 
 /// The workspace edit of a floating window's move or resize, the step `phase` of a gesture that `action`
 /// (`Action::MoveFloating`) places the window by: the gesture runs from the window's `Begin` to its `Commit`, so one
-/// drag is one undo step. `moving` holds the gesture and the workspace it began on; `rights` are the panels'
-/// permissions with the lock applied, which refuse the move of a locked workspace.
+/// drag is one undo step. A move by the title row arrives only as its `Commit`, which sets the place. `moving` holds
+/// the gesture and the workspace it began on; `rights` are the panels' permissions with the lock applied, which refuse
+/// the move of a locked workspace.
 fn window_edit<P: Clone + Eq + Hash>(
     ctx: &Context,
     current: &Arc<Workspace<P>>,

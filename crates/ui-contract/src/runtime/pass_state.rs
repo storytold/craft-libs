@@ -96,6 +96,8 @@ pass_state! {
         held_widths: crate::layout::body::HeldWidths,
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,
+        flow_starts: crate::layout::body::FlowStarts,
+        brackets: crate::layout::body::Brackets,
         cursors: crate::layout::body::Cursors,
         footer_slots: crate::contract::footer_slot::Slots,
         column_groups: crate::layout::column_group::Open,

@@ -138,6 +138,18 @@ pub struct Scoped {
     /// Where the first child the scope places in flow reports its first line: a container's header or body
     /// (`layout::FirstLines`). `None` in the children of a `Row` body, which reports its line itself.
     pub(crate) first_line: Option<Id>,
+    /// The body whose flow places the scope's direct children: the flow start a child reads (`layout::flow_start`)
+    /// and the one a child placed in flow closes.
+    pub(crate) flow_body: Option<Id>,
+    /// A rule precedes the start of the body this scope opens: its container draws one under its header, or draws
+    /// nothing of its own and itself follows one. The body's layout opens its flow start with it.
+    pub(crate) after_rule: bool,
+    /// The body is an unwrapped `Row` placed from its start whose container is a row of a vertical flow: its first
+    /// child in flow starts where the rows of that flow start (`label::in_column`).
+    pub(crate) column_row: bool,
+    /// The layout of the bracketed `Row` body (`ContainerProps::bracket`) whose labelled rows report their controls to
+    /// it: set for the row's body and kept through the containers inside it up to a labelled one.
+    pub(crate) bracket: Option<Id>,
     /// The container whose footer stands in its body (`FooterPlace::Body`) and the size that footer measured: a
     /// `FooterSlot` shown under it takes that size and is where the footer is drawn.
     pub(crate) footer_slot: Option<FooterSlotOf>,
@@ -366,6 +378,7 @@ impl Scoped {
     /// layer is no line of a bar it was opened from. A layer's content measures and runs in this.
     pub(crate) fn start_layer(&mut self) {
         self.start_room();
+        self.bracket = None;
         self.measure = None;
         self.arena = None;
         self.roving = None;
@@ -395,6 +408,8 @@ impl Scoped {
         self.row_room = None;
         self.row_line = None;
         self.first_line = None;
+        self.flow_body = None;
+        self.column_row = false;
         self.fill_body = None;
         self.fill_share = None;
         self.shrink = None;
@@ -563,6 +578,10 @@ impl Env {
                 row_room: None,
                 row_line: None,
                 first_line: None,
+                flow_body: None,
+                after_rule: false,
+                column_row: false,
+                bracket: None,
                 footer_slot: None,
                 fill_body: None,
                 fill_share: None,
@@ -652,6 +671,7 @@ impl Env {
     pub(crate) fn new_room(&self) -> Env {
         self.derive_local(|scoped| {
             scoped.start_room();
+            scoped.bracket = None;
             scoped.lazy = None;
             scoped.measure = None;
             // A pane opened from a bar is not the bar's line.

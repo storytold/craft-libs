@@ -1,11 +1,13 @@
 //! Stories of the layout components `Row`, `Stack` and `Grid`.
 
 use super::{Grid, Row, Stack};
-use crate::contract::{Gap, LeastWidth, Pad, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth};
+use crate::contract::{Bind, Bracket, Gap, LeastWidth, Pad, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth};
 use crate::display::Text;
+use crate::form::{Field, FieldGroup};
 use crate::layout::{CellAlign, GridFit, empty_cell};
 use crate::story_kit::sample::{outlined, words};
 use crate::testing::{StoryData, StoryOutput, story};
+use crate::text::{NumberField, link_toggle};
 use craft_behavior::ColumnWidth;
 use egui::Ui;
 
@@ -35,6 +37,29 @@ fn stack(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Stack<'static>, covers = [])]
 fn stack_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     outlined(ui, |ui| Stack::new().gap(Gap::Stack).pad(Pad::Regular).footer(|ui, _| words(ui, 2..3)).show(ui, |ui, _| words(ui, 0..2)).into())
+}
+
+/// A bracketed row: the width and height of a form linked to their chain, which sits halfway between the two fields'
+/// controls. The bracket is drawn while they are linked.
+#[story(Row, covers = [], title = "Linked rows")]
+fn row_bracket(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let linked = *data.choice("linked", true, &[("Linked", true), ("Unlinked", false)]);
+    outlined(ui, |ui| {
+        FieldGroup::new("Size")
+            .show(ui, |ui, _| {
+                Row::new().bracket(if linked { Bracket::Linked } else { Bracket::Unlinked }).show(ui, |ui, _| {
+                    Stack::new().show(ui, |ui, _| {
+                        for name in ["Width", "Height"] {
+                            Field::new(name).show(ui, |ui, _| {
+                                NumberField::new(name, Bind::given(Some(800.0))).sizing(Sizing::Content).show(ui);
+                            });
+                        }
+                    });
+                    link_toggle("Constrain proportions", Bind::given(linked)).show(ui);
+                });
+            })
+            .into()
+    })
 }
 
 /// A side menu beside a page: the menu as wide as its widest item and as tall as the row, its footer at the bottom.

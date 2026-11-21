@@ -2,7 +2,7 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
+    Access, BodyCx, Bracket, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
     LeastWidth, Pad, Role, Scroll, Sizing, ThemeScope, WrapWidth,
 };
 use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
@@ -332,6 +332,14 @@ impl Row {
     // design: allow[props/point-size](the least line of a row is the caller's measured extent (three control rows of a look and a title line), not a chosen size)
     pub fn least_height(mut self, points: f32) -> Self {
         self.props = self.props.least_height(points);
+        self
+    }
+
+    /// Links the labelled rows of the first child to the child after them (width and height to their chain): that
+    /// child sits halfway between the first and the last row's controls, and `Bracket::Linked` draws the bracket
+    /// from the controls to it.
+    pub fn bracket(mut self, bracket: Bracket) -> Self {
+        self.props = self.props.bracket(bracket);
         self
     }
 }

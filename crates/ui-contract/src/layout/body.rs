@@ -212,6 +212,79 @@ fn report_first_line(ctx: &egui::Context, target: Id, at: Option<f32>) {
     });
 }
 
+/// The bodies whose flow has placed nothing yet in the sweep or run under way, by body id, each with whether a rule
+/// precedes the body's start (`Scoped::after_rule`).
+#[derive(Default)]
+pub(crate) struct FlowStarts(IdMap<bool>);
+
+/// Where the next child placed in flow under `env` starts: `Some(edge)` while the body that places it has placed
+/// nothing yet in this sweep or run, with `after_rule` when a rule precedes that body's start (`Scoped::after_rule`);
+/// `None` once a child took room there, and outside a body.
+pub(crate) fn flow_start(ctx: &egui::Context, env: &Env) -> Option<bool> {
+    let body = env.flow_body?;
+    pass_state::with::<FlowStarts, _>(ctx, |starts| starts.0.get(&body).copied())
+}
+
+/// Whether the next child placed in flow under `env` starts its body's flow (`flow_start`).
+pub(crate) fn at_flow_start(ctx: &egui::Context, env: &Env) -> bool {
+    flow_start(ctx, env).is_some()
+}
+
+/// A child took room in the flow of the body that places the children under `env`: its flow start closes.
+pub(crate) fn close_flow_start(ctx: &egui::Context, env: &Env) {
+    if let Some(body) = env.flow_body {
+        pass_state::with::<FlowStarts, _>(ctx, |starts| starts.0.remove(&body));
+    }
+}
+
+/// `close_flow_start` for a child placed in the flow of `ui` outside `place_in_cell` and `take_in_flow`.
+pub(crate) fn close_flow_start_in(ui: &Ui) {
+    close_flow_start(ui.ctx(), &Env::of(ui));
+}
+
+/// What the labelled rows of a bracketed `Row` (`ContainerProps::bracket`) reported of their controls in the sweep or
+/// run under way, and the rect of the row's last child in flow, by the row's layout id.
+#[derive(Default)]
+pub(crate) struct Brackets(IdMap<BracketTook>);
+
+/// The controls of a bracket's rows and the child after them.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BracketTook {
+    /// The centre line of the first row's control.
+    pub(crate) first: Option<f32>,
+    /// The centre line of the last row's control.
+    pub(crate) last: Option<f32>,
+    /// How far the rows' controls reach toward the row's end edge, at most: right, or left under right-to-left.
+    pub(crate) end: Option<f32>,
+    /// The rect of the row's last child placed in flow: the control in the bracket's middle.
+    pub(crate) middle: Option<Rect>,
+}
+
+impl BracketTook {
+    /// The centre line between the first and the last row's controls, once two rows reported.
+    pub(crate) fn centre(&self) -> Option<f32> {
+        self.first.zip(self.last).filter(|(first, last)| last > first).map(|(first, last)| (first + last) / 2.0)
+    }
+}
+
+/// Reports the `control` rect of a labelled row to the bracketed row `row`, its end edge `rtl`-aware.
+pub(crate) fn report_bracket_control(ctx: &egui::Context, row: Id, control: Rect, rtl: bool) {
+    pass_state::with::<Brackets, _>(ctx, |brackets| {
+        if let Some(took) = brackets.0.get_mut(&row) {
+            let centre = control.center().y;
+            took.first.get_or_insert(centre);
+            took.last = Some(centre);
+            let end = if rtl { -control.min.x } else { control.max.x };
+            took.end = Some(took.end.map_or(end, |was: f32| was.max(end)));
+        }
+    });
+}
+
+/// What the rows of the bracketed row `row` reported in the run that just ended; `None` outside a bracketed row.
+pub(crate) fn take_bracket(ctx: &egui::Context, row: Id) -> Option<BracketTook> {
+    pass_state::with::<Brackets, _>(ctx, |brackets| brackets.0.remove(&row))
+}
+
 /// How a child that fills the main axis of the body it sits in sizes along it.
 enum MainFill {
     /// The body is being measured: the child takes no room along the axis and is counted.
@@ -1151,9 +1224,16 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     let env = Env::of(ui);
     let (line, target) = (env.row_line.filter(|line| line.places), env.first_line);
     let child = InFlow { first: if child.line { child.first } else { one_line(child.first, size.y) }, ..child };
-    let above = line.and_then(|line| line.centre).zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
+    // A one-line child of a bracketed row sits with its centre on the bracket's middle, between the controls its
+    // rows reported before it.
+    let bracket = line.filter(|line| env.bracket == Some(line.body)).and_then(|line| {
+        let took = pass_state::with::<Brackets, _>(ui.ctx(), |brackets| brackets.0.get(&line.body).copied())?;
+        Some((line.body, took.centre().map(|centre| centre - ui.available_rect_before_wrap().top())))
+    });
+    let centre = bracket.and_then(|(_, centre)| centre).or_else(|| line.and_then(|line| line.centre));
+    let above = centre.zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
     let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
-    let (rect, in_cell) = take_in(ui, env.grid, slot);
+    let (rect, in_cell) = take_in(ui, &env, slot);
     let placed = if child.fill && in_cell {
         rect
     } else {
@@ -1166,6 +1246,9 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
         };
         Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
     };
+    if let Some((row, _)) = bracket {
+        pass_state::with::<Brackets, _>(ui.ctx(), |brackets| brackets.0.get_mut(&row).map(|took| took.middle = Some(placed)));
+    }
     if measure::active(ui.ctx()) {
         if let Some(line) = line {
             pass_state::with::<RowLines, _>(ui.ctx(), |rows| {
@@ -1184,7 +1267,7 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
 /// Takes `size` in flow in `ui`: the next cell of the `Grid` or spread `Row` body that encloses it directly, else the
 /// next allocation of `ui`'s layout. Returns the rect taken and whether it is a cell.
 pub(crate) fn take_in_flow(ui: &mut Ui, size: Vec2) -> (Rect, bool) {
-    take_in(ui, Env::of(ui).grid, size)
+    take_in(ui, &Env::of(ui), size)
 }
 
 /// Leaves the next cell of the `Grid` body that encloses `ui` directly empty: the next child takes the cell after it.
@@ -1194,13 +1277,15 @@ pub fn empty_cell(ui: &mut Ui) {
     let env = Env::of(ui);
     let grid = env.grid.filter(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| matches!(cursors.0.get(body), Some(Cursor::Grid(_)))));
     if grid.is_some() {
-        take_in(ui, grid, Vec2::ZERO);
+        take_in(ui, &env, Vec2::ZERO);
     }
 }
 
-/// `take_in_flow`, with `grid` the body of `ui`'s env that places its children itself.
-fn take_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> (Rect, bool) {
-    match cell_in(ui, grid, size) {
+/// `take_in_flow` under `env`, `ui`'s env: the next cell of its grid, else the next allocation; the body's flow start
+/// closes.
+fn take_in(ui: &mut Ui, env: &Env, size: Vec2) -> (Rect, bool) {
+    close_flow_start(ui.ctx(), env);
+    match cell_in(ui, env.grid, size) {
         Some(cell) => (cell, true),
         None => (alloc::space(ui, size), false),
     }
@@ -1209,7 +1294,12 @@ fn take_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> (Rect, bool) {
 /// Takes the next cell of the `Grid` or spread `Row` body that encloses `ui` directly for a child of `size`, and returns
 /// it; `None`, taking nothing, outside such a body.
 pub(crate) fn take_cell(ui: &mut Ui, size: Vec2) -> Option<Rect> {
-    cell_in(ui, Env::of(ui).grid, size)
+    let env = Env::of(ui);
+    let cell = cell_in(ui, env.grid, size);
+    if cell.is_some() {
+        close_flow_start(ui.ctx(), &env);
+    }
+    cell
 }
 
 fn cell_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> Option<Rect> {
@@ -1360,6 +1450,7 @@ fn run_grid<R>(
             scoped.derive_local(|scoped| {
                 scoped.grid = Some(id);
                 scoped.grid_top = cells == CellAlign::Top;
+                scoped.flow_body = Some(id);
             }),
         );
         let (inner, unsettled) = ColumnGroup::grid(ui, id, count, seed, &mut body);
@@ -1651,8 +1742,14 @@ pub(crate) fn run_body_measured<R>(
     // Each sweep of a measuring run finds the body's first line and an unwrapped row's line afresh.
     let target = env.first_line.filter(|_| sizing);
     let row = (sizing && matches!(layout, BodyLayout::Row { wrap: false, .. })).then_some(id);
+    // Each sweep and the real run start the body's flow, and a bracketed row's reports, afresh.
+    let (after_rule, bracket) = (env.after_rule, env.bracket == Some(id));
     let body = |ui: &mut Ui| {
         open_sweep(&ctx, target, row, least);
+        pass_state::with::<FlowStarts, _>(&ctx, |starts| starts.0.insert(id, after_rule));
+        if bracket {
+            pass_state::with::<Brackets, _>(&ctx, |brackets| brackets.0.insert(id, BracketTook::default()));
+        }
         body(ui)
     };
     // Each layout runs in its own function, so a body nested in bodies keeps only its own layout's frame on the stack.
@@ -1680,7 +1777,10 @@ struct RowIn {
 /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
 fn run_stack<R>(ui: &mut Ui, env: &Env, at: &RowIn, body: impl FnMut(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
-    let env = env.derive_local(|scoped| scoped.shrink = Some(Shrink::Fit));
+    let env = env.derive_local(|scoped| {
+        scoped.shrink = Some(Shrink::Fit);
+        scoped.flow_body = Some(at.id);
+    });
     let installed = Env::install_for(ui, env.clone());
     // A held child of a column whose own room is unbounded keeps the width it measured at.
     let inner = if env.content_column && flow_room(ui).x.is_finite() {
@@ -1705,6 +1805,7 @@ fn run_spread_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, mut body: impl FnMut(&m
                 scoped.grid_top = false;
                 scoped.row_line = Some(line);
                 scoped.first_line = None;
+                scoped.flow_body = Some(id);
             }),
         );
         let inner = run_spread(ui, id, gap.x, rtl, &mut body);
@@ -1728,6 +1829,7 @@ fn run_start_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, mut body: impl FnMut(&mu
                 scoped.row_room = Some(room.width());
                 scoped.row_line = Some(line);
                 scoped.first_line = None;
+                scoped.flow_body = Some(id);
             }),
         );
         let inner = run_shrinking(ui, id, &mut body);
@@ -1777,6 +1879,7 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
             env.derive_local(|scoped| {
                 scoped.row_room = Some(room.width());
                 scoped.row_line = line;
+                scoped.flow_body = Some(id);
                 if line.is_some() {
                     scoped.first_line = None;
                 }

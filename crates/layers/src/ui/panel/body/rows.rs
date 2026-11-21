@@ -31,9 +31,10 @@ pub(in crate::ui::panel) struct DisplayRow<Id> {
 /// What the display order derives from: the tree's tracked revision, the filter and the groups a reveal opens. A
 /// change of any of them builds the rows again; nothing else does.
 #[derive(MemoProps)]
-pub(in crate::ui::panel) struct RowsKey<'a, Id: MemoProps> {
+pub(in crate::ui::panel) struct RowsKey<'a, Id> {
     pub(in crate::ui::panel) tree: Revision,
     pub(in crate::ui::panel) filter: &'a LayerFilter,
+    #[memo_props(hash = "tree ids are plain model ids (LayerTree::Id: PlainData); Hash covers them")]
     pub(in crate::ui::panel) opened: &'a [Id],
 }
 

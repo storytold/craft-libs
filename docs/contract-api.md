@@ -1974,6 +1974,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn cells(self, cells: CellAlign) -> Self`. A `Grid` with `cells`; any other layout is unchanged.
   - `pub fn wrap(self, on: bool) -> Self`. A `Row` that wraps; any other layout is unchanged.
   - `pub fn align(self, align: RowAlign) -> Self`. A `Row` with `align`; any other layout is unchanged.
+- `craft_ui::contract::Bracket`: `pub enum Bracket { Linked, Unlinked }`. The bracket a `Row` draws from the labelled rows of its first child to the child after them (Image Size's width and
 - `craft_ui::contract::CanvasGesture`: re-export of `craft_ui::runtime::sampler::CanvasGesture`.
 - `craft_ui::contract::CellWidth`: `pub type CellWidth = ColumnWidth`. The width of a caption's cell.
 - `craft_ui::contract::Collapse`: `pub struct Collapse { pub initially_open: bool, pub animated: bool }`. Collapse configuration.
@@ -2056,7 +2057,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Common`: `pub struct Common { pub label: Label, pub tooltip: Option<Tooltip>, pub description: Option<String>, pub selected: Option<bool> }`. What every component carries: the props the pipeline reads at step 1.
   - `pub const fn new() -> Common`. A `Common` with every prop unset, which the derive's constructors start from.
 - `craft_ui::contract::Component`: re-export of `craft_ui_macros::Component` (outside these crates).
-- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub pad_edges: PadEdges, pub sizing: Sizing, pub content_in_bar: bool, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub least_height: Option<f32>, pub wrap_width: Option<WrapWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
+- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub pad_edges: PadEdges, pub sizing: Sizing, pub content_in_bar: bool, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub least_height: Option<f32>, pub wrap_width: Option<WrapWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme>, pub bracket: Option<Bracket> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
   - `pub const fn new() -> Self`. Props with every field at its default.
   - `pub fn mount(mut self, mount: Mount) -> Self`. Where the container lives.
   - `pub const fn surface(mut self, surface: SurfaceKind) -> Self`. The surface the container paints.
@@ -2093,6 +2094,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn save(mut self, key: SaveKey) -> Self`. Saves placement, size and open state under `key`.
   - `pub const fn outer_edit(mut self, on: bool) -> Self`. One outer gesture over the body's fields, from open to close.
   - `pub const fn label_column(mut self, on: bool) -> Self`. The labelled rows of the body share the widest label as one column. A nested container with its own
+  - `pub const fn bracket(mut self, bracket: Bracket) -> Self`. The bracket of a `Row` from its first child's labelled rows to the child after them ([`bracket`](Self::bracket)).
   - `pub const fn labels(mut self, scheme: LabelScheme) -> Self`. The labelled rows under the container show their labels in `scheme`: its regions, its body and every container
 - `craft_ui::contract::ContextMenuRequest`: `pub struct ContextMenuRequest<K> { pub key: K, pub at: Pos2, pub column: Option<ColumnKey>, pub part: Option<PartRef> }`. A request for the context menu of an item. Collections never open menus: the app does.
   - `pub fn new(key: K, at: Pos2) -> Self`. A request for the menu of `key` that opens at `at`, from the item itself: no column and no part. A component
@@ -2760,6 +2762,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
 - `craft_ui::contract::overlay::close_popups`: re-export of `craft_ui::runtime::overlay::close_popups`.
 - `craft_ui::contract::overlay::family`: re-export of `craft_ui::runtime::overlay::family`.
 - `craft_ui::contract::overlay::is_open`: re-export of `craft_ui::runtime::overlay::is_open`.
+- `craft_ui::contract::overlay::layer_room`: `pub fn layer_room(ctx: &Context) -> Rect`. The room a layer opened in the running viewport may take, in its points: the work area around a palette window,
 - `craft_ui::contract::overlay::paint_frame_layers`: `pub fn paint_frame_layers(ctx: &Context)`. Paints the ghost egui layer from runtime data: the drag preview and drop mark, and the painted cursor the cursor
 - `craft_ui::contract::overlay::request_close`: re-export of `craft_ui::runtime::overlay::request_close`.
 - `craft_ui::contract::overlay::top`: re-export of `craft_ui::runtime::overlay::top`.
@@ -3054,6 +3057,8 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn strip_arrow(strip: Rect, back: bool, color: Color32) -> Shape`. The filled arrow of a scroll strip, centred in `strip`: pointing up for the strip before the view (`back`),
   - `pub fn thumb(min_thumb: f32, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan) -> Rect`. The thumb inside `track`, a bar along `axis`, for `span`: its length is the shown share of the track, at least
   - `pub fn shapes(look: &ScrollBarLook, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan, state: &StateSet) -> Vec<Shape>`. The shapes of the bar in `track` along `axis` for `span`, in `state` (the bar's: hovered while the pointer is
+- `craft_ui::primitives::Serials`: `pub struct Serials`. The numbers that keep apart the textures one owner makes: a mask or preview made anew gets a number no earlier one
+  - `pub fn mint(&mut self) -> u64`. A new number: never one this `Serials` gave before.
 - `craft_ui::primitives::Span`: `pub struct Span<'a> { pub text: Cow<'a, str>, pub italic: bool, pub tabular: bool, pub mono: bool, pub muted: bool, pub shortcut: bool, pub highlight: bool, pub underline: bool, pub strong: bool, pub flag: Option<Tone> }`. One styled stretch of a run.
   - `pub fn new(text: impl Into<Cow<'a, str>>) -> Self`. A plain span.
   - `pub fn flag(mut self, tone: Tone) -> Self`. Underlines the span in the ink of `tone` (spelling `Bad`, grammar `Info`).
@@ -3254,6 +3259,8 @@ Frosted backdrops: a bounded blurred composition of the layers under a surface, 
   - `pub const fn new(value: u64) -> Revision`. The revision `value` (a document's own change counter).
   - `pub const fn get(self) -> u64`. The number.
   - `pub fn of(value: &impl Hash) -> Revision`. The revision of anything hashable: `Revision::of(&(fingerprint, doc_width))`. Stable within one run of the
+- `craft_ui::primitives::textures::Serials`: `pub struct Serials`. The numbers that keep apart the textures one owner makes: a mask or preview made anew gets a number no earlier one
+  - `pub fn mint(&mut self) -> u64`. A new number: never one this `Serials` gave before.
 - `craft_ui::primitives::textures::TextureBudget`: `pub struct TextureBudget { pub max_bytes: usize, pub max_entries: usize, pub uploads_per_pass: usize, pub upload_bytes_per_pass: usize }`. How much a store may hold and upload. Entries past `max_bytes` or `max_entries` are evicted; `uploads_per_pass`
   - `pub const fn new(max_bytes: usize, max_entries: usize) -> Self`. Holds `max_bytes` and `max_entries`; a loader uploads 16 pictures and 16 MiB per frame.
   - `pub const fn uploads(mut self, count: usize, bytes: usize) -> Self`. Other upload limits per frame.
@@ -4240,7 +4247,7 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
 - `craft_ui::runtime::windows::ScreenshotError`: re-export of `craft_ui::runtime::egui::screenshot::ScreenshotError`.
 - `craft_ui::runtime::windows::ScreenshotFacts`: re-export of `craft_ui::runtime::egui::screenshot::ScreenshotFacts`.
 - `craft_ui::runtime::windows::ScreenshotSlot`: re-export of `craft_ui::runtime::egui::screenshot::ScreenshotSlot`.
-- `craft_ui::runtime::windows::WindowAction`: `pub enum WindowAction { Close, Minimize, ToggleMaximize, ToggleFullscreen, SetFullscreen(bool), SetMaximized(bool), Focus, StartMove, StartResize(ResizeEdge), SetOuterPosition(Pos2), SetInnerSize(Vec2), Restore, SetMinInnerSize(Vec2), SetLevel(WindowLevel), SetTitle(String), SetOpacity(f32) }`. A window command `act` sends.
+- `craft_ui::runtime::windows::WindowAction`: `pub enum WindowAction { Close, Minimize, ToggleMaximize, ToggleFullscreen, SetFullscreen(bool), SetMaximized(bool), Focus, Raise, StartMove, StartResize(ResizeEdge), SetOuterPosition(Pos2), SetInnerSize(Vec2), Restore, SetMinInnerSize(Vec2), SetLevel(WindowLevel), SetTitle(String), SetOpacity(f32) }`. A window command `act` sends.
 - `craft_ui::runtime::windows::WindowFacts`: `pub struct WindowFacts { pub inner: Rect, pub outer: Option<Rect>, pub scale: Option<f32>, pub state: WindowState, pub focused: bool }`. What the OS tells about a window, in desktop points.
 - `craft_ui::runtime::windows::WindowHit`: `pub enum WindowHit { Move, Resize(ResizeEdge), Caption(Button) }`. What a part of the window does for the operating system: a press on it moves the window, resizes it from an edge,
 - `craft_ui::runtime::windows::WindowHost`: `pub struct WindowHost`. The multi-window driver of one context.
@@ -4296,8 +4303,9 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn install_hit_sink(&self, viewport: ViewportId) -> HitSink`. The hit-test sink of `viewport`'s window, made on the first call. The platform layer calls it once it has put
   - `pub fn pointer_in(&self, viewport: ViewportId) -> Option<Pos2>`. The desktop pointer in the coordinates of `viewport`, when it lies inside that window.
 - `craft_ui::runtime::windows::WindowLevel`: `pub enum WindowLevel { Normal, Palette, AlwaysOnTop }`. Where a window stands in the stack of windows.
-- `craft_ui::runtime::windows::WindowSpec`: `pub struct WindowSpec { pub kind: WindowKind, pub chrome: Option<WindowChrome>, pub captions: Option<Captions>, pub level: WindowLevel, pub taskbar: bool, pub shown_after_first_paint: bool }`. How an OS window opens (21.2): what it is for, who draws its frame, where it stands and whether it has a taskbar
+- `craft_ui::runtime::windows::WindowSpec`: `pub struct WindowSpec { pub kind: WindowKind, pub chrome: Option<WindowChrome>, pub captions: Option<Captions>, pub level: WindowLevel, pub taskbar: bool, pub shown_after_first_paint: bool, pub takes_focus: bool, pub passes_pointer: bool }`. How an OS window opens (21.2): what it is for, who draws its frame, where it stands and whether it has a taskbar
   - `pub fn tool() -> Self`. A tool window (a native dock window): its own title row in place of the OS title bar
+  - `pub fn popup() -> Self`. A popup window: a layer opened from a palette window (a flyout, menu or tooltip) in an OS window of its own. It
   - `pub fn document() -> Self`. A document window with the installed decision's frame.
   - `pub fn dialog() -> Self`. A dialog window with the installed decision's frame.
   - `pub fn kind(mut self, kind: WindowKind) -> Self`. Sets what the window is for.
@@ -4306,6 +4314,8 @@ The toast queues: one per window (`WindowKey`), filled from any code with a `Con
   - `pub fn frame(mut self, frame: &Frame) -> Self`. Takes the chrome and the captions from a decided `frame`; a frame without buttons has no captions.
   - `pub fn level(mut self, level: WindowLevel) -> Self`. Sets the level.
   - `pub fn taskbar(mut self, taskbar: bool) -> Self`. Sets whether the window has a taskbar or Dock entry.
+  - `pub fn takes_focus(mut self, takes_focus: bool) -> Self`. Sets whether the window takes OS focus when it opens.
+  - `pub fn passes_pointer(mut self, passes_pointer: bool) -> Self`. Sets whether pointer input passes through the window to the window below it (a tooltip's).
 - `craft_ui::runtime::windows::act`: `pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool`. Sends `action` to `viewport`. It is the only sender of window commands: it checks the capabilities and the
 - `craft_ui::runtime::windows::double_click_action`: `pub fn double_click_action(frame: &Frame, setting: DoubleClick, maximized: bool) -> Option<WindowAction>`. What a double click on a window's free move band (its title bar, or the strip a modal leaves over it) asks of the
 
@@ -4342,6 +4352,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn on(mut self, ground: Stateful<StyleColor>) -> Self`. Declares the fill the icon is painted on, for an icon that sits on a part's own fill.
 - `craft_ui::style::Ink`: `pub enum Ink { OnPanel, OnDark, Accent }`. The text and icon colour that reads on a surface, resolved at step 12.
 - `craft_ui::style::Insets`: re-export of `craft_behavior::flow::Insets`.
+- `craft_ui::style::LetterCase`: re-export of `craft_theme::LetterCase` (outside these crates).
 - `craft_ui::style::MarkerLook`: `pub struct MarkerLook { pub radius: f32, pub large: f32, pub ring: StyleColor, pub selected: StyleColor, pub ring_width: f32, pub halo: StyleColor, pub halo_width: f32, pub backing: StyleColor }`. A colour marker: the mark on a colour field, wheel, disc or gradient line that shows where a colour sits. Its ring
 - `craft_ui::style::Metrics`: re-export of `craft_behavior::sizing::Metrics`.
 - `craft_ui::style::Mix`: re-export of `craft_theme::Mix` (outside these crates).
