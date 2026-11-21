@@ -27,8 +27,12 @@ pub enum SlotSize {
     /// content runs in the room the slot can grow into, from its outer edge to the far edge of what the slots before it
     /// leave: it measures at its own extent, and when that differs the shell lays the window out again in the same
     /// frame. The slot stacks its content from its outer edge instead of centring one line in it, so content of more
-    /// than one line (a ribbon: a tab strip over a group row) gets its own height and the slot's full width. Outside a
-    /// shell it resolves to `size.bar.options`.
+    /// than one line (a ribbon: a tab strip over a group row) gets its own height and the slot's full width.
+    ///
+    /// The slot never takes more than the room the window leaves it: content larger than that, unless it scrolls,
+    /// is cut at the window's edge. Raw egui content allocates its own extent along the slot's edge; content that takes whatever room it is
+    /// offered (`ui.available_size()`) takes the whole room the slot can grow into. Outside a shell it resolves to
+    /// `size.bar.options`.
     Content,
 }
 

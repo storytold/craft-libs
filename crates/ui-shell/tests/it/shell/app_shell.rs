@@ -202,8 +202,8 @@ fn a_slot_sized_by_its_content_grows_to_a_child_that_fills_its_height() {
 }
 
 /// A settled frame runs a content slot's content once, in one pass: its measure is reused while its inputs are
-/// unchanged. A frame where the content grows (a denser theme makes every button taller) lays the window out again at
-/// most once and shows the new extent in that frame.
+/// unchanged. A frame where the content grows (a roomier density makes every button taller) lays the window out again
+/// at most once, shows the new extent in that frame and leaves the next frame settled.
 #[trial]
 fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame() {
     let runs = Rc::new(Cell::new(0_u32));
@@ -230,8 +230,104 @@ fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame
     assert!(fixture.passes() <= 2, "the frame the content grows in lays the window out again at most once: {} passes", fixture.passes());
     let slot = regions.borrow().as_ref().and_then(|regions| regions.slots.first().map(|(_, rect)| *rect)).expect("the slot shows");
     let grown = seen.borrow().0;
-    assert!(grown.height() > before.height() + 1.0, "the denser theme makes the column taller: {before:?} to {grown:?}");
+    assert!(grown.height() > before.height() + 1.0, "the roomier density makes the column taller: {before:?} to {grown:?}");
     assert!(slot.expand(1.0).contains_rect(grown), "in the frame it grows in, the slot {slot:?} holds the grown column {grown:?}");
+    runs.set(0);
+    fixture.frame(Vec::new());
+    assert_eq!(fixture.passes(), 1, "the frame after the grow is settled: one pass");
+    assert_eq!(runs.get(), 1, "the frame after the grow runs the slot's content once");
+}
+
+/// Content rails sit at their own sides in either reading direction, each as wide as the column it holds, and a
+/// settled frame runs one pass with each rail's content once: the start rail at the reading start, the end rail at the
+/// reading end, the body between them.
+#[trial]
+fn content_rails_sit_at_their_sides_and_settle_in_one_pass() {
+    const RAIL: [&str; 3] = ["Move", "Brush", "Eraser"];
+    for rtl in [false, true] {
+        let direction = if rtl { craft_i18n::Direction::Rtl } else { craft_i18n::Direction::Ltr };
+        let (start, end) = (column(), column());
+        let (start_runs, end_runs) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(0_u32)));
+        let regions = Rc::new(RefCell::new(None));
+        let (start_seen, end_seen, start_count, end_count, out) =
+            (Rc::clone(&start), Rc::clone(&end), Rc::clone(&start_runs), Rc::clone(&end_runs), Rc::clone(&regions));
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .start(Slot::new("tools").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    start_count.set(start_count.get() + 1);
+                    fill_column(ui, &RAIL, &start_seen);
+                })
+                .end(Slot::new("inspector").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    end_count.set(end_count.get() + 1);
+                    fill_column(ui, &RAIL, &end_seen);
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            *out.borrow_mut() = Some(shown.regions);
+        });
+        fixture.direction(direction).room(Vec2::new(600.0, 400.0)).settle();
+        let regions = regions.borrow().clone().expect("the shell shows");
+        const SLACK: f32 = 1.0;
+        let rect_of = |key| regions.slots.iter().find(|(shown, _)| *shown == key).map(|(_, rect)| *rect).expect("the rail shows");
+        let (start_rail, end_rail) = (rect_of("tools"), rect_of("inspector"));
+        for (key, rail, seen) in [("tools", start_rail, &start), ("inspector", end_rail, &end)] {
+            let (column, buttons) = seen.borrow().clone();
+            assert_eq!(buttons.len(), RAIL.len(), "RTL {rtl}, {key}: every button shows");
+            for button in &buttons {
+                assert!(column.expand(SLACK).contains_rect(*button), "RTL {rtl}, {key}: the button {button:?} lies in its column {column:?}");
+            }
+            assert!(rail.expand(SLACK).contains_rect(column), "RTL {rtl}, {key}: the rail {rail:?} holds its column {column:?}");
+        }
+        let body = regions.body;
+        let (left, right) = if rtl { (end_rail, start_rail) } else { (start_rail, end_rail) };
+        assert!(left.max.x <= body.min.x + SLACK, "RTL {rtl}: the rail {left:?} lies left of the body {body:?}");
+        assert!(right.min.x >= body.max.x - SLACK, "RTL {rtl}: the rail {right:?} lies right of the body {body:?}");
+        (start_runs.set(0), end_runs.set(0));
+        fixture.frame(Vec::new());
+        assert_eq!(fixture.passes(), 1, "RTL {rtl}: a settled frame runs one pass");
+        assert_eq!((start_runs.get(), end_runs.get()), (1, 1), "RTL {rtl}: a settled frame runs each rail's content once");
+    }
+}
+
+/// A content slot holding a list that scrolls along its height is as tall as the list's rows, whether the list sizes
+/// from its content or fills its height: the slot offers its content no bound along its edge, so the list shows all
+/// of its rows instead of taking the window's height, and the body keeps the rest of the window.
+#[trial]
+fn a_content_slot_holding_a_scrolling_list_takes_the_list_height() {
+    for sizing in [Sizing::Content, Sizing::FillHeight, Sizing::Fill] {
+        let rows = Rc::new(RefCell::new(Vec::new()));
+        let regions = Rc::new(RefCell::new(None));
+        let (seen, out) = (Rc::clone(&rows), Rc::clone(&regions));
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .top(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    let mut buttons = Vec::new();
+                    Stack::new().sizing(sizing).scroll(Scroll::vertical()).show(ui, |ui, _| {
+                        for label in ["First", "Second", "Third"] {
+                            buttons.push(Button::new(label).show(ui).rect);
+                        }
+                    });
+                    *seen.borrow_mut() = buttons;
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            *out.borrow_mut() = Some(shown.regions);
+        });
+        fixture.room(Vec2::new(600.0, 700.0)).settle();
+        let regions = regions.borrow().clone().expect("the shell shows");
+        let slot = regions.slots.iter().find(|(key, _)| *key == "findBar").map(|(_, rect)| *rect).expect("the slot shows");
+        let rows = rows.borrow().iter().fold(Rect::NOTHING, |all, row| all.union(*row));
+        const SLACK: f32 = 1.0;
+        // The rule toward the body, the stack's padding and rounding.
+        const AROUND: f32 = 24.0;
+        assert!(slot.expand(SLACK).contains_rect(rows), "{sizing:?}: the slot {slot:?} holds the list's rows {rows:?}");
+        assert!(slot.height() <= rows.height() + AROUND, "{sizing:?}: the slot {slot:?} is as tall as the list's rows {rows:?}, not the window");
+        let body = regions.body;
+        assert!(
+            body.min.y >= slot.max.y - SLACK && (body.max.y - 700.0).abs() <= SLACK,
+            "{sizing:?}: the body {body:?} keeps the window under the slot {slot:?}"
+        );
+    }
 }
 
 /// A check box with its label after it sits on the options slot's middle, as a button beside it does: the slot is
