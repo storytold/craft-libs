@@ -1,18 +1,19 @@
 //! The seven sections of Save PDF and the rows they share.
 
-use super::PdfSection;
+use super::{PdfExportMode, PdfSection, PresetDraft};
 use super::words::PdfExportWords;
+use crate::buttons::Button;
 use crate::choice::{Checkbox, Radio, RadioGroup};
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup};
-use crate::layout_components::Stack;
+use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
-use crate::runtime::env::{Label, UnitKind, Units};
+use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::sections::{HeaderStrength, Section};
 use crate::style::TypeRole;
-use crate::text::{NumberField, TextField};
+use crate::text::{LinkMode, LinkedFields, NumberField, TextField};
 use craft_behavior::Mixed;
 use craft_pdf::settings::{
     Choice, ColorConversion, Compatibility, DOCUMENT_CMYK, Downsample, Encryption, ImageCodec, ImageCompression, PdfSettings, Standard,
@@ -49,6 +50,14 @@ pub struct PasswordSwitches {
     pub permissions: bool,
 }
 
+/// The buttons of the sections that were pressed in this pass.
+pub(super) struct SectionPresses {
+    /// Custom… beside the flattener preset.
+    pub custom: bool,
+    /// Save Summary… under the Summary.
+    pub save_summary: bool,
+}
+
 /// What the sections read and edit in one pass.
 pub(super) struct Sections<'a> {
     pub words: &'a PdfExportWords,
@@ -64,6 +73,8 @@ pub(super) struct Sections<'a> {
     pub work: &'a mut PdfSettings,
     pub artboards: &'a mut ArtboardChoice,
     pub switches: &'a mut PasswordSwitches,
+    /// Whether the four bleed sides move together.
+    pub bleed_linked: &'a mut bool,
     /// Why the typed artboard range is refused, already worded.
     pub range_error: Option<&'a str>,
     /// The warnings of the Summary, already worded.
@@ -72,6 +83,14 @@ pub(super) struct Sections<'a> {
     pub changed: &'a [String],
     /// The chosen preset's name as shown.
     pub preset_name: &'a Label,
+    pub mode: PdfExportMode,
+    /// A custom flattener preset is in effect: the select shows it as "[Custom]".
+    pub custom_flattener: bool,
+    pub pressed: &'a mut SectionPresses,
+    /// The name and description a preset editor edits; its Description box stands in place of Artboards.
+    pub draft: Option<&'a mut PresetDraft>,
+    /// The artboards are the art bounds: General has no Artboards group.
+    pub art_bounds: bool,
 }
 
 impl Sections<'_> {
@@ -91,6 +110,7 @@ impl Sections<'_> {
         let words = self.words;
         let plain = enabled(self.work, "preserveEditing");
         let layers = enabled(self.work, "createLayers");
+        let long_pages = enabled(self.work, "longPagesInPoints");
         let work = &mut *self.work;
         group(ui, "options", &words.options, |ui| {
             flag(ui, "preserve", &words.preserve_editing, &mut work.preserve_editing, plain);
@@ -99,7 +119,20 @@ impl Sections<'_> {
             flag(ui, "view", &words.view_after_saving, &mut work.view_after_saving, true);
             flag(ui, "layers", &words.create_layers, &mut work.create_layers, layers);
             flag(ui, "nonprinting", &words.include_non_printing, &mut work.include_non_printing, true);
+            flag(ui, "longPages", &words.long_pages, &mut work.long_pages_in_points, long_pages);
         });
+        if let Some(draft) = self.draft.as_deref_mut() {
+            group(ui, "description", &words.description, |ui| {
+                let typed = TextField::new(words.description.clone(), Bind::given(draft.description.clone())).lines(4).show(ui);
+                if let Some(text) = typed.value().cloned() {
+                    draft.description = text;
+                }
+            });
+            return;
+        }
+        if self.art_bounds {
+            return;
+        }
         let artboards = &mut *self.artboards;
         let range_error = self.range_error;
         group(ui, "artboards", &words.artboards, |ui| {
@@ -178,19 +211,26 @@ impl Sections<'_> {
         });
         let bleed = &mut self.work.bleed;
         let document = self.document_bleed;
+        let linked = &mut *self.bleed_linked;
+        // A unit that needs the document's resolution shows in points.
+        let shown_unit = if length.per_inch(UnitKind::POINTS_PER_INCH).is_some() { length } else { UnitKind::Points };
         group(ui, "bleeds", &words.bleeds, |ui| {
             flag(ui, "document", &words.use_document_bleed, &mut bleed.use_document, true);
             // With the document's bleed the fields show it.
             let use_document = bleed.use_document;
-            let mut shown = if use_document { document } else { bleed.values() };
-            let sides = [("top", &words.top), ("bottom", &words.bottom), ("left", &words.left), ("right", &words.right)];
-            for (side, (id, label)) in sides.into_iter().enumerate() {
-                if let Some(points) = shown.get_mut(side) {
-                    length_row(ui, id, label, points, length, !use_document);
-                }
-            }
-            if !use_document {
-                [bleed.top, bleed.bottom, bleed.left, bleed.right] = shown;
+            let shown = if use_document { document } else { bleed.values() };
+            let sides = LinkedFields::<4>::new(words.bleeds.clone(), Bind::given(shown.map(|points| Mixed::Same(Some(points)))), Bind::bound(&mut *linked))
+                .mode(LinkMode::Equal)
+                .captions([&words.top, &words.bottom, &words.left, &words.right].map(Clone::clone))
+                .range(0.0..=MAX_LENGTH)
+                .lengths(LengthUnits::new(UnitKind::Points, shown_unit, UnitKind::POINTS_PER_INCH))
+                .enabled(!use_document)
+                .show(ui);
+            if let Some([Mixed::Same(Some(top)), Mixed::Same(Some(bottom)), Mixed::Same(Some(left)), Mixed::Same(Some(right))]) =
+                sides.edit.value().copied()
+                && !use_document
+            {
+                (bleed.top, bleed.bottom, bleed.left, bleed.right) = (top, bottom, left, right);
             }
         });
     }
@@ -234,7 +274,9 @@ impl Sections<'_> {
     }
 
     fn advanced(&mut self, ui: &mut Ui) {
-        let (words, flatteners) = (self.words, self.flatteners);
+        let (words, flatteners, custom_flattener) = (self.words, self.flatteners, self.custom_flattener);
+        let editor = self.mode == PdfExportMode::PresetEditor;
+        let pressed = &mut *self.pressed;
         let flat = enabled(self.work, "flattenerPreset");
         let subset_on = enabled(self.work, "advanced.fontSubsetPercent");
         let work = &mut *self.work;
@@ -261,6 +303,7 @@ impl Sections<'_> {
             // The empty name and the ids `high`, `medium` and `low` name the built-in presets.
             let built_in = ["high", "medium", "low"];
             let mut current = match work.flattener_preset.trim() {
+                _ if custom_flattener => words.custom_flattener.as_str().to_owned(),
                 "" => "High Resolution".to_owned(),
                 id if built_in.iter().any(|name| name.eq_ignore_ascii_case(id)) => {
                     let at = built_in.iter().position(|name| name.eq_ignore_ascii_case(id)).unwrap_or_default();
@@ -269,7 +312,12 @@ impl Sections<'_> {
                 name => name.to_owned(),
             };
             let before = current.clone();
-            name_row(ui, "flattener", &words.flattener_preset, &mut current, presets, flat);
+            Row::new().show(ui, |ui, _| {
+                name_row(ui, "flattener", &words.flattener_preset, &mut current, presets.clone(), flat);
+                if !editor && clicked(&Button::new(words.custom.clone()).id_salt("custom").enabled(flat).show(ui)) {
+                    pressed.custom = true;
+                }
+            });
             if current != before {
                 work.flattener_preset = current;
             }
@@ -346,6 +394,9 @@ impl Sections<'_> {
                 }
             });
         });
+        if clicked(&Button::new(words.save_summary.clone()).id_salt("save-summary").show(ui)) {
+            self.pressed.save_summary = true;
+        }
     }
 }
 
@@ -369,6 +420,8 @@ pub(super) fn enabled(settings: &PdfSettings, path: &str) -> bool {
         "preserveEditing" => plain,
         // PDF layers need PDF 1.5, and PDF/X-1a and PDF/X-3 have none.
         "createLayers" => standard.allows_layers() && settings.compatibility.has_layers(),
+        // Only a file without a standard and above PDF 1.4 can carry a page over the limit at all.
+        "longPagesInPoints" => plain && !matches!(settings.compatibility, Compatibility::Pdf13 | Compatibility::Pdf14),
         // PDF/X-1a converts to CMYK even without a conversion.
         "output.destination" => settings.output.conversion != ColorConversion::None || standard.cmyk_only(),
         // A standard decides whether colours are tagged.
