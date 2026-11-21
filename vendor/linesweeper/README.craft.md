@@ -5,7 +5,8 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs` and `docs/sweep.typ`.
+The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs`, `src/curve/mod.rs`,
+`src/curve/line.rs` and `docs/sweep.typ`.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -15,9 +16,13 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 ## Local patches
 
+The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs`, `src/curve/mod.rs`,
+`src/curve/line.rs` and `docs/sweep.typ`.
+
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `src/curve/mod.rs` | `intersect_cubics_rec` calls the new `order_from_control_points` after cutting both cubics to their shared y-range. It bounds the x gap between the two pieces by the smallest and largest control point x gap, widened by the largest control point y gap times a bound on `\|dx/dy\|` from the control polygon (`max_slope`). When that range stays more than `ish_tolerance` on one side of zero, the whole range gets `Left` or `Right` and the comparison does not recurse. Before, two nearly parallel cubics split their shared y-range into about `(height / ish_tolerance)^(1/3)` pieces even when they stayed more than `ish_tolerance` apart: a tall S-shaped cubic and a copy moved 10 * `ish_tolerance` sideways took 4,096 recursion leaves at height 1e6 and 16,384 at height 1e8; now each takes one. The `near_parallel_cubics_are_ordered_without_recursing` test counts the entries for that pair, `control_point_order_is_sound` checks every order the control points give against sampled gaps, and `control_point_order_keeps_band_contours` checks that the contours of a tall wavy band and a moved copy do not change. |
 | `src/curve/mod.rs` | When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN. The `short_curve_chord_with_huge_x` test fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307. Code comments label the change `Craft patch (huge chord)`. |
 | `src/curve/line.rs` | `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height. The `subnormal_x` test checks that line and a line from x = -1.5e-323 to 1.5e-323. Code comments label the change `Craft patch (subnormal x)`. |
 | `docs/sweep.typ` | The intersection scan to the left compares each segment with `alpha^(i+1)` instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma after it is stated for `alpha^(i+1)`. |
