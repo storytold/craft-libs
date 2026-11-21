@@ -80,7 +80,7 @@ fn visible(fx: &Fixture, c: char) -> bool {
 }
 
 fn selected(fx: &Fixture, c: char) -> bool {
-    fx.by_label(&name(c)).is_some_and(|cell| fx.tree().data_of(cell.node).and_then(|data| data.is_selected()).unwrap_or(false))
+    fx.by_label(&name(c)).is_some_and(|cell| fx.tree().selected_of(cell.node).unwrap_or(false))
 }
 
 #[trial]

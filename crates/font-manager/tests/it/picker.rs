@@ -235,7 +235,8 @@ fn the_closed_fields_wheel_steps_one_family_per_line_through_the_filtered_order_
     fx.advance(GESTURE_GAP * 2.0).idle(3);
     assert_eq!(seen.borrow().picks, [(all[2].clone(), None)], "the run's end picks once");
 
-    let settings = FontPickerSettings { favorites: vec![all[0].clone(), all[2].clone()], ..FontPickerSettings::default() };
+    let mut settings = FontPickerSettings::default();
+    settings.favorites = vec![all[0].clone(), all[2].clone()];
     let mut favorites = FontFilters::default();
     favorites.favorites = true;
     let (mut fx, seen) = rig_with(three_faces(), vec![], settings, Some(favorites));
@@ -319,7 +320,8 @@ fn a_picker_that_stops_showing_with_a_preview_is_reported_once_in_ended_previews
 #[trial]
 fn samples_on_white_paint_dark_ink_on_a_lighter_paper_in_a_dark_theme() {
     let white_papers = |on_white: bool| {
-        let settings = FontPickerSettings { samples_on_white: on_white, ..FontPickerSettings::default() };
+        let mut settings = FontPickerSettings::default();
+        settings.samples_on_white = on_white;
         let (mut fx, _) = rig_with(three_faces(), vec![], settings, None);
         fx.theme(Mode::Dark, Contrast::Standard);
         fx.settle();
