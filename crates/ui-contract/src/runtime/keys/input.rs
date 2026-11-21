@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// What the strip of one event decided.
 struct Strip<'a> {
     os: Os,
-    layout: &'a Layout,
+    layout: &'a mut Layout,
     keeps_tab: bool,
     pages: bool,
     /// The focused component reads every press as a chord (`OwnerClass::Recorder`).
@@ -72,13 +72,14 @@ impl Strip<'_> {
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
     /// with the press, in this pass or a later one. `at` is the event's arrival time (`Arrived::at`).
-    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent, at: Option<f64>) -> bool {
+    fn event(&mut self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent, at: Option<f64>) -> bool {
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
             batch.last_press = None;
         }
         match event {
             KeyEvent::Press { key, input, repeat } => {
+                let input = self.layout.capture_bracket_fallback(input);
                 alt.other_key = true;
                 if key == Key::Enter {
                     batch.enter_down = Some(true);
@@ -131,6 +132,14 @@ impl Strip<'_> {
                 alt.other_key = true;
                 let mut claimed = false;
                 if let Some(last) = batch.last_press.take() {
+                    if !alt.right
+                        && self.layout.observe_typed_bracket(last.input.mods, &text)
+                        && let Some(press) = last.pressed
+                        && let Some(shortcut) = batch.shortcuts.iter_mut().rev().find(|shortcut| shortcut.press == Some(press))
+                    {
+                        // If this press is dispatched as a shortcut, it knows about its own text.
+                        shortcut.input = self.layout.capture_bracket_fallback(shortcut.input);
+                    }
                     if let Some(physical) = last.input.physical.filter(|_| !alt.right) {
                         batch.learned.push((physical, last.input.mods, text.clone()));
                     }
@@ -479,9 +488,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
         stage.layout.set_latin(input.keyboard_layout_is_latin);
-        let strip = Strip {
+        let mut strip = Strip {
             os,
-            layout: &stage.layout,
+            layout: &mut stage.layout,
             keeps_tab: keys.is_some_and(|keys| keys.keep == focus::KeepKeys::Tab),
             pages: record.pages,
             records: keys.is_some_and(|keys| matches!(keys.owner, OwnerClass::Recorder)),
