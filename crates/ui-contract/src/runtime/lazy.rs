@@ -166,8 +166,8 @@ pub(crate) struct Measured {
     pub(crate) room: Rect,
 }
 
-/// Where a memoized view ran: it replays only at a place of the same size, layer, layout and environment, and its
-/// record moves with the room's position (`Place::shift_to`).
+/// Where a memoized view ran: it replays only at a place of the same size, layer, layout, opacity and environment, and
+/// its record moves with the room's position (`Place::shift_to`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
     /// The region its parent offered it.
@@ -179,6 +179,9 @@ pub(crate) struct Place {
     /// The font atlas the run's text points into (`Fonts::atlas_generation`): egui clears the atlas when it fills up
     /// and rebuilds it for new text options, and a kept galley's glyphs then name other glyphs.
     pub(crate) atlas: u64,
+    /// The opacity everything painted in the room is faded to (`Ui::opacity`, a layer fading in or out): the run's
+    /// colours hold it.
+    pub(crate) opacity: f32,
     /// The scope's environment (`Env::key`): its tokens (theme, density), scale, direction, language and whether the
     /// window is active.
     pub(crate) env: EnvKey,
@@ -193,8 +196,8 @@ struct Moved {
 
 impl Place {
     /// How a run at this place that took `rect` replays at `now`, or `None` when it cannot. The room may have moved; its
-    /// size, the layer, layout, scale, font atlas and environment are the ones the run had. A record that shows an
-    /// overlay replays only at the room and clip of its run (`Record::pinned`). Any other record moves by the room's move
+    /// size, the layer, layout, scale, font atlas, opacity and environment are the ones the run had. A record that shows
+    /// an overlay replays only at the room and clip of its run (`Record::pinned`). Any other record moves by the room's move
     /// when that keeps where a run places content (`keeps_placement`, so a moved record is what a run there gives) and,
     /// for a move, the record holds nothing a move cannot place (`Record::movable`: no paint callback) on an
     /// untransformed layer (`transformed`: egui's AccessKit bounds are layer space only there). Its clip rects follow
@@ -212,6 +215,7 @@ impl Place {
             && now.layout == self.layout
             && now.pixels_per_point == self.pixels_per_point
             && now.atlas == self.atlas
+            && now.opacity == self.opacity
             && now.env == self.env;
         let placeable = if record.pinned() {
             offset == Vec2::ZERO && now.clip == self.clip
