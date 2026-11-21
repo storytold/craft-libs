@@ -4,9 +4,10 @@
 //! today's cross.
 
 use craft_behavior::kurbo::{Point, Vec2};
-use craft_behavior::{CancelReason, CanvasView, Cursor, CursorIcon};
-use craft_draw::ui::measure::{RulerLine, RulerTool, show_ruler};
+use craft_behavior::{CancelReason, CanvasView, Cursor, CursorIcon, MotionMode};
+use craft_draw::ui::measure::{RulerLine, RulerOverlay, RulerTool, show_ruler};
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::primitives::Draw;
 use craft_ui::testing::{ToolFixture, trial};
 use egui::{Color32, Pos2, Shape};
@@ -268,6 +269,58 @@ fn the_line_and_the_dot_keep_their_screen_size_at_other_zooms() {
     }
     assert!(seen.iter().all(|(width, _)| *width == seen[0].0), "the line keeps its one-pixel width at every zoom: {seen:?}");
     assert!(seen.windows(2).all(|pair| pair[0].1 == pair[1].1), "the dot keeps its screen size at every zoom: {seen:?}");
+}
+
+/// The Ruler overlay shown interactive (its own tool's control), over the fixed `line`: the body binds the
+/// overlay to the line and drops its edit, so the marks under the pointer stay put while they are dragged.
+fn interactive(line: RulerLine) -> ToolFixture<PaintOnly> {
+    let held = Rc::new(RefCell::new(Some(line)));
+    ToolFixture::with_view(
+        "Ruler",
+        PaintOnly,
+        move |room| view(room, 1.0),
+        move |ui, body| {
+            let mut value = *held.borrow();
+            RulerOverlay::new("Ruler", Bind::bound(&mut value)).show_at(ui, body.rect);
+        },
+    )
+}
+
+/// The theme's accent hover and pressed: the colours a hovered or dragged point paints its mark in.
+fn accent() -> (Color32, Color32) {
+    let tokens = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard);
+    (craft_ui::style::rgba_color(tokens.color.accent.hover), craft_ui::style::rgba_color(tokens.color.accent.pressed))
+}
+
+/// The vertex dot reads the Start point's own state, like the arm end's cross: it keeps the line's colour while
+/// the pointer is away from the vertex, turns the accent while the vertex is pressed and dragged, and takes the
+/// line's colour back once the drag ends and the point rests.
+#[trial]
+fn the_vertex_dot_turns_accent_while_the_vertex_is_dragged() {
+    let line = with_arm(anchor());
+    let mut fixture = interactive(line);
+    fixture.fixture().motion(MotionMode::Off);
+    fixture.fixture().frame(Vec::new());
+    let shapes = fixture.fixture().frame_shapes();
+    let vertex = Pos2::new(line.start.x as f32, line.start.y as f32); // zoom 1: the screen point of the document point
+    let rest = dots_at(&shapes, vertex);
+    assert_eq!(rest.len(), 1, "one dot on the vertex");
+    assert_eq!(rest[0].1, ink(), "at rest the dot keeps the line's colour");
+
+    let (hover, pressed) = accent();
+    fixture.press_at(vertex);
+    let dragged = vertex + egui::vec2(12.0, 8.0);
+    fixture.move_to(dragged);
+    let dragging = dots_at(&fixture.fixture().frame_shapes(), vertex);
+    assert_eq!(dragging.len(), 1, "the dot stays on the vertex through the drag");
+    assert!(dragging[0].1 == hover || dragging[0].1 == pressed, "while the vertex is dragged the dot is the accent: {:?}", dragging[0].1);
+
+    fixture.release_at(dragged);
+    fixture.move_to(vertex + egui::vec2(150.0, 120.0));
+    fixture.fixture().frame(Vec::new());
+    let after = dots_at(&fixture.fixture().frame_shapes(), vertex);
+    assert_eq!(after.len(), 1, "the dot is on the vertex again after the release");
+    assert_eq!(after[0].1, ink(), "the dot takes the line's colour back once the point rests");
 }
 
 /// A drag that has barely begun — ends under 2 screen points apart — draws no line, as the line preview lags

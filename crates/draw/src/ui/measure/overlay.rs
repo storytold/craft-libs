@@ -36,7 +36,8 @@ pub struct RulerOverlayStyle {
     /// The length of each arm of a cross, from its point.
     arm: f32,
     /// The radius of the dot on a protractor's vertex: the small handle's half, so about 6 screen points across
-    /// (the reference application measures about 7; this is the nearest theme size).
+    /// (the reference application measures about 7; the handle tokens sm 6 and md 8 tie for that, and the smaller
+    /// was chosen).
     dot: f32,
     /// The marks' line per state: the line's colour at rest, the accent while hovered or dragged.
     line: Stateful<StyleColor>,
@@ -296,7 +297,10 @@ impl Component for RulerOverlay<'_> {
                 // A plain ruler's ends paint nothing (photocraft#11988); a protractor's vertex shows the small dot
                 // in the line's colour, which is the colour `show_lines` paints the line in.
                 RulerPart::Start if line.protractor.is_some() => {
-                    draw.fill(&PaintShape::Circle(centre, style.dot), cx.resolve(&style.line));
+                    // A point the pass's edit just added has no part yet; it shows as the control at rest.
+                    let at_rest = cx.part_if_declared(POINT.at(RulerPart::Start.key())).is_none();
+                    let ink = if at_rest { cx.resolve(&style.line) } else { cx.resolve_part(POINT.at(RulerPart::Start.key()), &style.line) };
+                    draw.fill(&PaintShape::Circle(centre, style.dot), ink);
                 }
                 // The arm's free end keeps today's cross: the issue leaves that marker unmeasured.
                 RulerPart::Protractor => {
