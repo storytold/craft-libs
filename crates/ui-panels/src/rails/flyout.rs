@@ -4,12 +4,13 @@ use super::tool::{RailTool, SlotDrop, SlotId, ToolDrag, ToolDropped};
 use crate::buttons::{IconButton, PopupMark};
 use crate::contract::overlay::{Anchor, Place};
 use crate::contract::{
-    Access, Common, Component, Cx, DragPreview, MeasureCx, Name, NoValue, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
+    Access, Common, Component, Cx, DragPreview, Input, MeasureCx, Name, NoValue, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
     PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, Trigger,
 };
 use crate::menu::{self, Menu, MenuItem};
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
+use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, GlyphRole, StyleCx};
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
@@ -191,6 +192,8 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
 
 impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
     const ROLE: Role = Role::BUTTON;
+    /// Space runs the face's command as a tap does: the focus has no held press, so it opens no flyout.
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_space_activation();
     const SHOWS_LABEL: bool = false;
     type Style = FlyoutButtonStyle;
     type Output = FlyoutOutput<T>;

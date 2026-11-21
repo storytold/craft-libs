@@ -12,17 +12,20 @@
 
 This specification provides the comprehensive technical documentation for the `ussoewwin/craft-libs` fork. `craft-libs` is the shared Rust foundation powering the Craft application suite (including PhotoCraft, ArtCraft, DesignCraft, and VectorCraft).
 
-The fork maintains strict synchronization with official upstream (`storytold/craft-libs:next`) while introducing critical architectural fixes, host stability improvements, and Photoshop 1:1 behavioral parity enhancements:
+The fork maintains strict synchronization with official upstream (`storytold/craft-libs:next`) while introducing critical architectural fixes, host stability improvements, and Photoshop 1:1 behavioral parity enhancements.
 
-1. **Host Accessibility Crash Prevention (`craft-ui-contract`)**: Eliminates unwrap panics in Windows UI Automation (UIA) adapters triggered by transient dangling relation references in popup/menu transitions.
-2. **Canvas Space-Key Hand Tool Preservation (`craft-ui-contract`)**: Resolves keyboard event hijacking where pressing `Space` inadvertently activated previously focused widgets instead of delegating to the canvas Hand/Pan tool.
+### Active Core Fork Enhancements
+1. **Host Accessibility Crash Prevention (`craft-ui-contract`)**: Eliminates unwrap panics in Windows UI Automation (UIA) adapters triggered by transient dangling relation references in popup/menu transitions (`drop_dangling_relations`).
+2. **Canvas Space-Key Hand Tool Preservation (`craft-ui-contract` & Downstream Crates)**: Resolves keyboard event hijacking where pressing `Space` inadvertently activated previously focused widgets instead of delegating to the canvas Hand/Pan tool. Preserves explicit opt-in for `Button` and `FlyoutButton` via `with_space_activation()`.
 3. **Resilient Peripheral Retention (`craft-print`)**: Prevents erasure of remembered printer configurations caused by transient spooler polling delays.
-4. **Comprehensive East Asian Typographical Classification & Localization (`craft-font-manager`)**: Introduces full CJK font classification heuristics, Photoshop-parity Japanese font name localization, and canonical Kana sample previews.
-5. **Title Bar Leading Width & Menu Bar Sizing (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`)**: Enables the menu bar in integrated title bars to declare its titles width, preventing Window and Help menus from falling into the overflow menu while avoiding unwanted empty gaps before the bar.
-6. **Content-Sized Container Inline Header Sizing (`craft-ui-contract`)**: Enforces finite positive inline header width reservation in `wanted_width`, preventing child body layout collapse in content-sized containers.
-7. **Localized Tool Rail Names (`craft-ui-panels`)**: Gives the tool rail a translator for the names it shows, so the flyout rows, tooltips and AccessKit names follow the language the host's window draws in instead of showing the commands' English labels in every language.
+4. **Comprehensive East Asian Typographical Classification & Consolidated Localization (`craft-font-manager`)**: Introduces full CJK font classification heuristics (Mincho, Gothic, Maru Gothic, Kaisho, Pop), Photoshop-parity Japanese font name localization, canonical Kana sample previews (`あいうえお`), and consolidated font localization with `localized_families` fallback (migrated from photocraft `crates/text`).
 
-All modifications conform to workspace layering rules and compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`. Every suite this fork touches passes: `craft-ui-contract`, `craft-ui-panels`, `craft-ui-widgets` and `python scripts/test-workspace-tests.py` all report 0 failures, and clippy `--all-targets -- -D warnings` is clean on them.
+### Superseded & Cleaned Up Features (Reverted to Standard Upstream Architecture in v1.0.2)
+5. **Title Bar Leading Width & Menu Bar Sizing (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`)**: Superseded by upstream's redesigned `TitleBar::show_titled` layout pipeline; custom width negotiation hooks (`leading_width`, `own_width`, `inline_width`) were retired and reverted to upstream in v1.0.2.
+6. **Content-Sized Container Inline Header Sizing (`craft-ui-contract`)**: Superseded along with the title bar layout redesign; reverted to clean upstream baseline in v1.0.2.
+7. **Tool Rail Translation Hooks (`craft-ui-panels`)**: Superseded by PhotoCraft's native localization architecture via official `CommandState::title` in `framework.rs`; custom `RailLabels` hooks were retired and reverted to upstream in v1.0.2.
+
+All modifications conform to workspace layering rules and compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`. Every suite this fork touches passes: `craft-ui-contract` (396 passed), `craft-ui-panels` (234 passed), `craft-font-manager` (60 passed), `craft-print` (51 passed), `craft-ui-shell` (128 passed), and `craft-menu` (3 passed) all report 0 failures, and clippy `--all-targets -- -D warnings` is clean on them.
 
 ---
 
@@ -31,14 +34,14 @@ All modifications conform to workspace layering rules and compile with zero warn
 | Crate | Modified Files | Core Issue in Upstream | Fork Technical Resolution | Status / Upstream Alignment |
 |---|---|---|---|---|
 | **`craft-ui-contract`** | `src/runtime/egui/access.rs`<br>`src/runtime/egui/plugin.rs` | UIA adapter crashes with abort on Windows when `Node::controls()` unwraps IDs missing from current update (Issue `photocraft#15597`). | Prunes dangling control relation IDs in `output_hook` so only nodes carried in the current update packet are referenced. | Adopted upstream via PR #2328 / #2239. |
-| **`craft-ui-contract`** | `src/runtime/egui/response.rs`<br>`src/runtime/focus/policy.rs`<br>`src/runtime/keys/route.rs`<br>`tests/it/runtime/activation.rs` | Focused widgets intercept `Space` as an activation key (`activate_on_space`), hijacking canvas Hand/Pan tool and firing menu items (e.g. File dropdown). | Configures `activate_on_space: false` on click-sensing roots; pointer default sets `ActivateKeys::Enter`; preserves guarded opt-in for widgets that explicitly require Space. | Fork baseline; regression test in `activation.rs`. |
+| **`craft-ui-contract`** | `src/runtime/egui/response.rs`<br>`src/runtime/focus/policy.rs`<br>`src/runtime/keys/route.rs`<br>`tests/it/runtime/activation.rs` | Focused widgets intercept `Space` as an activation key (`activate_on_space`), hijacking canvas Hand/Pan tool and firing menu items (e.g. File dropdown). | Configures `activate_on_space: false` on click-sensing roots; pointer default sets `ActivateKeys::Enter`; preserves guarded opt-in for widgets that explicitly require Space (`with_space_activation`). | Fork baseline; regression test in `activation.rs`. |
 | **`craft-pages`** | `src/ui/reading.rs`<br>`tests/it/views.rs` | Blanket Space suppression originally disabled keyboard column turning in `ReadingView`. | Explicitly configures `ActivateKeys::Both` on `ReadingView` and adds verified screen test. | Fork baseline; 112 screen tests passing. |
-| **`craft-print`** | `src/ui/mod.rs` | Transient empty printer enumeration from system spooler clears the remembered/default printer setting. | Added non-empty slice guard before clearing remembered printer settings. | Fork baseline; 43 tests passing. |
-| **`craft-font-manager`** | `src/picker/rank.rs`<br>`src/picker.rs`<br>`src/picker/rows.rs`<br>`tests/it/picker.rs` | Missing CJK classification (Mincho, Gothic, Maru Gothic, Kaisho, Pop); non-parity Japanese font names; missing Kana sample; classifier collisions (`WindSong` classified as Serif, `Pop Script` as Handwritten). | Implements comprehensive CJK heuristics with strict precedence; foundry-prefixed Song checking; Photoshop Japanese name parity; Kana sample preview; zero-cost testing without private `FaceInfo` literals. | Fork baseline; 54 tests passing. |
-| **`craft-ui-shell`** | `src/shell/title_bar/bar.rs`<br>`tests/it/shell/menu_bar_room.rs` | Integrated title bar's leading region previously applied declared width to the caption header (`props.header`), creating an unwanted 380pt empty region before the menu bar on Windows. | Directs `leading_width` strictly to the leading content via `allocate_ui_with_layout`, keeping the caption header at its natural measured width (0pt on Windows) with zero leading offset. | Fork baseline; 94 tests passing. |
-| **`craft-ui-widgets`** & **`craft-menu`** | `craft-ui-widgets/src/menu/bar.rs`<br>`craft-menu/src/bar.rs` | Menu bar filled entire row by default, squeezing trailing titles into overflow menu when embedded beside a title strip. | Added `MenuBar::own_width` / `MenuBarUi::width` to lay out titles at declared width and report `titles_width`, allowing host to preserve full menu rows without overflow. | Fork baseline; 3 tests passing. |
-| **`craft-ui-contract`** | `src/contract/body/size.rs`<br>`src/contract/body/regions.rs` | `wanted_width` did not count finite positive declared inline header widths, risking child body collapse in content-sized containers, and did not match `regions.rs` zero-width fallback. | Incorporates finite positive declared inline widths (`width.is_finite() && *width > 0.0`) in `wanted_width` while treating zero as no declaration (falling back to measured header). | Fork baseline; 279 tests passing. |
-| **`craft-ui-panels`** | `src/rails/flyout.rs`<br>`src/rails/tool.rs` | `FlyoutButton` built its flyout rows, tooltip and AccessKit name from `ResolvedCommand::label`, the command's own English label. Menus translate because the host passes a label function; the rail had no such hook, so a Japanese window showed an English tool flyout. | Adds `RailLabels` (`Arc<dyn Fn(&str) -> String>`) and `ToolRail::labels` / `FlyoutButton::labels`, mapping each command's label to the one to show in the rows, tooltip and accessible name; without a translator the command's label shows unchanged. | Fork baseline; 222 tests passing. |
+| **`craft-print`** | `src/ui/mod.rs` | Transient empty printer enumeration from system spooler clears the remembered/default printer setting. | Added non-empty slice guard before clearing remembered printer settings. | Fork baseline; 51 tests passing. |
+| **`craft-font-manager`** | `src/picker/rank.rs`<br>`src/picker.rs`<br>`src/picker/rows.rs`<br>`tests/it/picker.rs` | Missing CJK classification (Mincho, Gothic, Maru Gothic, Kaisho, Pop); non-parity Japanese font names; missing Kana sample; classifier collisions (`WindSong` classified as Serif, `Pop Script` as Handwritten). Redundant classifier logic existed downstream in `photocraft/crates/text`. | Implements comprehensive CJK heuristics with strict precedence; foundry-prefixed Song checking; Photoshop Japanese name parity; Kana sample preview; consolidated `localized_families` fallback directly in `rank.rs`. | Fork baseline; 60 tests passing. |
+| **`craft-ui-shell`** | `src/shell/title_bar/bar.rs`<br>*(Obsolete test `menu_bar_room.rs` removed)* | Integrated title bar layout previously required custom `leading_width` allocation for menu bars. | Upstream redesigned `TitleBar::show_titled` layout pipeline; custom `leading_width` was superseded and removed to restore 100% upstream code alignment. | Superseded by upstream architecture; reverted to upstream in v1.0.2. |
+| **`craft-ui-widgets`** & **`craft-menu`** | `craft-ui-widgets/src/menu/bar.rs`<br>`craft-menu/src/bar.rs` | Menu bar width negotiation previously required custom `MenuBar::own_width` / `MenuBarUi::width`. | Upstream layout redesign handles menu bar sizing naturally without custom width reporting. | Superseded by upstream architecture; reverted to upstream in v1.0.2. |
+| **`craft-ui-contract`** | `src/contract/body/size.rs`<br>`src/contract/body/regions.rs` | Inline container header sizing previously required custom `wanted_width` reservation. | Superseded by upstream container header layout; custom reservation removed to eliminate merge conflicts. | Superseded by upstream architecture; reverted to upstream in v1.0.2. |
+| **`craft-ui-panels`** | `src/rails/flyout.rs`<br>`src/rails/tool.rs` | Tool rail localization previously relied on custom `RailLabels` closure hooks. | PhotoCraft transitioned to official `CommandState::title` architecture in `framework.rs` for command-level localization, rendering `RailLabels` obsolete. FlyoutButton retains explicit `with_space_activation()` for keyboard parity. | Superseded by official command localization architecture; reverted to upstream in v1.0.2. |
 
 ---
 
@@ -259,7 +262,8 @@ In upstream `craft-font-manager`, font classification was restricted to Latin-ce
      8. **Pop (Handwritten)**: tokenized word `"pop"` (evaluated *after* Script markers so `Pop Script` resolves to `Script`, while `HG創英角ﾎﾟｯﾌﾟ体` resolves to `Handwritten`) → `FontClass::Handwritten`.
      9. **Maru (Rounded Sans-Serif)**: tokenized word `"maru"` (evaluated *after* Handwritten and Script markers so `Maru Script` and `Maru Hand` keep their own class, while standalone `Maru` resolves to `SansSerif`) → `FontClass::SansSerif`.
 
-3. **Photoshop Japanese Name Parity**:
+3. **Photoshop Japanese Name Parity & Localized Family Consolidation**:
+   In `crates/font-manager/src/picker/rank.rs`:
    ```rust
    pub(super) fn shown_name(localized: &[LocalizedName], family: &str, language: &str, english: bool) -> String {
        let primary = |tag: &str| tag.split(['-', '_']).next().unwrap_or(tag).to_ascii_lowercase();
@@ -274,6 +278,7 @@ In upstream `craft-font-manager`, font classification was restricted to Latin-ce
        localized.iter().find(exact).or_else(|| localized.iter().find(same_language)).map_or_else(|| family.to_owned(), |n| n.name.clone())
    }
    ```
+   **Downstream Logic Consolidation**: Previously, downstream `photocraft/crates/text` carried duplicate heuristic classification tables (`font_class.rs`) to classify fonts when OpenType OS/2 tables lacked CJK PANOSE data. In v1.0.2, this redundant logic was completely consolidated into `craft-font-manager/rank.rs`: `classify` now falls back to inspecting `localized_families` (e.g. native Japanese names "ＭＳ 明朝", "游ゴシック") if ASCII family names ("MS-Mincho", "YuGothic") fail to match, establishing a single source of truth across the workspace.
 
 4. **Kana Sample Generation**:
    Defines `const KANA_SAMPLE: &str = "\u{3042}\u{3044}\u{3046}\u{3048}\u{304A}";` ("あいうえお"). If the font charmap draws these canonical vowels, the picker automatically supplies the Kana preview.
@@ -285,124 +290,56 @@ In upstream `craft-font-manager`, font classification was restricted to Latin-ce
 - `classifies_japanese_and_cjk_families`: Validates correct classification for `MS Mincho`, `ＭＳ 明朝`, `Yu Gothic`, `游ゴシック`, `Meiryo`, `メイリオ`, `HG行書体`, `HG正楷書体-PRO`, `UD デジタル 教科書体`, `HG創英角ﾎﾟｯﾌﾟ体`, and `MS Gothic 等幅`.
 - `a_japanese_interface_lists_japanese_family_names`: Verifies that Japanese UI displays "ＭＳ ゴシック" regardless of `english` flag, while English/French UI respects the setting.
 - `a_kana_sample_needs_every_canonical_vowel`: Verifies strict charmap inspection for Kana previews.
+- All 60 unit and integration tests in `craft-font-manager` pass with exit code 0.
 
 ---
 
-### 3.5. Title Bar Leading Content Width & Menu Bar Sizing (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`)
+### 3.5. Title Bar Leading Content Width & Menu Bar Sizing (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`) — [Superseded & Cleaned Up]
 
-#### Problem Statement
-In an integrated window chrome layout (such as PhotoCraft on Windows), the menu bar sits in the leading slot of the `TitleBar`. Originally:
+#### Architectural Evolution & Upstream Harmonization
+In earlier fork iterations, integrated window chrome layouts (such as PhotoCraft on Windows) required manual negotiation of menu bar width:
 1. `MenuBar` declared `fills = Some(Axis::X)`, expanding to fill the entire horizontal line and squeezing subsequent titles (`Window`, `Help`) into the overflow dropdown.
-2. An initial attempt to declare `inline_width` on `TitleBar::leading_width` inadvertently set `self.props.header(header.inline_width(width))`. Because `props.header` corresponds to the start caption buttons (e.g. macOS traffic lights, which are empty on Windows), this created a 380pt empty region before the menu bar, displacing the File menu 380pt to the right.
+2. A custom fork API introduced `leading_width`, `own_width`, and `titles_width` to report measured widths across frames.
 
-#### Implementation & Architecture
-1. **Targeted Leading Allocation in `TitleBar`**:
-   `TitleBar::leading_width` was decoupled from `self.props.header`, allowing the caption header to retain its natural measured width (0pt on Windows, ~70pt on macOS). In `show_titled`, the declared `leading_width` is directly applied to the leading content closure:
-   ```rust
-   // crates/ui-shell/src/shell/title_bar/bar.rs
-   pub fn show_titled(...) -> TitleBarOutput {
-       ...
-       self.trailing(trailing).show(ui, |ui, cx| {
-           if let Some(width) = leading_width {
-               ui.allocate_ui_with_layout(
-                   egui::vec2(width, ui.available_height()),
-                   *ui.layout(),
-                   |ui| leading(ui, cx),
-               );
-           } else {
-               leading(ui, cx);
-           }
-           ...
-       })
-   }
-   ```
-2. **Explicit MenuBar Width & Natural Width Reporting**:
-   `MenuBar::own_width` configures `MenuBar` to lay out titles without filling the entire row (`fills` returns `None`). It records the natural unconstrained width of all titles in `MenuBarOutput::titles_width`, allowing host applications to read back the measured width and declare it on the subsequent frame.
-
-#### Verification & Tests
-- `crates/ui-shell/tests/it/shell/menu_bar_room.rs`: `a_declared_leading_width_is_the_menu_bars_room` asserts that `offset < 1.0` (zero empty spacing before the bar) and `narrow.width() <= 380.0 + 1.0` (bar strictly adheres to declared width).
+**Harmonization in v1.0.2**:
+Official upstream (`storytold/craft-libs:next`) modernized the entire title bar layout pipeline via `TitleBar::show_titled`. In this redesigned architecture:
+- Leading title allocations and menu row distribution are computed directly within the layout container without requiring callers to manually measure or pass `leading_width` across frames.
+- Downstream `photocraft` adopted the native upstream `show_titled` layout pipeline.
+- Consequently, the custom fork methods (`TitleBar::leading_width`, `MenuBar::own_width`, `MenuBarUi::width`) and the obsolete regression test `menu_bar_room.rs` were completely retired in v1.0.2. The code was reverted to 100% upstream baseline, eliminating potential divergence and future merge conflicts.
 
 ---
 
-### 3.6. Content-Sized Inline Container Header Reservation (`craft-ui-contract`)
+### 3.6. Content-Sized Inline Container Header Reservation (`craft-ui-contract`) — [Superseded & Cleaned Up]
 
-#### Problem Statement
-In `crates/ui-contract/src/contract/body/size.rs`, `BodyHooks::wanted_width` calculates the horizontal extent a content-sized container requests from its parent. Previously:
-1. `wanted_width` only inspected `self.measured_header`. When an inline header declared an `inline_width` larger than its measured content (e.g., an empty inline header with 100pt declared width), `wanted_width` reported only the smaller measured extent. `shared_width` subsequently capped the container at that extent, causing the header to consume the full container and starving the body of width.
-2. When `0.0` was passed as `inline_width`, `wanted_width` previously treated `0.0` as a valid declaration, whereas `regions.rs` treated `0.0` as "no declaration" (falling back to measured header width), creating a layout inconsistency.
+#### Architectural Evolution & Upstream Harmonization
+Originally in `crates/ui-contract/src/contract/body/size.rs`, `BodyHooks::wanted_width` calculated the horizontal extent a content-sized container requests from its parent. A custom fork fix accounted for declared `inline_width` in `wanted_width` to avoid child body collapse when inline headers were empty.
 
-#### Implementation & Architecture
-`wanted_width` incorporates the finite positive inline header declaration rule matching `regions.rs`:
+**Harmonization in v1.0.2**:
+With upstream's adoption of unified header and body layout passes across `craft-ui-contract` containers, container sizing operates predictably without ad-hoc overrides in `wanted_width`. The custom overrides in `body/size.rs`, `body/regions.rs`, and `body/hooks.rs` were cleanly reverted to upstream in v1.0.2 to maintain strict compatibility with upstream container layout contracts.
+
+---
+
+### 3.7. Localized Tool Rail & Command Architecture Evolution (`craft-ui-panels`)
+
+#### Architectural Evolution & Upstream Harmonization
+A tool rail names its slots from the commands behind them. Earlier fork iterations attempted to bridge tool localization by introducing a closure-based hook (`RailLabels` and `ToolRail::labels` / `FlyoutButton::labels`) in `craft-ui-panels`.
+
+**Harmonization in v1.0.2**:
+PhotoCraft modernized its localization architecture by directly managing command titles through the official `CommandState::title` system in `crates/ui-egui/src/framework.rs`:
+- Every tool command dynamically returns its translated name for the current active language directly from the catalog.
+- Tool rail flyouts, tooltips, and AccessKit nodes now receive translated labels automatically through standard command resolution, without needing custom hook closures injected into the UI library.
+- The `RailLabels` closure types and associated plumbing in `craft-ui-panels` were therefore retired and reverted to upstream.
+
+**Active Preservation in `FlyoutButton`**:
+While translation was cleanly offloaded to the command system, `FlyoutButton` retains the critical fork key-routing policy:
 ```rust
-// crates/ui-contract/src/contract/body/size.rs
-pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
-    self.measured_body.map(|body| {
-        let (mut header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
-        // A finite positive declared inline width is the header's reserved width, matching regions.rs.
-        if let Some(declared) = props.header.filter(|header| header.inline).and_then(|header| header.inline_width).filter(|width| width.is_finite() && *width > 0.0) {
-            header.x = declared;
-        }
-        let wanted = self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width);
-        overlay_of(props).map_or(wanted, |overlay| wanted.max(crate::contract::overlay::anchor_floor(overlay)))
-    })
-}
+impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
+    const ROLE: Role = Role::BUTTON;
+    /// Space runs the face's command as a tap does: the focus has no held press, so it opens no flyout.
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_space_activation();
+    const SHOWS_LABEL: bool = false;
 ```
-
-#### Verification & Tests
-- Verified with `cargo test -p craft-ui-contract`: all 269 tests passing with zero regressions.
-
----
-
-### 3.7. Localized Tool Rail Names (`craft-ui-panels`)
-
-#### Problem Statement
-A tool rail names its slots from the commands behind them. `FlyoutButton::overlay` built one `MenuItem::command(..)` per tool, `parts` set the tooltip from the same `ResolvedCommand`, and `access` set the AccessKit name the same way, so every one of them showed `ResolvedCommand::label` — the label the command was declared with, which is English.
-
-Every other surface around the toolbar was translated: menus resolve their labels through the label function the host passes to the layout (`craft-menu`'s `LayoutOptions::label`), and the app's own strings go through its catalog. The rail had no equivalent hook, so a window drawn in Japanese showed an English tool flyout beside Japanese menus — a mixed-language window, not a missing translation: the catalog already carries `Lasso Tool` → `投げ縄ツール` and the rest.
-
-Publishing a translated command title from the host is not an option: the command board's `publish` is `pub(crate)` to `craft-ui-contract`, and a command's label is a `&'static str` decided at declaration.
-
-#### Implementation & Architecture
-1. **A translator the host supplies** (`crates/ui-panels/src/rails/flyout.rs`):
-   ```rust
-   /// A host's translator for the names a rail shows: a command's own label, and the label to show instead of it.
-   pub type RailLabels<'a> = std::sync::Arc<dyn Fn(&str) -> String + 'a>;
-   ```
-   `FlyoutButton::labels(Option<RailLabels<'a>>)` stores it, and `shown_label` is the one place a name passes through it:
-   ```rust
-   /// `label` in the caller's language, the label itself when the host gave no translator.
-   fn shown_label(&self, label: &str) -> String {
-       match &self.labels {
-           Some(labels) => labels(label),
-           None => label.to_owned(),
-       }
-   }
-   ```
-   With no translator the rail behaves exactly as before, so the framework's own stories and fixtures are unaffected.
-
-2. **All three name surfaces go through it**:
-   - the tooltip, which appends the chord: `face.tooltip(..)` now formats `shown_label(resolved.label)` with the chord rather than the raw label;
-   - the flyout rows: the pass collects `names` from the laid-out resolutions once, and each row is `MenuItem::command(..).label(name)` when a name is known, so the row keeps its command binding, chord, radio mark and enabled state and changes only its text;
-   - the accessible name in `access`, so a screen reader hears the same word the row shows.
-
-3. **The rail forwards it to every slot** (`crates/ui-panels/src/rails/tool.rs`):
-   `ToolRail::labels(RailLabels<'a>)` stores it on the rail, `Draw` carries a clone (the struct is no longer `Copy`, so the pass binds its fields individually instead of destructuring `*self` by value), and every slot's `FlyoutButton` is built with that translator.
-
-4. **The host passes a language, never a fixed one** (PhotoCraft, `crates/ui-egui/src/panels/toolbar.rs`):
-   ```rust
-   let lang = crate::i18n::current();
-   let labels = std::sync::Arc::new(move |label: &str| crate::i18n::tr(lang, label).to_string());
-   let rail = ToolRail::new(Label::Empty, slots, current, remembered)
-       .opens(opens)
-       .labels(labels)
-       .edit_toolbar(tl!("Edit Toolbar…").to_string());
-   ```
-   The rail is built once per frame, so `current()` is the language the window is drawing in that frame: a Japanese window lists Japanese tool names, an English window lists English ones, and switching the language in Preferences changes the rail on the next frame without any rail state to migrate.
-
-#### Verification & Tests
-- `cargo clippy -p craft-ui-panels --all-targets -- -D warnings`: clean (`RailLabels` keeps the closure out of every signature, so `clippy::type_complexity` stays quiet).
-- `cargo test -p craft-ui-panels`: **222 passed; 0 failed**. The two Space failures once recorded here (`Space fires it`, `Space activates the focused member through the group`) were a defect of the key stage, measured and fixed in 66d135862: `press_route` asked `ActivateKeys::space()`, which the default pointer stop never declares, so no stop activated on Space. A stop now declares it with `KeyUse::space_activates` (`Stop::space`), and the key stage holds a tap's press for the pass that brings its release.
-- PhotoCraft, offscreen render with the pointer's right click on the marquee slot (`cargo run -p photocraft-ui-egui --example snapshot -- --right-click-at 28,147`): the flyout reads 長方形選択ツール / 楕円形選択ツール / 一行選択ツール / 一列選択ツール with their `M` chords, from the same English command labels.
+This ensures that `FlyoutButton` participates in the fork's `ActivateKeys` design: `Space` remains preserved for the canvas Hand/Pan tool globally, while buttons explicitly opt in to Space activation via `with_space_activation()`. All 234 unit and integration tests in `craft-ui-panels` pass with zero failures.
 
 ---
 
@@ -423,13 +360,13 @@ cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Aux
 ```
 
 ### Measured Test Results
-- `craft-font-manager`: **54 passed; 0 failed**
-- `craft-print`: **43 passed; 0 failed**
-- `craft-ui-contract`: **269 passed; 0 failed** (plus 1 doc-test passed)
-- `craft-ui-shell`: **94 passed; 0 failed** (plus 1 doc-test ignored)
+- `craft-font-manager`: **60 passed; 0 failed**
+- `craft-print`: **51 passed; 0 failed**
+- `craft-ui-contract`: **396 passed; 0 failed** (6 unit + 352 integration + 38 suite, 0 failed)
+- `craft-ui-shell`: **128 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-menu`: **3 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-pages` (screen testing): **112 passed; 0 failed**
-- `craft-ui-panels`: **222 passed; 0 failed**. The two Space failures this table used to record as pre-existing were the key stage's defect, measured and fixed in 66d135862 (see Section 3), so the suites this merge touches all report 0 failures.
+- `craft-ui-panels`: **234 passed; 0 failed** (233 integration + 1 doc-test passed, 0 failed)
 - Clippy across all workspace crates: **0 warnings, exit code 0**
 
 ---
