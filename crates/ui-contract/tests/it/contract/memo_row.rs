@@ -1,5 +1,6 @@
-//! A memoized view that is one unit of a shrinking row: the row's counting sweep calls it with another key than its
-//! real run, and that call leaves the replay decision of the pass to the calls after it and reuses its own measure.
+//! A memoized view that is one unit of a shrinking row: the row's counting sweep calls it in another flow than its real
+//! run (the content shows unbounded there), and that call leaves the replay decision of the pass to the real call and
+//! reuses the measure of the last counting call.
 
 use craft_ui::contract::{MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::BodyLayout;
@@ -26,11 +27,11 @@ fn of_view(runs: Vec<(&'static str, egui::Id, MemoRun)>) -> Vec<MemoRun> {
 }
 
 /// A memoized view in a row that is not short, whose new content is wider: it runs once in the real run that meets the
-/// new props and once as a measuring run in the row's counting sweep, whose call keys apart from the real run's
-/// (the content shows unbounded there). The real run of the discard pass that sweep belongs to replays, and so does
+/// new props and once as a measuring run in the row's counting sweep, whose flow is not the real run's (the content
+/// shows unbounded there). The real run of the discard pass that sweep belongs to replays, and so does
 /// every call of the next frame, a counting sweep's included.
 #[trial]
-fn a_memoized_row_unit_replays_after_the_rows_counting_call_with_another_key() {
+fn a_memoized_row_unit_replays_after_the_rows_counting_call() {
     let width = Cell::new(60.0);
     let mut frames = Frames::new();
     let frame = |frames: &mut Frames| {
