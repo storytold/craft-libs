@@ -106,15 +106,34 @@ pub struct LayoutOptions {
     pub markup: f64,
     /// [`PageDisplay::Columns`]: at least this many pages across.
     pub min_columns: usize,
+    /// The most a fit zooms to (1.0 = 100 %), [`f64::INFINITY`] for no limit. A host previewing documents in a wide
+    /// pane can set 1.0, so a page shows at its actual size there instead of filling the pane; a smaller viewport still
+    /// shrinks the page to fit, and a zoom the user sets ([`Fit::None`]) is not capped. A cap below [`ZOOM_RANGE`] counts
+    /// as its smallest zoom.
+    pub max_fit_zoom: f64,
 }
 
 impl LayoutOptions {
     /// PdfCraft's: single page, continuous, page gaps.
-    pub const ACROBAT: LayoutOptions =
-        LayoutOptions { display: PageDisplay::Single, cover: false, continuous: true, page_gaps: true, markup: 0.0, min_columns: 1 };
+    pub const ACROBAT: LayoutOptions = LayoutOptions {
+        display: PageDisplay::Single,
+        cover: false,
+        continuous: true,
+        page_gaps: true,
+        markup: 0.0,
+        min_columns: 1,
+        max_fit_zoom: f64::INFINITY,
+    };
     /// WordCraft's: as many across as fit, continuous, page gaps.
-    pub const WORD: LayoutOptions =
-        LayoutOptions { display: PageDisplay::Columns, cover: false, continuous: true, page_gaps: true, markup: 0.0, min_columns: 1 };
+    pub const WORD: LayoutOptions = LayoutOptions {
+        display: PageDisplay::Columns,
+        cover: false,
+        continuous: true,
+        page_gaps: true,
+        markup: 0.0,
+        min_columns: 1,
+        max_fit_zoom: f64::INFINITY,
+    };
 }
 
 /// The spacing of a page layout: screen points, except [`white_space_pad`](Self::white_space_pad),
@@ -313,7 +332,8 @@ pub fn page_at(layout: &PagedLayout, p: Point) -> Option<usize> {
 /// - Width: `(width - 2 × side - gap × (n - 1)) / (page width × n)` with n the pages per row
 ///   (2 for spreads); Page: the smaller of that and `(height - 2 × margin) / page height`;
 ///   Height: the second alone. The width is at least 100.
-/// - Clamped to [`ZOOM_RANGE`] × [`SCREEN_POINTS_PER_POINT`].
+/// - No larger than [`LayoutOptions::max_fit_zoom`] × [`SCREEN_POINTS_PER_POINT`], then clamped to [`ZOOM_RANGE`] ×
+///   [`SCREEN_POINTS_PER_POINT`].
 // pdfcraft: crates/ui-egui/src/canvas/zoom.rs:259 `fit_zoom`; wordcraft:
 // crates/ui-egui/src/canvas/geometry.rs:178 (pageWidth, onePage, multiplePages).
 pub fn fit_scale(sizes: &[Size], viewport: Size, fit: Fit, options: &LayoutOptions, spacing: &PageSpacing, current: Option<usize>) -> Option<f64> {
@@ -340,7 +360,11 @@ pub fn fit_scale(sizes: &[Size], viewport: Size, fit: Fit, options: &LayoutOptio
         Fit::Height => by_height,
         Fit::None => return None,
     };
-    scale.is_finite().then(|| scale.clamp(ZOOM_RANGE.start() * SCREEN_POINTS_PER_POINT, ZOOM_RANGE.end() * SCREEN_POINTS_PER_POINT))
+    scale.is_finite().then(|| {
+        scale
+            .min(options.max_fit_zoom * SCREEN_POINTS_PER_POINT)
+            .clamp(ZOOM_RANGE.start() * SCREEN_POINTS_PER_POINT, ZOOM_RANGE.end() * SCREEN_POINTS_PER_POINT)
+    })
 }
 
 /// When not continuous, the pages of the row shown: the current page, or the current spread. With

@@ -39,6 +39,27 @@ fn spreads_follow_the_cover_rule() {
 }
 
 #[trial]
+fn a_fit_zooms_no_further_than_max_fit_zoom() {
+    let (big, small) = (Size::new(4000.0, 6000.0), Size::new(400.0, 500.0));
+    for fit in [Fit::Width, Fit::Page, Fit::Height] {
+        let scale = |options: &LayoutOptions, viewport| fit_scale(&[LETTER], viewport, fit, options, &SPACING, None).unwrap_or(f64::NAN);
+        assert!(scale(&LayoutOptions::WORD, big) > 2.0 * SCREEN_POINTS_PER_POINT, "{fit:?}: unlimited by default, the page fills a big viewport");
+        for cap in [1.0, 0.75] {
+            let capped = LayoutOptions { max_fit_zoom: cap, ..LayoutOptions::WORD };
+            assert_eq!(scale(&capped, big), cap * SCREEN_POINTS_PER_POINT, "{fit:?}: no larger than a cap of {cap}");
+            assert!(scale(&capped, small) < cap * SCREEN_POINTS_PER_POINT, "{fit:?}: a small viewport still shrinks the page under {cap}");
+            assert_eq!(scale(&capped, small), scale(&LayoutOptions::WORD, small), "{fit:?}: under a cap of {cap} the fit is unchanged");
+        }
+        for cap in [0.0, -1.0] {
+            let shown = scale(&LayoutOptions { max_fit_zoom: cap, ..LayoutOptions::WORD }, big);
+            assert_eq!(shown, ZOOM_RANGE.start() * SCREEN_POINTS_PER_POINT, "{fit:?}: a cap of {cap} shows the smallest zoom");
+        }
+    }
+    let capped = LayoutOptions { max_fit_zoom: 1.0, ..LayoutOptions::WORD };
+    assert_eq!(fit_scale(&[LETTER], big, Fit::None, &capped, &SPACING, None), None, "a zoom the user sets is not a fit");
+}
+
+#[trial]
 fn hide_white_space_cuts_margins_and_keeps_coordinates() {
     let mut laid = place_pages(&[LETTER; 3], 1.0, viewport(), &LayoutOptions::ACROBAT, &SPACING);
     let before = laid.rects[1].size();

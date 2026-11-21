@@ -31,13 +31,18 @@ type LayoutRig = (Fixture, Rc<RefCell<PageViewState>>, Rc<RefCell<Vec<kurbo::Rec
 
 /// A page view over `count` demo pages with the state it starts from, and the rects of the pages it laid out.
 fn layout_rig(count: usize, start: PageViewState) -> LayoutRig {
+    layout_rig_with(count, start, LayoutOptions::ACROBAT)
+}
+
+/// [`layout_rig`] with these layout options.
+fn layout_rig_with(count: usize, start: PageViewState, options: LayoutOptions) -> LayoutRig {
     let state = Rc::new(RefCell::new(start));
     let rects: Rc<RefCell<Vec<kurbo::Rect>>> = Rc::default();
     let (kept, seen) = (Rc::clone(&state), Rc::clone(&rects));
     let pages = DemoPages::new(count);
     let mut fixture = Fixture::new(move |ui| {
         let mut now = kept.borrow().clone();
-        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, _| ());
+        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(options).show(ui, |_, _| ());
         seen.borrow_mut().clone_from(&out.layout.rects);
         *kept.borrow_mut() = now;
     });
@@ -419,6 +424,30 @@ fn zoom_in_zooms_a_focused_view_with_animated_zoom() {
     fixture.key(Key::Equals, Modifiers::COMMAND);
     fixture.settle();
     assert!(state.borrow().zoom > before, "Zoom In zooms: {before} -> {}", state.borrow().zoom);
+}
+
+#[trial]
+fn a_capped_fit_shows_the_cap_and_zoom_in_goes_past_it() {
+    let options = LayoutOptions { max_fit_zoom: 1.0, ..LayoutOptions::ACROBAT };
+    let start = state_with(|s| {
+        s.fit = Fit::Width;
+        s.zoom = 0.5;
+    });
+    let (mut fixture, state, _) = layout_rig_with(3, start, options);
+    fixture.room(vec2(1800.0, 1200.0));
+    fixture.settle();
+    let fitted = state.borrow().clone();
+    assert!(
+        fitted.fit == Fit::Width && fitted.zoom == 1.0,
+        "Fit Width in a view wider than the page stops at the cap: {:?} at {}",
+        fitted.fit,
+        fitted.zoom
+    );
+    focus_canvas(&mut fixture);
+    fixture.key(Key::Equals, Modifiers::COMMAND);
+    fixture.settle();
+    let after = state.borrow().clone();
+    assert!(after.fit == Fit::None && after.zoom > 1.0, "Zoom In starts from the cap and is not capped: {:?} at {}", after.fit, after.zoom);
 }
 
 #[trial]
