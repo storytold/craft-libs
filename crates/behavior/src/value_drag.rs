@@ -263,6 +263,28 @@ mod tests {
     }
 
     #[test]
+    fn a_warp_acknowledgement_keeps_motion_from_the_same_sample() {
+        let bounds = Rect::from_min_max(pos2(0.0, 0.0), pos2(500.0, 300.0));
+        let origin = bounds.center();
+        for (axis, edge, motion, before, after) in [
+            (Axis::X, pos2(499.0, 150.0), Vec2::new(8.0, -2.0), 749.0, 757.0),
+            (Axis::X, pos2(1.0, 150.0), Vec2::new(-8.0, 2.0), 251.0, 243.0),
+            (Axis::Y, pos2(250.0, 1.0), Vec2::new(2.0, -8.0), 649.0, 657.0),
+            (Axis::Y, pos2(250.0, 299.0), Vec2::new(-2.0, 8.0), 351.0, 343.0),
+        ] {
+            let scrub = ValueDrag::relative(1.0, 0.0..=1000.0).axis(axis).warp(true);
+            let mut warp = DragWarp::default();
+            let at = |warp: &mut DragWarp, pos: Pos2| scrub.value_shifted(500.0, &drag(origin, pos, Mods::NONE), false, warp.shift(pos));
+            let by = scrub.warp_by(edge, bounds).expect("the pointer is at an edge");
+            warp.sent(edge, by);
+            assert_eq!(at(&mut warp, edge), Some(before));
+            assert!(warp.pending(), "a sample at the old edge does not acknowledge the warp");
+            assert_eq!(at(&mut warp, edge + by + motion), Some(after), "{axis:?} at {edge:?}");
+            assert!(!warp.pending());
+        }
+    }
+
+    #[test]
     fn wrap_value_brings_values_into_one_period() {
         assert_eq!(wrap_value(-10.0, 0.0, 360.0), 350.0);
         assert_eq!(wrap_value(5.0, 0.0, 0.0), 5.0, "a period of 0 leaves the value, not NaN");
