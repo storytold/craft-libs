@@ -509,6 +509,62 @@ mod tests {
         assert!(junk.parts.is_empty());
     }
 
+    #[test]
+    fn a_file_of_element_budget_parts_still_reads() {
+        // The same nine chart references as the integration fixture, at a small injected cap.
+        // Each chart has 200 elements including its root, so later charts exceed the shared
+        // allowance without allocating millions of elements just to reach that boundary.
+        let parts = 9usize;
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+        let chart_xml = format!(r#"<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">{}</c:chart>"#, "<a/>".repeat(199));
+        let mut document = format!(
+            r#"<w:document {ns} xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><w:body>"#
+        );
+        for i in 0..parts {
+            document.push_str(&format!(
+                r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="635000" cy="635000"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId{i}"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+            ));
+        }
+        document.push_str("</w:body></w:document>");
+        let mut rels = String::from(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        for i in 0..parts {
+            rels.push_str(&format!(
+                r#"<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="charts/chart{i}.xml"/>"#
+            ));
+        }
+        rels.push_str("</Relationships>");
+        let mut entries =
+            vec![("word/document.xml".to_string(), document.into_bytes()), ("word/_rels/document.xml.rels".to_string(), rels.into_bytes())];
+        for i in 0..parts {
+            entries.push((format!("word/charts/chart{i}.xml"), chart_xml.as_bytes().to_vec()));
+        }
+        let z = zip_entries(&entries).unwrap();
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 1_600).unwrap();
+        let doc = crate::read::read_opened(&pkg, None).expect("a file over the element budget still reads, the extra parts skipped");
+        assert_eq!(doc.body.len(), parts, "the document's own paragraphs read");
+        // The chart reader silently skips an over-budget part. This subsequent real parse
+        // proves the read consumed the shared allowance, rather than only reading the body.
+        assert!(matches!(pkg.xml("word/charts/chart8.xml"), Err(DocxError::Limit(_))));
+
+        // The normal public caller also reads this same small, valid package without a
+        // test-only cap. No production-limit value or private counter is an oracle here.
+        let doc = crate::read(&z).expect("the default caller reads the nine-part document");
+        assert_eq!(doc.body.len(), parts, "the document's own paragraphs read");
+    }
+
+    #[test]
+    fn the_element_budget_accepts_the_exact_cap_and_refuses_one_more_element() {
+        let part = format!("<root>{}</root>", "<a/>".repeat(199));
+        let mut entries: Vec<(String, Vec<u8>)> = (0..8).map(|i| (format!("part{i}.xml"), part.as_bytes().to_vec())).collect();
+        entries.push(("one-more.xml".to_string(), b"<root/>".to_vec()));
+        let z = zip_entries(&entries).unwrap();
+        let pkg = Package::open_limited_within(&z, MAX_PART, MAX_TOTAL, 1_600).unwrap();
+        for i in 0..8 {
+            assert!(pkg.xml_strict(&format!("part{i}.xml")).expect("eight 200-element parts fit exactly").is_some());
+        }
+        assert!(matches!(pkg.xml_strict("one-more.xml"), Err(DocxError::Limit(_))));
+    }
+
     /// A file of many parts each inside the per-part cap is bounded in total: every XML part
     /// read through the package charges a package-wide budget, and a part over it is skipped
     /// (warned), never built. A chart part with no series builds a maximal tree for almost no
