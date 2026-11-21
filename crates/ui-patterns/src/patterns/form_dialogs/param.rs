@@ -352,6 +352,9 @@ impl ParamKind {
 
 type CustomDraw = dyn Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync;
 
+/// A [`Param::custom`] row's set-time rule ([`Param::on_set`]).
+pub(crate) type SetRule = fn(&mut DialogFields, &str, serde_json::Value) -> Result<(), String>;
+
 /// What draws a [`ParamKind::Custom`] row: it gets the row's control cell, the form's values and the row's
 /// [`CustomContext`], and returns the response the row label names. Besides the row's own key, `draw` may keep values
 /// under its companion keys ([`Param::companions`]). Equal only to a clone of itself with the same value and companions.
@@ -362,12 +365,14 @@ pub struct CustomRow {
     opens_with: Option<FieldValue>,
     /// The other keys `draw` keeps values under.
     companions: Vec<String>,
+    /// The rule a value set from outside the row goes through ([`Param::on_set`]).
+    on_set: Option<SetRule>,
 }
 
 impl CustomRow {
     /// Wraps `draw`, which draws the row and edits the values it owns through the [`DialogFields`].
     pub fn new(draw: impl Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync + 'static) -> Self {
-        Self { draw: Arc::new(draw), opens_with: None, companions: Vec::new() }
+        Self { draw: Arc::new(draw), opens_with: None, companions: Vec::new(), on_set: None }
     }
 
     /// Draws the row.
@@ -379,6 +384,11 @@ impl CustomRow {
     pub(crate) fn has_companion(&self, key: &str) -> bool {
         self.companions.iter().any(|companion| companion == key)
     }
+
+    /// The rule a value set from outside the row goes through, if the row has one.
+    pub(crate) fn on_set(&self) -> Option<SetRule> {
+        self.on_set
+    }
 }
 
 impl fmt::Debug for CustomRow {
@@ -389,7 +399,11 @@ impl fmt::Debug for CustomRow {
 
 impl PartialEq for CustomRow {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.draw, &other.draw) && self.opens_with == other.opens_with && self.companions == other.companions
+        let same_rule = match (self.on_set, other.on_set) {
+            (Some(a), Some(b)) => std::ptr::fn_addr_eq(a, b),
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        Arc::ptr_eq(&self.draw, &other.draw) && self.opens_with == other.opens_with && self.companions == other.companions && same_rule
     }
 }
 
@@ -546,6 +560,12 @@ pub(crate) struct RowOptions {
     searchable: bool,
     /// The keys a change of the row's value removes ([`Param::resets`]).
     resets: Vec<String>,
+    /// The row takes input only while the number under the key is above the bound ([`Param::enabled_above`]).
+    enabled_above: Option<(String, f64)>,
+    /// The row takes input only while the values under the two keys differ ([`Param::enabled_when_differs`]).
+    enabled_when_differs: Option<(String, String)>,
+    /// The value the row shows while it is disabled ([`Param::disabled_value`]).
+    disabled_value: Option<FieldValue>,
     /// How a section head draws ([`Param::group`], [`Param::section_check`]).
     head: Head,
     /// The row's label shows a reset dot ([`Param::resettable`]).
@@ -768,32 +788,37 @@ impl Param {
     /// The row takes input only while the number `fields[key]` is above `bound` (an int reads as a number); otherwise
     /// it is shown disabled.
     #[must_use]
-    pub fn enabled_above(self, key: impl Into<String>, bound: f64) -> Self {
-        let _ = (self, key, bound);
-        todo!("pl.F4")
+    pub fn enabled_above(mut self, key: impl Into<String>, bound: f64) -> Self {
+        self.options.get_or_insert_default().enabled_above = Some((key.into(), bound));
+        self
     }
 
     /// The row takes input only while `fields[a]` and `fields[b]` differ (for two switches: exactly one is on);
     /// otherwise it is shown disabled.
     #[must_use]
-    pub fn enabled_when_differs(self, a: impl Into<String>, b: impl Into<String>) -> Self {
-        let _ = (self, a, b);
-        todo!("pl.F5")
+    pub fn enabled_when_differs(mut self, a: impl Into<String>, b: impl Into<String>) -> Self {
+        self.options.get_or_insert_default().enabled_when_differs = Some((a.into(), b.into()));
+        self
     }
 
     /// The value the row shows while it is disabled, in place of its own.
     #[must_use]
-    pub fn disabled_value(self, value: impl Into<FieldValue>) -> Self {
-        let _ = (self, value);
-        todo!("q343")
+    pub fn disabled_value(mut self, value: impl Into<FieldValue>) -> Self {
+        self.options.get_or_insert_default().disabled_value = Some(value.into());
+        self
     }
 
     /// A [`Param::custom`] row's set-time rule: `set` runs for the row's key and its companions when a value is set
     /// from outside the row (automation), and may change other fields or refuse the value. Other rows ignore it.
+    ///
+    /// `set` gets the fields, the key being set and the incoming value, and writes in place of the row's default
+    /// write; an `Err` refuses the value and is the refusal's message.
     #[must_use]
-    pub fn on_set(self, set: fn(&mut DialogFields, &str, serde_json::Value) -> Result<(), String>) -> Param {
-        let _ = (self, set);
-        todo!("q336")
+    pub fn on_set(mut self, set: fn(&mut DialogFields, &str, serde_json::Value) -> Result<(), String>) -> Param {
+        if let ParamKind::Custom(row) = &mut self.kind {
+            row.on_set = Some(set);
+        }
+        self
     }
 
     /// A bare number row: a [`ParamKind::Number`] open on both sides. Bound it with [`Param::bounds`].
@@ -1186,6 +1211,11 @@ impl Param {
         self.options.as_deref().cloned().unwrap_or_default()
     }
 
+    /// The value the row shows while it is disabled ([`Param::disabled_value`]).
+    pub(crate) fn shown_disabled(&self) -> Option<&FieldValue> {
+        self.options.as_deref()?.disabled_value.as_ref()
+    }
+
     /// The hint text.
     pub(crate) fn hint_text(&self) -> Option<&Label> {
         self.texts.as_deref()?.hint.as_ref()
@@ -1270,9 +1300,13 @@ impl Param {
         self.visible_when.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
-    /// Whether the row takes input with `fields`.
+    /// Whether the row takes input with `fields`: every condition its `enabled_when`,
+    /// [`enabled_above`](Param::enabled_above) and [`enabled_when_differs`](Param::enabled_when_differs) set holds.
     pub fn enabled(&self, fields: &DialogFields) -> bool {
+        let options = self.options.as_deref();
         self.enabled_when.as_ref().is_none_or(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
+            && options.and_then(|options| options.enabled_above.as_ref()).is_none_or(|(key, bound)| fields.number(key).is_some_and(|n| n > *bound))
+            && options.and_then(|options| options.enabled_when_differs.as_ref()).is_none_or(|(a, b)| fields.get(a) != fields.get(b))
     }
 }
 

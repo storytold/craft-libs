@@ -758,3 +758,87 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
         }
     }
 }
+
+/// Scale's merge: a `{w, h}` object keeps what it leaves out from the held value; anything else is refused.
+fn merge_scale(fields: &mut DialogFields, key: &str, value: serde_json::Value) -> Result<(), String> {
+    let serde_json::Value::Object(incoming) = value else { return Err(format!("{key} takes an object")) };
+    let mut merged = match fields.get(key) {
+        Some(FieldValue::Json(serde_json::Value::Object(held))) => held.clone(),
+        _ => serde_json::Map::new(),
+    };
+    merged.extend(incoming.into_iter().filter(|(_, v)| !v.is_null()));
+    fields.set(key, FieldValue::Json(merged.into()));
+    Ok(())
+}
+
+// A custom row's set-time rule writes a value set from outside in place of the default write, from the held values,
+// for its key and its companions; its refusal is the answer and leaves the values as they were.
+#[trial]
+fn a_custom_rows_set_rule_merges_a_set_value_with_the_held_one() {
+    let params = vec![
+        Param::custom("scale", "Scale", |ui, _, _| ui.label("scale")).companions(["link"]).on_set(merge_scale),
+        Param::custom("plain", "Plain", |ui, _, _| ui.label("plain")),
+    ];
+    let mut fields = DialogFields::new();
+    set_param_field(&params, &mut fields, "scale", json!({"w": 50, "h": 50})).expect("an object is taken");
+    set_param_field(&params, &mut fields, "scale", json!({"w": 80, "h": null})).expect("a partial object is taken");
+    assert_eq!(fields.get("scale"), Some(&FieldValue::Json(json!({"w": 80, "h": 50}))), "the rule kept the held height");
+    set_param_field(&params, &mut fields, "link", json!({"on": true})).expect("a companion goes through the rule");
+    assert_eq!(fields.get("link"), Some(&FieldValue::Json(json!({"on": true}))));
+    let refused = set_param_field(&params, &mut fields, "scale", json!(3));
+    assert!(refused.is_err_and(|why| why.contains("takes an object")), "the rule's refusal is the answer");
+    assert_eq!(fields.get("scale"), Some(&FieldValue::Json(json!({"w": 80, "h": 50}))), "a refusal changes nothing");
+    set_param_field(&params, &mut fields, "plain", json!({"w": 1})).expect("a row without a rule takes the value");
+    set_param_field(&params, &mut fields, "plain", json!({"h": 2})).expect("and replaces it");
+    assert_eq!(fields.get("plain"), Some(&FieldValue::Json(json!({"h": 2}))), "without a rule the value replaces the held one");
+}
+
+// `enabled_above` and `enabled_when_differs` disable a row from the values, for the rows and for automation; turning
+// the second switch on disables the constrained row.
+#[trial]
+fn rows_enabled_above_a_bound_or_while_two_keys_differ_follow_their_keys() {
+    let params = vec![
+        Param::new("width_on", "Width", ParamKind::bool(false)),
+        Param::new("height_on", "Height", ParamKind::bool(false)),
+        Param::new("constrain", "Constrain", ParamKind::bool(false)).enabled_when_differs("width_on", "height_on"),
+        Param::new("dashes", "Dashes", ParamKind::int(Some(0), None, 0)),
+        Param::new("gap", "Gap", ParamKind::number(Some(0.0), None, 1.0, 1.0, 1)).enabled_above("dashes", 0.0),
+    ];
+    let mut fields = DialogFields::from_pairs([("width_on", FieldValue::Bool(false)), ("height_on", FieldValue::Bool(false))]);
+    assert!(set_param_field(&params, &mut fields, "constrain", json!(true)).is_err(), "both off: refused");
+    assert!(set_param_field(&params, &mut fields, "gap", json!(2.0)).is_err(), "no dashes: refused");
+    set_param_field(&params, &mut fields, "dashes", json!(2)).expect("dashes");
+    set_param_field(&params, &mut fields, "gap", json!(2.0)).expect("an int above the bound enables the row");
+
+    let values = Rc::new(RefCell::new(fields));
+    let mut fixture = rows(params, &values);
+    let disabled = |fixture: &Fixture| fixture.tree().is_disabled_key(fixture.by_label("Constrain").expect("the row").node);
+    assert!(disabled(&fixture), "both switches off");
+    let width = fixture.by_label("Width").expect("the width switch");
+    fixture.click(&width).settle();
+    assert!(!disabled(&fixture), "exactly one switch on");
+    let height = fixture.by_label("Height").expect("the height switch");
+    fixture.click(&height).settle();
+    assert!(disabled(&fixture), "turning the second switch on disables the row");
+}
+
+// A disabled row shows its `disabled_value` and keeps its own value, which it shows again once enabled.
+#[trial]
+fn a_disabled_row_shows_its_disabled_value_and_keeps_its_own() {
+    let params = vec![
+        Param::new("paper", "Paper", ParamKind::bool(true)),
+        Param::new("ink", "Ink", ParamKind::bool(false)).enabled_when("paper", false).disabled_value(true),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::from_pairs([("paper", FieldValue::Bool(true)), ("ink", FieldValue::Bool(false))])));
+    let mut fixture = rows(params, &values);
+    let ink = |fixture: &Fixture| {
+        let tree = fixture.tree();
+        let check = tree.with_role(Role::CHECK_BOX).into_iter().find(|key| tree.name_of(*key) == Some("Ink")).expect("the ink check box");
+        tree.toggled_of(check)
+    };
+    assert_eq!(ink(&fixture), Some(craft_behavior::Mixed::Same(true)), "shown with the derived value while disabled");
+    assert_eq!(values.borrow().bool("ink"), Some(false), "its own value stays");
+    let paper = fixture.by_label("Paper").expect("the paper switch");
+    fixture.click(&paper).settle();
+    assert_eq!(ink(&fixture), Some(craft_behavior::Mixed::Same(false)), "enabled, it shows its own value again");
+}

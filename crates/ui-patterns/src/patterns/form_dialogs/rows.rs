@@ -597,9 +597,19 @@ impl<'p> Pass<'p> {
         if !param.visible(&self.work) {
             return;
         }
-        let line = self.line(param, compact);
+        let mut line = self.line(param, compact);
         let held = self.work.get(line.key).cloned();
+        // A disabled row shows its `disabled_value` over the values, which keep its own.
+        let own = param.shown_disabled().filter(|_| !line.enabled).map(|shown| {
+            line.mixed = false;
+            let mut work = self.work.clone();
+            work.set(line.key, shown.clone());
+            std::mem::replace(&mut self.work, work)
+        });
         self.show_row(ui, &line);
+        if let Some(own) = own {
+            self.work = own;
+        }
         param.drop_dependents(held.as_ref(), &mut self.work);
         self.lift(line.key, held);
         if let Some(link) = param.option().help_link().filter(|_| line.helped.get()) {

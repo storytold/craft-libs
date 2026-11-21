@@ -188,6 +188,26 @@ fn param_rows_with_radio_details(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     rows_story(ui, data, &params, |_| {})
 }
 
+/// Rows disabled by their values: Black Ink shows checked while Paper is on, Gap takes input only with dashes, and
+/// Constrain only while exactly one of Width and Height is on.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_disabled_by_values(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::new("paper", "Simulate Paper", ParamKind::bool(true)),
+        Param::new("ink", "Simulate Black Ink", ParamKind::bool(false)).enabled_when("paper", false).disabled_value(true),
+        Param::new("dashes", "Dashes", ParamKind::int(Some(0), Some(6), 0)),
+        Param::number("gap", "Gap", 2.0, 1.0, 0).enabled_above("dashes", 0.0),
+        Param::new("width_on", "Width", ParamKind::bool(true)),
+        Param::new("height_on", "Height", ParamKind::bool(false)),
+        Param::new("constrain", "Constrain", ParamKind::bool(false)).enabled_when_differs("width_on", "height_on"),
+    ];
+    rows_story(ui, data, &params, |fields| {
+        fields.set("paper", true);
+        fields.set("width_on", true);
+        fields.set("height_on", false);
+    })
+}
+
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();

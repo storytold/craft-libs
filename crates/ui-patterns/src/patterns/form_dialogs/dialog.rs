@@ -1189,7 +1189,8 @@ impl HostedParamDialog {
 /// Checks `value` against the row `field` of `params` and sets it in `fields`, as the user editing the row would; `Err`
 /// says why the row refused (`FieldRefusal`). The field is a row's key, its unit key or a custom row's companion key
 /// ([`Param::companions`]); a Files row takes a `{files, folder, useFolder}` object and sets its two companion keys with
-/// it. Every dialog built on `Param`s sets its fields through this one rule.
+/// it. A custom row with a set-time rule ([`Param::on_set`]) writes its key and companions through that rule instead.
+/// Every dialog built on `Param`s sets its fields through this one rule.
 pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str, value: Value) -> Result<(), String> {
     let companion = |param: &Param| matches!(&param.kind, ParamKind::Custom(row) if row.has_companion(field));
     let Some(param) = params.iter().find(|param| param.key == field || param.unit_key() == Some(field) || companion(param)) else {
@@ -1198,7 +1199,23 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
     if !param.visible(fields) || !param.enabled(fields) {
         return Err(FieldRefusal::Inactive.message(field));
     }
-    let writes = if companion(param) {
+    let held = fields.get(&param.key).cloned();
+    let rule = match &param.kind {
+        ParamKind::Custom(row) => row.on_set(),
+        _ => None,
+    };
+    match rule {
+        Some(set) => set(fields, field, value)?,
+        None => write_param_field(param, fields, field, value, companion(param))?,
+    }
+    param.drop_dependents(held.as_ref(), fields);
+    Ok(())
+}
+
+/// `set_param_field`'s write of `value` under `field` when the row has no set-time rule: the row's own key, its
+/// unit, a Files row's keys or a custom row's companion (`companion`), each checked with `Param::accepts`.
+fn write_param_field(param: &Param, fields: &mut DialogFields, field: &str, value: Value, companion: bool) -> Result<(), String> {
+    let writes = if companion {
         Some(vec![(field.to_owned(), (!value.is_null()).then_some(FieldValue::Json(value.clone())))])
     } else if param.key != field {
         value.as_str().map(|unit| vec![(field.to_owned(), Some(FieldValue::Text(unit.to_owned())))])
@@ -1212,7 +1229,6 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
     let Some(writes) = writes else {
         return Err(FieldRefusal::Rejects(&value).message(field));
     };
-    let held = fields.get(&param.key).cloned();
     for (key, read) in writes {
         match read {
             Some(read) => fields.set(key, read),
@@ -1221,7 +1237,6 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
             }
         }
     }
-    param.drop_dependents(held.as_ref(), fields);
     Ok(())
 }
 
