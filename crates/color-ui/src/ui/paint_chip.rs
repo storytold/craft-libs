@@ -15,30 +15,28 @@ use craft_cms::convert::CmykConverter;
 use craft_keymap::Mods;
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
-use craft_ui::choice::{ChoiceWords, RING_SHARE, Segmented, Swatch, SwatchFace, SwatchStyle, paint_ring};
+use craft_ui::choice::{ChoiceWords, RING_SHARE, Segmented, Swatch, SwatchStyle, paint_ring};
 use craft_ui::contract::{
-    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Meta as _, Outcome, Overlay, OverlayUi, Overlays as _, Pages,
-    PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
+    Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Meta as _, Outcome, Overlay, OverlayUi,
+    Overlays as _, Pages, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
-use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetRowMenu, PresetState, ThumbInfo};
+use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetRowMenu, PresetState};
 use craft_ui::primitives::textures::CachedTexture;
 use craft_ui::primitives::{ContentPainterCx, FacePaint, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
-use craft_ui::style::{
-    ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle,
-};
+use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle};
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
 
 use super::popover::compact_picker;
-use super::{PickedColor, ScreenPickGesture, SwatchKey, SwatchPalette, SwatchesWords, swatch_rows};
+use super::{PickedColor, ScreenPickGesture, SwatchKey, SwatchPalette, swatch_source};
 use crate::palette::{SwatchColor, SwatchGroup};
 
-mod paint_list;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod paint_list;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use paint_list::{PaintLink, PaintLinkKind, PaintList, PaintListEvent, PaintListOptions, PaintListOutput, PaintRow};
 
@@ -347,11 +345,8 @@ pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl craft_ui::contra
         }
     }
     if style.ring {
-        let ground = ui.with_style(cx.resolved.variant, |scope| SurfaceStyle {
-            edge: SurfaceEdge::None,
-            shadow: None,
-            ..scope.surface(cx.env.surface())
-        });
+        let ground =
+            ui.with_style(cx.resolved.variant, |scope| SurfaceStyle { edge: SurfaceEdge::None, shadow: None, ..scope.surface(cx.env.surface()) });
         ui.draw().surface_styled(well.shrink(well.width() * RING_SHARE), &ground);
     } else {
         ui.draw().stroke(&shape, StrokeWidth::Thin, style.edge);
@@ -441,7 +436,7 @@ impl<'a> PaintChip<'a> {
     /// The [`ColorRequest::key`] of the full picker the Color Picker… button asks for.
     pub const COLOR_KEY: &'static str = "paintChip";
 
-    /// The swatches the popover lists (rows from `swatch_rows`) beside the picker: the groups the Swatches panel takes,
+    /// The swatches the popover lists (from `swatch_source`) beside the picker: the groups the Swatches panel takes,
     /// so a host builds no library copy each pass.
     #[must_use]
     pub fn swatches(mut self, groups: &'a [SwatchGroup], state: Bind<'a, PresetState<SwatchKey>>) -> Self {
@@ -599,7 +594,6 @@ impl Component for PaintChip<'_> {
         let solid = cx.memory::<LastSolid>().0.unwrap_or(self.fallback);
         let current = FillKind::of(&paint);
         let sampled = self.sampled;
-        let swatch_words = cx.words::<SwatchesWords>();
         let recent_cells: Vec<(Label, Srgba)> = self.recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
         let full_picker = self.full_picker;
         let cmyk = self.cmyk.unwrap_or_else(|| CmykConverter::coated());
@@ -638,21 +632,14 @@ impl Component for PaintChip<'_> {
                         }
                         if let Some((groups, state)) = swatches.as_mut() {
                             let groups: &[SwatchGroup] = groups;
-                            let rows = swatch_rows(groups, &swatch_words);
+                            let source = swatch_source(groups, cmyk);
                             let colors: HashMap<&str, &SwatchColor> =
                                 groups.iter().flat_map(|g| g.entries.iter().filter_map(|e| e.color().map(|c| (e.name.as_str(), c)))).collect();
-                            let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &rows)
+                            let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &source)
                                 .toolbar(false)
                                 .row_menu(PresetRowMenu::Off)
                                 .default_open(DefaultOpen::None)
                                 .room_height(Env::of(ui).tokens.size.control.sm * SWATCH_ROWS)
-                                .thumb(|painter: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
-                                    if let SwatchKey::Swatch(name) = info.key
-                                        && let Some(color) = colors.get(name.as_str())
-                                    {
-                                        SwatchFace::new(color.to_srgb(cmyk)).selected(info.selected).paint(painter, rect);
-                                    }
-                                })
                                 .show(ui);
                             for event in out.events {
                                 if let PresetEvent::Select { key: SwatchKey::Swatch(name), .. } = event

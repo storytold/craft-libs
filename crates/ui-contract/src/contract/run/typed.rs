@@ -387,7 +387,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn settle_values(&mut self) -> steps::ValueEdit {
-        steps::settle(self.comp, self.cx)
+        steps::settle(self.comp, self.cx, self.hooks.in_flow(self.comp))
     }
 
     fn access(&self) -> (Access, Option<String>) {
@@ -524,8 +524,9 @@ fn measure_shape<C: Component>(
     proposal: Proposal,
     under: Option<&crate::contract::cx::Under>,
     hooks: &mut dyn ShapeHooks<C>,
+    purpose: super::MeasureFor,
 ) -> Vec2 {
-    super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under)
+    super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under, purpose)
 }
 
 pub(crate) fn show_leaf<C: Component + Meta<Shape = crate::contract::shape::Leaf>>(
@@ -546,9 +547,10 @@ pub(crate) fn show_container_taking<C: Container, R>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     rect: Rect,
-    body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Inner<C::Output, R> {
     let shown = show_container(slot, ui, ShowAt::Rect(rect), body, None);
+    crate::layout::close_flow_start_in(ui);
     crate::runtime::egui::alloc::advance_past(ui, rect);
     shown
 }
@@ -557,7 +559,7 @@ pub(crate) fn show_container<C: Container, R>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     at: ShowAt,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     tip: Option<TipFn<'_>>,
 ) -> Inner<C::Output, R> {
     if let Some(output) = unshown(held(slot), ui) {
@@ -638,7 +640,13 @@ pub(crate) fn measure_under<C: Component>(
     proposal: Proposal,
     under: Option<&crate::contract::cx::Under>,
 ) -> Vec2 {
-    measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None })
+    measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None }, super::MeasureFor::Component)
+}
+
+/// Measures `face` as `PaintUi::face` will show it, as part of the measure call of the composite whose `under` it
+/// takes: as [`measure_under`], with no transcript leaf of its own.
+pub(crate) fn measure_face<C: Component>(face: &mut C, ui: &Ui, id: Id, proposal: Proposal, under: &crate::contract::cx::Under) -> Vec2 {
+    measure_shape(face, ui, Some(id), proposal, Some(under), &mut LeafHooks { scope: None }, super::MeasureFor::Face)
 }
 
 /// Measures a container with `body` as `show` will show it: steps 1 to 5, with the body, header, footer and end
@@ -647,13 +655,13 @@ pub(crate) fn measure_container<C: Container, R>(
     comp: &mut C,
     ui: &Ui,
     proposal: Proposal,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Vec2 {
     let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
         body(ui, cx);
     };
     let mut hooks = crate::contract::body::BodyHooks::of(comp, &mut call);
-    measure_shape(comp, ui, None, proposal, None, &mut hooks)
+    measure_shape(comp, ui, None, proposal, None, &mut hooks, super::MeasureFor::Component)
 }
 
 /// A measuring run's extent: the shape's `measured_extent` under a `Cx` that senses nothing and writes only to the

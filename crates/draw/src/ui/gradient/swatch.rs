@@ -10,8 +10,10 @@ use egui::{CornerRadius, Response, Vec2};
 
 use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+use super::GradientTile;
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a gradient swatch: the colour swatch's height, corners and ring.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -72,13 +74,25 @@ pub struct GradientSwatch<'a> {
     /// Tells AccessKit that a click opens a dialog.
     #[prop(flag)]
     has_popup: bool,
+    /// How the gradient is drawn: the ramp chip, or a square two-dimensional tile.
+    #[prop]
+    tile: GradientTile,
     clicked: bool,
 }
 
 impl<'a> GradientSwatch<'a> {
     /// A swatch of `stops`; `label` names it for a screen reader.
     pub fn new(label: impl Into<craft_ui::runtime::env::Label>, stops: &'a GradientStops) -> Self {
-        GradientSwatch { common: Common::new(), stops, rows: StopRows::Split, sampler: None, has_popup: false, clicked: false }.label(label)
+        GradientSwatch {
+            common: Common::new(),
+            stops,
+            rows: StopRows::Split,
+            sampler: None,
+            has_popup: false,
+            tile: GradientTile::default(),
+            clicked: false,
+        }
+        .label(label)
     }
 }
 
@@ -104,6 +118,9 @@ impl Component for GradientSwatch<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let height = cx.style.side;
+        if self.tile != GradientTile::Ramp {
+            return Vec2::splat(height);
+        }
         let (wide, high) = GradientRamp::CHIP_ASPECT;
         let chip = height * f32::from(wide) / f32::from(high);
         let width = if cx.resolved.sizing() == Some(Sizing::FillWidth) {
@@ -137,6 +154,10 @@ impl Component for GradientSwatch<'_> {
         let style = cx.style;
         let default = default_sampler(self.rows);
         let sampler: &Sampler = self.sampler.unwrap_or(&default);
+        if self.tile != GradientTile::Ramp {
+            self.tile.paint(&ui.content_painter(cx), cx.rect, style.radius, self.stops, sampler, style.edge);
+            return;
+        }
         let colors = GradientRamp::colors(self.stops, sampler);
         GradientRamp::paint_chip(&ui.content_painter(cx), cx.rect, style.radius, &colors, style.edge);
     }

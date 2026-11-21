@@ -152,7 +152,7 @@ where
     let (entries, user_order) = entries_of(model, state, collator);
     let searching = !state.search.trim().is_empty();
     let cards = Cards::new(model, entries);
-    let mods = craft_ui::runtime::pointer::frame(ui.ctx()).mods;
+    let mods = craft_ui::runtime::pointer::mods(ui.ctx());
     if let Some(key) = rename {
         request_rename(ui.ctx(), id, &key);
     }

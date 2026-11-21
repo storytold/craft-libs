@@ -1,8 +1,8 @@
 //! `NewWorkspaceDialog` and `DeleteWorkspaceDialog`: the questions `run_workspace` returns as `WorkspaceAsk::Name`
 //! and `WorkspaceAsk::Which`.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::WorkspaceDialogWords;
 use crate::choice::Checkbox;

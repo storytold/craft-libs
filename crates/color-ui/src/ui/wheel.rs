@@ -21,8 +21,8 @@ use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx
 use egui::{Color32, Mesh, Pos2, Rect, Response, Vec2, vec2};
 use std::f32::consts::{SQRT_2, TAU};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The hue ring: a press on it sets the hue to the pointer's angle.
 const RING: PartKey = PartKey::new("ring");

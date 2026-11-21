@@ -17,7 +17,7 @@ use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
     Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, PressKind,
-    Scopes, Trigger,
+    Scopes, Trigger, TypingRule,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -142,6 +142,8 @@ pub(crate) struct Board {
     /// The commands the app defines at run time, from this frame's input.
     app: Option<AppCatalog>,
     keymap: Option<KeymapCache>,
+    /// How many keymaps the board built: the keymap's generation (`runtime::inputs::Input::Keymap`).
+    keymaps: u64,
     gate: Option<CommandGate>,
     /// The gate's answers under its current key, by command key (`CommandRef::key`). The gate is a `fn` of its props,
     /// so the board asks it once per command until the key moves, whichever readers, passes and frames resolve it.
@@ -162,8 +164,6 @@ pub(crate) struct Board {
     state_log: Vec<(u64, StateKey)>,
     /// The generations of the inputs every resolution reads and of the focus vantage.
     gens: Gens,
-    /// What the frame's input changed, under the root frame it arrived for (`set_input`).
-    changed: (u64, InputChanges),
     /// Scoped commands waiting for their instance.
     queue: Vec<Fired>,
     /// App-scope commands for the next `FrameOutput`.
@@ -188,6 +188,8 @@ pub(crate) struct Board {
     hold_delay: f64,
     /// The top modal layer's root container of each viewport that has one.
     modal_roots: HashMap<ViewportId, Id>,
+    /// The root of the page region the window's shell shows, per viewport: where keys with nothing focused also go.
+    page_roots: HashMap<ViewportId, Id>,
     /// The states published this pass, and the pass before, by an instance inside the top modal layer.
     modal_published: HashSet<StateKey>,
     modal_published_last: HashSet<StateKey>,
@@ -202,14 +204,6 @@ pub(crate) struct Board {
     shown: HashMap<ViewportId, Shown>,
     /// The scope each child scope is declared inside: an instance of the child is also an instance of the parent.
     parents: HashMap<&'static str, &'static str>,
-}
-
-/// What `set_input` changed for the readers of command states, which each pass of the frame notes before any component
-/// runs (`begin`).
-#[derive(Clone, Default)]
-struct InputChanges {
-    /// The keymap was rebuilt: any chord shown may differ.
-    keymap: bool,
 }
 
 /// Whether a resolution finds the same state under `a` and `b`: no state is the default one.
@@ -288,6 +282,8 @@ struct View {
     edits: Option<(EditSet, EditSet)>,
     gens: ViewGens,
 }
+/// A press's double-press matcher, its time, and whether a binding's command accepts the press where it lands.
+type ChordMatch<'a> = (&'a mut Matcher, f64, &'a dyn Fn(&CommandRef) -> bool);
 
 /// What a resolution read besides the board's own generation and the gate.
 #[derive(Default)]
@@ -489,7 +485,7 @@ fn focused_edits(ctx: &Context, viewport: ViewportId) -> Option<(EditSet, EditSe
 }
 
 /// Notes, in the read record, that the running code showed a resolution under `key` (a state's, or the focused stop's
-/// answer): a settled region that showed it runs when `begin` resolves the command from the same reader to something
+/// answer): a settled memoized view that showed it runs when `begin` resolves the command from the same reader to something
 /// else (a state, the gate, a modal layer, an instance or the stop's edits changed), and a change published after it in
 /// the pass runs the pass again.
 fn note_read(ctx: &Context, key: Option<BindKey>) {
@@ -559,15 +555,26 @@ impl Board {
         self.views.get(&viewport).map_or_else(ViewGens::default, |view| view.gens)
     }
 
-    /// What `reader` of `viewport` was shown of `command`, judged from `vantage` (a layered reader's).
-    fn lookup(&mut self, viewport: ViewportId, reader: &Reader, command: &CommandRef, vantage: Option<&Option<Vantage>>) -> Lookup {
+    /// What `reader` of `viewport` was shown of `command`, judged from `vantage` (a layered reader's). `edits` is the
+    /// focused stop's edits now: a resolution that read them is stale once an end hook moved them, before the next
+    /// `begin` moves the edits generation (a read between passes).
+    fn lookup(
+        &mut self,
+        viewport: ViewportId,
+        reader: &Reader,
+        command: &CommandRef,
+        vantage: Option<&Option<Vantage>>,
+        edits: Option<(EditSet, EditSet)>,
+    ) -> Lookup {
         let Some(&number) = self.numbers.get(command.id.as_str()) else { return Lookup::Missing };
         let gate = self.gate_answer(command);
         let view = self.view_gens(viewport);
+        let edits_moved = self.views.get(&viewport).is_some_and(|kept| kept.edits != edits);
         let Some(shown) = self.shown.get_mut(&viewport) else { return Lookup::Missing };
         let Some(id) = shown.find(reader, number, command) else { return Lookup::Missing };
         let Some(entry) = shown.entries.get_mut(&id) else { return Lookup::Missing };
-        if holds(&mut entry.kept.key, self.gens, view, &self.revisions, gate, vantage) {
+        let edits_hold = !edits_moved || entry.kept.key.edits.is_none();
+        if holds(&mut entry.kept.key, self.gens, view, &self.revisions, gate, vantage) && edits_hold {
             Lookup::Fresh(Arc::clone(&entry.kept.resolved), entry.kept.key.bind())
         } else {
             Lookup::Stale
@@ -739,7 +746,15 @@ impl Board {
         };
         let in_reach = !dialog_open || !from.inside_modal.is_empty();
         let (edits, inactive) = keys.filter(|_| in_reach)?;
-        edits.contains(edit).then_some(Declaration::Focused { inactive: inactive.contains(edit) })
+        let inactive = inactive.contains(edit);
+        // An Undo or Redo the focused part has no step for goes where `fall_through` sends it (the declaring instance
+        // or the app command), so that target answers for it and its state enables the command: a toolbar Undo stays
+        // enabled while the app can undo though the field cannot. Cut, Copy and Delete with nothing selected stay the
+        // part's and disabled.
+        if inactive && matches!(edit, EditCommand::Undo | EditCommand::Redo) {
+            return None;
+        }
+        edits.contains(edit).then_some(Declaration::Focused { inactive })
     }
 
     /// `command` as seen by `instance`, or by the app for an app-scope command, from `from`, before the gate, and the
@@ -810,6 +825,7 @@ impl Board {
             marked: state.is_some_and(CommandState::is_marked),
             hint: state.and_then(|s| s.hint_ref().cloned()),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
+            edit: self.registry.edit_of(&command.id).is_some(),
             command: command.clone(),
             instance,
         };
@@ -850,10 +866,11 @@ impl KeyScopes {
     }
 
     /// What a press of `input` runs, read through `layout`. With `matcher` and the press's time the press counts toward
-    /// a double press; without, it is matched on its own.
-    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
+    /// a double press; without, it is matched on its own. With a matcher, a binding of a command `accept` refuses
+    /// (disabled where the press lands) is passed over for the press's next binding.
+    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<ChordMatch<'_>>) -> Option<Hit> {
         self.matching(typing, |active, outer| match matcher {
-            Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active, outer }),
+            Some((matcher, now, accept)) => matcher.press_where(layout, &self.keymap, &Press { input, repeat: false, now, active, outer }, accept),
             None => Matcher::single(layout, &self.keymap, input, active, outer),
         })
     }
@@ -882,7 +899,7 @@ pub(crate) fn install(ctx: &Context, stories: bool) -> Result<(), registry::Comm
 
 /// A keymap with the chords it binds to the edit commands and to the window's keys.
 #[derive(Clone)]
-struct BuiltKeymap {
+pub(crate) struct BuiltKeymap {
     keymap: Arc<Keymap>,
     edit_chords: Arc<[(EditCommand, Chord)]>,
     window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
@@ -890,10 +907,20 @@ struct BuiltKeymap {
     shown_text: Arc<HashMap<Chord, Arc<str>>>,
 }
 
-/// The keymap of `defs` on `platform` under `overrides`, with the system chords reserved and hold bindings counting
-/// when `holds`.
-fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>, holds: bool) -> Keymap {
+/// The keymap of `defs` on `platform` under `overrides`, with the system chords reserved, the app's typing rule when it
+/// set one, and hold bindings counting when `holds`.
+fn keymap_of(
+    defs: Vec<CommandDef>,
+    scopes: Scopes,
+    platform: Platform,
+    overrides: Option<&Arc<Overrides>>,
+    typing: Option<TypingRule>,
+    holds: bool,
+) -> Keymap {
     let mut keymap = Keymap::new(defs, scopes, platform).with_reserved(craft_keymap::reserved::system(platform));
+    if let Some(rule) = typing {
+        keymap = keymap.with_typing_rule(rule);
+    }
     keymap.set_holds(holds);
     if let Some(overrides) = overrides {
         keymap.set_overrides((**overrides).clone());
@@ -959,6 +986,12 @@ fn build_keymap(
     let joined = |defs: &[CommandDef]| -> Vec<CommandDef> { defs.iter().chain(&app_defs).cloned().collect() };
     let mut defs = registry.defs_for(platform);
     if let Some(app) = app {
+        // The app's defaults for a linked set's command replace the set's, before the app's alternate keys join them.
+        for def in &mut defs {
+            if let Some(bindings) = app.replaced_defaults(&def.command.id) {
+                def.defaults = bindings.to_vec();
+            }
+        }
         for extra in app.defs() {
             if let Some(def) = defs.iter_mut().find(|def| def.command == extra.command) {
                 for binding in &extra.defaults {
@@ -969,7 +1002,8 @@ fn build_keymap(
             }
         }
     }
-    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides, holds);
+    let typing = app.and_then(AppCatalog::typing);
+    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides, typing, holds);
     let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
     let yielded: Vec<(CommandRef, Trigger)> = defs
         .iter()
@@ -983,14 +1017,18 @@ fn build_keymap(
             def.defaults
                 .retain(|binding| !yielded.iter().any(|(command, chord)| *command == def.command && binding.trigger.effective(platform) == *chord));
         }
-        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides, holds);
+        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides, typing, holds);
     }
     let window_shortcuts = registry
         .defs()
         .iter()
         .filter_map(|def| WindowShortcut::of(&def.command).map(|key| (key, &def.command)))
         .flat_map(|(key, command)| {
-            keymap.bindings(command).into_iter().filter(|binding| binding.trigger.press == PressKind::Single).map(move |binding| (key, binding.trigger.chord))
+            keymap
+                .bindings(command)
+                .into_iter()
+                .filter(|binding| binding.trigger.press == PressKind::Single)
+                .map(move |binding| (key, binding.trigger.chord))
         })
         .collect();
     let edit_chords = registry
@@ -1000,7 +1038,11 @@ fn build_keymap(
         // Delete's keys (Delete, Backspace) stay a focused text part's own deletion, which also deletes one character.
         .filter(|(edit, _)| *edit != EditCommand::Delete)
         .flat_map(|(edit, command)| {
-            keymap.bindings(command).into_iter().filter(|binding| binding.trigger.press == PressKind::Single).map(move |binding| (edit, binding.trigger.chord))
+            keymap
+                .bindings(command)
+                .into_iter()
+                .filter(|binding| binding.trigger.press == PressKind::Single)
+                .map(move |binding| (edit, binding.trigger.chord))
         })
         .collect();
     let mut shown_text = HashMap::new();
@@ -1016,12 +1058,8 @@ fn build_keymap(
     BuiltKeymap { keymap: Arc::new(keymap), edit_chords, window_shortcuts, shown_text: Arc::new(shown_text) }
 }
 
-/// The keymap of each shared registry (with or without the stories' sets) on each platform with no overrides. It
-/// depends on nothing else, so every context of the process shares it.
-static DEFAULT_KEYMAPS: std::sync::Mutex<Vec<(Platform, bool, BuiltKeymap)>> = std::sync::Mutex::new(Vec::new());
-
-/// The keymap of `registry` and `app` on `platform` under `overrides`: built once per platform for the shared
-/// registry with no overrides, no catalog and holds off, else built here.
+/// Builds or reuses a keymap owned by this exact command registry: one with no catalog, no overrides and holds off is
+/// built once per platform.
 fn keymap_for(
     registry: &Arc<registry::Registry>,
     app: Option<&AppCatalog>,
@@ -1029,16 +1067,15 @@ fn keymap_for(
     overrides: Option<&Arc<Overrides>>,
     holds: bool,
 ) -> BuiltKeymap {
-    if app.is_some() || overrides.is_some() || holds || !registry::Registry::is_shared(registry) {
+    if app.is_some() || overrides.is_some() || holds {
         return build_keymap(registry, app, platform, overrides, holds);
     }
-    let mut kept = DEFAULT_KEYMAPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let stories = registry.has_stories();
-    if let Some((.., built)) = kept.iter().find(|(on, with, _)| *on == platform && *with == stories) {
+    let mut kept = registry.keymaps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, built)) = kept.iter().find(|(on, _)| *on == platform) {
         return built.clone();
     }
     let built = build_keymap(registry, None, platform, None, false);
-    kept.push((platform, stories, built.clone()));
+    kept.push((platform, built.clone()));
     built
 }
 
@@ -1069,7 +1106,6 @@ fn platform(ctx: &Context) -> Platform {
 /// was shown.
 pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
     let platform = platform(ctx);
-    let frame = pass::root_frame_nr(ctx);
     let generation = input.catalog.as_ref().map(AppCatalog::generation);
     let holds = input.holds.is_some();
     let shadowed = with(ctx, |board| {
@@ -1126,16 +1162,24 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
         if stale {
             let BuiltKeymap { keymap, edit_chords, window_shortcuts, shown_text } =
                 keymap_for(&board.registry, input.catalog.as_ref(), platform, input.overrides.as_ref(), holds);
-            board.keymap =
-                Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), generation, holds, edit_chords, window_shortcuts, shown_text });
+            board.keymap = Some(KeymapCache {
+                keymap,
+                platform,
+                overrides: input.overrides.clone(),
+                generation,
+                holds,
+                edit_chords,
+                window_shortcuts,
+                shown_text,
+            });
             board.gens.shared += 1;
+            board.keymaps += 1;
             for def in input.catalog.as_ref().map_or(&[][..], AppCatalog::defs) {
                 if board.registry.get(&def.command.id).is_some() && board.shadowed.insert(def.command.id.clone()) {
                     shadowed.push(def.command.id.clone());
                 }
             }
         }
-        board.changed = (frame, InputChanges { keymap: stale });
         shadowed
     });
     for id in shadowed {
@@ -1149,24 +1193,52 @@ pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.edit_chords)).unwrap_or_default())
 }
 
-/// The window's keymap; none before the first frame builds one.
-pub(crate) fn keymap(ctx: &Context) -> Option<Arc<Keymap>> {
-    with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap)))
+/// The generation of the window's keymap without noting a read: it moves each time a new keymap is built.
+pub(crate) fn keymap_built(ctx: &Context) -> u64 {
+    with(ctx, |board| board.keymaps)
+}
+
+/// The generation of the window's keymap, for a key that holds what is derived from its chords: it moves each time a
+/// new keymap is built. The caller's view reads the keymap, so a change of it runs the view.
+pub fn keymap_generation(ctx: &Context) -> u64 {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
+    keymap_built(ctx)
+}
+
+/// Whether the queue holds a command for one of `instances`: only a run of the view they registered in takes it.
+pub(crate) fn queued_for(ctx: &Context, instances: &[Id]) -> bool {
+    !instances.is_empty() && with(ctx, |board| board.queue.iter().any(|fired| fired.target.is_some_and(|target| instances.contains(&target))))
 }
 
 /// The bindings the window's keymap gives `command`; none before the first frame builds one.
 pub(crate) fn bindings(ctx: &Context, command: &CommandRef) -> Vec<craft_keymap::Binding> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.bindings(command)).unwrap_or_default())
 }
 
 /// The chord the window's keymap shows for `command` (`Keymap::shown_chord`); none before the first frame builds one.
 pub(crate) fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command)))
+}
+
+/// The window's own keymap: the registry scopes, the app catalog, the window shortcuts and the app's overrides, as the
+/// board resolves keys with it; none before the first frame builds one.
+pub fn keymap(ctx: &Context) -> Option<Arc<Keymap>> {
+    with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap)))
 }
 
 /// The command that holds `chord` in the window's keymap (`Keymap::holder`); none before the first frame builds one.
 pub(crate) fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.holder(chord)))
+}
+
+/// Whether a command the window's keymap binds `chord` to is enabled, as the last pass resolved it for a surface with
+/// no component of its own (the state a menu row shows): a press of the chord can run something. Notes no reader.
+pub(crate) fn runs_now(ctx: &Context, chord: &Chord) -> bool {
+    let holders = with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.holders(chord)).unwrap_or_default());
+    holders.iter().any(|command| resolve_from(ctx, command, None).0.enabled)
 }
 
 /// The chords bound to the window's keys, which the input hook takes before any component.
@@ -1187,6 +1259,7 @@ pub(crate) fn take_delivered(ctx: &Context) -> Vec<Fired> {
 /// Whether the component that holds key focus sits inside the instance `id`.
 #[doc(hidden)]
 pub fn focus_within(ctx: &Context, id: Id) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Focus);
     with(ctx, |board| board.here.focused.iter().any(|(_, chain)| chain.contains(&id)))
 }
 
@@ -1198,6 +1271,7 @@ pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
 /// `register_instance` in the layer `layer`, which a replay of the registration keeps.
 fn register_in(ctx: &Context, scope: CommandScope, id: Id, layer: Option<Id>) {
     crate::runtime::replay::journal(ctx, || (scope, id, layer), |ctx, &(scope, id, layer)| register_in(ctx, scope, id, layer));
+    crate::runtime::replay::note_instance(ctx, id);
     let viewport = pass::current_viewport(ctx);
     let stamp = pass::pass_nr(ctx, viewport);
     with(ctx, |board| {
@@ -1235,6 +1309,15 @@ pub(crate) fn set_modal_open(ctx: &Context, open: bool, viewport: ViewportId, ro
             board.gens.shared += 1;
         }
         board.here.modal_open = open;
+    });
+}
+
+/// Records `root` as the page region `viewport` shows (`AppShell::page`): a key pressed with nothing focused reaches
+/// the page's command scope beside the window's.
+#[doc(hidden)]
+pub fn note_page_root(ctx: &Context, viewport: ViewportId, root: Id) {
+    with(ctx, |board| {
+        board.page_roots.insert(viewport, root);
     });
 }
 
@@ -1356,9 +1439,12 @@ pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &Comma
 /// `command` as `reader` is shown it, noted as its read: the kept resolution while its inputs are unchanged, else a new
 /// one, kept.
 fn read(ctx: &Context, reader: Reader, command: &CommandRef) -> Arc<ResolvedCommand> {
+    // The resolved command carries the chord the keymap shows, kept or made now.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     let viewport = pass::current_viewport(ctx);
     let vantage = vantage_of(ctx, &reader);
-    let found = with(ctx, |board| board.lookup(viewport, &reader, command, vantage.as_ref()));
+    let edits = focused_edits(ctx, viewport);
+    let found = with(ctx, |board| board.lookup(viewport, &reader, command, vantage.as_ref(), edits));
     let (resolved, bind) = match found {
         Lookup::Fresh(resolved, bind) => (resolved, bind),
         found => {
@@ -1431,8 +1517,8 @@ fn resolve_once(ctx: &Context, command: &CommandRef, instance: Option<Id>, reach
 /// fx.F23: resolves again what a reader of `viewport` was shown when an input of it changed since the viewport's last
 /// wake, from that reader's own vantage under this pass's gate, states, modal facts and instances, and notes an edit of
 /// the key each was read under when its resolution differs in any shown part (label, chord, enabled, checked, marked,
-/// hint), so a settled region that shows it runs; the entry keeps the new resolution. Readers of regions that did not
-/// run keep their entries: a settled region is the reader this exists for. It walks only the entries whose inputs
+/// hint), so a settled memoized view that shows it runs; the entry keeps the new resolution. Readers of regions that did not
+/// run keep their entries: a settled memoized view is the reader this exists for. It walks only the entries whose inputs
 /// moved, through the table's indexes: every entry when a generation all of them read moved (the shared one, the
 /// viewport's keys, the gate), else the readers of the focus, of the focused stop's edits and of each changed state,
 /// and the readers under a layer or in a menu, whose vantage it reads again. A second pass of a frame compares against
@@ -1623,7 +1709,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
 }
 
 /// Publishes `state` of `command` for the innermost instance in `chain`. A state other than the one resolved so far in
-/// the frame is an edit of it: a settled region that read it runs, and so does the pass, when something read it
+/// the frame is an edit of it: a settled memoized view that read it runs, and so does the pass, when something read it
 /// earlier in the pass.
 ///
 /// A publish is a board effect, which a measuring run skips as it skips registration: the real run of the same content
@@ -1808,10 +1894,6 @@ fn release_fired(held: Held, mods: craft_keymap::Mods, time: f64) -> Fired {
 /// through the gate, to their commands. A key with a hold binding waits (`HoldWait`) for its release, the next event
 /// or its deadline.
 pub(crate) fn begin(ctx: &Context) {
-    let (arrived, changed) = with(ctx, |board| board.changed.clone());
-    if arrived == pass::root_frame_nr(ctx) && changed.keymap {
-        lazy::unsettle(ctx);
-    }
     let viewport = pass::current_viewport(ctx);
     let focused = focus::record(ctx, viewport).focused;
     let shortcuts = keys::take_shortcuts(ctx);
@@ -1844,8 +1926,14 @@ pub(crate) fn begin(ctx: &Context) {
             view.gens.focus += 1;
         }
         // Nothing focused outside a modal: the window's shell root takes the commands, so a window command's key comes
-        // before an app command's. Nothing holds focus there, so the chain last focused stays.
-        let chain = if chain.is_empty() && focused.is_none() { shell.into_iter().collect() } else { chain };
+        // before an app command's, and the page region's after it. Nothing holds focus there, so the chain last focused
+        // stays.
+        let chain = if chain.is_empty() && focused.is_none() {
+            let page = board.page_roots.get(&viewport).copied();
+            shell.into_iter().chain(page).collect()
+        } else {
+            chain
+        };
         match board.here.focused.iter_mut().find(|(v, _)| *v == viewport) {
             Some(entry) if entry.1 == chain => {}
             Some(entry) => {
@@ -1967,11 +2055,18 @@ pub(crate) fn begin(ctx: &Context) {
             _ => {
                 // Another key's press settles the wait first: keys act in the order they went down.
                 fired.extend(settle(wait.take(), time));
+                // A binding whose command is disabled where the press lands (a window command with no floating
+                // window, a canvas's view command it does not offer) is passed over: the press runs the next binding
+                // of its chord, in an outer scope, or of its next chord candidate, as if the disabled one were unbound.
+                let enabled = |command: &CommandRef| {
+                    let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
+                    resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
+                };
                 let typing = shortcuts.typing && !shortcut.canvas;
                 let hold = key
                     .filter(|_| !typing && !modal_at_start)
                     .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));
-                let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time)));
+                let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled)));
                 match hold {
                     Some((key, hold)) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
                     None => fired.extend(tap.and_then(|hit| press(hit, key, time))),

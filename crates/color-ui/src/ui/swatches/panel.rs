@@ -1,6 +1,6 @@
 //! `SwatchesPanel`: the panel body, its state and what it reports.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use craft_cms::convert::CmykConverter;
@@ -8,20 +8,19 @@ use craft_i18n::Format;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
-use craft_ui::choice::SwatchFace;
-use craft_ui::contract::{Bind, DropAt, DropPlace, DropZone, Entry, Held, NoValue, Outcome, Pattern, SelectMode, ShowContainer as _};
+use craft_ui::contract::{Bind, DropAt, DropPlace, DropZone, Entry, Held, MemoProps, NoValue, Outcome, Pattern, SelectMode, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{
-    PresetBrowser, PresetDrop, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetRowMenu, PresetWords, ThumbInfo,
+    PresetBrowser, PresetDrop, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetRowMenu, PresetWords, ThumbFn,
 };
-use craft_ui::primitives::{ContentPainterCx, IconSpec};
+use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Count, Env};
-use egui::{Rect, Response, Ui};
+use egui::{Response, Ui};
 
-use super::library::{find_swatch, has};
+use super::library::{HostThumb, find_swatch, has, panel_source};
 use super::menu::event_edits;
-use super::{SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords, swatch_rows};
-use crate::palette::{SwatchColor, SwatchGroup, SwatchNote, SwatchReport};
+use super::{SWATCH_ZOOM, SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords};
+use crate::palette::{SwatchGroup, SwatchNote, SwatchReport};
 
 /// What [`SwatchesPanel::show`] reports.
 #[derive(Debug)]
@@ -48,7 +47,6 @@ impl Outcome for SwatchesPanelOutput {
     }
 }
 
-type ThumbFn<'a> = Box<dyn Fn(&ContentPainterCx<'_>, Rect, ThumbInfo<'_, SwatchKey>) + 'a>;
 type ToolsFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 type RowIconsFn<'a> = Box<dyn Fn(&SwatchKey) -> Vec<(IconSpec<'static>, String)> + 'a>;
 type RowItemsFn<'a> = Box<dyn Fn(&SwatchKey) -> Vec<Entry<String>> + 'a>;
@@ -80,7 +78,7 @@ pub struct SwatchesPanel<'a> {
     state: Bind<'a, SwatchesState>,
     cmyk: Option<&'a CmykConverter>,
     foreground: Srgba,
-    thumb: Option<ThumbFn<'a>>,
+    thumb: Option<HostThumb<'a>>,
     tools: Option<ToolsFn<'a>>,
     drop_zone: Option<DropZone>,
     footer: Option<Option<PresetFooterOptions<'a>>>,
@@ -129,11 +127,12 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
-    /// Paints each swatch's thumbnail with `painter` in place of the panel's own swatch face (the host's gradient and
-    /// pattern previews). The painter draws the selected state from `ThumbInfo::selected`.
+    /// Paints each swatch's thumbnail with `paint` over the host's `inputs` in place of the panel's own swatch face
+    /// (the host's gradient and pattern previews), as `PresetFns::thumb` does: the inputs are all the painter reads, so
+    /// the swatch list keys on them. The painter draws the selected state from `ThumbInfo::selected`.
     #[must_use]
-    pub fn thumb(mut self, painter: impl Fn(&ContentPainterCx<'_>, Rect, ThumbInfo<'_, SwatchKey>) + 'a) -> Self {
-        self.thumb = Some(Box::new(painter));
+    pub fn thumb<I: MemoProps + Send + 'a>(mut self, inputs: I, paint: ThumbFn<I, SwatchKey>) -> Self {
+        self.thumb = Some(HostThumb::new(inputs, paint));
         self
     }
 
@@ -230,6 +229,14 @@ impl<'a> SwatchesPanel<'a> {
         let mut held_state = Held::new(state);
         let ctx = ui.ctx().clone();
         let browser_id = ui.scope_id();
+        let icons: BTreeMap<&str, Vec<(IconSpec<'static>, String)>> = match &row_icons {
+            Some(icons) => {
+                groups.iter().flat_map(|g| g.entries.iter()).map(|e| (e.name.as_str(), icons(&SwatchKey::Swatch(e.name.clone())))).collect()
+            }
+            None => BTreeMap::new(),
+        };
+        // Built once: the body can run more than once a pass, and the host's painter is moved into the source.
+        let source = panel_source(groups, cmyk, icons, thumb);
         let mut shown = Stack::new().fill().show(ui, |ui, cx| {
             let before_state = held_state.read(cx)?;
             let mut st = before_state.clone();
@@ -237,38 +244,18 @@ impl<'a> SwatchesPanel<'a> {
             st.selection.items.retain(live);
             st.selection.lead = st.selection.lead.take().filter(live);
             st.selection.anchor = st.selection.anchor.take().filter(live);
-            let mut rows = swatch_rows(groups, &words);
-            if let Some(icons) = &row_icons {
-                for row in rows.iter_mut().filter(|row| matches!(row.key, SwatchKey::Swatch(_))) {
-                    row.trailing = icons(&row.key);
-                }
-            }
             let footer_options = match &footer {
                 Some(host) => host.clone(),
                 None => Some(PresetFooterOptions::new().can_delete(!st.selection.items.is_empty())),
             };
             let out = {
-                let colors: HashMap<&str, &SwatchColor> = if thumb.is_some() {
-                    HashMap::new()
-                } else {
-                    groups.iter().flat_map(|g| g.entries.iter().filter_map(|e| e.color().map(|c| (e.name.as_str(), c)))).collect()
-                };
-                let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &rows)
+                let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &source)
+                    .thumb_range(SWATCH_ZOOM)
                     .toolbar(true)
                     .search(search)
                     .select(select)
                     .reorder(PresetReorder::items_and_groups())
-                    .selection(Bind::bound(&mut st.selection))
-                    .thumb(|cx: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| match thumb.as_ref() {
-                        Some(host) => host(cx, rect, info),
-                        None => {
-                            if let SwatchKey::Swatch(name) = info.key
-                                && let Some(color) = colors.get(name.as_str())
-                            {
-                                SwatchFace::new(color.to_srgb(cmyk)).selected(info.selected).paint(cx, rect);
-                            }
-                        }
-                    });
+                    .selection(Bind::bound(&mut st.selection));
                 if let Some(options) = footer_options {
                     browser = browser.footer(options);
                 }

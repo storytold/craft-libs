@@ -5,8 +5,8 @@ mod cards;
 mod details;
 mod presets;
 mod settings;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::form::{read_bind, write_bind};
 use super::{FormCx, FormDialog, HostRequests};
@@ -17,6 +17,8 @@ use crate::dialog::{
     DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
 
+use crate::contract::Show as _;
+use crate::display::Divider;
 use crate::layout_components::{Grid, Stack};
 
 use crate::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary, PresetWords as LibraryWords};
@@ -323,8 +325,8 @@ impl<S: DocumentSettings> Outcome for NewDocumentOutput<S> {
     }
 }
 
-/// The columns of the body: the cards take the room the details column leaves.
-const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content];
+/// Leave most of the dialog to the presets and keep the details column at a consistent share of the width.
+const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(2.0), ColumnWidth::fill(1.0)];
 
 /// The body of the dialog: the columns, then what they asked for.
 fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut S, shared: &Shared<'_, S>) -> bool {
@@ -369,6 +371,8 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
     }
     let mut left = Left::default();
     let mut right = Right::default();
+    cards::tabs(ui, &session, &read, &mut left);
+    Divider::horizontal().show(ui);
     Grid::new(&COLUMNS).fill().show(ui, |ui, _| {
         Stack::new().fill().show(ui, |ui, _| {
             cards::show(ui, &session, values, &read, &mut left);
@@ -405,7 +409,7 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
     }
     if right.save {
         let name = session.naming.clone().unwrap_or_default();
-        if details::refusal(&library, &name).is_none() {
+        if details::refusal(&library.names(), &name).is_none() {
             let mut preset = values.clone();
             preset.set_name(name.trim().to_owned());
             if let Ok(id) = library.add(&GroupPath::root(), &name, preset) {
@@ -777,11 +781,7 @@ impl<S: DocumentSettings> HostedNewDocument<S> {
     /// A hosted dialog opening on `options`; `build` makes the dialog over them (the clipboard, the profiles, the
     /// app's name). The settings open at once (the clipboard's size, the default name from the root's words), so
     /// automation lists and sets them before the first pass.
-    pub fn new(
-        ctx: &egui::Context,
-        mut options: S,
-        build: impl for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send + 'static,
-    ) -> Self {
+    pub fn new(ctx: &egui::Context, mut options: S, build: impl for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send + 'static) -> Self {
         let setup = build(&mut options).setup;
         options.open(&setup, Env::of_root(ctx).words::<NewDocumentWords>().untitled.as_str());
         HostedNewDocument {

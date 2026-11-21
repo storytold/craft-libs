@@ -76,14 +76,14 @@ impl<'a> OverlayUi<'a> {
     }
 
     /// Keeps the popups this component shows from here on, and every popup opened from them, below the component:
-    /// inside the safe rect less the part above the component's bottom edge, and above the bottom of the inherited
+    /// inside the layer room less the part above the component's bottom edge, and above the bottom of the inherited
     /// `PopupRegion` when one is set (the bottom slots of a shell). A menu bar's menus and their submenus never cover
     /// the bar.
     pub fn contain_popups_below(&mut self) {
-        let safe = areas::safe_rect(self.ctx);
-        let bottom = self.env.get::<PopupRegion>().0.map_or(safe.bottom(), |region| region.bottom().min(safe.bottom())).max(safe.top());
-        let top = (self.to_screen * self.anchor).bottom().clamp(safe.top(), bottom);
-        let region = Rect::from_min_max(egui::pos2(safe.left(), top), egui::pos2(safe.right(), bottom));
+        let room = super::layer_room(self.ctx);
+        let bottom = self.env.get::<PopupRegion>().0.map_or(room.bottom(), |region| region.bottom().min(room.bottom())).max(room.top());
+        let top = (self.to_screen * self.anchor).bottom().clamp(room.top(), bottom);
+        let region = Rect::from_min_max(egui::pos2(room.left(), top), egui::pos2(room.right(), bottom));
         self.env = self.env.derive(|scoped| {
             scoped.inherited_mut().values.set(PopupRegion(Some(region)));
         });
@@ -96,7 +96,11 @@ impl<'a> OverlayUi<'a> {
     /// placed, so a popup whose content changes is placed by its new size in the pass that shows it. A child that fills
     /// the width takes the width the popup settles on, not the window's. The popup's memory belongs to the component
     /// that shows it (or to the opener its overlay names), so what its body keeps lasts while that component shows.
-    pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
+    pub fn show<R>(&mut self, popup: PopupHandle, overlay: Overlay, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
+        self.show_with(popup, overlay, &mut body)
+    }
+
+    fn show_with<R>(&mut self, popup: PopupHandle, overlay: Overlay, body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Option<R> {
         let Some(open) = self.open.get(&popup.id).copied() else {
             debug_assert!(false, "popup {:?} is shown but was not registered with `cx.popup` this pass", popup.name);
             return None;
@@ -118,7 +122,7 @@ impl<'a> OverlayUi<'a> {
         let label = self.resolved.label_value.clone();
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).mount(Mount::Layer(overlay));
         let container = PopupBody { common: Common::new(), props: ContainerProps { owner: Some(owner), ..props } }.label(label);
-        self.show_container(popup, container, body).and_then(|shown| shown.inner)
+        self.show_container_with(popup, container, body).and_then(|shown| shown.inner)
     }
 
     /// Shows `container` as the layer of `popup`, through the container pipeline: its body step with the move band
@@ -132,7 +136,16 @@ impl<'a> OverlayUi<'a> {
         &mut self,
         popup: PopupHandle,
         container: C,
-        body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+        mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    ) -> Option<Inner<C::Output, R>> {
+        self.show_container_with(popup, container, &mut body)
+    }
+
+    fn show_container_with<C: ShowContainer, R>(
+        &mut self,
+        popup: PopupHandle,
+        container: C,
+        body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     ) -> Option<Inner<C::Output, R>> {
         let Some(open) = self.open.get(&popup.id).copied() else {
             debug_assert!(false, "popup {:?} is shown but was not registered with `cx.popup` this pass", popup.name);

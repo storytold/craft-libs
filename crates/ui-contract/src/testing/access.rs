@@ -3,6 +3,7 @@
 use crate::runtime::access::{FieldLabel, scope};
 use egui::{Context, Id};
 
+pub use crate::runtime::access::layer_root;
 pub use crate::runtime::egui::access::{AccessTree, Declared, NodeKey, is_interactive, name, prune_controls};
 
 /// The AccessKit tree a finished pass of a viewport produced, taken out of its output; empty when it made none.
@@ -20,7 +21,6 @@ pub fn begin_label_scope(ctx: &Context, container: Id, label: FieldLabel) {
 pub fn focused_key(tree: &AccessTree) -> NodeKey {
     tree.focused_key()
 }
-
 
 /// The rule violations of a frame: interactive nodes with no name, and every finding the runtime's role rules
 /// reported on `ctx`.

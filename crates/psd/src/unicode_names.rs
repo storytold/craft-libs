@@ -24,6 +24,20 @@ pub fn records(mut data: &[u8]) -> impl Iterator<Item = &[u8]> {
     })
 }
 
+/// Encode counted NUL-terminated big-endian UTF-16 name records (resource 1045).
+pub fn write<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for name in names {
+        let count = name.encode_utf16().count().saturating_add(1);
+        let count_u32 = u32::try_from(count).unwrap_or(u32::MAX);
+        out.extend_from_slice(&count_u32.to_be_bytes());
+        for unit in name.encode_utf16().take(count_u32 as usize - 1).chain(std::iter::once(0)) {
+            out.extend_from_slice(&unit.to_be_bytes());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,5 +64,14 @@ mod tests {
         for end in 0..first.len() {
             assert_eq!(records(&first[..end]).count(), 0);
         }
+    }
+
+    #[test]
+    fn write_roundtrips_with_nul_terminator() {
+        let bytes = write(["Alpha 1", "café"]);
+        let decoded: Vec<_> = records(&bytes).collect();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0], [0, b'A', 0, b'l', 0, b'p', 0, b'h', 0, b'a', 0, b' ', 0, b'1', 0, 0]);
+        assert_eq!(decoded[1], [0, b'c', 0, b'a', 0, b'f', 0, 0xe9, 0, 0]);
     }
 }

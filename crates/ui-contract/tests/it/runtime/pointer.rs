@@ -90,6 +90,52 @@ fn canvas(transform: Option<CanvasTransform>) -> ProbeRoot {
 
 const ZOOM: CanvasTransform = CanvasTransform::new(2.0, Vec2::new(10.0, 5.0));
 
+/// A root's egui widget, and its transformed body's forwarding widget, sense what the members that joined it in the
+/// same pass sense: a member that clicks makes them click from the first frame, and one gone or added changes them in
+/// that frame.
+#[trial]
+fn a_root_widget_senses_what_its_members_sense_in_the_same_pass() {
+    let with_member = Rc::new(std::cell::Cell::new(true));
+    let shown = with_member.clone();
+    let mut show_frame = move |ui: &mut Ui| {
+        let root = ProbeRoot::new("canvas", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
+            .arena()
+            .part(ProbePart::new(BACKGROUND, rect(100.0, 100.0, 500.0, 300.0), Sense::DRAG).level(HitLevel::Background, 0))
+            .transformed(ZOOM)
+            .blocker(Vec2::new(500.0, 300.0));
+        let root = if shown.get() { root.member(ProbeMember::new("tool", rect(160.0, 160.0, 90.0, 30.0), Sense::CLICK)) } else { root };
+        show(ui, &[root]);
+    };
+    let clicks = |frames: &Frames| {
+        [ProbeRoot::id("canvas"), ProbeRoot::transform_widget("canvas")]
+            .map(|id| frames.ctx.widget_rect_last_pass(id).map(|widget| widget.sense.senses_click()))
+    };
+    let mut frames = Frames::new();
+    frames.idle(1, &mut show_frame);
+    assert_eq!(clicks(&frames), [Some(true); 2], "the first frame's widgets click with their member");
+    with_member.set(false);
+    frames.idle(1, &mut show_frame);
+    assert_eq!(clicks(&frames), [Some(false); 2], "the widgets stop clicking in the frame the member goes");
+    with_member.set(true);
+    frames.idle(1, &mut show_frame);
+    assert_eq!(clicks(&frames), [Some(true); 2], "the widgets click again in the frame the member comes back");
+}
+
+/// A root its clip cuts registers its whole rect as its egui widget's rect, and the part inside the clip as the rect
+/// egui's hit test uses, as egui's own widgets do: its response reports and reveals where the root is.
+#[trial]
+fn a_root_cut_by_its_clip_keeps_its_whole_rect_and_senses_inside_the_clip() {
+    let (whole, clip) = (rect(100.0, 100.0, 200.0, 100.0), rect(0.0, 0.0, 400.0, 150.0));
+    let mut show_frame = move |ui: &mut Ui| {
+        ui.set_clip_rect(clip);
+        show(ui, &[ProbeRoot::new("cut", whole, Sense::CLICK)]);
+    };
+    let mut frames = Frames::new();
+    frames.idle(1, &mut show_frame);
+    let widget = frames.ctx.widget_rect_last_pass(ProbeRoot::id("cut")).expect("the root's widget");
+    assert_eq!((widget.rect, widget.interact_rect), (whole, whole.intersect(clip)), "the whole rect, sensed inside the clip");
+}
+
 /// Skeleton: `frames_pointer::button_on_canvas_click_and_slop_drag` and `..._on_zoomed_canvas_...`.
 fn member_on_canvas(transform: Option<CanvasTransform>) {
     let (mut show_frame, log) = scene(vec![canvas(transform)]);

@@ -9,6 +9,7 @@ mod memo;
 mod pattern;
 mod plain;
 mod props;
+mod registry;
 mod style;
 mod token_group;
 mod util;
@@ -100,9 +101,14 @@ pub fn derive_plain_data(input: TokenStream) -> TokenStream {
 /// implementation carries `#[memo_props(hash = "why the type is plain")]`: it feeds the key through its `Hash`, and its
 /// type must be `Hash + Sync` (which keeps out raw pointers, `NonNull`, `Cell` and `RefCell`), with a `Hash` that covers
 /// everything the view shows and is prefix-free (two different values never feed bytes of which one starts the
-/// other); the reason is required. A type parameter is bound by `MemoProps`, except one marked
-/// `#[memo_props(stateless)]`: the type of a callback held as `Stateless<E>`, which no fn item or closure implements
-/// `MemoProps` for, is bound by `'static` only (`struct Bar<#[memo_props(stateless)] E> { english: Stateless<E> }`).
+/// other); the reason is required. A `&'static` reference to a static item (a registration) carries
+/// `#[memo_props(address = "why")]` and feeds where it points. A field another field of the same variant stands for (a
+/// closure a generation counter covers) carries `#[memo_props(covered_by = "<field>", reason = "why")]` and feeds
+/// nothing; the named field must exist and feed the key itself. A type parameter is bound by `MemoProps`, except one
+/// marked `#[memo_props(stateless)]`: the type of a callback held as `Stateless<E>`, which no fn item or closure
+/// implements `MemoProps` for, is bound by `'static` only (`struct Bar<#[memo_props(stateless)] E> { english:
+/// Stateless<E> }`). A type that is a handle to state written during the pass, or a context rebuilt each pass, carries
+/// `#[memo_props(every_pass = "why")]`: it feeds no field, and a view whose key holds it runs in every pass.
 #[proc_macro_derive(MemoProps, attributes(memo_props))]
 pub fn derive_memo_props(input: TokenStream) -> TokenStream {
     expanded(memo::derive(input.into()))
@@ -140,8 +146,7 @@ pub fn words(input: TokenStream) -> TokenStream {
 
 /// Registers a function as a trial of its crate's test executable.
 ///
-/// The function takes no arguments and returns `()`; it fails by panicking. The registration lists it in
-/// `craft_ui::testing::trials()`, so the runner finds it without a hand-kept list. An `#[ignore]` on the function
+/// The function takes no arguments and returns `()`; it fails by panicking. The crate registry includes it in the runner. An `#[ignore]` on the function
 /// makes it run only under `--ignored`.
 #[proc_macro_attribute]
 pub fn trial(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -161,12 +166,17 @@ pub fn trial(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
     let ident = &sig.ident;
     let name = ident.to_string();
+    let gate = component::declares_suite().then(|| quote!(#[cfg(any(test, feature = "suite"))]));
+    let helper = quote::format_ident!("__registry_trial_{}", ident);
     quote! {
+        #gate
         #func
 
-        #k::testing::__private::inventory::submit! {
+        #gate
+        pub(crate) fn #helper() -> #k::testing::Trial {
             #k::testing::Trial::#register(module_path!(), #name, #ident)
         }
+
     }
     .into()
 }
@@ -229,7 +239,8 @@ impl Parse for StoryArgs {
 pub fn story(attr: TokenStream, item: TokenStream) -> TokenStream {
     let k = util::ui_crate();
     let args = parse_macro_input!(attr as StoryArgs);
-    let func = parse_macro_input!(item as ItemFn);
+    let mut func = parse_macro_input!(item as ItemFn);
+    func.vis = syn::parse_quote!(pub(crate));
     let ident = &func.sig.ident;
     let name = ident.to_string();
     let ty = &args.ty;
@@ -239,18 +250,36 @@ pub fn story(attr: TokenStream, item: TokenStream) -> TokenStream {
     let title = args.title.as_ref().map(|title| quote!(.title(#title)));
     let group = args.group.as_ref().map(|group| quote!(.group(#group)));
     let commands = args.commands.as_ref().map(|commands| quote!(.commands(#commands)));
+    let gate = component::registration_gate();
+    let helper = quote::format_ident!("__registry_story_{}", ident);
+    let registration = quote! {
+        #k::testing::StoryRegistration::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_CRATE_NAME"),
+            ::std::any::type_name::<#ty>,
+            <#ty as #k::testing::Registered>::registration,
+            #k::testing::Story::new(#name, #ident).covers(&[#(#k::testing::Required::#covers),*]) #drive #disabled_text #title #group #commands,
+        ).at(file!(), line!())
+    };
     quote! {
+        #gate
         #func
 
-        #k::testing::__private::inventory::submit! {
-            #k::testing::StoryRegistration::new(
-                env!("CARGO_PKG_NAME"),
-                env!("CARGO_CRATE_NAME"),
-                ::std::any::type_name::<#ty>,
-                #k::testing::Story::new(#name, #ident).covers(&[#(#k::testing::Required::#covers),*]) #drive #disabled_text #title #group #commands,
-            )
-            .at(file!(), line!())
+        #gate
+        #k::__register_contract! {
+            @suite
+            pub(crate) fn #helper() -> #k::testing::StoryRegistration { #registration }
         }
+
     }
     .into()
+}
+
+/// Generates a crate registration function by reading its source modules.
+#[proc_macro]
+pub fn registry(input: TokenStream) -> TokenStream {
+    if !input.is_empty() {
+        return syn::Error::new(proc_macro2::Span::call_site(), "registry! takes no arguments").to_compile_error().into();
+    }
+    expanded(registry::expand())
 }

@@ -4,7 +4,7 @@ use super::{PairWell, SwatchPair, Well};
 use crate::ui::{GradientPreview, Paint};
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _, Validity};
+use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _, Tracked, Validity};
 use craft_ui::layout_components::Row;
 use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::env::Message;
@@ -36,9 +36,12 @@ struct Colors {
 /// popup's picker edits the well it opened on. With `ring` the secondary well is a ring, as DesignCraft's stroke.
 fn editing(ui: &mut Ui, data: &mut StoryData, names: [&'static str; 2], start: [Srgba; 2], ring: bool) -> StoryOutput {
     let defaults = [Srgba::rgb(0.0, 0.0, 0.0), Srgba::rgb(1.0, 1.0, 1.0)];
-    let state = data.value("colors", Colors { active: Well::Primary, colors: start });
+    let (state, state_at) = data.value_at("colors", Colors { active: Well::Primary, colors: start });
     let wells = [PairWell::new(names[0], state.colors[0]), PairWell::new(names[1], state.colors[1]).ring(ring)];
-    let shown = SwatchPair::<()>::new("Colours", wells, Bind::bound(&mut state.active)).swap_button("Swap colours").default_button("Default colours").show(ui);
+    let shown = SwatchPair::<()>::new("Colours", wells, state_at.bind(&mut state.active))
+        .swap_button("Swap colours")
+        .default_button("Default colours")
+        .show(ui);
     if shown.swap {
         state.colors.swap(0, 1);
     }
@@ -70,13 +73,13 @@ fn swatch_pair_ring(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(SwatchPair<'static, u8>, covers = [], drive = Drive::Never)]
 fn swatch_pair_host_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    SwatchPair::<()>::new("Colours", wells(false), Bind::bound(data.value("active", Well::Primary))).popover(false).click_activates(false).show(ui).into()
+    SwatchPair::<()>::new("Colours", wells(false), data.bind("active", Well::Primary)).popover(false).click_activates(false).show(ui).into()
 }
 
 #[story(SwatchPair<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn swatch_pair_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let wells = [PairWell::new("Fill", Mixed::<Srgba>::Mixed), PairWell::new("Stroke", Srgba::rgb(0.1, 0.3, 0.8)).ring(true)];
-    SwatchPair::<()>::new("Fill and stroke", wells, Bind::bound(data.value("active", Well::Primary))).show(ui).into()
+    SwatchPair::<()>::new("Fill and stroke", wells, data.bind("active", Well::Primary)).show(ui).into()
 }
 
 /// Opens the picker of the focused well with Enter.
@@ -88,26 +91,26 @@ fn open_picker(fixture: &mut Fixture) {
 
 #[story(SwatchPair<'static, u8>, covers = [Open], drive = Drive::Custom(open_picker))]
 fn swatch_pair_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    SwatchPair::<()>::new("Colours", wells(false), Bind::bound(data.value("active", Well::Primary))).show(ui).into()
+    SwatchPair::<()>::new("Colours", wells(false), data.bind("active", Well::Primary)).show(ui).into()
 }
 
 #[story(SwatchPair<'static, u8>, covers = [Invalid], drive = Drive::Never)]
 fn swatch_pair_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_secondary =
         |well: &Well| if *well == Well::Secondary { Validity::Refuse(Message::new("Only the foreground can be edited")) } else { Validity::Ok };
-    SwatchPair::<()>::new("Colours", wells(false), Bind::bound(data.value("active", Well::Secondary)).check(refuse_secondary)).show(ui).into()
+    SwatchPair::<()>::new("Colours", wells(false), data.bind("active", Well::Secondary).check(refuse_secondary)).show(ui).into()
 }
 
 /// The pair in a tool rail's footer, as PhotoCraft's colour chips: the gap round the front well takes the rail's chrome.
 #[story(SwatchPair<'static, u8>, covers = [], drive = Drive::Never)]
 fn swatch_pair_tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let active = data.value("active", Well::Primary);
-    let (slots, last): (Vec<ToolSlot<u8>>, LastUsed<u8>) = (Vec::new(), LastUsed::default());
+    let (active, active_at) = data.value_at("active", Well::Primary);
+    let (slots, last): (Tracked<Vec<ToolSlot<u8>>>, Tracked<LastUsed<u8>>) = (Tracked::default(), Tracked::default());
     let wells = [PairWell::new("Foreground colour", Srgba::rgb(0.0, 0.0, 0.0)), PairWell::new("Background colour", Srgba::rgb(1.0, 1.0, 1.0))];
     let mut shown = None;
     ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |ui, _| {
         shown = Some(
-            SwatchPair::<()>::new("Colours", wells.clone(), Bind::bound(&mut *active))
+            SwatchPair::<()>::new("Colours", wells.clone(), active_at.bind(&mut *active))
                 .popover(false)
                 .swap_button("Swap colours")
                 .default_button("Default colours")

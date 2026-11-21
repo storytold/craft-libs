@@ -10,8 +10,8 @@ use craft_ui::runtime::env::Label;
 use egui::{Response, Ui};
 use std::sync::Arc;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The table's drag mapper, type-erased so the palette needs no payload parameter.
 type TableMap = Arc<dyn for<'t> Fn(SwatchTable<'t>) -> SwatchTable<'t>>;

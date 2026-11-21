@@ -24,6 +24,8 @@ pub use craft_assuan as assuan;
 pub use craft_atomic as atomic;
 #[cfg(feature = "audio")]
 pub use craft_audio as audio;
+#[cfg(feature = "audio-dsp")]
+pub use craft_audio_dsp as audio_dsp;
 #[cfg(feature = "automation")]
 pub use craft_automation as automation;
 pub use craft_behavior as behavior;
@@ -311,6 +313,8 @@ pub use craft_raw as raw;
 pub use craft_review as review;
 #[cfg(feature = "rtf")]
 pub use craft_rtf as rtf;
+#[cfg(feature = "sbs")]
+pub use craft_sbs as sbs;
 #[cfg(feature = "score")]
 pub use craft_score as score;
 #[cfg(feature = "scraft-format")]
@@ -333,6 +337,8 @@ pub use craft_smime as smime;
 pub use craft_sniff as sniff;
 #[cfg(feature = "sourcemap")]
 pub use craft_sourcemap as sourcemap;
+#[cfg(feature = "sqlite")]
+pub use craft_sqlite as sqlite;
 #[cfg(feature = "ssip")]
 pub use craft_ssip as ssip;
 #[cfg(feature = "stencilcraft-document")]

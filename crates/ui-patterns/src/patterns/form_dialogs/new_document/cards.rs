@@ -8,13 +8,13 @@ use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, 
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::{PresetId, PresetLibrary};
-use crate::primitives::{ContentPainterCx, PaintShape};
+use crate::primitives::{ContentPainterCx, StrokeWidth};
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
-use egui::{CornerRadius, Rect, Ui, vec2};
+use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
 use std::cell::Cell;
 
@@ -115,8 +115,8 @@ pub(super) fn clipboard_at<S: DocumentSettings>(session: &Session<S>, values: &S
     S::recent_cards(&card_cx(session, values, read)).iter().position(|card| card.source == CardSource::Clipboard)
 }
 
-/// Shows the tabs and what the open tab lists, and reports the tab and the card the user picked.
-pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, values: &S, read: &Read<'_, S>, left: &mut Left<S>) {
+/// Shows the full-width category strip above the two columns.
+pub(super) fn tabs<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, read: &Read<'_, S>, left: &mut Left<S>) {
     let words = read.words;
     let tabs: Vec<TabId> =
         std::iter::once(TabId::Recent).chain((0..read.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
@@ -132,7 +132,11 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
             left.tab = Some(*tab);
         }
     }
+}
 
+/// Shows the cards or saved presets in the category picked in this pass.
+pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, values: &S, read: &Read<'_, S>, left: &mut Left<S>) {
+    let words = read.words;
     let tab = left.tab.unwrap_or(session.tab);
     let cards = cards_of(tab, read.library, &card_cx(session, values, read));
     let selected = if tab == session.tab { selected_of(tab, session, values, &cards) } else { None };
@@ -166,9 +170,12 @@ pub(super) fn show<S: DocumentSettings>(ui: &mut Ui, session: &Session<S>, value
         }
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
-        Text::new(words.presets_heading.fill(&[("n", &count)])).role(TypeRole::Label).shade(Shade::Muted).show(ui);
+        let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
+        Text::new(heading).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
         let shown = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
+            .card()
+            .aspect(2.0)
             .select(SelectMode::Single)
             .detail_line()
             .rows_stamp(stamp)
@@ -213,9 +220,7 @@ fn pick<S: DocumentSettings>(left: &mut Left<S>, cards: &[DocumentCard<S>], inde
 fn selected_of<S: DocumentSettings>(tab: TabId, session: &Session<S>, values: &S, cards: &[DocumentCard<S>]) -> Option<usize> {
     match session.card {
         Some(at) => (at < cards.len()).then_some(at),
-        None if tab == TabId::Recent => {
-            cards.iter().position(|card| card.source == CardSource::Recent && card.settings.same_document(values))
-        }
+        None if tab == TabId::Recent => cards.iter().position(|card| card.source == CardSource::Recent && card.settings.same_document(values)),
         None => None,
     }
 }
@@ -249,7 +254,9 @@ fn tab_title<P>(tab: TabId, categories: &[PresetCategory<P>], words: &NewDocumen
 /// The cards `tab` lists.
 fn cards_of<S: DocumentSettings>(tab: TabId, library: &PresetLibrary<S>, cx: &CardCx<'_, S>) -> Vec<DocumentCard<S>> {
     match tab {
-        TabId::Category(at) => cx.presets.get(at).map_or_else(Vec::new, |category| category.presets.iter().map(|preset| S::preset_card(preset, cx)).collect()),
+        TabId::Category(at) => {
+            cx.presets.get(at).map_or_else(Vec::new, |category| category.presets.iter().map(|preset| S::preset_card(preset, cx)).collect())
+        }
         TabId::Saved => library
             .items()
             .into_iter()
@@ -346,22 +353,25 @@ fn tile_of<S: DocumentSettings>(card: &DocumentCard<S>) -> Tile<'static> {
     let page = card.settings.page();
     let tile = Tile::new(card.title.clone())
         .detail(card.line.clone())
-        .thumb(ThumbAspect::SQUARE, move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page));
+        .flat_thumbnail()
+        .thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, page));
     match &card.tooltip {
         Some(tooltip) => tile.tooltip(tooltip.clone()),
         None => tile,
     }
 }
 
-/// The page outline in the picture: a well, and the page's outline at its aspect inside it.
+/// A page icon inside the tile's picture, in content ink so the tile alone draws the selection ring.
 fn paint_page(painter: &ContentPainterCx<'_>, picture: Rect, (width, height): (f64, f64)) {
-    let well = painter.plot_frame(picture);
-    painter.outline(&PaintShape::Rect(page_rect(well, width, height), CornerRadius::ZERO));
+    let page = page_rect(picture, width, height);
+    let stroke = Stroke::new(painter.stroke_width(StrokeWidth::Thin), painter.ink());
+    painter.painter.rect_stroke(page, CornerRadius::ZERO, stroke, StrokeKind::Inside);
 }
 
-/// The largest rect of the page's aspect that fits `room`, centred in it.
+/// The page's aspect inside `room`, capped at the 30-point size of the original outline.
 fn page_rect(room: Rect, width: f64, height: f64) -> Rect {
+    const PAGE_SIDE: f32 = 30.0;
     let (width, height) = (width.max(1.0) as f32, height.max(1.0) as f32);
-    let scale = (room.width() / width).min(room.height() / height);
+    let scale = (room.width().min(PAGE_SIDE) / width).min(room.height().min(PAGE_SIDE) / height);
     Rect::from_center_size(room.center(), vec2(width * scale, height * scale))
 }

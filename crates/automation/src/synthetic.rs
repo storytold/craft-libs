@@ -52,9 +52,9 @@ pub const OFF_SCREEN: &str = "the document point is too far off the screen";
 /// The error of a point that is not finite (NaN or infinite): refused at the request, never queued.
 pub const NOT_FINITE: &str = "the point must be finite";
 
-/// The application's map from a document point to the screen point its canvas shows it at; `None` when no canvas
-/// shows a document. Applications without documents pass `&|_| None`.
-pub type DocumentMap<'a> = &'a dyn Fn(Pos2) -> Option<Pos2>;
+/// The application's map from a page and a document point on it to the screen point its canvas shows it at; `None`
+/// when no canvas shows a document. Applications without documents pass `&|_, _| None`.
+pub type DocumentMap<'a> = &'a dyn Fn(usize, Pos2) -> Option<Pos2>;
 
 /// A point of a request: screen points, document points the application maps, or an offset from a named control.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,8 +62,8 @@ pub type DocumentMap<'a> = &'a dyn Fn(Pos2) -> Option<Pos2>;
 pub enum At {
     /// Screen points.
     Screen(Pos2),
-    /// Document points.
-    Document(Pos2),
+    /// Document points on page `page` (0 when the request names none).
+    Document(Pos2, usize),
     /// An offset from the centre of the rect of the control `target` names.
     #[non_exhaustive]
     Control {
@@ -88,7 +88,7 @@ impl At {
             return Ok(Self::Control { target: access::Target::from_params(control)?, offset: vec2(x, y) });
         }
         Ok(match p.choice("coordinates", "coordinates", &["screen", "document"])?.unwrap_or("screen") {
-            "document" => Self::Document(pos2(x, y)),
+            "document" => Self::Document(pos2(x, y), p.uint_field("page")?.map_or(0, |page| usize::try_from(page).unwrap_or(usize::MAX))),
             _ => Self::Screen(pos2(x, y)),
         })
     }
@@ -109,9 +109,9 @@ impl At {
             }
             Self::Screen(at) if at.x.is_finite() && at.y.is_finite() => Ok(*at),
             Self::Screen(_) => Err(NOT_FINITE.to_owned()),
-            Self::Document(at) if !(at.x.is_finite() && at.y.is_finite()) => Err(NOT_FINITE.to_owned()),
-            Self::Document(at) => {
-                let on_screen = map(*at).ok_or_else(|| NO_DOCUMENT.to_owned())?;
+            Self::Document(at, _) if !(at.x.is_finite() && at.y.is_finite()) => Err(NOT_FINITE.to_owned()),
+            Self::Document(at, page) => {
+                let on_screen = map(*page, *at).ok_or_else(|| NO_DOCUMENT.to_owned())?;
                 let within = |v: f32| v.is_finite() && f64::from(v.abs()) <= MAX_SCREEN_POINT;
                 if within(on_screen.x) && within(on_screen.y) { Ok(on_screen) } else { Err(OFF_SCREEN.to_owned()) }
             }
@@ -125,7 +125,7 @@ impl At {
 }
 
 /// The point fields every pointer request takes.
-const POINT: [&str; 4] = ["x", "y", "coordinates", "control"];
+const POINT: [&str; 5] = ["x", "y", "coordinates", "page", "control"];
 /// The modifier fields ([`crate::protocol::KEY_MODIFIERS`], top-level or under `modifiers`).
 const MODIFIERS: [&str; 5] = ["modifiers", "shift", "alt", "command", "ctrl"];
 
@@ -308,10 +308,10 @@ pub struct Release {
 }
 
 impl Release {
-    /// `{button?, key?, x?, y?, coordinates?, control?}`, no other fields. With neither `button` nor `key` everything
+    /// `{button?, key?, x?, y?, coordinates?, page?, control?}`, no other fields. With neither `button` nor `key` everything
     /// held is released, the modifiers too; both is ``"`button` and `key` exclude each other"``.
     pub fn from_params(params: &Value) -> Result<Self, String> {
-        let p = Params(params).only(None, &["button", "key", "x", "y", "coordinates", "control"])?;
+        let p = Params(params).only(None, &["button", "key", "x", "y", "coordinates", "page", "control"])?;
         let p = Params(&p);
         let released = match (button(&p)?, key(&p)?) {
             (Some(_), Some(_)) => return Err("`button` and `key` exclude each other".into()),

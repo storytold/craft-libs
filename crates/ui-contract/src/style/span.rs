@@ -1,5 +1,6 @@
 //! `Span`: one styled stretch of a text run.
 
+use craft_theme::variant::Tone;
 use std::borrow::Cow;
 
 /// One styled stretch of a run.
@@ -26,6 +27,8 @@ pub struct Span<'a> {
     pub strong: bool,
     /// A link in a paragraph: drawn in the run's link colour, and the only part of the paragraph that takes the pointer.
     pub link: bool,
+    /// Underlined in the ink of this tone.
+    pub flag: Option<Tone>,
 }
 
 impl<'a> Span<'a> {
@@ -42,12 +45,19 @@ impl<'a> Span<'a> {
             underline: false,
             strong: false,
             link: false,
+            flag: None,
         }
     }
 
     /// Makes the span a link: it takes the run's link colour and the pointer.
     pub fn link(mut self) -> Self {
         self.link = true;
+        self
+    }
+
+    /// Underlines the span in the ink of `tone` (spelling `Bad`, grammar `Info`).
+    pub fn flag(mut self, tone: Tone) -> Self {
+        self.flag = Some(tone);
         self
     }
 

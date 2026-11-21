@@ -1,4 +1,4 @@
-//! The command search: how `SearchIndex` and `rank` find and order commands.
+//! The command search: how `SearchIndex` and `rank` find and order commands, every word of a query and the command id.
 
 use craft_i18n::Words;
 use craft_ui::menu::{HelpEntry, SearchIndex, SearchWords, Synonyms, rank};
@@ -80,7 +80,27 @@ fn use_counts_lift_a_command_but_never_past_a_better_match() {
 
 #[trial]
 fn a_recent_place_lifts_an_entry_with_that_path() {
-    let entries = || vec![entry("t0", "Copy A").with_path(["Edit"]), entry("t1", "Copy B").with_path(["Edit"]), entry("t2", "Copy C").with_path(["Edit"])];
+    let entries =
+        || vec![entry("t0", "Copy A").with_path(["Edit"]), entry("t1", "Copy B").with_path(["Edit"]), entry("t2", "Copy C").with_path(["Edit"])];
     assert_eq!(ranked(entries(), english(), "copy", Vec::new(), Vec::new()), vec![0, 1, 2]);
     assert_eq!(ranked(entries(), english(), "copy", vec![2, 0], Vec::new()), vec![2, 0, 1]);
+}
+
+#[trial]
+fn every_word_of_a_query_must_match_in_any_order_and_the_command_id_is_found() {
+    let table = || vec![entry("insert.table", "Table").with_path(["Insert", "Tables"])];
+    assert_eq!(find(table(), "insert table"), vec![0]);
+    assert_eq!(find(table(), "  Table   INSERT "), vec![0], "any order, any case, extra spaces");
+    assert!(find(table(), "insert chart").is_empty(), "every word has to match");
+    assert!(find(table(), "").is_empty());
+    assert!(find(table(), "   ").is_empty());
+
+    let one = vec![entry("t0", "Other").with_path(["Format", "Italic"]), entry("t1", "Italic").with_path(["Format"])];
+    assert_eq!(find(one, "italic"), vec![1, 0], "a label match ranks before a path-only match");
+
+    let ids = || vec![entry("format.italic", "Slanted").with_path(["Format"]), entry("tools.x", "Format.italic tool").with_path(["Tools"])];
+    let mut found = find(ids(), "FORMAT.ITALIC");
+    found.sort_unstable();
+    assert_eq!(found, vec![0, 1], "the id matches in any case, as does the label that starts with it");
+    assert_eq!(find(ids(), "slanted format.italic"), vec![0], "a word in the label and a word in the id");
 }

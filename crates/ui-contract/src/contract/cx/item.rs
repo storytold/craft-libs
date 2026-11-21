@@ -17,6 +17,16 @@ pub struct ItemOpener {
 }
 
 /// What the item closure reads for one item: a view over the pipeline's memory stage keyed by the item.
+///
+/// The row-hook contract. The collection measures an auto row (auto height or auto widths) at step 5, before it
+/// places its rows, from the item this closure and `Collection::dress` make with the row state known before the pass
+/// senses input: the `RowState` fields marked "measured" as step 4 read them, the depth and the set position, under
+/// the collection's env. The size of an auto row depends only on those. It must not depend on app values the body
+/// adds at step 13, the surface, focus, or the pointer and gesture state (`hovered`, `pointer_over`, `pressed`,
+/// `dragging`, `drop_target`, `menu_open`, `activated_by_key`): only the build that shows the row has them. A row
+/// whose measured state this pass's input changes (a click that selects it, a press that starts its rename) is
+/// measured again when it is built; a size other than the one the pass placed it by makes the pass run again, so
+/// the frame shows the row at its new size.
 #[non_exhaustive]
 pub struct ItemCx<'a, 'r, K> {
     /// The item's key.

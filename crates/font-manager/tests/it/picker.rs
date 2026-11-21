@@ -5,15 +5,22 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use craft_behavior::{GESTURE_GAP, Preview};
+use craft_behavior::{GESTURE_GAP, PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
-use craft_font_manager::picker::{FamilySet, FontFilters, FontPicker, FontPickerSettings, FontScript, SIMILAR_COUNT, family_rows};
+use craft_font_manager::missing::MissingFontsWords;
+use craft_font_manager::picker::{
+    FamilyInfos, FamilySet, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontScript, MissingAdvice, SIMILAR_COUNT,
+    family_rows,
+};
 use craft_font_manager::{Catalog, FontEnv};
+use craft_ui::buttons::ControlPlace;
+use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, wheel_lines};
-use craft_ui::testing::{Fixture, Room, trial};
+use craft_ui::testing::{Fixture, Room, last_frame_derived_builds, trial};
 use craft_theme::{Contrast, Mode};
 use egui::{Color32, Event, Key, Modifiers, Shape};
 
@@ -36,6 +43,9 @@ struct Seen {
     rested: Vec<String>,
     /// The family the open list proposes as a live preview, as the last pass reported it.
     preview: Option<String>,
+    actions: Vec<usize>,
+    /// The id of the shown picker, as the last pass reported it.
+    id: Option<egui::Id>,
 }
 
 fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>>) {
@@ -127,15 +137,16 @@ fn similar_fonts_put_the_reference_family_first_and_leave_the_list_alone_without
     let catalog = catalog_of(&[epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT, INTER_REGULAR]);
     let mut similar = FontFilters::default();
     similar.similar = Some("Inter".to_owned());
-    let rows = family_rows(&catalog, "", None, &similar, &[], "en");
+    let infos = FamilyInfos::of(&catalog);
+    let rows = family_rows(&catalog, &infos, "", None, &similar, &[], "en");
     let names: Vec<&str> = rows.iter().map(|row| row.family.as_str()).collect();
     assert_eq!(names.first(), Some(&"Inter"), "the reference family first, though it is not first by name");
     assert!(rows.len() <= SIMILAR_COUNT);
 
     // A reference family the catalog lacks has no traits: the list stays as unfiltered.
-    let unfiltered = family_rows(&catalog, "", None, &FontFilters::default(), &[], "en");
+    let unfiltered = family_rows(&catalog, &infos, "", None, &FontFilters::default(), &[], "en");
     similar.similar = Some("Missing".to_owned());
-    assert_eq!(family_rows(&catalog, "", None, &similar, &[], "en"), unfiltered);
+    assert_eq!(family_rows(&catalog, &infos, "", None, &similar, &[], "en"), unfiltered);
 }
 
 #[trial]
@@ -206,7 +217,7 @@ fn three_faces() -> Arc<Catalog> {
 
 /// The families of `catalog` in list order under `filters` and `sets`.
 fn listed(catalog: &Arc<Catalog>, filters: &FontFilters, sets: &[FamilySet<'_>]) -> Vec<String> {
-    family_rows(catalog, "", None, filters, sets, "en").into_iter().map(|row| row.family).collect()
+    family_rows(catalog, &FamilyInfos::of(catalog), "", None, filters, sets, "en").into_iter().map(|row| row.family).collect()
 }
 
 /// Focuses the field and rests the pointer on it, so the wheel turns over the closed field.
@@ -330,4 +341,207 @@ fn samples_on_white_paint_dark_ink_on_a_lighter_paper_in_a_dark_theme() {
     };
     assert!(white_papers(true) >= 3, "each family's sample sits on a white paper, in a dark theme");
     assert_eq!(white_papers(false), 0, "without the setting no sample paper is white");
+}
+
+/// A `Plain` picker over `family` with `recent` families, `actions` rows and the face `shown_as`.
+fn plain_rig(
+    catalog: Arc<Catalog>,
+    family: &str,
+    recent: &[&str],
+    actions: Vec<Label>,
+    shown_as: Option<&'static str>,
+) -> (Fixture, Rc<RefCell<Seen>>) {
+    let seen = Rc::new(RefCell::new(Seen { family: family.to_owned(), ..Seen::default() }));
+    let shown = Rc::clone(&seen);
+    let mut settings = FontPickerSettings::default();
+    settings.recent = recent.iter().map(|family| (*family).to_owned()).collect();
+    let mut fx = Fixture::new(move |ui| {
+        let mut seen = shown.borrow_mut();
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .kind(FontPickerKind::Plain)
+            .actions(&actions)
+            .advice(if actions.is_empty() { MissingAdvice::None } else { MissingAdvice::AddFont });
+        if let Some(face) = shown_as {
+            picker = picker.shown_as(face);
+        }
+        let out = picker.show(ui);
+        seen.id = Some(out.edit.response.id);
+        if let Some(family) = out.picked {
+            seen.picks.push((family, out.picked_style));
+        }
+        seen.actions.extend(out.action);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    (fx, seen)
+}
+
+#[trial]
+fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after_a_cleared_query() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let words = FontPickerWords::default();
+    let (recently, all) = (words.recently_used.as_str(), words.all_fonts.as_str());
+    open(&mut fx);
+    assert!(present(&fx, recently), "the recents have their heading");
+    assert!(present(&fx, all), "the families have theirs");
+    fx.key(Key::Escape, Modifiers::NONE);
+    fx.settle();
+
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    fx.type_text("x");
+    fx.settle();
+    assert!(!present(&fx, recently), "a query lists its matches only");
+    fx.key(Key::Backspace, Modifiers::NONE);
+    fx.settle();
+    assert!(present(&fx, recently), "a cleared query lists the recents again");
+
+    fx.type_text("Zapfino");
+    fx.settle();
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(seen.borrow().family, "Zapfino", "a name that is no family is applied as typed");
+    assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some("Zapfino"));
+}
+
+#[trial]
+fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_naming_the_face() {
+    let words = MissingFontsWords::default();
+    let note = format!("{} {}", words.shown_as.fill(&[("family", "Gotham"), ("face", "Inter")]), words.add_font.as_str());
+    let note = note.as_str();
+    let (mut fx, seen) = plain_rig(catalog_of(&[INTER_REGULAR]), "Gotham", &[], vec![Label::from("Add Font…")], Some("Inter"));
+    // The note is the tooltip of the field's warning mark, so it shows once the pointer rests on the mark.
+    let picker = seen.borrow().id.expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    assert!(!present(&fx, note), "the note waits for a rest on the mark");
+    fx.frame(vec![moved(mark.center())]);
+    fx.advance(DELAY);
+    fx.settle();
+    assert!(present(&fx, note), "a rest on the mark shows the note");
+    open(&mut fx);
+    let action = fx.by_label("Add Font…").expect("the action row");
+    fx.click(&action);
+    fx.settle();
+    assert_eq!(seen.borrow().actions, [0], "the action is reported by its index");
+    assert_eq!(seen.borrow().family, "Gotham", "an action leaves the family");
+    assert!(seen.borrow().picks.is_empty(), "and picks nothing");
+
+    let (fx, seen) = plain_rig(catalog_of(&[INTER_REGULAR]), "Inter", &[], vec![Label::from("Add Font…")], Some("Inter"));
+    let picker = seen.borrow().id.expect("the picker");
+    assert!(fx.part_rect(picker, PartKey::new("missing")).is_none(), "an installed family has no mark");
+}
+
+/// The width of a plain picker over `family`, in a ribbon group's place or not.
+fn picker_width(family: &'static str, ribbon: bool) -> f32 {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut fx = Fixture::new(move |ui| {
+        let mut family = family.to_owned();
+        let mut show = |ui: &mut egui::Ui| {
+            let _ = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).show(ui);
+        };
+        if ribbon {
+            with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(ControlPlace::Ribbon);
+                },
+                show,
+            );
+        } else {
+            show(ui);
+        }
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.by_label("Font family").expect("the picker").rect.width()
+}
+
+/// In a ribbon the font box is held at the small field length, narrower than in a form, and keeps its width whichever
+/// family it shows.
+#[trial]
+fn a_ribbons_font_box_is_short_and_keeps_its_width() {
+    let (ribbon, standard) = (picker_width("Inter", true), picker_width("Inter", false));
+    assert!(ribbon < standard - 0.5, "the ribbon's font box is narrower: {ribbon} against {standard}");
+    let length = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.field.sm;
+    assert!((ribbon - length).abs() < 0.5, "the ribbon's font box is the small field length {length}: {ribbon}");
+    let long = picker_width("Source Sans Pro Semibold Condensed Extra", true);
+    assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
+}
+
+/// The width of a plain picker over "Inter" in a ribbon group's place, in a row beside a block that leaves it 60 pt of
+/// the window, so the row shrinks it to its least.
+fn squeezed_ribbon_picker_width() -> f32 {
+    use craft_ui::contract::ShowContainer as _;
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut fx = Fixture::new(move |ui| {
+        let mut family = "Inter".to_owned();
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(ControlPlace::Ribbon);
+            },
+            |ui| {
+                let rest = ui.available_width() - 60.0;
+                craft_ui::layout_components::Row::new().show(ui, |ui, _| {
+                    let _ = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).show(ui);
+                    craft_ui::testing::layout::Block::new(egui::Vec2::new(rest, 20.0)).show(ui);
+                });
+            },
+        );
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.by_label("Font family").expect("the picker").rect.width()
+}
+
+/// A ribbon row that lacks room narrows its font box no further than its least: a name field the short field length
+/// (`size.length.short`) wide, about the old ribbon's font name, plus its menu arrow; never to an arrow alone.
+#[trial]
+fn a_squeezed_ribbon_font_box_keeps_a_short_fields_name() {
+    let squeezed = squeezed_ribbon_picker_width();
+    let short = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.short;
+    assert!(squeezed > short, "the squeezed font box keeps a name field {short} wide and its arrow: {squeezed}");
+    assert!(squeezed <= picker_width("Inter", true) + 0.5, "and is no wider than where the room allows");
+}
+
+/// The family data builds of the last frame.
+fn family_builds(fx: &Fixture) -> u32 {
+    last_frame_derived_builds(fx.ctx()).iter().map(|(_, builds)| builds).sum()
+}
+
+#[trial]
+fn the_family_data_builds_when_the_catalog_changes_and_not_while_it_is_idle() {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let (mut fx, _) = rig(Arc::clone(&catalog), vec![]);
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 0, "an idle open list builds nothing");
+    catalog.add_bytes(INTER_SEMIBOLD.to_vec(), Source::Bundled, &Limits::default()).expect("a font file");
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 1, "a changed catalog builds the data once, whatever reads it");
+}
+
+#[trial]
+fn a_picker_handed_another_catalog_at_the_same_generation_builds_its_family_data_once() {
+    let (one, two) = (catalog_of(&[INTER_REGULAR]), catalog_of(&[INTER_REGULAR]));
+    assert_eq!(one.generation(), two.generation(), "the two catalogs count alike");
+    assert_ne!(one.id(), two.id());
+    let shown = Rc::new(RefCell::new(Arc::clone(&one)));
+    let held = Rc::clone(&shown);
+    let mut family = String::new();
+    let mut fx = Fixture::new(move |ui| {
+        let catalog = Arc::clone(&held.borrow());
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog).show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 0, "the first catalog's data is kept");
+    *shown.borrow_mut() = Arc::clone(&two);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 1, "the second catalog builds the data once");
 }

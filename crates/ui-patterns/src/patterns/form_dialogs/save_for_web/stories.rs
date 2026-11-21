@@ -1,10 +1,9 @@
 //! Stories of `SaveForWebDialog`.
 
 use super::{
-    Animation, BrowserPreview, OptimizeAnswer, SaveForWebDialog, SaveForWebOptions, TableMarks, WebDocument, WebFormat, WebPictures, WebPreset, WebSlice,
-    WebSlices, WebVariant,
+    Animation, BrowserPreview, OptimizeAnswer, SaveForWebDialog, SaveForWebOptions, TableMarks, WebDocument, WebFormat, WebPictures, WebPreset,
+    WebSlice, WebSlices, WebVariant,
 };
-use crate::contract::Bind;
 use crate::primitives::TextureCache;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -60,16 +59,17 @@ fn save_for_web(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut pictures = WebPictures::new().original(original);
     pictures.set(WebVariant::new(0, 1, encoded, ENCODED_BYTES));
     let flags = extras(data, false, true);
-    let (options, open) = data.value("web", (SaveForWebOptions::default(), true));
-    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)), flags).show(ui).into()
+    let ((options, open), web_at) = data.value_at("web", (SaveForWebOptions::default(), true));
+    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, web_at.bind(options)).opened(web_at.bind(open)), flags).show(ui).into()
 }
 
 #[story(SaveForWebDialog<'static>, covers = [], drive = Drive::Never)]
 fn save_for_web_pending_animation(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let original = picture(ui, "form-dialogs-web-original", Color32::from_rgb(0x8a, 0x6f, 0x4d));
     let flags = extras(data, true, false);
-    let (options, open) = data.value("web-animation", (SaveForWebOptions::default(), true));
-    let dialog = SaveForWebDialog::new("loop.psd", size(), WebPictures::new().original(original), Bind::bound(options)).opened(Bind::bound(open));
+    let ((options, open), options_open_at) = data.value_at("web-animation", (SaveForWebOptions::default(), true));
+    let dialog = SaveForWebDialog::new("loop.psd", size(), WebPictures::new().original(original), options_open_at.bind(options))
+        .opened(options_open_at.bind(open));
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -86,8 +86,9 @@ fn save_for_web_color_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     pictures.set(WebVariant::new(0, 1, encoded, ENCODED_BYTES).colors(8).palette(palette()));
     let start = SaveForWebOptions { format: WebFormat::Gif, colors: 8, ..SaveForWebOptions::default() };
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-table", (start, true));
-    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).marks(story_marks());
+    let ((options, open), options_open_at) = data.value_at("web-table", (start, true));
+    let dialog =
+        SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options)).opened(options_open_at.bind(open)).marks(story_marks());
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -122,8 +123,10 @@ fn save_for_web_slices(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     pictures.set(WebVariant::new(0, 1, encoded, ENCODED_BYTES));
     let start = SaveForWebOptions { slices: WebSlices::Selected(vec![2]), ..SaveForWebOptions::default() };
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-slices", (start, true));
-    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).slices(story_slices());
+    let ((options, open), options_open_at) = data.value_at("web-slices", (start, true));
+    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options))
+        .opened(options_open_at.bind(open))
+        .slices(story_slices());
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -134,8 +137,10 @@ fn save_for_web_failed_encode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
     pictures.set(WebVariant::failed(0, 1, "The encoder ran out of memory"));
     let start = SaveForWebOptions { format: WebFormat::Gif, ..SaveForWebOptions::default() };
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-failed", (start, true));
-    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)), flags).show(ui).into()
+    let ((options, open), options_open_at) = data.value_at("web-failed", (start, true));
+    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options)).opened(options_open_at.bind(open)), flags)
+        .show(ui)
+        .into()
 }
 
 /// A vector document of two artboards, clipped to the second.
@@ -144,9 +149,10 @@ fn save_for_web_vector(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pictures = ready(ui);
     let start = SaveForWebOptions { format: WebFormat::Png24, clip_to_artboard: true, artboard: Some(1), ..SaveForWebOptions::default() };
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-vector", (start, true));
+    let ((options, open), options_open_at) = data.value_at("web-vector", (start, true));
     let document = WebDocument::Vector { artboards: vec!["Artboard 1".to_owned(), "Artboard 2".to_owned()] };
-    let dialog = SaveForWebDialog::new("logo.vcr", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).document(document);
+    let dialog =
+        SaveForWebDialog::new("logo.vcr", size(), pictures, options_open_at.bind(options)).opened(options_open_at.bind(open)).document(document);
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -156,8 +162,10 @@ fn save_for_web_gif_lossy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pictures = ready(ui);
     let start = SaveForWebOptions { format: WebFormat::Gif, lossy: 30, ..SaveForWebOptions::default() };
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-lossy", (start, true));
-    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)), flags).show(ui).into()
+    let ((options, open), options_open_at) = data.value_at("web-lossy", (start, true));
+    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options)).opened(options_open_at.bind(open)), flags)
+        .show(ui)
+        .into()
 }
 
 /// The Done button beside Save…, and Preview in Browser disabled with its reason.
@@ -165,10 +173,10 @@ fn save_for_web_gif_lossy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn save_for_web_done_and_unavailable_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pictures = ready(ui);
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-done", (SaveForWebOptions::default(), true));
+    let ((options, open), options_open_at) = data.value_at("web-done", (SaveForWebOptions::default(), true));
     let reason = Label::from("No browser is installed");
-    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options))
-        .opened(Bind::bound(open))
+    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options))
+        .opened(options_open_at.bind(open))
         .browser_preview(BrowserPreview::Unavailable(reason));
     with_extras(dialog, flags).show(ui).into()
 }
@@ -178,9 +186,11 @@ fn save_for_web_done_and_unavailable_preview(ui: &mut Ui, data: &mut StoryData) 
 fn save_for_web_optimize(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pictures = ready(ui);
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-optimize", (SaveForWebOptions::default(), true));
-    let dialog =
-        SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).optimize().optimize_start(48 * 1024);
+    let ((options, open), options_open_at) = data.value_at("web-optimize", (SaveForWebOptions::default(), true));
+    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options))
+        .opened(options_open_at.bind(open))
+        .optimize()
+        .optimize_start(48 * 1024);
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -189,10 +199,10 @@ fn save_for_web_optimize(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn save_for_web_optimize_result(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pictures = ready(ui);
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-optimize-result", (SaveForWebOptions::default(), true));
+    let ((options, open), options_open_at) = data.value_at("web-optimize-result", (SaveForWebOptions::default(), true));
     let answer = OptimizeAnswer::new(None, 31_800, 32 * 1024, true);
-    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options))
-        .opened(Bind::bound(open))
+    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options))
+        .opened(options_open_at.bind(open))
         .optimize()
         .optimize_answer(Ok(answer));
     with_extras(dialog, flags).show(ui).into()

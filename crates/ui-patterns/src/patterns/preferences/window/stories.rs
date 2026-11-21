@@ -1,8 +1,8 @@
 //! Stories of `PreferencesWindow`.
 
 use super::{PreferencesState, PreferencesWindow};
-use crate::contract::{Bind, Entry};
-use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
+use crate::contract::Entry;
+use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesDraft, PreferencesModel, RowKind, RowSpec};
 use crate::runtime::env::{LengthUnits, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
@@ -25,7 +25,16 @@ struct Values {
 
 impl Default for Values {
     fn default() -> Self {
-        Values { snap: true, language: "en".to_owned(), name: "Poster".to_owned(), size: 24, opacity: 0.5, tint: Rgba([0xff, 0x88, 0x00, 0xff]), margin: 36.0, delay: 0.5 }
+        Values {
+            snap: true,
+            language: "en".to_owned(),
+            name: "Poster".to_owned(),
+            size: 24,
+            opacity: 0.5,
+            tint: Rgba([0xff, 0x88, 0x00, 0xff]),
+            margin: 36.0,
+            delay: 0.5,
+        }
     }
 }
 
@@ -89,22 +98,6 @@ impl PreferencesModel for Demo {
 
     fn custom_page(&mut self, _: &mut Ui, _: &str) {}
 
-    fn differs(&self) -> bool {
-        self.draft != self.saved
-    }
-
-    fn apply(&mut self) -> Result<(), String> {
-        if self.refuse {
-            return Err("The brush size can't be applied.".to_owned());
-        }
-        self.saved = self.draft.clone();
-        Ok(())
-    }
-
-    fn cancel(&mut self) {
-        self.draft = self.saved.clone();
-    }
-
     fn reset_page(&mut self, page: &str) {
         let defaults = Values::default();
         match page {
@@ -120,10 +113,28 @@ impl PreferencesModel for Demo {
     fn nested(&mut self, _: &mut Ui) {}
 }
 
+impl PreferencesDraft for Demo {
+    fn differs(&self) -> bool {
+        self.draft != self.saved
+    }
+
+    fn apply(&mut self) -> Result<(), String> {
+        if self.refuse {
+            return Err("The brush size can't be applied.".to_owned());
+        }
+        self.saved = self.draft.clone();
+        Ok(())
+    }
+
+    fn cancel(&mut self) {
+        self.draft = self.saved.clone();
+    }
+}
+
 fn window(ui: &mut Ui, data: &mut StoryData, state: PreferencesState, demo: Demo) -> StoryOutput {
     let mut demo = data.value("demo", demo).clone();
-    let state = data.value("state", state);
-    let shown = PreferencesWindow::new(Bind::bound(state)).embedded().show(ui, &mut demo).into();
+    let (state, state_at) = data.value_at("state", state);
+    let shown = PreferencesWindow::new(state_at.bind(state)).embedded().show(ui, &mut demo).into();
     *data.value("demo", Demo::default()) = demo;
     shown
 }

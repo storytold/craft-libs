@@ -104,6 +104,10 @@ pub fn write_reply(out: &mut impl Write, reply: &Value) -> std::io::Result<()> {
 
 /// The pointer buttons a request may name.
 pub const BUTTONS: [&str; 4] = ["left", "right", "secondary", "middle"];
+/// The method that reads the window's access tree. Params `{}`; the reply is
+/// `{nodes: [{id, role, name?, value?, children, textSelection?}], focus, root}` with AccessKit
+/// role names.
+pub const ACCESS_TREE_METHOD: &str = "ui.accessTree";
 /// The per-request reply deadline.
 pub const REPLY_DEADLINE: Duration = Duration::from_secs(60);
 

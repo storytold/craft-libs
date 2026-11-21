@@ -25,7 +25,7 @@ pub mod glyphs;
 #[cfg(feature = "ui")]
 pub mod missing;
 #[cfg(feature = "ui")]
-mod panel;
+pub(crate) mod panel;
 #[cfg(feature = "ui")]
 pub mod picker;
 
@@ -40,5 +40,7 @@ pub use panel::{
 /// The registered stories and trials of this crate.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }

@@ -3,8 +3,8 @@
 
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
-use craft_ui::canvas::{Canvas, PixelRect, RasterDisplay};
-use craft_ui::canvas_controls::{CanvasGrid, GridSegment, PixelGrid};
+use craft_ui::canvas::{Canvas, CanvasSpace, PixelRect, RasterDisplay};
+use craft_ui::canvas_controls::{CanvasGrid, GridCrowding, GridSegment, PixelGrid};
 use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::testing::canvas_story::StoryPicture;
 use craft_ui::testing::{Fixture, trial};
@@ -49,6 +49,31 @@ fn redrawing_a_damaged_part_of_the_pixel_grid_matches_drawing_the_region_again()
     assert_eq!(edges(&patched), edges(&again));
 }
 
+/// The major lines `grid` draws on the x axis in a 400 by 300 point view at `zoom`.
+fn majors(grid: &CanvasGrid, zoom: f64) -> Vec<f64> {
+    let view = CanvasView::new(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0)), Point::new(200.0, 150.0), zoom);
+    grid.lines(&CanvasSpace::new(view, 1.0)).x.major
+}
+
+#[trial]
+fn a_thinned_grid_doubles_its_step_until_it_fits_and_a_hiding_one_draws_nothing() {
+    const STEP: f64 = 100.0;
+    let grid = |crowding| CanvasGrid::new("Grid").spacing((STEP, STEP).into()).crowding(crowding);
+    // At 5 % the step is five points, under the six-point minimum.
+    assert!(majors(&grid(GridCrowding::Hide), 0.05).is_empty(), "a hiding grid draws nothing where its lines crowd");
+    let thin = majors(&grid(GridCrowding::Thin), 0.05);
+    assert!(thin.len() > 10, "a thinned grid keeps lines: {}", thin.len());
+    assert_eq!(thin[1] - thin[0], 2.0 * STEP, "one doubling is enough at 5 %");
+    assert!(thin.iter().all(|at| at.rem_euclid(STEP) == 0.0), "the thinned lines lie on lines of the undoubled grid");
+    // Where the lines already fit, `Thin` changes nothing.
+    assert_eq!(majors(&grid(GridCrowding::Thin), 1.0), majors(&grid(GridCrowding::Hide), 1.0));
+    // 32 doublings reach the minimum at 2e-11 and 31 would not; at 1e-12 even 32 do not, so the axis is empty.
+    let far = majors(&grid(GridCrowding::Thin), 2e-11);
+    assert!(far.len() >= 2, "a grid that fits after 32 doublings draws");
+    assert_eq!(far[1] - far[0], STEP * 2f64.powi(32), "the loop stops at 32 doublings");
+    assert!(majors(&grid(GridCrowding::Thin), 1e-12).is_empty(), "a grid that needs more than 32 doublings draws nothing");
+}
+
 #[trial]
 fn the_grid_colour_follows_the_pixel_below() {
     let grey = |v: f32, alpha: f32| [v, v, v, alpha];
@@ -86,10 +111,8 @@ fn shapes_around_the_picture(under: bool) -> (usize, usize) {
     fixture.room(room);
     fixture.settle();
     let shapes = fixture.frame_shapes();
-    let at = shapes
-        .iter()
-        .position(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.texture_id != TextureId::default()))
-        .expect("the picture's mesh");
+    let at =
+        shapes.iter().position(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.texture_id != TextureId::default())).expect("the picture's mesh");
     (at, shapes.len() - at - 1)
 }
 

@@ -20,8 +20,8 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The column of the source marks.
 const SOURCE: ColumnKey = ColumnKey::new("historySource");

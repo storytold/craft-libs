@@ -3,9 +3,9 @@
 //! and reading them from a font are always available; the sliders are on `ui`.
 
 #[cfg(feature = "ui")]
-mod button;
+pub(crate) mod button;
 #[cfg(feature = "ui")]
-mod sliders;
+pub(crate) mod sliders;
 #[cfg(feature = "ui")]
 pub use button::AxesButton;
 #[cfg(feature = "ui")]

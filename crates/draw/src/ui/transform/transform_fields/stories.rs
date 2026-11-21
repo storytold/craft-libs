@@ -6,7 +6,7 @@ use craft_behavior::kurbo::{Rect, Size};
 use craft_behavior::{RulerUnits, Ticks};
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::canvas::RulerText;
-use craft_ui::contract::{Bind, Entry, ShowContainer as _};
+use craft_ui::contract::{Entry, ShowContainer as _};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -35,8 +35,8 @@ fn inches() -> RulerText {
 
 #[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
 fn panel_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let state = data.value("state", sample());
-    TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1)).show(ui).into()
+    let (state, state_at) = data.value_at("state", sample());
+    TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1)).show(ui).into()
 }
 
 /// The panel form with X and W on the first row and Y and H on the second.
@@ -52,12 +52,12 @@ fn panel_form_position_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The panel form of a layer's properties: position and size only, percentages read against the document.
 #[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
 fn panel_form_with_document(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let state = data.value("state", sample());
+    let (state, state_at) = data.value_at("state", sample());
     let mut groups = TransformGroups::NONE;
     groups.reference = true;
     groups.position = true;
     groups.size = true;
-    TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1))
+    TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1))
         .groups(groups)
         .document(Size::new(1000.0, 400.0))
         .show(ui)
@@ -67,12 +67,12 @@ fn panel_form_with_document(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The bar form with the Δ toggle on: X and Y show the reference point's offset.
 #[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
 fn bar_form_relative(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let state = data.value("state", (sample().0, true, true));
+    let (state, state_at) = data.value_at("state", (sample().0, true, true));
     Bar::new("Options", BarKind::Options)
         .show(ui, |ui, _| {
-            TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1))
+            TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1))
                 .bar()
-                .relative(Bind::bound(&mut state.2))
+                .relative(state_at.bind(&mut state.2))
                 .show(ui);
         })
         .output
@@ -81,10 +81,10 @@ fn bar_form_relative(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
 fn bar_form_in_percent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let state = data.value("state", sample());
+    let (state, state_at) = data.value_at("state", sample());
     Bar::new("Options", BarKind::Options)
         .show(ui, |ui, _| {
-            TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1)).bar().show(ui);
+            TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1)).bar().show(ui);
         })
         .output
         .into()
@@ -92,11 +92,11 @@ fn bar_form_in_percent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
 fn bar_form_in_a_length_unit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let state = data.value("state", sample());
+    let (state, state_at) = data.value_at("state", sample());
     let units = [Entry::new(UnitKind::Percent, "Percent"), Entry::new(UnitKind::Pixels, "Pixels"), Entry::new(UnitKind::Inches, "Inches")];
     Bar::new("Options", BarKind::Options)
         .show(ui, |ui, _| {
-            TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1))
+            TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1))
                 .bar()
                 .rulers(craft_ui::canvas::CanvasRulers::new(inches(), inches(), craft_behavior::kurbo::Point::ZERO))
                 .size_unit(size_unit_of(UnitKind::Inches, inches(), UnitKind::POINTS_PER_INCH))

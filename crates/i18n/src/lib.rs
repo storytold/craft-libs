@@ -34,7 +34,7 @@ use bidi::{FSI, has_bidi_control, has_rtl, is_one_isolate, unwrap_isolate, wrap}
 use negotiation::posix_env_tags;
 use negotiation::{bare, candidates, is_region, marked, plural_rules};
 
-pub use bidi::{isolate, ltr, strip_isolates};
+pub use bidi::{file_name, isolate, ltr, path, strip_isolates};
 pub use message::MessageMatch;
 use message::{KEPT_VALUE, MAX_MESSAGE_LEN, MESSAGE_DEPTH, Template, insert_template, sort_templates};
 

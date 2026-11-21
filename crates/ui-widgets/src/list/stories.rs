@@ -2,7 +2,7 @@
 
 use super::{LabelUnderline, ListRow, RowInk, RowRun, ThumbSize, TrailingFace, TrailingPart};
 use crate::contract::Show as _;
-use crate::primitives::{ContentPainterCx, IconSpec, StrokeWidth};
+use crate::primitives::{ContentPainterCx, IconSpec, Span, StrokeWidth};
 use crate::style::{Corners, DataColor, SurfaceKind};
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::{ColumnKey, IconId};
@@ -40,6 +40,19 @@ fn list_row_text_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         (SIZE, Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(left + width, height))),
     ];
     show_as_only_item(ui, ListRow::new("report.pdf").cells(&cells).cell(SIZE, "2.4 MB")).into()
+}
+
+/// A search result: the match in the label reads in the highlight look.
+///
+/// The excerpt neither starts nor ends with a neutral character such as "…": in a right-to-left paragraph a neutral
+/// at the paragraph's edge next to left-to-right text takes the paragraph's direction (UAX #9 N1/N2), so it is shaped
+/// apart from the letter beside it and the run's width changes by direction, which the suite's right-to-left case
+/// rejects.
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_match_highlight(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let spans = vec![Span::new("the light over the "), Span::new("harbour").highlight(), Span::new(" turned grey")];
+    let joined: String = spans.iter().map(|span| span.text.as_ref()).collect();
+    show_as_only_item(ui, ListRow::new(joined).label_spans(spans).detail("Page 4")).into()
 }
 
 fn trailing_row() -> ListRow<'static> {
@@ -129,11 +142,8 @@ fn list_row_runs(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(ListRow<'static>, covers = [], drive = Drive::Never)]
 fn list_row_thumbnails_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let row = ListRow::new("Layer mask")
-        .thumbnails_only()
-        .thumb(ThumbSize::Medium, thumb)
-        .extra_thumb(thumb)
-        .thumb_link(true, "Link the mask to {row}");
+    let row =
+        ListRow::new("Layer mask").thumbnails_only().thumb(ThumbSize::Medium, thumb).extra_thumb(thumb).thumb_link(true, "Link the mask to {row}");
     row.show(ui).into()
 }
 

@@ -2,10 +2,10 @@
 // Unwrapping, expecting and panicking on failure is fine in tests, unlike in shipped code.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod access;
-mod actions;
-mod agents;
-mod control;
-mod dialogs;
-mod screenshot;
-mod synthetic;
+pub(crate) mod access;
+pub(crate) mod actions;
+pub(crate) mod agents;
+pub(crate) mod control;
+pub(crate) mod dialogs;
+pub(crate) mod screenshot;
+pub(crate) mod synthetic;

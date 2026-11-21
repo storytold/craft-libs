@@ -4,10 +4,11 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::SizeLimits;
-use craft_ui::contract::{Bind, BodyCx, Common, Component, Cx, MeasureCx, Pointer as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, Common, Component, Cx, MeasureCx, PlainData, Pointer as _, Role, Show as _, ShowContainer as _, Tracked};
 use craft_ui::docking::tree::{self, FrameRules};
 use craft_ui::docking::{
-    DockConfig, DockDropTarget, DockDropped, DockGroup, DockPanels, DockSizes, GroupDrag, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea,
+    DockConfig, DockDropTarget, DockDropped, DockGroup, DockPanels, DockSizes, GroupDrag, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle,
+    SplitArea, Titles,
 };
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
@@ -17,6 +18,7 @@ use craft_ui::testing::{Fixture, trial};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// The docking sizes with a one-point divider, a 40-point least pane and a 24-point strip.
 fn sizes() -> DockSizes {
@@ -133,7 +135,7 @@ fn bed(layout: Layout<String>) -> Bed {
             for (anchor, panels, rect) in &placed {
                 let titles: Vec<PanelTitle> = panels.iter().map(|panel| PanelTitle::new(PanelKey::of(panel), panel.clone())).collect();
                 let active = titles.first().map_or(PanelKey::new(0), |title| title.key);
-                DockGroup::new(anchor.clone(), &titles, active).dock(dock_id()).show_at(ui, *rect, |_, _| ());
+                DockGroup::new(anchor.clone(), Titles::from_content(titles.clone()), active).dock(dock_id()).show_at(ui, *rect, |_, _| ());
             }
         });
         for dropped in shared_taken.borrow_mut().drain(..) {
@@ -176,23 +178,26 @@ fn a_header_drag_shows_the_drop_mark_over_a_group_side_and_docks_on_release() {
 }
 
 /// Panels with no body: the drag is all the trial needs.
+#[derive(PlainData)]
 struct Named;
 
-impl DockPanels<String> for Named {
+impl PanelSpecs<String> for Named {
     fn spec(&self, panel: &String) -> PanelSpec {
         PanelSpec::new(panel.clone())
     }
+}
 
+impl DockPanels<String> for Named {
     fn body(&mut self, _: &String, _: &mut Ui, _: &mut BodyCx<'_>) {}
 }
 
 #[trial]
 fn a_drag_started_under_another_workspace_revision_ends_when_the_workspace_is_replaced() {
-    let workspace = Rc::new(RefCell::new(Workspace::new(wide_left_group())));
-    let shared = Rc::clone(&workspace);
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(wide_left_group()))));
+    let (shared, specs) = (Rc::clone(&workspace), Tracked::new(Named));
     let mut fixture = Fixture::new(move |ui| {
         let mut held = shared.borrow_mut();
-        DockArea::new("Replaced dock", Bind::bound(&mut *held), &mut Named, DockConfig::default()).show(ui);
+        DockArea::new("Replaced dock", Bind::bound(&mut *held), &specs, &mut Named, DockConfig::default()).show(ui);
     });
     fixture.settle();
     let grip = left_grip(&fixture);
@@ -201,9 +206,9 @@ fn a_drag_started_under_another_workspace_revision_ends_when_the_workspace_is_re
     fixture.frame(Vec::new());
     assert!(drag::active::<GroupDrag<String>>(fixture.ctx()).is_some(), "the dock's own passes keep the drag");
     let replacement = Workspace::new(Layout::new(Some(Node::tabs(panels(&["Properties"]), 0)), Vec::new()));
-    workspace.borrow_mut().replace(replacement);
+    Arc::make_mut(&mut workspace.borrow_mut()).replace(replacement);
     fixture.frame(Vec::new());
     fixture.idle(1);
     assert!(drag::active::<GroupDrag<String>>(fixture.ctx()).is_none(), "replacing the workspace ended the drag");
-    assert_eq!(groups(&workspace.borrow().layout), vec![panels(&["Properties"])], "the new workspace's layout stays as it was set");
+    assert_eq!(groups(workspace.borrow().layout()), vec![panels(&["Properties"])], "the new workspace's layout stays as it was set");
 }

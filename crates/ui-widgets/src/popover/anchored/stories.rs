@@ -3,7 +3,7 @@
 use super::Popover;
 use crate::bars::{Bar, BarItem, BarItems, BarKind};
 use crate::buttons::Button;
-use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::contract::{Show as _, ShowContainer as _};
 use crate::layout_components::Stack;
 use crate::runtime::commands::EditCommands;
 use crate::runtime::focus::Initial;
@@ -54,7 +54,7 @@ fn popover_with(ui: &mut Ui, data: &mut StoryData, build: impl Fn(Popover<'_>) -
     in_row(ui, |ui| {
         let opener = Button::new("Grid").show(ui);
         let mut clicked = false;
-        let shown = build(Popover::new("Grid options", Bind::bound(data.value("open", true))).opened_by(&opener)).show(ui, |ui, _| {
+        let shown = build(Popover::new("Grid options", data.bind("open", true)).opened_by(&opener)).show(ui, |ui, _| {
             clicked = body(ui);
         });
         let mut output = StoryOutput::from(shown.output);

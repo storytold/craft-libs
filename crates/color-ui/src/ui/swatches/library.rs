@@ -3,16 +3,23 @@
 use std::collections::HashSet;
 
 use craft_behavior::Selection;
-use craft_ui::contract::ReorderMove;
-use craft_ui::patterns::presets::{PresetRow, PresetState};
+use craft_cms::convert::CmykConverter;
+use craft_theme::Srgba;
+use craft_ui::choice::SwatchFace;
+use craft_ui::contract::{MemoKey, MemoProps, ReorderMove};
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource, PresetState, ThumbFn, ThumbInfo};
+use craft_ui::primitives::{ContentPainterCx, IconSpec};
+use craft_ui::runtime::env::Env;
+use egui::Rect;
+use std::collections::BTreeMap;
 
-use super::{MAX_GROUPS, MAX_SWATCHES, SwatchesWords};
+use super::{MAX_GROUPS, MAX_SWATCHES, SWATCH_ZOOM, SwatchesWords};
 use crate::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchPaint, SwatchReport};
 use crate::ui::PickedColor;
 
 /// What the browser names its rows by. Swatch names are unique across the library and group names among groups, so
 /// both survive reordering.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum SwatchKey {
     /// A group, by name.
@@ -38,7 +45,9 @@ pub struct SwatchesState {
 
 impl Default for SwatchesState {
     fn default() -> Self {
-        SwatchesState { browser: PresetState::new(), selection: Selection::default(), rename: None, export_notes: None }
+        let mut browser = PresetState::new();
+        browser.zoom = SWATCH_ZOOM.default_value();
+        SwatchesState { browser, selection: Selection::default(), rename: None, export_notes: None }
     }
 }
 
@@ -560,9 +569,76 @@ impl SwatchLibrary {
     }
 }
 
-/// The rows of the swatch list: each group at depth 0 with its count, each swatch at depth 1 with "name, value" as its
-/// tooltip and accessible name (the name alone for a swatch without a colour). `SwatchesPanel` and `PaintChip`'s
-/// swatches list build their rows with it.
+/// A host's thumbnail painter over its own inputs, as `PresetFns::thumb` takes one: `key` holds the inputs and the
+/// `fn`, so the swatch list keys on what the painter reads.
+#[derive(craft_ui::contract::MemoProps)]
+pub(super) struct HostThumb<'a> {
+    key: u128,
+    #[memo_props(covered_by = "key", reason = "the painter runs the host's `fn` over the host's inputs, and `key` holds both")]
+    paint: Box<dyn Fn(&ContentPainterCx<'_>, Rect, ThumbInfo<'_, SwatchKey>) + Send + 'a>,
+}
+
+impl<'a> HostThumb<'a> {
+    /// `paint` over `inputs`.
+    pub(super) fn new<I: MemoProps + Send + 'a>(inputs: I, paint: ThumbFn<I, SwatchKey>) -> Self {
+        let key = MemoKey::of(&(&inputs, paint as usize));
+        HostThumb {
+            key,
+            paint: Box::new(move |cx: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| paint(&inputs, cx, rect, info)),
+        }
+    }
+}
+
+/// The swatch list's inputs: the library's groups, each swatch's colour as drawn and the icons trailing its row, by
+/// name, and the host's thumbnail painter, which paints every swatch in place of the drawn colours.
+#[derive(craft_ui::contract::MemoProps)]
+struct SwatchInputs<'a> {
+    groups: &'a [SwatchGroup],
+    drawn: BTreeMap<&'a str, Srgba>,
+    icons: BTreeMap<&'a str, Vec<(IconSpec<'static>, String)>>,
+    host: Option<HostThumb<'a>>,
+}
+
+/// The presets of the swatch list: each group at depth 0 with its count, each swatch at depth 1 with "name, value" as
+/// its tooltip and accessible name (the name alone for a swatch without a colour), painted in its colour through
+/// `cmyk`. `SwatchesPanel` and `PaintChip`'s swatches list show it.
+pub fn swatch_source<'a>(groups: &'a [SwatchGroup], cmyk: &CmykConverter) -> PresetSource<'a, SwatchKey> {
+    panel_source(groups, cmyk, BTreeMap::new(), None)
+}
+
+/// [`swatch_source`] with `icons` trailing the swatch rows they name and the `host` painter, if any, painting every
+/// swatch.
+pub(super) fn panel_source<'a>(
+    groups: &'a [SwatchGroup],
+    cmyk: &CmykConverter,
+    icons: BTreeMap<&'a str, Vec<(IconSpec<'static>, String)>>,
+    host: Option<HostThumb<'a>>,
+) -> PresetSource<'a, SwatchKey> {
+    let entries = || groups.iter().flat_map(|g| g.entries.iter());
+    let drawn = if host.is_some() {
+        BTreeMap::new()
+    } else {
+        entries().filter_map(|e| e.color().map(|color| (e.name.as_str(), color.to_srgb(cmyk)))).collect()
+    };
+    PresetSource::new(SwatchInputs { groups, drawn, icons, host }, PresetFns::new(source_rows).thumb(paint_swatch))
+}
+
+fn source_rows(inputs: &SwatchInputs<'_>, env: &Env) -> Vec<PresetRow<SwatchKey>> {
+    let mut rows = swatch_rows(inputs.groups, &env.words::<SwatchesWords>());
+    if !inputs.icons.is_empty() {
+        for row in &mut rows {
+            if let SwatchKey::Swatch(name) = &row.key
+                && let Some(icons) = inputs.icons.get(name.as_str())
+            {
+                row.trailing.clone_from(icons);
+            }
+        }
+    }
+    rows
+}
+
+/// The rows the Swatches panel lists for `groups`: each group's header, then its swatches, each named by its name and
+/// colour value (the name alone for a swatch without a colour).
 pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetRow<SwatchKey>> {
     let mut rows = Vec::with_capacity(groups.len() + groups.iter().map(|g| g.entries.len()).sum::<usize>());
     for group in groups {
@@ -578,8 +654,18 @@ pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetR
     rows
 }
 
+fn paint_swatch(inputs: &SwatchInputs<'_>, cx: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>) {
+    if let Some(host) = &inputs.host {
+        (host.paint)(cx, rect, info);
+    } else if let SwatchKey::Swatch(name) = info.key
+        && let Some(color) = inputs.drawn.get(name.as_str())
+    {
+        SwatchFace::new(*color).selected(info.selected).paint(cx, rect);
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 

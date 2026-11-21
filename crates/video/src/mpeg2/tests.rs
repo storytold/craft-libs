@@ -1,5 +1,5 @@
 //! Unit tests over hand-built streams (headers, robustness). Decoding accuracy against ffmpeg is
-//! in `tests/mpeg2/oracle.rs`.
+//! in `tests/it/mpeg2/oracle.rs`.
 
 use super::*;
 

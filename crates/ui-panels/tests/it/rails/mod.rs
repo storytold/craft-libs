@@ -1,7 +1,7 @@
 //! The rail's own logic: which tool a slot shows, what the rail remembers, where a drop goes, the flyout's hold and
 //! click, a press dragged away, the flyout's tear-off bar and the window a torn-off group floats in.
 
-mod drawer;
+pub(crate) mod drawer;
 
 use craft_behavior::GesturePhase;
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind};

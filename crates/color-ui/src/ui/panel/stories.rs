@@ -3,7 +3,6 @@
 use super::{ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelRamp, ColorPanelShown, ColorPanelState, TintRow};
 use crate::ui::Gamut;
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -23,7 +22,7 @@ static RECENT: [Srgba; 8] = [
 ];
 
 fn panel(ui: &mut Ui, data: &mut StoryData, state: ColorPanelState) -> StoryOutput {
-    ColorPanel::new(Bind::bound(data.value("state", state)), COLORS).show(ui).into()
+    ColorPanel::new(data.bind("state", state), COLORS).show(ui).into()
 }
 
 /// The FillStroke panel on `state` showing `shown`, set up further by `tweak`.

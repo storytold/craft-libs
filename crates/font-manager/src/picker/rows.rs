@@ -23,10 +23,10 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::StageAccess;
 use egui::{Color32, Rect};
 
-use super::rank::{Infos, Language, Listing, list, shown_name};
+use super::rank::{FamilyInfos, Language, Listing, list, shown_name};
 use super::{
-    FamilyRow, FamilySet, FilterLayout, FontClass, FontFilters, FontFormat, FontPicker, FontPickerSettings, FontPickerWords, FontPreviewSize,
-    FontScript, POPUP, SIMILAR, STAR, Typing, infos, read, ui_language, write,
+    FamilyRow, FamilySet, FilterLayout, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords,
+    FontPreviewSize, FontScript, POPUP, SIMILAR, STAR, Typing, infos_of, read, ui_language, write,
 };
 use crate::panel::faces::{Owner, Shown, paint_sample, shown};
 use craft_ui::style::DataColor;
@@ -38,12 +38,29 @@ const SAMPLE_ASPECT: (u16, u16) = (4, 1);
 /// The banner's sample is this many times as wide as high.
 const BANNER_ASPECT: (u16, u16) = (12, 1);
 
-/// One position of the list: a family, one style of an open family, or the gap between the recents and the other
-/// families.
+/// The headings of the `Plain` list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Heading {
+    Recent,
+    All,
+}
+
+/// One position of the list: a family, one style of an open family, the gap between the recents and the other
+/// families, a heading of the `Plain` list, or one of the host's action rows.
 enum Slot {
     Family { row: FamilyRow, open: bool },
     Style { family: String, style: String },
     Gap,
+    Heading(Heading),
+    Action(usize),
+}
+
+/// What shapes the slots besides the rows.
+struct Layout {
+    /// Headings over the recents and the families, and the action rows after them: the `Plain` list with nothing typed.
+    sections: bool,
+    /// How many action rows follow the families.
+    actions: usize,
 }
 
 /// What names a slot across passes. A family opening shifts the positions after it, so the list keys its rows by what
@@ -51,6 +68,8 @@ enum Slot {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum SlotKey {
     Gap,
+    Heading(Heading),
+    Action(usize),
     Family { family: String, recent: bool },
     Style { family: String, style: String },
 }
@@ -61,6 +80,8 @@ impl Slot {
             Slot::Family { row, .. } => SlotKey::Family { family: row.family.clone(), recent: row.recent },
             Slot::Style { family, style } => SlotKey::Style { family: family.clone(), style: style.clone() },
             Slot::Gap => SlotKey::Gap,
+            Slot::Heading(heading) => SlotKey::Heading(*heading),
+            Slot::Action(at) => SlotKey::Action(*at),
         }
     }
 
@@ -69,7 +90,7 @@ impl Slot {
         match self {
             Slot::Family { row, .. } => Some(&row.family),
             Slot::Style { family, .. } => Some(family),
-            Slot::Gap => None,
+            Slot::Gap | Slot::Heading(_) | Slot::Action(_) => None,
         }
     }
 
@@ -78,7 +99,7 @@ impl Slot {
         match self {
             Slot::Family { row, .. } => Some((&row.family, None)),
             Slot::Style { family, style } => Some((family, Some(style))),
-            Slot::Gap => None,
+            Slot::Gap | Slot::Heading(_) | Slot::Action(_) => None,
         }
     }
 }
@@ -117,26 +138,35 @@ impl DisplayOrder<SlotKey> for Slots<'_> {
     }
 
     fn is_section(&self, at: usize) -> bool {
-        matches!(self.0[at], Slot::Gap)
+        matches!(self.0[at], Slot::Gap | Slot::Heading(_))
     }
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {
         match &self.0[at] {
             Slot::Family { row, .. } => Some(Cow::Borrowed(row.shown.as_str())),
             Slot::Style { style, .. } => Some(Cow::Borrowed(style.as_str())),
-            Slot::Gap => None,
+            Slot::Gap | Slot::Heading(_) | Slot::Action(_) => None,
         }
     }
 }
 
 impl ItemSource<SlotKey> for Slots<'_> {}
 
-/// The rows with a gap after the recents and the styles of each expanded family under its row.
-fn slots(catalog: &Catalog, rows: Vec<FamilyRow>, expanded: &[String]) -> Vec<Slot> {
+/// The rows with a gap after the recents (headings over the recents and the families under `layout.sections`), the
+/// styles of each expanded family under its row, and the action rows at the end.
+fn slots(catalog: &Catalog, rows: Vec<FamilyRow>, expanded: &[String], layout: &Layout) -> Vec<Slot> {
     let recents = rows.iter().take_while(|row| row.recent).count();
-    let mut slots: Vec<Slot> = Vec::with_capacity(rows.len() + 1);
+    let mut slots: Vec<Slot> = Vec::with_capacity(rows.len() + 2);
+
     for (at, row) in rows.into_iter().enumerate() {
-        if at == recents && recents > 0 {
+        if layout.sections {
+            if at == 0 && recents > 0 {
+                slots.push(Slot::Heading(Heading::Recent));
+            }
+            if at == recents {
+                slots.push(Slot::Heading(Heading::All));
+            }
+        } else if at == recents && recents > 0 {
             slots.push(Slot::Gap);
         }
         let open = !row.recent && row.styles > 1 && expanded.contains(&row.family);
@@ -151,6 +181,9 @@ fn slots(catalog: &Catalog, rows: Vec<FamilyRow>, expanded: &[String]) -> Vec<Sl
                 }
             }
         }
+    }
+    if layout.sections {
+        slots.extend((0..layout.actions).map(Slot::Action));
     }
     slots
 }
@@ -330,7 +363,7 @@ fn filter_chips(
 /// text, and nothing until the face is loaded. `on_white` paints black type on a white paper fill, in every theme.
 fn face_thumb<'a>(
     catalog: &'a Arc<Catalog>,
-    infos: &'a Infos,
+    infos: &'a FamilyInfos,
     family: &'a str,
     text: String,
     on_white: bool,
@@ -353,7 +386,7 @@ fn face_thumb<'a>(
 }
 
 /// The banner: `text` in the face of `family`, on one line cut at the end, in a picture as high as the large thumbnail.
-fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &Infos, family: &str, shown_name: &str, text: &str, on_white: bool) {
+fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &FamilyInfos, family: &str, shown_name: &str, text: &str, on_white: bool) {
     let aspect = ThumbAspect::new(BANNER_ASPECT.0, BANNER_ASPECT.1);
     Picture::painter(shown_name.to_owned(), aspect, face_thumb(catalog, infos, family, text.to_owned(), on_white))
         .extent(PictureSize::Thumb(ThumbSize::Large))
@@ -362,7 +395,7 @@ fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &Infos, family: &str
 
 /// The name the banner shows for `family`: its row's shown name when the list holds one, else its name in the
 /// interface language, else the family key.
-fn banner_shown_name(slots: &[Slot], infos: &Infos, family: &str, language: &str, settings: Option<&FontPickerSettings>) -> String {
+fn banner_shown_name(slots: &[Slot], infos: &FamilyInfos, family: &str, language: &str, settings: Option<&FontPickerSettings>) -> String {
     let row = slots.iter().find_map(|slot| match slot {
         Slot::Family { row, .. } if row.family == family => Some(row.shown.clone()),
         _ => None,
@@ -418,7 +451,10 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let mut hide_classes = cx.memory::<Typing>().hide_classes;
     let family = cx.value().cloned().unwrap_or_default();
     let settings = read(&mut picker.settings, cx);
-    let mut filters = read(&mut picker.filters, cx);
+    let plain = picker.kind == FontPickerKind::Plain;
+    // The plain list has no filters: neither the bar nor the column shows, and nothing narrows the list.
+    let mut filters = read(&mut picker.filters, cx).filter(|_| !plain);
+    let actions = picker.actions;
     let has_filters = filters.is_some();
     let chips = picker.filter_layout == FilterLayout::Chips;
     let on_white = settings.as_ref().is_some_and(|s| s.samples_on_white);
@@ -426,12 +462,13 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let (sets, scripts) = (picker.sets, picker.scripts);
     let narrowing = filters.clone().unwrap_or_default();
     let catalog = picker.catalog;
-    let infos = infos(catalog);
+    let infos = infos_of(&cx.response.ctx, cx.id, catalog);
     let language_code = ui_language(&cx.env);
     let (folder, collator) = (cx.env.folder(), cx.env.collator());
     let listing = Listing { query: &query, settings: settings.as_ref(), filters: &narrowing, language: &language_code, served: picker.served, sets };
     let (found, comparable) = list(catalog, &infos, &listing, &Language { folder: &folder, collator: &collator }, true);
-    let slots = slots(catalog, found, &expanded);
+    let layout = Layout { sections: plain && query.trim().is_empty(), actions: actions.len() };
+    let slots = slots(catalog, found, &expanded, &layout);
     let current = slots.iter().position(|slot| matches!(slot, Slot::Family { row, .. } if row.family == family));
     let size = settings.as_ref().map_or(ThumbSize::None, |s| s.preview.thumb());
     let favorites_empty = settings.as_ref().is_none_or(|s| s.favorites.is_empty());
@@ -487,26 +524,35 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                         .rows_stamp(stamp.finish())
                         .show_items(ui, &source, &mut |_, item| match &slots[item.at] {
                             Slot::Gap => ListRow::spacer(),
+                            Slot::Heading(Heading::Recent) => ListRow::new(words.recently_used.clone()).section_heading(),
+                            Slot::Heading(Heading::All) => ListRow::new(words.all_fonts.clone()).section_heading(),
+                            Slot::Action(at) => ListRow::new(actions[*at].clone()).option().depth(0),
                             Slot::Style { style, .. } => ListRow::new(style.clone()).option().depth(1),
                             Slot::Family { row, open } => {
                                 let icon = if row.starred { "star_filled" } else { "star" };
                                 let name = Label::from(words.favorite.fill(&[("row", row.shown.as_str())]));
                                 let star = TrailingFace::Icon(IconSpec::svg(IconId::new(icon)));
                                 let mut line = ListRow::new(row.shown.clone()).option().depth(0).check(current == Some(item.at));
+                                // The plain list has no filters, so `has_filters` keeps the similar part off it too.
                                 if chips && has_filters {
                                     let similar = TrailingFace::Icon(IconSpec::svg(IconId::new("font_similar")));
                                     let similar_name = Label::from(words.show_similar.fill(&[("row", row.shown.as_str())]));
                                     line = line.trailing_part(SIMILAR, similar, similar_name);
                                 }
-                                line = line.trailing_part(STAR, star, name);
+                                if !plain {
+                                    line = line.trailing_part(STAR, star, name);
+                                }
                                 if source.has_children(item.at) {
                                     line = line.group(*open);
                                 }
-                                if let Some(class) = row.class {
+                                if let Some(class) = row.class.filter(|_| !plain) {
                                     line = line.trailing_named(class_mark(class, &words), class_label(class, &words));
                                 }
                                 line = match row.format {
-                                    Some(format) => line.trailing_named(Label::from(format.badge().to_owned()), format_label(format, &words)),
+                                    Some(format) if !plain => {
+                                        line.trailing_named(Label::from(format.badge().to_owned()), format_label(format, &words))
+                                    }
+                                    Some(_) => line,
                                     None => line.trailing_named(words.served.clone(), words.served.clone()),
                                 };
                                 if size == ThumbSize::None {
@@ -601,7 +647,12 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     {
         write(&mut picker.filters, cx, filters, "Font filters");
     }
-    if let Some((family, style)) = picked.and_then(|key| slot_of(&slots, &key)).and_then(Slot::pick) {
+    let chosen = picked.and_then(|key| slot_of(&slots, &key));
+    if let Some(Slot::Action(at)) = chosen {
+        picker.action = Some(*at);
+        end_preview(picker, cx);
+        popup.close(cx);
+    } else if let Some((family, style)) = chosen.and_then(Slot::pick) {
         picker.picked = Some(family.to_owned());
         picker.picked_style = style.map(str::to_owned);
         end_preview(picker, cx);

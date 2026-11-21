@@ -71,6 +71,7 @@ pub fn arrange(ui: &mut Ui, layout: &dyn Arrangement, children: &mut [Placed<'_>
         placed.response = Some(placed.child.show_at(ui, *id, flow.to_physical(*rect)));
     }
     let whole = flow.to_physical(Rect::from_min_size(room.min, taken));
+    super::close_flow_start_in(ui);
     alloc::advance_past(ui, whole);
     whole
 }

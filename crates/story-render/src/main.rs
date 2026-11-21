@@ -4,8 +4,9 @@
 //! `new-<Name>--<story>.png` for every story of the component, `new-<Name>.png` for the story its Overview card
 //! shows (its first), `stories.tsv` and `components.tsv`. Each story runs in a card's story body (`StoryBody`) in a
 //! fresh context, in ArtCraft Dark (`--theme`, `--mode`, `--density`, `--contrast`) at 2 pixels per point (`--scale`) with the interface fonts, and its image is cropped to the
-//! story's surface and the layers it opened. A story runs in an embedded shell, over which its dialogs open, and a story
-//! whose dialog the card holds behind its button is shown with the dialog open.
+//! story's surface and the layers it opened. A story runs in a test fixture (`Fixture`) in an embedded shell, over which
+//! its dialogs open; a story whose dialog the card holds behind its button is shown with the dialog open, and a story
+//! that shows an open popup (`Required::Open`) is shown after its own drive (`Drive::Custom`), which opens it.
 //!
 //! The bin links the framework and only the domain crates its features name (`--features color-ui` for craft-color-ui's
 //! components; `--features apps` for every crate, as the gallery links them), so a change in one crate rebuilds that
@@ -32,18 +33,19 @@ use craft_ui::runtime::commands::CommandInput;
 use craft_ui::runtime::env::{RootEnv, WindowKey};
 use craft_ui::shell::AppShell;
 use craft_ui::testing::snapshot::{Renderer, RgbaImage, layer_rects, modal_open};
-use craft_ui::testing::{Frames, Story, StoryRegistration};
+use craft_ui::testing::{Drive, Fixture, Required, Story, StoryOutput, StoryRegistration};
 use craft_ui_gallery::WINDOW;
 use craft_ui_gallery::chrome::{Spec, StoryBody, overview_card};
 use craft_ui_gallery::viewer::{CONTRASTS, CardState, Catalog, Cells, DENSITIES, GallerySettings, MODES, entry_of, theme_named};
 use egui::{Pos2, Rect, Ui, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Mutex;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// The pixels per point of the images unless `--scale` gives another.
 const PIXELS_PER_POINT: f32 = 2.0;
@@ -135,9 +137,9 @@ fn options() -> Result<Options, String> {
 /// What a job renders.
 enum Shown {
     /// One story in a card's story body.
-    Story(&'static StoryRegistration),
-    /// The Overview card of one story group.
-    Card(Spec),
+    Story(Box<StoryRegistration>),
+    /// The Overview card of one story group, which the card's frames show.
+    Card(Arc<Spec>),
 }
 
 /// One story or card to render.
@@ -182,7 +184,7 @@ fn jobs(options: &Options) -> Vec<Job> {
                     name: component.name.clone(),
                     level: entry.level.title(),
                     crate_name,
-                    shown: Shown::Card(spec),
+                    shown: Shown::Card(Arc::new(spec)),
                     surface: entry.surface,
                     story: group.name.clone(),
                     title: group.name.clone(),
@@ -200,7 +202,7 @@ fn jobs(options: &Options) -> Vec<Job> {
                 name: component.name.clone(),
                 level: entry.level.title(),
                 crate_name: story.registration.crate_name,
-                shown: Shown::Story(story.registration),
+                shown: Shown::Story(Box::new(story.registration)),
                 surface: entry.surface,
                 story: story.registration.story.name.to_owned(),
                 title: story.registration.story.caption(&component.name),
@@ -230,53 +232,76 @@ fn root_env(options: &Options) -> RootEnv {
     env
 }
 
-/// `show` at the screen's top left, `width` wide, until it settles: the frames, then a second past every fade, then the
-/// frames again. It runs in a shell as large as the gallery's window, over which its dialogs open as over a gallery
-/// view, so a dialog or workspace gets the room it gets in the gallery, not the card's width.
-fn settle(frames: &mut Frames, width: f32, show: &mut dyn FnMut(&mut Ui)) {
+/// A fixture of `show` at the screen's top left, `width` wide, in the theme `env` gives, at the images' scale, with the
+/// interface fonts, recording its paint. `show` runs in a shell as large as the gallery's window, over which its
+/// dialogs open as over a gallery view, so a dialog or workspace gets the room it gets in the gallery, not the card's
+/// width. It returns the story's output in a pass that ran the story ([`Fixture::hosted`]).
+fn fixture(env: &RootEnv, options: &Options, mut show: impl FnMut(&mut Ui) -> Option<StoryOutput> + 'static) -> Fixture {
+    let width = options.width;
     let window = Rect::from_min_size(Pos2::ZERO, Vec2::from(WINDOW));
-    for at in 0..8 {
-        if at == 4 {
-            frames.advance(1.0);
-        }
-        frames.frame(Vec::new(), |ui| {
-            craft_ui::testing::layout::in_region(ui, window, |ui| {
-                AppShell::embedded(WindowKey::new("story-render"))
-                    .body(|ui, _, _: &mut ()| {
-                        let view = ui.available_rect_before_wrap();
-                        let column = Rect::from_min_size(view.min, Vec2::new(width, view.height()));
-                        craft_ui::testing::layout::in_region(ui, column, |ui| show(ui));
-                    })
-                    .show(ui, &mut ())
-            });
+    let mut fixture = Fixture::hosted(move |ui| {
+        let mut output = None;
+        craft_ui::testing::layout::in_region(ui, window, |ui| {
+            AppShell::embedded(WindowKey::new("story-render"))
+                .body(|ui, _, _: &mut ()| {
+                    let view = ui.available_rect_before_wrap();
+                    let column = Rect::from_min_size(view.min, Vec2::new(width, view.height()));
+                    output = craft_ui::testing::layout::in_region(ui, column, |ui| show(ui));
+                })
+                .show(ui, &mut ())
         });
-    }
+        output
+    });
+    UiFonts::new(&I18nScripts).install(fixture.ctx());
+    fixture.root(env.clone()).room(Vec2::from(WINDOW)).pixels_per_point(options.scale).record_paint();
+    fixture
 }
 
-/// The story in a card's body, with its dialog open when the card holds one behind its button: the rect it showed in.
-fn story(frames: &mut Frames, story: &'static StoryRegistration, job: &Job, options: &Options) -> Option<Rect> {
-    let body = StoryBody::new("sheet", story, job.surface, options.room, Pad::Regular);
-    let mut state = CardState::default();
-    let mut flow = None;
-    settle(frames, options.width, &mut |ui| flow = body.show(ui, &mut state).flow);
-    if state.dialog.hidden {
-        state.show_dialog();
-        settle(frames, options.width, &mut |ui| flow = body.show(ui, &mut state).flow);
-    }
-    flow
+/// Frames until what the fixture shows settles: the frames, then a second past every fade, then the frames again.
+fn settle(fixture: &mut Fixture) {
+    fixture.idle(4).advance(1.0).idle(4);
 }
 
-/// The Overview card of `spec`, with every dialog its stories hold behind a button open: the card's rect, and whether
-/// a dialog was opened.
-fn card(frames: &mut Frames, spec: &Spec, options: &Options) -> (Option<Rect>, bool) {
-    let stories = spec.card_stories();
-    let card = spec.card(&stories, "sheet".to_owned(), options.room);
-    let mut cells = Cells::default();
-    let mut rect = None;
+/// The story in a card's body, with its dialog open when the card holds one behind its button, under the command
+/// states the gallery gives it. A story that shows an open popup ([`Required::Open`]) is shown after its own drive,
+/// which opens it, as the suite runs it: the fixture, and the rect the story showed in.
+fn story(registration: StoryRegistration, surface: Surface, env: &RootEnv, options: &Options) -> (Fixture, Option<Rect>) {
+    let body = StoryBody::new("sheet", registration, surface, options.room, Pad::Regular);
+    let state = Rc::new(RefCell::new(CardState::default()));
+    let flow = Rc::new(Cell::new(None));
+    let (held, flowed) = (state.clone(), flow.clone());
+    let mut fixture = fixture(env, options, move |ui| {
+        let shown = body.show(ui, &mut held.borrow_mut());
+        flowed.set(shown.flow);
+        shown.output
+    });
+    fixture.commands(CommandInput::new().states(&Tracked::new(Story::command_states([&registration.story]))));
+    settle(&mut fixture);
+    if state.borrow().dialog.hidden {
+        state.borrow_mut().show_dialog();
+        settle(&mut fixture);
+    }
+    let story = &registration.story;
+    if let (true, Drive::Custom(open)) = (story.covers.contains(&Required::Open), story.drive) {
+        open(&mut fixture);
+        settle(&mut fixture);
+    }
+    (fixture, flow.get())
+}
+
+/// The Overview card of `spec`, with every dialog its stories hold behind a button open, under no command states, as
+/// the Overview gives its cards: the fixture, the card's rect, and whether a dialog was opened.
+fn card(spec: &Arc<Spec>, env: &RootEnv, options: &Options) -> (Fixture, Option<Rect>, bool) {
+    let cells = Rc::new(RefCell::new(Cells::default()));
+    let rect = Rc::new(Cell::new(None));
+    let (spec, held, placed, room) = (spec.clone(), cells.clone(), rect.clone(), options.room);
     // In a one-column grid row in a vertical scroll, as the Overview holds its cards: a filling card is as tall as its
     // row's content.
-    let show = |ui: &mut Ui, cells: &mut Cells| {
-        Stack::new()
+    let mut fixture = fixture(env, options, move |ui| {
+        let stories = spec.card_stories();
+        let card = spec.card(&stories, "sheet".to_owned(), room);
+        let cells = &mut *held.borrow_mut();
+        let shown = Stack::new()
             .fill()
             .scroll(Scroll::vertical())
             .show(ui, |ui, _| {
@@ -287,45 +312,38 @@ fn card(frames: &mut Frames, spec: &Spec, options: &Options) -> (Option<Rect>, b
                 grid.inner.map(|()| grid.output.rect)
             })
             .inner
-            .flatten()
-    };
-    settle(frames, options.width, &mut |ui| rect = show(ui, &mut cells));
+            .flatten();
+        placed.set(shown);
+        None
+    });
+    settle(&mut fixture);
     let mut opened = false;
-    for state in cells.values_mut().filter(|state| state.dialog.hidden) {
+    for state in cells.borrow_mut().states_mut().filter(|state| state.dialog.hidden) {
         state.show_dialog();
         opened = true;
     }
     if opened {
-        settle(frames, options.width, &mut |ui| rect = show(ui, &mut cells));
+        settle(&mut fixture);
     }
-    (rect, opened)
+    (fixture, rect.get(), opened)
 }
 
 /// The story or card rendered: its image cropped to what it showed and the layers it opened, in pixels.
 fn render(job: &Job, renderer: &mut Renderer, env: &RootEnv, options: &Options) -> Result<RgbaImage, String> {
-    let mut frames = Frames::new();
-    UiFonts::new(&I18nScripts).install(&frames.ctx);
-    frames.root(env.clone());
-    frames.screen(Vec2::from(WINDOW));
-    frames.pixels_per_point(options.scale);
-    frames.record_paint();
-    // The command states of the story shown, as the gallery gives them, before the first frame. The Overview gives its
-    // cards none, so a card is rendered under none.
-    frames.commands(match &job.shown {
-        Shown::Story(registration) => CommandInput::new().states(&Tracked::new(Story::command_states([&registration.story]))),
-        Shown::Card(_) => CommandInput::new(),
-    });
-    let (shown, dialog) = match &job.shown {
-        Shown::Story(registration) => (story(&mut frames, registration, job, options), false),
-        Shown::Card(spec) => card(&mut frames, spec, options),
+    let (mut fixture, shown, dialog) = match &job.shown {
+        Shown::Story(registration) => {
+            let (fixture, shown) = story(**registration, job.surface, env, options);
+            (fixture, shown, false)
+        }
+        Shown::Card(spec) => card(spec, env, options),
     };
-    let layers = layer_rects(&frames.ctx).into_iter().fold(Rect::NOTHING, Rect::union);
+    let layers = layer_rects(fixture.ctx()).into_iter().fold(Rect::NOTHING, Rect::union);
     // An opened card dialog, or a modal layer the story opened itself, is cropped alone, as the old gallery's dialog
     // shots are.
-    let alone = dialog || modal_open(&frames.ctx);
+    let alone = dialog || modal_open(fixture.ctx());
     let crop = if alone && layers.is_positive() { layers } else { shown.map_or(layers, |shown| layers.union(shown)) };
-    let paint = frames.take_paint().ok_or("no paint recorded")?;
-    let image = renderer.render(&frames.ctx, paint);
+    let paint = fixture.take_paint().ok_or("no paint recorded")?;
+    let image = renderer.render(fixture.ctx(), paint);
     renderer.finish();
     let image = image?;
     if !crop.is_positive() {

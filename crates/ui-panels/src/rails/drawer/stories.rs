@@ -1,7 +1,7 @@
 //! Stories of `ToolbarDrawer`.
 
 use super::{DrawerGroup, ToolbarDrawer};
-use crate::contract::Show as _;
+use crate::contract::{Show as _, Tracked};
 use crate::display::Text;
 use crate::menu::PanelRow;
 use crate::rails::tool::stories::{BRUSH, StoryTools, tools};
@@ -16,11 +16,11 @@ fn staged<'a>(
     ui: &mut Ui,
     data: &mut StoryData,
     groups: &'a [DrawerGroup<u8>],
-    slots: &'a [ToolSlot<u8>],
+    slots: &'a Tracked<Vec<ToolSlot<u8>>>,
     tune: impl FnOnce(ToolbarDrawer<'a, u8>, bool) -> ToolbarDrawer<'a, u8>,
     below: impl FnMut(&mut Ui),
 ) -> StoryOutput {
-    let last = LastUsed::default();
+    let last = Tracked::new(LastUsed::default());
     let rail = ToolRail::new("Tools", slots, &BRUSH, &last).edit_toolbar("Edit Toolbar").show_rail(ui, |_, _| {});
     let open = data.value("open", false);
     let Some(opener) = rail.edit_toolbar.as_ref() else { return rail.into() };
@@ -40,8 +40,8 @@ fn staged<'a>(
 }
 
 /// The slots of the toolbar the stories start from.
-fn toolbar() -> [ToolSlot<u8>; 2] {
-    [ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1]))]
+fn toolbar() -> Tracked<Vec<ToolSlot<u8>>> {
+    Tracked::new(vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1]))])
 }
 
 /// The drawer as an app shows it: closed beside the tool rail until the rail's Edit Toolbar button opens it. The eraser
@@ -61,11 +61,8 @@ fn toolbar_drawer_menu_footer_and_runs(ui: &mut Ui, data: &mut StoryData) -> Sto
         DrawerGroup::new("Retouching", tools(&[6, 7])),
         DrawerGroup::new("Other", tools(&[8])),
     ];
-    let rows = vec![
-        PanelRow::Command(CommandRef::from(StoryTools::Move)),
-        PanelRow::Separator,
-        PanelRow::Command(CommandRef::from(StoryTools::Brush)),
-    ];
+    let rows =
+        vec![PanelRow::Command(CommandRef::from(StoryTools::Move)), PanelRow::Separator, PanelRow::Command(CommandRef::from(StoryTools::Brush))];
     staged(
         ui,
         data,

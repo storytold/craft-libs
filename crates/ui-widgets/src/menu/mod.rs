@@ -2,22 +2,22 @@
 
 mod alternate;
 pub mod bar;
-mod edit;
+pub(crate) mod edit;
 pub(crate) mod item;
 #[doc(hidden)]
 pub mod level;
-mod panel;
-mod popup;
+pub(crate) mod panel;
+pub(crate) mod popup;
 pub mod search;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use alternate::Alternate;
 pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle};
 pub(crate) use edit::text_menu;
 pub use edit::{EditMenu, EditMenuOutput};
-pub use item::{MenuItem, MenuItemOutput, MenuItemStyle};
+pub use item::{MenuItem, MenuItemOutput, MenuItemStyle, MenuSamplePaint, MenuShortcut};
 pub use panel::{GroupItem, PanelMenu, PanelMenuOutput, PanelRow};
 #[doc(hidden)]
 pub use popup::entry_rows;

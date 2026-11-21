@@ -2,8 +2,8 @@
 //! are not installed, and the dialog that lists them with a replacement for each (Photoshop's
 //! "missing fonts" warning on open; VectorCraft's and FigCraft's Document Fonts lists).
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -45,6 +45,11 @@ craft_ui::words! {
         installed: "missingFonts.installed" = "Installed";
         missing: "missingFonts.missing" = "Missing";
         warning: template "missingFonts.warning" = "font '{family}' is not installed; text may render using a fallback face";
+        /// The note for a shown font that is not installed, with `{family}` the missing family and `{face}` the face shown
+        /// in its place.
+        shown_as: template "missingFonts.shownAs" = "{family} isn't installed on this computer, so its text is shown in {face}. Line breaks and page count can differ from where the document was made.";
+        /// The advice that follows the note when the host's list has a row that adds a font.
+        add_font: "missingFonts.addFont" = "If you have the font file, add it with Add Font… at the end of this list.";
         missing_font: template "missingFonts.missingFont" = "{font} ({status})";
         installed_style: template "missingFonts.installedStyle" = "{status} ({style})";
         font_status: template "missingFonts.fontStatus" = "{font}: {status}";

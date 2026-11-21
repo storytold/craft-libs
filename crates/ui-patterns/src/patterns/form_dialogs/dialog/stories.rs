@@ -36,7 +36,7 @@ fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLay
     let preview = *data.value("preview", preview);
     let layout = *data.choice("layout", layout, &LAYOUTS);
     let comparing = *data.value("comparing", false);
-    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true).layout(layout);
+    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(data.bind("open", true)).history(true).layout(layout);
     let dialog = if preview { dialog.previews(true).preview(picture(ui, comparing)) } else { dialog };
     let shown = dialog.show(ui);
     *data.value("comparing", false) = shown.comparing;
@@ -67,7 +67,7 @@ fn param_dialog_stacked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_close_without_reset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamDialog::new("blur", "Blur", Param::parse_list(SPEC))
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .cancel_label(Label::from("Close"))
         .alt_resets(false)
         .show(ui)
@@ -79,7 +79,7 @@ const COMMAND_SPEC: &str = r#"{"name":text,"size":1..100=10,"method":"fit|fill",
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_with_footer_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamDialog::new("color-table", "Color Table", Param::parse_list(SPEC))
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .extra_buttons(vec![
             ("load".to_owned(), FooterButton::new(Label::from("Load…"), DialogRole::Other)),
             ("save".to_owned(), FooterButton::new(Label::from("Save…"), DialogRole::Other)),
@@ -137,10 +137,8 @@ fn param_dialog_with_a_footer_toggle(ui: &mut Ui, data: &mut StoryData) -> Story
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_with_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = [PresetRow::item("soft".to_owned(), "Soft", 0), PresetRow::item("hard".to_owned(), "Hard", 0)];
-    let values = [
-        ("soft".to_owned(), DialogFields::from_pairs([("radius", 2.0)])),
-        ("hard".to_owned(), DialogFields::from_pairs([("radius", 60.0)])),
-    ];
+    let values =
+        [("soft".to_owned(), DialogFields::from_pairs([("radius", 2.0)])), ("hard".to_owned(), DialogFields::from_pairs([("radius", 60.0)]))];
     let built_in = ["soft".to_owned()];
     ParamDialog::new("blur", "Blur", Param::parse_list(SPEC))
         .opened(Bind::bound(opener(ui, data)))
@@ -149,20 +147,23 @@ fn param_dialog_with_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into()
 }
 
-/// A dialog whose OK is refused with a reason: OK is off and the reason shows under the rows.
+/// A dialog whose values the host refuses with a reason until it withdraws it: OK is off and the reason shows under
+/// the rows.
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_with_refused_values(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ParamDialog::new("blur", "Blur", Param::parse_list(SPEC))
-        .opened(Bind::bound(opener(ui, data)))
-        .ok_enabled(false)
-        .ok_reason(Label::from(REFUSAL))
-        .refusal((Label::from(REFUSAL), DialogFields::new()))
-        .refusal_blocks(true)
-        .show(ui)
-        .into()
+    let ctx = ui.ctx().clone();
+    let open = move || {
+        let mut dialog = HostedParamDialog::new(&ctx, "blur", DialogFields::new(), |fields| {
+            ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).values(Bind::bound(fields))
+        })
+        .held_ok();
+        dialog.refuse(Some(Label::from(REFUSAL)));
+        dialog
+    };
+    hosted_with(ui, data, (), open, |_| {})
 }
 
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn command_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ParamDialog::command("fit-image", "Fit Image", Param::parse_list(COMMAND_SPEC)).opened(Bind::bound(data.value("open", true))).show(ui).into()
+    ParamDialog::command("fit-image", "Fit Image", Param::parse_list(COMMAND_SPEC)).opened(data.bind("open", true)).show(ui).into()
 }

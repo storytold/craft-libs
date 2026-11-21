@@ -18,6 +18,26 @@ pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_milli
 /// The longest reply line a client reads: 256 MiB. A longer one is an error and closes the connection.
 pub const MAX_REPLY_BYTES: u64 = 256 << 20;
 
+/// Why [`ControlClient::connect`] failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConnectError {
+    /// A socket or read failure: the server was not reached.
+    Transport(String),
+    /// The server answered the `auth` request with an error.
+    Refused(String),
+}
+
+impl std::fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectError::Transport(why) | ConnectError::Refused(why) => f.write_str(why),
+        }
+    }
+}
+
+impl std::error::Error for ConnectError {}
+
 /// One authenticated connection.
 pub struct ControlClient {
     stream: std::net::TcpStream,
@@ -27,16 +47,25 @@ pub struct ControlClient {
 }
 
 impl ControlClient {
+    /// True after a transport failure closed the connection; an error reply leaves it false. A
+    /// caller tells a lost connection from a refused request and never replays a mutation.
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
     /// Connect (read timeout [`CALL_TIMEOUT`]), send
     /// `{"id": 1, "method": "auth", "params": {"token": token}}` and read one reply line; `Err` with
-    /// the reply's `error` text when it isn't `ok`, or the I/O error's message.
-    pub fn connect(addr: SocketAddr, token: &str) -> Result<Self, String> {
-        let stream = std::net::TcpStream::connect(addr).map_err(|e| e.to_string())?;
-        stream.set_read_timeout(Some(CALL_TIMEOUT)).map_err(|e| e.to_string())?;
-        stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|e| e.to_string())?;
-        let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+    /// the reply's `error` text as `Refused` when it isn't `ok`, or the I/O error's message as `Transport`.
+    pub fn connect(addr: SocketAddr, token: &str) -> Result<Self, ConnectError> {
+        let io = |e: std::io::Error| ConnectError::Transport(e.to_string());
+        let stream = std::net::TcpStream::connect(addr).map_err(io)?;
+        stream.set_read_timeout(Some(CALL_TIMEOUT)).map_err(io)?;
+        stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(io)?;
+        let reader = BufReader::new(stream.try_clone().map_err(io)?);
         let mut client = Self { stream, broken: false, reader, next_id: 2 };
-        client.exchange(1, AUTH_METHOD, json!({"token": token}))?;
+        // `exchange` marks the client broken on a transport failure only, so an error reply is a refusal.
+        let auth = client.exchange(1, AUTH_METHOD, json!({"token": token}));
+        auth.map_err(|e| if client.broken { ConnectError::Transport(e) } else { ConnectError::Refused(e) })?;
         Ok(client)
     }
 
@@ -54,11 +83,6 @@ impl ControlClient {
     /// turns true while it waits for the reply.
     pub fn call_until(&mut self, method: &str, params: Value, cancelled: &dyn Fn() -> bool) -> Result<Value, String> {
         let _ = (method, params, cancelled);
-        todo!("sh.N3")
-    }
-
-    /// Whether the connection is still open: false once it broke.
-    pub fn is_open(&self) -> bool {
         todo!("sh.N3")
     }
 
@@ -107,4 +131,4 @@ enum Failure {
 
 #[cfg(all(test, feature = "ui"))]
 #[path = "client_tests.rs"]
-mod client_tests;
+pub(crate) mod client_tests;

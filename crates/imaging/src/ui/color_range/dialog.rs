@@ -8,7 +8,7 @@ use craft_ui::buttons::Button;
 use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::choice::{Checkbox, Radio, RadioGroup, Segmented};
 use craft_ui::contract::{
-    Bind, CanvasGesture, EditResponse, Entry, NoValue, Outcome, Pattern, Props, Sampler as _, Show as _, ShowContainer as _, clicked,
+    Bind, CanvasGesture, EditResponse, Entry, FieldLayout, NoValue, Outcome, Pattern, Props, Sampler as _, Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup, SliderField};
@@ -223,7 +223,7 @@ impl<'a> ColorRangeDialog<'a> {
         let preview_words = env.words::<SelectionWords>();
         // Holding ⌘ (Ctrl off macOS; `Mods` folds Ctrl into `cmd` there) shows the other view while held: view only,
         // `show_image` does not change.
-        let swapped = pointer::frame(ui.ctx()).mods.cmd;
+        let swapped = pointer::mods(ui.ctx()).cmd;
         let image_shown = show_image != swapped;
         let source = if image_shown { image } else { mask };
         let state = match (&error, source) {
@@ -288,12 +288,12 @@ impl<'a> ColorRangeDialog<'a> {
                         f64::from(p.x.floor().max(0.0)) * f64::from(k) + f64::from(k / 2),
                         f64::from(p.y.floor().max(0.0)) * f64::from(k) + f64::from(k / 2),
                     ];
-                    let mods = pointer::frame(ui.ctx()).mods;
+                    let mods = pointer::mods(ui.ctx());
                     let mut next = pass.current.clone();
                     next.samples.pick(at, document, tool, mods);
                     pass.set(&words.eyedropper, next);
                 }
-                Stack::new().show(ui, |ui, _| {
+                Stack::new().fill_width().show(ui, |ui, _| {
                     Stack::new().enabled(c.sampling).show(ui, |ui, _| {
                         let tools = [
                             Entry::new(SampleTool::Sample, words.eyedropper.clone()).icon(IconSpec::svg(IconId::new("eyedropper"))),
@@ -323,7 +323,7 @@ impl<'a> ColorRangeDialog<'a> {
                     });
                     let events = Checkbox::new(Bind::given(now.invert)).label(words.invert.clone()).show(ui).events;
                     pass.lift(events, |value, on| value.invert = on);
-                    Field::new(words.selection.clone()).id_salt("view").show(ui, |ui, _| {
+                    Field::new(words.selection.clone()).layout(FieldLayout::Above).id_salt("view").show(ui, |ui, _| {
                         let group = RadioGroup::new(words.selection.clone(), Bind::given(show_image)).show(ui, |ui, _| {
                             Row::new().show(ui, |ui, _| {
                                 Radio::new(false).label(words.selection.clone()).show(ui);
@@ -332,7 +332,7 @@ impl<'a> ColorRangeDialog<'a> {
                         });
                         picked_view = group.output.value().copied();
                     });
-                    Field::new(words.selection_preview.clone()).show(ui, |ui, _| {
+                    Field::new(words.selection_preview.clone()).layout(FieldLayout::Above).show(ui, |ui, _| {
                         let modes = [
                             Entry::new(PreviewMode::None, words.none.clone()),
                             Entry::new(PreviewMode::Grayscale, preview_words.grayscale.clone()),

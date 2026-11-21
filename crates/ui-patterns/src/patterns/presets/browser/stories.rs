@@ -5,10 +5,10 @@ use crate::choice::SwatchFace;
 use crate::contract::{Bind, DropAt, DropPlace, Entry, ListDrag, SelectMode};
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{
-    CellShape, GroupHeads, PresetEvent, PresetFooterOptions, PresetRow, PresetRowMenu, PresetState, PresetTiles, PresetView,
+    CellShape, GroupHeads, PresetEvent, PresetFns, PresetFooterOptions, PresetRow, PresetRowMenu, PresetSource, PresetState, PresetTiles, PresetView,
 };
 use crate::primitives::IconSpec;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, Label};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Selection, SelectionModel};
 use craft_theme::Srgba;
@@ -27,7 +27,7 @@ fn swatch(n: u32) -> Srgba {
 /// A library of 28 swatches: two loose ones, then Warm and Cool, each with three swatches and the folders Pastel and
 /// Deep, which hold three swatches and a Standard folder of two. Presets are keyed 1 to 28, groups from 100 on. No
 /// preset has a caption, so the grid shows bare tiles.
-fn library_rows() -> Vec<PresetRow<u32>> {
+fn library_rows(_: &(), _: &Env) -> Vec<PresetRow<u32>> {
     let mut rows = Vec::new();
     let mut n = 0;
     let mut group = 100;
@@ -60,11 +60,11 @@ fn library_rows() -> Vec<PresetRow<u32>> {
 
 #[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = library_rows();
+    let rows = PresetSource::new((), PresetFns::new(library_rows));
     let slider = *data.value("slider", true);
     let new_group = *data.value("new_group", true);
     let selected = *data.value("selected", None::<u32>);
-    let mut browser = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows)
+    let mut browser = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows)
         .toolbar(true)
         .reorder(PresetReorder::items_and_groups().nest(NESTING))
         .footer(PresetFooterOptions::new().slider(slider).new_group(new_group).can_delete(selected.is_some()));
@@ -88,9 +88,9 @@ fn preset_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// Three presets selected under `SelectMode::Multi`, in both views: Shift extends from the anchor, Cmd/Ctrl toggles.
 #[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_browser_multi(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = library_rows();
+    let rows = PresetSource::new((), PresetFns::new(library_rows));
     let shown = data.value("selection", Selection::new(vec![1, 2, 3], Some(3), Some(1))).clone();
-    let out = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows)
+    let out = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows)
         .toolbar(true)
         .select(SelectMode::Multi)
         .selection(Bind::given(shown))
@@ -108,8 +108,8 @@ fn preset_browser_multi(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// Group heads as full-width rules between the groups, over wide chips, with no row menu.
 #[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_browser_rule_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = library_rows();
-    PresetBrowser::new("Gradients", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows)
+    let rows = PresetSource::new((), PresetFns::new(library_rows));
+    PresetBrowser::new("Gradients", data.bind("state", PresetState::<u32>::new()), &rows)
         .tiles(PresetTiles::Chips)
         .cell_shape(CellShape::ratio(64, 28))
         .group_heads(GroupHeads::Rule)
@@ -122,8 +122,8 @@ fn preset_browser_rule_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
 // PLAN: the sheet's `DropAction` around the browser and `FooterBar` in a `Panel` footer are not shown: their builders are not in this set's bundle.
 #[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_browser_drops(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = library_rows();
-    let out = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows)
+    let rows = PresetSource::new((), PresetFns::new(library_rows));
+    let out = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows)
         .view_lock(PresetView::List)
         .drags(true)
         .takes_drop(PresetDrop::new::<ListDrag<u32>>(DropPlace::Onto, |drag, at| matches!(at, DropAt::Onto(key) if *key != drag.grabbed)))
@@ -131,7 +131,9 @@ fn preset_browser_drops(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .row_items(|key| {
             vec![
                 Entry::new(String::from("use"), Label::from(format!("Use Preset {key}"))).checked(*key == 1),
-                Entry::new(String::from("lock"), Label::from(String::from("Lock"))).enabled(false).disabled_reason(Label::from(String::from("Already locked"))),
+                Entry::new(String::from("lock"), Label::from(String::from("Lock")))
+                    .enabled(false)
+                    .disabled_reason(Label::from(String::from("Already locked"))),
             ]
         })
         .show(ui);
@@ -147,14 +149,20 @@ fn preset_browser_drops(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     StoryOutput::from(out).readout(readout)
 }
 
-/// Trailing icons after a row's label in the list view, and a preset scrolled into view once.
-#[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
-fn preset_browser_trailing_and_reveal(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut rows = library_rows();
+/// The library with a lock icon after every fifth preset's label.
+fn locked_rows(inputs: &(), env: &Env) -> Vec<PresetRow<u32>> {
+    let mut rows = library_rows(inputs, env);
     for row in rows.iter_mut().filter(|row| !row.is_group() && row.key % 5 == 0) {
         row.trailing.push((IconSpec::svg(IconId::new("lock")), String::from("Locked")));
     }
-    PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows)
+    rows
+}
+
+/// Trailing icons after a row's label in the list view, and a preset scrolled into view once.
+#[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
+fn preset_browser_trailing_and_reveal(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = PresetSource::new((), PresetFns::new(locked_rows));
+    PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows)
         .view_lock(PresetView::List)
         .max_rows(8)
         .reveal(28)
@@ -165,9 +173,9 @@ fn preset_browser_trailing_and_reveal(ui: &mut Ui, data: &mut StoryData) -> Stor
 /// The chips variant: the same library as small bare chips under text-high group names, as a palette in a popover.
 #[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_browser_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = library_rows();
+    let rows = PresetSource::new((), PresetFns::new(library_rows));
     let selected = *data.value("selected", None::<u32>);
-    let mut browser = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows).tiles(PresetTiles::Chips);
+    let mut browser = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows).tiles(PresetTiles::Chips);
     if let Some(key) = selected {
         browser = browser.selection(Bind::given(Selection::single(key)));
     }

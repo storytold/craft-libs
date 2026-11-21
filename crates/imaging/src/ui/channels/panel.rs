@@ -22,7 +22,7 @@ use egui::Ui;
 use super::footer::{ChannelDrag, show_footer};
 use super::labels::{ChannelsWords, shortcut_numbers};
 use super::menu::{ChannelsCommands, lands, show_row_menu};
-use super::model::{ChannelKind, ChannelRow, ChannelsEvent, ChannelsOutput, targeted_row};
+use super::model::{ChannelKind, ChannelRow, ChannelsEvent, ChannelsOutput, targeted_for_delete, targeted_row};
 use super::rows::{EYE, NAME, RowContext, ThumbHost, channel_row};
 
 /// What the panel keeps between passes, in its root slot: the row the last context request opened the menu on.
@@ -93,7 +93,7 @@ impl<K: Clone> ItemSource<K> for Order<'_, K> {
 ///   [`Rename`](ChannelsEvent::Rename).
 /// - **Drag**: alpha and spot rows reorder, before or after another one or before Quick Mask
 ///   ([`Reorder`](ChannelsEvent::Reorder); Cmd/Ctrl+] and [ too). Any row drops on the footer's New and Load buttons,
-///   and an alpha or spot row on Delete; a drop acts on the row grabbed.
+///   and a deletable row on Delete. A drop acts on the row grabbed.
 /// - **Menus**: a right-click or the Menu key opens the row's context menu; [`panel_rows`](super::panel_rows) is the
 ///   panel menu's fixed list, each command greyed by [`states`](super::states).
 /// - **Right to left**: the list and the footer mirror; the chord sits at the trailing end.
@@ -154,7 +154,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                 events.borrow_mut().extend(out);
             })
             .show(ui, |ui, stack| {
-                let mods = craft_ui::runtime::pointer::frame(&ctx).mods;
+                let mods = craft_ui::runtime::pointer::mods(&ctx);
                 while let Some((command, _)) = stack.take_command::<ChannelsCommands>() {
                     match (command, targeted_row(rows)) {
                         (ChannelsCommands::RenameChannel, Some(row)) if row.kind.renames() => request_rename(&ctx, list, &row.key),
@@ -172,7 +172,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                 let lead = targeted_row(rows).map(|row| row.key.clone());
                 let mut selection = Selection::new(rows.iter().filter(|row| row.targeted).map(|row| row.key.clone()).collect(), lead.clone(), lead);
                 let kinds: Vec<(K, ChannelKind)> = rows.iter().map(|row| (row.key.clone(), row.kind)).collect();
-                let payload_kinds = kinds.clone();
+                let payload_rows: Vec<K> = rows.iter().map(|row| row.key.clone()).collect();
                 let kind_of = |key: &K| kinds.iter().find(|(k, _)| k == key).map(|(_, kind)| *kind);
                 let columns = vec![
                     ColumnSpec::toggle(EYE, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("eye")),
@@ -198,8 +198,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                         lands(&remaining, insert.saturating_sub(moved_before))
                     })
                     .drag_payload(move |drag: &ListDrag<K>| {
-                        let kind = payload_kinds.iter().find(|(key, _)| *key == drag.grabbed).map(|(_, kind)| *kind)?;
-                        Some(ChannelDrag { list: drag.list, grabbed: drag.grabbed.clone(), kind })
+                        payload_rows.contains(&drag.grabbed).then(|| ChannelDrag { list: drag.list, grabbed: drag.grabbed.clone() })
                     })
                     .show_items(ui, &order, &mut |_key, item| {
                         let at = item.at;
@@ -264,7 +263,11 @@ fn map_events<K: Clone + PartialEq>(
             }
             CollectionEvent::Reorder(edit) => events.push(ChannelsEvent::Reorder(edit)),
             CollectionEvent::Delete(keys) => {
-                for key in keys.into_iter().filter(|key| kind_of(key).is_some_and(ChannelKind::moves)) {
+                let delete_color = matches!(
+                    keys.as_slice(),
+                    [key] if targeted_for_delete(rows).is_some_and(|row| &row.key == key && row.can_delete_color())
+                );
+                for key in keys.into_iter().filter(|key| delete_color || kind_of(key).is_some_and(ChannelKind::moves)) {
                     events.push(ChannelsEvent::Command { command: ChannelsCommands::Delete, key: Some(key) });
                 }
             }

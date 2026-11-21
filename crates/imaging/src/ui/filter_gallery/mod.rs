@@ -21,12 +21,12 @@
 //! [`EditHistory`]: craft_behavior::EditHistory
 
 mod catalog;
-mod parameters;
+pub(crate) mod parameters;
 mod session;
-mod stack;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod stack;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
-mod tree;
+pub(crate) mod tree;
 mod words;
 
 pub use catalog::{FilterCatalog, FilterCategory, FilterGallerySource, FilterIndex, GalleryFilter, GalleryThumb};

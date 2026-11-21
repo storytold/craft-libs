@@ -2,7 +2,7 @@
 
 use super::{HostedPdfExport, PdfArtboards, PdfExportDialog, PdfExportMode, PresetDraft};
 use crate::buttons::Button;
-use crate::contract::{Bind, Show as _, clicked};
+use crate::contract::{Show as _, clicked};
 use crate::dialog::stories::hosted_with;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_pdf::settings::{PdfSettings, builtin_preset};
@@ -18,42 +18,37 @@ const PRESETS: [(&str, &str); 4] =
 #[story(PdfExportDialog<'static>, covers = [], drive = Drive::Never)]
 fn pdf_export_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let preset = *data.choice("preset", "default", &PRESETS);
-    let (settings, open, applied) = data.value("pdf", (PdfSettings::default(), true, "default"));
+    let (((settings, applied), pdf_at), (open, open_at)) = data.pair_at(("pdf", (PdfSettings::default(), "default")), ("open", true));
     if *applied != preset {
         if let Some(found) = builtin_preset(preset, "Story") {
             *settings = found.settings;
         }
         *applied = preset;
     }
-    PdfExportDialog::new("Story", Bind::bound(settings)).opened(Bind::bound(open)).artboard_count(ARTBOARDS).show(ui).into()
+    PdfExportDialog::new("Story", pdf_at.bind(settings)).opened(open_at.bind(open)).artboard_count(ARTBOARDS).show(ui).into()
 }
 
 #[story(PdfExportDialog<'static>, covers = [], drive = Drive::Never)]
 fn pdf_export_art_bounds(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (settings, open) = data.value("pdf-art-bounds", (PdfSettings::default(), true));
-    PdfExportDialog::new("Story", Bind::bound(settings)).opened(Bind::bound(open)).artboards(PdfArtboards::ArtBounds).show(ui).into()
+    let ((settings, open), at) = data.value_at("pdf-art-bounds", (PdfSettings::default(), true));
+    PdfExportDialog::new("Story", at.bind(settings)).opened(at.bind(open)).artboards(PdfArtboards::ArtBounds).show(ui).into()
 }
 
 #[story(PdfExportDialog<'static>, covers = [], drive = Drive::Never)]
 fn pdf_export_preset_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (settings, open, draft) = data.value("pdf-editor", (PdfSettings::default(), true, PresetDraft::default()));
-    PdfExportDialog::new("Story", Bind::bound(settings))
-        .opened(Bind::bound(open))
+    let ((settings, open, draft), at) = data.value_at("pdf-editor", (PdfSettings::default(), true, PresetDraft::default()));
+    PdfExportDialog::new("Story", at.bind(settings))
+        .opened(at.bind(open))
         .mode(PdfExportMode::PresetEditor)
-        .preset_draft(Bind::bound(draft))
+        .preset_draft(at.bind(draft))
         .show(ui)
         .into()
 }
 
 #[story(PdfExportDialog<'static>, covers = [], drive = Drive::Never)]
 fn pdf_export_custom_flattener(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (settings, open) = data.value("pdf-custom", (PdfSettings::default(), true));
-    PdfExportDialog::new("Story", Bind::bound(settings))
-        .opened(Bind::bound(open))
-        .artboard_count(ARTBOARDS)
-        .custom_flattener(true)
-        .show(ui)
-        .into()
+    let ((settings, open), at) = data.value_at("pdf-custom", (PdfSettings::default(), true));
+    PdfExportDialog::new("Story", at.bind(settings)).opened(at.bind(open)).artboard_count(ARTBOARDS).custom_flattener(true).show(ui).into()
 }
 
 #[story(PdfExportDialog<'static>, covers = [], drive = Drive::Never)]

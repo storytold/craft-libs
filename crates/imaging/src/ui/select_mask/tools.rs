@@ -84,7 +84,7 @@ impl<T> EditPhase<T> {
 
 /// The tools of Select and Mask's strip, with Photoshop's letters. Quick Selection and Object
 /// Selection share the W slot, Lasso and Polygonal Lasso the L slot.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum SelectMaskTool {
     /// W.

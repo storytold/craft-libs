@@ -31,8 +31,8 @@ use super::{
 use crate::{CmykModel, GrayModel, not_web_safe};
 
 mod fill_stroke;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The Color panel's words.
@@ -73,7 +73,19 @@ craft_ui::words! {
 
 /// What the panel shows: Photoshop's panel menu choices, in its order. Hue Cube is the default;
 /// the theme never changes it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    craft_ui::contract::MemoProps,
+    craft_ui::contract::PlainData,
+)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ColorPanelMode {
@@ -155,7 +167,19 @@ impl ColorPanelMode {
 }
 
 /// The ramp under the sliders. Shift-click on the ramp cycles them in this order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    craft_ui::contract::MemoProps,
+    craft_ui::contract::PlainData,
+)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ColorPanelRamp {
@@ -205,7 +229,7 @@ impl ColorPanelRamp {
 }
 
 /// The Color panel's settings, kept across runs (settings section `color_panel`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ColorPanelState {
@@ -793,8 +817,13 @@ impl ColorPanelMenu {
         shown: &ColorPanelShown,
         has_color: bool,
     ) -> Vec<(ColorPanelCommand, CommandState)> {
-        let needs_color =
-            [ColorPanelCommand::CopyHtml, ColorPanelCommand::CopyHex, ColorPanelCommand::Invert, ColorPanelCommand::Complement, ColorPanelCommand::NewSwatch];
+        let needs_color = [
+            ColorPanelCommand::CopyHtml,
+            ColorPanelCommand::CopyHex,
+            ColorPanelCommand::Invert,
+            ColorPanelCommand::Complement,
+            ColorPanelCommand::NewSwatch,
+        ];
         Self::commands(layout)
             .into_iter()
             .map(|command| {
@@ -964,11 +993,9 @@ impl Body<'_> {
     fn wells(&mut self, ui: &mut Ui) {
         let was = self.active;
         let mut active = was;
-        let wells = self
-            .inputs
-            .wells
-            .cloned()
-            .unwrap_or_else(|| [PairWell::new(self.words.foreground.clone(), self.colors[0]), PairWell::new(self.words.background.clone(), self.colors[1])]);
+        let wells = self.inputs.wells.cloned().unwrap_or_else(|| {
+            [PairWell::new(self.words.foreground.clone(), self.colors[0]), PairWell::new(self.words.background.clone(), self.colors[1])]
+        });
         let pair = SwatchPair::<()>::new(self.words.wells.clone(), wells, Bind::bound(&mut active)).popover(false).frame_active(true);
         let pair = match self.layout {
             ColorPanelLayout::ForegroundBackground => pair,
@@ -1226,7 +1253,7 @@ impl Body<'_> {
 const WEB_STEP: f64 = 51.0;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use craft_ui::testing::trial;
 
     use super::*;

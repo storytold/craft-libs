@@ -1,10 +1,11 @@
 //! Stories of the find bar and the Find and Replace dialog.
 
+use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{FindBar, FindCheck, FindReplaceDialog, FindTab, ReplaceButtons};
+use super::{FindBar, FindCheck, FindReplaceDialog, FindTab, GoToKind, ReplaceButtons};
 use crate::find::{FindMatches, FindOptions, FindPattern, MAX_COUNT};
 
 fn matches(text: &str, query: &str) -> FindMatches {
@@ -41,7 +42,12 @@ fn refused_pattern(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// The Word layout of the dialog on `tab`, with "craft" in Find what.
 fn word(tab: FindTab) -> FindReplaceDialog {
-    FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(vec!["Page".into(), "Line".into()])
+    let kinds = vec![
+        GoToKind::typed("Page", "Enter a page number, or leave empty to step", true),
+        GoToKind::typed("Line", "Enter a line number", false),
+        GoToKind::named("Bookmark", vec![], "No bookmarks"),
+    ];
+    FindReplaceDialog::new("craft", tab).word(true).go_to_kinds(kinds)
 }
 
 /// The dialog `fresh` builds, while `open`. The dialog keeps what is typed in it until it closes; the card's Show
@@ -89,4 +95,14 @@ fn replace_tab_separate_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
 #[story(FindReplaceDialog, covers = [], drive = Drive::Never)]
 fn powerpoint_layout(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     dialog(ui, data, || FindReplaceDialog::new("craft", FindTab::Find).word(false))
+}
+
+#[story(FindReplaceDialog, covers = [], drive = Drive::Never)]
+fn go_to_named(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || {
+        FindReplaceDialog::new("", FindTab::GoTo).word(true).go_to_kinds(vec![
+            GoToKind::named("Bookmark", vec!["Introduction".to_owned(), "Results".to_owned()], "No bookmarks"),
+            GoToKind::typed("Page", "Enter a page number, or leave empty to step", true),
+        ])
+    })
 }

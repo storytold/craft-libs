@@ -9,7 +9,7 @@ use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerDrop, LayerPosition, LayerSelect, LayersDrag, LayersEvent, LayersPanel, MaskMove};
 use craft_layers::ui::tree::{LayerPart, LayerRowKey, LayerTree as _};
 use craft_theme::LabelColor;
-use craft_ui::contract::{Entry, ListDrag};
+use craft_ui::contract::{Entry, ListDrag, Tracked};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Modifiers, Pos2, Rect, Vec2};
@@ -28,7 +28,7 @@ const PANEL: Vec2 = Vec2::new(420.0, 560.0);
 fn rig() -> (Fixture, Seen, Asked) {
     let (seen, asked): (Seen, Asked) = (Rc::default(), Rc::default());
     let (sink, menus) = (Rc::clone(&seen), Rc::clone(&asked));
-    let tree = FakeLayers::sample();
+    let tree = Tracked::new(FakeLayers::sample());
     let mut fixture = Fixture::new(move |ui| {
         let out = LayersPanel::new(&tree)
             .row_menu(|target| {
@@ -145,7 +145,7 @@ fn a_host_payload_dropped_onto_and_between_rows_reports_its_place() {
     const GROUP: u32 = 1;
     let seen: Seen = Rc::default();
     let sink = Rc::clone(&seen);
-    let (target, source) = (FakeLayers::sample(), FakeLayers::flat(1));
+    let (target, source) = (Tracked::new(FakeLayers::sample()), Tracked::new(FakeLayers::flat(1)));
     let mut fixture = Fixture::new(move |ui| {
         let origin = ui.max_rect().min;
         in_region(ui, Rect::from_min_size(origin, PANEL), |ui| {

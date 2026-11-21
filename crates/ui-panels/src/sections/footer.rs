@@ -28,8 +28,8 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a footer bar. A bar of panel actions sits under a divider rule along its top edge, with the control
 /// padding above and under its buttons; other bars have no look of their own.
@@ -246,7 +246,7 @@ impl<P> Outcome for DropActionOutput<P> {
 }
 
 /// Whether an accepted drag is over the enclosing drop slot, which the slot's body reads to show its child enabled.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 struct Accepting(bool);
 
 impl EnvValue for Accepting {
@@ -515,7 +515,7 @@ impl FooterButton {
     }
 
     /// Whether the button can be activated.
-    pub(crate) const fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
 
@@ -819,8 +819,8 @@ impl Component for FooterBar {
         }
         let Some(pass) = frame::running(&ctx) else { return };
         let focused = WindowHost::of(&ctx).facts(pass.viewport).is_some_and(|facts| facts.focused);
-        let held = !crate::runtime::pointer::frame(&ctx).buttons.is_empty()
-            || keys::held(&ctx).iter().any(|key| matches!(key, Key::Enter | Key::Space));
+        let held =
+            !crate::runtime::pointer::frame(&ctx).buttons.is_empty() || keys::held(&ctx).iter().any(|key| matches!(key, Key::Enter | Key::Space));
         let arming = cx.keep::<Arming>();
         let continues = arming.frame.is_some_and(|last| pass.frame_nr == last || pass.frame_nr == last + 1);
         if !(continues && focused) {

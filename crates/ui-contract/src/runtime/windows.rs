@@ -6,8 +6,8 @@
 use crate::runtime::cursor;
 use crate::runtime::egui::input::{self as raw_input, RawInput};
 use crate::runtime::egui::{injected, pass, viewports};
-use crate::runtime::ime;
 use crate::runtime::frame::PerViewport;
+use crate::runtime::ime;
 use crate::runtime::overlay;
 use crate::runtime::pass_state;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority};
@@ -49,9 +49,9 @@ pub use shell::shell_of;
 use shell::{refresh, window_info};
 #[cfg(feature = "testing")]
 pub(crate) use shell::{set_chrome, set_os};
-use spec::chrome_of;
+use spec::{AppState, chrome_of};
 pub use spec::{WindowLevel, WindowSpec};
-pub(crate) use viewport::{ViewportOpen, show_viewport, take_close_request, unplaced};
+pub(crate) use viewport::{PopupOpen, ViewportOpen, close_popup, place_popup, show_popup, show_viewport, take_close_request, unplaced};
 
 /// Seconds between writes of a changed placement store.
 const FLUSH_SECONDS: f64 = 1.0;
@@ -87,14 +87,20 @@ pub(crate) struct Shared {
     desktop: Option<Desktop>,
     /// Whether the root window had focus in the last root pass.
     root_focused: bool,
-    /// Whether no window of the app had focus when the last frame's windows had all reported.
-    away: bool,
+    /// The app's state when the last frame's windows had all reported, which its palettes follow.
+    app: AppState,
+    /// Whether a palette window stood lowered under an app-modal layer in this frame.
+    lowered: bool,
+    /// Where the raise of the modal's window above the palettes it lowered stands.
+    raise: Raise,
     /// Whether the root window showed an app-modal or popup layer in the last root pass: palette windows are hidden
     /// meanwhile, and one that opens meanwhile opens hidden.
     palettes_yield: bool,
     /// The app's windows from the one focused longest ago to the one focused last: the stacking order of
     /// overlapping windows.
     stacking: Vec<ViewportId>,
+    /// The windows that got a primary press, each with the root frame of the press, in this root frame and the last.
+    presses: Vec<(ViewportId, u64)>,
 }
 
 /// One viewport's window record.
@@ -109,8 +115,11 @@ pub(crate) struct Record {
     chrome: Option<WindowChrome>,
     /// The caption buttons the app draws in this window.
     captions: Option<Captions>,
-    /// The level the window was opened with or last set to; a palette's egui level follows the app's activity.
+    /// The level the window was opened with or last set to; a palette's egui level follows the app's state.
     level: Option<WindowLevel>,
+    /// Whether the window is hidden because the app's state hides it (a palette while the main window is minimized or
+    /// the root window shows an app-modal or popup layer).
+    hidden: bool,
     /// The buttons that are down as the viewport's events left the input hook.
     buttons_down: Vec<egui::PointerButton>,
     /// Whether the user can resize the window; unknown for a window not opened by `show_viewport`.
@@ -148,6 +157,24 @@ pub(crate) struct Record {
     known: Option<Rect>,
     /// The place the window's own pass last saw.
     seen: Option<Rect>,
+    /// The smallest inner size its caller asks for, as the window's builder carries it.
+    min_size: Option<Vec2>,
+    /// For a popup window ([`show_popup`]): the window its layer was opened from, while the layer shows.
+    opener: Option<ViewportId>,
+}
+
+/// The raise of the window holding an app-modal layer above the palettes the modal lowered. The raise goes out in the
+/// frame after a palette was built lowered: a raise in the same frame may reach the OS before the palette's new level
+/// does, and the palette, made an ordinary window after it, would stand in front again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Raise {
+    /// No palette has stood lowered under the open modal yet, or no modal is open.
+    #[default]
+    Waiting,
+    /// A palette stood lowered in the last frame: the modal's window is raised in this one.
+    Due,
+    /// The modal's window was raised.
+    Done,
 }
 
 /// Passes between searches for an OS window that was not found.
@@ -180,6 +207,14 @@ fn shared<R>(ctx: &Context, f: impl FnOnce(&mut Shared) -> R) -> R {
 #[cfg(feature = "testing")]
 pub(crate) fn take_sent(ctx: &Context) -> Vec<(ViewportId, WindowAction)> {
     shared(ctx, |shared| std::mem::take(&mut shared.sent))
+}
+
+/// Whether the OS resizes `viewport`'s window from a frame of its own: it draws the frame (macOS `Inset`, a titled
+/// window under the app's bar) and the window is resizable. A window its caller sizes opens not resizable, so the OS
+/// leaves it to the app's grips.
+pub(crate) fn os_resizes(ctx: &Context, viewport: ViewportId) -> bool {
+    let chrome = shell_of(ctx, viewport).window.chrome;
+    chrome == WindowChrome::Inset && PerViewport::<Record>::with(ctx, viewport, |record| record.resizable != Some(false))
 }
 
 /// Whether the app runs the move of `viewport`'s window (`Overlay::moved_by_app`).
@@ -234,9 +269,7 @@ pub(crate) fn set_input(ctx: &Context) {
         shared.system_buttons = buttons;
         shared.system_command = command;
     });
-    if discard
-        && let Some(system) = &system
-    {
+    if discard && let Some(system) = &system {
         system.discard_marked_text();
     }
 }
@@ -311,7 +344,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         }
         let primary = egui::PointerButton::Primary;
         // A lost primary release already ends the press.
-        let release = record.buttons_down.contains(&primary) && !lost.contains(&primary) && ((undecorated && resized) || (handed_off && !os_released));
+        let release =
+            record.buttons_down.contains(&primary) && !lost.contains(&primary) && ((undecorated && resized) || (handed_off && !os_released));
         if !lost.is_empty() {
             let at = input
                 .events
@@ -335,6 +369,15 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     });
     if handed_off && tracked == Some(viewport) {
         shared(ctx, |shared| shared.tracked_move = None);
+    }
+    let pressed =
+        input.events.iter().any(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. }));
+    if pressed {
+        let frame = pass::root_frame_nr(ctx);
+        shared(ctx, |shared| {
+            shared.presses.retain(|(_, at)| at + 1 >= frame);
+            shared.presses.push((viewport, frame));
+        });
     }
     released
 }
@@ -390,6 +433,73 @@ fn opens_over(ctx: &Context, opener: ViewportId) -> bool {
         _ => false,
     };
     !covers
+}
+
+/// Where the layers opened in a palette window show: in popup windows of their own, placed in desktop points.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PopupRoom {
+    /// The palette window's inner top-left corner in desktop points: the origin of its viewport's points.
+    pub origin: Pos2,
+    /// The room its layers may take, in its viewport's points: the work area of the monitor the window is on, or where
+    /// no monitor is listed, the area the app's windows other than popups span.
+    pub room: Rect,
+}
+
+/// The room of the layers opened in the running viewport when it is a palette window (a dock window or a popup
+/// window, both at [`WindowLevel::Palette`]) that opens OS windows ([`opens_over`]) where the platform places them:
+/// every such layer shows in a popup window of its own. `None` in every other window, whose layers stay in it.
+pub(crate) fn popup_room(ctx: &Context) -> Option<PopupRoom> {
+    let viewport = pass::current_viewport(ctx);
+    if !base_shell(ctx).window_positions() || !opens_over(ctx, viewport) {
+        return None;
+    }
+    let facts = PerViewport::<Record>::with_existing(ctx, viewport, |record| record.facts.filter(|_| record.level == Some(WindowLevel::Palette)))??;
+    let origin = facts.inner?.min;
+    let scale = host::scale_of(ctx, &facts).unwrap_or(1.0).max(f32::EPSILON);
+    let work = host::monitor_of(ctx, &facts).map(|monitor| {
+        let (pos, size) = monitor.work_px.unwrap_or((monitor.pos_px, monitor.size_px));
+        let min = Pos2::new(pos[0] as f32, pos[1] as f32) / scale;
+        Rect::from_min_size(min, Vec2::new(size[0] as f32, size[1] as f32) / scale)
+    });
+    // The popup windows themselves don't count: a popup's room never depends on where a popup stands.
+    let spanned = || {
+        let popup = |viewport: ViewportId| PerViewport::<Record>::with_existing(ctx, viewport, |record| record.opener.is_some()).unwrap_or(false);
+        viewports::reported(ctx)
+            .iter()
+            .filter(|(viewport, _)| !popup(*viewport))
+            .filter_map(|(_, facts)| facts.inner)
+            .fold(Rect::NOTHING, Rect::union)
+    };
+    let room = work.unwrap_or_else(spanned).translate(-origin.to_vec2());
+    Some(PopupRoom { origin, room })
+}
+
+/// Whether a primary press landed, in this root frame (or in the last one, unless the popup window `popup` just
+/// `appeared`), in a window of the app other than the running viewport (the popup's opener, whose own presses its
+/// layer stack judges) and the popup window and the popup windows opened from it.
+pub(crate) fn pressed_elsewhere(ctx: &Context, popup: ViewportId, appeared: bool) -> bool {
+    let opener = pass::current_viewport(ctx);
+    let frame = pass::root_frame_nr(ctx);
+    let presses = shared(ctx, |shared| shared.presses.clone());
+    presses.into_iter().filter(|(_, at)| *at == frame || (!appeared && at + 1 == frame)).any(|(viewport, _)| {
+        if viewport == opener {
+            return false;
+        }
+        // A press in a popup window opened from the popup, at any depth, is inside its family.
+        let mut at = Some(viewport);
+        while let Some(window) = at {
+            if window == popup {
+                return false;
+            }
+            at = PerViewport::<Record>::with_existing(ctx, window, |record| record.opener).flatten();
+        }
+        true
+    })
+}
+
+/// Whether no window of the app has focus, as the last frame's windows reported.
+pub(crate) fn app_away(ctx: &Context) -> bool {
+    shared(ctx, |shared| shared.app.away)
 }
 
 /// Refuses the close request of the running viewport while an app-modal layer blocks it, and raises the modal's
@@ -508,12 +618,14 @@ fn flush_store(ctx: &Context) {
     }
 }
 
-/// Keeps the app's activity and the stacking order of its windows current from the windows' focus. A palette's
-/// window level follows the activity: the mounts build their viewports with the level of the moment, and a change
+/// Keeps the app's state and the stacking order of its windows current from the windows' facts. A palette's window
+/// level and visibility follow the state: the mounts build their viewports with the state of the moment, and a change
 /// asks for the next frame. Runs at the end of the root pass, inside which every child window's pass of the frame
 /// has run, so each window's focus is the one its own pass reported after its input batch. The root input's list of
 /// windows holds each child as of its previous pass, so it is not read for focus. The app is inactive when no
 /// window reports focus: the batch that took focus from one window gave it to no other.
+///
+/// Once a palette has stood lowered under an app-modal layer, the modal's window is raised above it, once per modal.
 fn follow_activity(ctx: &Context) {
     let windows = viewports::reported(ctx);
     let focused: Vec<ViewportId> = windows
@@ -521,31 +633,40 @@ fn follow_activity(ctx: &Context) {
         .map(|(viewport, _)| *viewport)
         .filter(|viewport| PerViewport::<Record>::with(ctx, *viewport, |record| record.facts.is_some_and(|facts| facts.focused)))
         .collect();
-    let changed = shared(ctx, |shared| {
+    let modal = overlay::app_modal_viewport(ctx);
+    let minimized = viewports::current(ctx).minimized;
+    let (repaint, raise) = shared(ctx, |shared| {
         shared.stacking.retain(|viewport| windows.iter().any(|(open, _)| open == viewport) && !focused.contains(viewport));
         shared.stacking.extend(&focused);
-        let away = focused.is_empty();
-        std::mem::replace(&mut shared.away, away) != away
+        let app = AppState { away: focused.is_empty(), modal, minimized };
+        let lowered = std::mem::take(&mut shared.lowered);
+        let (step, raise) = match shared.raise {
+            _ if app.modal != shared.app.modal => (Raise::Waiting, None),
+            Raise::Waiting if lowered => (Raise::Due, None),
+            Raise::Due => (Raise::Done, app.modal),
+            step => (step, None),
+        };
+        shared.raise = step;
+        let changed = std::mem::replace(&mut shared.app, app) != app;
+        (changed || step == Raise::Due, raise)
     });
-    if changed {
+    if let Some(modal) = raise {
+        act(ctx, modal, WindowAction::Raise);
+    }
+    if repaint {
         ctx.request_repaint();
     }
 }
 
-/// Hides the palette windows while the root window shows an app-modal or popup layer, so a click on a palette cannot
-/// bring it over the layer, and shows them in the frame the layer closes. Runs at the end of the root pass, where the
+/// Records whether the root window shows an app-modal or popup layer: palette windows hide meanwhile, so a click on a
+/// palette cannot bring it over the layer, and the palettes' mounts hide and show them as they do for the app's state
+/// ([`show_viewport`]), asked for by a repaint when it changes. Runs at the end of the root pass, where the
 /// layers of the running viewport are the root's. Focus moving between the app's windows does not touch it.
 fn follow_overlays(ctx: &Context) {
-    let hidden = overlay::any_open(ctx, overlay::OpenFilter::Keys);
-    if shared(ctx, |shared| std::mem::replace(&mut shared.palettes_yield, hidden) == hidden) {
-        return;
+    let shows = overlay::any_open(ctx, overlay::OpenFilter::Keys);
+    if shared(ctx, |shared| std::mem::replace(&mut shared.palettes_yield, shows) != shows) {
+        ctx.request_repaint();
     }
-    for (viewport, _) in viewports::reported(ctx) {
-        if PerViewport::<Record>::with(ctx, viewport, |record| matches!(record.level, Some(WindowLevel::Palette))) {
-            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(!hidden));
-        }
-    }
-    ctx.request_repaint();
 }
 
 /// On the root window's focus gain, re-reads the desktop's caption layout and gives the root frame the change.

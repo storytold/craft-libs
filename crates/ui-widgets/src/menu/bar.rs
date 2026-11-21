@@ -13,10 +13,10 @@
 //! one the title takes the first letter no earlier title holds. The mnemonic is underlined while Alt is held.
 //!
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
-//! matches by label, English label or menu path, each as a command row with its path as detail.
+//! matches by label, English label, menu path or command id, each as a command row with its path as detail.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::search::{HelpEntry, MAX_RESULTS, SearchIndex, SearchWords, Synonyms, rank};
 use super::words::MenuWords;
@@ -114,9 +114,11 @@ impl Component for TitleFace {
         face::measure(
             cx,
             &FaceSpec {
+                arrangement: crate::buttons::Arrangement::Inline,
                 label: cx.resolved.label,
                 role: None,
                 lead: None,
+                picture: None,
                 trail: None,
                 loading: false,
                 mnemonic: None,
@@ -137,9 +139,11 @@ impl Component for TitleFace {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let spec = FaceSpec {
+            arrangement: crate::buttons::Arrangement::Inline,
             label: cx.resolved.label,
             role: None,
             lead: None,
+            picture: None,
             trail: None,
             loading: false,
             mnemonic: self.mnemonic,
@@ -248,8 +252,10 @@ struct BarState {
 #[derive(Clone, Debug, Default)]
 struct Query(String, u32, bool);
 
+craft_ui_contract::stays!(BarFact);
+
 /// What the bar published for `is_open` and `is_focused`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct BarFact {
     open: bool,
     focused: bool,
@@ -689,7 +695,9 @@ impl Component for MenuBar<'_> {
         let texts = self.texts(&cx.env);
         // A title in the overflow menu has no part rect, so it records nothing.
         for (at, title) in self.titles.iter().enumerate().take(found.shown) {
-            if let (false, Some(result), Some((text, _))) = (title.holds.is_empty(), cx.part_if_declared(Self::slot_part(Open::Title(at))), texts.get(at)) {
+            if let (false, Some(result), Some((text, _))) =
+                (title.holds.is_empty(), cx.part_if_declared(Self::slot_part(Open::Title(at))), texts.get(at))
+            {
                 commands::holds(&cx.ctx, cx.response.layer_id, result.rect, &title.holds, Label::from(text.clone()));
             }
         }

@@ -1,14 +1,20 @@
 //! The ruler tick rule (`Rulers::ticks`): labelled ticks stay at least `LABEL_STEP_MIN` apart at every zoom.
 
-use craft_behavior::kurbo::Point;
-use craft_behavior::{CanvasView, RulerUnits, Ticks};
-use craft_ui::canvas::{Canvas, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerText, Rulers, StepLadder, TickRule};
+use craft_behavior::geometry::{SnapOptions, SnapTargets};
+use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::{CancelReason, CanvasView, RulerUnits, Ticks};
+use craft_ui::canvas::{
+    Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap, StepLadder, TickRule,
+    ToolAction, ToolContext, ToolPath, ToolPointer,
+};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::TickRank;
+use craft_ui::primitives::{Draw, PaintShape};
 use craft_ui::runtime::env::UnitKind;
-use craft_ui::testing::{Fixture, trial};
-use egui::{Pos2, Rect, Vec2};
-use std::cell::Cell;
+use craft_ui::style::StyleColor;
+use craft_ui::testing::{Fixture, ToolFixture, trial};
+use egui::{Color32, CornerRadius, Pos2, Rect, Shape, Vec2};
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
@@ -74,9 +80,11 @@ fn top_tick_extents(degrees: f64) -> BTreeSet<(i32, i32)> {
     let seen = Rc::clone(&content);
     let mut zero = Point::ZERO;
     let mut fixture = Fixture::new(move |ui| {
-        Canvas::new("Document").view(view).show_rulers(true).rulers(text, text, Point::ZERO).show(ui, |ui, body| {
-            seen.set(Rulers::new("Rulers", Bind::bound(&mut zero)).show_at(ui, body.rect).content_rect());
-        });
+        let strips = Rulers::new("Rulers", Bind::bound(&mut zero));
+        let shown = Canvas::new("Document").view(view).with_rulers(Some(strips)).rulers(text, text).show(ui, |_, _| {});
+        if let Some(rulers) = shown.output.rulers {
+            seen.set(rulers.content_rect());
+        }
     });
     fixture.room(room);
     fixture.settle();
@@ -96,4 +104,69 @@ fn ticks_stay_level_and_the_zero_label_sits_at_the_zero_point_in_a_turned_view()
     let turned = top_tick_extents(30.0);
     assert!(!turned.is_empty(), "the turned view's top strip has tick marks");
     assert!(turned.is_subset(&level), "tick marks keep the lengths and cross coordinates of the level view: {turned:?} against {level:?}");
+}
+
+/// How far past the canvas the tool's fill and the marquee reach.
+const PAST: f32 = 60.0;
+
+/// A tool that paints past the canvas's rect.
+struct Overpaint;
+
+impl CanvasTool for Overpaint {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        draw.fill(&PaintShape::Rect(cx.rect.expand(PAST), CornerRadius::ZERO), StyleColor(Color32::RED));
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Select Area... command")
+    }
+}
+
+// With rulers on, what the body shows (the tool's paint and a canvas control) is clipped to the view inside the
+// strips; the rulers keep the canvas rect.
+#[trial]
+fn with_rulers_on_the_tool_and_a_canvas_control_paint_inside_the_view_and_the_rulers_keep_the_canvas() {
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let view = |room: Rect| CanvasView::new(room, Point::new(f64::from(room.center().x), f64::from(room.center().y)), 1.0);
+    let snap = Snap::new(std::sync::Arc::new(SnapTargets::new()), SnapOptions::default());
+    let mut fixture = ToolFixture::with_rulers("Document", Overpaint, view, snap, zero, |ui, body| {
+        let pages = [PageFrame::new(DocRect::new(-f64::from(PAST), -f64::from(PAST), 500.0 + f64::from(PAST), 400.0 + f64::from(PAST)))];
+        let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
+    });
+    fixture.fixture().room(Vec2::new(500.0, 400.0)).settle();
+    let canvas = fixture.canvas().rect;
+    let shapes = fixture.fixture().frame_clipped_shapes();
+    let past = |shape: &Shape| {
+        let bounds = shape.visual_bounding_rect();
+        bounds.is_finite() && !canvas.expand(PAST / 2.0).contains_rect(bounds)
+    };
+    let overflowing: Vec<&(Rect, Shape)> = shapes.iter().filter(|(_, shape)| past(shape)).collect();
+    // The tool's fill and the marquee's outline reach past the canvas; the strips and the surface do not.
+    assert!(overflowing.len() >= 2, "the tool and the pasteboard paint past the canvas: {overflowing:?}");
+    // The view starts where the strips end: the top strip is as thick as the view's clip lies below the canvas's top.
+    let thickness = overflowing.iter().map(|(clip, _)| clip.min.y - canvas.min.y).fold(f32::INFINITY, f32::min);
+    for (clip, shape) in overflowing {
+        assert!(
+            clip.min.x > canvas.min.x && clip.min.y > canvas.min.y && canvas.contains_rect(*clip),
+            "past the canvas, a shape paints inside the view, past the strips: clip {clip:?} in {canvas:?} for {shape:?}"
+        );
+    }
+    // The canvas's own surface spans the whole rect, so only a shape inside the top strip, under the canvas's rect as
+    // its clip, comes from the rulers.
+    let strip = Rect::from_min_max(canvas.min, egui::pos2(canvas.max.x, canvas.min.y + thickness));
+    let strips_keep_the_canvas = shapes.iter().any(|(clip, shape)| {
+        let bounds = shape.visual_bounding_rect();
+        bounds.is_finite() && bounds.width() > 0.0 && strip.expand(1.0).contains_rect(bounds) && clip.contains_rect(strip)
+    });
+    assert!(strips_keep_the_canvas, "the rulers paint inside the top strip under the canvas's rect: {strip:?} in {shapes:?}");
 }

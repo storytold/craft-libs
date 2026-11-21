@@ -4,6 +4,7 @@ use super::{HoverMask, HoverOutline, HoverShape, SelectionOutline};
 use crate::canvas::RasterSource as _;
 use crate::canvas::testing::canvas_story::{StoryDocument, StoryPicture, StoryShape, accent, on_canvas, on_picture, paint_shapes};
 use crate::contract::Show as _;
+use crate::primitives::Serials;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::kurbo::{self, BezPath, Circle, Point, Rect, Shape as _};
 use egui::{Color32, Ui};
@@ -36,8 +37,9 @@ fn rollover(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(HoverOutline, covers = [Default], drive = Drive::Never)]
-fn coverage_tint(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let mask = HoverMask::sampled(bounds(), |x, y| if DISC.contains(Point::new(x, y)) { 1.0 } else { 0.0 });
+fn coverage_tint(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let disc = |x, y| if DISC.contains(Point::new(x, y)) { 1.0 } else { 0.0 };
+    let mask = HoverMask::sampled(data.note("serials", Serials::default()), bounds(), disc);
     let picture = objects(ui, &DISC);
     on_picture(ui, &picture, |ui, at, _| HoverOutline::new("Object", Some(HoverShape::Mask(mask.clone()))).show_at(ui, at))
 }

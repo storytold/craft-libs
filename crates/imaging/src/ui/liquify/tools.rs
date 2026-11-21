@@ -11,7 +11,7 @@ use super::session::{LiquifyStroke, StrokeEvent};
 /// The tools of Liquify's strip, in strip order, with Photoshop's letters. Serialised with the
 /// engine's names (`forwardWarp`, `twirlCw`, `lassoMask`, …) so a [`LiquifyStroke`] passes to
 /// PhotoCraft's engine unchanged.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum LiquifyTool {

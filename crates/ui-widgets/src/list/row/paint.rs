@@ -1,11 +1,11 @@
 //! Painting a row's trailing items, toggles, thumbnails, text and cells.
 
 use super::placement::Placed;
-use super::{LabelUnderline, ListRow, RowRun};
 use super::show::{LINK, TEXT_CELL, TOGGLE};
 use super::style::ListRowStyle;
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_run};
+use super::{LabelUnderline, ListRow, RowRun};
 use crate::buttons::IconButton;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
@@ -208,10 +208,7 @@ impl ListRow<'_> {
         if !self.renaming && !self.label_has_field() {
             let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
             let look = if muted { &style.cell_muted } else { &style.text };
-            let mut span = Span::new(cx.resolved.label);
-            span.italic = self.italic;
-            span.underline = self.underline == LabelUnderline::Solid;
-            let run = TextRun::spans(vec![span]).role(look.role).color(cx.resolve(&look.color)).elide();
+            let run = self.label_run(cx.resolved.label).role(look.role).color(cx.resolve(&look.color)).elide();
             let room = Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new((label.width() - beside).max(0.0), sizes.label_line));
             if self.underline == LabelUnderline::Dashed {
                 // The line runs under the shown (elided) text only.
@@ -239,6 +236,18 @@ impl ListRow<'_> {
 }
 
 impl ListRow<'_> {
+    /// The label as a run without its role and colour: its styled spans (`label_spans`) when it has them, else `label`
+    /// as one span, every span italic under `italic` and underlined under a solid `underline`.
+    pub(super) fn label_run<'s>(&'s self, label: &'s str) -> TextRun<'s> {
+        let mut spans: Vec<Span<'s>> = if self.label_spans.is_empty() { vec![Span::new(label)] } else { self.label_spans.clone() };
+        let underline = self.underline == LabelUnderline::Solid;
+        for span in &mut spans {
+            span.italic |= self.italic;
+            span.underline |= underline;
+        }
+        TextRun::spans(spans)
+    }
+
     /// The text cells, inset and centred on the row's height, each aligned as its column says.
     /// The text cell `at` as a run in its column's look, without its colour.
     pub(super) fn cell_run(&self, style: &ListRowStyle, at: usize) -> TextRun<'_> {

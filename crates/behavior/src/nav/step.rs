@@ -64,6 +64,12 @@ pub trait NavOutline {
         None
     }
 
+    /// `RaggedGrid`: how many columns a vertical move from row `from` to row `to` shifts the column by, for rows that are
+    /// offset against each other (a honeycomb's). 0 for rows that line up.
+    fn column_shift(&self, _from: usize, _to: usize) -> isize {
+        0
+    }
+
     /// `Cell`: the cells of every position (a row of a sheet).
     fn columns(&self) -> usize {
         1
@@ -325,8 +331,9 @@ fn ragged(outline: &dyn NavOutline, state: &NavState, lead: usize, mv: NavMove) 
     let Some((row, column, _)) = locate(outline, lead) else { return NavStep::Unhandled };
     let rows = (0..).take_while(|&r| outline.row_len(r).is_some()).count();
     // A row without a position that takes the lead (a closed group's) is passed over in the move's direction.
-    let toward = |rows: Vec<usize>| moved(rows.into_iter().find_map(|row| ragged_at(outline, row, column)));
-    let vertical = |to: Option<usize>| moved(to.and_then(|row| ragged_at(outline, row, column)));
+    let shifted = |to: usize| column.saturating_add_signed(outline.column_shift(row, to));
+    let toward = |rows: Vec<usize>| moved(rows.into_iter().find_map(|to| ragged_at(outline, to, shifted(to))));
+    let vertical = |to: Option<usize>| moved(to.and_then(|to| ragged_at(outline, to, shifted(to))));
     match mv {
         NavMove::Back => moved(neighbour(outline, state, lead, false)),
         NavMove::Forward => moved(neighbour(outline, state, lead, true)),

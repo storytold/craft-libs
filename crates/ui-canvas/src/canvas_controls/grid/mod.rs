@@ -2,8 +2,8 @@
 //! the document grid of Preferences > Guides, Grid & Slices. Display only: it senses nothing, so the host's menu item
 //! carries the state. Show it before guides and frames.
 
-#[cfg(feature = "testing")]
-pub(super) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::canvas::{CanvasSpace, GuideLine, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
@@ -16,7 +16,7 @@ use craft_behavior::{CanvasView, Input, Metrics};
 use egui::{Color32, Response, Shape};
 use std::sync::Arc;
 
-pub use crate::primitives::{GridAxis, GridLines, MAX_LINES};
+pub use crate::primitives::{GridAxis, GridCrowding, GridLines, MAX_LINES};
 
 /// The major step of a new grid, in document units.
 const DEFAULT_STEP: f64 = 100.0;
@@ -119,6 +119,9 @@ pub struct CanvasGrid {
     /// under the art; outside a slot it paints in place.
     #[prop(flag, name = "picture")]
     under_pictures: bool,
+    /// What the grid does when its lines come closer than the minimum step: `Thin` keeps it visible zoomed out.
+    #[prop]
+    crowding: GridCrowding,
 }
 
 impl CanvasGrid {
@@ -134,6 +137,7 @@ impl CanvasGrid {
             line: GridLine::Solid,
             min_zoom: None,
             under_pictures: false,
+            crowding: GridCrowding::default(),
         }
         .label(label)
     }
@@ -159,7 +163,7 @@ impl CanvasGrid {
         if !(extent.x0.is_finite() && extent.y0.is_finite() && extent.x1.is_finite() && extent.y1.is_finite()) {
             return GridLines::default();
         }
-        GridLines::document(view, extent, self.spacing, self.origin, self.subdivisions)
+        GridLines::document(view, extent, self.spacing, self.origin, self.subdivisions, self.crowding)
     }
 }
 

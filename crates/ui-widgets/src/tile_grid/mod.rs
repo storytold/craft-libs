@@ -3,13 +3,13 @@
 //! The data types of a tile (badges, status, marks, the caption's place) live here; `TileGrid` shows tiles in
 //! rows and columns and reads the tile size from the value a `ThumbnailSlider` edits.
 
-mod grid;
+pub(crate) mod grid;
 mod headers;
 mod layout;
-mod slider;
-#[cfg(feature = "testing")]
-mod stories;
-mod tile;
+pub(crate) mod slider;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+pub(crate) mod tile;
 mod words;
 
 use crate::runtime::env::Label;

@@ -2,7 +2,9 @@
 //! owned by a `DialogHost`. A command form is a `ParamDialog` without a preview.
 
 use super::fields::{DialogFields, FieldValue};
-use crate::patterns::presets::{NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetKind, PresetPicker, PresetRow};
+use crate::patterns::presets::{
+    NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetFns, PresetKind, PresetPicker, PresetRow, PresetSource,
+};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, ListingRequest, PathRequest};
 
 use super::form::{FormDialog, FormDialogWords};
@@ -12,7 +14,9 @@ use super::preview::{PreviewPane, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
 
-use crate::contract::{Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
+use crate::contract::{
+    Bind, BodyCx, CanvasGesture, MemoKey, MemoProps, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _,
+};
 
 use crate::dialog::{
     Alert, ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id,
@@ -21,7 +25,6 @@ use crate::dialog::{
 use crate::display::{Shade, Text};
 use crate::form::SliderFieldLayout;
 use crate::layout_components::{Row, Stack};
-use crate::notices::{Notice, NoticeLayout};
 
 use crate::runtime::env::{Env, Label};
 use crate::text::RangeAlert;
@@ -33,15 +36,14 @@ use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 
 use craft_theme::Srgba;
-use craft_theme::variant::Tone;
 use egui::load::SizedTexture;
 use egui::{Context, Pos2, Response, Ui};
 use serde_json::Value;
 
 use std::borrow::Cow;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the parameter dialog beside the common OK and Cancel.
@@ -148,8 +150,6 @@ pub struct ParamDialogOutput {
     pub presets: Vec<NamedPresetEvent<String>>,
     /// The help link a row's button reported in this pass.
     pub help_link: Option<String>,
-    /// The answer OK would have given, the pass OK was pressed on a dialog that holds its OK for the host.
-    pub(crate) held: Option<ParamResult>,
     /// The picture point at the centre of the view the preview pane drew this pass; `None` without a preview.
     pub(crate) preview_centre: Option<Pos2>,
 }
@@ -262,9 +262,10 @@ pub struct ParamDialog<'a> {
     /// dialog open; a press comes back as `ParamDialogOutput::footer_action`.
     #[prop]
     extra_buttons: Vec<(String, FooterButton)>,
-    /// The patterns the dialog's [`ParamKind::Pattern`] rows offer.
+    /// The patterns the dialog's [`ParamKind::Pattern`] rows offer. A hosted dialog's build gives a source over
+    /// owned inputs.
     #[prop]
-    patterns: Cow<'a, [PresetRow<String>]>,
+    patterns: Option<PresetSource<'a, String>>,
     /// A muted line at the footer's start edge, left of the buttons (a file size estimate, say).
     #[prop(into)]
     footer_note: Option<Label>,
@@ -279,24 +280,15 @@ pub struct ParamDialog<'a> {
     /// Reset restores `opening`.
     #[prop(vis = "pub(crate)")]
     values_opened: Option<DialogFields>,
-    /// Makes OK keep the dialog open and report its answer in `ParamDialogOutput::held`.
-    #[prop(name = "hold_ok", vis = "pub(crate)")]
-    hold: bool,
-    /// Closes the dialog as OK in this pass: the host accepted the held answer.
-    #[prop(vis = "pub(crate)")]
-    finish_held: bool,
-    /// Shows `reason` under the rows while the values are `refused`.
-    #[prop(vis = "pub(crate)")]
-    refusal: Option<(Label, DialogFields)>,
-    /// Shows the refusal whatever the values are: the host keeps it until it withdraws it.
-    #[prop(vis = "pub(crate)")]
-    refusal_blocks: bool,
     /// Centres the preview pane's view on the picture point `point` in this pass; without a picture it does nothing.
     #[prop(name = "centre_on", vis = "pub(crate)")]
     centre: Option<Pos2>,
     /// The colours the colour rows show in place of their values in this pass, by row key.
     #[prop(vis = "pub(crate)")]
     preview_colors: Vec<(String, Srgba)>,
+    /// OK files the values in `held` and the dialog stays open; a refusal shows until the values change.
+    #[prop(vis = "pub(crate)")]
+    held: Option<&'a mut HeldAnswer<DialogFields>>,
 }
 
 /// What `ParamDialog::shaped` applies to the built [`Dialog`].
@@ -356,18 +348,15 @@ impl<'a> ParamDialog<'a> {
             click_centres: true,
             canvas: None,
             extra_buttons: Vec::new(),
-            patterns: Cow::Borrowed(&[]),
+            patterns: None,
             footer_note: None,
             below: None,
             shaped: None,
             answers: Vec::new(),
             values_opened: None,
-            hold: false,
-            finish_held: false,
-            refusal: None,
-            refusal_blocks: false,
             centre: None,
             preview_colors: Vec::new(),
+            held: None,
         }
     }
 
@@ -471,12 +460,9 @@ impl<'a> ParamDialog<'a> {
             shaped,
             answers,
             values_opened,
-            hold,
-            finish_held,
-            refusal,
-            refusal_blocks,
             centre,
             preview_colors,
+            held,
         } = self;
         let preview_label = Env::of(ui).words::<FormDialogWords>().preview.clone();
         // The footer `FormDialog` builds for this pass, made the same way, so its `pick` reads `FormOutput::picked`.
@@ -493,8 +479,10 @@ impl<'a> ParamDialog<'a> {
             .history(history)
             .collection_body(collection_body)
             .closable(closable)
-            .accept_stays_open(hold)
             .answers(answers);
+        if let Some(held) = held {
+            form = form.held(held);
+        }
         if let Some(reset_to) = reset_to {
             form = form.reset_with(move |_, opened, _| reset_target(opened, Some(&reset_to)));
         }
@@ -548,11 +536,11 @@ impl<'a> ParamDialog<'a> {
         let mut live = Live::default();
         let mut rows = None;
         let mut shown_preview = ShownPreview::default();
-        let mut latest = None::<DialogFields>;
         let shown = form.show(ui, |ui, cx, values| {
             if cx.first() && !host_opened {
                 let saved = remember.as_ref().and_then(|key| remembered_values(ui.ctx(), key, remember_for));
-                Self::open_values(&params, &patterns, saved.as_ref(), values);
+                let offered = patterns.as_ref().map(|source| source.rows(ui.ctx(), &Env::of(ui))).unwrap_or_default();
+                Self::open_values(&params, &offered, saved.as_ref(), values);
             }
             apply_answers(&params, values, cx.take_answers());
             // A footer row pressed in the previous pass flips once; a measuring run leaves it for the real one.
@@ -573,19 +561,15 @@ impl<'a> ParamDialog<'a> {
             if let Some(canvas) = canvas.filter(|_| click_centres && preview.is_some()) {
                 cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
             }
-            // A measuring run closes nothing: the real run of the same pass makes the close.
-            if finish_held && !crate::runtime::measure::active(ui.ctx()) {
-                cx.request_close_as(CloseReason::Activated);
-            }
             live = cx.memory::<Live>().clone();
             if let (Some(point), Some(texture)) = (centre, &preview) {
                 live.view = live.view.centred_on(point, texture.size);
             }
             let mut show_rows = |ui: &mut Ui, values: &mut DialogFields| {
-                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values))
-                    .patterns(&patterns)
-                    .preview_colors(&preview_colors)
-                    .sliders(layout.sliders());
+                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values)).preview_colors(&preview_colors).sliders(layout.sliders());
+                if let Some(source) = patterns.as_ref() {
+                    shown = shown.patterns(source);
+                }
                 if let Some(canvas) = canvas {
                     shown = shown.canvas(canvas);
                 }
@@ -608,15 +592,10 @@ impl<'a> ParamDialog<'a> {
                 }
                 (None, _) => show_rows(ui, values),
             }
-            // The host's refusal of the held OK stays until a value changes, or until the host withdraws it.
-            if let Some((reason, _)) = refusal.as_ref().filter(|(_, refused)| refusal_blocks || *refused == *values) {
-                Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
-            }
             if let Some(BelowRows(draw)) = &below {
                 draw(ui, values);
             }
             *cx.memory::<Live>() = live.clone();
-            latest = Some(values.clone());
             if !footer_rows.is_empty() {
                 let states: Vec<bool> = footer_rows.iter().map(|param| values.bool(&param.key).unwrap_or(false)).collect();
                 ui.data_mut(|data| data.insert_temp(footer_id, states));
@@ -637,11 +616,7 @@ impl<'a> ParamDialog<'a> {
             ui.data_mut(|data| data.insert_temp(flip_id, param.key.clone()));
             crate::runtime::frame::request_repaint(ui.ctx());
         }
-        let (result, held) = match (shown.accepted, pick, latest) {
-            (Some(fields), _, _) => (Some(Self::result(key, &params, remember, remember_for, fields)), None),
-            (None, Some(ResetPick::Accept), Some(fields)) if hold => (None, Some(Self::result(key, &params, remember, remember_for, fields))),
-            _ => (None, None),
-        };
+        let result = shown.accepted.map(|fields| Self::result(key, &params, remember, remember_for, fields));
         let help_link = rows.as_ref().and_then(|rows| rows.help_link.clone());
         ParamDialogOutput {
             response: shown.response,
@@ -655,7 +630,6 @@ impl<'a> ParamDialog<'a> {
             footer_action,
             presets: preset_events,
             help_link,
-            held,
             preview_centre: shown_preview.centre,
         }
     }
@@ -675,15 +649,14 @@ fn reset_target(opened: &DialogFields, reset_to: Option<&DialogFields>) -> Dialo
 /// renamed or deleted come back in `events` for the host to store.
 fn show_presets(ui: &mut Ui, label: &Label, presets: &ParamPresets<'_>, values: &mut DialogFields, events: &mut Vec<NamedPresetEvent<String>>) {
     let current = presets.values.iter().find(|(_, preset)| preset_applies(preset, values)).map(|(name, _)| name.clone());
-    let picker = PresetPicker::new(label.clone(), Bind::given(current), presets.rows, Bind::kept()).field(PickerField::Name);
-    let taken = |name: &str| {
-        let same = |other: &str| other.to_lowercase() == name.to_lowercase();
-        presets.built_in.iter().any(|built_in| same(built_in)) || presets.rows.iter().any(|row| same(&row.label))
-    };
-    let shown = NamedPresetRow::new(label.clone(), picker)
-        .check_name(|name| taken(name).then_some(PresetError::NameTaken))
-        .built_in(|name: &String| presets.built_in.contains(name))
-        .show(ui);
+    let source = PresetSource::new(ListedRows(presets.rows), PresetFns::new(listed_rows));
+    let picker = PresetPicker::new(label.clone(), Bind::given(current), &source, Bind::kept()).field(PickerField::Name);
+    let taken: Vec<&str> = presets.built_in.iter().map(String::as_str).chain(presets.rows.iter().map(|row| row.label.as_str())).collect();
+    let check = NameCheck::new(taken, |taken, name| {
+        let name = name.to_lowercase();
+        taken.iter().any(|other| other.to_lowercase() == name).then_some(PresetError::NameTaken)
+    });
+    let shown = NamedPresetRow::new(label.clone(), picker).check_name(check).built_in(|name: &String| presets.built_in.contains(name)).show(ui);
     for event in shown.events {
         match event {
             NamedPresetEvent::Apply(name) => {
@@ -695,6 +668,28 @@ fn show_presets(ui: &mut Ui, label: &Label, presets: &ParamPresets<'_>, values: 
             _ => {}
         }
     }
+}
+
+/// The rows a [`ParamPresets`] lists, as the inputs of the presets row's source: keyed by each row's key, name, depth
+/// and kind, which are all a named preset row shows.
+#[derive(Clone, Copy)]
+struct ListedRows<'a>(&'a [PresetRow<String>]);
+
+impl MemoProps for ListedRows<'_> {
+    fn key(&self, key: &mut MemoKey) {
+        for row in self.0 {
+            row.key.key(key);
+            row.label.key(key);
+            row.depth.key(key);
+            (row.kind == PresetKind::Item).key(key);
+        }
+        self.0.len().key(key);
+    }
+}
+
+/// The rows of the presets row: the host's own.
+fn listed_rows(listed: &ListedRows<'_>, _: &Env) -> Vec<PresetRow<String>> {
+    listed.0.to_vec()
 }
 
 /// Whether `values` hold every value `preset` sets.
@@ -794,7 +789,7 @@ impl ResetFooter {
     pub fn new(ui: &Ui, cancel: Option<Label>, alt_resets: bool) -> Self {
         let env = Env::of(ui);
         ResetFooter {
-            resetting: alt_resets && crate::runtime::pointer::frame(ui.ctx()).mods.alt,
+            resetting: alt_resets && crate::runtime::pointer::mods(ui.ctx()).alt,
             cancel: cancel.unwrap_or_else(|| env.words::<CommonWords>().cancel.clone()),
             reset: env.words::<ParamDialogWords>().reset.clone(),
             extra: Vec::new(),
@@ -944,7 +939,7 @@ pub struct HostedParamDialog {
     /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedParamDialog::held_ok)).
     hold: bool,
     /// The OK the host holds back until it answers `answer_ok`, and its refusal, shown until a value changes.
-    held: HeldAnswer<ParamResult>,
+    held: HeldAnswer<DialogFields>,
     /// The picture point the next pass centres the preview on ([`centre_preview`](HostedParamDialog::centre_preview)).
     centre: Option<Pos2>,
     /// The named presets the presets row lists ([`set_presets`](HostedParamDialog::set_presets)).
@@ -980,7 +975,9 @@ impl HostedParamDialog {
     ) -> Self {
         let key = key.into();
         let ParamDialog { params, remember, remember_for, patterns, previews, .. } = build(&mut fields);
-        let (params, patterns) = (params.into_owned(), patterns.into_owned());
+        // No pass runs here: the rows are built in the root scope, whose words name them; only their keys are read.
+        let patterns = patterns.map(|source| source.rows(ctx, &Env::of_root(ctx))).unwrap_or_default();
+        let params = params.into_owned();
         let saved = remember.and_then(|key| remembered_values(ctx, &key, remember_for));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
         let id = dialog_id(key.as_str());
@@ -1101,7 +1098,8 @@ impl HostedParamDialog {
 
     /// The OK filed by a held dialog, once.
     pub fn take_ok(&mut self) -> Option<ParamResult> {
-        self.held.take()
+        let fields = self.held.take()?;
+        Some(self.result_of(fields))
     }
 
     /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
@@ -1114,10 +1112,7 @@ impl HostedParamDialog {
     /// change; `None` ends the refusal.
     pub fn refuse(&mut self, reason: Option<Label>) {
         match reason {
-            Some(reason) => {
-                let (result, _) = self.current_result();
-                self.held.refuse(reason, result);
-            }
+            Some(reason) => self.held.refuse(reason, self.fields.clone()),
             None => self.held.clear_refusal(),
         }
     }
@@ -1143,19 +1138,14 @@ impl HostedParamDialog {
         self.requests.take_help_link()
     }
 
-    /// The answer OK would give with the values now, and whether the dialog lets OK be pressed.
-    fn current_result(&mut self) -> (ParamResult, bool) {
-        let ParamDialog { key, params, remember, remember_for, ok_enabled, .. } = (self.build)(&mut self.fields);
+    /// The answer OK gives with `fields`: the key, the part a remembering dialog saves and this dialog's id, as the
+    /// dialog's own build says them.
+    fn result_of(&mut self, fields: DialogFields) -> ParamResult {
+        let ParamDialog { key, params, remember, remember_for, .. } = (self.build)(&mut self.fields);
         let params = params.into_owned();
-        let mut result = ParamDialog::result(key, &params, remember, remember_for, self.fields.clone());
+        let mut result = ParamDialog::result(key, &params, remember, remember_for, fields);
         result.id = self.id;
-        (result, ok_enabled)
-    }
-
-    /// Holds `result` for the host: the OK of a held dialog, from the button or from `confirm`.
-    fn file_held(&mut self, mut result: ParamResult) {
-        result.id = self.id;
-        self.held.file(result);
+        result
     }
 
     /// The footer button id that was pressed, once (`ParamDialog::extra_buttons`).
@@ -1319,7 +1309,6 @@ impl StackDialog for HostedParamDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ParamResult>> {
         let measuring = crate::runtime::measure::active(ui.ctx());
         let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
-        let finish = self.held.is_accepted();
         // A measuring run keeps the centre: the real run of the pass takes it.
         let centre = if measuring { self.centre } else { self.centre.take() };
         let mut dialog = (self.build)(&mut self.fields);
@@ -1328,26 +1317,19 @@ impl StackDialog for HostedParamDialog {
             .preview_on(Bind::bound(&mut self.preview_on))
             .values_opened(self.opening.clone())
             .answers(answers)
-            .hold_ok(self.hold)
-            .finish_held(finish)
             .preview_colors(self.requests.previewed_colors().to_vec());
-        let blocks = self.held.refusal_blocks();
-        if let Some((reason, refused)) = self.held.refusal() {
-            // A refusal the host keeps shows whatever the values are; the other until a value changes.
-            dialog = dialog.refusal((reason.clone(), refused.fields.clone())).refusal_blocks(blocks);
-            if blocks {
-                dialog = dialog.ok_enabled(false).ok_reason(reason.clone());
-            }
-        }
-        if let Some(point) = centre {
-            dialog = dialog.centre_on(point);
+        // A refusal the host keeps holds OK off with its reason whatever the values are.
+        if let Some((reason, _)) = self.held.refusal().filter(|_| self.held.refusal_blocks()) {
+            dialog = dialog.ok_enabled(false).ok_reason(reason.clone());
         }
         if let Some(presets) = &self.presets {
             dialog = dialog.presets(ParamPresets { rows: &presets.rows, values: &presets.values, built_in: &presets.built_in });
         }
-        // OK waits for the host's answer: a second OK cannot file over the held one.
-        if self.held.is_waiting() {
-            dialog = dialog.ok_enabled(false);
+        if self.hold {
+            dialog = dialog.held(&mut self.held);
+        }
+        if let Some(point) = centre {
+            dialog = dialog.centre_on(point);
         }
         if let Some(picture) = self.picture {
             dialog = dialog.preview(picture);
@@ -1369,18 +1351,11 @@ impl StackDialog for HostedParamDialog {
         }
         self.shown = ShownState { comparing: shown.comparing, centre: shown.preview_centre };
         self.preset_events.extend(shown.presets);
-        if !blocks && self.held.refusal().is_some_and(|(_, refused)| refused.fields != self.fields) {
-            self.held.clear_refusal();
-        }
-        if let Some(result) = shown.held {
-            self.file_held(result);
-        }
         match (shown.result, shown.closed) {
             (Some(mut result), _) => {
                 result.id = self.id;
                 Some(DialogResult::Ok(result))
             }
-            (None, Some(CloseReason::Activated)) if finish => Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok)),
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
         }
@@ -1453,20 +1428,23 @@ impl StackDialog for HostedParamDialog {
     /// held answer, it answers that.
     fn confirm(&mut self, _: &Context) -> Option<ParamResult> {
         if self.held.is_accepted() {
-            return self.held.finish();
+            let fields = self.held.finish()?;
+            return Some(self.result_of(fields));
         }
         if self.held.is_waiting() {
             return None;
         }
-        let (result, ok_enabled) = self.current_result();
+        // OK is off while the dialog says so or a refusal the host keeps holds it.
+        let ok_enabled = (self.build)(&mut self.fields).ok_enabled && !self.held.refusal_blocks();
         if !ok_enabled {
             return None;
         }
         if self.hold {
-            self.file_held(result);
+            self.held.file(self.fields.clone());
             return None;
         }
-        Some(result)
+        let fields = self.fields.clone();
+        Some(self.result_of(fields))
     }
 
     /// The values by parameter key, as [`DialogFields`] serializes them, with the Preview check box under `preview`

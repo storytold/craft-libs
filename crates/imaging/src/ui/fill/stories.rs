@@ -12,7 +12,6 @@ use egui::Ui;
 
 use craft_behavior::kurbo::Rect;
 use craft_ui::canvas::RasterSource;
-use craft_ui::contract::Bind;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{FullWindowView, HostedWorkspace};
 use craft_ui::runtime::pending::{Job, Pending};
@@ -150,14 +149,14 @@ fn workspace_with_the_preview_failed(ui: &mut Ui, data: &mut StoryData) -> Story
 
 #[story(FillPanel<'static>, covers = [Default], drive = Drive::Never)]
 fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = data.value("settings", FillSettings::default());
-    FillPanel::new(Bind::bound(settings), SamplingMode::Auto).show(ui).into()
+    let (settings, settings_at) = data.value_at("settings", FillSettings::default());
+    FillPanel::new(settings_at.bind(settings), SamplingMode::Auto).show(ui).into()
 }
 
 #[story(FillPanel<'static>, covers = [], drive = Drive::Never)]
 fn panel_with_an_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = data.value("settings", FillSettings::default());
-    FillPanel::new(Bind::bound(settings), SamplingMode::Custom)
+    let (settings, settings_at) = data.value_at("settings", FillSettings::default());
+    FillPanel::new(settings_at.bind(settings), SamplingMode::Custom)
         .error(Some("at most 1000 sampling strokes: undo some, or reset the sampling area"))
         .show(ui)
         .into()

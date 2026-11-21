@@ -1,17 +1,33 @@
 [package]
 name = "craft-gpu"
-description = "Provider-neutral GPU traits, GpuJob envelope, and registry (no vendor IO)"
+description = "Provider-neutral GPU traits, GpuJob envelope, and registry (no vendor IO); with `startup`, eframe's wgpu start-up choices per platform"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
 
 [lints]
 workspace = true
 
+[features]
+default = []
+# GPU start-up choices for apps on eframe's wgpu backend (`configure`): backends, power preference, DX12 compiler and
+# the Linux DRM device pick. Off by default, so the provider-neutral traits pull in no vendor crate.
+startup = ["dep:egui-wgpu", "dep:log", "dep:pollster"]
+
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+# A `[patch.crates-io]` row at the framework root points egui-wgpu at the pinned egui fork; it is not a workspace dependency.
+# Its `wgpu` re-export is the wgpu eframe draws with.
+egui-wgpu = { version = "0.37", default-features = false, optional = true }
+log = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# Waits for the DirectX 12 adapter list of the start-up probe.
+pollster = { version = "1", optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tempfile = "3"

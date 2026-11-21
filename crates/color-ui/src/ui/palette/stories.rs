@@ -3,7 +3,6 @@
 use super::SwatchPalette;
 use craft_theme::Srgba;
 use craft_ui::choice::SwatchSpacing;
-use craft_ui::contract::Bind;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -31,7 +30,7 @@ fn named(entries: impl IntoIterator<Item = (String, Srgba)>) -> Vec<(Label, Srgb
 /// The palette of the twelve colours, set up by `options`, with the readout of its latest event.
 fn shown_palette(ui: &mut Ui, data: &mut StoryData, options: impl for<'a> FnOnce(SwatchPalette<'a>) -> SwatchPalette<'a>) -> StoryOutput {
     let swatches = named(PALETTE.iter().map(|(name, color)| ((*name).to_owned(), *color)));
-    let shown = options(SwatchPalette::new("Swatches", Bind::bound(data.value("color", PALETTE[8].1)), &swatches)).show(ui);
+    let shown = options(SwatchPalette::new("Swatches", data.bind("color", PALETTE[8].1), &swatches)).show(ui);
     let last = data.note("last", String::new());
     if let Some(event) = &shown.edit {
         *last = format!("{event:?}");

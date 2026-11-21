@@ -97,6 +97,7 @@ impl SwatchFormat {
 
 /// A swatch colour in its own model.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[serde(tag = "model", content = "values", rename_all = "camelCase")]
 pub enum SwatchColor {
     /// Encoded RGB, 0–1 each, in the RGB working space.
@@ -148,6 +149,7 @@ impl SwatchColor {
 
 /// How a swatch is marked: its `.ase` kind, or the built-in Registration swatch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[serde(rename_all = "camelCase")]
 pub enum SwatchKind {
     #[default]
@@ -163,6 +165,7 @@ pub enum SwatchKind {
 
 /// What a swatch holds.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[non_exhaustive]
 pub enum SwatchPaint {
     /// A colour.
@@ -193,6 +196,7 @@ impl From<SwatchColor> for SwatchPaint {
 
 /// One named swatch.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[serde(from = "SwatchEntryWire", into = "SwatchEntryWire")]
 pub struct SwatchEntry {
     /// The swatch's label.
@@ -257,6 +261,7 @@ impl SwatchEntry {
 /// A named group of swatches, as the Swatches panel shows them. A file without groups reads as
 /// one group named after the file.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 pub struct SwatchGroup {
     /// The group's label.
     pub name: String,
@@ -573,7 +578,7 @@ mod aco;
 mod ase;
 mod reader;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod text;
 
 use aco::{AcoColor, act_used, from_aco, parse_aco, to_aco, write_aco};

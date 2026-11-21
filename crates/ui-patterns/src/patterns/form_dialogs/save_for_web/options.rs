@@ -15,13 +15,16 @@ use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Tr
 use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
+use super::model::set_pixels;
 use crate::layout_components::Row;
 use crate::menu::{Menu, MenuItem};
 use crate::patterns::form_dialogs::{LinkedSize, Resample, resize_from_scale};
-use crate::patterns::presets::{NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetPicker, PresetRow};
+use crate::patterns::presets::{
+    NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetFns, PresetPicker, PresetRow, PresetSource,
+};
 use crate::pickers::{Select, UnitSelect};
 
-use crate::runtime::env::{Label, UnitKind, Units};
+use crate::runtime::env::{Env, Label, UnitKind, Units};
 
 use crate::sections::Section;
 use crate::style::TypeRole;
@@ -146,25 +149,40 @@ pub(super) fn show(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, 
     });
 }
 
-/// Sets `options` to what `preset` sets, keeping what belongs to the document: the size, the resample method, the
-/// slices and the artboard.
+/// Sets `options` to what `preset` sets, keeping what belongs to the document: the size and its link, the resample
+/// method, the slices and the artboard.
 pub(super) fn apply_preset(options: &mut SaveForWebOptions, preset: &WebPreset) {
-    let (percent, resample, slices, artboard) = (options.percent, options.resample, options.slices.clone(), options.artboard);
-    *options = SaveForWebOptions { percent, resample, slices, artboard, ..preset.options.clone() };
+    *options = SaveForWebOptions {
+        percent: options.percent,
+        size: options.size,
+        constrain_proportions: options.constrain_proportions,
+        resample: options.resample,
+        slices: options.slices.clone(),
+        artboard: options.artboard,
+        ..preset.options.clone()
+    };
+}
+
+/// One preset row per name, keyed by the name.
+fn preset_rows(names: &&[String], _: &Env) -> Vec<PresetRow<String>> {
+    names.iter().map(|name| PresetRow::item(name.clone(), name.clone(), 0)).collect()
 }
 
 /// The Preset row: pick, save under a new name, rename and delete. The host stores the presets, so the row reports
 /// events in `asked` and the host gives the list back.
 fn preset_row(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, live: &mut Live, asked: &mut Asked) {
     let Kit { words, presets, .. } = *kit;
-    let rows: Vec<PresetRow<String>> = presets.iter().map(|preset| PresetRow::item(preset.name.clone(), preset.name.clone(), 0)).collect();
+    let names: Vec<String> = presets.iter().map(|preset| preset.name.clone()).collect();
+    let rows = PresetSource::new(names.as_slice(), PresetFns::new(preset_rows));
     let held = presets.iter().find(|preset| preset.is_set_in(options)).map(|preset| preset.name.clone());
     let picker = PresetPicker::new(words.preset.clone(), Bind::given(held), &rows, Bind::bound(&mut live.preset))
         .field(PickerField::Name)
         .placeholder(words.unnamed.clone());
     let named = NamedPresetRow::new(words.preset.clone(), picker)
         .suggest_name(words.new_preset_name.as_str().to_owned())
-        .check_name(|typed| presets.iter().any(|preset| preset.name.eq_ignore_ascii_case(typed)).then_some(PresetError::NameTaken))
+        .check_name(NameCheck::new(names.as_slice(), |names, typed| {
+            names.iter().any(|name| name.eq_ignore_ascii_case(typed)).then_some(PresetError::NameTaken)
+        }))
         .built_in(|key| presets.iter().any(|preset| preset.built_in && preset.name == *key))
         .show(ui);
     for event in named.events {
@@ -540,6 +558,7 @@ fn size_section(
                 .show(ui);
             if let Some(v) = field.edit.value().cloned().flatten() {
                 link.set_width(v);
+                options.set_exact_size(link);
             }
             if let Some(unit) = field.unit.value().copied() {
                 link.set_unit(unit);
@@ -553,6 +572,7 @@ fn size_section(
                 .show(ui);
             if let Some(v) = field.edit.value().cloned().flatten() {
                 link.set_height(v);
+                options.set_exact_size(link);
             }
             if let Some(unit) = field.unit.value().copied() {
                 link.set_unit(unit);
@@ -563,15 +583,24 @@ fn size_section(
             let field = NumberField::new(words.percent.clone(), Bind::given(Some(percent)))
                 .codec(NumberCodec::new(units.reader(Some(UnitKind::Percent)), 2))
                 .range(LEAST_PERCENT..=MAX_PERCENT);
-            if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
-                set_percent(link, v);
+            if let Some(v) = field.show(ui).edit.value().cloned().flatten()
+                && let Ok(size) = resize_from_scale(link.original(), v)
+            {
+                set_pixels(link, size);
+                options.percent = v;
+                options.size = None;
             }
         });
+        if let Some(on) = check(ui, &words.constrain, "constrain", link.is_linked()) {
+            options.constrain(link, on);
+        }
         match document {
             WebDocument::Raster => {
                 let methods = Resample::entries(sizing, &RESAMPLE_METHODS);
                 row(ui, &sizing.resample_method, "resample", |ui| {
-                    if let Some(method) = Select::new(sizing.resample_method.clone(), Bind::given(options.resample), &methods).show(ui).value().copied() {
+                    if let Some(method) =
+                        Select::new(sizing.resample_method.clone(), Bind::given(options.resample), &methods).show(ui).value().copied()
+                    {
                         options.resample = method;
                     }
                 });
@@ -605,15 +634,5 @@ fn vector_rows(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWebOpt
                 options.artboard = Some(at);
             }
         });
-    }
-}
-
-/// Sets the output size to `percent` of the document, whatever unit the fields show.
-fn set_percent(link: &mut LinkedSize, percent: f64) {
-    if let Ok(size) = resize_from_scale(link.original(), percent) {
-        let unit = link.unit();
-        link.set_unit(UnitKind::Pixels);
-        link.set_width(f64::from(size.width));
-        link.set_unit(unit);
     }
 }

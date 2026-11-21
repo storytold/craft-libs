@@ -191,7 +191,7 @@ fn a_localised_decimal_types_in() {
 
 /// A field over 0 to 100 with a popup slider.
 fn with_slider(ui: &mut Ui, data: &mut craft_ui::testing::StoryData) -> craft_ui::testing::StoryOutput {
-    NumberField::new("Opacity", Bind::bound(data.value("value", Some(50.0)))).range(0.0..=100.0).popup_slider(0.0..=100.0).show(ui).into()
+    NumberField::new("Opacity", data.bind("value", Some(50.0))).range(0.0..=100.0).popup_slider(0.0..=100.0).show(ui).into()
 }
 
 /// Pressing the popup slider's chevron and dragging moves the value at once, and the release closes the slider.

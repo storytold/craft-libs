@@ -18,12 +18,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use web_time::{Duration, Instant};
 
 use base64::Engine as _;
 use craft_ui::runtime::windows::{ScreenshotFacts, ScreenshotSlot, WindowHost};
 use egui::{ColorImage, ViewportId};
-use web_time::Instant;
 
 use crate::control::ControlResponse;
 

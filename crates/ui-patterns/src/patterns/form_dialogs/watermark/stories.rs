@@ -1,7 +1,6 @@
 //! Stories of `Watermark`.
 
 use super::{Watermark, WatermarkSettings, WatermarkStyle};
-use crate::contract::Bind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -22,7 +21,7 @@ fn kind_of(style: &WatermarkStyle) -> Kind {
 fn watermark_story(ui: &mut Ui, data: &mut StoryData, name: &'static str, start: WatermarkSettings) -> StoryOutput {
     let kind = *data.choice("style", kind_of(&start.style), &KINDS);
     let vertical = *data.value("vertical", start.vertical);
-    let settings = data.value(name, start);
+    let (settings, settings_at) = data.value_at(name, start);
     if kind_of(&settings.style) != kind {
         settings.style = match kind {
             Kind::Text => WatermarkStyle::Text("© Studio".to_owned()),
@@ -30,7 +29,7 @@ fn watermark_story(ui: &mut Ui, data: &mut StoryData, name: &'static str, start:
         };
     }
     settings.vertical = vertical;
-    let output: StoryOutput = Watermark::new("Watermark", Bind::bound(&mut *settings)).show(ui).into();
+    let output: StoryOutput = Watermark::new("Watermark", settings_at.bind(&mut *settings)).show(ui).into();
     let (kind, vertical) = (kind_of(&settings.style), settings.vertical);
     *data.choice("style", kind, &KINDS) = kind;
     *data.value("vertical", vertical) = vertical;

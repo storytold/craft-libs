@@ -123,7 +123,7 @@ impl ShellPane {
 }
 
 /// The padding tier of a body.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Pad {
     /// No padding.
@@ -135,6 +135,9 @@ pub enum Pad {
     Regular,
     /// `space.pad.roomy`.
     Roomy,
+    /// A full-window page's margin around its content: two and a half roomy pads (40 pt in the compact set), as a
+    /// File page's body stands off the window and its side menu.
+    Page,
 }
 
 /// The edges a container's padding tier applies to.
@@ -168,6 +171,22 @@ pub enum Sizing {
     /// fills takes it, and the container with it. A content-sized mount, a row or a grid stops that.
     #[default]
     Content,
+    /// The width its content took last pass and the available height: a side menu beside a page, as wide as its
+    /// widest item and as tall as the row it stands in, with its footer at the bottom. Across the width it is
+    /// `Content`, down the height `Fill`.
+    FillHeight,
+}
+
+impl Sizing {
+    /// Whether the width follows the content: `Content` and `FillHeight`.
+    pub const fn content_width(self) -> bool {
+        matches!(self, Sizing::Content | Sizing::FillHeight)
+    }
+
+    /// Whether the height is the available height: `Fill` and `FillHeight`.
+    pub const fn fills_height(self) -> bool {
+        matches!(self, Sizing::Fill | Sizing::FillHeight)
+    }
 }
 
 /// A size role that sets the least width of a container's content or of a button.
@@ -184,6 +203,12 @@ pub enum LeastWidth {
     DialogSideButton,
     /// `size.rail.width` per column: a tool rail of this many columns, as wide as the shell slot that holds it.
     Rail(std::num::NonZeroU8),
+    /// `size.dialog.least` and `size.dialog.wrap` together: a wide dialog, as wide as a dialog's least content beside a
+    /// paragraph's line (an About dialog whose tabs hold credit tables).
+    WideDialog,
+    /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
+    /// band beside the page, not as buttons cut to their labels.
+    SideMenu,
 }
 
 impl LeastWidth {
@@ -195,6 +220,8 @@ impl LeastWidth {
             LeastWidth::DialogButton => tokens.size.dialog.button,
             LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
+            LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
+            LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
         }
     }
 }
@@ -206,6 +233,8 @@ impl LeastWidth {
 pub enum WrapWidth {
     /// `size.dialog.wrap`: a dialog's paragraphs.
     Dialog,
+    /// `size.dock.column`: a page's column of settings beside a preview (a Print page), as wide as a dock column.
+    Column,
 }
 
 impl WrapWidth {
@@ -213,6 +242,7 @@ impl WrapWidth {
     pub fn points(self, tokens: &craft_theme::Tokens) -> f32 {
         match self {
             WrapWidth::Dialog => tokens.size.dialog.wrap,
+            WrapWidth::Column => tokens.size.dock.column,
         }
     }
 }
@@ -414,7 +444,8 @@ impl FooterRegion {
     }
 }
 
-/// Where a footer region sits.
+/// Where a footer region sits. In every place, `Container::body_end` fills the body's column under its content, so
+/// a notice it shows lies under the body and above the footer, or beside a footer in the end region.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FooterPlace {
@@ -686,7 +717,7 @@ pub enum Gap {
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows
 /// of a menu touch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InMenu(pub bool);
 
@@ -694,6 +725,19 @@ impl EnvValue for InMenu {
     fn root() -> Self {
         InMenu(false)
     }
+}
+
+/// The bracket a `Row` draws from the labelled rows of its first child to the child after them (Image Size's width and
+/// height to their chain): a tick from each of the first and the last row's controls to the middle child's centre
+/// line, joined along that line. The middle child sits halfway between the two controls. The value is the link's
+/// state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Bracket {
+    /// The rows are linked: the bracket is drawn.
+    Linked,
+    /// The rows are not linked: the middle child keeps its place, with no bracket.
+    Unlinked,
 }
 
 /// What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
@@ -759,7 +803,8 @@ pub struct ContainerProps {
     pub arena: bool,
     /// The container is its body's scroll owner without a scroll region, as a canvas with a view of its own is: the
     /// page and end moves and the reveals its children leave go to it (`Focus::take_scroll_moves`,
-    /// `Focus::take_reveal`). A container with a `scroll` region is one already.
+    /// `Focus::take_reveal`). A container with a `scroll` region is one already. The body is clipped to its body
+    /// region, the view, so what it shows never paints over the container's padding (a canvas's rulers).
     pub scroll_owner: bool,
     /// The container's value is a gate that disables its content while off.
     #[doc(hidden)]
@@ -790,6 +835,9 @@ pub struct ContainerProps {
     pub fit_rank: Option<u8>,
     /// How the labelled rows under the container show their labels; `None` keeps the scheme of the scope.
     pub labels: Option<LabelScheme>,
+    /// The bracket an unwrapped `Row` placed from its start draws from its first child's labelled rows to the child
+    /// after them; any other body draws none.
+    pub bracket: Option<Bracket>,
     /// The component whose memory holds the container's shown memory and its layer's bookkeeping, when it is another:
     /// the body of a popup an `overlay` hook shows belongs to the component that shows it.
     pub(crate) owner: Option<egui::Id>,
@@ -831,6 +879,7 @@ impl ContainerProps {
             && self.outer_edit == other.outer_edit
             && self.collection_body == other.collection_body
             && self.labels == other.labels
+            && self.bracket == other.bracket
     }
 
     /// Props with every field at its default.
@@ -873,6 +922,7 @@ impl ContainerProps {
             label_column: false,
             fit_rank: None,
             labels: None,
+            bracket: None,
             owner: None,
         }
     }
@@ -1097,6 +1147,12 @@ impl ContainerProps {
     /// their mark and icon columns through it.
     pub const fn label_column(mut self, on: bool) -> Self {
         self.label_column = on;
+        self
+    }
+
+    /// The bracket of a `Row` from its first child's labelled rows to the child after them ([`bracket`](Self::bracket)).
+    pub const fn bracket(mut self, bracket: Bracket) -> Self {
+        self.bracket = Some(bracket);
         self
     }
 

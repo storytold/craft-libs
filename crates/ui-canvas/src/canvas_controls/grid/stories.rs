@@ -1,7 +1,7 @@
 //! Stories of `CanvasGrid`.
 
-use super::{CanvasGrid, GridLine};
-use crate::canvas::testing::canvas_story::{StoryDocument, StoryPicture, on_canvas, on_canvas_with, story_view};
+use super::{CanvasGrid, GridCrowding, GridLine};
+use crate::canvas::testing::canvas_story::{StoryDocument, StoryPicture, on_canvas, on_canvas_view, on_canvas_with, story_view};
 use crate::canvas::{Canvas, RasterDisplay, RasterSource as _};
 use crate::contract::Show as _;
 use crate::testing::{Drive, StoryData, StoryOutput, stage, story};
@@ -48,4 +48,15 @@ fn grid_in_back(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         let _ = RasterDisplay::new("Picture", &picture).picture().show_at(ui, at);
         shown
     })
+}
+
+#[story(CanvasGrid, covers = [Default], drive = Drive::Never)]
+fn thinned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    // At 5 % the 100-unit step is five points, under the minimum, so `Thin` doubles it until the lines fit.
+    on_canvas_view(
+        ui,
+        |room, ppp| StoryDocument::STANDARD.view(room, ppp, 5.0),
+        Some(&StoryDocument::STANDARD),
+        |ui, at, _| grid().crowding(GridCrowding::Thin).show_at(ui, at),
+    )
 }

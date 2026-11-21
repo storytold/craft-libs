@@ -16,10 +16,10 @@ use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 use serde_json::{Value, json};
 
-#[cfg(feature = "testing")]
-mod stories;
-#[cfg(feature = "testing")]
-mod trials;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod trials;
 
 craft_ui::words! {
     /// The words of the report dialog beside the common OK.
@@ -154,7 +154,8 @@ impl<'a> ReportDialog<'a> {
                 None => words.line.fill(&[("tone", tone.as_str()), ("text", body.as_str())]),
             }
         };
-        let mut out: Vec<String> = if self.lines.is_empty() { self.notes.iter().map(&line).collect() } else { self.lines.iter().map(&text).collect() };
+        let mut out: Vec<String> =
+            if self.lines.is_empty() { self.notes.iter().map(&line).collect() } else { self.lines.iter().map(&text).collect() };
         for group in &self.groups {
             out.push(text(&group.heading));
             out.extend(group.notes.iter().map(&line));
@@ -230,8 +231,8 @@ fn show_note(ui: &mut Ui, note: &ReportNote, at: usize) {
     notice.show(ui);
 }
 
-/// A [`ReportDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: a title, a summary, plain lines and groups of
-/// notes. The text of the Copy button waits in [`take_copied`](HostedReport::take_copied) until the app puts it on the
+/// A [`ReportDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: a title, a summary, plain lines or notes, and
+/// groups of notes. The text of the Copy button waits in [`take_copied`](HostedReport::take_copied) until the app puts it on the
 /// clipboard.
 pub struct HostedReport {
     id: crate::dialog::DialogId,
@@ -241,6 +242,8 @@ pub struct HostedReport {
     groups: Vec<ReportGroup>,
     open: bool,
     copied: Option<String>,
+    /// The notes shown as notices; plain `lines` take their place when there are any.
+    notes: Vec<ReportNote>,
 }
 
 impl HostedReport {
@@ -254,7 +257,15 @@ impl HostedReport {
             groups: Vec::new(),
             open: true,
             copied: None,
+            notes: Vec::new(),
         }
+    }
+
+    /// Shows `notes` with the report; `json_fields` lists them.
+    #[must_use]
+    pub fn notes(mut self, notes: Vec<ReportNote>) -> Self {
+        self.notes = notes;
+        self
     }
 
     /// Shows and copies `groups` after the lines; `json_fields` lists their headings and note texts.
@@ -282,7 +293,7 @@ impl crate::dialog::StackDialog for HostedReport {
         let shown = ReportDialog {
             title: self.title.clone(),
             summary: self.summary.clone(),
-            notes: Vec::new(),
+            notes: self.notes.clone(),
             lines,
             groups: self.groups.clone(),
             open: Some(Bind::bound(&mut self.open)),
@@ -299,12 +310,13 @@ impl crate::dialog::StackDialog for HostedReport {
     }
 
     fn json_fields(&self) -> Option<Value> {
+        let notes: Vec<Value> = self.notes.iter().map(|note| json!({ "tone": note.tone.name(), "text": note.text.as_str() })).collect();
         let groups: Vec<Value> = self
             .groups
             .iter()
             .map(|group| json!({ "heading": group.heading.as_str(), "notes": group.notes.iter().map(|note| note.text.as_str()).collect::<Vec<_>>() }))
             .collect();
-        Some(json!({ "lines": self.lines, "groups": groups }))
+        Some(json!({ "lines": self.lines, "notes": notes, "groups": groups }))
     }
 }
 

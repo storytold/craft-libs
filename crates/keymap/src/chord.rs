@@ -23,7 +23,7 @@ macro_rules! keys {
         /// A key on the keyboard, independent of any UI toolkit.
         ///
         /// Digits are the main row; numeric keypad keys map to the same keys.
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, craft_ui_macros::PlainData)]
         #[non_exhaustive]
         pub enum Key {
             $(#[allow(missing_docs)] $variant),*
@@ -388,7 +388,7 @@ impl<'de> Deserialize<'de> for Key {
 }
 
 /// Modifier keys held with a chord's key.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Mods {
     /// The command modifier: ⌘ on macOS, Ctrl on Windows and Linux.
     pub cmd: bool,
@@ -453,7 +453,7 @@ impl Mods {
 }
 
 /// A key with modifiers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, craft_ui_macros::PlainData)]
 pub struct Chord {
     /// The modifiers held with the key.
     pub mods: Mods,

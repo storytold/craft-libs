@@ -1,8 +1,9 @@
 //! Stories of `ToolRail`, and the commands its stories and the flyout's use as tools.
 
 use super::{LastUsed, RailTool, ToolRail, ToolRailOutput, ToolSlot, ToolTips};
-use crate::contract::{Show as _, ThemeScope};
+use crate::contract::{MemoProps, Show as _, Tracked};
 use crate::display::{Shade, Text};
+use crate::docking::{DockGrid, DockSizes};
 use crate::style::TypeRole;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -45,7 +46,12 @@ pub(crate) fn tools(ids: &[u8]) -> Vec<RailTool<u8>> {
 }
 
 fn slots() -> Vec<ToolSlot<u8>> {
-    vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1])), ToolSlot::new(2, tools(&[ERASER])), ToolSlot::new(3, tools(&[4]))]
+    vec![
+        ToolSlot::new(0, tools(&[0])),
+        ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1])),
+        ToolSlot::new(2, tools(&[ERASER])),
+        ToolSlot::new(3, tools(&[4])),
+    ]
 }
 
 /// The story slots in two captioned groups: Move alone, then the painting tools.
@@ -61,7 +67,7 @@ fn captioned_slots() -> Vec<ToolSlot<u8>> {
 /// Shows `rail` in a room as wide as the grid of `cells` cells at `columns` columns, the stage a dock column of that
 /// many steps gives it, and at most `height` high.
 fn in_columns(ui: &mut Ui, columns: u8, cells: usize, height: Option<f32>, rail: ToolRail<'_, u8>) -> ToolRailOutput<u8> {
-    let width = ToolRail::<u8>::dock_grid(ui.ctx(), &ThemeScope::new(), cells).width(u16::from(columns));
+    let width = DockGrid::rail(cells).resolved(&DockSizes::of_scope(ui)).width(u16::from(columns));
     // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
     ui.scope(|ui| {
         ui.set_max_width(width);
@@ -81,8 +87,9 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let short = *data.choice("room", false, &[("Tall", false), ("Short", true)]);
     let hidden =
         data.choice("hidden", Vec::<u8>::new(), &[("None", Vec::new()), ("Pencil", vec![2]), ("Stamp", vec![4]), ("Eraser", vec![3])]).clone();
-    let slots = slots();
-    let last = LastUsed::default();
+    let hidden = Tracked::new(hidden);
+    let slots = Tracked::new(slots());
+    let last = Tracked::new(LastUsed::default());
     let rail = ToolRail::new("Tools", &slots, &BRUSH, &last).hidden(&hidden).edit_toolbar("Edit Toolbar");
     let out = in_columns(ui, columns, slots.len() + 1, short.then_some(SHORT_ROOM), rail);
     let note = data.note("note", "Nothing yet".to_owned());
@@ -103,12 +110,13 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
 fn tool_rail_captions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let columns = *data.ranged("columns", 1_u8, 1.0..=2.0);
-    let slots = captioned_slots();
-    let last = LastUsed::default();
+    let slots = Tracked::new(captioned_slots());
+    let last = Tracked::new(LastUsed::default());
     in_columns(ui, columns, slots.len(), None, ToolRail::new("Tools", &slots, &0, &last).captions()).into()
 }
 
 /// The tips of the brush and the eraser: the tool's name over what it does.
+#[derive(MemoProps)]
 struct StoryTips;
 
 impl ToolTips<u8> for StoryTips {
@@ -127,8 +135,8 @@ impl ToolTips<u8> for StoryTips {
 /// slot's flyout.
 #[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
 fn tool_rail_tips(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let slots = slots();
-    let last = LastUsed::default();
+    let slots = Tracked::new(slots());
+    let last = Tracked::new(LastUsed::default());
     in_columns(ui, 1, slots.len(), None, ToolRail::new("Tools", &slots, &0, &last).tips(&StoryTips)).into()
 }
 
@@ -136,8 +144,8 @@ fn tool_rail_tips(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// pencil row wears the mark; closed again, the slot's button wears it.
 #[story(ToolRail<'static, u8>, covers = [], drive = Drive::Never)]
 fn tool_rail_marked_in_a_closed_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let slots = slots();
-    let last = LastUsed::default();
+    let slots = Tracked::new(slots());
+    let last = Tracked::new(LastUsed::default());
     let pencil = BRUSH + 1;
     // The reveal is a request of one pass.
     let revealed = std::mem::replace(data.note("revealed", false), true);

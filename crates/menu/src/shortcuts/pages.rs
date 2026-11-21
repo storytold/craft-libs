@@ -134,6 +134,12 @@ pub struct DialogSnapshot {
     pub recording_hold: Option<CommandRef>,
     /// The import review, while it shows.
     pub review: Option<ReviewSnapshot>,
+    /// The chord in the New Shortcut field, as canonical text, while there is one.
+    pub pressed: Option<String>,
+    /// The commands that hold the pressed chord now.
+    pub holders: Vec<CommandRef>,
+    /// The selected command's keys as canonical text, as `remove` names them.
+    pub keys: Vec<String>,
 }
 
 /// The import review as automation reads it.
@@ -248,6 +254,9 @@ impl DialogState {
                 _ => None,
             }),
             review: self.review.as_ref().map(ReviewSnapshot::of),
+            pressed: self.field.as_ref().map(|f| f.binding.to_string()),
+            holders: self.field.as_ref().map(|f| f.holders.iter().map(|h| h.command.clone()).collect()).unwrap_or_default(),
+            keys: self.selected.as_ref().map(|c| keymap.bindings(c).iter().map(ToString::to_string).collect()).unwrap_or_default(),
         })
     }
 }

@@ -206,7 +206,7 @@ impl Overlay {
         mapped.placed_at = mapped.placed_at.map(|pos| to_screen * pos);
         mapped.bounds = mapped.bounds.map(|rect| to_screen * rect);
         match &mut mapped.place {
-            Place::Float(FloatPlace { pos: Some(pos) }) => *pos = to_screen * *pos,
+            Place::Float(FloatPlace { pos: Some(pos), .. }) => *pos = to_screen * *pos,
             // An offset is a vector: it scales with the layer's space and does not translate.
             Place::Anchored { offset, clear, .. } => {
                 *offset = to_screen.scaling * *offset;
@@ -300,7 +300,7 @@ impl Overlay {
     }
 
     /// The chrome of a modal over a part of the window the modal covers, placed at `rect`: above the modal, with no
-    /// focus scope and no dismissal of its own. Its move band moves the window the layer is shown in.
+    /// focus policy and no dismissal of its own. Its move band moves the window the layer is shown in.
     pub fn modal_chrome(rect: Rect) -> Overlay {
         let mut overlay =
             Overlay::base(Rank::ModalChrome, Place::Float(FloatPlace::centred()), OverlayFit::Content, OwnerClass::Widget, FocusPolicy::NONE);

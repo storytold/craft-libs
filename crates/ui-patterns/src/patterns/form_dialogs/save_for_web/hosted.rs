@@ -8,11 +8,12 @@ use super::model::{
 };
 use super::options::apply_preset;
 use super::{
-    BrowserPreview, COLOR_TABLES, DEFAULT_OPTIMIZE_K, OPENING_SPEED, SaveForWebDialog, WEB_SPEEDS, WebInput, WebPictures, WebSlice, WebView, ZOOM_RANGE, hex,
-    parse_hex, result_of, save_request,
+    BrowserPreview, COLOR_TABLES, DEFAULT_OPTIMIZE_K, OPENING_SPEED, SaveForWebDialog, WEB_SPEEDS, WebInput, WebPictures, WebSlice, WebView,
+    ZOOM_RANGE, hex, parse_hex, result_of, save_request,
 };
 use crate::contract::Bind;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
+use crate::patterns::form_dialogs::LinkedSize;
 use crate::patterns::form_dialogs::host_requests::HostRequests;
 use crate::runtime::env::Label;
 use crate::runtime::memory::SaveKey;
@@ -52,12 +53,11 @@ pub struct HostedSaveForWeb {
     open: bool,
     /// The document's slices.
     slices: Vec<WebSlice>,
+    slice_warning: Option<Label>,
     /// The view tab: bound to the dialog's `view` prop, so automation reads and writes it here.
     view: WebView,
     /// The path the app answered the save request with.
     path: Option<PathBuf>,
-    /// The output size after the last pass.
-    pixels: PixelSize,
     document: WebDocument,
     formats: Vec<WebFormat>,
     color_tables: Vec<ColorTable>,
@@ -89,6 +89,13 @@ impl HostedSaveForWeb {
     #[must_use]
     pub fn slices(mut self, slices: Vec<WebSlice>) -> Self {
         self.slices = slices;
+        self
+    }
+
+    /// A notice placed below the preview captions when the host omits slices.
+    #[must_use]
+    pub fn slice_warning(mut self, warning: Option<Label>) -> Self {
+        self.slice_warning = warning;
         self
     }
 
@@ -209,9 +216,9 @@ impl HostedSaveForWeb {
             saving: false,
             open: true,
             slices: Vec::new(),
+            slice_warning: None,
             view: WebView::default(),
             path: None,
-            pixels: size,
             document: WebDocument::default(),
             formats: WebFormat::ALL.to_vec(),
             color_tables: COLOR_TABLES.to_vec(),
@@ -240,6 +247,7 @@ impl HostedSaveForWeb {
     #[must_use]
     pub fn options(mut self, options: SaveForWebOptions) -> Self {
         self.options = options;
+        self.options.clamp_exact_size(self.size);
         self
     }
 
@@ -326,7 +334,7 @@ impl StackDialog for HostedSaveForWeb {
     /// dialog as Save… does and answers none.
     fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
         if std::mem::take(&mut self.done) {
-            return Some(result_of(self.options.clone(), None, self.pixels, self.view, self.remember.clone()));
+            return Some(result_of(self.options.clone(), None, self.options.output_size(self.size), self.view, self.remember.clone()));
         }
         let Some(path) = self.path.clone() else {
             if !self.saving {
@@ -335,7 +343,7 @@ impl StackDialog for HostedSaveForWeb {
             }
             return None;
         };
-        Some(result_of(self.options.clone(), Some(path), self.pixels, self.view, self.remember.clone()))
+        Some(result_of(self.options.clone(), Some(path), self.options.output_size(self.size), self.view, self.remember.clone()))
     }
 
     fn take_color_request(&mut self) -> Option<ColorRequest> {
@@ -354,6 +362,10 @@ impl StackDialog for HostedSaveForWeb {
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.options)?;
         let map = fields.as_object_mut()?;
+        let size = self.options.output_size(self.size);
+        map.insert("width".into(), size.width.into());
+        map.insert("height".into(), size.height.into());
+        map.insert("__constrain".into(), self.options.constrain_proportions.into());
         map.insert("view".to_owned(), serde_json::to_value(self.view).ok()?);
         map.insert("frame".to_owned(), Value::from(self.frame));
         let path = self.path.as_ref().map_or(Value::Null, |path| Value::String(path.to_string_lossy().into_owned()));
@@ -459,8 +471,33 @@ impl StackDialog for HostedSaveForWeb {
                 self.inputs.push(WebInput::OptimizeGo);
                 Ok(())
             }
+            "width" | "height" => {
+                let pixels = value.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(rejected)?;
+                let mut link = LinkedSize::new(self.size);
+                self.options.apply_size(&mut link);
+                if field == "width" {
+                    link.set_width(pixels);
+                } else {
+                    link.set_height(pixels);
+                }
+                self.options.set_exact_size(&link);
+                Ok(())
+            }
+            "__constrain" => {
+                let constrain = value.as_bool().ok_or_else(rejected)?;
+                let mut link = LinkedSize::new(self.size);
+                self.options.apply_size(&mut link);
+                self.options.constrain(&mut link, constrain);
+                Ok(())
+            }
+            "percent" => {
+                set_serde_field(&mut self.options, field, value.clone())?;
+                self.options.size = None;
+                Ok(())
+            }
             _ => {
                 set_serde_field(&mut self.options, field, value.clone())?;
+                self.options.clamp_exact_size(self.size);
                 self.restore_if_reduced(before);
                 Ok(())
             }
@@ -480,6 +517,7 @@ impl StackDialog for HostedSaveForWeb {
             animation: self.animation,
             remember: self.remember.clone(),
             slices: &self.slices,
+            slice_warning: self.slice_warning.clone(),
             view: Some(Bind::bound(&mut self.view)),
             frame: Some(Bind::bound(&mut self.frame)),
             open: Some(Bind::bound(&mut self.open)),
@@ -497,7 +535,6 @@ impl StackDialog for HostedSaveForWeb {
             ..dialog
         };
         let mut shown = dialog.show(ui);
-        self.pixels = shown.size;
         if let Some(last) = shown.wanted_variants.first() {
             self.taken = last.request.revision;
             self.wanted = shown.wanted_variants;
