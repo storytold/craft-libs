@@ -541,11 +541,18 @@ pub(crate) struct ShrinkCap {
     pub width: f32,
     /// The unit dropped out of the row (`shrink_or_drop`): it shows nothing and takes no place.
     pub dropped: bool,
+    /// The row gave the unit less than it asks for in no room, or dropped it: what the unit shows depends on the row's
+    /// room. A unit the row did not narrow shows as in no room.
+    pub narrowed: bool,
 }
 
 /// What the shrink step of the row `row` gave its unit `leaf` in this pass's measuring run.
 pub(crate) fn shrink_cap(ctx: &egui::Context, row: Id, leaf: Id) -> Option<ShrinkCap> {
-    layout_memory::shrink(ctx, shrink_key(row, leaf)).map(|(found, dropped)| ShrinkCap { width: found.took.x, dropped })
+    layout_memory::shrink(ctx, shrink_key(row, leaf)).map(|(found, given)| ShrinkCap {
+        width: found.took.x,
+        dropped: given.dropped,
+        narrowed: given.narrowed,
+    })
 }
 
 fn shrink_key(row: Id, leaf: Id) -> Id {
@@ -649,9 +656,13 @@ fn shrink_or_drop(
     let shown_first: Vec<bool> = first.iter().zip(&kept).filter(|(_, kept)| **kept).map(|(first, _)| *first).collect();
     let mut widths = shrink_in_turns(&shown, &pick(whole), &shown_first, fixed, room, order).into_iter();
     kept.iter()
-        .map(|kept| match kept {
-            true => ShrinkCap { width: widths.next().unwrap_or_default(), dropped: false },
-            false => ShrinkCap { width: 0.0, dropped: true },
+        .zip(units)
+        .map(|(kept, unit)| match kept {
+            true => {
+                let width = widths.next().unwrap_or_default();
+                ShrinkCap { width, dropped: false, narrowed: unit.ideal - width >= 0.5 }
+            }
+            false => ShrinkCap { width: 0.0, dropped: true, narrowed: true },
         })
         .collect()
 }
@@ -732,21 +743,23 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let widths = if room.is_finite() {
             shrink_or_drop(&units, &whole, &first, (fixed + held, gap), room, order, drops)
         } else {
-            units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false }).collect()
+            units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false, narrowed: false }).collect()
         };
         // A levelled unit took no place of its own content in the first sweep (it measured each level apart), so the
         // records its content's run leaves for the real run come from a sweep at the levels given.
         let mut again = !levelled.is_empty();
         for (leaf, cap) in continuous.iter().zip(widths) {
             let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(cap.width, 0.0));
-            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, cap.dropped);
+            let given = layout_memory::ShrinkGiven { dropped: cap.dropped, narrowed: cap.narrowed };
+            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, given);
             // Half a point: less than a pixel shows at any scale the box runs.
             again |= (leaf.took - cap.width).abs() >= 0.5;
         }
         for (leaf, level) in levelled.iter().zip(levels) {
             // The level travels as the record's height (`level_of`).
             let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width_at(leaf, level), level as f32));
-            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, false);
+            let given = layout_memory::ShrinkGiven { dropped: false, narrowed: level > 0 };
+            layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, given);
         }
         again
     };

@@ -410,12 +410,18 @@ impl Scoped {
     }
 
     /// Starts the layout room of a memoized view's content (`start_room`). Where a leaf shown here would fit its room
-    /// (`view_fits`), the leaves of the view's content fit the room the view is given (`Shrink::Fit`).
+    /// (`view_fits`), the leaves of the view's content fit the room the view is given (`Shrink::Fit`). A view that is a
+    /// unit of a shrinking `Row` sizes from its content along x, as the row counted it: a child that fills there takes
+    /// its measured width, not the row's flow region a view the row does not narrow is shown in.
     pub(crate) fn start_view_room(&mut self) {
         let fits = self.view_fits();
+        let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
         self.start_room();
         if fits {
             self.shrink = Some(Shrink::Fit);
+        }
+        if row_unit {
+            self.content.0 = true;
         }
     }
 

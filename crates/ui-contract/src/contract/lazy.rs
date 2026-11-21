@@ -78,11 +78,13 @@ impl Lazy {
         };
         let rtl = ui.layout().prefer_right_to_left();
         let memo = matches!(key, Key::Memo(_));
-        // A memoized view is one unit of the shrinking row around it: it shows at most the width the row's measuring
-        // run gave it, the room its place then holds, so a new width runs it.
+        // A memoized view is one unit of the shrinking row around it. A row that narrows it gives it at most the width
+        // its measuring run settled on, the room its place then holds, so a new width runs it. A view the row does not
+        // narrow shows as in no room, in the row's flow region: its room does not follow its own content's width, so a
+        // new content runs it once and the discard pass its new size asks for replays that run.
         let shrink = Env::of(ui).shrink.filter(|_| memo);
         let cap = match shrink {
-            Some(Shrink::Apply(row)) => crate::layout::shrink_cap(&ctx, row, id),
+            Some(Shrink::Apply(row)) => crate::layout::shrink_cap(&ctx, row, id).filter(|cap| cap.narrowed),
             _ => None,
         };
         let available = cap.map_or_else(|| flow_region(ui), |cap| at_most(flow_region(ui), rtl, cap.width));

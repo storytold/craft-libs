@@ -53,8 +53,9 @@ use std::sync::Arc;
 /// cursor) does not reach in, so the room it is given reaches it only through its place. To the body
 /// around it the view is one unit, sized by its content's measure. In a shrinking `Row` it is a unit the row narrows
 /// as it narrows a body unit: from what its content takes in no room down to what it takes with every leaf at its
-/// least. The width the row gives it is the room of its place, and the leaves of its content fit that room, as they
-/// fit the room of a `Stack` the view is shown in.
+/// least. When the row narrows it, the width the row gives it is the room of its place; otherwise it shows as in no
+/// room, in the row's flow region. Its content sizes from its content along x, and its leaves fit the view's room, as
+/// they fit the room of a `Stack` the view is shown in.
 ///
 /// What `show` returns holds layout facts only (a size, a rect, which part took the room). A replay returns the kept
 /// value again, moved with the record when the room moved (`Shift`), so an event returned through it would arrive once
