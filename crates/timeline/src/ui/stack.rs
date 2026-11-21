@@ -817,5 +817,5 @@ pub(crate) fn set_event<T>(before: T, after: T, label: &str) -> EditEvent<T> {
     EditEvent::set(Mixed::Same(before), after, Arc::from(label), None)
 }
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

@@ -14,8 +14,8 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The [`ColorRequest::key`](crate::runtime::requests::ColorRequest::key) of Panel Options' Custom… colour.
 pub const NAVIGATOR_PROXY_COLOR_KEY: &str = "navigatorOptionsDialog.proxyColor";

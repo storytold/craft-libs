@@ -10,10 +10,10 @@
 extern crate self as craft_ui;
 
 #[cfg(feature = "testing")]
+pub use craft_ui_widgets::registry;
+#[cfg(feature = "suite")]
 #[doc(hidden)]
 pub use craft_ui_widgets::story_kit;
-#[cfg(feature = "testing")]
-pub use craft_ui_widgets::testing_registered;
 #[doc(hidden)]
 pub use craft_ui_widgets::{__private, __register_command_set, __register_contract, __register_pattern};
 pub use craft_ui_widgets::{InstallError, InstallSpec, contract, fonts, install, layout, primitives, runtime, style, words};
@@ -43,5 +43,6 @@ pub mod testing {
         pub use crate::testing_internals::*;
     }
 
-    crate::testing_registered!();
+    #[cfg(feature = "suite")]
+    crate::registry!();
 }

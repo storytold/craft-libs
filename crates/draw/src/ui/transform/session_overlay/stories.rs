@@ -6,7 +6,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::{Line, Rect as DocRect};
 use craft_ui::canvas::RasterSource as _;
-use craft_ui::contract::{Bind, Entry};
+use craft_ui::contract::Entry;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::pointer;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, paint_shapes};
@@ -100,9 +100,9 @@ fn run_session(ui: &mut Ui, data: &mut StoryData, with_rows: bool) -> StoryOutpu
     let rows = if with_rows { app_rows(&words) } else { Vec::new() };
     let first = data.value("settings", sample_settings()).clone();
     let kept = story_tool(data, || TransformKept::new(&first));
-    let settings = data.value("settings", sample_settings());
+    let (settings, settings_at) = data.value_at("settings", sample_settings());
     // The bar shows before the canvas, as the app's options bar does: its edits reach the session on this pass.
-    let bar = TransformBar::new("Free Transform", &kept.borrow().session, Bind::bound(settings)).show(ui);
+    let bar = TransformBar::new("Free Transform", &kept.borrow().session, settings_at.bind(settings)).show(ui);
     let settings = settings.clone();
     let document = StoryDocument::STANDARD;
     let line = accent(ui, 1.0);

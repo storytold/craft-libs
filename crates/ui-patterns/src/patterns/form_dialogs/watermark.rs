@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The key of the image request the Choose button files.
 pub const WATERMARK_IMAGE_KEY: &str = "watermark";
@@ -262,7 +262,8 @@ fn rows(ui: &mut Ui, words: &WatermarkWords, units: &Units, now: &mut WatermarkS
         }
     }
     Field::new(words.position.clone()).id_salt("position").show(ui, |ui, _| {
-        if let Some(position) = ReferencePoint::new(words.position.clone(), Bind::given(now.position)).show(ui).value().cloned() {
+        let picked = ReferencePoint::new(words.position.clone(), Bind::given(Some(now.position))).show(ui);
+        if let Some(position) = picked.value().cloned().flatten() {
             now.position = position;
         }
     });

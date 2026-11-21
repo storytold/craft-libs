@@ -7,10 +7,12 @@ use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetR
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
+
+use super::GradientTile;
 
 /// The presets take their content height up to this many small control heights, then scroll.
 const MAX_ROWS: f32 = 6.0;
@@ -40,12 +42,21 @@ pub struct GradientItem {
     pub name: String,
     /// The preset's stops.
     pub stops: GradientStops,
+    /// How the preset's cell is drawn: the ramp chip, or a square tile.
+    pub tile: GradientTile,
 }
 
 impl GradientItem {
     /// A preset called `name` with `stops`.
     pub fn new(name: impl Into<String>, stops: GradientStops) -> Self {
-        Self { name: name.into(), stops }
+        Self { name: name.into(), stops, tile: GradientTile::default() }
+    }
+
+    /// Draws the preset's cell as `tile`.
+    #[must_use]
+    pub fn tile(mut self, tile: GradientTile) -> Self {
+        self.tile = tile;
+        self
     }
 }
 
@@ -200,20 +211,30 @@ impl<'a> GradientPalette<'a> {
         let default = default_sampler(self.rows);
         let sampler: &Sampler = self.sampler.unwrap_or(&default);
         let (groups, recent) = (self.groups, self.recent);
+        let (wide, high) = GradientRamp::CHIP_ASPECT;
+        // The browser has one cell shape for the grid and the list, so any tile makes every cell square.
+        let square = groups.iter().flat_map(|g| &g.items).any(|item| item.tile != GradientTile::Ramp);
         let thumb =
             move |cx: &craft_ui::primitives::ContentPainterCx, rect: egui::Rect, info: craft_ui::patterns::presets::ThumbInfo<'_, GradientRef>| {
                 if let Some(stops) = stops_of(groups, recent, *info.key) {
                     let (radius, edge) = GradientRamp::chip_look(&cx.style_cx());
-                    GradientRamp::paint_chip(cx, rect, radius, &GradientRamp::colors(stops, sampler), edge);
+                    let tile = item_of(groups, *info.key).map_or(GradientTile::Ramp, |item| item.tile);
+                    if tile != GradientTile::Ramp {
+                        tile.paint(cx, rect, radius, stops, sampler, edge);
+                        return;
+                    }
+                    let chip = if square {
+                        egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), rect.width() * f32::from(high) / f32::from(wide)))
+                    } else {
+                        rect
+                    };
+                    GradientRamp::paint_chip(cx, chip, radius, &GradientRamp::colors(stops, sampler), edge);
                 }
             };
-        let (wide, high) = GradientRamp::CHIP_ASPECT;
         let most = Env::of(ui).tokens.size.control.sm * MAX_ROWS;
-        let mut browser = PresetBrowser::new(self.label, self.state, &rows)
-            .cell_shape(CellShape::ratio(wide, high))
-            .tiles(PresetTiles::Chips)
-            .room_height(most)
-            .thumb(thumb);
+        let shape = if square { CellShape::Square } else { CellShape::ratio(wide, high) };
+        let mut browser =
+            PresetBrowser::new(self.label, self.state, &rows).cell_shape(shape).tiles(PresetTiles::Chips).room_height(most).thumb(thumb);
         if let Some(selected) = self.selected {
             browser = browser.selected(selected);
         }
@@ -234,6 +255,14 @@ impl<'a> GradientPalette<'a> {
 pub(super) fn stops_of<'a>(groups: &'a [GradientGroup], recent: &'a [GradientStops], key: GradientRef) -> Option<&'a GradientStops> {
     match key {
         GradientRef::Recent(i) => recent.get(i),
-        GradientRef::Item { group, item } => groups.get(group)?.items.get(item).map(|preset| &preset.stops),
+        GradientRef::Item { .. } => item_of(groups, key).map(|preset| &preset.stops),
+    }
+}
+
+/// The group item `key` names; none for a recent gradient (which has stops only) or a group header.
+pub(super) fn item_of(groups: &[GradientGroup], key: GradientRef) -> Option<&GradientItem> {
+    match key {
+        GradientRef::Recent(_) => None,
+        GradientRef::Item { group, item } => groups.get(group)?.items.get(item),
     }
 }

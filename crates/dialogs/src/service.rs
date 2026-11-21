@@ -23,8 +23,14 @@ use std::sync::{Arc, Mutex};
 use craft_host::{FileError, Files, PickAnswer, PickId, PickRequest, Wake};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+#[cfg(feature = "ui")]
+use craft_browse::places::{FolderCache, SystemDirectories};
+#[cfg(feature = "ui")]
+use craft_host::ThreadJobs;
 use craft_host::{PickKind, Picked};
 
+#[cfg(feature = "ui")]
+use crate::ui::FileChooser;
 use crate::{Answer, Dialogs, FileDialog, Filter, Kind, Message, MessageButtons, MessageLevel, MessageResult, probe};
 
 /// The words of the Replace question: a native message box, so they come from the app's catalog
@@ -59,6 +65,19 @@ fn file_error(e: std::io::Error, path: &Path) -> FileError {
         std::io::ErrorKind::PermissionDenied => FileError::PermissionDenied(path.to_owned()),
         _ => FileError::Other(e.to_string()),
     }
+}
+
+/// Writes `bytes` to `path` atomically: the one write of [`Files::write`] and of a finished save.
+// pc: apps/photocraft/src/services.rs:359 write_atomic
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), FileError> {
+    craft_atomic::atomic_write(path, bytes).map_err(|e| file_error(e, path))
+}
+
+/// The folder a picker starts in: the request's own folder, else the purpose's remembered one
+/// (`last`), else the request's first-time folder. The native panels and the fallback chooser
+/// both start here.
+fn start_folder(request: &PickRequest, last: Option<&Path>) -> Option<PathBuf> {
+    request.directory.clone().or_else(|| last.map(Path::to_path_buf)).or_else(|| request.default_directory.clone())
 }
 
 /// The name a Save panel starts with. Where the panel adds the filter's extension itself
@@ -151,6 +170,8 @@ struct Pending {
     request: PickRequest,
     /// The Save path waiting on the replace question's answer.
     awaiting_replace: Option<ReplaceQuestion>,
+    /// What a [`Files::save`] writes to the settled path.
+    bytes: Option<Vec<u8>>,
 }
 
 /// A Save answer that collides with an existing file after the extension policy: the path the
@@ -167,6 +188,17 @@ struct ReplaceQuestion {
 struct AskedPrompt {
     id: PickId,
     question: ReplaceQuestion,
+    dialog: Option<craft_ui::dialog::DialogId>,
+}
+
+/// A pick the fallback chooser answers on the app's `DialogHost`: the ticket, its request, why the
+/// native dialog was not used (`None` when the request asked for the chooser), and the chooser's
+/// id once it is open.
+#[cfg(feature = "ui")]
+struct AskedChooser {
+    id: PickId,
+    request: PickRequest,
+    cause: Option<String>,
     dialog: Option<craft_ui::dialog::DialogId>,
 }
 
@@ -192,6 +224,12 @@ pub struct FilePanels {
     /// The replace questions [`pump_with`](FilePanels::pump_with) put on the app's dialog host.
     #[cfg(feature = "ui")]
     prompts: Vec<AskedPrompt>,
+    /// The picks [`pump_with`](FilePanels::pump_with) answers with the fallback chooser, in order.
+    #[cfg(feature = "ui")]
+    choosers: Vec<AskedChooser>,
+    /// Repaint request for the fallback chooser's folder jobs.
+    #[cfg(feature = "ui")]
+    wake: Wake,
 }
 
 struct Inner {
@@ -226,6 +264,10 @@ impl FileService {
             backend_problem: probe::known_problem,
             #[cfg(feature = "ui")]
             prompts: Vec::new(),
+            #[cfg(feature = "ui")]
+            choosers: Vec::new(),
+            #[cfg(feature = "ui")]
+            wake: wake.clone(),
         };
         (Self { inner, wake, to_panels }, panels)
     }
@@ -295,6 +337,7 @@ impl FilePanels {
     // pc: crates/ui-egui/src/file_dialog.rs:310 poll_file_dialog, :349 finish_file_dialog, :365 saved_path
     pub fn pump<W: HasWindowHandle + HasDisplayHandle>(&mut self, parent: Option<&W>) {
         self.start_requests();
+        self.cancel_forgotten();
         // A replace question queued by `finish` shows in the same pass, so the loop runs until no
         // answer is left to settle.
         loop {
@@ -304,7 +347,7 @@ impl FilePanels {
                 break;
             }
             for (id, answer) in answers {
-                if let Some(question) = self.finish(id, answer) {
+                if let Some(question) = self.finish(id, answer, true) {
                     self.dialogs.ask_message(self.replace_message(&question.settled), id);
                 }
             }
@@ -319,11 +362,23 @@ impl FilePanels {
     /// open makes the question wait its turn. The question is a prompt instance
     /// ([`StandardPrompt::instance`](craft_ui::dialog::StandardPrompt::instance)), so the app's
     /// `take::<StandardPrompt>()` and its own prompts leave its answer alone.
+    ///
+    /// A request with [`PickRequest::fallback`] set, and one whose native dialog answered
+    /// [`Answer::Unavailable`], is answered by the in-app [`FileChooser`] on the same host instead,
+    /// one chooser at a time; its answer is settled like a native one.
     // pc: crates/ui-egui/src/dialogs/replace_prompt.rs:23 open
     #[cfg(feature = "ui")]
     pub fn pump_with<W: HasWindowHandle + HasDisplayHandle>(&mut self, dialogs: &mut craft_ui::dialog::DialogHost, parent: Option<&W>) {
         self.collect_prompt_answers(dialogs);
-        self.start_requests();
+        self.collect_chooser_answers(dialogs);
+        while let Ok((id, request)) = self.requests.try_recv() {
+            if request.fallback {
+                self.choosers.push(AskedChooser { id, request, cause: None, dialog: None });
+            } else {
+                self.ask_panel(id, &request);
+            }
+        }
+        self.cancel_forgotten();
         loop {
             self.dialogs.show_pending(parent);
             let answers = self.dialogs.take_answers();
@@ -331,13 +386,80 @@ impl FilePanels {
                 break;
             }
             for (id, answer) in answers {
-                if let Some(question) = self.finish(id, answer) {
+                // No native dialog could show: the chooser answers the pick, unless it was
+                // forgotten or is settling a replace question.
+                let answer = match answer {
+                    Answer::Unavailable(why) => {
+                        let unsettled = lock(&self.inner).pending.get(&id).filter(|p| p.awaiting_replace.is_none()).map(|p| p.request.clone());
+                        match unsettled {
+                            Some(request) => {
+                                self.choosers.push(AskedChooser { id, request, cause: Some(why), dialog: None });
+                                continue;
+                            }
+                            None => Answer::Unavailable(why),
+                        }
+                    }
+                    answer => answer,
+                };
+                if let Some(question) = self.finish(id, answer, true) {
                     self.prompts.push(AskedPrompt { id, question, dialog: None });
                 }
             }
         }
+        self.open_choosers(dialogs);
         self.open_prompts(dialogs);
         self.mark_busy();
+    }
+
+    /// Opens the next waiting chooser when none is open. Its folder source lists the file system
+    /// on threads and repaints the app when a listing is in.
+    #[cfg(feature = "ui")]
+    fn open_choosers(&mut self, dialogs: &mut craft_ui::dialog::DialogHost) {
+        if dialogs.get::<FileChooser>().is_some() {
+            return;
+        }
+        let Some(asked) = self.choosers.iter_mut().find(|a| a.dialog.is_none()) else { return };
+        let last = lock(&self.inner).last_folder.get(&asked.request.purpose).cloned();
+        let mut request = asked.request.clone();
+        request.directory = start_folder(&request, last.as_deref());
+        let folders = FolderCache::new(Arc::new(SystemDirectories), Arc::new(ThreadJobs), self.wake.clone());
+        asked.dialog = Some(dialogs.open(FileChooser::new(request, asked.cause.clone(), folders)));
+    }
+
+    /// Settles the picks whose chooser has finished: OK with its answer, anything else as
+    /// `Cancelled`, the same for a chooser closed from outside. A pick forgotten before its
+    /// chooser opened is dropped; one forgotten while it is open is dropped by `finish`.
+    #[cfg(feature = "ui")]
+    fn collect_chooser_answers(&mut self, dialogs: &mut craft_ui::dialog::DialogHost) {
+        use craft_ui::dialog::DialogResult;
+        for asked in std::mem::take(&mut self.choosers) {
+            let answer = match asked.dialog {
+                None => {
+                    let pending = lock(&self.inner).pending.contains_key(&asked.id);
+                    if pending {
+                        self.choosers.push(asked);
+                    }
+                    continue;
+                }
+                Some(dialog) => match dialogs.take_by_id::<FileChooser>(dialog) {
+                    Some(DialogResult::Ok(answer)) => answer,
+                    Some(_) => Answer::Cancelled,
+                    None if dialogs.get_by_id::<FileChooser>(dialog).is_some() => {
+                        // A forgotten pick has no one to answer: its chooser closes, as its
+                        // native panel does (`cancel_forgotten`).
+                        if !lock(&self.inner).pending.contains_key(&asked.id) {
+                            dialogs.close_by_id(dialog);
+                        }
+                        self.choosers.push(asked);
+                        continue;
+                    }
+                    None => Answer::Cancelled,
+                },
+            };
+            if let Some(question) = self.finish(asked.id, answer, false) {
+                self.prompts.push(AskedPrompt { id: asked.id, question, dialog: None });
+            }
+        }
     }
 
     /// The dialog ids of the Replace questions open on the app's dialog host, for an app that lists
@@ -393,10 +515,21 @@ impl FilePanels {
     /// Drains the requests the service queued into the native panels' queue.
     fn start_requests(&mut self) {
         while let Ok((id, request)) = self.requests.try_recv() {
-            let folder = lock(&self.inner).last_folder.get(&request.purpose).cloned();
-            let dialog = self.file_dialog(&request, folder.as_deref());
-            self.dialogs.ask(dialog, id);
+            self.ask_panel(id, &request);
         }
+    }
+
+    /// Queues the native panel of pick `id`.
+    fn ask_panel(&mut self, id: PickId, request: &PickRequest) {
+        let folder = lock(&self.inner).last_folder.get(&request.purpose).cloned();
+        let dialog = self.file_dialog(request, folder.as_deref());
+        self.dialogs.ask(dialog, id);
+    }
+
+    /// Closes the open panel of a pick that was forgotten (a closed document's portal Save).
+    fn cancel_forgotten(&mut self) {
+        let inner = &self.inner;
+        self.dialogs.cancel_open_if(|id| !lock(inner).pending.contains_key(id));
     }
 
     fn mark_busy(&self) {
@@ -416,7 +549,7 @@ impl FilePanels {
         });
         dialog.title = request.title.clone();
         dialog.filters = request.filters.iter().map(|f| Filter { name: f.name.clone(), extensions: f.extensions.clone() }).collect();
-        dialog.directory = request.directory.clone().or_else(|| last_folder.map(Path::to_path_buf)).or_else(|| request.default_directory.clone());
+        dialog.directory = start_folder(request, last_folder);
         if request.kind == PickKind::Save {
             let adds_extension = cfg!(windows) && !request.filters.is_empty();
             dialog.file_name = request.file_name.as_deref().and_then(|name| dialog_file_name(name, adds_extension));
@@ -471,10 +604,11 @@ impl FilePanels {
     /// the policy and guard, `Unavailable` stays `Unavailable` with the cause, and a `Cancelled` on a
     /// system where the probe found no dialog backend becomes `Unavailable` with the probe's
     /// cause. A Save that needs the replace
-    /// question stays pending and returns the question for the caller to ask.
-    fn finish(&mut self, id: PickId, answer: Answer) -> Option<ReplaceQuestion> {
-        let pending = lock(&self.inner).pending.remove(&id)?;
-        let picked = match (answer, pending.awaiting_replace) {
+    /// question stays pending and returns the question for the caller to ask. `from_panel` says a
+    /// native panel answered, not the fallback chooser, whose Cancel is always the user's.
+    fn finish(&mut self, id: PickId, answer: Answer, from_panel: bool) -> Option<ReplaceQuestion> {
+        let Pending { request, awaiting_replace, bytes } = lock(&self.inner).pending.remove(&id)?;
+        let picked = match (answer, awaiting_replace) {
             (Answer::Message(result), Some(question)) => {
                 let replace =
                     matches!(&result, MessageResult::Ok) || matches!(&result, MessageResult::Custom(label) if *label == self.replace_words.replace);
@@ -482,12 +616,12 @@ impl FilePanels {
             }
             (Answer::Paths(paths), _) if paths.is_empty() => Picked::Cancelled,
             (Answer::Paths(mut paths), _) => {
-                if pending.request.kind == PickKind::Save {
+                if request.kind == PickKind::Save {
                     let answered = paths.swap_remove(0);
-                    let settled = Self::settled_save_path(self.extension_policy, &answered, pending.request.suggested_extension.as_deref());
+                    let settled = Self::settled_save_path(self.extension_policy, &answered, request.suggested_extension.as_deref());
                     if self.replace_guard == ReplaceGuard::AskWhenUnasked && Self::replaces_unasked(&answered, &settled) {
                         let question = ReplaceQuestion { answered, settled };
-                        lock(&self.inner).pending.insert(id, Pending { request: pending.request, awaiting_replace: Some(question.clone()) });
+                        lock(&self.inner).pending.insert(id, Pending { request, awaiting_replace: Some(question.clone()), bytes });
                         return Some(question);
                     }
                     paths = vec![settled];
@@ -497,10 +631,10 @@ impl FilePanels {
             (Answer::Unavailable(why), _) => Picked::Unavailable(why),
             // A panel that answers nothing on a system without a dialog backend did not get
             // cancelled; the probe knows why.
-            (Answer::Cancelled, None) => (self.backend_problem)().map_or(Picked::Cancelled, Picked::Unavailable),
+            (Answer::Cancelled, None) if from_panel => (self.backend_problem)().map_or(Picked::Cancelled, Picked::Unavailable),
             (Answer::Cancelled | Answer::Message(_), _) => Picked::Cancelled,
         };
-        self.complete(id, pending.request, picked);
+        self.complete(id, request, picked, bytes);
         None
     }
 
@@ -508,12 +642,20 @@ impl FilePanels {
     /// `Cancelled` otherwise. A forgotten pick has nothing to settle.
     #[cfg(feature = "ui")]
     fn settle_replace(&mut self, id: PickId, replace: bool) {
-        let Some(Pending { request, awaiting_replace: Some(question) }) = lock(&self.inner).pending.remove(&id) else { return };
-        self.complete(id, request, if replace { Picked::Paths(vec![question.settled]) } else { Picked::Cancelled });
+        let Some(Pending { request, awaiting_replace: Some(question), bytes }) = lock(&self.inner).pending.remove(&id) else { return };
+        self.complete(id, request, if replace { Picked::Paths(vec![question.settled]) } else { Picked::Cancelled }, bytes);
     }
 
-    /// Remembers the folder of a chosen path and queues the answer.
-    fn complete(&self, id: PickId, request: PickRequest, picked: Picked) {
+    /// Writes a save's `bytes` to the settled path (a failed write answers `Failed` with the
+    /// system's message), remembers the folder of a chosen path and queues the answer.
+    fn complete(&self, id: PickId, request: PickRequest, picked: Picked, bytes: Option<Vec<u8>>) {
+        let picked = match (picked, bytes) {
+            (Picked::Paths(paths), Some(bytes)) => match paths.first().map(|path| write_file(path, &bytes)) {
+                Some(Err(e)) => Picked::Failed(e.to_string()),
+                _ => Picked::Paths(paths),
+            },
+            (picked, _) => picked,
+        };
         let mut inner = lock(&self.inner);
         if let Picked::Paths(paths) = &picked
             && let Some(first) = paths.first()
@@ -527,20 +669,28 @@ impl FilePanels {
     }
 }
 
-impl Files for FileService {
+impl FileService {
+    /// Allocates the ticket of `request`, counts it pending and queues it for the panels; a save's
+    /// `bytes` wait in the pending entry for the settled path.
     // new: ticket allocation and queueing on `Dialogs::ask`
-    fn pick(&self, request: PickRequest) -> PickId {
+    fn ask(&self, request: PickRequest, bytes: Option<Vec<u8>>) -> PickId {
         let id = {
             let mut inner = lock(&self.inner);
             inner.next += 1;
             let id = PickId(inner.next);
-            inner.pending.insert(id, Pending { request: request.clone(), awaiting_replace: None });
+            inner.pending.insert(id, Pending { request: request.clone(), awaiting_replace: None, bytes });
             id
         };
         // The panels gone (the app is shutting down) leaves the ticket unanswered.
         let _ = self.to_panels.send((id, request));
         self.wake.wake();
         id
+    }
+}
+
+impl Files for FileService {
+    fn pick(&self, request: PickRequest) -> PickId {
+        self.ask(request, None)
     }
 
     fn take_answer(&self, id: PickId) -> Option<Picked> {
@@ -549,7 +699,8 @@ impl Files for FileService {
         inner.answered.remove(at).map(|a| a.picked)
     }
 
-    // A ticket still pending leaves `pending`, so the answer the panel gives later is dropped by `finish`.
+    // A ticket still pending leaves `pending`, so the answer the panel gives later is dropped by
+    // `finish`, and the next pump closes its portal Save (`cancel_forgotten`).
     fn forget(&self, id: PickId) {
         let mut inner = lock(&self.inner);
         inner.pending.remove(&id);
@@ -566,9 +717,22 @@ impl Files for FileService {
         std::fs::read(path).map_err(|e| file_error(e, path))
     }
 
-    // pc: apps/photocraft/src/services.rs:359 write_atomic
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-        craft_atomic::atomic_write(path, bytes).map_err(|e| file_error(e, path))
+        write_file(path, bytes)
+    }
+
+    /// Queues a Save pick, then writes `bytes` to the settled path and answers `Paths` or
+    /// `Failed`.
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
+        self.ask(request, Some(bytes))
+    }
+
+    fn can_pick(&self) -> bool {
+        true
+    }
+
+    fn browser_saves(&self) -> bool {
+        false
     }
 
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
@@ -577,7 +741,7 @@ impl Files for FileService {
 }
 
 #[cfg(test)]
-mod service_tests {
+pub(crate) mod service_tests {
     //! Behaviour tests with `Dialogs::set_override` standing in for the panels.
 
     use craft_ui::testing::trial;
@@ -698,6 +862,85 @@ mod service_tests {
         assert_eq!(answered(&service, asked), Picked::Paths(vec![dir.join("Photo.png")]));
         assert_eq!(log.borrow().len(), 3, "no question for a path the panel asked about");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A save is a ticketed pick that writes: the answer names the written file once; a target
+    // that cannot be written answers `Failed`, which names no path.
+    #[trial]
+    fn a_save_writes_the_bytes_once_and_answers_by_ticket() {
+        let dir = std::env::temp_dir().join(format!("craft-dialogs-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let written = dir.join("Notes.txt");
+        let unwritable = dir.join("missing").join("Notes.txt");
+        let (service, mut panels, _) = service_with(vec![Answer::Paths(vec![written.clone()]), Answer::Paths(vec![unwritable.clone()])]);
+
+        let saved = service.save(PickRequest::save("export"), b"hello".to_vec());
+        assert!(service.pick_pending(), "the save waits for its panel");
+        panels.pump(NONE);
+        assert_eq!(service.take_answer(saved), Some(Picked::Paths(vec![written.clone()])));
+        assert_eq!(std::fs::read(&written).expect("the save wrote the file"), b"hello");
+        assert_eq!(service.take_answer(saved), None, "an answer is read once");
+        assert!(!service.pick_pending());
+
+        let failed = service.save(PickRequest::save("export"), b"lost".to_vec());
+        panels.pump(NONE);
+        let picked = answered(&service, failed);
+        assert!(matches!(picked, Picked::Failed(_)), "{picked:?}");
+        assert_eq!(picked.first_path(), None);
+        assert!(!unwritable.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A closed document forgets its save: the portal Save on screen is cancelled, and the answer it
+    // gives anyway is dropped without a write.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+    #[trial]
+    fn forgetting_a_pending_save_cancels_its_panel() {
+        let late = std::env::temp_dir().join(format!("craft-dialogs-forgotten-{}.txt", std::process::id()));
+        let (service, mut panels) = FileService::new(Wake::none());
+        panels.backend_problem = || None;
+        let cancel = crate::portal::Cancel::default();
+        let shown = cancel.clone();
+        let replies: Rc<RefCell<Vec<crate::Reply>>> = Rc::default();
+        let kept = replies.clone();
+        panels.dialogs.set_custom(move |_, reply| {
+            kept.borrow_mut().push(reply);
+            crate::native::Shown { cancel: Some(shown.clone()) }
+        });
+
+        let id = service.save(PickRequest::save("export"), b"late".to_vec());
+        panels.pump(NONE);
+        assert!(!cancel.is_cancelled(), "a save still wanted stays open");
+        service.forget(id);
+        panels.pump(NONE);
+        assert!(cancel.is_cancelled(), "the forgotten save's panel is cancelled");
+
+        let reply = replies.borrow_mut().remove(0);
+        reply.send(Answer::Paths(vec![late.clone()]));
+        panels.pump(NONE);
+        assert!(service.take_answer(id).is_none(), "the late answer stays dropped");
+        assert!(!late.exists(), "nothing is written for a forgotten save");
+    }
+
+    // A closed document forgets its save: the fallback chooser on screen closes with the next
+    // pass of the host, and nothing is answered for the ticket.
+    #[cfg(feature = "ui")]
+    #[trial]
+    fn forgetting_a_pending_save_closes_its_chooser() {
+        use craft_ui::testing::Fixture;
+        let (service, mut panels) = FileService::scripted(Wake::none(), []);
+        let host = Rc::new(RefCell::new(craft_ui::dialog::DialogHost::new()));
+        let shown = host.clone();
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        let id = service.save(PickRequest::save("export").fallback(true), b"late".to_vec());
+        panels.pump_with(&mut host.borrow_mut(), NONE);
+        assert!(host.borrow().is_open::<FileChooser>(), "the chooser opens for the request");
+        service.forget(id);
+        panels.pump_with(&mut host.borrow_mut(), NONE);
+        fixture.idle(2);
+        panels.pump_with(&mut host.borrow_mut(), NONE);
+        assert!(!host.borrow().is_open::<FileChooser>(), "the forgotten save's chooser is closed");
+        assert!(service.take_answer(id).is_none());
     }
 
     // Saving over an existing `PHOTO.PNG` with Lowercase Extension on writes `PHOTO.PNG`, the

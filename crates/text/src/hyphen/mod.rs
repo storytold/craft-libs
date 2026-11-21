@@ -16,7 +16,7 @@
 #[cfg(feature = "generator")]
 pub mod dict;
 #[cfg(not(feature = "generator"))]
-mod dict;
+pub(crate) mod dict;
 #[cfg(feature = "generator")]
 pub mod patgen;
 mod patterns;
@@ -516,4 +516,4 @@ fn heuristic_points(c: &[char]) -> Vec<usize> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

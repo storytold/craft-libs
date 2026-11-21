@@ -21,5 +21,7 @@ pub use relink::{LinkList, LinkListWords, RelinkDialog, RelinkWords, StatusBadge
 /// The stories and trials this crate registers for the integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }

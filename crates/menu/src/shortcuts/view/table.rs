@@ -690,7 +690,7 @@ fn apply(env: &mut Env<'_>, state: &mut DialogState, now: f64, lines: &[Line], o
 }
 
 /// Identifies what the rows are, so the lead starts over when the area, the filter or the query changes.
-fn stamp_of(area: &AreaId, query: &str, filter: &str) -> u64 {
+pub(super) fn stamp_of(area: &AreaId, query: &str, filter: &str) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     area_key(area).hash(&mut hasher);

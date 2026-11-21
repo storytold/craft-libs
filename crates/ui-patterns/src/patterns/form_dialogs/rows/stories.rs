@@ -3,7 +3,6 @@
 use super::{DialogFields, ParamRows};
 use crate::runtime::requests::PathKind;
 
-use crate::contract::Bind;
 use crate::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use crate::patterns::form_dialogs::{NumberUnit, Param, ParamKind};
 use crate::patterns::presets::PresetRow;
@@ -24,8 +23,8 @@ fn patterns() -> Vec<PresetRow<String>> {
 }
 
 /// One row of every kind the rows show, a section, a row that waits for a check box, a row with a unit menu, a
-/// multi-line text row, a searchable choice, a radio row with a disabled option, a blend row, a pattern row, a files
-/// row in folder mode and a section of read-only rows.
+/// multi-line text row, a text row forty characters wide, a searchable choice, a radio row with a disabled option, a radio row with its options in a row,
+/// a blend row, a pattern row, a files row in folder mode and a section of read-only rows.
 fn params() -> Vec<Param> {
     let mut params = Param::parse_list(SPEC);
     let blend = vec![
@@ -39,6 +38,7 @@ fn params() -> Vec<Param> {
     params.push(Param::files("files", "Files").folder_mode(true));
     params.push(Param::new("size", "Size", ParamKind::choice(sizes(), None)).searchable());
     params.push(Param::new("scale", "Scale", ParamKind::radio(sizes(), None)).disabled_options(["large"]));
+    params.push(Param::new("fit", "Fit", ParamKind::radio(sizes(), Some("medium".to_owned()))).options_in_row());
     params.push(Param::new("angle", "Angle", ParamKind::angle(30.0)));
     params.push(Param::new("centre", "Centre", ParamKind::point([50.0, 50.0])));
     params.push(Param::section("Output"));
@@ -60,6 +60,7 @@ fn params() -> Vec<Param> {
     params.push(Param::new("sharpen", "Sharpen", ParamKind::bool(false)));
     params.push(Param::new("amount", "Amount", ParamKind::range(0.0, 100.0, 50.0, Default::default())).enabled_when("sharpen", true));
     params.push(Param::new("notes", "Notes", ParamKind::text("")).multiline(3));
+    params.push(Param::new("caption", "Caption", ParamKind::text("CONFIDENTIAL")).field_chars(40));
     params.push(Param::section("Camera Data"));
     params.push(Param::read_only_text("make", "Make", "Canon"));
     params.push(Param::read_only_text("exposure", "Exposure", "1/250 s at f/8"));
@@ -70,14 +71,14 @@ fn params() -> Vec<Param> {
 fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();
     let patterns = patterns();
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).show(ui).into()
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).show(ui).into()
 }
 
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();
     let patterns = patterns();
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).read_only(true).show(ui).into()
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).read_only(true).show(ui).into()
 }

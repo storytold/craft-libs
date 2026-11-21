@@ -3,13 +3,13 @@
 
 use craft_behavior::{ColumnWidth, PartKey};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
+use craft_ui::contract::{Bind, ContainerProps, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft_ui::layout_components::Grid;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::runtime::focus::{FocusTarget, request};
-use craft_ui::testing::layout::{Block, in_region};
+use craft_ui::testing::layout::{Block, in_region, measured_block};
 use craft_ui::testing::text::widget_id;
-use craft_ui::testing::{Fixture, Frames, pointer, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, last_frame_memo_runs, pointer, trial};
 use craft_ui::text::TextField;
 use craft_ui_test_kit::body::Slab;
 use egui::{Id, Pos2, Rect, Ui, Vec2};
@@ -339,6 +339,56 @@ fn content_that_grows_inside_a_lazy_cell_that_fills_it_grows_its_row() {
     frames.frame(vec![], &mut show);
     assert!(content.get().height() > LINE.y + SAME, "the content grew: {:?}", content.get());
     assert!(card.get().expand(SAME).contains_rect(content.get()), "the card grew to its content: {:?} in {:?}", content.get(), card.get());
+}
+
+/// A memoized line as wide as its view.
+#[derive(MemoProps)]
+struct Line {
+    at: usize,
+}
+
+fn line(props: &mut Line, ui: &mut Ui) -> usize {
+    Block::new(Vec2::new(ui.available_width(), LINE.y)).show(ui);
+    props.at
+}
+
+/// A memoized block whose measured width is `width`: a new width asks the body around it to measure again.
+#[derive(MemoProps)]
+struct Grown {
+    width: f32,
+}
+
+fn grown(props: &mut Grown, ui: &mut Ui) -> f32 {
+    measured_block(ui, "grown", Vec2::new(props.width, LINE.y));
+    Block::new(Vec2::new(props.width, LINE.y)).show(ui);
+    props.width
+}
+
+/// Count trial: an overflowing scrolling body's measuring run lays its content out once, at the view beside the bar.
+/// In a pass that measures the body again, its settled memoized children in view replay in the measuring run as in
+/// the real run: none runs a measuring run at another width.
+#[trial]
+fn an_overflowing_bodys_settled_memo_children_run_no_measuring_run_when_it_measures_again() {
+    let width = Cell::new(40.0);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("memo_lines").show(ui, |ui, _| {
+                MemoView::new("grown", Grown { width: width.get() }, grown).show(ui);
+                for at in 0..30 {
+                    MemoView::new(("line", at), Line { at }, line).show(ui);
+                }
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(5, &mut show);
+    width.set(60.0);
+    frames.idle(1, &mut show);
+    let runs = last_frame_memo_runs(&frames.ctx);
+    let ran = |name: &str| runs.iter().filter(|(of, _, run)| of.contains(name) && *run == MemoRun::Ran).count();
+    assert!(ran("::Grown") >= 2, "the changed view ran in the body's measuring run and its real run: {runs:?}");
+    assert!(runs.iter().any(|(of, _, run)| of.contains("::Line") && *run == MemoRun::Replayed), "the lines in view took part: {runs:?}");
+    assert_eq!(ran("::Line"), 0, "no settled line ran, in a measuring run or the real run: {runs:?}");
 }
 
 /// A vertical scroll body of `Lazy` children, child `at` as tall as `height(at)` and estimated at `estimate(at)`

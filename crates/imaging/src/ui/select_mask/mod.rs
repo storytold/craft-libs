@@ -38,12 +38,12 @@
 //! [`EditHistory`]: craft_behavior::EditHistory
 //! [`FullWindowWorkspace`]: craft_ui::dialog::FullWindowWorkspace
 
-mod bar;
+pub(crate) mod bar;
 mod commands;
 mod edits;
-mod panel;
+pub(crate) mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tools;
 mod words;

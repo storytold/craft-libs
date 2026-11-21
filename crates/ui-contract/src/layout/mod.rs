@@ -7,7 +7,7 @@ mod label;
 mod slot;
 
 pub use arrange::{Placed, arrange};
-pub use body::{BodyLayout, CellAlign, GridFit, RowAlign, ShrinkOrder, ShrinkUnit, empty_cell, shrink_widths};
+pub use body::{BodyLayout, CellAlign, GridFit, RowAlign, ShrinkOrder, ShrinkUnit, empty_cell, levelled_unit, plan_levels, shrink_widths};
 pub use column_group::ColumnGroup;
 #[doc(hidden)]
 pub use column_group::ambient_width;
@@ -26,5 +26,5 @@ pub(crate) use body::run_body;
 pub(crate) use body::{
     InFlow, close_first_line, counting_fills, fill_share, fill_size, flow_fill_room, flow_region, flow_room, grid_cell, in_grid_content_column,
     leaf_fill_room, members_line, open_first_lines, place_in_cell, report_held, report_least, report_shrink, row_alone_room, run_body_measured,
-    shares_y, shrink_cap, take_in_flow, view_room,
+    shares_y, shrink_cap, take_cell, take_in_flow, view_room,
 };

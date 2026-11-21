@@ -31,8 +31,8 @@ use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The height of a floating group's title row: a strong `TitleRow`, which is as tall as a panel header.
 pub(crate) fn title_row(tokens: &UiTokens) -> f32 {
@@ -501,8 +501,9 @@ impl Container for FloatingGroup<'_> {
         if let Some(column) = self.column.filter(|column| column.collapsed.is_some()) {
             // The collapsed window moves; the rect keeps its expanded size.
             change.rect = column.kept(change.rect, self.rect, self.header, self.rtl);
-        } else if fitted && change.kind == PlacementKind::Move {
-            // A window its content sizes moves; the rect keeps its size.
+        } else if (fitted || self.sized == Sizing::Content) && change.kind == PlacementKind::Move {
+            // A window its content sizes moves (a cancel too, which reports the rect from before the gesture); the
+            // rect keeps the size the caller gave, not the one measured from the body.
             change.rect = Rect::from_min_size(change.rect.min, self.rect.size());
         } else if self.minimized {
             change.rect = Rect::from_min_size(change.rect.min, Vec2::new(change.rect.width(), self.rect.height()));

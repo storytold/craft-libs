@@ -595,26 +595,27 @@ impl CollectionProps {
     }
 }
 
-/// What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.
+/// What an item reads of its place in the collection; the item step joins it to the item's flags at step 12. The
+/// fields marked "Measured" are the ones an auto row's measure reads (the row-hook contract on `ItemCx`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RowState {
-    /// The row is selected.
+    /// The row is selected. Measured.
     pub selected: bool,
-    /// The row holds the lead.
+    /// The row holds the lead. Measured.
     pub lead: bool,
     /// A drag would drop on the row.
     pub drop_target: bool,
     /// The row is being dragged.
     pub dragging: bool,
-    /// The row's name is being edited.
+    /// The row's name is being edited. Measured.
     pub renaming: bool,
     /// The app marks the row.
     pub emphasized: bool,
-    /// The collection's current item (`CollectionProps::current`).
+    /// The collection's current item (`CollectionProps::current`). Measured.
     pub current: bool,
-    /// An odd row of a striped list.
+    /// An odd row of a striped list. Measured.
     pub striped: bool,
-    /// A tree row whose children show.
+    /// A tree row whose children show. Measured.
     pub open: bool,
     /// The pointer is over the row and a press there would reach it.
     pub hovered: bool,
@@ -627,11 +628,11 @@ pub struct RowState {
     /// button shown.
     pub menu_open: bool,
     /// `Some(steps)` for a sub-row of a row above (`ItemSource::sub_row`): compact, its toggles `steps` indent steps
-    /// into its content.
+    /// into its content. Measured.
     pub sub_row: Option<usize>,
-    /// The next row is a sub-row, which continues this row: no divider between them.
+    /// The next row is a sub-row, which continues this row: no divider between them. Measured.
     pub continued: bool,
-    /// The row is the collection's last: dividers fall between rows, so none under it.
+    /// The row is the collection's last: dividers fall between rows, so none under it. Measured.
     pub last: bool,
     /// The activation key (Enter) activated the row this pass: a row with controls of its own may move focus into one.
     pub activated_by_key: bool,

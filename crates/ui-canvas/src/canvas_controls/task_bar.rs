@@ -1,13 +1,13 @@
 //! `TaskBar`: the contextual task bar over a canvas, hung below its anchor until the user moves it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::CanvasControlWords;
 use crate::bars::{Bar, BarKind};
 use crate::buttons::IconButton;
 use crate::canvas::canvas_space;
-use crate::contract::overlay::{Anchor, Place, PlacementChange, PlacementKind};
+use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, PlacementChange, PlacementKind};
 use crate::contract::{
     Bind, BindMut, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad, PopupKind,
     Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
@@ -16,6 +16,7 @@ use crate::display::Icon;
 use crate::menu::{Menu, MenuItem};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
+use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::kurbo::Point;
 use craft_behavior::overlay::{Align, Side};
@@ -70,6 +71,37 @@ pub struct TaskBar<'a> {
     label: Label,
     anchor: &'a [Point],
     place: Bind<'a, TaskBarPlace>,
+    /// Which bar this is: the task bar, or a bar over a selection.
+    #[prop]
+    kind: TaskBarKind,
+    /// The side of the anchor the bar hangs on; `None` gives the kind's side: above for `Selection`, below for `Task`.
+    #[prop]
+    side: Option<Side>,
+    /// What an outside press does to the bar.
+    #[prop]
+    dismiss: TaskBarDismiss,
+}
+
+/// Which bar a [`TaskBar`] is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarKind {
+    /// The contextual task bar, hung below its anchor.
+    #[default]
+    Task,
+    /// A bar anchored above a selection.
+    Selection,
+}
+
+/// What an outside press does to a [`TaskBar`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarDismiss {
+    /// An outside press closes the bar.
+    #[default]
+    Close,
+    /// The bar survives outside presses while its graphic is selected.
+    Keep,
 }
 
 /// What the task bar reports.
@@ -82,6 +114,8 @@ pub struct TaskBarOutput {
     pub hide: bool,
     /// The bar's rect on screen.
     pub rect: Rect,
+    /// The bar closed: an outside press, Escape or its anchor going. The caller stops showing it.
+    pub closed: bool,
 }
 
 impl Outcome for TaskBarOutput {
@@ -116,6 +150,8 @@ enum MenuPick {
 /// The More button and its menu, placed once per run of the bar's body.
 struct MoreMenu {
     words: Arc<CanvasControlWords>,
+    /// Whether the bar has a More menu: a selection bar has none.
+    offered: bool,
     placed: bool,
     pick: Option<MenuPick>,
 }
@@ -123,7 +159,7 @@ struct MoreMenu {
 impl MoreMenu {
     /// Shows the button and its menu here unless this run of the body showed them already.
     fn place(&mut self, ui: &mut Ui) {
-        if std::mem::replace(&mut self.placed, true) {
+        if !self.offered || std::mem::replace(&mut self.placed, true) {
             return;
         }
         let words = Arc::clone(&self.words);
@@ -148,12 +184,29 @@ impl MoreMenu {
 impl<'a> TaskBar<'a> {
     /// A bar named `label` hung below the screen bounds of `anchor` (document points) until `place` moves it.
     pub fn new(label: impl Into<Label>, anchor: &'a [Point], place: Bind<'a, TaskBarPlace>) -> Self {
-        TaskBar { label: label.into(), anchor, place }
+        TaskBar { label: label.into(), anchor, place, kind: TaskBarKind::Task, side: None, dismiss: TaskBarDismiss::Close }
+    }
+
+    /// A bar named `label` anchored above or at `side` of a selection whose bounds are `anchor` (document points),
+    /// flipped and clamped to fit.
+    pub fn selection(label: impl Into<Label>, anchor: &'a [Point]) -> Self {
+        TaskBar {
+            label: label.into(),
+            anchor,
+            place: Bind::given(Mixed::Same(TaskBarPlace::default())),
+            kind: TaskBarKind::Selection,
+            side: None,
+            dismiss: TaskBarDismiss::Close,
+        }
     }
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, anchor, mut place } = self;
+        let TaskBar { label, anchor, mut place, kind, side, dismiss } = self;
+        let side = side.unwrap_or(match kind {
+            TaskBarKind::Task => Side::Below,
+            TaskBarKind::Selection => Side::Above,
+        });
         let env = Env::of(ui);
         let words = env.words::<CanvasControlWords>();
         // The anchor maps through this pass's view, so the bar follows a scroll or zoom in the same pass.
@@ -168,14 +221,21 @@ impl<'a> TaskBar<'a> {
             Some(Mixed::Same(held)) => held,
             _ => TaskBarPlace::default(),
         };
-        let hang = shows.then(|| hang_rect(bounds, env.tokens.space.gap.section));
-        let layer = TaskBarLayer::new(label, layer_overlay(&held, hang, area), shows);
-        let mut menu = MoreMenu { words: Arc::clone(&words), placed: false, pick: None };
-        let grip = words.task_bar_move.clone();
+        let hang = shows.then(|| hang_rect(bounds, env.tokens.space.gap.section, side));
+        let overlay = match kind {
+            TaskBarKind::Task => layer_overlay(&held, hang, area, side),
+            TaskBarKind::Selection => selection_overlay(hang, area, dismiss, side),
+        };
+        let layer = TaskBarLayer::new(label, overlay, shows, kind);
+        let mut menu = MoreMenu { words: Arc::clone(&words), offered: kind == TaskBarKind::Task, placed: false, pick: None };
+        // Only the task bar moves, so only it starts with the grip.
+        let grip = (kind == TaskBarKind::Task).then(|| words.task_bar_move.clone());
         let mut shown = layer.show(ui, |ui, _| {
             // The bar is the one surface: the grip is its first member, on the members' line inside its padding.
             Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
-                let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
+                if let Some(grip) = &grip {
+                    let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
+                }
                 menu.placed = false;
                 let inner = body(ui, &mut TaskBarCx { menu: &mut menu });
                 menu.place(ui);
@@ -184,7 +244,7 @@ impl<'a> TaskBar<'a> {
         });
         let rect = shown.output.response.rect;
         let pick = menu.pick;
-        if shows {
+        if shows && kind == TaskBarKind::Task {
             let moved = shown.output.moved.filter(|moved| moved.min != rect.min);
             let next = settled(held, rect, area, moved, pick);
             if next != held {
@@ -197,7 +257,8 @@ impl<'a> TaskBar<'a> {
                 let _ = shown.settle(|cx, _| place.reborrow().write(cx, &event));
             }
         }
-        let output = TaskBarOutput { response: shown.output.response, hide: pick == Some(MenuPick::Hide), rect };
+        let output =
+            TaskBarOutput { response: shown.output.response, hide: pick == Some(MenuPick::Hide), rect, closed: shown.output.closed.is_some() };
         match shown.inner {
             Some(bar) => Inner { output, inner: bar.inner, settle: bar.settle },
             None => Inner { output, inner: None, settle: None },
@@ -205,21 +266,40 @@ impl<'a> TaskBar<'a> {
     }
 }
 
-/// The rect the bar hangs below: the anchor's screen `bounds` grown by `gap` at the bottom. The overlay host keeps the
-/// layer inside `Overlay::bounds`.
-fn hang_rect(bounds: Rect, gap: f32) -> Rect {
-    Rect::from_min_max(bounds.min, Pos2::new(bounds.max.x, bounds.max.y + gap))
+/// The rect the bar hangs from: the anchor's screen `bounds` grown by `gap` on the bar's `side`. A side along the
+/// reading direction grows both ends, so the gap is kept in either direction. The overlay host keeps the layer inside
+/// `Overlay::bounds`.
+fn hang_rect(bounds: Rect, gap: f32, side: Side) -> Rect {
+    match side {
+        Side::Above => Rect::from_min_max(Pos2::new(bounds.min.x, bounds.min.y - gap), bounds.max),
+        Side::Below => Rect::from_min_max(bounds.min, Pos2::new(bounds.max.x, bounds.max.y + gap)),
+        _ => bounds.expand2(egui::vec2(gap, 0.0)),
+    }
 }
 
-/// The layer the bar shows in: hung below `hang` while `held` has no place, at its place once it has one. A move stays
-/// inside `area`. A bar that does not show (`hang` is `None`) gets a closed layer with no place.
-fn layer_overlay(held: &TaskBarPlace, hang: Option<Rect>, area: Rect) -> Overlay {
+/// The layer of a selection bar: hung on `side` of `hang`, flipped and kept inside `area`, never moved by the user.
+/// `dismiss` says what an outside press does to it.
+fn selection_overlay(hang: Option<Rect>, area: Rect, dismiss: TaskBarDismiss, side: Side) -> Overlay {
+    let outside = match dismiss {
+        TaskBarDismiss::Close => Outside::Close,
+        TaskBarDismiss::Keep => Outside::Keep,
+    };
+    let overlay = Overlay::floating().modeless().body_scroll(false).dismiss(Dismiss::new().outside(outside));
+    match hang {
+        Some(hang) => overlay.bounds(area).place(Place::anchored(Anchor::Rect(hang), side, Align::Center)),
+        None => overlay,
+    }
+}
+
+/// The layer the bar shows in: hung on `side` of `hang` while `held` has no place, at its place once it has one. A move
+/// stays inside `area`. A bar that does not show (`hang` is `None`) gets a closed layer with no place.
+fn layer_overlay(held: &TaskBarPlace, hang: Option<Rect>, area: Rect, side: Side) -> Overlay {
     let overlay = Overlay::floating().modeless().movable(true).body_scroll(false);
     let Some(hang) = hang else { return overlay };
     let overlay = overlay.bounds(area);
     match held.placed_in(area) {
         Some(at) => overlay.placed_at(at),
-        None => overlay.place(Place::anchored(Anchor::Rect(hang), Side::Below, Align::Center)),
+        None => overlay.place(Place::anchored(Anchor::Rect(hang), side, Align::Center)),
     }
 }
 
@@ -253,11 +333,12 @@ pub struct TaskBarLayerStyle {
     metrics: Metrics,
 }
 
-/// What the task bar's layer reports: its response and the last move of this pass.
+/// What the task bar's layer reports: its response, the last move of this pass and why it closed.
 #[derive(Debug)]
 struct TaskBarLayerOutput {
     response: Response,
     moved: Option<Rect>,
+    closed: Option<CloseReason>,
 }
 
 impl Outcome for TaskBarLayerOutput {
@@ -281,16 +362,22 @@ struct TaskBarLayer {
     /// Open while the bar shows; the caller shows the bar again each pass it wants it.
     open: Bind<'static, bool>,
     moved: Option<Rect>,
+    /// Why the layer closed, once it has.
+    closed: Option<CloseReason>,
 }
 
 impl TaskBarLayer {
-    fn new(label: Label, overlay: Overlay, open: bool) -> Self {
-        let props = ContainerProps::new()
-            .mount(Mount::Layer(overlay))
-            .pad(Pad::None)
-            .sizing(Sizing::Content)
-            .header(HeaderRegion::new().band(DragBand::Move).inline(true));
-        TaskBarLayer { common: Common::new(), props, open: Bind::given(open), moved: None }.label(label).id_salt("task-bar")
+    /// A layer for a bar of `kind`: only the task bar has the empty inline header whose move band moves it.
+    fn new(label: Label, overlay: Overlay, open: bool, kind: TaskBarKind) -> Self {
+        let mut props = ContainerProps::new().mount(Mount::Layer(overlay)).pad(Pad::None).sizing(Sizing::Content);
+        let salt = match kind {
+            TaskBarKind::Task => {
+                props = props.header(HeaderRegion::new().band(DragBand::Move).inline(true));
+                "task-bar"
+            }
+            TaskBarKind::Selection => "selection-bar",
+        };
+        TaskBarLayer { common: Common::new(), props, open: Bind::given(open), moved: None, closed: None }.label(label).id_salt(salt)
     }
 }
 
@@ -310,13 +397,17 @@ impl Component for TaskBarLayer {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TaskBarLayerOutput {
-        TaskBarLayerOutput { response: cx.response.clone(), moved: self.moved }
+        TaskBarLayerOutput { response: cx.response.clone(), moved: self.moved, closed: self.closed }
     }
 }
 
 impl Container for TaskBarLayer {
     fn open(&mut self) -> Option<BindMut<'_, bool>> {
         Some(self.open.reborrow())
+    }
+
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.get_or_insert(why);
     }
 
     fn placement_changed(&mut self, change: &PlacementChange) {

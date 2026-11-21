@@ -190,11 +190,14 @@ impl Component for SelectFace<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         // At its least the face elides its name to its readable least.
         let run = TextRun::new(cx.resolved.label).role(cx.style.text.role).elide();
-        let least = || cx.least_width(&run);
-        let mut text = match (self.name, cx.proposal) {
-            (true, Proposal::Min) => Vec2::new(least(), cx.layout_at(&run, f32::INFINITY).size().y),
-            (true, _) => cx.layout_at(&run, f32::INFINITY).size(),
-            (false, _) => Vec2::ZERO,
+        // A fitted box also needs the least to cap its text at.
+        let (mut text, least) = if !self.name {
+            (Vec2::ZERO, 0.0)
+        } else if cx.proposal == Proposal::Min || self.fit {
+            let least = cx.least(&run);
+            (if cx.proposal == Proposal::Min { least.size() } else { least.whole.size() }, least.width)
+        } else {
+            (cx.layout_at(&run, f32::INFINITY).size(), 0.0)
         };
         let caption = self.caption_run(&cx.style.caption).map_or(Vec2::ZERO, |run| cx.layout(&run).size());
         let picture = match (&self.thumb, caption.y > 0.0) {
@@ -208,9 +211,36 @@ impl Component for SelectFace<'_> {
             // least.
             let field = cx.style.field.metrics();
             let room = field.ideal_width - cx.style.metrics.padding.start - cx.style.metrics.padding.end - beside;
-            text.x = text.x.min(room.max(least()));
+            text.x = text.x.min(room.max(least));
         }
         Vec2::new(beside + text.x, text.y.max(picture))
+    }
+
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        // A caption may wrap differently under two rooms, so keep the separate path when the ideal has a room.
+        if ideal.room.is_some() {
+            return None;
+        }
+        let run = TextRun::new(ideal.resolved.label).role(ideal.style.text.role).elide();
+        let whole = if self.name { ideal.layout_at(&run, f32::INFINITY).size() } else { Vec2::ZERO };
+        let width = if self.name { least.least_width(&run) } else { 0.0 };
+        let caption = self.caption_run(&ideal.style.caption).map_or(Vec2::ZERO, |run| ideal.layout(&run).size());
+        let picture = match (&self.thumb, caption.y > 0.0) {
+            (None, _) => 0.0,
+            (Some(_), false) => ideal.style.thumb,
+            (Some(_), true) => ideal.style.thumb + ideal.style.caption_gap + caption.y,
+        };
+        let beside = self.lead(ideal.style, caption.x) + reserve(&ideal.style.field, &self.leading_glyphs(), &[Self::chevron()]);
+        let mut ideal_width = whole.x;
+        if self.fit && self.name {
+            let field = ideal.style.field.metrics();
+            let room = field.ideal_width - ideal.style.metrics.padding.start - ideal.style.metrics.padding.end - beside;
+            ideal_width = ideal_width.min(room.max(width));
+        }
+        let height = whole.y.max(picture);
+        Some((Vec2::new(beside + ideal_width, height), Vec2::new(beside + width, height)))
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -253,8 +283,8 @@ impl Component for SelectFace<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Opens the popup of a picker whose face part toggles it, from the keyboard: Enter and Space (an activation by key)
 /// toggle it. A click on the face reaches the popup through the part's `toggles`, so the pointer is not read here.

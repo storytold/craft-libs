@@ -2,7 +2,6 @@
 //! tree; extra columns; effects and Smart Filters open; filtered by Artboard and by Group, which keep each group open or
 //! closed.
 
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -50,8 +49,8 @@ fn layers_panel_no_active_layer(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
 #[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
 fn layers_panel_filtered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tree = selected();
-    let filter = data.value("filter", LayerFilter { by: FilterBy::Name, name: String::from("o"), ..LayerFilter::default() });
-    let shown = LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui);
+    let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::Name, name: String::from("o"), ..LayerFilter::default() });
+    let shown = LayersPanel::new(&tree).filter(filter_at.bind(filter)).show(ui);
     with_readout(data, shown)
 }
 
@@ -105,8 +104,8 @@ fn layers_panel_effects_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
 fn layers_panel_by_artboard(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tree = FakeLayers::boards();
-    let filter = data.value("filter", LayerFilter { by: FilterBy::Artboard, ..LayerFilter::default() });
-    let shown = LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui);
+    let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::Artboard, ..LayerFilter::default() });
+    let shown = LayersPanel::new(&tree).filter(filter_at.bind(filter)).show(ui);
     with_readout(data, shown)
 }
 
@@ -114,7 +113,7 @@ fn layers_panel_by_artboard(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(LayersPanel<'static, FakeLayers>, covers = [], drive = Drive::Never)]
 fn layers_panel_by_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tree = FakeLayers::fifty();
-    let filter = data.value("filter", LayerFilter { by: FilterBy::Group, ..LayerFilter::default() });
-    let shown = LayersPanel::new(&tree).filter(Bind::bound(filter)).show(ui);
+    let (filter, filter_at) = data.value_at("filter", LayerFilter { by: FilterBy::Group, ..LayerFilter::default() });
+    let shown = LayersPanel::new(&tree).filter(filter_at.bind(filter)).show(ui);
     with_readout(data, shown)
 }

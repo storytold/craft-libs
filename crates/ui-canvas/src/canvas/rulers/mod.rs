@@ -2,8 +2,8 @@
 //! control (20.6). The strips and the corner are parts at handle priority in the canvas's arena. A drag from a strip
 //! reports a guide being placed; a drag from the corner moves the zero point.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod ticks;
 
 pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
@@ -244,6 +244,15 @@ impl<'a> Rulers<'a> {
     /// The part of the canvas's rect `full` inside the strips: where the view lies.
     pub fn content_rect(cx: &StyleCx<'_>, full: Rect) -> Rect {
         Self::content_rect_of(full, thickness(cx.tokens))
+    }
+
+    /// The top and the left strip inside the canvas's rect `full`, each as thick as the canvas's own rulers, for a ruler
+    /// of another component (a text ruler, a page ruler) that lies along them.
+    pub fn strips(ui: &egui::Ui, full: Rect) -> (Rect, Rect) {
+        let env = crate::runtime::env::Env::of(ui);
+        let cx = StyleCx::of_env(ui.ctx(), &env);
+        let (top, left, _) = strips(full, thickness(cx.tokens));
+        (top, left)
     }
 
     /// The ticks of one ruler over `values` (ruler units from the zero point): the one tick rule of every ruler, so a

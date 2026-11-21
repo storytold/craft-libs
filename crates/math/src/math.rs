@@ -499,7 +499,12 @@ fn lin_arg(a: &[MNode], s: &mut String, depth: usize) {
         // A bare script or limit ends at a space: a letter, digit or period after it is its own item.
         if matches!(n, MNode::Script { kind, .. } if *kind != ScriptKind::Pre) || matches!(n, MNode::Lim { .. }) {
             let ends_bare = s.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '.');
-            if ends_bare && a.get(i + 1).and_then(first_lin_char).is_some_and(|c| c.is_alphanumeric() || c == '.') {
+            // So does a `,` before a digit: a number script reads it as part of the number (`x^2,3`).
+            let comma_digit = || {
+                let mut cs = a[i + 1..].iter().map_while(|n| if let MNode::Run(r) = n { Some(r.text.chars()) } else { None }).flatten();
+                cs.next() == Some(',') && cs.next().is_some_and(|c| c.is_ascii_digit())
+            };
+            if ends_bare && (a.get(i + 1).and_then(first_lin_char).is_some_and(|c| c.is_alphanumeric() || c == '.') || comma_digit()) {
                 s.push(' ');
             }
         }
@@ -518,11 +523,20 @@ fn first_lin_char(n: &MNode) -> Option<char> {
     }
 }
 
-/// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
-fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
-    let mut inner = String::new();
-    lin_arg(a, &mut inner, depth);
-    let simple = match a {
+/// Whether `t` is one number as the linear-format parser reads it (`number_len`): digits, where a
+/// `.` or `,` continues it only before a digit (`2.5`, `1,000`), and a leading `.` before a digit
+/// starts one (`.5`). `2.` isn't one: the parser leaves the point out.
+fn is_number(t: &str) -> bool {
+    // Every character of a number is ASCII, so the bytes do.
+    let b = t.as_bytes();
+    let digit = |k: usize| b.get(k).is_some_and(u8::is_ascii_digit);
+    (digit(0) || (b.first() == Some(&b'.') && digit(1)))
+        && b.iter().enumerate().all(|(k, &c)| c.is_ascii_digit() || (matches!(c, b'.' | b',') && digit(k + 1)))
+}
+
+/// Whether `a` is written bare as an operand: a single simple atom.
+fn simple_operand(a: &[MNode]) -> bool {
+    match a {
         [MNode::Run(r)] => {
             let mut cs = r.text.chars();
             match (cs.next(), cs.next()) {
@@ -532,13 +546,50 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
         }
         [MNode::Delim { .. }] => true,
         _ => false,
-    };
-    if simple && !inner.is_empty() {
+    }
+}
+
+/// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
+fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
+    let mut inner = String::new();
+    lin_arg(a, &mut inner, depth);
+    if simple_operand(a) && !inner.is_empty() {
         s.push_str(&inner);
     } else {
         s.push('(');
         s.push_str(&inner);
         s.push(')');
+    }
+}
+
+/// A script base: bare when simple, else in invisible brackets `〖…〗`, as Word's Linear format
+/// writes it. The parser reads them back as grouping only, so `〖a^b〗^c` keeps its tree, where
+/// `(a^b)^c` would gain a visible delimiter (#6075). A base that is itself one invisible delimiter
+/// (LaTeX `\left.a\right.`) gets an outer pair too, so the inner one reads back as that delimiter.
+/// So does an operator (`⊗`, `×`, `<`…): a script after one reads as a pre-script, so `⊗_i` would
+/// come back as `⊗` and a pre-script, where `〖⊗〗_i` keeps it the base. And so does a run of several
+/// letters: the parser attaches a script to the last character before it (`mc^2` is `m`, `c²`), so
+/// `mc` is written `〖mc〗^2`, as Word linearizes it (#6228). A number (`10^3`, as Word writes it) and
+/// an upright function name (`sin^2`, read whole as a name) stay bare.
+fn lin_base(a: &[MNode], s: &mut String, depth: usize) {
+    let mut inner = String::new();
+    lin_arg(a, &mut inner, depth);
+    let invisible = matches!(a, [MNode::Delim { beg: None, end: None, elems, .. }] if elems.len() == 1);
+    let operator = matches!(a, [MNode::Run(r)] if r.text.chars().all(crate::math_linear::is_boundary));
+    let name = |r: &MRun| r.sty == Some(MSty::Plain) && crate::math_linear::FUNCTION_NAMES.contains(&r.text.as_str());
+    // A number by the parser's rule (`1,000`, `2.5`, `.5`) is one item, so it stays bare too.
+    let number = matches!(a, [MNode::Run(r)] if is_number(&r.text));
+    let letters = matches!(a, [MNode::Run(r)] if r.text.chars().nth(1).is_some() && !number && !name(r));
+    // A base starting with a digit or `.` right after a digit, `.` or `,` would continue the number
+    // before it (`1` then `23^4` is `123^4`), so it keeps its brackets: `1〖23〗^4`.
+    let joins = s.chars().next_back().is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+        && inner.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '.');
+    if (simple_operand(a) || number) && !inner.is_empty() && !invisible && !operator && !letters && !joins {
+        s.push_str(&inner);
+    } else {
+        s.push('〖');
+        s.push_str(&inner);
+        s.push('〗');
     }
 }
 
@@ -586,7 +637,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
                 lin_operand(base, s, depth);
                 return;
             }
-            lin_operand(base, s, depth);
+            lin_base(base, s, depth);
             if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup) {
                 s.push('_');
                 lin_script(sub, s, depth);
@@ -610,11 +661,12 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         }
         MNode::Nary { chr, sub_hide, sup_hide, sub, sup, e, .. } => {
             s.push(*chr);
-            if !sub_hide && !sub.is_empty() {
+            // A shown limit is written even when empty (`_()`): left out, it reads back hidden (#6076).
+            if !sub_hide {
                 s.push('_');
                 lin_script(sub, s, depth);
             }
-            if !sup_hide && !sup.is_empty() {
+            if !sup_hide {
                 s.push('^');
                 lin_script(sup, s, depth);
             }

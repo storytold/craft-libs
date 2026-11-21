@@ -8,7 +8,7 @@ mod units;
 pub use label::{Label, Message, Word};
 #[doc(hidden)]
 pub use shell::ShellEntry;
-pub use shell::{BodyMode, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
+pub use shell::{BodyMode, PageBandRoom, RevealEdge, ShellCx, ShellRegions, SlotKey, WindowKey};
 pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units};
 
 use crate::runtime::commands::CommandChain;
@@ -51,7 +51,7 @@ pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
 use tokens::tokens_for;
-pub use values::{ArenaId, ColumnAlign, InBar, MotionPolicy, PaneEdge, RowPressed, Scale};
+pub use values::{AltCodePages, ArenaId, ColumnAlign, InBar, MotionPolicy, PaneEdge, RowPressed, Scale, WheelSpeed};
 pub use view::EnvView;
 
 /// The inherited context of a `Ui`: one `Arc` clone per read.
@@ -89,6 +89,8 @@ pub struct Scoped {
     /// The key of everything above that the style cache depends on.
     #[doc(hidden)]
     pub key: EnvKey,
+    /// The key of what a memoized view shown in the scope inherits beyond `key` (`scope_key`), once a view asked.
+    scope_key: std::sync::OnceLock<u128>,
     /// Ambient control size; the root default is `Md`.
     pub size: ControlSize,
     /// How the icon-only buttons of the scope show their glyph; the root default and a layer's is `Control`.
@@ -235,6 +237,8 @@ pub struct Inherited {
     pub(crate) host: Option<Arc<Host>>,
     #[doc(hidden)]
     pub values: AppValues,
+    /// The context the env was built in: the accessors of tracked inputs note their reads into its records.
+    pub(crate) ctx: Context,
 }
 
 impl Deref for Scoped {
@@ -249,12 +253,14 @@ impl Deref for Scoped {
 /// each leaf, and each body that does not fill the row, is a unit the row narrows to fit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Shrink {
-    /// The first sweep of a measuring run of the row: each unit reports its widths to the row (`layout::report_shrink`).
+    /// The first sweep of a measuring run of the row: each unit reports its widths to the row (`layout::report_shrink`),
+    /// a levelled unit its width at each level (`layout::levelled_unit`).
     Count(Id),
     /// The sweep of a short row that asks each body unit for its least width (`layout::report_least`): it measures its
     /// content unbounded along x, every leaf at its least, and leaves no record.
     Least(Id),
-    /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`).
+    /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`), a levelled unit
+    /// at the level the row gave it.
     Apply(Id),
     /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
     Fit,
@@ -315,6 +321,7 @@ pub struct ItemFacts {
 }
 
 /// The innermost body that owns the scroll of a scope (`Scoped::scroll_owner`).
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ScrollOwner {
     pub(crate) id: Id,
@@ -369,13 +376,14 @@ impl Scoped {
         self.inherited_mut().values.set(InBar(false));
     }
 
-    /// Ends the layout room of the enclosing body: its flow grid and content column.
+    /// Ends the layout room of the enclosing body: its flow grid and content column. The axes the body sizes from its
+    /// content stay (`content`): like `cell_fills` and `least`, they say what a child that fills takes there, its
+    /// measured size or the room, and the scope key holds them.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
         self.grid_top = false;
         self.content_column = false;
         self.given_column = false;
-        self.content = (false, false);
         self.row_room = None;
         self.row_line = None;
         self.first_line = None;
@@ -384,6 +392,40 @@ impl Scoped {
         self.shrink = None;
         self.column = None;
         self.offered = None;
+    }
+
+    /// The key of everything a memoized view shown in this scope inherits beyond `key` (the style inputs, which its
+    /// place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface, wheel, directions), the
+    /// containers around it (arena, roving group, transform, collection item and row, inside label, footer slot, line
+    /// length, scroll owner and axes), the command chain, motion, the host's formats and date, and every app value. The
+    /// flow fields of the enclosing body are not in it: a memoized view's content starts a layout room of its own
+    /// (`start_room`). Computed once per scope, on the first view that asks; the bytes it fed are counted then.
+    pub(crate) fn scope_key(&self) -> u128 {
+        *self.scope_key.get_or_init(|| {
+            use crate::contract::{MemoKey, MemoProps as _};
+            let mut key = MemoKey::of_view(&self.ctx);
+            key.feed_hash(&(self.enabled, self.read_only, self.size, self.glyphs, self.ink, self.surface, self.wheel));
+            key.feed_hash(&(self.direction, self.text_direction, self.ids_stable, self.cell_fills, self.least, self.unbounded, self.content));
+            key.feed_hash(&(self.arena, self.roving, self.item, self.row, self.scroll_owner.map(|owner| (owner.id, owner.view))));
+            self.transform.map(|transform| (transform.scale, transform.offset)).key(&mut key);
+            self.footer_slot.map(|slot| (slot.owner, slot.size)).key(&mut key);
+            self.measure.key(&mut key);
+            // State a key cannot follow, rebuilt each pass: a view under it runs in every pass.
+            if self.item_facts.is_some() || self.inside_label.is_some() {
+                key.changes_every_pass();
+            }
+            for id in self.commands.ids() {
+                id.key(&mut key);
+            }
+            key.feed_hash(&(std::mem::discriminant(&self.motion.mode), self.canvas_pattern, self.tab_toggles_chrome, self.today));
+            (&self.format, &self.dates, &self.host).key(&mut key);
+            let value_bytes = self.values.key(&mut key);
+            #[cfg(feature = "testing")]
+            crate::runtime::measure::count_memo_key_bytes(&self.ctx, key.bytes() + value_bytes);
+            #[cfg(not(feature = "testing"))]
+            let _ = value_bytes;
+            key.finish()
+        })
     }
 
     /// The facts the collection recorded for the item `id`.
@@ -416,6 +458,11 @@ impl EnvCapture {
 }
 
 impl Env {
+    /// Whether both views come from the same immutable scope. A derived scope has a different source.
+    pub(crate) fn same_source(&self, other: &Env) -> bool {
+        Arc::ptr_eq(&self.scoped, &other.scoped)
+    }
+
     /// The word set `L` in the scope's language.
     pub fn words<L: WordSet + Send + Sync + 'static>(&self) -> Arc<L> {
         self.words.set::<L>()
@@ -449,7 +496,9 @@ impl Env {
     /// The root env of a frame: the app's values with the pixels per point read back from egui.
     pub(crate) fn from_root(ctx: &Context, root: &RootEnv, host: Option<Arc<Host>>, pixels_per_point: f32) -> Env {
         let resolved = root.resolved(ctx);
-        let inputs = TokenInputs::of(root, resolved);
+        // An id that is not a valid `AppId` names no theme pins, so it resolves as no app.
+        let app = host.as_ref().and_then(|host| craft_theme::AppId::parse(host.app().id).ok());
+        let inputs = TokenInputs::of(root, resolved, app);
         let tokens = tokens_for(ctx, &inputs);
         let motion = MotionPolicy::new(motion_mode(ctx, resolved.motion), tokens.tokens().motion);
         let os = windows::os_of(ctx);
@@ -458,6 +507,9 @@ impl Env {
         let shell = Arc::new(windows::shell_of(ctx, pass::current_viewport(ctx)));
         let active = shell.window.active;
         let keyboard = Arc::new(crate::runtime::keys::layout_of(ctx));
+        // The window facts and the layout are tracked inputs: a view that read them runs when they change.
+        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Shell, (*shell).clone());
+        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Keyboard, (*keyboard).clone());
         let words = host_words(ctx, host.as_ref());
         let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash())
             .with_line(line_ratio)
@@ -483,8 +535,10 @@ impl Env {
                     canvas_pattern: root.canvas_pattern,
                     host,
                     values: root.values.clone(),
+                    ctx: ctx.clone(),
                 }),
                 key,
+                scope_key: std::sync::OnceLock::new(),
                 ink: Ink::default(),
                 surface: SurfaceKind::Background,
                 size: ControlSize::Md,
@@ -529,7 +583,7 @@ impl Env {
     /// The env of `ui`: the nearest entry up the `Ui` stack, else the running viewport's root env, so the `Ui`
     /// of an egui `Area` or `Window` reads the app's root values. For app panels (layer 8) and caller closures only.
     ///
-    /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`.
+    /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
@@ -537,7 +591,9 @@ impl Env {
             stack::nearest(ui, |node| envs.entries.get(&node).cloned()).or_else(|| envs.root.clone())
         });
         let env = found.unwrap_or_else(|| Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)));
-        if style::is_enabled(ui) { env } else { env.derive_local(|s| s.enabled = false) }
+        // egui's `invisible()` also disables the `Ui`, and a sizing `Ui` is invisible, not disabled: in a sizing pass
+        // the env keeps the enabled state the real run has, so a memoized view keys alike in both.
+        if style::is_enabled(ui) || ui.is_sizing_pass() { env } else { env.derive_local(|s| s.enabled = false) }
     }
 
     /// The running viewport's root env: what code with no `Ui` (the ghost layer) paints with.
@@ -579,6 +635,7 @@ impl Env {
     pub(crate) fn derive(&self, f: impl FnOnce(&mut Scoped)) -> Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
+        scoped.scope_key = std::sync::OnceLock::new();
         scoped.key = EnvKey::new(scoped.tokens.key(), scoped.direction, scoped.scale, scoped.os, scoped.active, scoped.values.style_hash())
             .with_line(scoped.line_ratio)
             .with_words(scoped.words.generation());
@@ -602,7 +659,13 @@ impl Env {
     pub(crate) fn derive_local(&self, f: impl FnOnce(&mut Scoped)) -> Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
+        scoped.scope_key = std::sync::OnceLock::new();
         Env { scoped: Arc::new(scoped) }
+    }
+
+    /// Reuse a sweep's scope while it is uniquely held. A captured child env keeps its snapshot.
+    pub(crate) fn local_mut(&mut self) -> &mut Scoped {
+        Arc::make_mut(&mut self.scoped)
     }
 
     /// This env's container scope on top of `root`, the root env of the viewport the scope now runs in: the scale,

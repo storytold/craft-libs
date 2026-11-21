@@ -10,11 +10,11 @@
 //! The app paints the tip and stroke images from its engine; the library never sees an engine type. Presets are
 //! keyed by the app's key type (PhotoCraft: `PresetKey<String>`, by name).
 
-mod panel;
-mod picker;
+pub(crate) mod panel;
+pub(crate) mod picker;
 mod rows;
 mod settings;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 

@@ -24,8 +24,8 @@ use craft_behavior::{DisplayOrder, IconId, ItemSource, Value};
 use egui::{Rect, Response, Ui};
 use std::borrow::Cow;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A group of the drawer: a heading over the tools that belong under it.
 #[derive(Clone, Debug)]

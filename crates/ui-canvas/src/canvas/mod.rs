@@ -7,7 +7,7 @@
 //! commands routed to it ([`ViewCommands`]), keeps the document in view with Overscroll off, eases a zoom under
 //! Animated Zoom, publishes the view it shows as a [`CanvasSpace`] to its body, and reports the view the app copies.
 
-mod crop;
+pub(crate) mod crop;
 mod frame_step;
 // The full-window dialog family; `dialog` re-exports it.
 pub(crate) mod full_window;
@@ -15,8 +15,8 @@ pub(crate) mod full_window_parts;
 mod march;
 mod readout;
 mod space;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 #[cfg(feature = "testing")]
 pub(crate) mod testing;
 mod words;
@@ -26,7 +26,7 @@ mod tool_groups;
 mod tool_host;
 
 pub use crate::canvas_data::{Guide, GuideColor, GuideDrag, GuideKey, GuideLine, NavigatorOptions, NavigatorSettings, ProxyColor};
-pub use crop::{CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
+pub use crop::{CropOverlay, CropOverlayOutput, CropScope, CropShield, CropStyle, ShieldColor, paint_outside};
 pub use frame_step::{FRAME_STEP_MAX, frame_step};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::{ShowReadouts, hud, readout};
@@ -37,19 +37,19 @@ pub use words::CanvasWords;
 pub use tool::tool_probe;
 pub use tool::{CanvasTool, NoTool, ToolAccess, ToolAction, ToolAnchor, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRegion, ViewEase};
 pub use tool_groups::{PickStep, tool_pick};
-pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, tool_pass};
+pub use tool_host::{ContextRequest, ContextSource, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, tool_pass};
 
 mod raster_source;
 pub use raster_source::{PixelRect, RasterSource};
 
-mod pasteboard;
-mod split;
+pub(crate) mod pasteboard;
+pub(crate) mod split;
 pub use pasteboard::{PageBorder, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
 pub use split::{SplitAt, SplitLayout, SplitPane, SplitStyle, SplitViews, SplitViewsOutput};
 pub use words::SplitWords;
 
 mod app_paint;
-mod raster;
+pub(crate) mod raster;
 pub use app_paint::AppPaint;
 pub use raster::{DetailPlan, Extent, RasterDisplay, RasterDisplayOutput, RasterStyle, snap_to_texels};
 
@@ -65,28 +65,29 @@ pub use space::{BackgroundPress, BodyKeys, CanvasRulers, context_click};
 
 // canvas-navigate-a
 mod momentary;
-mod navigate;
-mod rotate;
+pub(crate) mod navigate;
+pub(crate) mod rotate;
 mod tools;
 mod zoom_motion;
 
 pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
 pub use navigate::{
-    Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan,
+    Autoscroll, FlickPan, MiddleButton, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput,
+    WheelNavigation, WheelScheme, pan,
 };
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
 pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewRequest, ViewTarget, ZoomTool};
 pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 
-mod rulers;
-mod scrollbars;
+pub(crate) mod rulers;
+pub(crate) mod scrollbars;
 pub use rulers::{
     INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule,
 };
 pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
 
 // canvas-navigator-a
-mod navigator;
+pub(crate) mod navigator;
 pub use navigator::{
     Navigator, NavigatorCommands, NavigatorOutput, NavigatorPreview, NavigatorZoomRow, NavigatorZoomRowOutput, preview_rect, proxy_quad,
     view_center_for, zoom_to_document_rect,
@@ -100,26 +101,32 @@ pub use navigator::NavigatorStyle;
 pub mod navigator_panel;
 
 use crate::contract::{
-    Bind, Common, Component, Container, ContainerProps, Cx, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
+    Bind, Common, Component, Container, ContainerProps, Cx, EditorHandle, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
+    Role, Sizing,
 };
+use crate::primitives::{EditorPurpose, ImeStamp};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::runtime::lock_keys;
 use crate::runtime::measure;
 use crate::runtime::motion::{Animate as _, spec};
-use crate::style::{ComponentStyle, Stateful, StyleCx, SurfaceKind, SurfaceLook};
+use crate::style::{ComponentStyle, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
-    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState,
-    Sense, WheelNotch,
+    CanvasTransform, CanvasView, CursorPriority, EditEvent, EditorInput, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, Mixed, PartKey,
+    PointerButton, PressPhase, PressState, Sense, WheelNotch,
 };
-use egui::{Pos2, Rect, Response, Vec2};
+use egui::{Context, Pos2, Rect, Response, Vec2};
+use navigate::MiddleAutoscroll;
+use std::sync::Arc;
 use zoom_motion::{Steer, ViewMotion};
 
 pub(crate) const BACKGROUND: PartKey = PartKey::new("background");
 
+/// The editor part a canvas with [`Canvas::editor`] registers.
+const EDITOR: PartKey = PartKey::new("editor");
 /// The key the canvas shows its rulers under.
 const RULERS: &str = "rulers";
 
@@ -155,6 +162,8 @@ pub struct CanvasStyle {
     metrics: Metrics,
     /// How far the rulers' strips push the view's rect in from the canvas's top-left corner, while they show.
     rulers: Vec2,
+    /// The middle-button autoscroll mark's fill and ink: the overlay handle colours, so it reads on any page.
+    mark: Option<(StyleColor, StyleColor)>,
 }
 
 /// A canvas: a pasteboard the caller's canvas controls and the active tool share.
@@ -203,6 +212,13 @@ pub struct Canvas<'a> {
     /// body that pages its document itself (a page view).
     #[prop]
     keys_to_body: bool,
+    /// The canvas registers one editor part of this purpose: the part's widget is the component's focus holder and the
+    /// input-method owner, and keys arrive as editor input ([`ToolPass::editor_input`]); [`keys_to_body`](Self::keys_to_body)
+    /// does not apply. The body reports its editor state through [`ToolPass::editor`].
+    #[prop]
+    editor: Option<EditorPurpose>,
+    /// The editor part's inputs of this pass, taken once in `update`: `tool_pass` is built from a shared `Cx`.
+    editor_input: Arc<[EditorInput]>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
     rulers: Option<CanvasRulers>,
     /// The zero point of the rulers given to `with_rulers`, which the space publishes in `rulers`.
@@ -265,6 +281,12 @@ struct Settled {
     easing: bool,
     /// The keys the canvas leaves to its body.
     keys: BodyKeys,
+    /// The mark of a running middle-button autoscroll, in screen points.
+    mark: Option<Pos2>,
+    /// A press that stopped an autoscroll is down: it reaches no tool.
+    swallowing: bool,
+    /// The screen point a wheel or pinch zoom of this pass kept still ([`CanvasSpace::zoom_anchor`]).
+    zoom_anchor: Option<Pos2>,
 }
 
 impl<'a> Canvas<'a> {
@@ -285,6 +307,8 @@ impl<'a> Canvas<'a> {
             strips_shown: false,
             ruler_output: None,
             keys_to_body: false,
+            editor: None,
+            editor_input: Arc::from([]),
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
             rulers: None,
@@ -409,13 +433,21 @@ impl<'a> Canvas<'a> {
             }
         }
         let mut jumped = false;
-        if let Some(wheel) = cx.take_wheel() {
+        // The screen point a wheel or pinch zoom of this pass kept still, before the clamp below can move the centre.
+        let mut zoom_anchor = None;
+        let wheel = cx.take_wheel();
+        let wheeled = wheel.is_some();
+        if let Some(wheel) = wheel {
             let os = cx.env.shell().os;
             if let Some(action) = motion.wheel.read(&wheel, WheelNavigation::LINE, os, &self.navigation) {
                 // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in its body
                 // covers it.
                 let at = wheel.at.unwrap_or_else(|| view.rect.center());
+                let (anchor, zoom) = (WheelNavigation::zoom_anchor(&view, action, at, size), view.zoom);
                 jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
+                if view.zoom != zoom {
+                    zoom_anchor = anchor;
+                }
             }
             // A trackpad rotation or a twist of two fingers turns the view; a mirrored view turns the other way.
             if let Some(degrees) = WheelNavigation::rotation(&WheelInput::of(&wheel, WheelNavigation::LINE, os), &self.navigation) {
@@ -423,9 +455,16 @@ impl<'a> Canvas<'a> {
                 jumped = true;
             }
         }
-        if let Some(delta) = self.background_press(cx).1 {
+        let (_, drag) = self.background_press(cx);
+        if let Some(delta) = drag {
             pan(&mut view, delta);
             jumped = true;
+        }
+        let mut swallowing = false;
+        if !measure::active(&ctx) {
+            let (moved, swallowed) = self.autoscroll(cx, &mut motion.autoscroll, &mut view, size, wheeled);
+            jumped |= moved;
+            swallowing = swallowed;
         }
         // As its body's scroll owner the canvas shows a control focus arrives at, and applies the page keys a focused
         // control leaves as its own.
@@ -434,7 +473,9 @@ impl<'a> Canvas<'a> {
             jumped = true;
         }
         // Page Up and Down, Home and End scroll the view as in Photoshop; the arrows are the tool's nudges. A canvas
-        // that leaves its keys to its body hands both to it.
+        // that leaves its keys to its body hands both to it. With an editor part the keys are its input: they reached
+        // the body as editor input before this step, so nothing is left to hand over.
+        let to_body = self.keys_to_body && self.editor.is_none();
         let mut keys = BodyKeys::default();
         let mut moves = Vec::new();
         while let Some(mv) = cx.intents().take_move() {
@@ -442,13 +483,13 @@ impl<'a> Canvas<'a> {
         }
         moves.extend(cx.take_scroll_moves());
         for (step, mods) in moves {
-            if self.keys_to_body {
+            if to_body {
                 keys.page = Some((step, mods));
             } else if let (Some(document), Some(key)) = (self.document_size(), PageKey::of(step, mods, area.size())) {
                 jumped |= key.apply(&mut view, document);
             }
         }
-        if self.keys_to_body {
+        if to_body {
             keys.nudge = cx.intents().take_nudge();
         }
         // A pan or a scroll takes over from an ease, here or in a tool.
@@ -462,6 +503,10 @@ impl<'a> Canvas<'a> {
         }
         let before = view;
         if let Some((next, motion)) = self.view_commands(cx, Some(view)) {
+            // A view command's zoom keeps its own point (the centre), not the wheel's.
+            if next.zoom != view.zoom {
+                zoom_anchor = None;
+            }
             view = next;
             match motion {
                 CommandMotion::Ease if self.navigation.animated_zoom => {
@@ -487,8 +532,67 @@ impl<'a> Canvas<'a> {
         }
         let shown = motion.animation.shown(&target, progress);
         let easing = motion.animation.running();
+        let mark = motion.autoscroll.mark();
         motion.restore(&ctx, id);
-        Settled { target, shown, easing, keys }
+        Settled { target, shown, easing, keys, mark, swallowing, zoom_anchor }
+    }
+
+    /// One pass of the middle button's autoscroll over `view`: a middle press on the background starts it under
+    /// [`MiddleButton::Autoscroll`]; while it runs each pass scrolls toward the pointer and asks for the next pass; any
+    /// input ends it, and the pass that ends it applies no step. A drag while the button is held scrolls the same way,
+    /// and its release ends the run; a click leaves it running. `wheeled` is whether a wheel or a zoom reached the
+    /// canvas this pass. Returns whether the view moved, and whether a press that stopped the run is down (it and its
+    /// release belong to the autoscroll, not to the tool).
+    ///
+    /// Every end signal is read in the pass that gets the input (a rerun pass of a frame reads no key and no press,
+    /// and shares the frame's clock, so it steps zero): `keyed` for any key (`runtime/keys/input.rs`), the background
+    /// press or the frame's press for a press, egui's window focus (winit `Focused`, the web's blur) and a pointer
+    /// position of `None` (winit `CursorLeft`, egui `PointerGone`) for leaving the window.
+    fn autoscroll(&self, cx: &mut Cx<'_, Self>, run: &mut MiddleAutoscroll, view: &mut CanvasView, size: Size, wheeled: bool) -> (bool, bool) {
+        let ctx = cx.core.ctx.clone();
+        let input = crate::runtime::pointer::frame(&ctx);
+        let phase = self.raw_press(cx).phase;
+        let down = matches!(phase, PressPhase::Down { .. });
+        let swallowing = run.swallowing();
+        if swallowing && matches!(phase, PressPhase::Release { .. } | PressPhase::Cancel { .. }) {
+            run.stop_swallowing();
+        }
+        let moved = 'pass: {
+            if run.mark().is_some() {
+                let keyed = crate::runtime::keys::keyed(&ctx);
+                let unfocused = !ctx.input(|i| i.focused);
+                let off = self.navigation.middle_button != MiddleButton::Autoscroll;
+                if keyed || wheeled || down || input.press.is_some() || unfocused || input.pos.is_none() || off {
+                    // Escape only stops the scroll; any other key also does its own job.
+                    if keyed {
+                        let _ = cx.intents().take(Intent::Cancel);
+                    }
+                    run.end();
+                    if down {
+                        run.swallow_press();
+                    }
+                    break 'pass false;
+                }
+                if phase.start().is_some_and(|start| start.button == PointerButton::Middle) {
+                    match phase {
+                        PressPhase::DragStart { .. } | PressPhase::Drag { .. } => run.drag(),
+                        PressPhase::Release { .. } | PressPhase::Cancel { .. } => run.release(),
+                        _ => {}
+                    }
+                }
+            } else if self.navigation.middle_button == MiddleButton::Autoscroll
+                && let PressPhase::Down { start, .. } = phase
+                && start.button == PointerButton::Middle
+            {
+                run.press(start.origin);
+            }
+            let Some(pointer) = input.pos.filter(|_| run.mark().is_some()) else { break 'pass false };
+            let step = run.step(pointer, crate::runtime::frame::clock(&ctx));
+            crate::runtime::cursor::request(&ctx, run.cursor(Some(pointer)).into(), CursorPriority::Drag);
+            crate::runtime::frame::request_repaint(&ctx);
+            Autoscroll::scroll(view, step, size).is_some()
+        };
+        (moved, swallowing || run.swallowing())
     }
 
     /// Shows `rulers` along the top and left edges of the canvas, which the view lies inside (View > Rulers); none shows
@@ -515,11 +619,11 @@ impl<'a> Canvas<'a> {
 
     /// The space the body and the tool see in this pass; `caps_lock` is whether Caps Lock is on in it.
     fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool) -> Option<CanvasSpace> {
-        let (shown, target, easing, keys) = match self.settled {
-            Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
-            None => (self.given?, self.given?, false, BodyKeys::default()),
+        let (shown, target, easing, keys, zoom_anchor) = match self.settled {
+            Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys, settled.zoom_anchor),
+            None => (self.given?, self.given?, false, BodyKeys::default(), None),
         };
-        let mut space = CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer);
+        let mut space = CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer).with_zoom_anchor(zoom_anchor);
         space.set_view(target);
         if easing {
             space.ease_through(shown);
@@ -544,18 +648,25 @@ impl<'a> Canvas<'a> {
         self.snap.clone().map(|snap| snap.at(&view, os))
     }
 
-    /// The press on the background part, or on the tool region that holds it, as the canvas reports it, and the pan
-    /// of a middle-button drag: a middle press pans the view and is never a tool press.
-    fn background_press(&self, cx: &Cx<'_, Self>) -> (PressState, Option<Vec2>) {
+    /// The press on the background part, or on the tool region that holds it, with every button.
+    fn raw_press(&self, cx: &Cx<'_, Self>) -> PressState {
         let region = (0..self.tool_regions.len() as u64)
             .filter_map(|i| cx.part_if_declared(TOOL_REGION.at(i)))
             .map(|result| result.press)
             .find(|press| !matches!(press.phase, PressPhase::Idle));
-        let press = region.unwrap_or(cx.part(BACKGROUND).press);
+        region.unwrap_or(cx.part(BACKGROUND).press)
+    }
+
+    /// The press on the background part, or on the tool region that holds it, as the canvas reports it, and the pan of a
+    /// middle-button drag: a middle press pans the view, or under [`MiddleButton::Autoscroll`] belongs to the
+    /// autoscroll, and is never a tool press.
+    fn background_press(&self, cx: &Cx<'_, Self>) -> (PressState, Option<Vec2>) {
+        let press = self.raw_press(cx);
         let middle = press.phase.start().is_some_and(|start| start.button == PointerButton::Middle);
+        let pans = self.navigation.middle_button != MiddleButton::Autoscroll;
         match press.phase {
-            PressPhase::DragStart { start, pos, .. } if middle => (PressState::IDLE, Some(pos - start.origin)),
-            PressPhase::Drag { delta, .. } if middle => (PressState::IDLE, Some(delta)),
+            PressPhase::DragStart { start, pos, .. } if middle && pans => (PressState::IDLE, Some(pos - start.origin)),
+            PressPhase::Drag { delta, .. } if middle && pans => (PressState::IDLE, Some(delta)),
             _ if middle => (PressState::IDLE, None),
             _ => (press, None),
         }
@@ -563,7 +674,8 @@ impl<'a> Canvas<'a> {
 
     /// The tool host's input of this pass: settled in `update`, so the body and `finish` read the same.
     fn tool_pass(&self, cx: &Cx<'_, Self>) -> ToolPass {
-        let press = self.background_press(cx).0;
+        // A press that stopped an autoscroll is the autoscroll's until its release.
+        let press = if self.settled.is_some_and(|settled| settled.swallowing) { PressState::IDLE } else { self.background_press(cx).0 };
         let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
         let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
         ToolPass {
@@ -575,6 +687,8 @@ impl<'a> Canvas<'a> {
             snap: self.snapped(cx.env.shell().os),
             document: self.document_size(),
             navigation: self.navigation,
+            editor_input: self.editor_input.clone(),
+            editor: cx.editor_handle(),
         }
     }
 
@@ -602,6 +716,8 @@ pub struct CanvasOutput {
     /// target; the canvas shows the way there itself. [`ToolHost::run`] carries it in [`ToolHostResponse::view`]
     /// when no tool set a view, so an app with a tool host copies that one view.
     pub view: Option<CanvasView>,
+    /// The mark of a running middle-button autoscroll, for captures.
+    pub autoscroll: Option<Pos2>,
     /// What the rulers given to [`Canvas::with_rulers`] reported in this pass.
     pub rulers: Option<RulersOutput>,
 }
@@ -638,9 +754,37 @@ pub struct ToolPass {
     pub(crate) snap: Option<Snap>,
     pub(crate) document: Option<Size>,
     pub(crate) navigation: NavigationOptions,
+    /// The editor part's inputs of this pass, in the order they arrived; the body applies them to its own document.
+    pub editor_input: Arc<[EditorInput]>,
+    /// The editor part of this pass, through which the body reports its editor state; `None` without an editor.
+    pub editor: Option<EditorHandle>,
 }
 
 impl ToolPass {
+    /// Notes the input-method receipt between the stamps `before` and `after` for the canvas's editor part; true when the
+    /// stamps prove the engine applied it.
+    /// A canvas without an editor part notes nothing and proves nothing.
+    pub fn ime_receipt(&self, ctx: &Context, before: ImeStamp, after: ImeStamp) -> bool {
+        self.editor.as_ref().is_some_and(|editor| editor.ime_receipt(ctx, before, after))
+    }
+
+    /// Notes an input-method application change (an edit the app made, not the input method) for the canvas's editor
+    /// part. A canvas without an editor part notes nothing.
+    pub fn ime_application_change(&self, ctx: &Context) {
+        if let Some(editor) = &self.editor {
+            editor.ime_application_change(ctx);
+        }
+    }
+
+    /// Asks for the OS composition to be interrupted this pass because the body refused an input method's edit, as
+    /// [`EditorHandle::ime_interrupt`]: a commit the body applied after the refusal keeps its `InputMethod` cause. A
+    /// canvas without an editor part asks nothing.
+    pub fn ime_interrupt(&self, ctx: &Context) {
+        if let Some(editor) = &self.editor {
+            editor.ime_interrupt(ctx);
+        }
+    }
+
     /// `view` as the canvas keeps it: inside the document's edges with Overscroll off. The tool host passes a tool's
     /// view through it.
     pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
@@ -664,8 +808,26 @@ impl Component for Canvas<'_> {
 
     fn style(cx: &StyleCx<'_>, _: CanvasStyleKey) -> CanvasStyle {
         let surface = SurfaceLook::new(Stateful::new(cx.color(cx.tokens.color.surface.canvas))).kind(SurfaceKind::Canvas);
-        // The rulers' own layout says where the view lies inside them.
-        CanvasStyle { surface: Some(surface), rulers: Rulers::content_rect(cx, Rect::ZERO).min.to_vec2(), ..CanvasStyle::default() }
+        // The rulers' own layout says where the view lies inside them. The autoscroll mark takes the overlay handle
+        // colours, not the window fill and text ink: the canvas has no window fill, and the overlay pair is the one
+        // that reads on any page.
+        let overlay = &cx.tokens.color.overlay;
+        CanvasStyle {
+            surface: Some(surface),
+            rulers: Rulers::content_rect(cx, Rect::ZERO).min.to_vec2(),
+            mark: Some((cx.color(overlay.handle_fill), cx.color(overlay.stroke))),
+            ..CanvasStyle::default()
+        }
+    }
+
+    /// With an editor part the canvas keeps an editor's keys: typed text, the arrows as moves and Delete reach the part
+    /// as editor input, where the canvas's own keys would leave the text unrouted and make the arrows the tool's
+    /// nudges. It still marks its window as showing a document.
+    fn keys(&self) -> KeyUse {
+        match self.editor {
+            Some(_) => KeyUse::of(Input::Editor).with_chrome_key(true).with_moves(),
+            None => Self::KEYS,
+        }
     }
 
     fn sense(&self) -> Sense {
@@ -691,8 +853,16 @@ impl Component for Canvas<'_> {
         }
     }
 
+    /// The mark of a running middle-button autoscroll, over the body's picture and controls, clipped to the canvas.
+    fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let (Some(at), Some((fill, ink))) = (self.settled.and_then(|settled| settled.mark), cx.style.mark) else { return };
+        ui.clipped(cx.content_rect, |ui| navigate::paint_mark(&ui.draw(), at, fill, ink));
+    }
+
     /// The view of this pass, kept for the body and `finish`.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // Taken once: `Cx::editor_input` empties the pass's inputs, and the body reads them from the `ToolPass`.
+        self.editor_input = cx.editor_input().collect::<Vec<_>>().into();
         // Left untaken: the canvas's generic context request is recorded as for a secondary click.
         self.context_key = cx.intents().untaken(&Intent::ContextMenu);
         // The canvas is no value component: it reads and writes its view's binding itself, as a container does.
@@ -732,6 +902,10 @@ impl Component for Canvas<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let sense = Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS;
         cx.part(BACKGROUND, rect).priority(HitPriority::new(HitLevel::Background, 0)).sense(sense).pointer_only(TOOL_PATH);
+        // The editor part's widget is the canvas's focus holder, so the press that focuses the canvas focuses it.
+        if let Some(purpose) = self.editor {
+            cx.editor(EDITOR, rect, purpose);
+        }
         if self.tool_regions.is_empty() {
             return;
         }
@@ -755,7 +929,8 @@ impl Component for Canvas<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
-        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, rulers: self.ruler_output }
+        let autoscroll = self.settled.and_then(|settled| settled.mark);
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, autoscroll, rulers: self.ruler_output }
     }
 }
 

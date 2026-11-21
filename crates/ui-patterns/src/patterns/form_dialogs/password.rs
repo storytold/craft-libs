@@ -3,7 +3,7 @@
 use crate::buttons::ToggleButton;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use crate::dialog::{Dialog, DialogOutput};
-use crate::display::{Icon, Progress, Text};
+use crate::display::{Icon, Progress, Shade, Text};
 use crate::form::{Field, FieldGroup, Help};
 use crate::layout_components::{Row, Stack};
 use crate::primitives::IconSpec;
@@ -21,8 +21,8 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the password dialog beside the common Cancel. `{name}` is the file's name, `{strength}` one of
@@ -49,6 +49,7 @@ craft_ui::words! {
         medium: "passwordDialog.medium" = "Medium";
         strong: "passwordDialog.strong" = "Strong";
         wrong: "passwordDialog.wrong" = "That password is not correct.";
+        clear_hint: "passwordDialog.clearHint" = "Leave both fields empty to remove the password.";
     }
 }
 
@@ -140,6 +141,8 @@ pub enum PasswordPurpose {
     /// A new password typed twice, with its strength under the first field; OK stays disabled until both match and
     /// are not empty.
     Set,
+    /// A new password typed twice; both fields empty is valid and clears the password.
+    SetOrClear,
 }
 
 impl PasswordPurpose {
@@ -215,9 +218,14 @@ struct Entries {
 }
 
 impl Entries {
-    /// Whether OK may be pressed: a new password needs a non-empty entry that its confirmation repeats.
-    fn valid(&self, setting: bool) -> bool {
-        !setting || (!self.input.is_empty() && self.input == self.confirm)
+    /// Whether OK may be pressed: a new password needs a non-empty entry that its confirmation repeats; one that may
+    /// also be cleared takes two empty entries too, and two entries that differ never pass.
+    fn valid(&self, purpose: &PasswordPurpose) -> bool {
+        match purpose {
+            PasswordPurpose::Set => !self.input.is_empty() && self.input == self.confirm,
+            PasswordPurpose::SetOrClear => self.input == self.confirm,
+            _ => true,
+        }
     }
 }
 
@@ -256,7 +264,8 @@ impl<'a> PasswordDialog<'a> {
         let env = Env::of(ui);
         let words = env.words::<PasswordWords>();
         let common = env.words::<CommonWords>();
-        let setting = matches!(purpose, PasswordPurpose::Set);
+        let setting = matches!(purpose, PasswordPurpose::Set | PasswordPurpose::SetOrClear);
+        let clearing = matches!(purpose, PasswordPurpose::SetOrClear);
         let (title, message, ok) = match &purpose {
             PasswordPurpose::Open { name } => {
                 (words.open_title.clone(), Some(Label::from(words.open_message.fill(&[("name", name.as_str())]))), words.open.clone())
@@ -265,12 +274,14 @@ impl<'a> PasswordDialog<'a> {
                 (words.permissions_title.clone(), Some(Label::from(words.permissions_message.fill(&[("name", name.as_str())]))), words.unlock.clone())
             }
             PasswordPurpose::Set => (words.set_title.clone(), None, common.ok.clone()),
+            PasswordPurpose::SetOrClear => (words.set_title.clone(), None, common.ok.clone()),
         };
+        let (guard_purpose, settle_purpose) = (purpose.clone(), purpose.clone());
         let mut dialog = Dialog::new(title)
             .buttons([FooterButton::new(ok, DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
-            .close_guard(move |_, cx| cx.memory::<Entries>().valid(setting))
+            .close_guard(move |_, cx| cx.memory::<Entries>().valid(&guard_purpose))
             .settle_buttons(move |cx, buttons| {
-                let valid = cx.memory::<Entries>().valid(setting);
+                let valid = cx.memory::<Entries>().valid(&settle_purpose);
                 if let Some(accept) = buttons.first_mut() {
                     accept.set_enabled(valid);
                 }
@@ -338,6 +349,9 @@ impl<'a> PasswordDialog<'a> {
                         });
                     }
                 });
+                if clearing {
+                    Text::new(words.clear_hint.clone()).shade(Shade::Muted).show(ui);
+                }
                 if let Some(strength) = strength {
                     let (filled, variant) = match strength {
                         PasswordStrength::Weak => (1.0 / 3.0, Variant::DANGER),
@@ -347,7 +361,7 @@ impl<'a> PasswordDialog<'a> {
                     Progress::new(filled).variant(variant).label(words.strength_meter.clone()).show(ui);
                 }
             });
-            valid.set(entries.valid(setting));
+            valid.set(entries.valid(&purpose));
             *typed.borrow_mut() = entries.input.clone();
             *cx.memory::<Entries>() = entries;
         });

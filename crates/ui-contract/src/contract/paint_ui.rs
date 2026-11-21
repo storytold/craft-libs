@@ -166,11 +166,20 @@ impl PaintUi<'_> {
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
             let mut control = placed.control;
+            let mut prepared = None;
             if child.fills() != Some(craft_behavior::Axis::Y) {
-                let ideal = run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));
+                // The minimum measure above may have changed the child's enabled state. In that
+                // case `under` can differ from what the child inherits when it is shown.
+                let ideal = if self.fade.is_none() && under.enabled == self.enabled {
+                    let (ideal, kept) = run::measure_under_prepared(&mut child, &*self.ui, id, craft_behavior::Proposal::Ideal, &under);
+                    prepared = kept;
+                    ideal
+                } else {
+                    run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under))
+                };
                 control.max.y = control.max.y.min(control.min.y + ideal.y);
             }
-            let output = self.child_with(id, control, child, None, under.inside.clone());
+            let output = self.child_with_prepared(id, control, child, None, under.inside.clone(), prepared);
             placed.finish(&ctx);
             output
         })
@@ -179,6 +188,18 @@ impl PaintUi<'_> {
     /// Shows `child` at `rect` under the composite's `enabled` and `size`, and `inside`, the inside label of the side
     /// label the child is the control of.
     fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
+        self.child_with_prepared(id, rect, child, tip, inside, None)
+    }
+
+    fn child_with_prepared<C: Show>(
+        &mut self,
+        id: Id,
+        rect: Rect,
+        child: C,
+        tip: Option<TipFn<'_>>,
+        inside: Option<Arc<InsideLabel>>,
+        prepared: Option<run::PreparedLeaf<C>>,
+    ) -> C::Output {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
         let kids = self.kids.get_or_insert_with(|| {
@@ -186,7 +207,10 @@ impl PaintUi<'_> {
             alloc::child(parent, access::with_parent(builder, self.id))
         });
         let ctx = kids.ctx().clone();
-        let env = super::cx::child_env(&Env::of(kids), &super::cx::Under { enabled: self.enabled, size: self.size, inside });
+        let source = Env::of(kids);
+        let child = super::Props::id(child, id);
+        let prepared = prepared.filter(|prepared| self.fade.is_none() && prepared.matches(&child, &source));
+        let env = super::cx::child_env(&source, &super::cx::Under { enabled: self.enabled, size: self.size, inside });
         // A child shown while the owner's fade runs lies under the owner's veil, so a faded child adds none of its own.
         let env = match self.fade {
             Some(_) => {
@@ -200,7 +224,10 @@ impl PaintUi<'_> {
         let installed = Env::install_for(kids, env);
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.
-        let output = layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, ShowAt::Rect(rect), tip));
+        let output = layout_memory::boundary(&ctx, true, || match prepared {
+            Some(prepared) => run::show_leaf_prepared(&mut Some(child), kids, ShowAt::Rect(rect), tip, prepared),
+            None => run::show_leaf(&mut Some(child), kids, ShowAt::Rect(rect), tip),
+        });
         Env::restore(&ctx, installed);
         output
     }
@@ -210,16 +237,30 @@ impl PaintUi<'_> {
     /// colour through `StyleCx::host_ink` and its muted colour through `StyleCx::host_muted_ink`. It registers no id, senses nothing, opens no memory stage and
     /// fires nothing.
     pub fn face<C: Show>(&mut self, part: impl Into<PartRef>, face: C) {
-        self.face_with(part.into(), face, self.text);
+        self.face_with(part.into(), face, self.text, true);
     }
 
     /// `face`, for a face on a fill the composite draws for that part alone (a plate over a picture): the face reads
     /// `ink` through `StyleCx::host_ink` instead of the composite's text colour.
     pub fn face_in<C: Show>(&mut self, part: impl Into<PartRef>, face: C, ink: &Stateful<StyleColor>) {
-        self.face_with(part.into(), face, Some(ink));
+        self.face_with(part.into(), face, Some(ink), true);
     }
 
-    fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>) {
+    /// [`face`](Self::face) painted `share` as opaque as it would be (1 paints as `face` does, 0 paints nothing): a
+    /// component fading in or out as the one component that draws it. A share outside 0 to 1 is clamped and a
+    /// non-finite one leaves the opacity as it was; fades stack with the opacity already in force. A faded face is a
+    /// look only: it reports no sub-node, so a component fading out has no node while it fades.
+    pub fn face_faded<C: Show>(&mut self, part: impl Into<PartRef>, face: C, share: f32) {
+        let kept = self.ui.opacity();
+        if share.is_finite() {
+            self.ui.set_opacity(kept * share.clamp(0.0, 1.0));
+        }
+        self.face_with(part.into(), face, self.text, false);
+        self.ui.set_opacity(kept);
+    }
+
+    /// Paints `face` for `part`; a `reported` face gives the part's sub-node its facts (`steps::report_parts`).
+    fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>, reported: bool) {
         let Some(result) = self.results.get(&(part.key, part.index)) else {
             debug_assert!(false, "face for a part `parts` did not declare");
             return;
@@ -241,7 +282,9 @@ impl PaintUi<'_> {
         if let Some(baseline) = record.baseline {
             own.baseline.get_or_insert(baseline);
         }
-        own.faces.push(record);
+        if reported {
+            own.faces.push(record);
+        }
     }
 
     /// Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code

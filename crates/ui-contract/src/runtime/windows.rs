@@ -144,6 +144,8 @@ pub(crate) struct Record {
     known: Option<Rect>,
     /// The place the window's own pass last saw.
     seen: Option<Rect>,
+    /// The smallest inner size its caller asks for, as the window's builder carries it.
+    min_size: Option<Vec2>,
 }
 
 /// Passes between searches for an OS window that was not found.

@@ -5,7 +5,7 @@
 //! them to document units with the canvas's view ([`ToolContext::space`]), so it holds no copy of the view.
 
 use super::{CanvasSpace, MARCH_SECONDS, MARCH_TICK, Snap, ToolPath, march_shift};
-use crate::contract::{Pattern, PatternKind, PatternProbe};
+use crate::contract::{Pattern, PatternKind, PatternProbe, Tooltip};
 use crate::primitives::{ContentPainterCx, Draw};
 use crate::runtime::env::{Direction, Env, Label, MotionPolicy, PointSize, UnitWords, Units, WordSet, Words};
 use crate::runtime::motion::loop_phase;
@@ -222,6 +222,8 @@ pub(crate) struct ToolRequests {
     pub(crate) pan: Option<bool>,
     /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`].
     pub(crate) hud: Option<Vec<(Label, String)>>,
+    /// The pointer tip, from [`ToolContext::tip`].
+    pub(crate) tip: Option<Tooltip>,
 }
 
 /// What a tool sees and may ask for during a call.
@@ -525,6 +527,14 @@ impl<'a> ToolContext<'a> {
     /// readouts). The last request of a pass wins. A hud asked for in the same pass as a readout replaces it.
     pub fn hud(&mut self, rows: Vec<(Label, String)>) {
         self.requests.hud = Some(rows);
+    }
+
+    /// A tip to show at the pointer where it rests (a link's address and the key that follows it), asked from
+    /// [`CanvasTool::hover`]. The host shows it through the framework tooltip, with its look and delay, while no
+    /// gesture runs, and drops it when the pointer leaves the canvas or a press starts. The last request of a pass
+    /// wins, and a hover that asks for none drops the tip.
+    pub fn tip(&mut self, tip: impl Into<Tooltip>) {
+        self.requests.tip = Some(tip.into());
     }
 
     /// Asks for another pass (an animation, a held key that repeats).

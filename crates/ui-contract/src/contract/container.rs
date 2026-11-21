@@ -123,7 +123,7 @@ impl ShellPane {
 }
 
 /// The padding tier of a body.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Pad {
     /// No padding.
@@ -135,6 +135,9 @@ pub enum Pad {
     Regular,
     /// `space.pad.roomy`.
     Roomy,
+    /// A full-window page's margin around its content: two and a half roomy pads (40 pt in the compact set), as a
+    /// File page's body stands off the window and its side menu.
+    Page,
 }
 
 /// The edges a container's padding tier applies to.
@@ -168,6 +171,22 @@ pub enum Sizing {
     /// fills takes it, and the container with it. A content-sized mount, a row or a grid stops that.
     #[default]
     Content,
+    /// The width its content took last pass and the available height: a side menu beside a page, as wide as its
+    /// widest item and as tall as the row it stands in, with its footer at the bottom. Across the width it is
+    /// `Content`, down the height `Fill`.
+    FillHeight,
+}
+
+impl Sizing {
+    /// Whether the width follows the content: `Content` and `FillHeight`.
+    pub const fn content_width(self) -> bool {
+        matches!(self, Sizing::Content | Sizing::FillHeight)
+    }
+
+    /// Whether the height is the available height: `Fill` and `FillHeight`.
+    pub const fn fills_height(self) -> bool {
+        matches!(self, Sizing::Fill | Sizing::FillHeight)
+    }
 }
 
 /// A size role that sets the least width of a container's content or of a button.
@@ -184,6 +203,12 @@ pub enum LeastWidth {
     DialogSideButton,
     /// `size.rail.width` per column: a tool rail of this many columns, as wide as the shell slot that holds it.
     Rail(std::num::NonZeroU8),
+    /// `size.dialog.least` and `size.dialog.wrap` together: a wide dialog, as wide as a dialog's least content beside a
+    /// paragraph's line (an About dialog whose tabs hold credit tables).
+    WideDialog,
+    /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
+    /// band beside the page, not as buttons cut to their labels.
+    SideMenu,
 }
 
 impl LeastWidth {
@@ -195,6 +220,8 @@ impl LeastWidth {
             LeastWidth::DialogButton => tokens.size.dialog.button,
             LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
+            LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
+            LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
         }
     }
 }
@@ -206,6 +233,8 @@ impl LeastWidth {
 pub enum WrapWidth {
     /// `size.dialog.wrap`: a dialog's paragraphs.
     Dialog,
+    /// `size.dock.column`: a page's column of settings beside a preview (a Print page), as wide as a dock column.
+    Column,
 }
 
 impl WrapWidth {
@@ -213,6 +242,7 @@ impl WrapWidth {
     pub fn points(self, tokens: &craft_theme::Tokens) -> f32 {
         match self {
             WrapWidth::Dialog => tokens.size.dialog.wrap,
+            WrapWidth::Column => tokens.size.dock.column,
         }
     }
 }
@@ -414,7 +444,8 @@ impl FooterRegion {
     }
 }
 
-/// Where a footer region sits.
+/// Where a footer region sits. In every place, `Container::body_end` fills the body's column under its content, so
+/// a notice it shows lies under the body and above the footer, or beside a footer in the end region.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FooterPlace {
@@ -686,7 +717,7 @@ pub enum Gap {
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows
 /// of a menu touch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InMenu(pub bool);
 

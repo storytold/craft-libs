@@ -2,16 +2,16 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, Pad,
-    Role, Scroll, Sizing, ThemeScope,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
+    LeastWidth, Pad, Role, Scroll, Sizing, ThemeScope, WrapWidth,
 };
 use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnWidth, Insets, Metrics, Sense};
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of the layout components: no minimum size, and padding only at the start edge, one
 /// `space.pad.regular` per level of indent.
@@ -59,7 +59,7 @@ macro_rules! layout_component {
     ($(#[$doc:meta])* $name:ident, $key:ident, [$($fwd:ident),*] $(, <$life:lifetime> { $($field:ident: $ty:ty),* })?) => {
         $(#[$doc])*
         #[derive(crate::contract::Component, crate::contract::Props)]
-        #[component(container)]
+        #[component(container, unregistered)]
         pub struct $name $(<$life>)? {
             #[common]
             common: Common,
@@ -189,6 +189,13 @@ macro_rules! layout_component {
     };
 }
 
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Stack<'static>; container, purpose = "Children one under another");
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Row; container, purpose = "Children side by side");
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Grid; container, purpose = "Children row-major over a column list: a child in flow takes the next cell");
+
 layout_component!(
     /// Children one under another. A header and a footer sit outside the body: the footer stays in the room under
     /// a collection that fills it.
@@ -259,6 +266,22 @@ impl<'a> Stack<'a> {
         if let Some(footer) = self.props.footer {
             self.props = self.props.footer(footer.gap(gap));
         }
+        self
+    }
+
+    /// The least width of the stack's content from the size role `least`: a stack sized from its content is at least
+    /// that wide (a page's side menu, `LeastWidth::SideMenu`), and wider content still widens it.
+    #[must_use]
+    pub fn least_width(mut self, least: LeastWidth) -> Self {
+        self.props = self.props.least_width(least);
+        self
+    }
+
+    /// The line length `wrap` of the paragraphs in a stack sized from its content: a wrapping text breaks its lines
+    /// there instead of widening the stack (a Print page's settings column, `WrapWidth::Column`).
+    #[must_use]
+    pub fn wrap_width(mut self, wrap: WrapWidth) -> Self {
+        self.props = self.props.wrap_width(wrap);
         self
     }
 

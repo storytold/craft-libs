@@ -266,7 +266,9 @@ fn easing(e: Easing) -> &'static str {
 }
 
 fn motion_lines(out: &mut Lines, m: &MotionTokens) {
-    let MotionTokens { hover, open, r#move, caret, outline, reduced } = m;
+    // PLAN: `motion.slide` is not dumped: a dump line changes every golden file under `tests/dumps/tokens`, which need
+    // regenerating with the line `out.line("motion.slide", slide)` added below; owner: the lead (a blessed rerun).
+    let MotionTokens { hover, open, r#move, caret, outline, slide: _, reduced } = m;
     for (k, motion) in [("hover", hover), ("open", open), ("move", r#move), ("caret", caret), ("outline", outline)] {
         let Motion { millis, easing: e } = motion;
         out.line(&format!("motion.{k}.millis"), millis);

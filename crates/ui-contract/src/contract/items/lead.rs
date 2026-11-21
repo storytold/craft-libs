@@ -115,7 +115,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// The pointer's position, in screen space, while it is over the collection.
     fn hovered_pos(cx: &Cx<'_, C>) -> Option<Pos2> {
-        crate::runtime::pointer::frame(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
+        crate::runtime::pointer::frame_raw(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
     }
 
     /// The row under `pos` (screen space) in the rows' placement `at`: the pointer-to-row mapping of `hover_lead`,
@@ -139,9 +139,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// arrow keys. A pass moves the pointer when it holds a move event: the pointer entering over a row moves the lead
     /// with no movement to measure, and a modifier change under a resting pointer leaves the lead where the keys put it.
     pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
-        let moved = crate::runtime::pointer::with_pass_pointer(&cx.core.ctx, |pass| {
-            pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. }))
-        });
+        let moved =
+            crate::runtime::pointer::with_pass_raw(&cx.core.ctx, |pass| pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. })));
         if !moved {
             return;
         }
@@ -177,7 +176,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         {
             return;
         }
-        let Some(row) = crate::runtime::pointer::frame(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
+        let Some(row) = crate::runtime::pointer::frame_raw(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
         if self.holds(row) {
             return;
         }

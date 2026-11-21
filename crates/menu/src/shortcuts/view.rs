@@ -7,9 +7,10 @@
 mod bars;
 mod detail;
 mod header;
-#[cfg(feature = "screen-testing")]
-mod stories;
-mod table;
+pub(crate) mod lists;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+pub(crate) mod table;
 
 use std::borrow::Cow;
 
@@ -29,7 +30,7 @@ use egui::Ui;
 use crate::shortcuts::rows::AreaId;
 use crate::shortcuts::state::{DialogState, Env};
 use crate::shortcuts::words::around_chord;
-use crate::shortcuts::{keyboard, review, sets};
+use crate::shortcuts::{Layout, keyboard, review, sets};
 
 /// The table's share of the width beside the detail pane.
 const TABLE_SHARE: f32 = 0.62;
@@ -54,6 +55,12 @@ pub(crate) fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: &
         if changed {
             state.app_tab_changed();
         }
+        return;
+    }
+    if env.options.layout == Layout::CommandLists {
+        lists::show(ui, cx, env, state);
+        // The Reset All prompt and the messages are the bars'.
+        bars::show(ui, cx, env, state);
         return;
     }
     sets::show(ui, env, state);
@@ -111,9 +118,11 @@ pub(super) fn tab_strip(ui: &mut Ui, name: &'static str, titles: &[String], show
         .kind(TabKind::Text)
         .shown(shown)
         .show_items(ui, &Titles(titles), &mut |key, _| Tab::new(titles[*key].clone()).id_salt(("tab", *key)));
-    strip.response.events.into_iter().find_map(|event| match event {
-        CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.last().copied(),
-        _ => None,
+    strip.picked.or_else(|| {
+        strip.response.events.into_iter().find_map(|event| match event {
+            CollectionEvent::Selection(SelectionChange::Set(keys)) => keys.last().copied(),
+            _ => None,
+        })
     })
 }
 
@@ -130,7 +139,7 @@ fn app_tabs(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> Option<u
         state.set_tab(None);
     }
     let shown = current.map_or(0, |i| i + 1);
-    let picked = Stack::new().enabled(!state.modal()).show(ui, |ui, _| tab_strip(ui, "shortcuts.tab", &titles, shown)).inner.flatten();
+    let picked = Stack::new().fill_width().enabled(!state.modal()).show(ui, |ui, _| tab_strip(ui, "shortcuts.tab", &titles, shown)).inner.flatten();
     let shown = match picked {
         Some(i) => {
             state.set_tab(i.checked_sub(1).and_then(|k| ids.get(k).copied()));

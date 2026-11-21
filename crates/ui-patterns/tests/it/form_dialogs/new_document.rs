@@ -10,9 +10,9 @@ use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Opens the Save Document Preset pane with the icon beside Name, types `name` over the proposed one and saves.
+/// Opens the Save Document Preset pane with the button below the fields, types `name` over the proposed one and saves.
 fn save_preset(fixture: &mut Fixture, name: &str) {
-    let save = fixture.by_label("Save Document Preset").expect("the icon beside Name");
+    let save = fixture.by_label("Save Document Preset").expect("the Save Document Preset button");
     fixture.click(&save).idle(10);
     assert!(fixture.by_label("Preset Name").is_some(), "the pane asks for a name");
     fixture.type_text(name).idle(4);
@@ -92,7 +92,7 @@ fn the_save_icon_proposes_a_free_name_and_enter_saves_without_creating() {
         *held.borrow_mut() = bound;
     });
     fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
-    let save = fixture.by_label("Save Document Preset").expect("the icon beside Name");
+    let save = fixture.by_label("Save Document Preset").expect("the Save Document Preset button");
     fixture.click(&save).idle(10);
     assert!(shows(&fixture, "Saved 2"), "the first free name is proposed");
     fixture.type_text("Poster").idle(4);
@@ -127,6 +127,80 @@ fn bitmap_is_one_bit_without_a_transparent_background() {
     fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
     assert_eq!(shared.borrow().depth, BitDepth::One, "the dialog fits the depth to Bitmap");
     assert!(shows(&fixture, "1 bit"));
+}
+
+#[trial]
+fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
+    use craft_behavior::PixelSize;
+    use craft_host::target::Os;
+    use craft_ui::runtime::access::Role;
+    use craft_ui::testing::{Frames, install_spec, pointer};
+    use std::cell::Cell;
+
+    let wide = PixelSize::new(1200, 900);
+    let tall = PixelSize::new(600, 1200);
+    for scale in [1.0, 1.25] {
+        let mut frames = Frames::uninstalled();
+        let mut install = install_spec();
+        install.shell_info = install.shell_info.os(Os::Windows);
+        craft_ui::install(&frames.ctx, install).expect("a fresh Windows-style desktop fixture");
+        frames.screen(Vec2::new(1440.0, 900.0));
+        frames.pixels_per_point(scale);
+        let mut options = DocumentOptions::default();
+        let mut recent = DocumentOptions::default();
+        recent.size = tall;
+        let mut recents = vec![recent];
+        let selected_size = Cell::new(options.size);
+        let mut show = |ui: &mut egui::Ui| {
+            let _ = NewDocumentDialog::new(Bind::bound(&mut options)).clipboard(wide).recent(Bind::bound(&mut recents)).show(ui);
+            selected_size.set(options.size);
+        };
+        for _ in 0..30 {
+            frames.frame(Vec::new(), &mut show);
+        }
+        assert_eq!(frames.ctx.pixels_per_point(), scale);
+        assert_eq!(selected_size.get(), wide, "Recent starts with the Clipboard preset");
+        let tree = frames.tree();
+        let card = |name: &str| {
+            tree.with_role(Role::LIST_ITEM)
+                .into_iter()
+                .find(|key| tree.name_of(*key).is_some_and(|label| label.starts_with(name)))
+                .expect("the preset card")
+        };
+        let clipboard = card("Clipboard");
+        let custom = card("Custom");
+        assert_eq!(tree.selected_of(clipboard), Some(true));
+        let shapes = frames.frame_shapes(&mut show);
+        for (name, key, size) in [("Clipboard", clipboard, wide), ("Custom", custom, tall)] {
+            let card = tree.bounds_of(key).expect("visible tile bounds");
+            let caption = frames.texts().iter().find(|line| line.text == name).expect("the preset title is painted");
+            let outlines: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Rect(rect)
+                        if rect.stroke.width > 0.0
+                            && (rect.rect.center().x - card.center().x).abs() <= 1.0
+                            && card.contains_rect(rect.rect)
+                            && rect.rect.bottom() <= caption.rect.top() =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(outlines.len(), 1, "one page outline and no extra frame in {name} at {scale}: {outlines:?}");
+            let page = outlines[0];
+            assert!((page.width().max(page.height()) - 30.0).abs() <= 1.0, "the compact page outline in {name}: {page:?}");
+            assert!((page.width() / page.height() - size.width as f32 / size.height as f32).abs() < 0.05, "the page has the preset's aspect");
+        }
+
+        let at = tree.bounds_of(custom).expect("the custom recent is visible").center();
+        pointer::click(&mut frames, at, &mut show);
+        assert_eq!(selected_size.get(), tall, "clicking the tall recent still loads its actual dimensions");
+        let tree = frames.tree();
+        assert_eq!(tree.selected_of(custom), Some(true));
+        assert_eq!(tree.selected_of(clipboard), Some(false));
+    }
 }
 
 /// A Web card turns Artboards on and a Photo card turns it off again; Artboards the user ticked stays on.
@@ -173,4 +247,24 @@ fn pixel_aspect_lists_the_custom_entries_and_shows_an_unknown_id_as_square() {
     let row = fixture.by_label("Pixel Aspect Ratio").expect("the row under Color Profile");
     fixture.click(&row).idle(10);
     assert!(shows(&fixture, "DVCPRO HD 1080 (1.5)") && shows(&fixture, "Mine"), "the built-in ratios, then the app's");
+}
+
+#[trial]
+fn the_new_document_layout_places_presets_and_details_below_the_tabs() {
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let recent = fixture.by_label("Recent").expect("the Recent tab").rect;
+    let mode = fixture.by_label("Color Mode").expect("the Color Mode field").rect;
+    let depth = fixture.by_label("Depth").expect("the Depth field").rect;
+    let save = fixture.by_label("Save Document Preset").expect("the save action").rect;
+    let create = fixture.by_label("Create").expect("the create action").rect;
+    assert!(shows(&fixture, "PRESET DETAILS"), "the details header is a caption");
+    assert!(fixture.texts().iter().any(|t| t.text.starts_with("BLANK DOCUMENT PRESETS")), "the presets header is a caption");
+    assert!(recent.bottom() <= mode.top(), "tabs go above the details");
+    assert!((mode.top() - depth.top()).abs() < 1.0, "color mode and depth share a row");
+    assert!(mode.right() <= depth.left(), "depth follows color mode");
+    assert!(mode.bottom() <= save.top() && save.bottom() <= create.top(), "Save Preset is between the fields and the footer");
 }

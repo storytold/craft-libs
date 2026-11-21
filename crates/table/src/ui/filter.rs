@@ -11,8 +11,8 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook};
 use egui::{Rect, Response, Vec2, pos2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The filter button's words, English by default.

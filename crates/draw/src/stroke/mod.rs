@@ -12,7 +12,7 @@ use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveArclen, PathEl, PathS
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-mod dash_tests;
+pub(crate) mod dash_tests;
 
 /// The shortest run (between corners and path ends) and the smallest pattern total `Corners` fits.
 const MIN_RUN: f64 = 1e-6;
