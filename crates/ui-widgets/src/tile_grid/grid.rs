@@ -25,7 +25,7 @@ use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, RuleKind, StyleColor, StyleCx};
 use craft_behavior::{
-    ColumnKey, ColumnWidth, EditEvent, HitLevel, HitPriority, IconId, Intent, ItemLayout as _, ItemSource, Metrics, Mixed, NavShape, PartKey, PointerButton,
+    ColumnKey, ColumnWidth, EditEvent, HitLevel, HitPriority, Intent, ItemLayout as _, ItemSource, Metrics, Mixed, NavShape, PartKey, PointerButton,
     PressPhase, Roving, Selection, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
@@ -827,8 +827,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         }
         // The gap under the pointer shows where an insertion lands; the part's state layer shows hover and focus.
         for &(at, rect) in &self.placed_gaps {
-            let glyph = Rect::from_center_size(rect.center(), Vec2::splat(rect.width().min(rect.height())));
-            ui.draw().icon(glyph, &IconSpec::svg(IconId::new("plus")).color(style.insert));
             if cx.hover_pos(GAP.at(at as u64)).is_some() {
                 let line = PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]);
                 ui.draw().stroke(&line, StrokeWidth::Thick, style.insert);
