@@ -125,6 +125,16 @@ fn grouped_page() -> Fixture {
 }
 
 #[trial]
+fn the_rows_of_every_group_of_a_page_share_one_label_column() {
+    let fixture = grouped_page();
+    let end = |label: &str| {
+        let run = fixture.texts().iter().find(|run| run.text.trim_end_matches(':') == label).unwrap_or_else(|| panic!("no label {label}"));
+        run.rect.right()
+    };
+    assert_eq!(end("Aa"), end("A much longer label"), "the labels of both groups end at one x");
+}
+
+#[trial]
 fn a_host_labelled_custom_row_shows_its_label_once() {
     let fixture = grouped_page();
     let tree = fixture.tree();
