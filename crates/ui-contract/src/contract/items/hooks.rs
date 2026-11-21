@@ -227,7 +227,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let mut layout = comp.item_layout_from(previous, &*self.source, width, item, scx);
         // An auto-width layout sets its items side by side: where its width comes from its rows, it takes their run at
         // their ideal widths, not the widest one (a tab strip in a bar's unbounded row).
-        let run = (layout.auto_widths() && (asked.is_some() || !bounded || self.content_sized(comp)) && !self.source.is_empty())
+        let run = (layout.auto_widths() && (asked.is_some() || !bounded) && !self.source.is_empty())
             .then(|| self.run_in(ui, id, room).min(room.x))
             .filter(|run| *run > width);
         let (width, asked) = match run {

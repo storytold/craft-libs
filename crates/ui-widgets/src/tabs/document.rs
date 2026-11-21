@@ -269,14 +269,10 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     pub fn show(self, ui: &mut Ui) -> DocumentTabsOutput<D> {
         let DocumentTabs { label, tabs, selected, reorderable, tear_off, leading, trailing, large, takes_files } = self;
         let source = keyed(tabs, |tab: &DocumentTab<D>| tab.id.clone()).with_text(|tab| Cow::Borrowed(tab.label.as_str()));
-        let has_trailing = trailing.is_some();
         let make_strip = || {
             let mut strip = TabStrip::new(label.clone())
                 .takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true))
                 .can_close(move |key: &D| tabs.iter().any(|tab| &tab.id == key && tab.closable));
-            if has_trailing {
-                strip = strip.sizing(Sizing::Content);
-            }
             if takes_files {
                 strip = strip.takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true));
             }

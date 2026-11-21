@@ -92,25 +92,6 @@ fn document_tabs_with_trailing_control_fill_their_parent_row() {
 }
 
 #[trial]
-fn trailing_control_follows_short_document_tabs() {
-    use craft_ui::buttons::Button;
-    use craft_ui::contract::Show as _;
-    use craft_ui::tabs::{DocumentTab, DocumentTabs};
-    let mut fixture = Fixture::new(|ui| {
-        let tabs = [DocumentTab::new(1, "One document")];
-        let _ = DocumentTabs::new("Documents", &tabs)
-            .trailing(|ui| {
-                Button::new("Open").show(ui);
-            })
-            .show(ui);
-    });
-    fixture.room(egui::vec2(1000.0, 100.0)).settle();
-    let tab = fixture.by_label("One document").expect("document tab").rect;
-    let open = fixture.by_label("Open").expect("trailing control").rect;
-    assert!(open.left() - tab.right() < tab.width(), "trailing control follows the tab: {tab:?}, {open:?}");
-}
-
-#[trial]
 fn document_tabs_reserve_space_for_the_trailing_control() {
     use craft_ui::buttons::Button;
     use craft_ui::contract::Show as _;
