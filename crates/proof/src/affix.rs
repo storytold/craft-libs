@@ -36,8 +36,8 @@
 //! Lookups never panic: stems sit in one string, found through an open-addressing hash table, and
 //! a probe allocates only small scratch strings for the candidate roots it tries.
 
-use std::collections::HashMap;
-use std::hash::Hasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
 use crate::patterns::{FxHasher, FxMap};
@@ -664,18 +664,18 @@ type RawRule = (FlagKey, bool, String, String, String, String);
 /// their strict parse; literal continuations keep their own flags.
 enum ContinuationFlags {
     Literal(Vec<FlagKey>),
-    Alias(Rc<[FlagKey]>),
+    Alias { index: usize, flags: Rc<[FlagKey]> },
 }
 
 impl ContinuationFlags {
     fn read(rules: &Rules, written: &str, aliases: &mut FxMap<usize, Rc<[FlagKey]>>) -> Result<Self, String> {
         if let Some(index) = rules.alias_index(written) {
             if let Some(flags) = aliases.get(&index) {
-                return Ok(Self::Alias(Rc::clone(flags)));
+                return Ok(Self::Alias { index, flags: Rc::clone(flags) });
             }
             let flags: Rc<[FlagKey]> = rules.mode.parse(rules.flags(written))?.into();
             aliases.insert(index, Rc::clone(&flags));
-            Ok(Self::Alias(flags))
+            Ok(Self::Alias { index, flags })
         } else {
             rules.mode.parse(rules.flags(written)).map(Self::Literal)
         }
@@ -684,8 +684,28 @@ impl ContinuationFlags {
     fn as_slice(&self) -> &[FlagKey] {
         match self {
             Self::Literal(flags) => flags.as_slice(),
-            Self::Alias(flags) => flags.as_ref(),
+            Self::Alias { flags, .. } => flags.as_ref(),
         }
+    }
+
+    fn interned_id(
+        &self,
+        ids: &FxMap<FlagKey, u16>,
+        d: &mut AffixDict,
+        set_ids: &mut FxMap<Vec<u16>, u32>,
+        alias_ids: &mut FxMap<usize, u32>,
+    ) -> Result<u32, String> {
+        if let Self::Alias { index, .. } = self
+            && let Some(&id) = alias_ids.get(index)
+        {
+            return Ok(id);
+        }
+        let mut flags: Vec<u16> = self.as_slice().iter().filter_map(|k| ids.get(k).copied()).collect();
+        let id = d.intern(set_ids, &mut flags)?;
+        if let Self::Alias { index, .. } = self {
+            alias_ids.insert(*index, id);
+        }
+        Ok(id)
     }
 }
 
@@ -1364,7 +1384,17 @@ impl AffixDict {
         // Flags: every one a rule, a stem or a directive uses gets an id, in key order.
         let mut distinct: FxMap<FlagKey, u16> = FxMap::default();
         let all = rules.prefixes.iter().chain(&rules.suffixes).map(|r| r.0);
-        let all = all.chain(pfx_cont.iter().chain(&sfx_cont).flat_map(ContinuationFlags::as_slice).copied()).chain(stem_keys.iter().copied());
+        let mut seen_aliases: HashSet<usize, BuildHasherDefault<FxHasher>> = HashSet::default();
+        let continuation_keys = pfx_cont
+            .iter()
+            .chain(&sfx_cont)
+            .filter(|cont| match cont {
+                ContinuationFlags::Literal(_) => true,
+                ContinuationFlags::Alias { index, .. } => seen_aliases.insert(*index),
+            })
+            .flat_map(ContinuationFlags::as_slice)
+            .copied();
+        let all = all.chain(continuation_keys).chain(stem_keys.iter().copied());
         // NEEDAFFIX and CIRCUMFIX flags may only ever appear in rules' continuation classes.
         let directives =
             [rules.forbidden, rules.no_suggest, rules.substandard, rules.keepcase, rules.only_in_compound, rules.need_affix, rules.circumfix];
@@ -1566,12 +1596,14 @@ impl AffixDict {
         if dropped > 0 {
             log::debug!("affix dictionary: {dropped} homonym entries past {MAX_FLAGS_PER_STEM} merged flags kept only their exclusions");
         }
+        // Cache only after the first actual rule use, preserving the pool's insertion order.
+        let mut alias_ids: FxMap<usize, u32> = FxMap::default();
         let mut build_rules = |raw: Vec<RawRule>, conts: Vec<ContinuationFlags>, d: &mut AffixDict| -> Result<Vec<Rule>, String> {
             raw.into_iter()
                 .zip(conts)
                 .map(|((flag, cross, strip, add, _, cond), cont)| {
                     let flag = id_of(flag).ok_or("affix flag without an id")?;
-                    let cont = d.intern(&mut set_ids, &mut cont.as_slice().iter().filter_map(|&k| id_of(k)).collect())?;
+                    let cont = cont.interned_id(&distinct, d, &mut set_ids, &mut alias_ids)?;
                     Ok(Rule { flag, cross, strip: strip.into(), add: add.into(), cont, cond: parse_cond(&cond)?, cond_text: cond.into() })
                 })
                 .collect()
