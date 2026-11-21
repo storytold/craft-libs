@@ -42,7 +42,8 @@ fn load(files: ScriptedFiles) -> Reported {
 }
 
 /// The app gets the file as it was read, from a browser's contents and from a path, so it can hand its own
-/// reader the input range line instead of a re-written domain; a file that cannot be read has no bytes.
+/// reader the input range line instead of a re-written domain. A file the parse refuses still comes back as read (the
+/// app's reader may take it); a file that cannot be read has no bytes.
 #[trial]
 fn a_loaded_lut_comes_back_with_the_bytes_it_was_read_from() {
     let contents = ScriptedFiles::answering([Picked::Contents(vec![("wide.cube".into(), WIDE.as_bytes().to_vec())])]);
@@ -50,6 +51,9 @@ fn a_loaded_lut_comes_back_with_the_bytes_it_was_read_from() {
     let path = PathBuf::from("/luts/wide.cube");
     let on_disk = ScriptedFiles::answering([Picked::Paths(vec![path.clone()])]).with_file(&path, WIDE.as_bytes().to_vec());
     assert_eq!(load(on_disk), (Some(true), Some(WIDE.as_bytes().to_vec())), "a file on disk");
+    let broken = b"LUT_3D_SIZE 2\n0 0 0\n".to_vec();
+    let unparsed = ScriptedFiles::answering([Picked::Contents(vec![("broken.cube".into(), broken.clone())])]);
+    assert_eq!(load(unparsed), (Some(false), Some(broken)), "a file that reads but does not parse still comes back as read");
     let missing = ScriptedFiles::answering([Picked::Paths(vec![PathBuf::from("/luts/gone.cube")])]);
     assert_eq!(load(missing), (Some(false), None), "an unreadable file: an error and no bytes");
 }
