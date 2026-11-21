@@ -37,7 +37,7 @@ fn writing_mode(rtl: Option<bool>) -> &'static str {
 /// Preformatted Text), each with the look of the document's own style: font, size, bold,
 /// italic, colour and the rest of its text formatting, spacing, indents, alignment and keep with
 /// next, written out in full so other programs show them as WordCraft does.
-fn kind_styles(doc: &Document, on_outline: &std::collections::BTreeSet<String>) -> String {
+fn kind_styles(doc: &Document, on_outline: &std::collections::BTreeSet<String>, normal_rtl: bool) -> String {
     let mut s = String::new();
     let mut kinds: Vec<(String, String, String, Option<u8>, &str)> =
         (1..=6).map(|n| (format!("Heading_20_{n}"), format!("Heading {n}"), format!("Heading{n}"), Some(n), "text")).collect();
@@ -71,10 +71,12 @@ fn kind_styles(doc: &Document, on_outline: &std::collections::BTreeSet<String>) 
         if let Some(c) = pp.contextual_spacing {
             para.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
-        // The emitted kind style is based on Standard. Keep an explicit override, or a
-        // direction inherited from a parent that differs from the document default.
-        let default_rtl = doc.styles.default_para.bidi;
-        let rtl = doc.styles.get(&id).and_then(|style| style.para.bidi).or_else(|| pp.bidi.filter(|b| Some(*b) != default_rtl));
+        // The emitted kind style is based on Standard. Keep its own direction when an
+        // explicit choice or a different inherited direction would otherwise be lost.
+        let rtl = doc.styles.get(&id).and_then(|style| {
+            let resolved = pp.bidi.unwrap_or(false);
+            style.para.bidi.or((resolved != normal_rtl).then_some(resolved))
+        });
         para.push_str(writing_mode(rtl));
         let outline = outline.map(|n| outline_attrs(doc, n, &pp, on_outline.contains(&id))).unwrap_or_default();
         s.push_str(&format!(
@@ -140,7 +142,12 @@ fn odf_parent(doc: &Document, id: Option<&str>) -> String {
 /// The custom paragraph styles in `named` and the custom styles they are based on, as common
 /// styles (ODF 1.3 §16.2): named by their document id, shown by their name, each with its own
 /// paragraph and text formatting over its parent's.
-fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_outline: &std::collections::BTreeSet<String>) -> String {
+fn custom_styles(
+    doc: &Document,
+    named: &std::collections::BTreeSet<String>,
+    on_outline: &std::collections::BTreeSet<String>,
+    normal_rtl: bool,
+) -> String {
     let mut todo: Vec<String> = named.iter().cloned().collect();
     let mut done = std::collections::BTreeSet::new();
     let mut s = String::new();
@@ -169,7 +176,18 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
         if let Some(c) = pp.contextual_spacing {
             attrs.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
-        attrs.push_str(writing_mode(pp.bidi));
+        let parent = odf_parent(doc, st.based_on.as_deref());
+        let rtl = pp.bidi.or_else(|| {
+            // Some model parents are replaced by Standard or Heading 6 in the ODF package.
+            let exported_parent = match parent.as_str() {
+                "Standard" if st.based_on.as_deref() != Some("Normal") => normal_rtl,
+                "Heading_20_6" if st.based_on.as_deref() != Some("Heading6") => doc.styles.para_style_props("Heading6").0.bidi.unwrap_or(false),
+                _ => return None,
+            };
+            let resolved = doc.styles.para_style_props(&id).0.bidi.unwrap_or(false);
+            (resolved != exported_parent).then_some(resolved)
+        });
+        attrs.push_str(writing_mode(rtl));
         // At the width each side is drawn at, as the paragraph's own borders already are by the
         // time the flow model holds them: ODF has no border that is drawn and takes no room
         // (storytold/wordcraft#5065).
@@ -188,7 +206,6 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
                 super::writer::tab_stops(&tabs)
             })
             .unwrap_or_default();
-        let parent = odf_parent(doc, st.based_on.as_deref());
         let outline = pp.outline_level.filter(|l| *l < 9).map(|l| outline_attrs(doc, l + 1, pp, on_outline.contains(&id))).unwrap_or_default();
         s.push_str(&format!(
             "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"{outline}><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
@@ -370,7 +387,7 @@ fn with_watermark(body: &str, shape: &str) -> String {
     format!("<text:p>{shape}</text:p>{body}")
 }
 
-/// `styles.xml` of `doc`: the default style/// `styles.xml` of `doc`: the default style from the document defaults (Normal's spacing, the
+/// `styles.xml` of `doc`: the default style from the document defaults (Normal's spacing, the
 /// body font, pair kerning, the tab interval), the paragraph kinds' styles, and one master page
 /// per entry of `pages` with `parts`, its headers and footers, whose automatic styles are
 /// `part_styles`.
@@ -396,7 +413,7 @@ fn styles_xml(
         ..Default::default()
     };
     let kern = doc.styles.default_chr.kern.is_some_and(|k| k > 0.0);
-    // Normal's font size (Standard, written empty, takes the default style's).
+    // Normal's font size. Standard inherits the size in the default style.
     let size = doc.styles.resolve_char(None, &Default::default()).size;
     let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
     let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
@@ -422,12 +439,18 @@ fn styles_xml(
         lang = doc.styles.resolve_char(None, &Default::default()).lang.as_deref().map(|l| super::writer::lang_attrs(l, "")).unwrap_or_default(),
         scripts = super::writer::script_attrs(&doc.styles.default_chr)
     ));
-    s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
+    let normal_mode = writing_mode(Some(normal.bidi).filter(|b| *b != doc.styles.default_para.bidi.unwrap_or(false)));
+    s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"");
+    if normal_mode.is_empty() {
+        s.push_str("/>");
+    } else {
+        s.push_str(&format!("><style:paragraph-properties{normal_mode}/></style:style>"));
+    }
     let mut on_outline = std::collections::BTreeSet::new();
     styles_numbered_by_own_level(&doc.body, 0, &mut on_outline);
-    s.push_str(&kind_styles(doc, &on_outline));
+    s.push_str(&kind_styles(doc, &on_outline, normal.bidi));
     s.push_str(&outline_style(doc));
-    s.push_str(&custom_styles(doc, named, &on_outline));
+    s.push_str(&custom_styles(doc, named, &on_outline, normal.bidi));
     // The note text styles, as WordCraft's Footnote Text and Endnote Text: 10 pt, no spacing.
     for (name, class) in [("Footnote", "extra"), ("Endnote", "extra")] {
         s.push_str(&format!(

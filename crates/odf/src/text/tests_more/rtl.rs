@@ -103,6 +103,72 @@ fn exported_heading_styles_keep_explicit_and_inherited_directions() {
 }
 
 #[test]
+fn exported_normal_style_keeps_its_direction_separate_from_document_defaults() {
+    use craft_wordmodel::styles::{Style, StyleKind};
+    use craft_wordmodel::{Path, StoryRef};
+
+    for default_rtl in [false, true] {
+        let mut doc = Document::from_text("Normal\nUnparented\nMissing parent");
+        let styles = std::sync::Arc::make_mut(&mut doc.styles);
+        styles.default_para.bidi = Some(default_rtl);
+        styles.get_mut("Normal").unwrap().para.bidi = Some(!default_rtl);
+        for (name, parent) in [("Unparented", None), ("MissingParent", Some("Undefined"))] {
+            styles.upsert(Style {
+                id: name.into(),
+                name: name.into(),
+                kind: StyleKind::Paragraph,
+                based_on: parent.map(str::to_string),
+                ..Default::default()
+            });
+        }
+        for (i, name) in [(1, "Unparented"), (2, "MissingParent")] {
+            doc.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.style = Some(name.into());
+        }
+        let expected = [!default_rtl, default_rtl, default_rtl];
+        assert_eq!(resolved_directions(&doc), expected);
+
+        let bytes = export(&doc).unwrap();
+        let xml = entry(&bytes, "styles.xml");
+        let standard = xml.split_once("style:name=\"Standard\" style:family=\"paragraph\"").unwrap().1;
+        assert!(!standard.split_once('>').unwrap().0.ends_with('/'));
+        let mode = if default_rtl { "lr-tb" } else { "rl-tb" };
+        assert!(standard.split_once("</style:style>").unwrap().0.contains(&format!("style:writing-mode=\"{mode}\"")));
+        let back = import(&bytes).unwrap();
+        assert_eq!(back.styles.default_para.bidi, Some(default_rtl));
+        assert_eq!(resolved_directions(&back), expected);
+    }
+}
+
+#[test]
+fn exported_custom_style_keeps_direction_when_its_heading_parent_is_remapped() {
+    use craft_wordmodel::styles::{Style, StyleKind};
+    use craft_wordmodel::{Path, StoryRef};
+    use std::sync::Arc;
+
+    for level in 7..=9 {
+        let mut doc = Document::from_text("Inherited heading direction");
+        let styles = Arc::make_mut(&mut doc.styles);
+        styles.get_mut("Heading6").unwrap().para.bidi = Some(true);
+        styles.upsert(Style {
+            id: "NamedHeading".into(),
+            name: "Named Heading".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some(format!("Heading{level}")),
+            ..Default::default()
+        });
+        doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.style = Some("NamedHeading".into());
+        assert_eq!(resolved_directions(&doc), [false]);
+
+        let bytes = export(&doc).unwrap();
+        let xml = entry(&bytes, "styles.xml");
+        let named = xml.split_once("style:name=\"NamedHeading\"").unwrap().1.split_once("</style:style>").unwrap().0;
+        assert!(named.contains("style:parent-style-name=\"Heading_20_6\""));
+        assert!(named.contains("style:writing-mode=\"lr-tb\""));
+        assert_eq!(resolved_directions(&import(&bytes).unwrap()), [false]);
+    }
+}
+
+#[test]
 fn right_to_left_default_style_preserves_inheritance_and_left_to_right_overrides() {
     let styles = format!(
         r#"<office:document-styles {NS_T}><office:styles>
