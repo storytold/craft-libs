@@ -17,7 +17,7 @@ use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
-use craft_ui_test_kit::windows::{Out, Windows};
+use craft_ui_test_kit::windows::{AppKitWindow, Out, Windows};
 use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
@@ -594,20 +594,36 @@ fn a_native_float_the_os_resizes_or_moves_gets_no_place_back() {
     assert_eq!(Vec2::from(recorded.normal.size), at.size(), "the model holds the OS's last size");
 }
 
-/// An app change of a native palette's place (an undo, a reloaded layout) moves and sizes its window, once.
+/// An app change of a native palette's place (an undo, a reloaded layout) moves and sizes its window, once, and the
+/// window lands at that place: on Linux by one move and one size; on macOS, where AppKit keeps a resized window's
+/// bottom-left corner, the move goes out again after the size.
 #[trial]
 fn an_app_change_of_a_native_floats_place_moves_its_window_once() {
-    let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
-    let to = Rect::from_min_size(Pos2::new(1100.0, 200.0), Vec2::new(320.0, 260.0));
-    let mut placement = Placement::new(to.size().into(), 1.0);
-    placement.position_px = Some([to.min.x as i32, to.min.y as i32]);
-    Arc::make_mut(&mut dock.workspace).apply(Action::set_native(1, Some(placement)), false, |_| Permissions::ALL).expect("the model takes the place");
-    let mut sent = Vec::new();
-    for _ in 0..3 {
-        sent.extend(dock.frame(vec![]).1);
+    for os in [Os::Linux, Os::Mac] {
+        let mut dock = NativeDock::on(os, Arc::new(FakeSystem::new()));
+        let to = Rect::from_min_size(Pos2::new(1100.0, 200.0), Vec2::new(320.0, 260.0));
+        let mut placement = Placement::new(to.size().into(), 1.0);
+        placement.position_px = Some([to.min.x as i32, to.min.y as i32]);
+        Arc::make_mut(&mut dock.workspace)
+            .apply(Action::set_native(1, Some(placement)), false, |_| Permissions::ALL)
+            .expect("the model takes the place");
+        let (mut at, mut window) = (FLOAT_AT, AppKitWindow::new(FLOAT_AT, None));
+        let mut sent = Vec::new();
+        for _ in 0..3 {
+            let commands = dock.frame(vec![]).1;
+            window.run(&commands);
+            at = if os == Os::Mac { window.rect } else { placed_by(&commands, at) };
+            dock.windows.child_info(info(true, at));
+            sent.push(placing(&commands).into_iter().cloned().collect::<Vec<_>>());
+        }
+        let expected = match os {
+            Os::Mac => vec![ViewportCommand::OuterPosition(to.min), ViewportCommand::InnerSize(to.size()), ViewportCommand::OuterPosition(to.min)],
+            _ => vec![ViewportCommand::OuterPosition(to.min), ViewportCommand::InnerSize(to.size())],
+        };
+        assert_eq!(sent.concat(), expected, "{os:?}: one move and one size");
+        assert_eq!(sent.iter().filter(|frame| !frame.is_empty()).count(), 1, "{os:?}: in one frame");
+        assert_eq!(at, to, "{os:?}: the window lands at the place");
     }
-    let placing = placing(&sent);
-    assert_eq!(placing, [&ViewportCommand::OuterPosition(to.min), &ViewportCommand::InnerSize(to.size())], "one move and one size");
 }
 
 /// The size and place an OS window takes from `commands`, starting at `at`.
@@ -626,25 +642,15 @@ fn placed_by(commands: &[ViewportCommand], at: Rect) -> Rect {
 fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
     let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
     let expanded = FLOAT_AT.size();
-    // The OS follows the window commands of each frame, and the window reports where it is.
+    // AppKit follows the window commands of each frame, within the largest size the previous frames left in force,
+    // and the window reports where it is.
     let follow = |dock: &mut NativeDock, at: &mut Rect, frames: usize| {
         let mut sent = Vec::new();
         for _ in 0..frames {
-            // The OS clamps a size to the maximum in force when it takes the command: the one the previous frames
-            // left, then each limit command of this frame in order.
-            let mut max = dock.builder.as_ref().and_then(|builder| builder.max_inner_size);
+            let mut window = AppKitWindow::new(*at, dock.builder.as_ref().and_then(|builder| builder.max_inner_size));
             let commands = dock.frame(vec![]).1;
-            for command in &commands {
-                match command {
-                    ViewportCommand::MaxInnerSize(limit) => max = Some(*limit),
-                    ViewportCommand::InnerSize(size) => {
-                        let size = max.map_or(*size, |max| size.min(max));
-                        *at = Rect::from_min_size(at.min, size);
-                    }
-                    ViewportCommand::OuterPosition(to) => *at = Rect::from_min_size(*to, at.size()),
-                    _ => {}
-                }
-            }
+            window.run(&commands);
+            *at = window.rect;
             dock.windows.child_info(info(true, *at));
             sent.extend(commands);
         }
@@ -671,7 +677,7 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
     Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, false), false, |_| Permissions::ALL).expect("the column expands");
     let sent = follow(&mut dock, &mut at, 3);
     assert!(sent.contains(&ViewportCommand::InnerSize(expanded)), "the window takes its expanded size back: {:?}", placing(&sent));
-    assert_eq!(at.min, dropped.min, "it opens from the strip's place, against the start edge");
+    assert_eq!(at.min, dropped.min, "it opens from the strip's place, against the start edge, at the strip's top");
     assert_eq!(at.size(), expanded, "the OS window grows although the strip's limits capped it when the size was sent");
     let max = dock.builder.as_ref().and_then(|builder| builder.max_inner_size);
     assert!(max.is_none_or(|max| max.x >= expanded.x && max.y >= expanded.y), "the OS lets it take that size: max {max:?}");
@@ -684,10 +690,12 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
 fn a_collapsed_native_palette_on_macos_is_resized_by_appkit_in_its_width_only() {
     let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
     let mut at = FLOAT_AT;
-    // The OS follows the window commands of each frame, and the window reports where it is.
+    // AppKit follows the window commands of each frame, and the window reports where it is.
     let follow = |dock: &mut NativeDock, at: &mut Rect, events: Vec<Event>| {
+        let mut window = AppKitWindow::new(*at, dock.builder.as_ref().and_then(|builder| builder.max_inner_size));
         let commands = dock.frame(events).1;
-        *at = placed_by(&commands, *at);
+        window.run(&commands);
+        *at = window.rect;
         dock.windows.child_info(info(true, *at));
         commands
     };
@@ -738,13 +746,19 @@ fn a_minimized_native_palette_keeps_its_width_resizable_and_comes_back_at_its_he
         let mut dock = NativeDock::on(os, Arc::new(FakeSystem::new()));
         let expanded = FLOAT_AT.size();
         let mut at = FLOAT_AT;
-        // The OS follows the window commands of each frame, within the limits in force, and the window reports where it is.
+        // The OS follows the window commands of each frame, within the limits in force, and the window reports where it is:
+        // AppKit keeps a resized window's bottom-left corner, Windows its top-left corner.
         let follow = |dock: &mut NativeDock, at: &mut Rect, frames: usize| {
             let mut sent = Vec::new();
             for _ in 0..frames {
                 let mut max = dock.builder.as_ref().and_then(|builder| builder.max_inner_size);
+                let mut window = AppKitWindow::new(*at, max);
                 let commands = dock.frame(vec![]).1;
-                for command in &commands {
+                if os == Os::Mac {
+                    window.run(&commands);
+                    *at = window.rect;
+                }
+                for command in commands.iter().filter(|_| os != Os::Mac) {
                     match command {
                         ViewportCommand::MaxInnerSize(limit) => max = Some(*limit),
                         ViewportCommand::InnerSize(size) => *at = Rect::from_min_size(at.min, max.map_or(*size, |max| size.min(max))),
@@ -822,6 +836,165 @@ fn a_click_on_the_double_arrow_of_a_collapsed_native_palette_expands_it() {
     }
     assert!(!dock.workspace.layout().floating[0].column.iconic, "the click expands the column: {actions:?}");
     assert_eq!(at.size(), FLOAT_AT.size(), "the OS window takes its expanded size");
+}
+
+/// The display scale of a MacBook's built-in display.
+const RETINA: f32 = 2.0;
+
+/// A native palette on a Retina Mac whose window AppKit runs, after its first frames.
+fn appkit_palette(system: &Arc<FakeSystem>) -> (NativeDock, AppKitWindow) {
+    let mut dock = NativeDock::on(Os::Mac, Arc::clone(system));
+    dock.windows.root_info(scaled(true, MAIN_AT, RETINA));
+    let mut window = AppKitWindow::new(FLOAT_AT, None);
+    dock.windows.child_info(scaled(true, window.rect, RETINA));
+    for _ in 0..2 {
+        appkit_frame(&mut dock, &mut window, vec![]);
+    }
+    (dock, window)
+}
+
+/// One frame with `child` events for the palette's window, whose commands AppKit runs; the window then reports where
+/// it is.
+fn appkit_frame(dock: &mut NativeDock, window: &mut AppKitWindow, child: Vec<Event>) -> (Vec<Action<u32>>, Vec<ViewportCommand>) {
+    let (actions, commands) = dock.frame(child);
+    window.run(&commands);
+    dock.windows.child_info(scaled(true, window.rect, RETINA));
+    (actions, commands)
+}
+
+/// A click at `at` in the palette's window, with the system pointer and button as macOS tells them, and the frames
+/// after it.
+fn appkit_click(dock: &mut NativeDock, system: &FakeSystem, window: &mut AppKitWindow, at: Pos2) -> Vec<Action<u32>> {
+    let desktop = window.rect.min + at.to_vec2();
+    system.set_pointer(Some([desktop.x, desktop.y]));
+    let mut actions = appkit_frame(dock, window, vec![moved(at)]).0;
+    system.set_primary_held(Some(true));
+    actions.extend(appkit_frame(dock, window, vec![press(at)]).0);
+    system.set_primary_held(Some(false));
+    actions.extend(appkit_frame(dock, window, vec![release(at)]).0);
+    for _ in 0..3 {
+        actions.extend(appkit_frame(dock, window, vec![]).0);
+    }
+    actions
+}
+
+/// The rect of the palette's button whose name starts with `name`, in its window's points.
+fn palette_button(dock: &NativeDock, name: &str) -> Rect {
+    let tree = dock.palette_tree.as_ref().expect("the palette ran a pass");
+    tree.keys()
+        .into_iter()
+        .find(|key| tree.role_of(*key) == Some(Role::BUTTON) && tree.name_of(*key).is_some_and(|shown| shown.starts_with(name)))
+        .and_then(|key| tree.bounds_of(key))
+        .unwrap_or_else(|| panic!("the palette shows a button named {name}…: {:?}", nodes(tree)))
+}
+
+/// On a Retina Mac, clicks on the double arrow collapse a native palette to its strip of icons and expand it again,
+/// as AppKit runs the window commands: the strip shows at the window's top against the edge the window keeps to, and
+/// expanded, the window takes its size back at its place.
+#[trial]
+fn the_double_arrow_collapses_and_expands_a_native_palette_on_macos() {
+    let system = Arc::new(FakeSystem::new());
+    let (mut dock, mut window) = appkit_palette(&system);
+    let collapse = palette_button(&dock, "Collapse").center();
+    let actions = appkit_click(&mut dock, &system, &mut window, collapse);
+    let strip = window.rect;
+    assert!(dock.workspace.layout().floating[0].column.iconic, "the click collapses the column: {actions:?}");
+    assert!(strip.width() < FLOAT_AT.width() && strip.height() < FLOAT_AT.height(), "the window shows the strip: {strip:?}");
+    assert!((strip.max.x - FLOAT_AT.max.x).abs() <= 0.5, "the strip keeps to the window's end edge: {strip:?} from {FLOAT_AT:?}");
+    assert!((strip.min.y - FLOAT_AT.min.y).abs() <= 0.5, "the strip keeps the window's top: {strip:?} from {FLOAT_AT:?}");
+
+    let expand = palette_button(&dock, "Expand").center();
+    let actions = appkit_click(&mut dock, &system, &mut window, expand);
+    assert!(!dock.workspace.layout().floating[0].column.iconic, "the click expands the column: {actions:?}");
+    assert_eq!(window.rect.size(), FLOAT_AT.size(), "the window takes its expanded size");
+    assert!((window.rect.min - FLOAT_AT.min).length() <= 0.5, "at its place: {:?} from {FLOAT_AT:?}", window.rect);
+}
+
+/// A native palette on a Retina Mac collapsed to icons by its double arrow.
+fn collapsed_appkit_palette(system: &Arc<FakeSystem>) -> (NativeDock, AppKitWindow) {
+    let (mut dock, mut window) = appkit_palette(system);
+    let collapse = palette_button(&dock, "Collapse").center();
+    appkit_click(&mut dock, system, &mut window, collapse);
+    assert!(dock.workspace.layout().floating[0].column.iconic, "the click collapses the column");
+    (dock, window)
+}
+
+/// Whether `actions` dock a window or a group of it.
+fn docks(actions: &[Action<u32>]) -> bool {
+    actions.iter().any(|action| matches!(action, Action::MoveWindow { .. } | Action::MoveGroup { .. }))
+}
+
+/// Drags the collapsed palette from `from`, a point of its window, until the system pointer is over the main window's
+/// group, as macOS runs a drag: the press holds the pointer in the palette's window, and AppKit moves the window
+/// itself when the press hands it the move. Returns the commands of the press's frame and whether anything docked.
+fn appkit_drag_over_group(dock: &mut NativeDock, system: &FakeSystem, window: &mut AppKitWindow, from: Pos2) -> (Vec<ViewportCommand>, bool) {
+    let pressed_at = window.rect.min + from.to_vec2();
+    system.set_pointer(Some([pressed_at.x, pressed_at.y]));
+    system.set_primary_held(Some(true));
+    appkit_frame(dock, window, vec![moved(from)]);
+    let (actions, pressed) = appkit_frame(dock, window, vec![press(from)]);
+    let mut docked = docks(&actions);
+    let handed = pressed.contains(&ViewportCommand::StartDrag);
+    let step = (OVER_GROUP - pressed_at) / 3.0;
+    for at in 1..=3 {
+        let pointer = pressed_at + step * at as f32;
+        system.set_pointer(Some([pointer.x, pointer.y]));
+        if handed {
+            // AppKit keeps the pressed point under the pointer and sends the app no pointer events.
+            window.rect = Rect::from_min_size(pointer - from.to_vec2(), window.rect.size());
+            dock.windows.child_info(scaled(true, window.rect, RETINA));
+            docked |= docks(&appkit_frame(dock, window, vec![]).0);
+        } else {
+            docked |= docks(&appkit_frame(dock, window, vec![moved(pointer - window.rect.min.to_vec2())]).0);
+        }
+    }
+    for _ in 0..2 {
+        docked |= docks(&appkit_frame(dock, window, vec![]).0);
+    }
+    (pressed, docked)
+}
+
+/// On a Retina Mac a native palette collapsed to icons moves by its title row as an expanded one does: the press hands
+/// the move to the OS, the system pointer over the main window's group marks it, and the button's release docks the
+/// whole window there.
+#[trial]
+fn dragging_a_collapsed_native_palette_by_its_title_row_docks_it_on_macos() {
+    let system = Arc::new(FakeSystem::new());
+    let (mut dock, mut window) = collapsed_appkit_palette(&system);
+    let arrow = palette_button(&dock, "Expand");
+    // The band: the title row beside the double arrow, half way to the strip's other side.
+    let width = window.rect.width();
+    let band = Pos2::new(if arrow.center().x > width / 2.0 { arrow.min.x / 2.0 } else { (arrow.max.x + width) / 2.0 }, arrow.center().y);
+    let (pressed, docked) = appkit_drag_over_group(&mut dock, &system, &mut window, band);
+    assert!(pressed.contains(&ViewportCommand::StartDrag), "the press hands the move to the OS: {pressed:?}");
+    assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the system pointer shows the drop mark");
+    assert!(!docked, "nothing docks while the system holds the button");
+    system.set_primary_held(Some(false));
+    let mut docked = false;
+    for _ in 0..3 {
+        docked |= docks(&appkit_frame(&mut dock, &mut window, vec![]).0);
+    }
+    assert!(docked, "the button's release docks the whole window");
+}
+
+/// On a Retina Mac the grip of a native palette's icon group, collapsed to icons, drags the group: over the main
+/// window's group it shows the drop mark, and the release docks it there.
+#[trial]
+fn dragging_the_group_grip_of_a_collapsed_native_palette_docks_it_on_macos() {
+    let system = Arc::new(FakeSystem::new());
+    let (mut dock, mut window) = collapsed_appkit_palette(&system);
+    let grip = palette_button(&dock, "Move").center();
+    let (pressed, docked) = appkit_drag_over_group(&mut dock, &system, &mut window, grip);
+    assert!(!pressed.contains(&ViewportCommand::StartDrag), "the grip does not move the window: {pressed:?}");
+    assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the pointer shows the drop mark");
+    assert!(!docked, "nothing docks while the button is held");
+    let release_at = OVER_GROUP - window.rect.min.to_vec2();
+    system.set_primary_held(Some(false));
+    let mut docked = docks(&appkit_frame(&mut dock, &mut window, vec![release(release_at)]).0);
+    for _ in 0..2 {
+        docked |= docks(&appkit_frame(&mut dock, &mut window, vec![]).0);
+    }
+    assert!(docked, "the release docks the group");
 }
 
 /// Panels whose palette panel's body records, in each of its real runs, the viewport it runs in.
