@@ -39,6 +39,7 @@ use craft_behavior::{DisplayOrder, DropOperation, EditEvent, GesturePhase, IconI
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
 use egui::{Id, Pos2, Rect, Ui};
+use std::any::Any;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -209,20 +210,43 @@ impl<K: Clone + Eq> RowMap<'_, K> {
     }
 }
 
-type DropMaker<'a, K> = Box<dyn Fn(Rc<RowMap<'a, K>>) -> DropKind<'a, BrowserKey<K>> + 'a>;
+/// The host's test of a payload, with the payload type erased so the drop's lifetime stays covariant: a browser that
+/// borrows its rows for less than the host's closure lives takes the drop as it is.
+type DropAccepts<'a, K> = Rc<dyn Fn(&dyn Any, &DropAt<K>) -> bool + 'a>;
 
 /// A drop target on the presets: a host payload of type `P` dropped onto a preset or between presets.
-pub struct PresetDrop<'a, K>(DropMaker<'a, K>);
+pub struct PresetDrop<'a, K> {
+    place: DropPlace,
+    accepts: DropAccepts<'a, K>,
+    /// The drop kind of the payload type the drop was made for, over the rows of one browser pass.
+    build: for<'m> fn(DropPlace, DropAccepts<'m, K>, Rc<RowMap<'m, K>>) -> DropKind<'m, BrowserKey<K>>,
+}
 
 impl<'a, K: Clone + Eq + 'a> PresetDrop<'a, K> {
     /// Takes payloads of type `P` at `place` where `accepts` agrees; the drop comes back as `PresetEvent::Dropped`.
     pub fn new<P: Send + Sync + 'static>(place: DropPlace, accepts: impl Fn(&P, &DropAt<K>) -> bool + 'a) -> Self {
-        let accepts = Rc::new(accepts);
-        PresetDrop(Box::new(move |map| {
-            let accepts = Rc::clone(&accepts);
-            DropKind::new::<P>(place, move |payload, at| map.host(at).is_some_and(|at| accepts(payload, &at)))
-        }))
+        PresetDrop {
+            place,
+            accepts: Rc::new(move |payload, at| payload.downcast_ref::<P>().is_some_and(|payload| accepts(payload, at))),
+            build: drop_kind::<P, K>,
+        }
     }
+
+    /// The drop kind over the rows of `map`.
+    fn kind<'m>(&self, map: Rc<RowMap<'m, K>>) -> DropKind<'m, BrowserKey<K>>
+    where
+        'a: 'm,
+    {
+        (self.build)(self.place, Rc::clone(&self.accepts), map)
+    }
+}
+
+fn drop_kind<'m, P: Send + Sync + 'static, K: Clone + Eq>(
+    place: DropPlace,
+    accepts: DropAccepts<'m, K>,
+    map: Rc<RowMap<'m, K>>,
+) -> DropKind<'m, BrowserKey<K>> {
+    DropKind::new::<P>(place, move |payload, at| map.host(at).is_some_and(|at| accepts(payload, &at)))
 }
 
 type BrowserToolsFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
@@ -879,7 +903,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
                     grid = grid.drag_payload(app_drag::<K>);
                 }
                 for drop in &drops {
-                    grid = grid.takes_drop((drop.0)(Rc::clone(&map)));
+                    grid = grid.takes_drop(drop.kind(Rc::clone(&map)));
                 }
                 if let Some(key) = &reveal {
                     grid = grid.reveal(BrowserKey::Preset(key.clone()));
@@ -937,7 +961,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
                     list = list.drag_payload(app_drag::<K>);
                 }
                 for drop in &drops {
-                    list = list.takes_drop((drop.0)(Rc::clone(&map)));
+                    list = list.takes_drop(drop.kind(Rc::clone(&map)));
                 }
                 if let Some(key) = &reveal {
                     list = list.reveal(BrowserKey::Preset(key.clone()));
