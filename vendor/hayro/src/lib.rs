@@ -60,6 +60,20 @@ use vello_cpu::color::palette::css::WHITE;
 use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
+#[cfg(test)]
+mod clip_edge_tests;
+#[cfg(test)]
+mod coverage_budget_tests;
+#[cfg(test)]
+mod no_zoom_tests;
+#[cfg(test)]
+mod subpixel_dash_tests;
+#[cfg(test)]
+mod thin_stroke_width_tests;
+#[cfg(test)]
+mod tiling_cell_backdrop_tests;
+#[cfg(test)]
+mod tiling_cell_shading_tests;
 /// PdfCraft patch: exported for its regression test.
 pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
 /// PdfCraft patch: exported for its regression test.
@@ -70,7 +84,7 @@ pub use renderer::set_skip_offscreen_paths;
 pub use renderer::set_cmyk_band_pixels;
 /// PdfCraft patch (30): exported for its regression tests.
 #[doc(hidden)]
-pub use renderer::{OffscreenDraws, offscreen_draws};
+pub use renderer::{OffscreenDraws, coverage_budget, offscreen_draws, paths_drawn};
 
 /// A cache used by the renderer.
 ///
@@ -164,8 +178,8 @@ pub struct RenderSettings {
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
     /// PdfCraft patch (31): the most coverage values the rasterizer keeps for the page; paths
-    /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
-    /// as a strip's index reaches (2^31).
+    /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps the
+    /// page's `coverage_budget` (patch 34), never more than a strip's index reaches (2^31).
     pub max_coverage: Option<usize>,
 }
 
@@ -256,6 +270,8 @@ pub fn render_into<'a>(
         render_mode: RenderMode::OptimizeSpeed,
     };
 
+    // PdfCraft patch (32): each page starts with its full allowance of backdrop tiles.
+    renderer::reset_backdrop_tiles();
     let mut device = Renderer::new(
         pix_width,
         pix_height,

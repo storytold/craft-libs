@@ -164,7 +164,6 @@ pub struct TilingPattern<'a> {
     cache_key: u128,
     /// PdfCraft patch (78): see [`Self::instance`].
     instance: u64,
-    ctx_bbox: Rect,
     /// The bbox of the tiling pattern.
     pub bbox: Rect,
     /// The step in the x direction.
@@ -238,7 +237,6 @@ impl<'a> TilingPattern<'a> {
             .unwrap_or_default();
 
         let state = ctx.get().clone();
-        let ctx_bbox = ctx.bbox();
 
         let fill_cs = state
             .graphics_state
@@ -270,7 +268,6 @@ impl<'a> TilingPattern<'a> {
             x_step,
             y_step,
             matrix,
-            ctx_bbox,
             is_color,
             stream,
             stroke_paint,
@@ -301,8 +298,12 @@ impl<'a> TilingPattern<'a> {
 
         let mut context = Context::new_with(
             state.ctm,
-            // TODO: bbox?
-            (initial_transform * self.ctx_bbox.to_path(0.1)).bounding_box(),
+            // PdfCraft patch (119): the cell is drawn on a canvas of its own, in pattern space, and
+            // what bounds it there is its `/BBox` (ISO 32000-2 8.7.3.1), so `sh` paints the cell
+            // as far as that clip. It was the device rectangle of the content that set the
+            // pattern, read as if it were in pattern space: a cell with its shading at negative
+            // pattern coordinates (any pattern matrix that flips y) was painted nowhere.
+            (initial_transform * self.bbox.to_path(0.1)).bounding_box(),
             &self.cache,
             self.xref,
             self.settings.clone(),
@@ -371,6 +372,9 @@ impl CacheKey for TilingPattern<'_> {
 struct StencilPatternDevice<'a, 'b, T: Device<'a>> {
     inner: &'b mut T,
     paint: Paint<'a>,
+    /// PdfCraft patch (96): the blend modes of the transparency groups the cell is inside, outermost
+    /// first. Groups are not drawn as groups here; see `set_blend_mode`.
+    groups: Vec<BlendMode>,
 }
 
 impl<'a, 'b, T: Device<'a>> StencilPatternDevice<'a, 'b, T> {
@@ -378,6 +382,7 @@ impl<'a, 'b, T: Device<'a>> StencilPatternDevice<'a, 'b, T> {
         Self {
             inner: device,
             paint,
+            groups: Vec::new(),
         }
     }
 }
@@ -396,12 +401,21 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
     }
 
     fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+    // PdfCraft patch (112): the device drawn into decides.
+    fn out_of_room(&self) -> bool {
+        self.inner.out_of_room()
+    }
+
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         self.inner.push_clip_path(clip_path);
     }
 
-    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+    /// PdfCraft patch (96): see `set_blend_mode`. Nesting is bounded by the interpreter's nesting
+    /// depth.
+    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, blend_mode: BlendMode) {
+        self.groups.push(blend_mode);
+    }
 
     fn draw_glyph(
         &mut self,
@@ -426,7 +440,18 @@ impl<'a, T: Device<'a>> Device<'a> for StencilPatternDevice<'a, '_, T> {
         self.inner.pop_clip_path();
     }
 
-    fn pop_transparency_group(&mut self) {}
+    fn pop_transparency_group(&mut self) {
+        self.groups.pop();
+    }
 
-    fn set_blend_mode(&mut self, _: BlendMode) {}
+    /// PdfCraft patch (96): an uncoloured pattern may set transparency parameters (ISO 32000-2
+    /// §11.6.7: its restriction is on colours alone), and its blend modes blend its stencil
+    /// shapes, painted in the pattern's colour, like a coloured pattern's. Inside a transparency
+    /// group the shapes are drawn straight onto the device, so the group as a whole composites
+    /// with its own blend mode: each shape takes the outermost group's mode, and a mode set
+    /// inside the group, which blends only with the group's other shapes, is not forwarded.
+    fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        let blend_mode = self.groups.first().copied().unwrap_or(blend_mode);
+        self.inner.set_blend_mode(blend_mode);
+    }
 }
