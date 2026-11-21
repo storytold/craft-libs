@@ -241,9 +241,7 @@ fn a_type3_font_naming_its_codes_x0_to_xff_reads_them_from_128_up() {
 fn a_type1_font_counting_its_glyphs_zz0_to_zzae_still_reads_nothing_from_them() {
     let counter: Vec<_> = (0..=0xaeu8).map(|code| (code, format!("zz{code:x}"))).collect();
     let differences: String = counter.iter().map(|(code, name)| format!("{code} /{name} ")).collect();
-    let font = format!(
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /Differences [{differences}] >> >>"
-    );
+    let font = format!("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /Differences [{differences}] >> >>");
     let content = b"BT /F1 20 Tf 20 150 Td <AE> Tj ET";
     assert_eq!(glyph_texts(&font, "", content), [None], "Type 1 /zz0 … /zzae, code 0xAE");
     assert_eq!(type3_text(&counter, b"\xae"), "\u{ae}", "Type 3 /zz0 … /zzae, code 0xAE");
