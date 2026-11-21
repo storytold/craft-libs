@@ -144,7 +144,7 @@ pub struct PresetRow<K> {
 }
 
 /// What the row menu of a browser or picker shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PresetRowMenu {
     /// Rename, Move to, Delete, a divider, then the host's `row_items`.

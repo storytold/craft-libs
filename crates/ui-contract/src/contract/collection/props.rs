@@ -11,7 +11,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// What a collection lets the user select.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum SelectMode {
     /// Nothing; the lead still moves.
