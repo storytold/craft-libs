@@ -54,6 +54,16 @@ fn sony_lossless_ycbcr_needs_a_sony_make_and_every_layout_tag() {
     assert!(legacy_tiff_raw_hint(&repeated));
 }
 
+/// A merged pixel-shift `.ARQ` is a RAW, not a TIFF to open as a picture of its samples.
+#[test]
+fn sony_pixel_shift_composite_is_raw_only_under_a_sony_make() {
+    let short = |v: u16| [v.to_le_bytes()[0], v.to_le_bytes()[1], 0, 0];
+    let layout = [(0x0103, 3, 1, short(1)), (0x0106, 3, 1, short(32892)), (0x0115, 3, 1, short(4))];
+    let arq = |make: [u8; 4]| ifd(&[&[(0x010f, 7, 4, make)], &layout[..]].concat(), b"");
+    assert!(legacy_tiff_raw_hint(&arq(*b"SONY")));
+    assert!(!legacy_tiff_raw_hint(&arq(*b"TEST")));
+}
+
 #[test]
 fn oversized_or_cut_directories_are_skipped() {
     let mut huge = b"II\x2a\0\x08\0\0\0".to_vec();

@@ -1,0 +1,6246 @@
+{
+  "fixtures": [
+    {
+      "file": "8845.arw",
+      "source": "https://raw.pixls.us/getfile.php/8845/nice/Sony - ILCE-7M5 - 14bit (4:3).ARW",
+      "sha256": "8c35cd1ab0ca36b487ae50ae5e0333a8e967122700fce5678e1e5b97561896a4",
+      "header": {
+        "format": "Arw",
+        "width": 7168,
+        "height": 5120,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 14,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 7168,
+          "height": 5120
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 7008,
+          "height": 4672
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.2587891,
+                  1.0,
+                  3.4189453
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.6015625,
+                  1.0,
+                  2.5302734
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  2.0654297,
+                  1.0,
+                  1.8642578
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.4277344,
+                  1.0,
+                  1.5595703
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.7802734,
+                  1.0,
+                  1.3242188
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.8183594,
+          1.0,
+          1.3164062
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "24-70mm F2.8 DG DN II | Art 024",
+          "f_number": 2.8,
+          "iso": 100,
+          "focal_length": 24.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  64,
+                  160,
+                  288,
+                  448,
+                  672,
+                  1024,
+                  1472,
+                  2112,
+                  3008,
+                  4160,
+                  5632,
+                  7264,
+                  8928,
+                  10528,
+                  12480
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    640,
+                    640,
+                    640,
+                    640,
+                    640,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    384,
+                    384,
+                    256,
+                    256
+                  ],
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  -4,
+                  -4,
+                  -22,
+                  -49,
+                  -92,
+                  -146,
+                  -214,
+                  -286,
+                  -365,
+                  -438,
+                  -509,
+                  -562,
+                  -598,
+                  -598,
+                  -559,
+                  -467
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "CameraCorrectionDisabled"
+            },
+            "extended_distortion": {
+              "status": "NoTable",
+              "setting": {
+                "value": [
+                  65535,
+                  65535
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": null,
+                "source": null,
+                "raw_ifd": "Absent",
+                "sr2": {
+                  "Rejected": {
+                    "CountPrefix": 0
+                  }
+                },
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 7168,
+              "storage_height": 5120,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "compression": 7,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ],
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ],
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ]
+            ],
+            "center": [
+              3516,
+              2344
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                64,
+                160,
+                288,
+                448,
+                672,
+                1024,
+                1472,
+                2112,
+                3008,
+                4160,
+                5632,
+                7264,
+                8928,
+                10528,
+                12480,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "endpoint": 0,
+              "marker": [
+                1,
+                1
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a6bcd6bcd6bcd6bcd6bcd6bcd07e707e707e7"
+        },
+        {
+          "offset": 1795,
+          "hex": "0000c400c70095013f01c70800403f7dc40e3f56c47000be27283ed395c53f24000000000000000000000000000000000000000000000000000000000000000000000101"
+        }
+      ]
+    },
+    {
+      "file": "8846.arw",
+      "source": "https://raw.pixls.us/getfile.php/8846/nice/Sony - ILCE-7M5 - 14bit (3:2).ARW",
+      "sha256": "4e3a99cbcf2a348decaf3ca68c5de22b7a05eaa590f4e9184735c1f9c45213a7",
+      "header": {
+        "format": "Arw",
+        "width": 7040,
+        "height": 4688,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 16,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 7040,
+          "height": 4688
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 7008,
+          "height": 4672
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.2587891,
+                  1.0,
+                  3.4189453
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.6015625,
+                  1.0,
+                  2.5302734
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  2.0654297,
+                  1.0,
+                  1.8642578
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.4277344,
+                  1.0,
+                  1.5595703
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.7802734,
+                  1.0,
+                  1.3242188
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.8085938,
+          1.0,
+          1.3115234
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "24-70mm F2.8 DG DN II | Art 024",
+          "f_number": 2.8,
+          "iso": 100,
+          "focal_length": 24.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  64,
+                  160,
+                  288,
+                  448,
+                  672,
+                  1024,
+                  1472,
+                  2112,
+                  3008,
+                  4160,
+                  5632,
+                  7264,
+                  8928,
+                  10528,
+                  12480
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    640,
+                    640,
+                    640,
+                    640,
+                    640,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    384,
+                    384,
+                    384,
+                    256
+                  ],
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    -128
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  -5,
+                  -5,
+                  -23,
+                  -50,
+                  -93,
+                  -147,
+                  -216,
+                  -287,
+                  -367,
+                  -440,
+                  -509,
+                  -562,
+                  -598,
+                  -598,
+                  -559,
+                  -465
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "CameraCorrectionDisabled"
+            },
+            "extended_distortion": {
+              "status": "NoTable",
+              "setting": {
+                "value": [
+                  65535,
+                  65535
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": null,
+                "source": null,
+                "raw_ifd": "Absent",
+                "sr2": {
+                  "Rejected": {
+                    "CountPrefix": 0
+                  }
+                },
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 7040,
+              "storage_height": 4688,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "compression": 32766,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ],
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ],
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ]
+            ],
+            "center": [
+              3516,
+              2344
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                64,
+                160,
+                288,
+                448,
+                672,
+                1024,
+                1472,
+                2112,
+                3008,
+                4160,
+                5632,
+                7264,
+                8928,
+                10528,
+                12480,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "endpoint": 0,
+              "marker": [
+                1,
+                1
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a6bcd6bcd6bcd6bcd6bcd6bcd07e707e707e7"
+        },
+        {
+          "offset": 1795,
+          "hex": "0000c400c70095013f01c70800403f7dc40e3f56c47000be27283ed395c53f24000000000000000000000000000000000000000000000000000000000000000000000101"
+        }
+      ]
+    },
+    {
+      "file": "8847.arw",
+      "source": "https://raw.pixls.us/getfile.php/8847/nice/Sony - ILCE-7M5 - 14bit (3:2).ARW",
+      "sha256": "46d73475dfd8f96fd7e2f4d4a721a36cbbaba3d6ea95a4851809cd9d252b2a80",
+      "header": {
+        "format": "Arw",
+        "width": 7040,
+        "height": 4688,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 16,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 7040,
+          "height": 4688
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 7008,
+          "height": 4672
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.2587891,
+                  1.0,
+                  3.4189453
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.6015625,
+                  1.0,
+                  2.5302734
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  2.0654297,
+                  1.0,
+                  1.8642578
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.4277344,
+                  1.0,
+                  1.5595703
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.7802734,
+                  1.0,
+                  1.3242188
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.8017578,
+          1.0,
+          1.3085938
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "24-70mm F2.8 DG DN II | Art 024",
+          "f_number": 2.8,
+          "iso": 100,
+          "focal_length": 24.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  64,
+                  160,
+                  288,
+                  448,
+                  672,
+                  1024,
+                  1472,
+                  2112,
+                  3008,
+                  4160,
+                  5632,
+                  7264,
+                  8928,
+                  10528,
+                  12480
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    640,
+                    640,
+                    640,
+                    640,
+                    640,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    384,
+                    384,
+                    256,
+                    256
+                  ],
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  -5,
+                  -5,
+                  -23,
+                  -50,
+                  -93,
+                  -147,
+                  -216,
+                  -287,
+                  -367,
+                  -440,
+                  -509,
+                  -562,
+                  -598,
+                  -598,
+                  -559,
+                  -465
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "CameraCorrectionDisabled"
+            },
+            "extended_distortion": {
+              "status": "NoTable",
+              "setting": {
+                "value": [
+                  65535,
+                  65535
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": null,
+                "source": null,
+                "raw_ifd": "Absent",
+                "sr2": {
+                  "Rejected": {
+                    "CountPrefix": 0
+                  }
+                },
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 7040,
+              "storage_height": 4688,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "compression": 32766,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ],
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ],
+              [
+                2048,
+                2049,
+                2050,
+                2051,
+                2050,
+                2049,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2049,
+                2057,
+                2069,
+                2086,
+                2110,
+                2141,
+                2181,
+                2238,
+                2305,
+                2391,
+                2491,
+                2613,
+                2758,
+                2928,
+                3149,
+                3530,
+                4094
+              ]
+            ],
+            "center": [
+              3516,
+              2344
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                64,
+                160,
+                288,
+                448,
+                672,
+                1024,
+                1472,
+                2112,
+                3008,
+                4160,
+                5632,
+                7264,
+                8928,
+                10528,
+                12480,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "endpoint": 0,
+              "marker": [
+                1,
+                1
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a000e010e080e1b0e080e010e000e000e000e000e000e000e000e000e000e010ee70e300e5c0e230e570e550e2e0e01e793e7d6e7e0044204465674ea0acdfe8afe8afe8a6bcd6bcd6bcd6bcd6bcd6bcd07e707e707e7"
+        },
+        {
+          "offset": 1795,
+          "hex": "0000c400c70095013f01c70800403f7dc40e3f56c47000be27283ed395c53f24000000000000000000000000000000000000000000000000000000000000000000000101"
+        }
+      ]
+    },
+    {
+      "file": "8848.arw",
+      "source": "https://raw.pixls.us/getfile.php/8848/nice/Sony - ILCE-7M5 - 14bit (4:3).ARW",
+      "sha256": "51ad709cba01a5f05e3c723b779f6b5fda8fa7b378494dbb40b4d3d3aa5494a4",
+      "header": {
+        "format": "Arw",
+        "width": 5120,
+        "height": 3584,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 14,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 5120,
+          "height": 3584
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 4608,
+          "height": 3072
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.2587891,
+                  1.0,
+                  3.4179688
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.6015625,
+                  1.0,
+                  2.5292969
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  2.0654297,
+                  1.0,
+                  1.8642578
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.4277344,
+                  1.0,
+                  1.5595703
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.7822266,
+                  1.0,
+                  1.3242188
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.8271484,
+          1.0,
+          1.3203125
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "24-70mm F2.8 DG DN II | Art 024",
+          "f_number": 2.8,
+          "iso": 100,
+          "focal_length": 24.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  64,
+                  160,
+                  288,
+                  448,
+                  672,
+                  1024,
+                  1472,
+                  2112,
+                  3008,
+                  4160,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    640,
+                    640,
+                    640,
+                    640,
+                    640,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  -4,
+                  -4,
+                  -22,
+                  -49,
+                  -92,
+                  -146,
+                  -214,
+                  -286,
+                  -365,
+                  -438,
+                  -509,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "CameraCorrectionDisabled"
+            },
+            "extended_distortion": {
+              "status": "NoTable",
+              "setting": {
+                "value": [
+                  65535,
+                  65535
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": null,
+                "source": null,
+                "raw_ifd": "Absent",
+                "sr2": {
+                  "Rejected": {
+                    "CountPrefix": 0
+                  }
+                },
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 5120,
+              "storage_height": 3584,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "compression": 7,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ],
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ],
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ]
+            ],
+            "center": [
+              2316,
+              1544
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                64,
+                160,
+                288,
+                448,
+                672,
+                1024,
+                1472,
+                2112,
+                3008,
+                4160,
+                5632,
+                7264,
+                8928,
+                10528,
+                12480,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "endpoint": 0,
+              "marker": [
+                1,
+                1
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30e000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30e000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30eeae7eae7eae7eae7eae7eae70ed80ed80ed8"
+        },
+        {
+          "offset": 1795,
+          "hex": "0000c400c70095013f01c70800403f7dc40e3f56c47000be27283ed395c53f24000000000000000000000000000000000000000000000000000000000000000000000101"
+        }
+      ]
+    },
+    {
+      "file": "8849.arw",
+      "source": "https://raw.pixls.us/getfile.php/8849/nice/Sony - ILCE-7M5 - 14bit (3:2).ARW",
+      "sha256": "c16cae99d26a2f8ad183d31a23823310a994aa058d55cfe56e4f82ba56865f57",
+      "header": {
+        "format": "Arw",
+        "width": 4640,
+        "height": 3088,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 16,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 4640,
+          "height": 3088
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 4608,
+          "height": 3072
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.2587891,
+                  1.0,
+                  3.4179688
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.6015625,
+                  1.0,
+                  2.5292969
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  2.0654297,
+                  1.0,
+                  1.8642578
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.4277344,
+                  1.0,
+                  1.5595703
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.7822266,
+                  1.0,
+                  1.3242188
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.8359375,
+          1.0,
+          1.3251953
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "24-70mm F2.8 DG DN II | Art 024",
+          "f_number": 2.8,
+          "iso": 100,
+          "focal_length": 24.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  64,
+                  160,
+                  288,
+                  448,
+                  672,
+                  1024,
+                  1472,
+                  2112,
+                  3008,
+                  4160,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    640,
+                    640,
+                    640,
+                    640,
+                    640,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  -4,
+                  -4,
+                  -22,
+                  -49,
+                  -92,
+                  -146,
+                  -214,
+                  -286,
+                  -365,
+                  -438,
+                  -509,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "CameraCorrectionDisabled"
+            },
+            "extended_distortion": {
+              "status": "NoTable",
+              "setting": {
+                "value": [
+                  65535,
+                  65535
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": null,
+                "source": null,
+                "raw_ifd": "Absent",
+                "sr2": {
+                  "Rejected": {
+                    "CountPrefix": 0
+                  }
+                },
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 4640,
+              "storage_height": 3088,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "compression": 32766,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ],
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ],
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ]
+            ],
+            "center": [
+              2316,
+              1544
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                64,
+                160,
+                288,
+                448,
+                672,
+                1024,
+                1472,
+                2112,
+                3008,
+                4160,
+                5632,
+                7264,
+                8928,
+                10528,
+                12480,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "endpoint": 0,
+              "marker": [
+                1,
+                1
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30e000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30e000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30eeae7eae7eae7eae7eae7eae70ed80ed80ed8"
+        },
+        {
+          "offset": 1795,
+          "hex": "0000c400c70095013f01c70800403f7dc40e3f56c47000be27283ed395c53f24000000000000000000000000000000000000000000000000000000000000000000000101"
+        }
+      ]
+    },
+    {
+      "file": "8850.arw",
+      "source": "https://raw.pixls.us/getfile.php/8850/nice/Sony - ILCE-7M5 - 14bit (3:2).ARW",
+      "sha256": "8315af2a9889709f4c836dbaadc23d226847e5a0630fda212a9f896d5fe0569f",
+      "header": {
+        "format": "Arw",
+        "width": 4640,
+        "height": 3088,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 16,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 4640,
+          "height": 3088
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 4608,
+          "height": 3072
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.2587891,
+                  1.0,
+                  3.4179688
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.6015625,
+                  1.0,
+                  2.5292969
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  2.0664062,
+                  1.0,
+                  1.8642578
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.4277344,
+                  1.0,
+                  1.5595703
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.78125,
+                  1.0,
+                  1.3232422
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.8300781,
+          1.0,
+          1.3212891
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "24-70mm F2.8 DG DN II | Art 024",
+          "f_number": 2.8,
+          "iso": 100,
+          "focal_length": 24.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  64,
+                  160,
+                  288,
+                  448,
+                  672,
+                  1024,
+                  1472,
+                  2112,
+                  3008,
+                  4160,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    640,
+                    640,
+                    640,
+                    640,
+                    640,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    512,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  -5,
+                  -5,
+                  -23,
+                  -50,
+                  -93,
+                  -147,
+                  -216,
+                  -287,
+                  -367,
+                  -440,
+                  -509,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 11,
+              "status": "CameraCorrectionDisabled"
+            },
+            "extended_distortion": {
+              "status": "NoTable",
+              "setting": {
+                "value": [
+                  65535,
+                  65535
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": null,
+                "source": null,
+                "raw_ifd": "Absent",
+                "sr2": {
+                  "Rejected": {
+                    "CountPrefix": 0
+                  }
+                },
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 4640,
+              "storage_height": 3088,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 4608,
+                "height": 3072
+              },
+              "compression": 32766,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ],
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ],
+              [
+                2048,
+                2048,
+                2049,
+                2049,
+                2049,
+                2050,
+                2050,
+                2050,
+                2050,
+                2051,
+                2051,
+                2051,
+                2051,
+                2052,
+                2052,
+                2053,
+                2053,
+                2055,
+                2057,
+                2059,
+                2061,
+                2063,
+                2066,
+                2071,
+                2076,
+                2081,
+                2089,
+                2098,
+                2107,
+                2119,
+                2133,
+                2147
+              ]
+            ],
+            "center": [
+              2316,
+              1544
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                64,
+                160,
+                288,
+                448,
+                672,
+                1024,
+                1472,
+                2112,
+                3008,
+                4160,
+                5632,
+                7264,
+                8928,
+                10528,
+                12480,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "endpoint": 0,
+              "marker": [
+                1,
+                1
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30e000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30e000e000e010e010e010e080e080e080e080e1b0e1b0e1b0e1b0e400e400e7d0e7d0e5e0ee70e560ecd0e8a0e690ed70e280e510ec50e020ecb0e620e5b0ec30ec30ec30eeae7eae7eae7eae7eae7eae70ed80ed80ed8"
+        },
+        {
+          "offset": 1795,
+          "hex": "0000c400c70095013f01c70800403f7dc40e3f56c47000be27283ed395c53f24000000000000000000000000000000000000000000000000000000000000000000000101"
+        }
+      ]
+    },
+    {
+      "file": "sony_a7_v_18.arw",
+      "source": "https://img.photographyblog.com/reviews/sony_a7_v/sample_images/sony_a7_v_18.arw",
+      "sha256": "701b344cb468ce011ed1299fd704cd1a3f8ccc606cdb1021a2d67ba72ba5066b",
+      "header": {
+        "format": "Arw",
+        "width": 7040,
+        "height": 4688,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 16,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 7040,
+          "height": 4688
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 7008,
+          "height": 4672
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.1923828,
+                  1.0,
+                  3.8300781
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.5126953,
+                  1.0,
+                  2.8388672
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  1.9453125,
+                  1.0,
+                  2.0947266
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.2851562,
+                  1.0,
+                  1.7548828
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.6269531,
+                  1.0,
+                  1.4931641
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.6708984,
+          1.0,
+          1.4951172
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "FE 28-70mm F2 GM",
+          "f_number": 2.0,
+          "iso": 640,
+          "focal_length": 70.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  304,
+                  752,
+                  1248,
+                  1792,
+                  2352,
+                  2928,
+                  3520,
+                  4096,
+                  4640,
+                  5360,
+                  6368,
+                  7568,
+                  8880,
+                  10432,
+                  12208
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    -256,
+                    -256,
+                    -256,
+                    -384,
+                    -384,
+                    -384,
+                    -512,
+                    -512,
+                    -512,
+                    -384,
+                    -384,
+                    -256,
+                    0
+                  ],
+                  [
+                    -640,
+                    -512,
+                    -512,
+                    -384,
+                    -384,
+                    -256,
+                    -256,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    -128,
+                    -128,
+                    -384,
+                    -512
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  5,
+                  20,
+                  45,
+                  78,
+                  118,
+                  163,
+                  211,
+                  260,
+                  308,
+                  352,
+                  392,
+                  423,
+                  445,
+                  453,
+                  444
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "Superseded"
+            },
+            "extended_distortion": {
+              "status": "CameraCorrectionDisabled",
+              "setting": {
+                "value": [
+                  0,
+                  16
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  11,
+                  42,
+                  93,
+                  162,
+                  244,
+                  337,
+                  436,
+                  537,
+                  636,
+                  728,
+                  809,
+                  875,
+                  919,
+                  935,
+                  917,
+                  859,
+                  753,
+                  595
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 7040,
+              "storage_height": 4688,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "compression": 32766,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2061,
+                2084,
+                2109,
+                2138,
+                2166,
+                2197,
+                2230,
+                2263,
+                2299,
+                2333,
+                2370,
+                2407,
+                2448,
+                2486,
+                2525,
+                2565,
+                2601,
+                2639,
+                2684,
+                2759,
+                2851,
+                2974,
+                3121,
+                3303,
+                3518,
+                3785,
+                4141,
+                4644,
+                5355,
+                6429,
+                6429
+              ],
+              [
+                2048,
+                2061,
+                2084,
+                2109,
+                2138,
+                2166,
+                2197,
+                2230,
+                2263,
+                2299,
+                2333,
+                2370,
+                2407,
+                2448,
+                2486,
+                2525,
+                2565,
+                2601,
+                2639,
+                2684,
+                2759,
+                2851,
+                2974,
+                3121,
+                3303,
+                3518,
+                3785,
+                4141,
+                4644,
+                5355,
+                6429,
+                6429
+              ],
+              [
+                2048,
+                2061,
+                2084,
+                2109,
+                2138,
+                2166,
+                2197,
+                2230,
+                2263,
+                2299,
+                2333,
+                2370,
+                2407,
+                2448,
+                2486,
+                2525,
+                2565,
+                2601,
+                2639,
+                2684,
+                2759,
+                2851,
+                2974,
+                3121,
+                3303,
+                3518,
+                3785,
+                4141,
+                4644,
+                5355,
+                6429,
+                6429
+              ]
+            ],
+            "center": [
+              3516,
+              2344
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                112,
+                304,
+                512,
+                752,
+                992,
+                1248,
+                1520,
+                1792,
+                2080,
+                2352,
+                2640,
+                2928,
+                3232,
+                3520,
+                3808,
+                4096,
+                4368,
+                4640,
+                4944,
+                5360,
+                5824,
+                6368,
+                6944,
+                7568,
+                8208,
+                8880,
+                9616,
+                10432,
+                11296,
+                12208,
+                13456
+              ],
+              "endpoint": 15280,
+              "marker": [
+                2,
+                2
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000ecd0e5d0e8e0eb10e820ee90e1d0e260efb0eece796e773e7e1e71de7d1e77d04c50413041f04f7042f56985679ea90ea2ecdd505f0705d69f420ecbbecbbecbbecbb000ecd0e5d0e8e0eb10e820ee90e1d0e260efb0eece796e773e7e1e71de7d1e77d04c50413041f04f7042f56985679ea90ea2ecdd505f0705d69f420ecbbecbbecbbecbb000ecd0e5d0e8e0eb10e820ee90e1d0e260efb0eece796e773e7e1e71de7d1e77d04c50413041f04f7042f56985679ea90ea2ecdd505f0705d69f420ecbbecbbecbbecbb6bcd6bcd6bcd6bcd6bcd6bcd07e707e707e7"
+        },
+        {
+          "offset": 1795,
+          "hex": "000046002401000812083e1b3e40127d005e950e24e738044656c7ea3fcd3e05007070b69569388812203fbe3e81950ce1ec7095aad3e16a3f07951aaaefe1acaacb0808"
+        }
+      ]
+    },
+    {
+      "file": "sony_a7_v_21.arw",
+      "source": "https://img.photographyblog.com/reviews/sony_a7_v/sample_images/sony_a7_v_21.arw",
+      "sha256": "6f398b079f4a43a003268a4a858d9b290c7fe3182c7397abfdbd710261f5f546",
+      "header": {
+        "format": "Arw",
+        "width": 7040,
+        "height": 4688,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 16,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 7040,
+          "height": 4688
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 7008,
+          "height": 4672
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.1923828,
+                  1.0,
+                  3.8300781
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.5126953,
+                  1.0,
+                  2.8388672
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  1.9453125,
+                  1.0,
+                  2.0947266
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.2851562,
+                  1.0,
+                  1.7548828
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.6279297,
+                  1.0,
+                  1.4931641
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.6738281,
+          1.0,
+          1.4960938
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": []
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "FE 28-70mm F2 GM",
+          "f_number": 8.0,
+          "iso": 2000,
+          "focal_length": 70.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  16,
+                  96,
+                  224,
+                  384,
+                  576,
+                  784,
+                  992,
+                  1216,
+                  1408,
+                  1600,
+                  1760,
+                  1888,
+                  1968,
+                  1984,
+                  1904
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    -512,
+                    -512,
+                    -512,
+                    -640,
+                    -640,
+                    -640,
+                    -640,
+                    -768,
+                    -768,
+                    -768,
+                    -768,
+                    -640,
+                    -640,
+                    -512,
+                    -256,
+                    -128
+                  ],
+                  [
+                    -128,
+                    -128,
+                    -128,
+                    0,
+                    0,
+                    0,
+                    128,
+                    128,
+                    128,
+                    128,
+                    128,
+                    0,
+                    0,
+                    -128,
+                    -256,
+                    -512
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 0,
+                  "meaning": "Off"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  5,
+                  20,
+                  45,
+                  78,
+                  119,
+                  164,
+                  211,
+                  261,
+                  308,
+                  353,
+                  392,
+                  423,
+                  445,
+                  452,
+                  442
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "Superseded"
+            },
+            "extended_distortion": {
+              "status": "CameraCorrectionDisabled",
+              "setting": {
+                "value": [
+                  0,
+                  16
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  11,
+                  42,
+                  93,
+                  162,
+                  245,
+                  338,
+                  437,
+                  538,
+                  637,
+                  729,
+                  810,
+                  875,
+                  919,
+                  933,
+                  913,
+                  851,
+                  742,
+                  578
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 7040,
+              "storage_height": 4688,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "compression": 32766,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Off"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048
+              ],
+              [
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048
+              ],
+              [
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048,
+                2048
+              ]
+            ],
+            "center": [
+              3516,
+              2344
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                0,
+                16,
+                48,
+                96,
+                160,
+                224,
+                304,
+                384,
+                480,
+                576,
+                672,
+                784,
+                896,
+                992,
+                1104,
+                1216,
+                1312,
+                1408,
+                1504,
+                1600,
+                1680,
+                1760,
+                1824,
+                1888,
+                1936,
+                1968,
+                1984,
+                1984,
+                1952,
+                1904,
+                3056
+              ],
+              "endpoint": 10160,
+              "marker": [
+                2,
+                2
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e000e6bcd6bcd6bcd6bcd6bcd6bcd07e707e707e7"
+        },
+        {
+          "offset": 1795,
+          "hex": "00000000700024002700c7003e0024014a013e01c408c708701b4a1b3e1b38403f40957d4a7d3e7dc4d8e1d83ed8955e275ee15eaa5e3f5e3f5ec75e465e1256aa390808"
+        }
+      ]
+    },
+    {
+      "file": "sony_a7_v_44.arw",
+      "source": "https://img.photographyblog.com/reviews/sony_a7_v/sample_images/sony_a7_v_44.arw",
+      "sha256": "70d2ddb5d739d3796ba9ceefcc9efce9c495e7859f56daaecb89009e1b928e21",
+      "header": {
+        "format": "Arw",
+        "width": 7040,
+        "height": 4688,
+        "cpp": 1,
+        "cfa": {
+          "width": 2,
+          "height": 2,
+          "pattern": [
+            0,
+            1,
+            1,
+            2
+          ]
+        },
+        "bits": 16,
+        "active_area": {
+          "x": 0,
+          "y": 0,
+          "width": 7040,
+          "height": 4688
+        },
+        "crop": {
+          "x": 12,
+          "y": 8,
+          "width": 7008,
+          "height": 4672
+        },
+        "orientation": "Normal",
+        "color": {
+          "illuminant": [
+            0,
+            0
+          ],
+          "color_matrix": [
+            null,
+            null
+          ],
+          "forward_matrix": [
+            null,
+            null
+          ],
+          "camera_calibration": [
+            null,
+            null
+          ],
+          "analog_balance": null,
+          "as_shot_neutral": null,
+          "as_shot_white_xy": null,
+          "baseline_exposure": 0.0,
+          "baseline_sharpness": null,
+          "profile": {
+            "hue_sat_map": [
+              null,
+              null
+            ],
+            "look_table": null,
+            "tone_curve": null,
+            "gain_table_map": null
+          },
+          "kelvin_presets": {
+            "points": [
+              [
+                2500.0,
+                [
+                  1.2255859,
+                  1.0,
+                  3.7353516
+                ]
+              ],
+              [
+                3200.0,
+                [
+                  1.5556641,
+                  1.0,
+                  2.7685547
+                ]
+              ],
+              [
+                4500.0,
+                [
+                  2.0,
+                  1.0,
+                  2.0429688
+                ]
+              ],
+              [
+                6000.0,
+                [
+                  2.3496094,
+                  1.0,
+                  1.7109375
+                ]
+              ],
+              [
+                8500.0,
+                [
+                  2.7011719,
+                  1.0,
+                  1.4570312
+                ]
+              ]
+            ],
+            "pair": null
+          }
+        },
+        "wb_multipliers": [
+          2.7060547,
+          1.0,
+          1.4990234
+        ],
+        "opcodes": {
+          "list1": [],
+          "list2": [],
+          "list3": [
+            {
+              "WarpRectilinear": {
+                "planes": [
+                  [
+                    1.0539336919753368,
+                    -0.19892353586391284,
+                    0.07717545375307212,
+                    -0.01638451389467305,
+                    0.0,
+                    0.0
+                  ]
+                ],
+                "center": [
+                  0.49943173746270775,
+                  0.5
+                ]
+              }
+            }
+          ]
+        },
+        "metadata": {
+          "make": "SONY",
+          "model": "ILCE-7M5",
+          "lens_model": "FE 24-50mm F2.8 G",
+          "f_number": 2.8,
+          "iso": 800,
+          "focal_length": 24.0,
+          "keywords": [],
+          "hierarchical_keywords": [],
+          "regions": []
+        },
+        "lens_metadata": {
+          "sony": {
+            "shading": {
+              "setting": {
+                "value": {
+                  "value": 272,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  16,
+                  80,
+                  192,
+                  336,
+                  848,
+                  1632,
+                  2512,
+                  3440,
+                  4480,
+                  5632,
+                  6816,
+                  8528,
+                  10928,
+                  13376,
+                  15376
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "chromatic_aberration": {
+              "setting": {
+                "value": {
+                  "value": 1,
+                  "meaning": "Auto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  [
+                    1024,
+                    896,
+                    896,
+                    768,
+                    768,
+                    640,
+                    512,
+                    384,
+                    384,
+                    256,
+                    256,
+                    256,
+                    384,
+                    512,
+                    640,
+                    896
+                  ],
+                  [
+                    -640,
+                    -512,
+                    -512,
+                    -384,
+                    -384,
+                    -256,
+                    -128,
+                    -128,
+                    0,
+                    128,
+                    128,
+                    128,
+                    128,
+                    128,
+                    0,
+                    -128
+                  ]
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "NotValidatedComponent"
+            },
+            "distortion": {
+              "setting": {
+                "value": {
+                  "value": 17,
+                  "meaning": "ForcedAuto"
+                },
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  -11,
+                  -44,
+                  -99,
+                  -174,
+                  -270,
+                  -385,
+                  -517,
+                  -663,
+                  -821,
+                  -986,
+                  -1158,
+                  -1333,
+                  -1509,
+                  -1687,
+                  -1863
+                ],
+                "source": "RawIfd",
+                "raw_ifd": "Valid",
+                "sr2": "Valid",
+                "copies_agree": true,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "samples_per_channel": 16,
+              "status": "Superseded"
+            },
+            "extended_distortion": {
+              "status": "Applied",
+              "setting": {
+                "value": [
+                  17,
+                  16
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              },
+              "table": {
+                "value": [
+                  0,
+                  -23,
+                  -93,
+                  -209,
+                  -370,
+                  -575,
+                  -819,
+                  -1100,
+                  -1410,
+                  -1745,
+                  -2097,
+                  -2462,
+                  -2834,
+                  -3210,
+                  -3587,
+                  -3961,
+                  -4330,
+                  -4692,
+                  -5044
+                ],
+                "source": "Sr2SubIfd",
+                "raw_ifd": "Absent",
+                "sr2": "Valid",
+                "copies_agree": null,
+                "raw_ifd_repeated": false,
+                "sr2_repeated": false
+              }
+            },
+            "sr2_read": true,
+            "geometry": {
+              "storage_width": 7040,
+              "storage_height": 4688,
+              "sony_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "default_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "image_crop": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "reference": {
+                "x": 12,
+                "y": 8,
+                "width": 7008,
+                "height": 4672
+              },
+              "compression": 32766,
+              "linear_ycbcr": false,
+              "native_3_2": true
+            }
+          },
+          "sony_camera_settings": {
+            "shading": "Auto",
+            "chromatic_aberration": "Auto",
+            "distortion": "Auto"
+          },
+          "sony_capture_gains_q11": {
+            "gains_q11": [
+              [
+                2048,
+                2048,
+                2048,
+                2048,
+                2050,
+                2051,
+                2054,
+                2055,
+                2058,
+                2076,
+                2109,
+                2153,
+                2201,
+                2257,
+                2317,
+                2384,
+                2454,
+                2529,
+                2628,
+                2742,
+                2865,
+                3005,
+                3161,
+                3374,
+                3775,
+                4397,
+                5316,
+                6782,
+                8386,
+                8395,
+                8401,
+                8401
+              ],
+              [
+                2048,
+                2048,
+                2048,
+                2048,
+                2050,
+                2051,
+                2054,
+                2055,
+                2058,
+                2076,
+                2109,
+                2153,
+                2201,
+                2257,
+                2317,
+                2384,
+                2454,
+                2529,
+                2628,
+                2742,
+                2865,
+                3005,
+                3161,
+                3374,
+                3775,
+                4397,
+                5316,
+                6782,
+                8386,
+                8395,
+                8401,
+                8401
+              ],
+              [
+                2048,
+                2048,
+                2048,
+                2048,
+                2050,
+                2051,
+                2054,
+                2055,
+                2058,
+                2076,
+                2107,
+                2150,
+                2195,
+                2248,
+                2305,
+                2368,
+                2435,
+                2508,
+                2603,
+                2711,
+                2829,
+                2963,
+                3113,
+                3317,
+                3706,
+                4311,
+                5205,
+                6635,
+                8192,
+                8192,
+                8192,
+                8192
+              ]
+            ],
+            "center": [
+              3516,
+              2344
+            ],
+            "native_shading": {
+              "values": [
+                0,
+                0,
+                16,
+                32,
+                80,
+                128,
+                192,
+                256,
+                336,
+                544,
+                848,
+                1232,
+                1632,
+                2064,
+                2512,
+                2976,
+                3440,
+                3920,
+                4480,
+                5056,
+                5632,
+                6224,
+                6816,
+                7504,
+                8528,
+                9712,
+                10928,
+                12160,
+                13376,
+                14464,
+                15376,
+                16032
+              ],
+              "endpoint": 16368,
+              "marker": [
+                2,
+                2
+              ]
+            }
+          }
+        },
+        "pixel_aspect": 1.0
+      },
+      "encoded_fields": [
+        {
+          "offset": 0,
+          "hex": "0e4ab1cd"
+        },
+        {
+          "offset": 1483,
+          "hex": "000e000e000e000e080e1b0ed80e5e0e040e280e8e0e180ed20ef20ecde738e736e778e7c2041d047956845632eae2cd6805f0b619209f92ce951795f295f295f295f295000e000e000e000e080e1b0ed80e5e0e040e280e8e0e180ed20ef20ecde738e736e778e7c2041d047956845632eae2cd6805f0b619209f92ce951795f295f295f295f295000e000e000e000e080e1b0ed80e5e0e040e280ecb0edb0e1e0e800e01e7c4e777e709e74c041c04cd561e56c5eab9ea8c0526705b20f4bb0095009500950095009500956bcd6bcd6bcd6bcd6bcd6bcd07e707e707e7"
+        },
+        {
+          "offset": 1795,
+          "hex": "000000007000950038004a003f00000138019508381b344027d8700e34e7c75646cd388a4ab63f8800be3881c79238ec3851126aaa874aefc4ac4a477075c72312330808"
+        }
+      ]
+    }
+  ],
+  "live_metadata_probe": [
+    {
+      "file": "8845.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        4094,
+        4094,
+        4094
+      ]
+    },
+    {
+      "file": "8846.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        4094,
+        4094,
+        4094
+      ]
+    },
+    {
+      "file": "8847.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        4094,
+        4094,
+        4094
+      ]
+    },
+    {
+      "file": "8848.arw",
+      "center": [
+        2316,
+        1544
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        2147,
+        2147,
+        2147
+      ]
+    },
+    {
+      "file": "8849.arw",
+      "center": [
+        2316,
+        1544
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        2147,
+        2147,
+        2147
+      ]
+    },
+    {
+      "file": "8850.arw",
+      "center": [
+        2316,
+        1544
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        2147,
+        2147,
+        2147
+      ]
+    },
+    {
+      "file": "sony_a7_v_01.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2196,
+        2196,
+        2196
+      ]
+    },
+    {
+      "file": "sony_a7_v_03.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2196,
+        2196,
+        2196
+      ]
+    },
+    {
+      "file": "sony_a7_v_06.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        2370,
+        2370,
+        2370
+      ]
+    },
+    {
+      "file": "sony_a7_v_10.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        1,
+        1
+      ],
+      "knots_31": [
+        2522,
+        2522,
+        2522
+      ]
+    },
+    {
+      "file": "sony_a7_v_14.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2048,
+        2048,
+        2048
+      ]
+    },
+    {
+      "file": "sony_a7_v_18.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        6429,
+        6429,
+        6429
+      ]
+    },
+    {
+      "file": "sony_a7_v_21.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2048,
+        2048,
+        2048
+      ]
+    },
+    {
+      "file": "sony_a7_v_25.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2158,
+        2158,
+        2158
+      ]
+    },
+    {
+      "file": "sony_a7_v_30.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2158,
+        2158,
+        2158
+      ]
+    },
+    {
+      "file": "sony_a7_v_34.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2048,
+        2048,
+        2048
+      ]
+    },
+    {
+      "file": "sony_a7_v_38.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2048,
+        2048,
+        2048
+      ]
+    },
+    {
+      "file": "sony_a7_v_40.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2048,
+        2048,
+        2048
+      ]
+    },
+    {
+      "file": "sony_a7_v_41.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2048,
+        2048,
+        2048
+      ]
+    },
+    {
+      "file": "sony_a7_v_42.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2048,
+        2048,
+        2048
+      ]
+    },
+    {
+      "file": "sony_a7_v_43.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        5538,
+        5538,
+        5538
+      ]
+    },
+    {
+      "file": "sony_a7_v_44.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        8401,
+        8401,
+        8192
+      ]
+    },
+    {
+      "file": "sony_a7_v_45.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2996,
+        2996,
+        2996
+      ]
+    },
+    {
+      "file": "sony_a7_v_46.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        3352,
+        3352,
+        3352
+      ]
+    },
+    {
+      "file": "sony_a7_v_47.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        2936,
+        2936,
+        2936
+      ]
+    },
+    {
+      "file": "sony_a7_v_48.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        3094,
+        3094,
+        3094
+      ]
+    },
+    {
+      "file": "sony_a7_v_49.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        5593,
+        5593,
+        5593
+      ]
+    },
+    {
+      "file": "sony_a7_v_50.arw",
+      "center": [
+        3516,
+        2344
+      ],
+      "native_marker": [
+        2,
+        2
+      ],
+      "knots_31": [
+        3065,
+        3065,
+        3065
+      ]
+    }
+  ],
+  "published_flats": {
+    "24mm_f28_contours": "https://media.the-digital-picture.com/Images/Lens-Tests/Vignetting/Sigma-24-70mm-F2-8-DG-DN-II-Art-Lens/2024-05-14_18-40-32.webp",
+    "corner_loss": "https://opticallimits.com/images/8Reviews/lenses/sigma_2470_28dn2/vignetting_raw.png"
+  },
+  "optical_calibration": {
+    "selected": {
+      "mode": "stops",
+      "extent": 1.0,
+      "scale": 2.1,
+      "corner": 3.19921875,
+      "rms": 0.13909064890966513
+    },
+    "full_frame_remaining_corner_stops": 2.6835189117159577,
+    "aps_c_optical_corner_stops": 1.0259558272688358,
+    "aps_c_remaining_corner_stops": 0.9578493514100627
+  },
+  "full_frame_capture": {
+    "intervals": 28,
+    "geometry": "circular",
+    "deducted_corner_stops": 0.5156998382840424,
+    "lossless_sky": [
+      {
+        "tile_size": 24,
+        "options": [
+          [
+            "circle",
+            0,
+            0.18681019617559397,
+            [
+              [
+                45,
+                0.1980942227340693,
+                0.029711138852624996
+              ],
+              [
+                48,
+                0.17552616961711862,
+                0.057510097698118656
+              ]
+            ]
+          ],
+          [
+            "circle",
+            27,
+            0.16966972790676446,
+            [
+              [
+                45,
+                0.18597561633809187,
+                0.04224405390710961
+              ],
+              [
+                48,
+                0.15336383947543705,
+                -0.031200843613742535
+              ]
+            ]
+          ],
+          [
+            "circle",
+            28,
+            0.1698539397921749,
+            [
+              [
+                45,
+                0.18546578000360112,
+                0.04906953015033788
+              ],
+              [
+                48,
+                0.15424209958074866,
+                -0.04478391598611098
+              ]
+            ]
+          ],
+          [
+            "circle",
+            29,
+            0.16953431717019943,
+            [
+              [
+                45,
+                0.1833963575418108,
+                0.044874898903483285
+              ],
+              [
+                48,
+                0.15567227679858806,
+                -0.05103298127215328
+              ]
+            ]
+          ],
+          [
+            "circle",
+            31,
+            0.17711220895924468,
+            [
+              [
+                45,
+                0.18399340784608406,
+                0.04039728477932458
+              ],
+              [
+                48,
+                0.17023101007240532,
+                -0.07180954234835568
+              ]
+            ]
+          ]
+        ]
+      },
+      {
+        "tile_size": 32,
+        "options": [
+          [
+            "circle",
+            0,
+            0.1574032409017258,
+            [
+              [
+                20,
+                0.13738092845706543,
+                -0.0002499258098859203
+              ],
+              [
+                17,
+                0.17742555334638618,
+                0.0866755373519319
+              ]
+            ]
+          ],
+          [
+            "circle",
+            27,
+            0.13360332332986796,
+            [
+              [
+                20,
+                0.13263412544193148,
+                0.0027880618635780507
+              ],
+              [
+                17,
+                0.13457252121780441,
+                0.0637616746746903
+              ]
+            ]
+          ],
+          [
+            "circle",
+            28,
+            0.13098125097943508,
+            [
+              [
+                20,
+                0.13293728614109154,
+                0.001075116387146302
+              ],
+              [
+                17,
+                0.12902521581777862,
+                0.037714512228365304
+              ]
+            ]
+          ],
+          [
+            "circle",
+            29,
+            0.13094264317557297,
+            [
+              [
+                20,
+                0.13654191512290675,
+                -0.017510247635106113
+              ],
+              [
+                17,
+                0.12534337122823921,
+                0.006828947432637067
+              ]
+            ]
+          ],
+          [
+            "circle",
+            31,
+            0.14661683594291847,
+            [
+              [
+                20,
+                0.16601961679987617,
+                -0.08533689958203161
+              ],
+              [
+                17,
+                0.12721405508596073,
+                -0.010974853527251582
+              ]
+            ]
+          ]
+        ]
+      }
+    ],
+    "compressed_noise": {
+      "8846": {
+        "circle:0": [
+          [
+            315,
+            0.18789018881704656,
+            -0.028078528940856596
+          ],
+          [
+            327,
+            0.3052859094870986,
+            -0.0028639255245219435
+          ]
+        ],
+        "circle:27": [
+          [
+            315,
+            0.1529062396149245,
+            0.0045124473276937005
+          ],
+          [
+            327,
+            0.2971118269813149,
+            -0.013723009835897653
+          ]
+        ],
+        "circle:28": [
+          [
+            315,
+            0.15218918180717472,
+            0.00935401931575946
+          ],
+          [
+            327,
+            0.29812985464364294,
+            -0.010880370279822166
+          ]
+        ],
+        "circle:29": [
+          [
+            315,
+            0.1528159006205151,
+            0.010245910339487617
+          ],
+          [
+            327,
+            0.30007042325904365,
+            -0.008861413172846935
+          ]
+        ],
+        "circle:31": [
+          [
+            315,
+            0.15724559230476404,
+            0.02105364590908821
+          ],
+          [
+            327,
+            0.30634525042117944,
+            -0.008427520255229746
+          ]
+        ]
+      },
+      "8847": {
+        "circle:0": [
+          [
+            364,
+            0.16960678980053193,
+            -0.005971014810551309
+          ],
+          [
+            375,
+            0.16098428315152838,
+            -0.0032614264053329755
+          ]
+        ],
+        "circle:27": [
+          [
+            364,
+            0.1425334316131678,
+            -0.003244885310910961
+          ],
+          [
+            375,
+            0.151053445514744,
+            -0.0007111457296930926
+          ]
+        ],
+        "circle:28": [
+          [
+            364,
+            0.14118075174807787,
+            0.0015011863372121452
+          ],
+          [
+            375,
+            0.15306137724843843,
+            -0.0014400758248946444
+          ]
+        ],
+        "circle:29": [
+          [
+            364,
+            0.1417385839183784,
+            0.00026047402262442774
+          ],
+          [
+            375,
+            0.15568190467444856,
+            -0.0016907029326654263
+          ]
+        ],
+        "circle:31": [
+          [
+            364,
+            0.15923270506658835,
+            0.0038607081669194496
+          ],
+          [
+            375,
+            0.1633404922662715,
+            0.009430599337423809
+          ]
+        ]
+      }
+    }
+  },
+  "capture_comparisons": [
+    {
+      "i": 8845,
+      "j": 8846,
+      "registration": 0.10334758460521698,
+      "matches": 6509,
+      "folds": [
+        {
+          "n_train": 3141,
+          "n_test": 4562,
+          "scores": {
+            "0/0": [
+              0.11701694739539698,
+              -0.043199560523718095
+            ],
+            "27/27": [
+              0.11719751227320362,
+              -0.04292681214069505
+            ],
+            "30/30": [
+              0.11733013846492837,
+              -0.04296138288364976
+            ],
+            "31/31": [
+              0.11737980445723513,
+              -0.04299598959613182
+            ],
+            "27/31": [
+              0.12459155456030473,
+              0.08077508565295222
+            ],
+            "0/31": [
+              0.22061618240176484,
+              0.1658122141799907
+            ]
+          }
+        },
+        {
+          "n_train": 3373,
+          "n_test": 4484,
+          "scores": {
+            "0/0": [
+              0.12257889416484667,
+              -0.05345090925261392
+            ],
+            "27/27": [
+              0.12269858864402637,
+              -0.05348154109029485
+            ],
+            "30/30": [
+              0.12279182411452007,
+              -0.05332219498592233
+            ],
+            "31/31": [
+              0.12282200986401216,
+              -0.053255204310805104
+            ],
+            "27/31": [
+              0.11940974927833946,
+              0.05974891929396525
+            ],
+            "0/31": [
+              0.22063810810285517,
+              0.1450483415088279
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "i": 8845,
+      "j": 8847,
+      "registration": 0.0986175686120987,
+      "matches": 6567,
+      "folds": [
+        {
+          "n_train": 3345,
+          "n_test": 4555,
+          "scores": {
+            "0/0": [
+              0.0548351164238016,
+              -0.0016620109175752296
+            ],
+            "27/27": [
+              0.05476313336418277,
+              -0.0014632586413092508
+            ],
+            "30/30": [
+              0.054682019136758804,
+              -0.0013076101759872394
+            ],
+            "31/31": [
+              0.054657590475851225,
+              -0.0012426678559273041
+            ],
+            "27/31": [
+              0.15023446071753346,
+              0.12934806638687169
+            ],
+            "0/31": [
+              0.2647982913329699,
+              0.20238382496207252
+            ]
+          }
+        },
+        {
+          "n_train": 3453,
+          "n_test": 4486,
+          "scores": {
+            "0/0": [
+              0.0513455559727711,
+              -0.0018863281456774628
+            ],
+            "27/27": [
+              0.05122917549699178,
+              -0.001531009422683971
+            ],
+            "30/30": [
+              0.051129533356166885,
+              -0.00129921170084496
+            ],
+            "31/31": [
+              0.051098619690773825,
+              -0.001278929460767242
+            ],
+            "27/31": [
+              0.15621445615746576,
+              0.13127060277366492
+            ],
+            "0/31": [
+              0.27751413282370757,
+              0.21043117551205953
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "i": 8846,
+      "j": 8847,
+      "registration": 0.10146688669919968,
+      "matches": 6629,
+      "folds": [
+        {
+          "n_train": 1862,
+          "n_test": 2058,
+          "scores": {
+            "0/0": [
+              0.07042638968087708,
+              0.028765698405297347
+            ],
+            "27/27": [
+              0.07053109735088496,
+              0.028509175276003107
+            ],
+            "30/30": [
+              0.07057045512947176,
+              0.028213828991962103
+            ],
+            "31/31": [
+              0.07061592193183798,
+              0.028033164815744666
+            ],
+            "27/31": [
+              0.22096039203342216,
+              0.15235447187996443
+            ],
+            "0/31": [
+              0.3605524071994765,
+              0.2502558120754164
+            ]
+          }
+        },
+        {
+          "n_train": 2015,
+          "n_test": 1939,
+          "scores": {
+            "0/0": [
+              0.05208873752866964,
+              0.019381806818128667
+            ],
+            "27/27": [
+              0.052029944717749965,
+              0.01865270412625747
+            ],
+            "30/30": [
+              0.05198666316097017,
+              0.0182126769756686
+            ],
+            "31/31": [
+              0.051993816622961035,
+              0.017981759829162294
+            ],
+            "27/31": [
+              0.1995895307945059,
+              0.15124450989149024
+            ],
+            "0/31": [
+              0.33504446654087877,
+              0.2367301170074103
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "i": 8848,
+      "j": 8849,
+      "registration": 0.09569606930017471,
+      "matches": 5678,
+      "folds": [
+        {
+          "n_train": 1435,
+          "n_test": 1390,
+          "scores": {
+            "0/0": [
+              0.03758433207359324,
+              -0.008276607762558397
+            ],
+            "27/27": [
+              0.03759116140117592,
+              -0.008311159501906085
+            ],
+            "30/30": [
+              0.03759064728492386,
+              -0.008333014130864624
+            ],
+            "31/31": [
+              0.037598328776258176,
+              -0.008325148017989725
+            ],
+            "27/31": [
+              0.03332241425563387,
+              -0.00026213247780537685
+            ],
+            "0/31": [
+              0.031650260856976205,
+              0.00644579296968284
+            ]
+          }
+        },
+        {
+          "n_train": 1370,
+          "n_test": 1385,
+          "scores": {
+            "0/0": [
+              0.0384613444496714,
+              -0.006745571920780735
+            ],
+            "27/27": [
+              0.03846810208470467,
+              -0.006762001457687017
+            ],
+            "30/30": [
+              0.03847994253391713,
+              -0.006816207069757607
+            ],
+            "31/31": [
+              0.03848407489533286,
+              -0.006821464099967867
+            ],
+            "27/31": [
+              0.03392110450301953,
+              -0.00019154468498816524
+            ],
+            "0/31": [
+              0.031997486916830846,
+              0.006943454558709927
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "i": 8848,
+      "j": 8850,
+      "registration": 0.12401574850082397,
+      "matches": 5108,
+      "folds": [
+        {
+          "n_train": 1362,
+          "n_test": 1369,
+          "scores": {
+            "0/0": [
+              0.069480147366078,
+              -0.014173065227458759
+            ],
+            "27/27": [
+              0.0694763123429752,
+              -0.014188449192699348
+            ],
+            "30/30": [
+              0.06947730669846504,
+              -0.01423486022784659
+            ],
+            "31/31": [
+              0.06947820952857037,
+              -0.01423783179532978
+            ],
+            "27/31": [
+              0.06588079291078891,
+              -0.0052697697673025345
+            ],
+            "0/31": [
+              0.06345518284022361,
+              0.0018399646408165937
+            ]
+          }
+        },
+        {
+          "n_train": 1320,
+          "n_test": 1367,
+          "scores": {
+            "0/0": [
+              0.07145130855523515,
+              -0.010394267885214026
+            ],
+            "27/27": [
+              0.07145305047258059,
+              -0.010396483575401017
+            ],
+            "30/30": [
+              0.0714550211234857,
+              -0.010431841396903563
+            ],
+            "31/31": [
+              0.07146096499546306,
+              -0.010515424175784549
+            ],
+            "27/31": [
+              0.06672325715757349,
+              -0.0038594931499638108
+            ],
+            "0/31": [
+              0.06320252300182258,
+              0.003440904819051571
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "i": 8845,
+      "j": 8848,
+      "registration": 0.09953488409519196,
+      "matches": 3671,
+      "folds": [
+        {
+          "n_train": 2410,
+          "n_test": 1265,
+          "scores": {
+            "0/0": [
+              0.0527973889838058,
+              -0.015181005396136982
+            ],
+            "27/27": [
+              0.048370980856382056,
+              -0.006437122193922784
+            ],
+            "30/30": [
+              0.04893748445352986,
+              -0.005149996923315532
+            ],
+            "31/31": [
+              0.049543604645125174,
+              -0.005220699500035883
+            ],
+            "27/31": [
+              0.04498408236944563,
+              0.0007615030277562176
+            ],
+            "0/31": [
+              0.04477229637810651,
+              0.0010226185146906056
+            ]
+          }
+        },
+        {
+          "n_train": 2539,
+          "n_test": 1291,
+          "scores": {
+            "0/0": [
+              0.054247223009244505,
+              -0.01081320744139671
+            ],
+            "27/27": [
+              0.05098413243673138,
+              -0.0017495314262285025
+            ],
+            "30/30": [
+              0.05075008300633687,
+              -0.0009513194520255411
+            ],
+            "31/31": [
+              0.051144571413003125,
+              -0.0015003634621739148
+            ],
+            "27/31": [
+              0.04885422510543363,
+              0.005601511696747961
+            ],
+            "0/31": [
+              0.048789186133808726,
+              0.005692957938743297
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "i": 8846,
+      "j": 8849,
+      "registration": 0.10523883998394012,
+      "matches": 3766,
+      "folds": [
+        {
+          "n_train": 1208,
+          "n_test": 461,
+          "scores": {
+            "0/0": [
+              0.010412143702011819,
+              -0.005004972691956364
+            ],
+            "27/27": [
+              0.011087479535115356,
+              0.004242146481121686
+            ],
+            "30/30": [
+              0.010717509154183494,
+              0.0045254851232722215
+            ],
+            "31/31": [
+              0.01033471386758059,
+              0.00404240069064718
+            ],
+            "27/31": [
+              0.019544846752732138,
+              0.01446627488447616
+            ],
+            "0/31": [
+              0.021495335490246605,
+              0.01491336067699632
+            ]
+          }
+        },
+        {
+          "n_train": 1311,
+          "n_test": 467,
+          "scores": {
+            "0/0": [
+              0.014593030759258151,
+              -0.0050910631990354616
+            ],
+            "27/27": [
+              0.015127366112086572,
+              0.002711574497134356
+            ],
+            "30/30": [
+              0.015148103485099696,
+              0.0037271334011499124
+            ],
+            "31/31": [
+              0.015097369025469348,
+              0.00398535446769456
+            ],
+            "27/31": [
+              0.02128481446283586,
+              0.009893586407840743
+            ],
+            "0/31": [
+              0.02296386383141925,
+              0.010055187662133841
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "i": 8847,
+      "j": 8850,
+      "registration": 0.08437686413526535,
+      "matches": 3861,
+      "folds": [
+        {
+          "n_train": 1205,
+          "n_test": 519,
+          "scores": {
+            "0/0": [
+              0.02554174394263533,
+              -0.017105818187247036
+            ],
+            "27/27": [
+              0.019565307344598302,
+              -0.008983203245281492
+            ],
+            "30/30": [
+              0.018649168768012276,
+              -0.007630143626453244
+            ],
+            "31/31": [
+              0.01891974166723573,
+              -0.008903286112666388
+            ],
+            "27/31": [
+              0.01737074259762516,
+              0.0011758876507365536
+            ],
+            "0/31": [
+              0.018385461015705616,
+              0.0022385387961681522
+            ]
+          }
+        },
+        {
+          "n_train": 1301,
+          "n_test": 525,
+          "scores": {
+            "0/0": [
+              0.01950701088149985,
+              -0.007217403234092586
+            ],
+            "27/27": [
+              0.016078925171348533,
+              0.000587827000528094
+            ],
+            "30/30": [
+              0.0158757865548618,
+              0.0022126841582751633
+            ],
+            "31/31": [
+              0.01611091522509626,
+              0.0012090668014324048
+            ],
+            "27/31": [
+              0.018254307863594374,
+              0.007866529075384845
+            ],
+            "0/31": [
+              0.01999999192922021,
+              0.008377072160268319
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "aps_c_capture": {
+    "intervals": 31,
+    "geometry": "circular",
+    "deducted_corner_stops": 0.0681064758587732,
+    "remaining_uncertainty": "Nearby spacings differ by hundredths of a stop."
+  },
+  "outer_ca_phase_registration": [
+    {
+      "file": "8845.arw",
+      "red": {
+        "outer_positions": 20,
+        "median_sensor_pixels": {
+          "0": 0.5607369387051659,
+          "1": 0.06869954316995533,
+          "1.25": 0.08458871398848627
+        }
+      },
+      "blue": {
+        "outer_positions": 22,
+        "median_sensor_pixels": {
+          "0": 0.09327511047003623,
+          "1": 0.13501630409605395,
+          "1.25": 0.15421660818092592
+        }
+      }
+    },
+    {
+      "file": "8846.arw",
+      "red": {
+        "outer_positions": 20,
+        "median_sensor_pixels": {
+          "0": 0.5997980728803203,
+          "1": 0.1244392591044493,
+          "1.25": 0.0488436589976281
+        }
+      },
+      "blue": {
+        "outer_positions": 21,
+        "median_sensor_pixels": {
+          "0": 0.09054550279520468,
+          "1": 0.1209667832198179,
+          "1.25": 0.13952101480174317
+        }
+      }
+    },
+    {
+      "file": "8847.arw",
+      "red": {
+        "outer_positions": 20,
+        "median_sensor_pixels": {
+          "0": 0.5260405513673558,
+          "1": 0.1150345003246332,
+          "1.25": 0.0860283220950051
+        }
+      },
+      "blue": {
+        "outer_positions": 21,
+        "median_sensor_pixels": {
+          "0": 0.08558234160644762,
+          "1": 0.13703301963037973,
+          "1.25": 0.1480009078991469
+        }
+      }
+    },
+    {
+      "file": "8848.arw",
+      "red": {
+        "outer_positions": 46,
+        "median_sensor_pixels": {
+          "0": 0.562713462822922,
+          "1": 0.1360927820007064,
+          "1.25": 0.06418310561807505
+        }
+      },
+      "blue": {
+        "outer_positions": 46,
+        "median_sensor_pixels": {
+          "0": 0.04824664947492452,
+          "1": 0.15270447695487743,
+          "1.25": 0.177607380939094
+        }
+      }
+    },
+    {
+      "file": "8849.arw",
+      "red": {
+        "outer_positions": 40,
+        "median_sensor_pixels": {
+          "0": 0.5784833426868623,
+          "1": 0.12748146534860452,
+          "1.25": 0.0634519202796609
+        }
+      },
+      "blue": {
+        "outer_positions": 46,
+        "median_sensor_pixels": {
+          "0": 0.04520978718841273,
+          "1": 0.14067150562254352,
+          "1.25": 0.17182447451823185
+        }
+      }
+    },
+    {
+      "file": "8850.arw",
+      "red": {
+        "outer_positions": 40,
+        "median_sensor_pixels": {
+          "0": 0.5582619672983835,
+          "1": 0.13136796300214967,
+          "1.25": 0.054162394052861884
+        }
+      },
+      "blue": {
+        "outer_positions": 43,
+        "median_sensor_pixels": {
+          "0": 0.050500273242970906,
+          "1": 0.12016432552224116,
+          "1.25": 0.14148844799757368
+        }
+      }
+    }
+  ],
+  "application": {
+    "originals": [
+      {
+        "file": "8845.arw",
+        "stored_values": 36700160,
+        "vignetting_mean_rgb_code_change": [
+          16.158672444444445,
+          25.161920666666667
+        ],
+        "ca_only_mean_rgb_code_change": 0.11477688888888889,
+        "source_sha256": "8c35cd1ab0ca36b487ae50ae5e0333a8e967122700fce5678e1e5b97561896a4",
+        "dng_sha256": "ae8c0be1820c7b5aeba4d7d473b787629b2efbea2376cd9352818b19e767f065",
+        "file_equal_with_lensfun": true,
+        "distortion_off": true,
+        "fresh_dng_equal": true,
+        "older_archive_uses_red_only": true,
+        "older_archive_export_delta_vs_original_at_zero_shading": 0.0
+      },
+      {
+        "file": "8846.arw",
+        "stored_values": 33003520,
+        "vignetting_mean_rgb_code_change": [
+          16.168439555555555,
+          25.199908
+        ],
+        "ca_only_mean_rgb_code_change": 0.1067928888888889,
+        "source_sha256": "4e3a99cbcf2a348decaf3ca68c5de22b7a05eaa590f4e9184735c1f9c45213a7",
+        "dng_sha256": "55075c356b59585fc1befc19ec6d67ddb459f0edeb2b9c8956426cce78ad22b6",
+        "file_equal_with_lensfun": true,
+        "distortion_off": true,
+        "fresh_dng_equal": true,
+        "older_archive_uses_red_only": true,
+        "older_archive_export_delta_vs_original_at_zero_shading": 0.0
+      },
+      {
+        "file": "8847.arw",
+        "stored_values": 33003520,
+        "vignetting_mean_rgb_code_change": [
+          16.17515911111111,
+          25.282491333333333
+        ],
+        "ca_only_mean_rgb_code_change": 0.10649466666666667,
+        "source_sha256": "46d73475dfd8f96fd7e2f4d4a721a36cbbaba3d6ea95a4851809cd9d252b2a80",
+        "dng_sha256": "568e10e5c6d0879e2101363242fd774c23804930f27ce30a24d588cf579e2e2b",
+        "file_equal_with_lensfun": true,
+        "distortion_off": true,
+        "fresh_dng_equal": true
+      },
+      {
+        "file": "8848.arw",
+        "stored_values": 18350080,
+        "vignetting_mean_rgb_code_change": [
+          4.689701777777778,
+          8.536474
+        ],
+        "ca_only_mean_rgb_code_change": 0.17733133333333334,
+        "source_sha256": "51ad709cba01a5f05e3c723b779f6b5fda8fa7b378494dbb40b4d3d3aa5494a4",
+        "dng_sha256": "05f1edf0d96f204395ac6e81efc2f68f35f00cd173ac6a8467c3ce1a83c48452",
+        "file_equal_with_lensfun": true,
+        "distortion_off": true,
+        "fresh_dng_equal": true,
+        "older_archive_uses_red_only": true,
+        "older_archive_export_delta_vs_original_at_zero_shading": 0.0
+      },
+      {
+        "file": "8849.arw",
+        "stored_values": 14328320,
+        "vignetting_mean_rgb_code_change": [
+          4.785382,
+          8.758289777777778
+        ],
+        "ca_only_mean_rgb_code_change": 0.17146022222222224,
+        "source_sha256": "c16cae99d26a2f8ad183d31a23823310a994aa058d55cfe56e4f82ba56865f57",
+        "dng_sha256": "13679ce2295c80cb47b496f6cab65869af9b51f02bd445bacaaa6161527cd486",
+        "file_equal_with_lensfun": true,
+        "distortion_off": true,
+        "fresh_dng_equal": true,
+        "older_archive_uses_red_only": true,
+        "older_archive_export_delta_vs_original_at_zero_shading": 0.0
+      },
+      {
+        "file": "8850.arw",
+        "stored_values": 14328320,
+        "vignetting_mean_rgb_code_change": [
+          4.735617111111111,
+          8.686740666666667
+        ],
+        "ca_only_mean_rgb_code_change": 0.18076555555555557,
+        "source_sha256": "8315af2a9889709f4c836dbaadc23d226847e5a0630fda212a9f896d5fe0569f",
+        "dng_sha256": "be8e20cb9746fe614d3d18073af933a6bc7f0eae9c0bd0b91cb213496b205bad",
+        "file_equal_with_lensfun": true,
+        "distortion_off": true,
+        "fresh_dng_equal": true
+      }
+    ],
+    "positive_lensfun_control": 22.926420444444446,
+    "settled_optics": true,
+    "retained_raw_renders_matched_previous_build": [
+      "A1 II DSC06554.ARW",
+      "A7CR 7031.arw"
+    ]
+  }
+}
