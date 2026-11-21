@@ -244,11 +244,14 @@ pub(crate) fn owner_at(ctx: &Context, target: Option<&StopRec>, scopes: &[Id], b
     key_owner(layer == overlay::LayerKeys::Blocked, &present)
 }
 
-/// Whether the focused stop of the running viewport is in a dialog layer (`OwnerClass::Dialog`): Escape there is the
-/// dialog's Cancel, which discards a field's draft with the rest of the dialog's edits, so a draft does not hold it.
-pub(crate) fn focus_in_dialog(ctx: &Context) -> bool {
-    focus::focused_rec(ctx)
-        .is_some_and(|rec| overlay::key_layer(ctx, &focus::scope_chain(ctx, &rec), None) == overlay::LayerKeys::Class(OwnerClass::Dialog))
+/// A modal dialog's Cancel discards its edits together, so a field's draft does not hold Escape there. A modeless
+/// window's edits belong to the app, and its field must cancel its own draft first.
+pub(crate) fn focus_in_modal_dialog(ctx: &Context) -> bool {
+    focus::focused_rec(ctx).is_some_and(|rec| {
+        let scopes = focus::scope_chain(ctx, &rec);
+        overlay::key_layer(ctx, &scopes, None) == overlay::LayerKeys::Class(OwnerClass::Dialog)
+            && scopes.iter().find_map(|id| overlay::entry(ctx, *id)).is_some_and(|entry| entry.rank.is_modal())
+    })
 }
 
 /// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds

@@ -51,7 +51,7 @@ pub(crate) fn gesture_gate<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
 pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
     use crate::contract::cx::Edit as _;
     if cx.gesture().is_some_and(|phase| matches!(phase, GesturePhase::Begin | GesturePhase::Update)) {
-        let escapes = !cx.core.escape_to_list && !crate::runtime::keys::focus_in_dialog(&cx.core.ctx);
+        let escapes = !cx.core.escape_to_list && !crate::runtime::keys::focus_in_modal_dialog(&cx.core.ctx);
         let reason = if escapes && cx.core.intents.take(Intent::Cancel) {
             Some(CancelReason::Escape)
         } else {
