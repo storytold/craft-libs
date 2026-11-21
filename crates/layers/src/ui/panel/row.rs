@@ -14,9 +14,9 @@ use egui::emath::GuiRounding as _;
 use egui::{Color32, Rect, Stroke, StrokeKind, pos2, vec2};
 
 use super::body::thumb_click_replaces_select;
-use super::{LayerRowLook, LayersPanelWords};
 use super::context::{PanelContext, ThumbHost};
 use super::drag::LayersDrag;
+use super::{LayerRowLook, LayersPanelWords};
 use crate::ui::thumbs::LayerThumb;
 use crate::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerTree, LayerView, MaskInfo, SubRowGroup, ThumbBadge};
 
@@ -275,11 +275,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             row = row.toggle(ToggleCell::lock(LOCK, info.locks.any()).name(named(&words.lock_cell, &info.name)));
         }
     }
-    row = row
-        .clipped(info.clipped)
-        .highlight(cx.tree.hovered().as_ref() == Some(id))
-        .italic(info.italic)
-        .underline(info.underline);
+    row = row.clipped(info.clipped).highlight(cx.tree.hovered().as_ref() == Some(id)).italic(info.italic).underline(info.underline);
     if bar {
         if let Some(color) = info.color {
             row = row.stripe(color, if info.kind == LayerKind::Layer { StrokeWidth::Heavy } else { StrokeWidth::Thick });

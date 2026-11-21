@@ -24,11 +24,8 @@ fn ignore_reports_its_item_and_restart_shows_the_first_item() {
         shown.borrow_mut().show(ui);
     });
     fixture.settle();
-    let ignore = fixture
-        .by_role(Role::BUTTON)
-        .into_iter()
-        .find(|button| fixture.tree().name_of(button.node) == Some("Ignore"))
-        .expect("the Ignore button");
+    let ignore =
+        fixture.by_role(Role::BUTTON).into_iter().find(|button| fixture.tree().name_of(button.node) == Some("Ignore")).expect("the Ignore button");
     fixture.click(&ignore).settle();
     assert_eq!(dialog.borrow_mut().take_action(), Some(SpellingAction::Ignore(items()[0].clone())));
     let word = |dialog: &Rc<RefCell<CheckSpellingDialog>>| dialog.borrow().json_fields().expect("fields")["word"].clone();

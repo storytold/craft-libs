@@ -98,11 +98,9 @@ impl ZoomField {
         let shown = field.show(ui);
         let invalid_zoom = range.filter(|_| shown.cut).map(|range| InvalidZoom { low: *range.start(), high: *range.end() });
         let view = match self.view {
-            Some(current) => shown
-                .edit
-                .events
-                .clone()
-                .map(|percent| percent.map_or(current, |percent| zoom::with_device(&current, scheme.device(percent), document, pixels_per_point, &scheme))),
+            Some(current) => shown.edit.events.clone().map(|percent| {
+                percent.map_or(current, |percent| zoom::with_device(&current, scheme.device(percent), document, pixels_per_point, &scheme))
+            }),
             None => EditEvents::new(),
         };
         ZoomFieldOutput { response: shown.edit.response.clone(), view, invalid_zoom }

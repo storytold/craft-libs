@@ -31,7 +31,15 @@ struct Slide {
 
 impl Slide {
     fn new(value: f64) -> Self {
-        Slide { value: RefCell::new(value), range: 0.0..=100.0, scale: SliderScale::Linear, step: None, wheel_step: None, trim: None, events: RefCell::default() }
+        Slide {
+            value: RefCell::new(value),
+            range: 0.0..=100.0,
+            scale: SliderScale::Linear,
+            step: None,
+            wheel_step: None,
+            trim: None,
+            events: RefCell::default(),
+        }
     }
 
     fn show(&self, ui: &mut Ui) {

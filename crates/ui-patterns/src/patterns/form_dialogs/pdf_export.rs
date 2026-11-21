@@ -25,7 +25,8 @@ use crate::form::{Field, FieldGroup};
 use crate::list::ListRow;
 use crate::notices::{Notice, NoticeLayout};
 use crate::patterns::presets::{
-    NameCheck, NamedPresetEvent, Naming, NamedPresetRow, PickerField, PresetError, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState, PresetWords,
+    NameCheck, NamedPresetEvent, NamedPresetRow, Naming, PickerField, PresetError, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState,
+    PresetWords,
 };
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, Message, UnitKind};

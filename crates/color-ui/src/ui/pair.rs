@@ -5,9 +5,8 @@ use craft_theme::{Srgba, WellShape};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{ChoiceWords, Swatch, SwatchMetrics, SwatchStyle};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Meta as _, Outcome, Overlay, OverlayUi,
-    DragPreview, DropMark, DropOperation, DropTarget, Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
-    WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DragPreview, DropMark, DropOperation, DropTarget, Edit as _, EditResponse, Focus as _, MeasureCx,
+    Meta as _, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{Glyph, IconSpec, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
@@ -438,12 +437,8 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
             flags.set(Flags::MIXED, self.wells[i].paint.same().is_none());
             flags.set(Flags::CHECKED, well == active);
             let shape = if cx.style.round { HitShape::circle(at.center(), at.width() / 2.0) } else { HitShape::Rect(at) };
-            let part = cx
-                .part(WELL.at(i as u64), shape)
-                .sense(sense)
-                .priority(HitPriority::new(HitLevel::Body, u8::from(front)))
-                .flags(flags)
-                .focusable();
+            let part =
+                cx.part(WELL.at(i as u64), shape).sense(sense).priority(HitPriority::new(HitLevel::Body, u8::from(front))).flags(flags).focusable();
             if self.popover {
                 part.pointer_only("Enter opens the picker");
             }

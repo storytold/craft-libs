@@ -65,7 +65,8 @@ pub fn brush_row<K>(
         row.preview_face(ThumbAspect::new(STROKE_ASPECT.0, STROKE_ASPECT.1), paint.stroke.clone())
     } else {
         let (tip, scale) = (paint.tip.clone(), tip_thumb_scale(diameter));
-        let face = FacePaint::new(scaled_key(tip.key(), scale), move |cx, rect| tip.paint(cx, Rect::from_center_size(rect.center(), rect.size() * scale)));
+        let face =
+            FacePaint::new(scaled_key(tip.key(), scale), move |cx, rect| tip.paint(cx, Rect::from_center_size(rect.center(), rect.size() * scale)));
         row.preview_face(ThumbAspect::SQUARE, face)
     }
 }

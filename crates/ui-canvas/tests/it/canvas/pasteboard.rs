@@ -305,7 +305,8 @@ fn with_shows_outside_a_picture_shows_between_artboards_and_a_checker_page_paint
         );
     }
     let page = Rect::new(20.0, 20.0, 180.0, 280.0);
-    let (view, shapes) = pasteboard_shapes(vec![PageFrame::new(page).checker(Checker::default()), PageFrame::new(Rect::new(220.0, 20.0, 380.0, 280.0))], false);
+    let (view, shapes) =
+        pasteboard_shapes(vec![PageFrame::new(page).checker(Checker::default()), PageFrame::new(Rect::new(220.0, 20.0, 380.0, 280.0))], false);
     let quad = egui::Rect::from_points(&view.quad(page)).expand(0.5);
     let grids: Vec<&Mesh> = shapes
         .iter()

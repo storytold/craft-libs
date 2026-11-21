@@ -1,6 +1,8 @@
 //! The hold wait: a key with a single and a hold binding runs one or the other by how long it stayed down.
 
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandGate, CommandInput, CommandKind, CommandRef, FirePhase, Scope, Trigger, keymap_builds};
+use craft_ui::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandGate, CommandInput, CommandKind, CommandRef, FirePhase, Scope, Trigger, keymap_builds,
+};
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::frame::take_output;
 use craft_ui::shell::AppShell;
@@ -27,12 +29,7 @@ fn hold_def(id: &str, chord: &str) -> CommandDef {
 
 /// X taps `TAP` and holds `HOLD`; Y runs `OTHER`; M is a momentary command.
 fn input(delay: Option<f64>) -> CommandInput {
-    let defs = vec![
-        def(TAP, "X"),
-        hold_def(HOLD, "X"),
-        def(OTHER, "Y"),
-        def(MOMENT, "M").with_kind(CommandKind::Momentary),
-    ];
+    let defs = vec![def(TAP, "X"), hold_def(HOLD, "X"), def(OTHER, "Y"), def(MOMENT, "M").with_kind(CommandKind::Momentary)];
     CommandInput::new().catalog(AppCatalog::new(defs, 1).expect("the trial's catalog is valid")).holds(delay)
 }
 

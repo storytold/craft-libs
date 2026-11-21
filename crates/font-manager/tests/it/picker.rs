@@ -13,6 +13,7 @@ use craft_font_manager::picker::{
     family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
+use craft_theme::{Contrast, Mode};
 use craft_ui::buttons::ControlPlace;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
@@ -21,7 +22,6 @@ use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, wheel_lines};
 use craft_ui::testing::{Fixture, Room, last_frame_derived_builds, trial};
-use craft_theme::{Contrast, Mode};
 use egui::{Color32, Event, Key, Modifiers, Shape};
 
 const INTER_REGULAR: &[u8] = include_bytes!("../../../ui-contract/fonts/inter/Inter-Regular.ttf");
@@ -59,8 +59,7 @@ fn rig_with(catalog: Arc<Catalog>, served: Vec<String>, settings: FontPickerSett
     let (mut settings, mut filters) = (settings, filters);
     let mut fx = Fixture::new(move |ui| {
         let mut seen = shown.borrow_mut();
-        let mut picker =
-            FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served);
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served);
         if let Some(filters) = filters.as_mut() {
             picker = picker.filters(Bind::bound(filters));
         }

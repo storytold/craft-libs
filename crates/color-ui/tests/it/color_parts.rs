@@ -180,7 +180,8 @@ impl WheelRig {
         let (picked, held) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
         let (v, p, h) = (values.clone(), picked.clone(), held.clone());
         let mut fixture = Fixture::new(move |ui| {
-            let out = ColorWheel::new("Color wheel", Bind::given(v.get())).inner(inner).markers(&colors[..markers]).marker_names(names.clone()).show(ui);
+            let out =
+                ColorWheel::new("Color wheel", Bind::given(v.get())).inner(inner).markers(&colors[..markers]).marker_names(names.clone()).show(ui);
             if let Some(values) = out.edit.value() {
                 v.set(*values);
             }

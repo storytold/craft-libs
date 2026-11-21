@@ -92,9 +92,9 @@ pub(super) fn host_place<K: Clone + PartialEq>(
         .flatten()
         .find(|key| sub_row_group(key).is_some())
         .map(|key| key.layer());
-    if let Some(owner) = sub_row_owner.filter(|owner| {
-        (parent.as_ref() == Some(*owner) || parent == parent_of(owner)) && !mv.keys.contains(&LayerRowKey::Layer((*owner).clone()))
-    }) {
+    if let Some(owner) = sub_row_owner
+        .filter(|owner| (parent.as_ref() == Some(*owner) || parent == parent_of(owner)) && !mv.keys.contains(&LayerRowKey::Layer((*owner).clone())))
+    {
         return Some((owner.clone(), LayerPosition::After));
     }
     if let Some(group) = parent.clone().filter(|group| to > 0 && matches!(remaining[to - 1], LayerRowKey::Layer(id) if id == group)) {
@@ -127,9 +127,7 @@ pub(super) fn host_drop_place<K: Clone + PartialEq>(
 ) -> Option<(K, LayerPosition)> {
     match at {
         DropAt::Onto(LayerRowKey::Layer(id)) => Some((id.clone(), LayerPosition::Into)),
-        DropAt::Gap { key: Some(key), insert, .. } => {
-            host_place(&ReorderMove::new(key.clone(), Vec::new(), *insert, false), order, parent_of, true)
-        }
+        DropAt::Gap { key: Some(key), insert, .. } => host_place(&ReorderMove::new(key.clone(), Vec::new(), *insert, false), order, parent_of, true),
         _ => None,
     }
 }

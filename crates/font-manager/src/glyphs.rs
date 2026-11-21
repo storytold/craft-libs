@@ -334,7 +334,14 @@ fn recent_cells(recent: &[String]) -> Vec<GlyphCell> {
 }
 
 /// The cells of the shown set: the recents, or the source's cells of the category.
-fn category_cells(cache: &mut CellsCache, source: &dyn GlyphSource, family: &str, style: &str, category: &str, recent: &[String]) -> Arc<Vec<GlyphCell>> {
+fn category_cells(
+    cache: &mut CellsCache,
+    source: &dyn GlyphSource,
+    family: &str,
+    style: &str,
+    category: &str,
+    recent: &[String],
+) -> Arc<Vec<GlyphCell>> {
     if category == "Recently Used" {
         return Arc::new(recent_cells(recent));
     }

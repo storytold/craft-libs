@@ -1,7 +1,9 @@
 //! `SectionList`: the "sections beside the shown section" arrangement of the PDF export dialog, the preferences
 //! body and the properties dialog's list of tabs.
 
-use crate::contract::{ActivateOn, Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing};
+use crate::contract::{
+    ActivateOn, Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+};
 use crate::display::Divider;
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow};

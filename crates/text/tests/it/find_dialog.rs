@@ -23,10 +23,11 @@ fn press(fixture: &mut Fixture, name: &str) {
 #[trial]
 fn find_fields_set_by_automation_reach_the_next_request() {
     let dialog = Rc::new(RefCell::new(
-        FindReplaceDialog::new("craft", FindTab::Replace)
-            .word(true)
-            .replace_buttons(ReplaceButtons::Separate)
-            .checks(vec![FindCheck::new("backwards", "Search Backwards", false)]),
+        FindReplaceDialog::new("craft", FindTab::Replace).word(true).replace_buttons(ReplaceButtons::Separate).checks(vec![FindCheck::new(
+            "backwards",
+            "Search Backwards",
+            false,
+        )]),
     ));
     let shown = dialog.clone();
     let mut fixture = Fixture::new(move |ui| {

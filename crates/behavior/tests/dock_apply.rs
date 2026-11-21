@@ -448,7 +448,8 @@ fn a_renamed_panel_keeps_its_place_and_a_taken_name_changes_nothing() {
         renamed.validate().unwrap();
         assert_eq!(renamed.revision(), base.revision(), "{from}: a rename is an edit");
 
-        for (source, name, error) in [(40, 99, DockError::MissingPanel), (from, 4, DockError::DuplicatePanel), (from, 52, DockError::DuplicatePanel)] {
+        for (source, name, error) in [(40, 99, DockError::MissingPanel), (from, 4, DockError::DuplicatePanel), (from, 52, DockError::DuplicatePanel)]
+        {
             let mut refused = base.clone();
             assert_eq!(refused.rename(&source, name), Err(error), "{from}: {source} to {name}");
             assert_eq!(refused, base, "{from}: a refused rename changes nothing");

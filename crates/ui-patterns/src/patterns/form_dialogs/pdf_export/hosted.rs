@@ -300,8 +300,7 @@ impl HostedPdfExport {
     fn blocked(&self) -> bool {
         let catalog = Self::catalog_of(&self.catalog);
         let range = self.choice.range.trim();
-        let range_bad =
-            self.choice.range_only && !range.is_empty() && self.artboard_count.is_some_and(|count| check_range(range, count).is_err());
+        let range_bad = self.choice.range_only && !range.is_empty() && self.artboard_count.is_some_and(|count| check_range(range, count).is_err());
         range_bad || self.settings.check(catalog).and_then(|()| self.settings.check_destination(catalog, self.color_mode)).is_err()
     }
 

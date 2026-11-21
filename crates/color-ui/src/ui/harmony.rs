@@ -454,10 +454,8 @@ impl<'a> HarmonyPanel<'a> {
             let strip_cells: Vec<GuideCell> = guide.colors.iter().enumerate().map(|(i, c)| colored(GuideCellAt::Strip(i), *c)).collect();
             let strip = entries(&strip_cells);
             let mut strip_selection = Selection::default();
-            let table = SwatchTable::new(words.harmony.clone(), &strip)
-                .per_row(strip.len().max(1))
-                .span(true)
-                .selection(Bind::bound(&mut strip_selection));
+            let table =
+                SwatchTable::new(words.harmony.clone(), &strip).per_row(strip.len().max(1)).span(true).selection(Bind::bound(&mut strip_selection));
             let out = dragging(table, payload.as_ref(), &strip_cells).show_all(ui);
             if let Some(i) = out.selected {
                 chosen = strip_cells.get(i).copied();

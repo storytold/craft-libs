@@ -603,8 +603,10 @@ impl CommandRow<'_> {
             } else {
                 (words.add_a_shortcut_to_label.fill(&[("label", &line.label)]), "add")
             };
-            let add =
-                IconButton::new(IconSpec::svg(craft_behavior::IconId::new("plus"))).id_salt((add_salt, line.key.as_str())).label(name.clone()).tooltip(name);
+            let add = IconButton::new(IconSpec::svg(craft_behavior::IconId::new("plus")))
+                .id_salt((add_salt, line.key.as_str()))
+                .label(name.clone())
+                .tooltip(name);
             if clicked(&ui.child((add_salt, line.key.as_str()), rect, add)) {
                 act = Some(record(None));
             }

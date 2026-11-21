@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::chord::{Chord, PressKind, Trigger};
 use crate::chord::foreign::{Flavor, ForeignError, ReadNote, read_foreign};
+use crate::chord::{Chord, PressKind, Trigger};
 use crate::command::CommandRef;
 use crate::keymap::{Binding, CommandDef, CommandKind, Keymap, MAX_BINDINGS, Policy};
 use crate::scope::Scope;
@@ -200,7 +200,12 @@ impl ForeignKey {
     /// A key whose key or modifier code the reader leaves undecided: `trigger` is
     /// `Err(ForeignError::Undecided { key, mods })`, `text` is kept for reports.
     pub fn code(context: Option<&str>, text: &str, key: Option<u32>, mods: Option<u32>) -> ForeignKey {
-        ForeignKey { context: context.map(str::to_string), text: text.to_string(), trigger: Err(ForeignError::Undecided { key, mods }), notes: Vec::new() }
+        ForeignKey {
+            context: context.map(str::to_string),
+            text: text.to_string(),
+            trigger: Err(ForeignError::Undecided { key, mods }),
+            notes: Vec::new(),
+        }
     }
 }
 

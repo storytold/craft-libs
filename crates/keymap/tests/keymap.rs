@@ -299,13 +299,8 @@ fn hold_bindings_parse_clash_only_with_holds_and_hide_while_off() {
         assert!(Trigger::parse(text).is_err(), "{text}");
     }
 
-    let catalog = vec![
-        app("edit.a", &["Cmd+K"]),
-        app("edit.b", &[]),
-        app("edit.c", &[]),
-        app("app.hold", &[]),
-        in_scope("timeline.hold", "Timeline", &[]),
-    ];
+    let catalog =
+        vec![app("edit.a", &["Cmd+K"]), app("edit.b", &[]), app("edit.c", &[]), app("app.hold", &[]), in_scope("timeline.hold", "Timeline", &[])];
     let mut o = Overrides::new();
     o.insert("edit.b", vec!["Hold H".into(), "F5".into()]);
     o.insert("app.hold", vec!["Hold J".into()]);
@@ -351,5 +346,8 @@ fn hold_bindings_parse_clash_only_with_holds_and_hide_while_off() {
         };
         assert!(matches!(km.assign(&cmd("edit.c"), binding, Policy::Steal), Err(AssignError::NotHoldable(_))), "{text}");
     }
-    assert!(matches!(km.assign(&cmd("edit.c"), Binding::new(Trigger::hold(Chord::plain(Key::Space))), Policy::Steal), Err(AssignError::NotHoldable(_))));
+    assert!(matches!(
+        km.assign(&cmd("edit.c"), Binding::new(Trigger::hold(Chord::plain(Key::Space))), Policy::Steal),
+        Err(AssignError::NotHoldable(_))
+    ));
 }

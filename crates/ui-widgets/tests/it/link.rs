@@ -3,8 +3,8 @@
 
 use craft_ui::buttons::Link;
 use craft_ui::contract::Show as _;
-use craft_ui::testing::layout::in_region;
 use craft_ui::testing::focus::{egui_focused, key_release};
+use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, input, pointer, trial};
 use egui::{Key, Modifiers, Rect, pos2, vec2};
 use std::cell::Cell;

@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use craft_automation::actions::ActionList;
 use craft_automation::ui::actions::mock::{FakeActionsHost, action, list_of};
-use craft_automation::ui::actions::{ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, INCLUDE_COLUMN, StepCells};
+use craft_automation::ui::actions::{
+    ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, INCLUDE_COLUMN, StepCells,
+};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Ui, Vec2};
 

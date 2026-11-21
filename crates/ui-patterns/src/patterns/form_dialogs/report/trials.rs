@@ -34,10 +34,7 @@ fn grouped_notes_copy_with_their_headings() {
         dialog.opened(Bind::bound(&mut open)).show(ui);
     });
     fixture.settle();
-    assert_eq!(
-        *copied.borrow(),
-        "Info: Imported\nFonts\nWarning: Missing Arial (page 2)\nError: Cannot read Inter\nImages\nSuccess: hero.png"
-    );
+    assert_eq!(*copied.borrow(), "Info: Imported\nFonts\nWarning: Missing Arial (page 2)\nError: Cannot read Inter\nImages\nSuccess: hero.png");
     assert!(fixture.by_label("4 notes").is_some(), "the count counts the flat note and every grouped one");
 
     let hosted = HostedReport::new("Report", "Checked.", Vec::new()).groups(groups());

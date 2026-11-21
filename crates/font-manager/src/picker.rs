@@ -10,8 +10,8 @@ pub(crate) mod stories;
 
 use std::sync::Arc;
 
-use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense, Value};
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps, wheel_step};
+use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense, Value};
 use craft_behavior::{HitLevel, HitPriority, NavMove, Preview, WheelPhase};
 use craft_font_catalog::Catalog;
 use craft_host::Section;

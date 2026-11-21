@@ -330,13 +330,14 @@ impl Cell {
 
     /// The field of a cell that is a plain number; `None` for the others.
     fn plain(self, words: &CharacterWords, values: &CharacterValues) -> Option<PlainCell> {
-        let cell = |label: &Label,
-                    mark: &'static str,
-                    value: Option<f32>,
-                    range: RangeInclusive<f64>,
-                    percent: bool,
-                    presets: &'static [f32],
-                    change: fn(f32) -> CharacterChange| PlainCell { label: label.clone(), mark, value, range, percent, presets, change };
+        let cell =
+            |label: &Label,
+             mark: &'static str,
+             value: Option<f32>,
+             range: RangeInclusive<f64>,
+             percent: bool,
+             presets: &'static [f32],
+             change: fn(f32) -> CharacterChange| PlainCell { label: label.clone(), mark, value, range, percent, presets, change };
         Some(match self {
             Cell::VerticalScale => cell(&words.vertical_scale, "↕T", values.vertical_scale, SCALE_RANGE, true, &[], CharacterChange::VerticalScale),
             Cell::HorizontalScale => {
@@ -641,9 +642,7 @@ impl CharacterValues {
         let shared: Vec<([u8; 4], f32)> = self
             .held_axes()
             .iter()
-            .filter(|(tag, value)| {
-                !self.mixed_axes.contains(tag) && !other.mixed_axes.contains(tag) && other.held_axes().contains(&(*tag, *value))
-            })
+            .filter(|(tag, value)| !self.mixed_axes.contains(tag) && !other.mixed_axes.contains(tag) && other.held_axes().contains(&(*tag, *value)))
             .copied()
             .collect();
         let mut mixed: Vec<[u8; 4]> = Vec::new();

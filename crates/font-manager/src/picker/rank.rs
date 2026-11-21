@@ -170,7 +170,9 @@ pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: boo
 
 /// Whether a family name of the face is in Japanese.
 fn japanese_name(face: &FaceInfo) -> bool {
-    face.localized_families.iter().any(|n| n.language.as_deref().and_then(|l| l.split(['-', '_']).next()).is_some_and(|l| l.eq_ignore_ascii_case("ja")))
+    face.localized_families
+        .iter()
+        .any(|n| n.language.as_deref().and_then(|l| l.split(['-', '_']).next()).is_some_and(|l| l.eq_ignore_ascii_case("ja")))
 }
 
 /// A face's class, PANOSE, weight and scripts from its `OS/2`, `post` and `cmap` tables.
@@ -189,14 +191,11 @@ fn read_traits(catalog: &Catalog, face: &FaceInfo) -> Option<Traits> {
     let fixed_pitch = font.post().ok().is_some_and(|p| p.is_fixed_pitch() != 0);
     let map = font.charmap();
     let latin = ('A'..='Z').chain('a'..='z').all(|c| map.map(c).is_some());
-    let scripts = [
-        (FontScript::Latin, latin),
-        (FontScript::Japanese, face.traits.japanese || japanese_name(face)),
-        (FontScript::Thai, face.traits.thai),
-    ]
-    .into_iter()
-    .filter_map(|(script, covered)| covered.then_some(script))
-    .collect();
+    let scripts =
+        [(FontScript::Latin, latin), (FontScript::Japanese, face.traits.japanese || japanese_name(face)), (FontScript::Thai, face.traits.thai)]
+            .into_iter()
+            .filter_map(|(script, covered)| covered.then_some(script))
+            .collect();
     Some(Traits { class: classify(&face.family, family_class, panose, fixed_pitch), panose, weight, scripts })
 }
 

@@ -325,7 +325,6 @@ fn size_row(cx: &Cx<'_, CropOverlay<'_>>, space: &CanvasSpace, (w, h): (f64, f64
     vec![(Label::from(words.crop_width.as_str().to_owned()), text(x, w)), (Label::from(words.crop_height.as_str().to_owned()), text(y, h))]
 }
 
-
 impl CropOverlay<'_> {
     /// Starts the drag of `grab` pressed at screen point `origin`.
     fn begin(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox, grab: Grab, origin: Pos2, mods: Mods) -> Drag {
@@ -384,9 +383,7 @@ impl CropOverlay<'_> {
             _ => {}
         }
         let rows = match drag.kind {
-            Kind::Turn { .. } => {
-                readout::angle_row(&cx.words::<CanvasWords>(), &cx.env.units(), gesture::turn_degrees(&drag.last, self.image_mode))
-            }
+            Kind::Turn { .. } => readout::angle_row(&cx.words::<CanvasWords>(), &cx.env.units(), gesture::turn_degrees(&drag.last, self.image_mode)),
             Kind::Draw { .. } | Kind::Resize(_) => drag.last.crop_size().map(|size| size_row(cx, space, size)).unwrap_or_default(),
             _ => Vec::new(),
         };

@@ -225,8 +225,12 @@ pub fn write(name: &str, keymap: &Keymap) -> String {
     );
     for tools in [false, true] {
         for b in keymap.catalog().iter().filter(|b| matches!(b.kind, CommandKind::Tool { .. }) == tools) {
-            let keys: Vec<String> =
-                keymap.bindings(&b.command).iter().filter(|k| k.scope.is_none() && k.trigger.press == crate::chord::PressKind::Single).map(|k| photoshop_key(&k.trigger)).collect();
+            let keys: Vec<String> = keymap
+                .bindings(&b.command)
+                .iter()
+                .filter(|k| k.scope.is_none() && k.trigger.press == crate::chord::PressKind::Single)
+                .map(|k| photoshop_key(&k.trigger))
+                .collect();
             let Some(first) = keys.first() else { continue };
             let label = escape(&b.label.replace('…', "..."));
             let id = escape(&b.command.key());

@@ -329,11 +329,7 @@ fn body_buttons_stand_in_the_slot_the_body_keeps_and_keep_their_keys() {
 }
 
 /// A fixture that shows a dialog "Options" while `open` is set, with `body` inside it.
-fn dialog_fixture(
-    open: &std::rc::Rc<Cell<bool>>,
-    make: impl Fn(Dialog<'_>) -> Dialog<'_> + 'static,
-    body: impl Fn(&mut Ui) + 'static,
-) -> Fixture {
+fn dialog_fixture(open: &std::rc::Rc<Cell<bool>>, make: impl Fn(Dialog<'_>) -> Dialog<'_> + 'static, body: impl Fn(&mut Ui) + 'static) -> Fixture {
     let shown = std::rc::Rc::clone(open);
     Fixture::new(move |ui| {
         let mut now = shown.get();
@@ -355,11 +351,15 @@ fn reopen(fixture: &mut Fixture, open: &std::rc::Rc<Cell<bool>>) {
 #[trial]
 fn a_reopened_dialog_focuses_its_first_enabled_field_again() {
     let open = std::rc::Rc::new(Cell::new(true));
-    let mut fixture = dialog_fixture(&open, |dialog| dialog, |ui| {
-        let (mut first, mut second) = (String::new(), String::new());
-        TextField::new("First", Bind::bound(&mut first)).enabled(false).show(ui);
-        TextField::new("Second", Bind::bound(&mut second)).show(ui);
-    });
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog,
+        |ui| {
+            let (mut first, mut second) = (String::new(), String::new());
+            TextField::new("First", Bind::bound(&mut first)).enabled(false).show(ui);
+            TextField::new("Second", Bind::bound(&mut second)).show(ui);
+        },
+    );
     fixture.settle();
     let on_second = |fixture: &Fixture| {
         let second = fixture.by_label("Second").expect("the second field is shown");
@@ -383,7 +383,9 @@ fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
     fixture.room(egui::vec2(900.0, 700.0));
     fixture.settle();
     let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect;
-    let band = |fixture: &Fixture| fixture.by_role(Role::HEADING).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Options")).expect("the title band");
+    let band = |fixture: &Fixture| {
+        fixture.by_role(Role::HEADING).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Options")).expect("the title band")
+    };
     let start = dialog(&fixture);
 
     let from = start.center_bottom() - egui::vec2(0.0, 6.0);
@@ -414,11 +416,15 @@ fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
 #[trial]
 fn a_tall_body_scrolls_under_a_footer_that_stays_in_view() {
     let open = std::rc::Rc::new(Cell::new(true));
-    let mut fixture = dialog_fixture(&open, |dialog| dialog.buttons([FooterButton::new("OK", DialogRole::Accept)]), |ui| {
-        for line in 0..60 {
-            Text::new(format!("Line {line}")).show(ui);
-        }
-    });
+    let mut fixture = dialog_fixture(
+        &open,
+        |dialog| dialog.buttons([FooterButton::new("OK", DialogRole::Accept)]),
+        |ui| {
+            for line in 0..60 {
+                Text::new(format!("Line {line}")).show(ui);
+            }
+        },
+    );
     fixture.room(egui::vec2(600.0, 320.0));
     fixture.settle();
     let first = |fixture: &Fixture| fixture.by_label("Line 0").map(|target| target.rect);

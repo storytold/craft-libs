@@ -420,9 +420,10 @@ pub fn cancel_press_of(ctx: &Context, owner: Id) {
 pub(crate) fn hand_over_press(ctx: &Context, owner: Id, part: PartRef, origin: Pos2) {
     let read = PassRead::of(ctx);
     let start = PerViewport::<Arenas>::with(ctx, read.viewport, |arenas| {
-        let (_, state) = arenas.by_root.iter_mut().find(|(root, state)| {
-            **root != owner && state.machine.button() == Some(PointerButton::Primary) && !state.machine.release_held()
-        })?;
+        let (_, state) = arenas
+            .by_root
+            .iter_mut()
+            .find(|(root, state)| **root != owner && state.machine.button() == Some(PointerButton::Primary) && !state.machine.release_held())?;
         let start = state.machine.start()?;
         state.machine = PressMachine::default();
         state.host_cancel = false;
@@ -1077,7 +1078,8 @@ fn known_in(state: &ArenaState, owner: Id) -> Vec<(PartKey, Option<u64>)> {
     } else {
         state.previous.iter().find(|member| member.id == owner).map_or(&[], |member| member.parts.as_slice())
     };
-    let handed = state.handed.filter(|(_, pass)| *pass == state.pass).map(|(part, _)| part).filter(|_| state.root.is_some_and(|root| root.id == owner));
+    let handed =
+        state.handed.filter(|(_, pass)| *pass == state.pass).map(|(part, _)| part).filter(|_| state.root.is_some_and(|root| root.id == owner));
     parts.iter().map(|part| (part.key, part.index)).chain(handed.map(|part| (part.key, part.index))).collect()
 }
 

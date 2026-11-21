@@ -200,7 +200,8 @@ impl<'a> FilterTree<'a> {
             }
 
             let folder = Folder { keys: &current.filters, index };
-            let mut chosen = if current.filters.iter().any(|key| key == selected) { Selection::single(selected.to_owned()) } else { Selection::default() };
+            let mut chosen =
+                if current.filters.iter().any(|key| key == selected) { Selection::single(selected.to_owned()) } else { Selection::default() };
             let (wide, high) = THUMB_ASPECT;
             let out = List::<String>::new(words.filters.clone())
                 .select(SelectMode::Single)

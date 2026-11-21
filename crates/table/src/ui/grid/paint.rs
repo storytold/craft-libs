@@ -18,8 +18,7 @@ use super::editor::{EditState, Mode};
 use super::row::CellPaint;
 use super::{
     CellAt, CellGrid, CellGridStyle, CellGridStyleKey, CellGridWords, CellRange, CellSelection, ColumnEdges, ColumnFilter, GridLayout, GridModel,
-    SheetGeometry,
-    SheetMetrics,
+    SheetGeometry, SheetMetrics,
 };
 use super::{digits_of, edges, header_insets, row_digits};
 use crate::ui::error_tag::ErrorTag;
@@ -197,9 +196,8 @@ impl CellGrid<'_> {
         let cells = geometry.cells();
         let reach = craft_behavior::hit::LINE_REACH;
         let rtl = geometry.right_to_left();
-        let rows_bottom = rows
-            .last()
-            .map_or(cells.top(), |&row| (geometry.y(row) + geometry.rows().size(row) as f32 * geometry.zoom()).min(cells.bottom()));
+        let rows_bottom =
+            rows.last().map_or(cells.top(), |&row| (geometry.y(row) + geometry.rows().size(row) as f32 * geometry.zoom()).min(cells.bottom()));
         for &column in columns {
             let header = Self::column_header(geometry, column);
             let top = if self.headings { header.top() } else { cells.top() };

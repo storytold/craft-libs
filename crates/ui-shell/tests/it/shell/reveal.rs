@@ -214,5 +214,9 @@ fn chrome_state_reads_the_hiding_the_shell_left_and_show_panels_ends_it() {
     assert_eq!(state(&windows), (false, false, Some(RevealEdge::Start)), "a command reveal names its edge");
     assert!(seen.revealed && seen.slots == ["tools"], "the pass's output shows the revealed rail");
 
-    assert_eq!(chrome_state(&windows.ctx, ViewportId::from_hash_of("other window")), ChromeState::default(), "a viewport with no shell reads the default");
+    assert_eq!(
+        chrome_state(&windows.ctx, ViewportId::from_hash_of("other window")),
+        ChromeState::default(),
+        "a viewport with no shell reads the default"
+    );
 }

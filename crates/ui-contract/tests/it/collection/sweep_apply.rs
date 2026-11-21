@@ -4,12 +4,12 @@
 use super::kit::Row;
 use super::table::Table;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, ItemSource};
+use craft_keymap::Mods;
 use craft_ui::contract::{
     CollectionEvent, CollectionProps, ColumnKind, ColumnSpec, Props as _, ShowCollection as _, SweepApply, SweepStep, ToggleColumn,
 };
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, input, pointer, trial};
-use craft_keymap::Mods;
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
@@ -58,7 +58,13 @@ impl Host {
     }
 
     fn with(state: &[bool], apply: SweepApply) -> Self {
-        Host { eyes: Eyes(RefCell::new(state.to_vec())), apply: RefCell::new(apply), rows: RefCell::default(), frames: RefCell::new(Frames::new()), claimed: Cell::new(0) }
+        Host {
+            eyes: Eyes(RefCell::new(state.to_vec())),
+            apply: RefCell::new(apply),
+            rows: RefCell::default(),
+            frames: RefCell::new(Frames::new()),
+            claimed: Cell::new(0),
+        }
     }
 
     fn show(&self, ui: &mut Ui) {

@@ -1,7 +1,7 @@
 //! `path_runs`: the screen polylines a path outline is stroked from.
 
-use craft_behavior::kurbo::{BezPath, Point, Rect as DocRect, Shape as _, Size};
 use craft_behavior::CanvasView;
+use craft_behavior::kurbo::{BezPath, Point, Rect as DocRect, Shape as _, Size};
 use craft_ui::canvas::Canvas;
 use craft_ui::canvas_controls::{SelectionOutline, path_runs};
 use craft_ui::contract::{Show as _, ShowContainer as _};
@@ -73,8 +73,8 @@ fn moved(lines: &[Vec<Pos2>], by: egui::Vec2) -> Vec<Vec<Pos2>> {
 }
 
 fn assert_same(got: &[Vec<Pos2>], want: &[Vec<Pos2>], what: &str) {
-    let close = got.len() == want.len()
-        && got.iter().zip(want).all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (*p - *q).length() < 1e-2));
+    let close =
+        got.len() == want.len() && got.iter().zip(want).all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (*p - *q).length() < 1e-2));
     assert!(close, "{what}: {got:?} against {want:?}");
 }
 

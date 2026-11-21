@@ -4,9 +4,7 @@
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use craft_behavior::{
-    CursorIcon, EditEvent, EditEvents, IconId, Metrics, Mixed, PartKey, PointerButton, PressPhase, Sense, Value, keyed,
-};
+use craft_behavior::{CursorIcon, EditEvent, EditEvents, IconId, Metrics, Mixed, PartKey, PointerButton, PressPhase, Sense, Value, keyed};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
@@ -546,12 +544,7 @@ fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&dyn Fn(&str) -
             Some(message) => Validity::Refuse(Message::new(message)),
             None => Validity::Ok,
         });
-        typed = TextField::new(words.preset_name.clone(), checked)
-            .id_salt("name-text")
-            .select_on_focus()
-            .show(ui)
-            .value()
-            .cloned();
+        typed = TextField::new(words.preset_name.clone(), checked).id_salt("name-text").select_on_focus().show(ui).value().cloned();
     });
     let shown = match typed {
         Some(text) => {
@@ -813,17 +806,15 @@ impl<'a> PrintDialog<'a> {
                                 };
                                 let source = keyed(&titles, |title: &String| title.clone());
                                 // PLAN: assumes `SectionList::foot(self, impl FnOnce(&mut Ui) + 'a) -> Self` (type-w6 request on ty.X70).
-                                let picked = SectionList::new(words.sections.clone(), &source, current.clone())
-                                    .foot(|ui| preview(ui))
-                                    .show(
-                                        ui,
-                                        |title| ListRow::new(Label::from(title.clone())),
-                                        |ui| {
-                                            if let Some(section) = sections.iter().find(|section| section.title.as_str() == current) {
-                                                param_rows(ui, form.requests(), &section.title, &section.params, values);
-                                            }
-                                        },
-                                    );
+                                let picked = SectionList::new(words.sections.clone(), &source, current.clone()).foot(|ui| preview(ui)).show(
+                                    ui,
+                                    |title| ListRow::new(Label::from(title.clone())),
+                                    |ui| {
+                                        if let Some(section) = sections.iter().find(|section| section.title.as_str() == current) {
+                                            param_rows(ui, form.requests(), &section.title, &section.params, values);
+                                        }
+                                    },
+                                );
                                 if let Some(title) = picked {
                                     write(&mut section_bind, title);
                                 }
@@ -1329,7 +1320,8 @@ impl StackDialog for HostedPrint {
                 self.preset_name = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?.to_owned();
             }
             "preset" => {
-                let known = |name: &str| self.presets.as_ref().is_some_and(|presets| presets.rows.iter().any(|row| !row.is_group() && row.key == name));
+                let known =
+                    |name: &str| self.presets.as_ref().is_some_and(|presets| presets.rows.iter().any(|row| !row.is_group() && row.key == name));
                 let name = value.as_str().filter(|name| known(name));
                 let name = name.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
                 self.preset_events.push(NamedPresetEvent::Apply(name.to_owned()));

@@ -292,7 +292,8 @@ impl SearchIndex {
                 }
                 pairs.push((label.clone(), full));
             }
-            let ids: Vec<String> = if entry.ids().is_empty() { vec![fold(&entry.command().id)] } else { entry.ids().iter().map(|id| fold(id)).collect() };
+            let ids: Vec<String> =
+                if entry.ids().is_empty() { vec![fold(&entry.command().id)] } else { entry.ids().iter().map(|id| fold(id)).collect() };
             for id in &ids {
                 found.extend(words(id).map(|w| (w.to_string(), at, ID)));
             }

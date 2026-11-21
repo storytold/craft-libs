@@ -39,12 +39,10 @@ fn assign_profile_answers_the_profile_chosen_in_its_list() {
     assert_eq!(host.set_json_field(&ctx, id, "profile", json!("Gray Gamma 2.2")), Ok(()));
     assert!(host.confirm_by_id(&ctx, id));
     let answer = host.take::<ProfileMismatchDialog>().and_then(DialogResult::ok);
-    assert_eq!(
-        answer.map(|answer| (answer.action, answer.profile)),
-        Some((ProfileAction::AssignProfile, Some("Gray Gamma 2.2".to_owned())))
-    );
+    assert_eq!(answer.map(|answer| (answer.action, answer.profile)), Some((ProfileAction::AssignProfile, Some("Gray Gamma 2.2".to_owned()))));
 
-    let mismatch = ProfileMismatchDialog::new("poster.psd", ProfileMode::Rgb, ProfileQuestion::mismatch("Adobe RGB (1998)", "sRGB")).profiles(names());
+    let mismatch =
+        ProfileMismatchDialog::new("poster.psd", ProfileMode::Rgb, ProfileQuestion::mismatch("Adobe RGB (1998)", "sRGB")).profiles(names());
     let id = host.open(mismatch);
     assert_eq!(fields(&host, id), json!({"action": "useEmbedded"}), "a mismatch has no profile list");
 }

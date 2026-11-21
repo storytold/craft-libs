@@ -354,11 +354,8 @@ impl Component for LabelLeaf {
             let name_ink = cx.resolve(&cx.style.name.color);
             let colon = self.colon.as_deref().map(|colon| TextRun::new(colon).role(cx.style.name.role).color(name_ink));
             let colon_width = colon.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().x);
-            let named = if self.link {
-                TextRun::spans(vec![Span::new(cx.core.resolved.label).underline()])
-            } else {
-                TextRun::new(cx.core.resolved.label)
-            };
+            let named =
+                if self.link { TextRun::spans(vec![Span::new(cx.core.resolved.label).underline()]) } else { TextRun::new(cx.core.resolved.label) };
             let run = named.role(cx.style.name.role).color(name_ink);
             let run = if wrapped { run.wrap(Wrap::Wrap) } else { run.elide() };
             let name = draw.layout(&run, (rest.rect().width() - colon_width).max(0.0)).size();

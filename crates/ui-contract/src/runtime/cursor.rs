@@ -169,10 +169,7 @@ pub(crate) fn image_target(ctx: &Context) -> Option<ImageTarget> {
         (true, true) => zoom,
         (false, true) => pixels_per_point,
     };
-    Some(ImageTarget {
-        scale,
-        max_side: if shell.os == Os::Linux { MAX_SIDE_LINUX } else { MAX_SIDE },
-    })
+    Some(ImageTarget { scale, max_side: if shell.os == Os::Linux { MAX_SIDE_LINUX } else { MAX_SIDE } })
 }
 
 /// A painted pointer the window can take as its cursor image: drawn at a scale, compared with the last one handed over.

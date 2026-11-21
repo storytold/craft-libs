@@ -167,7 +167,8 @@ impl ItemSource<ActionSelection> for ActionRows<'_> {
 /// The include mark of the set `name` over its actions that have steps: on when every one is fully included, off when
 /// none is, mixed otherwise; `None` when no action of the set has a step.
 fn set_include(list: &ActionList, name: &str) -> Option<ToggleState> {
-    let mut marks = list.actions().iter().filter(|action| action.set.as_deref() == Some(name) && !action.steps.is_empty()).map(|action| action.include());
+    let mut marks =
+        list.actions().iter().filter(|action| action.set.as_deref() == Some(name) && !action.steps.is_empty()).map(|action| action.include());
     let first = marks.next()?;
     Some(if marks.all(|mark| mark == first) { include_state(first) } else { ToggleState::Mixed })
 }

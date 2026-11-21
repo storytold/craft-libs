@@ -280,7 +280,8 @@ fn the_lists_layout_picks_a_categorys_first_filter() {
         let index = FilterIndex::of(&Catalog);
         let thumbs = Thumbnails::<GalleryThumb>::in_context(ui.ctx(), "trial-tree-thumbs", ThumbnailOptions::default());
         let selected = now.borrow().clone();
-        let picked = FilterTree::new(&index, &selected, &thumbs, &FakeThumbSource::<GalleryThumb>::new()).layout(FilterTreeLayout::Lists).show(ui).picked;
+        let picked =
+            FilterTree::new(&index, &selected, &thumbs, &FakeThumbSource::<GalleryThumb>::new()).layout(FilterTreeLayout::Lists).show(ui).picked;
         if let Some(filter) = picked {
             *now.borrow_mut() = filter.clone();
             sink.borrow_mut().push(filter);
@@ -329,10 +330,7 @@ fn session_field_change_maps_each_automation_field_and_refuses_the_rest() {
     assert_eq!(run("toggle", serde_json::json!(1)), change(EffectChange::set_visible(1, false)));
     assert_eq!(run("move", serde_json::json!({"from": 0, "to": 1})), change(EffectChange::move_to(0, 1)));
     assert_eq!(run("filter", serde_json::json!("sponge")), change(EffectChange::set_filter(1, "sponge")));
-    assert!(matches!(
-        run("params", serde_json::json!({"glowSize": 3.0})),
-        Ok(Some(SessionField::Change(EffectChange::Fields { index: 1, .. })))
-    ));
+    assert!(matches!(run("params", serde_json::json!({"glowSize": 3.0})), Ok(Some(SessionField::Change(EffectChange::Fields { index: 1, .. })))));
     let layers = serde_json::to_value(&session.effects).expect("layers serialise");
     assert!(matches!(run("effects", layers.clone()), Ok(Some(SessionField::Change(EffectChange::Replace { .. })))));
 

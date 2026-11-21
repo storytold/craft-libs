@@ -28,12 +28,9 @@ fn floating_bar(ui: &mut Ui) -> bool {
     Bar::new("Tools", BarKind::Tool)
         .surface(SurfaceKind::Floating)
         .show(ui, |ui, _| {
-            let items = BarItems::new(vec![
-                BarItem::new(EditCommands::Undo),
-                BarItem::new(EditCommands::Redo),
-                BarItem::new(EditCommands::Cut).section(1),
-            ])
-            .show(ui);
+            let items =
+                BarItems::new(vec![BarItem::new(EditCommands::Undo), BarItem::new(EditCommands::Redo), BarItem::new(EditCommands::Cut).section(1)])
+                    .show(ui);
             crate::contract::clicked(&items)
         })
         .inner

@@ -522,7 +522,11 @@ pub struct DivideSlicesDialog {
 impl DivideSlicesDialog {
     /// The dialog starting from `divide`.
     pub fn new(divide: DivideSlices) -> Self {
-        DivideSlicesDialog { id: dialog_id("slice.divide"), axes: Axes::of(divide), lengths: LengthUnits::new(UnitKind::Pixels, UnitKind::Pixels, 72.0) }
+        DivideSlicesDialog {
+            id: dialog_id("slice.divide"),
+            axes: Axes::of(divide),
+            lengths: LengthUnits::new(UnitKind::Pixels, UnitKind::Pixels, 72.0),
+        }
     }
 
     /// The units the size field keeps and shows its length in; pixels in both, at 72 per inch, by default.
@@ -560,13 +564,15 @@ fn axis_rows(ui: &mut Ui, axis: &mut AxisState, caption: &Label, words: &SliceWo
     });
     Field::new(unit).enabled(axis.on).show(ui, |ui, _| {
         if axis.by_size {
-            let field = NumberField::length(words.divide_value.clone(), Bind::given(Some(axis.size)), lengths).range(1.0..=AxisState::MAX_SIZE).show(ui);
+            let field =
+                NumberField::length(words.divide_value.clone(), Bind::given(Some(axis.size)), lengths).range(1.0..=AxisState::MAX_SIZE).show(ui);
             if let Some(Some(size)) = field.value().copied() {
                 axis.size = AxisState::size_of(size, axis.size);
             }
         } else {
             let max = f64::from(AxisState::MAX_COUNT);
-            let field = NumberField::new(words.divide_value.clone(), Bind::given(Some(f64::from(axis.count)))).range(1.0..=max).commit_decimals(0).show(ui);
+            let field =
+                NumberField::new(words.divide_value.clone(), Bind::given(Some(f64::from(axis.count)))).range(1.0..=max).commit_decimals(0).show(ui);
             if let Some(Some(count)) = field.value().copied() {
                 axis.count = count.round().clamp(1.0, max) as u32;
             }
@@ -603,7 +609,8 @@ impl StackDialog for DivideSlicesDialog {
         } else if value.is_null() {
             axis.on = false;
         } else {
-            let number = value.as_f64().filter(|number| number.is_finite()).ok_or_else(|| format!("field `{what}` takes a number or null, got {value}"))?;
+            let number =
+                value.as_f64().filter(|number| number.is_finite()).ok_or_else(|| format!("field `{what}` takes a number or null, got {value}"))?;
             if axis.by_size {
                 axis.size = AxisState::size_of(number, axis.size);
             } else {

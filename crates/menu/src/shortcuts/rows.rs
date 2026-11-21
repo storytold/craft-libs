@@ -415,7 +415,8 @@ fn build(keymap: &Keymap, options: &Options, text: &Say, view: &View) -> Built {
             _ => false,
         };
         let unparsed = keymap.unparsed_texts(&b.command).into_iter().map(str::to_owned).collect();
-        let row = Row { index, command: b.command.clone(), key, label: text.command(b), prefix, chips, hold_chips, unparsed, changed, cycles, conflict };
+        let row =
+            Row { index, command: b.command.clone(), key, label: text.command(b), prefix, chips, hold_chips, unparsed, changed, cycles, conflict };
         match groups.iter_mut().find(|(r, h, _)| *r == rank && *h == header) {
             Some((_, _, rows)) => rows.push(row),
             None => groups.push((rank, header, vec![row])),

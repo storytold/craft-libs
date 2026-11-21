@@ -21,9 +21,8 @@ use egui::{Color32, Painter, Rect, Shape, Stroke, Ui, vec2};
 #[cfg(feature = "font-picker")]
 use super::FontPickerSource;
 use super::{
-    AUTO_LEADING, AUTO_ROW, CharacterChange, CharacterValues, CharacterWords, FontHeightReference, KerningName, LEADING_RANGE, Leading, PRESET_DECIMALS,
-    SIZE_PRESETS,
-    TRACKING_RANGE,
+    AUTO_LEADING, AUTO_ROW, CharacterChange, CharacterValues, CharacterWords, FontHeightReference, KerningName, LEADING_RANGE, Leading,
+    PRESET_DECIMALS, SIZE_PRESETS, TRACKING_RANGE,
 };
 #[cfg(feature = "font-picker")]
 use craft_font_manager::picker::FontPicker;

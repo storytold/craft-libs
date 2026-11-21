@@ -1,12 +1,12 @@
 //! Stories of the Character and Paragraph controls, the Paragraph dialog and its preview.
 
-#[cfg(feature = "font-picker")]
-use super::{AxesLayout, FaceAxes};
 use super::{
     AsianTypography, BaselinePosition, Caps, CharacterControls, CharacterRows, CharacterValues, DirectionRow, FontHeightReference, Kerning, Leading,
     LineBreakOptions, LineSpacing, ParagraphAlign, ParagraphControls, ParagraphDialog, ParagraphFormat, ParagraphPreview, ParagraphTab,
     ParagraphValues, SpacingKind, SpecialIndent, TextAlign,
 };
+#[cfg(feature = "font-picker")]
+use super::{AxesLayout, FaceAxes};
 use crate::ui::type_options::TextAntiAlias;
 use craft_theme::Rgba;
 use craft_ui::contract::Show as _;
@@ -121,7 +121,8 @@ fn paragraph_text(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(ParagraphControls<'static>, covers = [], drive = Drive::Never)]
 fn direction_explicit(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let values = ParagraphValues { align: Some(TextAlign::Left), direction: Some(super::ParagraphDirection::RightToLeft), ..ParagraphValues::default() };
+    let values =
+        ParagraphValues { align: Some(TextAlign::Left), direction: Some(super::ParagraphDirection::RightToLeft), ..ParagraphValues::default() };
     ParagraphControls::new("Paragraph", &values).direction_row(DirectionRow::Explicit).show(ui).into()
 }
 
@@ -166,11 +167,7 @@ fn axes_button(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     };
     let axes = [craft_font_manager::axes::FontAxis::new(*b"wght", "Weight", 100.0, 400.0, 900.0)];
     let (families, styles) = (families(), styles());
-    CharacterControls::new("Character", &values, &families, &styles)
-        .axes(FaceAxes::new(&axes, &[]))
-        .axes_layout(AxesLayout::Button)
-        .show(ui)
-        .into()
+    CharacterControls::new("Character", &values, &families, &styles).axes(FaceAxes::new(&axes, &[])).axes_layout(AxesLayout::Button).show(ui).into()
 }
 
 #[story(ParagraphControls<'static>, covers = [], drive = Drive::Never)]

@@ -132,7 +132,9 @@ fn detail(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
     for event in out.events {
         match event {
             CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => state.keys_pick = keys.last().copied(),
-            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => state.keys_pick = (state.keys_pick != Some(key)).then_some(key),
+            CollectionEvent::Selection { change: SelectionChange::Toggle(key), .. } => {
+                state.keys_pick = (state.keys_pick != Some(key)).then_some(key)
+            }
             CollectionEvent::Selection { change: SelectionChange::Clear, .. } => state.keys_pick = None,
             _ => {}
         }

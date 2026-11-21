@@ -75,9 +75,8 @@ impl<Id, P: Send + Sync + 'static, A: Fn(&P, &Id, LayerPosition) -> bool> HostDr
     where
         Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static,
     {
-        let accepting = move |payload: &P, at: &DropAt<LayerRowKey<Id>>| {
-            place(at).is_some_and(|(target, position)| (self.accepts)(payload, &target, position))
-        };
+        let accepting =
+            move |payload: &P, at: &DropAt<LayerRowKey<Id>>| place(at).is_some_and(|(target, position)| (self.accepts)(payload, &target, position));
         list.takes_drop(DropKind::new(DropPlace::Between, accepting)).takes_drop(DropKind::new(DropPlace::Onto, accepting))
     }
 }

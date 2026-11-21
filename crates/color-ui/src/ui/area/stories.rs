@@ -1,8 +1,8 @@
 //! Stories of `ColorArea`: its two shapes, a web-safe area, a refused value and a disabled one.
 
 use super::{AreaShape, ColorArea};
-use crate::ui::Gamut;
 use crate::AreaMode;
+use crate::ui::Gamut;
 use craft_theme::{ColorModel, HsbModel, Srgba};
 use craft_ui::contract::{Props as _, Show as _, Validity};
 use craft_ui::runtime::env::Message;

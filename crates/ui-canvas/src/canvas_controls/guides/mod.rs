@@ -538,7 +538,8 @@ impl Component for Guides<'_> {
         for guide in guides {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
             let key = self.key_guide == Some(guide.key);
-            let color = if key || self.selected.contains(&guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let color =
+                if key || self.selected.contains(&guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
             let width = if key { style.key_width } else { style.width };
             match guide.line {
                 GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(width) }, a, b, ppp)),

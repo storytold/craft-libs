@@ -1,8 +1,8 @@
 //! Stories of `BezierOverlay`.
 
 use super::{
-    ANCHOR, AnchorsShown, BezierOutput, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleStyle, HandlesShown, Knot, KnotRef, PathOptionsSettings,
-    PathSelection, SEGMENT, index,
+    ANCHOR, AnchorsShown, BezierOutput, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleStyle, HandlesShown, Knot, KnotRef,
+    PathOptionsSettings, PathSelection, SEGMENT, index,
 };
 use craft_behavior::kurbo::Point;
 use craft_theme::Srgba;
@@ -57,9 +57,7 @@ fn two_anchors_show_no_handles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 #[story(BezierOverlay<'static>, covers = [], drive = Drive::Never)]
 fn curvature_anchors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (paths, paths_at) = data.value_at("paths", paths());
-    on_canvas(ui, |ui, at| {
-        BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &selected()).anchors(AnchorsShown::Curvature).show_at(ui, at)
-    })
+    on_canvas(ui, |ui, at| BezierOverlay::new("Paths", paths_at.bind(&mut *paths), &selected()).anchors(AnchorsShown::Curvature).show_at(ui, at))
 }
 
 #[story(BezierOverlay<'static>, covers = [], drive = Drive::Never)]

@@ -70,8 +70,11 @@ impl Body<'_> {
         let strength = tint.tint / 100.0;
         let mix = |channel: f32| 1.0 + (channel - 1.0) * strength;
         let shown = Srgba::new(mix(tint.base.r), mix(tint.base.g), mix(tint.base.b), tint.base.a);
-        let kinds: Vec<&str> =
-            [(tint.global, self.words.global.as_str()), (tint.spot, self.words.spot.as_str())].into_iter().filter(|(on, _)| *on).map(|(_, word)| word).collect();
+        let kinds: Vec<&str> = [(tint.global, self.words.global.as_str()), (tint.spot, self.words.spot.as_str())]
+            .into_iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, word)| word)
+            .collect();
         let mut events = Vec::new();
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Row::new().gap(Gap::Item).show(ui, |ui, _| {
@@ -94,7 +97,8 @@ impl Body<'_> {
     /// The None, Black and White wells and the hex field. Alt on a well sets the colour not edited.
     fn quick_wells(&mut self, ui: &mut Ui) {
         let (words, enabled) = (self.words, self.enabled());
-        let wells = [(&words.none, Srgba::new(0.0, 0.0, 0.0, 0.0)), (&words.black, Srgba::rgb(0.0, 0.0, 0.0)), (&words.white, Srgba::rgb(1.0, 1.0, 1.0))];
+        let wells =
+            [(&words.none, Srgba::new(0.0, 0.0, 0.0, 0.0)), (&words.black, Srgba::rgb(0.0, 0.0, 0.0)), (&words.white, Srgba::rgb(1.0, 1.0, 1.0))];
         let mut hit = None;
         Row::new().fill_width().gap(Gap::Item).show(ui, |ui, _| {
             for (at, (label, color)) in wells.iter().enumerate() {

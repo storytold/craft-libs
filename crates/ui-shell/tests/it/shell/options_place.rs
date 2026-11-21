@@ -102,7 +102,10 @@ fn dragging_the_bar_grip_docks_or_floats_the_options_bar_and_escape_leaves_it() 
     window.hold(to_bottom);
     let bottom = window.drop_at(to_bottom);
     assert_eq!(window.place, OptionsBarPlace::new(true, false, Some(at)), "the bottom band docks the bar and docking keeps the corner");
-    assert!(bottom.options.expect("the bar shows in the bottom slot").top() >= bottom.body.bottom() - 0.5, "docked at the bottom, the bar is below the body");
+    assert!(
+        bottom.options.expect("the bar shows in the bottom slot").top() >= bottom.body.bottom() - 0.5,
+        "docked at the bottom, the bar is below the body"
+    );
 
     let to_top = pos2(bottom.body.center().x, bottom.body.top() + 2.0);
     window.hold(to_top);

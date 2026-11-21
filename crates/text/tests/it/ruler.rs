@@ -114,10 +114,7 @@ fn a_command_drag_moves_every_stop_and_keeps_their_spacing_within_the_column() {
 #[trial]
 fn dragging_is_none_off_the_ruler_after_escape_and_once_the_ruler_stops_showing() {
     let id = egui::Id::unique("ruler");
-    let values = Rc::new(RefCell::new(RulerValues {
-        stops: vec![TabStop::new(72.0, TabAlign::Left, TabLeader::None)],
-        ..Default::default()
-    }));
+    let values = Rc::new(RefCell::new(RulerValues { stops: vec![TabStop::new(72.0, TabAlign::Left, TabLeader::None)], ..Default::default() }));
     let (shown, visible) = (values.clone(), Rc::new(Cell::new(true)));
     let show = visible.clone();
     let mut fixture = Fixture::new(move |ui| {

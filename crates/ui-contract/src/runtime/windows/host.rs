@@ -154,7 +154,8 @@ impl WindowHost {
     /// The access tree of `viewport`'s latest settled pass, a host fact of the window as its screenshot facts are;
     /// `None` while AccessKit is off or before the viewport has run.
     pub fn access_tree(&self, viewport: ViewportId) -> Option<std::sync::Arc<crate::runtime::egui::access::AccessTree>> {
-        crate::runtime::egui::access::settled_tree(&self.ctx, viewport).map(|update| std::sync::Arc::new(crate::runtime::egui::access::AccessTree::new(update)))
+        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
+            .map(|update| std::sync::Arc::new(crate::runtime::egui::access::AccessTree::new(update)))
     }
 
     /// Queues the release of what `released` names, at `at` or where the injected pointer is.

@@ -374,11 +374,8 @@ fn plan_view(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState, 
         .map(|u| Line::new(u.item.clone(), u.line).keys(u.keys.clone()).note(unmatched_reason(say, u.reason)))
         .filter(&shown)
         .collect();
-    let mut unreadable: Vec<Line> = report
-        .unreadable
-        .iter()
-        .map(|u| Line::new(u.item.clone(), u.line).keys(u.keys.clone()).note(foreign_error(say, &u.reason)))
-        .collect();
+    let mut unreadable: Vec<Line> =
+        report.unreadable.iter().map(|u| Line::new(u.item.clone(), u.line).keys(u.keys.clone()).note(foreign_error(say, &u.reason))).collect();
     // PLAN: words.rs has no "Not read" title; the file's unread lines share the unreadable list until shortcuts-w4 adds one.
     unreadable.extend(report.not_read.iter().map(|n| Line::new(n.text.clone(), n.line)));
     unreadable.retain(&shown);

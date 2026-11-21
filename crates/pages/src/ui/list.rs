@@ -258,10 +258,11 @@ impl<'a> PageList<'a> {
                     .natural_height(true)
                     .show_items(ui, &source, &mut |&row, icx| {
                         let options = IconSpec::svg(IconId::new("settings"));
-                        let item = ListRow::new(rows[row].name.clone())
-                            .cells(icx.cells())
-                            .lead_text(number(row), widest.clone())
-                            .trailing_part(OPTIONS, TrailingFace::Icon(options), words.options.clone());
+                        let item = ListRow::new(rows[row].name.clone()).cells(icx.cells()).lead_text(number(row), widest.clone()).trailing_part(
+                            OPTIONS,
+                            TrailingFace::Icon(options),
+                            words.options.clone(),
+                        );
                         // A trailing part's name is used as given, so the row's name is filled in here.
                         let fill = |template: &Label| Label::from(WordTemplate::new(template.as_str()).fill(&[("row", &rows[row].name)]));
                         if rows[row].locked {

@@ -45,7 +45,15 @@ fn plain() -> Config {
 }
 
 fn harness_of(row: TransformRow, config: Config) -> Harness {
-    let host = Rc::new(RefCell::new(Host { row, linked: true, enabled: true, relative: config.relative, events: Vec::new(), sources: Vec::new(), submitted: Vec::new() }));
+    let host = Rc::new(RefCell::new(Host {
+        row,
+        linked: true,
+        enabled: true,
+        relative: config.relative,
+        events: Vec::new(),
+        sources: Vec::new(),
+        submitted: Vec::new(),
+    }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
         let mut host = shown.borrow_mut();

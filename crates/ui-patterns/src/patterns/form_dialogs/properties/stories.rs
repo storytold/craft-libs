@@ -35,7 +35,10 @@ fn resettable_tabs() -> Vec<PropertiesTab> {
     vec![
         PropertiesTab::new(
             "Character",
-            vec![PropertyRow::field(Param::number("size", "Size", 12.0, 1.0, 1)), PropertyRow::field(Param::new("title", "Title", ParamKind::text("")))],
+            vec![
+                PropertyRow::field(Param::number("size", "Size", 12.0, 1.0, 1)),
+                PropertyRow::field(Param::new("title", "Title", ParamKind::text(""))),
+            ],
         )
         .key("character")
         .resettable(),

@@ -130,10 +130,7 @@ impl<'a> Rows<'a> {
                 },
             )
             .into_iter();
-        nodes
-            .iter()
-            .map(|node| if takes_no_letter(node) { String::new() } else { labels.next().unwrap_or_default() })
-            .collect()
+        nodes.iter().map(|node| if takes_no_letter(node) { String::new() } else { labels.next().unwrap_or_default() }).collect()
     }
 
     /// The text of `nodes` and of every submenu below them, with shortcuts written for `platform`.

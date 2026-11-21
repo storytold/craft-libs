@@ -176,11 +176,15 @@ fn a_thumbnails_only_row_is_as_wide_as_its_thumbnails_and_named_by_its_label() {
     });
     fixture.room(Vec2::new(300.0, 200.0));
     fixture.settle();
-    let (row, other) = (fixture.by_label(NAMES[0]).expect("the row is named by its label").rect, fixture.by_label(NAMES[1]).expect("the plain row").rect);
+    let (row, other) =
+        (fixture.by_label(NAMES[0]).expect("the row is named by its label").rect, fixture.by_label(NAMES[1]).expect("the plain row").rect);
     let picture = only.get();
     assert!(row.contains_rect(picture), "the row holds its thumbnail: {row:?} {picture:?}");
     assert!(row.width() < other.width(), "the row is no wider than its thumbnails: {} vs {}", row.width(), other.width());
-    assert!(row.width() < 2.0 * picture.width() && row.height() < 2.0 * picture.height(), "the row is as large as its thumbnail: {row:?} {picture:?}");
+    assert!(
+        row.width() < 2.0 * picture.width() && row.height() < 2.0 * picture.height(),
+        "the row is as large as its thumbnail: {row:?} {picture:?}"
+    );
     let texts = fixture.texts();
     assert!(!texts.iter().any(|text| text.text == NAMES[0]), "the row paints no label");
     assert!(texts.iter().any(|text| text.text == NAMES[1]), "the plain row paints its label");

@@ -7,9 +7,9 @@
 //! change eases).
 
 use super::navigate::{FlickPan, NavigationOptions, pan};
+use super::readout::angle_row;
 use super::rotate::ViewTurn;
 use super::zoom_motion::{HoldZoom, ZoomDrag};
-use super::readout::angle_row;
 use super::{CanvasTool, CanvasWords, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use crate::primitives::Draw;
 use craft_behavior::PointerButton;

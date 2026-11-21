@@ -82,8 +82,7 @@ pub struct ZoomScheme {
 
 impl ZoomScheme {
     /// Photoshop's: 33 rungs, up to 12800 %, the shorter side 2 px at the least.
-    pub const PHOTOSHOP: ZoomScheme =
-        ZoomScheme { rungs: &PHOTOSHOP_RUNGS, max: 128.0, floor: ZoomFloor::ShorterSide(2.0), hundred: 1.0 };
+    pub const PHOTOSHOP: ZoomScheme = ZoomScheme { rungs: &PHOTOSHOP_RUNGS, max: 128.0, floor: ZoomFloor::ShorterSide(2.0), hundred: 1.0 };
 
     /// Illustrator's: 26 stops from 3.13 % to 64000 %.
     pub const ILLUSTRATOR: ZoomScheme = ZoomScheme {
@@ -204,15 +203,7 @@ pub fn fit_rect(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point:
     fit_rect_up_to(view, rect, size, pixels_per_point, scheme.max_device(), margin, scheme);
 }
 
-fn fit_rect_up_to(
-    view: &mut CanvasView,
-    rect: Rect,
-    size: Size,
-    pixels_per_point: f32,
-    max_device: f64,
-    margin: Vec2,
-    scheme: &ZoomScheme,
-) {
+fn fit_rect_up_to(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, max_device: f64, margin: Vec2, scheme: &ZoomScheme) {
     let rect = rect.abs();
     let (shown_w, shown_h, sin, cos) = shown_extent(view, rect.size());
     let (bw, bh) = (shown_w * cos + shown_h * sin, shown_w * sin + shown_h * cos);

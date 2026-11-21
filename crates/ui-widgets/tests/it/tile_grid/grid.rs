@@ -57,11 +57,8 @@ fn rule_group_heads_take_no_title_no_tab_stop_and_never_close() {
     let mut fixture = Fixture::new(move |ui| {
         let keys: Vec<usize> = (0..9).collect();
         let source = keyed(&keys, |key: &usize| *key);
-        let groups = [
-            TileGroup::new(100usize, 0, 3, "Alpha"),
-            TileGroup::new(101usize, 3, 3, "Beta").open(false),
-            TileGroup::new(102usize, 6, 3, "Gamma"),
-        ];
+        let groups =
+            [TileGroup::new(100usize, 0, 3, "Alpha"), TileGroup::new(101usize, 3, 3, "Beta").open(false), TileGroup::new(102usize, 6, 3, "Gamma")];
         let out = TileGrid::new("Library")
             .groups(&groups)
             .collapsible()
@@ -75,6 +72,9 @@ fn rule_group_heads_take_no_title_no_tab_stop_and_never_close() {
     assert!(fixture.by_label("Tile 4").is_some(), "a group declared closed is open under Rule");
     let head = fixture.by_label("Beta").expect("the heading keeps its name").rect;
     fixture.click_at(head.center()).settle();
-    let grouped = events.borrow().iter().any(|event| matches!(event, GridEvent::GroupOpen { .. } | GridEvent::GroupPicked { .. } | GridEvent::GroupMenu { .. }));
+    let grouped = events
+        .borrow()
+        .iter()
+        .any(|event| matches!(event, GridEvent::GroupOpen { .. } | GridEvent::GroupPicked { .. } | GridEvent::GroupMenu { .. }));
     assert!(!grouped, "a click on a rule reports no group event: {:?}", events.borrow());
 }

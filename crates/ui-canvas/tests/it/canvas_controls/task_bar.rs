@@ -323,7 +323,12 @@ fn a_bar_beside_a_point_flips_and_keeps_clear_of_it() {
     scene.borrow_mut().anchor = frame(DocVec::new(far, 0.0));
     fixture.settle();
     let flipped = seen(&scene);
-    assert!(flipped.rect.right() <= flipped.bounds.left() + SLACK, "the bar flipped to the left of the anchor {:?}: {:?}", flipped.bounds, flipped.rect);
+    assert!(
+        flipped.rect.right() <= flipped.bounds.left() + SLACK,
+        "the bar flipped to the left of the anchor {:?}: {:?}",
+        flipped.bounds,
+        flipped.rect
+    );
 
     // A point a little to the bar's right: a bar moved by 60 points would cover it.
     let at = egui::pos2(flipped.rect.max.x + 20.0, flipped.rect.center().y);

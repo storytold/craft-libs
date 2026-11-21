@@ -1,7 +1,7 @@
 //! The seven sections of Save PDF and the rows they share.
 
-use super::{PdfExportMode, PdfSection, PresetDraft};
 use super::words::PdfExportWords;
+use super::{PdfExportMode, PdfSection, PresetDraft};
 use crate::buttons::Button;
 use crate::choice::{Checkbox, Radio, RadioGroup};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
@@ -219,13 +219,14 @@ impl Sections<'_> {
             // With the document's bleed the fields show it.
             let use_document = bleed.use_document;
             let shown = if use_document { document } else { bleed.values() };
-            let sides = LinkedFields::<4>::new(words.bleeds.clone(), Bind::given(shown.map(|points| Mixed::Same(Some(points)))), Bind::bound(&mut *linked))
-                .mode(LinkMode::Equal)
-                .captions([&words.top, &words.bottom, &words.left, &words.right].map(Clone::clone))
-                .range(0.0..=MAX_LENGTH)
-                .lengths(LengthUnits::new(UnitKind::Points, shown_unit, UnitKind::POINTS_PER_INCH))
-                .enabled(!use_document)
-                .show(ui);
+            let sides =
+                LinkedFields::<4>::new(words.bleeds.clone(), Bind::given(shown.map(|points| Mixed::Same(Some(points)))), Bind::bound(&mut *linked))
+                    .mode(LinkMode::Equal)
+                    .captions([&words.top, &words.bottom, &words.left, &words.right].map(Clone::clone))
+                    .range(0.0..=MAX_LENGTH)
+                    .lengths(LengthUnits::new(UnitKind::Points, shown_unit, UnitKind::POINTS_PER_INCH))
+                    .enabled(!use_document)
+                    .show(ui);
             if let Some([Mixed::Same(Some(top)), Mixed::Same(Some(bottom)), Mixed::Same(Some(left)), Mixed::Same(Some(right))]) =
                 sides.edit.value().copied()
                 && !use_document
@@ -505,7 +506,12 @@ fn flag(ui: &mut Ui, id: &'static str, label: &Label, value: &mut bool, enabled:
 
 /// Every choice of `T` with its words.
 fn entries<T: Choice + Copy>(kind: &str, words: &PdfExportWords) -> Vec<(T, Label)> {
-    T::ALL.iter().zip(T::IDS).zip(T::LABELS).map(|((choice, choice_id), choice_label)| (*choice, words.choice(kind, choice_id, choice_label))).collect()
+    T::ALL
+        .iter()
+        .zip(T::IDS)
+        .zip(T::LABELS)
+        .map(|((choice, choice_id), choice_label)| (*choice, words.choice(kind, choice_id, choice_label)))
+        .collect()
 }
 
 /// A list of the choices of `T`, worded through `words`.

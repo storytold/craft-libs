@@ -183,7 +183,11 @@ fn a_tool_that_claims_the_alt_tap_gets_it() {
     let (mut canvas, ..) = session(false);
     canvas.fixture().settle();
     let tap = |canvas: &mut ToolFixture<Taker>| {
-        canvas.fixture().frame(vec![egui::Event::ModifiersChanged(Modifiers::ALT)]).frame(vec![egui::Event::ModifiersChanged(Modifiers::NONE)]).settle();
+        canvas
+            .fixture()
+            .frame(vec![egui::Event::ModifiersChanged(Modifiers::ALT)])
+            .frame(vec![egui::Event::ModifiersChanged(Modifiers::NONE)])
+            .settle();
     };
     tap(&mut canvas);
     assert!(canvas.tool().seen.is_empty(), "a tool that does not claim the tap gets none: {:?}", canvas.tool().seen);

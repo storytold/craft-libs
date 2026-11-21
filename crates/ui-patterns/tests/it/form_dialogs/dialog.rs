@@ -885,7 +885,12 @@ fn a_previewing_dialog_takes_preview_as_a_field() {
     let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), |fields| blur(fields).previews(true)));
     fixture.idle(4);
     let preview = |host: &Rc<RefCell<DialogHost>>| {
-        host.borrow().open_dialogs().into_iter().find(|dialog| dialog.id == id).and_then(|dialog| dialog.fields).map(|fields| fields["preview"].clone())
+        host.borrow()
+            .open_dialogs()
+            .into_iter()
+            .find(|dialog| dialog.id == id)
+            .and_then(|dialog| dialog.fields)
+            .map(|fields| fields["preview"].clone())
     };
     assert_eq!(preview(&host), Some(json!(true)), "the box lists as on");
     assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "preview", json!(false)), Ok(()));
@@ -973,14 +978,17 @@ fn a_preset_row_fills_the_values_and_names_new_presets() {
     let ctx = fixture.ctx().clone();
     let id = host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), blur));
     let rows = vec![PresetRow::item("soft".to_owned(), "Soft", 0), PresetRow::item("hard".to_owned(), "Hard", 0)];
-    let values = vec![
-        ("soft".to_owned(), DialogFields::from_pairs([("radius", 2.0)])),
-        ("hard".to_owned(), DialogFields::from_pairs([("radius", 60.0)])),
-    ];
+    let values =
+        vec![("soft".to_owned(), DialogFields::from_pairs([("radius", 2.0)])), ("hard".to_owned(), DialogFields::from_pairs([("radius", 60.0)]))];
     on_dialog(&host, |dialog| dialog.set_presets(rows, values, vec!["soft".to_owned()]));
     fixture.idle(6);
     let preset = |host: &Rc<RefCell<DialogHost>>| {
-        host.borrow().open_dialogs().into_iter().find(|dialog| dialog.id == id).and_then(|dialog| dialog.fields).map(|fields| fields["preset"].clone())
+        host.borrow()
+            .open_dialogs()
+            .into_iter()
+            .find(|dialog| dialog.id == id)
+            .and_then(|dialog| dialog.fields)
+            .map(|fields| fields["preset"].clone())
     };
     let picker = fixture.by_label("Preset").expect("the dialog has a presets row");
     fixture.click(&picker).idle(4);

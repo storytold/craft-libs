@@ -295,11 +295,8 @@ impl<'a> PropertiesDialog<'a> {
         let footer = ResetFooter::new(ui, None, !read_only);
         // The footer is a region of its own: the body tells it whether the shown tab resets, and it tells back a press.
         let (resettable, pressed) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
-        let mut dialog = FormDialog::new(title.clone(), values.reborrowed())
-            .collection_body(true)
-            .ok_enabled(ok_enabled)
-            .accept_stays_open(hold)
-            .answers(answers);
+        let mut dialog =
+            FormDialog::new(title.clone(), values.reborrowed()).collection_body(true).ok_enabled(ok_enabled).accept_stays_open(hold).answers(answers);
         if let Some(reason) = ok_reason {
             dialog = dialog.ok_reason(reason);
         }
@@ -346,7 +343,8 @@ impl<'a> PropertiesDialog<'a> {
             let title_of = |key: &usize| tabs.get(*key).map_or(Label::Empty, |tab| tab.title.clone());
             match (tabs.len() > 1, tab_layout) {
                 (true, TabLayout::List) => {
-                    let picked = SectionList::new(title.clone(), &titles, current).show(ui, |key| ListRow::new(title_of(key)), |ui| show_rows(ui, current));
+                    let picked =
+                        SectionList::new(title.clone(), &titles, current).show(ui, |key| ListRow::new(title_of(key)), |ui| show_rows(ui, current));
                     current = picked.map_or(current, |key| key.min(last));
                 }
                 (true, TabLayout::Strip) => {
@@ -382,9 +380,7 @@ impl<'a> PropertiesDialog<'a> {
             write_bind(bind, shown_tab.get());
         }
         let tab_reset = pressed.get();
-        if tab_reset
-            && let Some(tab) = tabs.get(shown_tab.get())
-        {
+        if tab_reset && let Some(tab) = tabs.get(shown_tab.get()) {
             let mut fields = read_bind(&mut values).unwrap_or_default();
             Self::reset_tab(tab, shown_tab.get(), &mut fields);
             write_bind(&mut values, fields);
@@ -570,11 +566,8 @@ impl StackDialog for HostedPropertiesDialog {
         let measuring = crate::runtime::measure::active(ui.ctx());
         let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
         let finish = self.held.is_accepted();
-        let mut dialog = (self.build)(Bind::bound(&mut self.fields))
-            .tab(Bind::bound(&mut self.tab))
-            .answers(answers)
-            .hold_ok(self.hold)
-            .finish_held(finish);
+        let mut dialog =
+            (self.build)(Bind::bound(&mut self.fields)).tab(Bind::bound(&mut self.tab)).answers(answers).hold_ok(self.hold).finish_held(finish);
         if self.previews {
             dialog = dialog.preview(Bind::bound(&mut self.preview_on));
         }

@@ -70,12 +70,7 @@ fn rig(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32) -> 
 }
 
 /// A rig whose grid `configure` sets the props of.
-fn rig_with(
-    hidden_column: Option<u32>,
-    selection: CellSelection<u32>,
-    zoom: f32,
-    configure: impl Fn(CellGrid<'_>) -> CellGrid<'_> + 'static,
-) -> Rig {
+fn rig_with(hidden_column: Option<u32>, selection: CellSelection<u32>, zoom: f32, configure: impl Fn(CellGrid<'_>) -> CellGrid<'_> + 'static) -> Rig {
     let state = Rc::new(RefCell::new(GridState::new(selection, zoom)));
     let edits = Rc::new(RefCell::new(Vec::new()));
     let committed = Rc::new(RefCell::new(Vec::new()));

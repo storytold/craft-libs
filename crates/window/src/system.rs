@@ -74,7 +74,6 @@ impl WindowSystem for NoWindows {
         false
     }
 
-
     fn command_held(&self) -> Option<bool> {
         None
     }

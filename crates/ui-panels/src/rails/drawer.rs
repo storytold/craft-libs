@@ -291,7 +291,10 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
         let layout = env.view().keyboard_layout();
         let chord_of = |command: &ResolvedCommand| command.chord.as_ref().map(|chord| chord.display_for(os, layout));
         let key_of = |id: &T| {
-            groups.iter().enumerate().find_map(|(group, held)| held.tools.iter().position(|tool| tool.id == *id).map(|tool| DrawerKey::Tool { group, tool }))
+            groups
+                .iter()
+                .enumerate()
+                .find_map(|(group, held)| held.tools.iter().position(|tool| tool.id == *id).map(|tool| DrawerKey::Tool { group, tool }))
         };
 
         let mut popover = Popover::new(words.drawer_title.clone(), Bind::bound(&mut open));

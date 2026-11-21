@@ -92,7 +92,8 @@ fn rows_story(ui: &mut Ui, data: &mut StoryData, params: &[Param], setup: impl F
 fn param_rows_resettable(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = [
         Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, Default::default())).resettable(),
-        Param::new("method", "Method", ParamKind::choice(vec![("spin".to_owned(), "Spin".into()), ("zoom".to_owned(), "Zoom".into())], None)).resettable(),
+        Param::new("method", "Method", ParamKind::choice(vec![("spin".to_owned(), "Spin".into()), ("zoom".to_owned(), "Zoom".into())], None))
+            .resettable(),
         Param::new("smooth", "Smooth", ParamKind::bool(false)).resettable(),
     ];
     rows_story(ui, data, &params, |fields| {
@@ -132,10 +133,7 @@ fn param_rows_closed_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// Rows with a help button after the control.
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_with_help_link(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let params = [
-        Param::number("width", "Width", 640.0, 1.0, 0).help_link("help/width"),
-        Param::new("smooth", "Smooth", ParamKind::bool(false)),
-    ];
+    let params = [Param::number("width", "Width", 640.0, 1.0, 0).help_link("help/width"), Param::new("smooth", "Smooth", ParamKind::bool(false))];
     rows_story(ui, data, &params, |_| {})
 }
 

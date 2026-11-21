@@ -593,9 +593,8 @@ fn patch_mesh(center: Pos2, radius: f32, level: f32, kind: DiscRadius) -> (Mesh,
         for ring in 0..PATCH_RINGS {
             let (hue, radial) = patch_at(sector as f32 * SECTOR_DEGREES, (ring as f32 + 0.5) / PATCH_RINGS as f32);
             let color = disc_color(kind, hue, radial, level);
-            let corners = [(-1.0, ring), (1.0, ring), (1.0, ring + 1), (-1.0, ring + 1)].map(|(side, edge)| {
-                ColorDisc::marker_pos(center, radius, hue + side * SECTOR_DEGREES / 2.0, edge as f32 / PATCH_RINGS as f32)
-            });
+            let corners = [(-1.0, ring), (1.0, ring), (1.0, ring + 1), (-1.0, ring + 1)]
+                .map(|(side, edge)| ColorDisc::marker_pos(center, radius, hue + side * SECTOR_DEGREES / 2.0, edge as f32 / PATCH_RINGS as f32));
             let first = mesh.vertices.len() as u32;
             for corner in corners {
                 mesh.colored_vertex(corner, color);

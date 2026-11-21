@@ -4,8 +4,8 @@ use super::app_shell::ShellRegionOutput;
 use super::canvas_shell::slots as keys;
 use super::words::ShellWords;
 use crate::contract::{
-    Access, Bind, Common, Component, Container, ContainerProps, Cx, DragPreview, DropMark, DropOperation, DropTarget, MeasureCx, Mount, Name, Overlay,
-    Pad, PaintUi, Pointer as _, Props as _, Role, Sizing, Styled as _, WordSetCx as _,
+    Access, Bind, Common, Component, Container, ContainerProps, Cx, DragPreview, DropMark, DropOperation, DropTarget, MeasureCx, Mount, Name,
+    Overlay, Pad, PaintUi, Pointer as _, Props as _, Role, Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Label, ShellEntry};
@@ -99,7 +99,10 @@ impl DropTarget<OptionsBarDrag> for PlaceTarget {
             corner.x.clamp(body.left(), (body.right() - drag.size.x).max(body.left())),
             corner.y.clamp(body.top(), (body.bottom() - drag.size.y).max(body.top())),
         );
-        Some(Landing { place: OptionsBarPlace::new(held.bottom, true, Some([min.x - body.left(), min.y - body.top()])), rect: Rect::from_min_size(min, drag.size) })
+        Some(Landing {
+            place: OptionsBarPlace::new(held.bottom, true, Some([min.x - body.left(), min.y - body.top()])),
+            rect: Rect::from_min_size(min, drag.size),
+        })
     }
 
     fn mark(&self, drop: &Landing) -> DropMark {
