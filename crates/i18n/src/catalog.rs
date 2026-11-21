@@ -4,6 +4,8 @@
 
 use std::collections::HashSet;
 
+use crate::message::Template;
+
 /// A row that passed, with its columns unescaped.
 pub(crate) struct Entry {
     pub context: String,
@@ -52,6 +54,10 @@ pub(crate) fn parse_row(text: &str, forms: usize) -> Result<Entry, String> {
     match row.context.as_str() {
         "@id" => {}
         "@plural" => check_plural(&row.source, &row.translation, forms)?,
+        "@msgplural" => {
+            check_plural(&row.source, &row.translation, forms)?;
+            row.source.split('|').try_for_each(check_matchable)?;
+        }
         c if c.starts_with('@') && !RESERVED.contains(&c) => {
             return Err(format!("unknown reserved context {c:?}"));
         }
@@ -62,9 +68,18 @@ pub(crate) fn parse_row(text: &str, forms: usize) -> Result<Entry, String> {
             if row.source.ends_with('…') != row.translation.ends_with('…') {
                 return Err("trailing … differs from the source text".into());
             }
+            if row.context == "@msg" {
+                check_matchable(&row.source)?;
+            }
         }
     }
     Ok(row)
+}
+
+/// A message is matched against its English text, so a template with no literal text or two
+/// placeholders in a row (where one ends and the next begins is unknowable) could never be used.
+fn check_matchable(english: &str) -> Result<(), String> {
+    Template::parse(english, Vec::new(), false).map(|_| ()).ok_or_else(|| "unmatchable message template".to_string())
 }
 
 fn check_plural(source: &str, translation: &str, forms: usize) -> Result<(), String> {
