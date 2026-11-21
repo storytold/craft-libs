@@ -36,3 +36,26 @@ fn separators_head_photoshops_groups_and_never_lead() {
     );
     assert!(separators(&[BlendKeyEntry::unlettered("darkerColor"), lettered("multiply", S::Multiply)]).is_empty());
 }
+
+#[trial]
+fn a_marked_entry_heads_a_group_with_or_without_a_letter() {
+    use BlendShortcut as S;
+    let lettered = |key, shortcut| BlendKeyEntry::new(key, shortcut);
+
+    // Apply Image's Blending: Add and Subtract (no letters) are a group of their own between Hard Mix and Difference.
+    assert_eq!(
+        separators(&[
+            lettered("hardMix", S::HardMix),
+            BlendKeyEntry::unlettered("add").heads_group(),
+            BlendKeyEntry::unlettered("subtract"),
+            lettered("difference", S::Difference),
+        ]),
+        vec![1, 4]
+    );
+    // A lettered mode that is not a head of the layer menu can be marked too.
+    assert_eq!(separators(&[lettered("normal", S::Normal), lettered("multiply", S::Multiply).heads_group()]), vec![1]);
+    // Marking a mode that already heads a group gives one separator, not two.
+    assert_eq!(separators(&[lettered("normal", S::Normal), lettered("darken", S::Darken).heads_group()]), vec![1]);
+    // A marked first entry still has no separator above it.
+    assert!(separators(&[BlendKeyEntry::unlettered("add").heads_group(), BlendKeyEntry::unlettered("subtract")]).is_empty());
+}
