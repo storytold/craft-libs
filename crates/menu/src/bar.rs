@@ -81,7 +81,8 @@ pub struct MenuBarOutput {
 /// The English-label hook a bar takes by default: none is set, so this type only names the slot.
 pub type EnglishFn = fn(Labeled<'_>) -> Option<String>;
 
-/// The bar for one frame: `MenuBarUi::new(&bar).show(ui)`. Draw it at the top of the window, in a top panel.
+/// The bar for one frame: `MenuBarUi::new(&bar).show(ui)`. Draw it at the top of the window, inside a `Stack` (a top
+/// panel's body) or the title bar's row: there it folds the titles that don't fit its room into "…".
 /// The commands chosen come back through the command queue, not from `show`.
 ///
 /// The bar is a memoized view: while its model, options, place and environment are those of its last run and nothing

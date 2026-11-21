@@ -122,7 +122,7 @@ impl Lazy {
             pixels_per_point: ctx.pixels_per_point(),
             atlas: ctx.fonts(|fonts| fonts.atlas_generation()),
             env: Env::of(ui).key,
-            fits: Env::of(ui).row_unit(),
+            fits: Env::of(ui).view_fits(),
         };
         if real && memo {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");

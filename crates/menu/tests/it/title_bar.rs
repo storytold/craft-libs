@@ -1,12 +1,15 @@
 //! The in-window menu bar in an app's title bar: every title shows while the bar has room for them, the document title
-//! takes the rest of the bar, and only a bar too narrow for every title folds the last into "…".
+//! takes the rest of the bar, and only a bar too narrow for every title folds the last into "…". In a `Stack`
+//! narrower than its titles the bar folds the same way and draws nothing past the stack's edge.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use craft_host::target::{Os, WindowChrome};
 use craft_menu::{CommandRef, MenuBar, MenuBarUi, Row, Target, from_items};
-use craft_ui::contract::{Role, Show as _, Tracked};
+use craft_ui::contract::{Role, Show as _, ShowContainer as _, Tracked};
 use craft_ui::display::Picture;
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
 use craft_ui::testing::{Fixture, trial};
@@ -102,4 +105,29 @@ fn a_narrow_title_bar_folds_the_last_menus_into_more() {
         fixture.click(&more).settle();
         assert!(fixture.by_label("Help").is_some(), "{pixels_per_point}x: Help is a row of the \"…\" menu");
     }
+}
+
+#[trial]
+fn a_bar_in_a_stack_narrower_than_its_titles_folds_them_and_draws_nothing_past_its_edge() {
+    let bar = Rc::new(model());
+    let stack = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let seen = Rc::clone(&stack);
+    let mut fixture = Fixture::new(move |ui| {
+        let bar = Rc::clone(&bar);
+        let shown = Stack::new().show(ui, |ui, _| {
+            MenuBarUi::new(&bar).target(Target::Windows).show(ui);
+        });
+        seen.set(shown.output.rect);
+    });
+    fixture.os(Os::Windows).room(vec2(240.0, 600.0)).settle();
+    let shown = titles(&fixture);
+    assert_eq!(shown.last().map(String::as_str), Some("…"), "{shown:?}");
+    assert!(!shown.iter().any(|title| title == "Help"), "Help is not a title: {shown:?}");
+    let edge = stack.get().right();
+    for run in fixture.texts().iter().filter(|run| MENUS.contains(&run.text.as_str()) || run.text == "…") {
+        assert!(run.rect.right() <= edge + 0.5, "{:?} at {:?} reaches past the stack's edge {edge}", run.text, run.rect);
+    }
+    let more = fixture.by_label("…").expect("the \"…\" title");
+    fixture.click(&more).settle();
+    assert!(fixture.by_label("Help").is_some(), "Help is a row of the \"…\" menu");
 }

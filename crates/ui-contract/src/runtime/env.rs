@@ -409,19 +409,21 @@ impl Scoped {
         self.offered = None;
     }
 
-    /// Starts the layout room of a memoized view's content (`start_room`). A view in a shrinking `Row` is one of the
-    /// units the row narrows: its content's leaves fit the room the view is given (`Shrink::Fit`).
+    /// Starts the layout room of a memoized view's content (`start_room`). Where a leaf shown here would fit its room
+    /// (`view_fits`), the leaves of the view's content fit the room the view is given (`Shrink::Fit`).
     pub(crate) fn start_view_room(&mut self) {
-        let fits = self.row_unit();
+        let fits = self.view_fits();
         self.start_room();
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
     }
 
-    /// Whether a child shown in flow here is a unit of the shrinking `Row` around it.
-    pub(crate) const fn row_unit(&self) -> bool {
-        matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)))
+    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body,
+    /// whose leaves show at most its room, and as one of the units a shrinking `Row` narrows. In a `Grid` cell, a
+    /// wrapping `Row` or a `Ui` with no body around it a leaf keeps its measured width, and so does the view's content.
+    pub(crate) const fn view_fits(&self) -> bool {
+        matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_) | Shrink::Fit))
     }
 
     /// The key of everything a memoized view shown in this scope inherits beyond `key` (the style inputs, which its

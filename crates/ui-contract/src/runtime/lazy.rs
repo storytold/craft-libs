@@ -182,8 +182,8 @@ pub(crate) struct Place {
     /// The scope's environment (`Env::key`): its tokens (theme, density), scale, direction, language and whether the
     /// window is active.
     pub(crate) env: EnvKey,
-    /// Whether the view is a unit of the shrinking `Row` around it, so the leaves of its content fit the view's room
-    /// (`Scoped::start_view_room`).
+    /// Whether the leaves of the view's content fit the view's room, as in a `Stack` or a shrinking `Row`
+    /// (`Scoped::view_fits`).
     pub(crate) fits: bool,
 }
 
