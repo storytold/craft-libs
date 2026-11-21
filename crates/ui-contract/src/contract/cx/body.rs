@@ -128,6 +128,16 @@ impl<'a> BodyCx<'a> {
         label::flow_leaf(ui, (self.id.with(key), self.resolved.id), (self.resolved.enabled, self.resolved.size), label, side, child, None)
     }
 
+    /// Shows `child` at `rect` as the container's own content, as [`PaintUi::inner`](crate::contract::PaintUi::inner)
+    /// shows a painted control: the child's node folds into the container's, which stands for its focus stop, carries
+    /// its value text and its text selection when the container's `access` sets none, and holds its sub-nodes. `ui` is
+    /// the body's `Ui`; `key` makes the child's id.
+    pub fn inner<C: Show>(&mut self, ui: &mut Ui, key: impl Hash + Debug, rect: Rect, child: C) -> C::Output {
+        let id = self.id.with(key);
+        crate::runtime::access::fold::request(ui.ctx(), id, self.resolved.id);
+        crate::contract::Props::id(child, id).show_at(ui, rect)
+    }
+
     /// `labelled`, with `content` shown inside the label after its text (a sample of what the option picks). The
     /// content belongs to the label: for a child that draws only its mark (a radio button, a check box) a press on it
     /// is the child's, as a press on the label is, so the content takes none itself. With a `LabelKind::Hidden` label

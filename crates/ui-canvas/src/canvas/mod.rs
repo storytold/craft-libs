@@ -101,8 +101,8 @@ pub use navigator::NavigatorStyle;
 pub mod navigator_panel;
 
 use crate::contract::{
-    Bind, Common, Component, Container, ContainerProps, Cx, EditorHandle, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, Sizing,
+    Access, Bind, Common, Component, Container, ContainerProps, Cx, EditorHandle, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
+    Props as _, Role, Sizing,
 };
 use crate::primitives::{EditorPurpose, ImeStamp};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
@@ -217,6 +217,11 @@ pub struct Canvas<'a> {
     /// does not apply. The body reports its editor state through [`ToolPass::editor`].
     #[prop]
     editor: Option<EditorPurpose>,
+    /// The role the canvas reports in place of a canvas: [`Role::DOCUMENT`] for a body that shows a document's pages
+    /// and describes their text as the canvas's own content (a page view), so the node that holds the key focus is
+    /// the document, with its text and the caret.
+    #[prop]
+    role: Option<Role>,
     /// The editor part's inputs of this pass, taken once in `update`: `tool_pass` is built from a shared `Cx`.
     editor_input: Arc<[EditorInput]>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
@@ -308,6 +313,7 @@ impl<'a> Canvas<'a> {
             ruler_output: None,
             keys_to_body: false,
             editor: None,
+            role: None,
             editor_input: Arc::from([]),
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
@@ -802,6 +808,7 @@ impl Outcome for CanvasOutput {
 
 impl Component for Canvas<'_> {
     const ROLE: Role = Role::CANVAS;
+    const ALT_ROLES: &'static [Role] = &[Role::DOCUMENT];
     const KEYS: KeyUse = KeyUse::CANVAS.with_moves();
     type Style = CanvasStyle;
     type Output = CanvasOutput;
@@ -832,6 +839,12 @@ impl Component for Canvas<'_> {
 
     fn sense(&self) -> Sense {
         Sense::FOCUS | Sense::TAKE_FOCUS | Sense::WHEEL
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if let Some(role) = self.role {
+            access.role(role);
+        }
     }
 
     fn wheel_notch(&self) -> WheelNotch {
