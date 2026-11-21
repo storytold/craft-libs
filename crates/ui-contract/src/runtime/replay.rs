@@ -93,6 +93,15 @@ impl PartialEq for Entry {
     }
 }
 
+impl Entry {
+    /// The entry at the place `shift` names. A shift that leaves every record as it is (`RecordShift::is_none`, a
+    /// pinned record's) leaves the entry too, as it leaves egui's records: a clip a layer the record shows sets lies
+    /// outside the clip around the record, which `RecordShift::clip` would cut it to.
+    fn at(&self, shift: &RecordShift) -> Entry {
+        if shift.is_none() { self.clone() } else { self.0.shifted(shift) }
+    }
+}
+
 impl fmt::Debug for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.describe(f)
@@ -350,7 +359,7 @@ impl Record {
         if let Some(diff) = self.focus.first_difference(&run.focus) {
             found.push(format!("focus: {diff}"));
         }
-        let shifted: Vec<Entry> = self.journal.iter().map(|entry| entry.0.shifted(shift)).collect();
+        let shifted: Vec<Entry> = self.journal.iter().map(|entry| entry.at(shift)).collect();
         let (left, right) = (&shifted, &run.journal);
         if let Some(index) = left
             .iter()
@@ -416,7 +425,7 @@ pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
     let noting = recording(ctx);
     if noting {
         pass_state::with::<Recorder, _>(ctx, |recorder| {
-            recorder.journal.extend(record.journal.iter().map(|entry| if shift.is_none() { entry.clone() } else { entry.0.shifted(shift) }));
+            recorder.journal.extend(record.journal.iter().map(|entry| entry.at(shift)));
             recorder.replaying = true;
         });
     }
