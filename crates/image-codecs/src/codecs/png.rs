@@ -2331,9 +2331,14 @@ mod streamed_tests {
                 xmp: Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into()),
                 ..Default::default()
             };
-            // Repeated nonconstant rows make the saved previous row observable across pushes.
-            let row = noise(w as usize * ch * bytes, 7);
-            let img = Image::from_raw(w, h, layout, sample, row.repeat(h as usize))
+            // Repeated nonconstant row runs keep carry observable and make row order matter.
+            let stride = w as usize * ch * bytes;
+            let row = noise(stride, 7);
+            let mut pixels = row.repeat(h as usize);
+            for row in pixels.chunks_exact_mut(stride).skip(h as usize / 2) {
+                row[0] ^= 0x5a;
+            }
+            let img = Image::from_raw(w, h, layout, sample, pixels)
                 .unwrap()
                 .with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect()))
                 .with_meta(meta);
