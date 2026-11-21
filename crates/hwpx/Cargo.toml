@@ -14,4 +14,6 @@ workspace = true
 craft-wordmodel = { workspace = true }
 craft-xml = { workspace = true }
 craft-zip = { workspace = true }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+log = "0.4"
 thiserror = { workspace = true }

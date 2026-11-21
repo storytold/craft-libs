@@ -10,6 +10,7 @@
 mod error;
 mod header;
 mod package;
+mod read;
 mod units;
 mod xml;
 
@@ -19,4 +20,11 @@ pub use error::HwpxError;
 /// which holds HWPX section parts.
 pub fn sniff(bytes: &[u8]) -> bool {
     package::is_hwpx(bytes)
+}
+
+/// Read an HWPX document into the model. A damaged or hostile file gives an error, never a
+/// panic.
+pub fn read(bytes: &[u8]) -> Result<craft_wordmodel::Document, HwpxError> {
+    let pkg = package::Package::open(bytes)?;
+    read::read(&pkg)
 }
