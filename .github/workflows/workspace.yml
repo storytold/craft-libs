@@ -121,7 +121,8 @@ jobs:
         # tests run (stubicc, h264_h264enc_bench); clippy in the lint leg covers the rest. The default-feature compile is the lint leg's
         # first clippy run; the last command runs the crates whose tests check behaviour with a
         # feature off, which an all-features build cannot reach.
-        # Every build is the whole workspace's, as on main; the filter narrows only the run. The
+        # A partial selection of exact package terms can skip both examples when neither is selected.
+        # The primary build is the whole workspace's, as on main; its filter narrows only the run. The
         # doctests run for the whole workspace: `cargo test -p <selected>` would resolve features
         # over the selected crates only and rebuild the dependencies whose features differ.
         if [ "$CRAFT_TESTS" = none ]; then
@@ -129,7 +130,12 @@ jobs:
           exit 0
         fi
         cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+        package_filter='^package\(=[a-zA-Z0-9_-]+\)( \| package\(=[a-zA-Z0-9_-]+\))*$'
+        if [[ "$CRAFT_TESTS" != some || ! "$CRAFT_TEST_FILTER" =~ $package_filter ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-aep)"* ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-video)"* ]]; then
+          cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+        fi
         # The replay audit (craft-libs#2336), on Linux: the selected UI crates' tests again, from the same build, with every
         # memoized view that would replay also run for real and compared with its replay.
         if [ "$RUNNER_OS" = Linux ]; then
@@ -173,7 +179,12 @@ jobs:
         fi
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
         cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+        package_filter='^package\(=[a-zA-Z0-9_-]+\)( \| package\(=[a-zA-Z0-9_-]+\))*$'
+        if [[ "$CRAFT_TESTS" != some || ! "$CRAFT_TEST_FILTER" =~ $package_filter ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-aep)"* ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-video)"* ]]; then
+          cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+        fi
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
