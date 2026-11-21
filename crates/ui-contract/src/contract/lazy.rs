@@ -317,7 +317,7 @@ fn place_view(ui: &mut Ui, rect: Rect) -> Rect {
 /// view taller than that reaches, and a view no run showed yet, stays at the row's top. The room keeps its size, so a
 /// kept run replays moved with it.
 fn on_row_line(ui: &Ui, id: egui::Id, room: Rect) -> Rect {
-    let Some(centre) = Env::of(ui).row_line.and_then(|line| line.centre) else {
+    let Some(centre) = crate::layout::row_line_of(ui, &Env::of(ui)).and_then(|line| line.centre) else {
         return room;
     };
     let Some(size) = lazy::last_extent(ui.ctx(), id) else {

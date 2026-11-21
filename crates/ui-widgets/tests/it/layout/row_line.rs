@@ -1,7 +1,8 @@
 //! The row line: a child of an unwrapped row that is one line sits with its centre on the row's line; a child of more
 //! than one line (a column, a field with a help line below) sits at the row's top. A control with its label after it
 //! or above it, and a field labelled above, sit on the line by their control, as a bare control does, in a row and in
-//! a grid's cell.
+//! a grid's cell. Components an app shows in an egui container inside a row or grid are laid out by that container:
+//! they take neither the row's line nor the grid's cells.
 
 use craft_behavior::ColumnWidth;
 use craft_theme::ControlSize;
@@ -164,4 +165,70 @@ fn a_labelled_check_box_sits_with_its_box_on_a_buttons_line_in_a_row_and_a_grid_
         }
         assert!((button.center().y - check.center().y).abs() <= ROUNDING, "{at}: the box {check:?} sits on the button's line {button:?}");
     }
+}
+
+/// Check boxes an app lays out in an `egui::Grid` inside a row (a dialog's custom row of two columns of check boxes)
+/// are no children of the row: the grid's rows are as high as the same grid's outside a row, not as high as the row's
+/// line, and what follows the row starts under the grid.
+#[trial]
+fn check_boxes_in_an_egui_grid_in_a_row_keep_their_own_rows() {
+    const ROWS: usize = 3;
+    let shown = |in_row: bool| {
+        let seen = Rc::new(Cell::new(([Rect::NOTHING; ROWS], Rect::NOTHING)));
+        let out = Rc::clone(&seen);
+        let _fixture = settled(move |ui| {
+            let room = Rect::from_min_size(ui.available_rect_before_wrap().min, egui::vec2(300.0, 600.0));
+            let out = Rc::clone(&out);
+            Stack::new().fill().show_at(ui, room, move |ui, _| {
+                let mut boxes = [Rect::NOTHING; ROWS];
+                let mut grid = |ui: &mut egui::Ui| {
+                    egui::Grid::new("boxes").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
+                        for (row, rect) in boxes.iter_mut().enumerate() {
+                            *rect = Checkbox::new(Bind::given(true)).label(format!("Left {row}")).show(ui).response.rect;
+                            Checkbox::new(Bind::given(false)).label(format!("Right {row}")).show(ui);
+                            ui.end_row();
+                        }
+                    });
+                };
+                if in_row {
+                    Row::new().fill().show(ui, |ui, _| grid(ui));
+                } else {
+                    Stack::new().fill().show(ui, |ui, _| grid(ui));
+                }
+                let after = Button::new("After").show(ui).rect;
+                out.set((boxes, after));
+            });
+        });
+        seen.get()
+    };
+    let (alone, _) = shown(false);
+    let (boxes, after) = shown(true);
+    let pitch = |boxes: &[Rect; ROWS]| boxes[1].top() - boxes[0].top();
+    assert!((pitch(&boxes) - pitch(&alone)).abs() <= ROUNDING, "the grid rows in a row {boxes:?} are as high as outside one {alone:?}");
+    assert!(after.top() >= boxes[ROWS - 1].bottom() - ROUNDING, "the button {after:?} is under the grid {boxes:?}");
+}
+
+/// Check boxes in a `ui.horizontal` an app shows in a `Grid` body are laid out by it: side by side on one line, taking
+/// none of the grid's cells.
+#[trial]
+fn check_boxes_in_an_egui_container_in_a_grid_take_no_cells() {
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let out = Rc::clone(&seen);
+    let _fixture = settled(move |ui| {
+        let room = Rect::from_min_size(ui.available_rect_before_wrap().min, egui::vec2(400.0, 400.0));
+        let out = Rc::clone(&out);
+        Stack::new().fill().show_at(ui, room, move |ui, _| {
+            Grid::new(&[ColumnWidth::Content, ColumnWidth::Content]).show(ui, |ui, _| {
+                Text::new("Name").show(ui);
+                let pair = ui.horizontal(|ui| {
+                    let one = Checkbox::new(Bind::given(true)).label("One").show(ui).response.rect;
+                    let two = Checkbox::new(Bind::given(true)).label("Two").show(ui).response.rect;
+                    (one, two)
+                });
+                out.set(pair.inner);
+            });
+        });
+    });
+    let (one, two) = seen.get();
+    assert!((one.center().y - two.center().y).abs() <= ROUNDING && two.left() >= one.right() - ROUNDING, "One {one:?}, then Two {two:?} on its line");
 }

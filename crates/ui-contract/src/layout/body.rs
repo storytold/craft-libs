@@ -328,7 +328,7 @@ pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32
     // its measuring run, where the child measured at its own size.
     if axis == Axis::Y
         && env.content.1
-        && let Some(line) = env.row_line.and_then(|line| line.height)
+        && let Some(line) = row_line_of(ui, &env).and_then(|line| line.height)
     {
         return measured.max(line);
     }
@@ -502,7 +502,7 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
     let shrink = Env::of(ui).shrink;
     // The unit's content is no unit of the row: it runs in a room of its own, on the row's line only to fill it. Its
     // children take no slots on the line and report nothing to the row: the unit's block is what stands in the row.
-    let line = Env::of(ui).row_line.map(|line| RowLine { places: false, ..line });
+    let line = row_line_of(ui, &Env::of(ui)).map(|line| RowLine { places: false, ..line });
     let own_room = Env::of(ui).derive_local(|scoped| {
         scoped.start_room();
         scoped.row_line = line;
@@ -1161,7 +1161,10 @@ fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(
     let sweep = |ui: &mut Ui, last: Option<Vec2>, leasts: Vec<f32>, probe: bool, body: &mut dyn FnMut(&mut Ui) -> R| {
         let flow = Flow::new(ui.available_rect_before_wrap(), rtl);
         pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Spread(Spread::new(flow, gap, last, leasts, probe))));
+        // The children run in the sweep's own `Ui`: the row's env is installed for it, so they are its direct children.
+        let installed = Env::install_for(ui, Env::of(ui));
         let inner = body(ui);
+        Env::restore(&ctx, installed);
         let spread = match pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
             Some(Cursor::Spread(spread)) => Some(spread),
             _ => None,
@@ -1262,7 +1265,7 @@ pub fn place_in_flow(ui: &mut Ui, size: Vec2) -> Rect {
 /// and its first line to the container whose header or body it starts.
 pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     let env = Env::of(ui);
-    let (line, target) = (env.row_line.filter(|line| line.places), env.first_line);
+    let (line, target) = (row_line_of(ui, &env).filter(|line| line.places), env.first_line);
     let child = InFlow { first: if child.line { child.first } else { one_line(child.first, size.y) }, ..child };
     // A one-line child of a bracketed row sits with its centre on the bracket's middle, between the controls its
     // rows reported before it.
@@ -1304,6 +1307,18 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     placed
 }
 
+/// The line of the unwrapped `Row` body a child placed in flow in `ui` stands on, `env` being `ui`'s env: only a direct
+/// child of the row has it (`Env::installed_for`).
+pub(crate) fn row_line_of(ui: &Ui, env: &Env) -> Option<RowLine> {
+    env.row_line.filter(|_| Env::installed_for(ui))
+}
+
+/// The `Grid` or spread `Row` body whose next cell a child placed in flow in `ui` takes, `env` being `ui`'s env: only a
+/// direct child of the body takes one (`Env::installed_for`).
+fn grid_of(ui: &Ui, env: &Env) -> Option<Id> {
+    env.grid.filter(|_| Env::installed_for(ui))
+}
+
 /// Takes `size` in flow in `ui`: the next cell of the `Grid` or spread `Row` body that encloses it directly, else the
 /// next allocation of `ui`'s layout. Returns the rect taken and whether it is a cell.
 pub(crate) fn take_in_flow(ui: &mut Ui, size: Vec2) -> (Rect, bool) {
@@ -1315,7 +1330,8 @@ pub(crate) fn take_in_flow(ui: &mut Ui, size: Vec2) -> (Rect, bool) {
 /// cells after it stay in their columns. Outside a grid it does nothing.
 pub fn empty_cell(ui: &mut Ui) {
     let env = Env::of(ui);
-    let grid = env.grid.filter(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| matches!(cursors.0.get(body), Some(Cursor::Grid(_)))));
+    let grid =
+        grid_of(ui, &env).filter(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| matches!(cursors.0.get(body), Some(Cursor::Grid(_)))));
     if grid.is_some() {
         take_in(ui, &env, Vec2::ZERO);
     }
@@ -1325,7 +1341,8 @@ pub fn empty_cell(ui: &mut Ui) {
 /// closes.
 fn take_in(ui: &mut Ui, env: &Env, size: Vec2) -> (Rect, bool) {
     close_flow_start(ui.ctx(), env);
-    match cell_in(ui, env.grid, size) {
+    let grid = grid_of(ui, env);
+    match cell_in(ui, grid, size) {
         Some(cell) => (cell, true),
         None => (alloc::space(ui, size), false),
     }
@@ -1335,7 +1352,8 @@ fn take_in(ui: &mut Ui, env: &Env, size: Vec2) -> (Rect, bool) {
 /// it; `None`, taking nothing, outside such a body.
 pub(crate) fn take_cell(ui: &mut Ui, size: Vec2) -> Option<Rect> {
     let env = Env::of(ui);
-    let cell = cell_in(ui, env.grid, size);
+    let grid = grid_of(ui, &env);
+    let cell = cell_in(ui, grid, size);
     if cell.is_some() {
         close_flow_start(ui.ctx(), &env);
     }
@@ -1351,7 +1369,8 @@ fn cell_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> Option<Rect> {
 /// The region the next child shown in flow in `ui` measures and is placed in: that of the next cell of the `Grid` or
 /// spread `Row` body that encloses `ui` directly, else the rest of `ui`'s layout.
 pub(crate) fn flow_region(ui: &Ui) -> Rect {
-    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::region)));
+    let cell =
+        grid_of(ui, &Env::of(ui)).and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::region)));
     cell.unwrap_or_else(|| ui.available_rect_before_wrap())
 }
 
@@ -1365,7 +1384,7 @@ pub(crate) fn row_alone_room(ui: &Ui) -> Option<f32> {
 /// The room a child shown in flow in `ui` measures and sizes in: the room of the next cell of the `Grid` or spread
 /// `Row` body that encloses `ui` directly, else the rest of `ui`'s layout.
 pub(crate) fn flow_room(ui: &Ui) -> Vec2 {
-    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::room)));
+    let cell = grid_of(ui, &Env::of(ui)).and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::room)));
     cell.unwrap_or_else(|| open_room(ui))
 }
 
@@ -1392,7 +1411,8 @@ fn open_room(ui: &Ui) -> Vec2 {
 /// The room a child that fills its width fills in `ui`: `flow_room`, except that in a `Content` column of a `Grid` it
 /// is the column's width, so the child never measures as the room and pushes the next column out of it.
 pub(crate) fn flow_fill_room(ui: &Ui) -> Vec2 {
-    let cell = Env::of(ui).grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::fill_room)));
+    let cell =
+        grid_of(ui, &Env::of(ui)).and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).map(Cursor::fill_room)));
     cell.unwrap_or_else(|| open_room(ui))
 }
 
@@ -1414,15 +1434,14 @@ pub(crate) fn shares_y(ui: &Ui) -> bool {
 /// Whether the next child shown in flow in `ui` goes in a `Content` column of the `Grid` body that encloses `ui`
 /// directly: like a content-sized column, a child that fills its width is placed at its measured width there.
 pub(crate) fn in_grid_content_column(ui: &Ui) -> bool {
-    Env::of(ui)
-        .grid
+    grid_of(ui, &Env::of(ui))
         .is_some_and(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get(&body).is_some_and(Cursor::in_content_column)))
 }
 
 /// The cell the next child shown in flow in `ui` takes, when the body that encloses `ui` directly is a `Grid`: the
 /// grid's body, the cell's column and whether the column is a `Content` one.
 pub(crate) fn grid_cell(ui: &Ui) -> Option<(Id, usize, bool)> {
-    let grid = Env::of(ui).grid?;
+    let grid = grid_of(ui, &Env::of(ui))?;
     pass_state::with::<Cursors, _>(ui.ctx(), |cursors| {
         let cursor = cursors.0.get(&grid)?;
         Some((grid, cursor.grid_column()?, cursor.in_content_column()))

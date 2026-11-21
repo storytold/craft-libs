@@ -307,7 +307,8 @@ pub(crate) enum ColumnSweep {
 }
 
 /// The line of an unwrapped `Row` body, as its direct children placed in flow see it: a child of one line sits with
-/// its centre on the line's centre, and a child of more than one line, or with no line of its own, at its top.
+/// its centre on the line's centre, and a child of more than one line, or with no line of its own, at its top. Read
+/// through `layout::row_line_of`, which gives it only to the direct children (`Env::installed_for`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RowLine {
     /// The row body, which the children of a measuring run report their lines to.
@@ -770,6 +771,16 @@ impl Env {
         let node = stack::node_id(ui);
         let previous = PerViewport::<ViewportEnvs>::with(ui.ctx(), viewport, |envs| envs.entries.insert(node, env));
         Installed { viewport, node, previous }
+    }
+
+    /// Whether `ui` is a `Ui` an env entry was installed for (`install_for`), not one that reads an entry installed
+    /// further up its stack. What a body sets up for the children it places in flow (its `Grid` or spread row's cells,
+    /// its unwrapped row's line) is for its direct children, which it shows in the `Ui` it installed its env for. A
+    /// `Ui` egui code makes inside that one (an `egui::Grid`, `ui.horizontal` in a caller's closure) lays out its own
+    /// children: a component placed there takes no cell or line of the body around it.
+    pub(crate) fn installed_for(ui: &Ui) -> bool {
+        let node = stack::node_id(ui);
+        PerViewport::<ViewportEnvs>::with(ui.ctx(), pass::current_viewport(ui.ctx()), |envs| envs.entries.contains_key(&node))
     }
 
     /// Puts back the entry `install_for` replaced.
