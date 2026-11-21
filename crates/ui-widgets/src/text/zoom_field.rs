@@ -6,7 +6,7 @@ use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _};
 use crate::runtime::env::{Env, Label, UnitKind};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, EditEvents, ZoomLadder};
+use craft_behavior::{CanvasView, EditEvents, ZoomScheme};
 use egui::{Response, Ui};
 
 #[cfg(feature = "testing")]
@@ -15,7 +15,7 @@ mod stories;
 /// The decimals the zoom range's ends are written with in the message, as the field shows a zoom.
 const MESSAGE_DECIMALS: usize = 2;
 
-/// A zoom field: a `NumberField` over the view's device zoom in percent, with the zoom codec and the zoom ladder's
+/// A zoom field: a `NumberField` over the view's device zoom in percent, with the zoom codec and the zoom scheme's
 /// range. With no view it shows a disabled empty field. An edit writes the zoom about the view's centre; an empty
 /// commit keeps the view.
 ///
@@ -40,7 +40,7 @@ impl ZoomField {
         ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true }
     }
 
-    /// The arrow keys and the wheel step along the zoom ladder.
+    /// The arrow keys and the wheel step along the zoom scheme's rungs.
     #[must_use]
     pub fn stepper(mut self, on: bool) -> Self {
         self.stepper = on;
@@ -65,11 +65,12 @@ impl ZoomField {
     pub fn show(self, ui: &mut Ui) -> ZoomFieldOutput {
         let env = Env::of(ui);
         let pixels_per_point = env.scale.0;
+        let scheme = env.view().get::<ZoomScheme>();
         let document = self.document;
         let device = self.view.as_ref().map(|view| zoom::device(view, pixels_per_point));
         // The document's zoom range widened to the current zoom, so the field never pulls the zoom back.
-        let range = device.map(|device| ZoomLadder::percent_range(device, document));
-        let mut field = NumberField::new(self.label, Bind::given(device.map(|device| device * 100.0)))
+        let range = device.map(|device| scheme.percent_range(device, document));
+        let mut field = NumberField::new(self.label, Bind::given(device.map(|device| scheme.percent(device))))
             .codec(env.units().zoom_codec())
             .unit_kind(UnitKind::Percent)
             .zoom_typing()
@@ -78,8 +79,7 @@ impl ZoomField {
             field = field.range(range);
         }
         if self.stepper {
-            // P3(canvas-w1): ap.AP15
-            field = field.stepper(move |percent: f64, dir: i32, _scale: f64| ZoomLadder::step(percent / 100.0, dir, document) * 100.0);
+            field = field.stepper(move |percent: f64, dir: i32, _scale: f64| scheme.percent(scheme.step(scheme.device(percent), dir, document)));
         }
         if self.scrub {
             field = field.scrub_by_label();
@@ -91,12 +91,7 @@ impl ZoomField {
                 .edit
                 .events
                 .clone()
-                // P3(canvas-w1): cv.F3
-                .map(|percent| {
-                    percent.map_or(current, |percent| {
-                        zoom::with_device(&current, percent / 100.0, document, pixels_per_point, &craft_behavior::ZoomScheme::PHOTOSHOP)
-                    })
-                }),
+                .map(|percent| percent.map_or(current, |percent| zoom::with_device(&current, scheme.device(percent), document, pixels_per_point, &scheme))),
             None => EditEvents::new(),
         };
         ZoomFieldOutput { response: shown.edit.response.clone(), view, invalid_zoom }

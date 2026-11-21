@@ -3,7 +3,7 @@
 //!
 //! Each piece is a pure rule over a [`CanvasView`]: the app (or the canvas's body) reads the pass's input from the
 //! runtime, asks the rule for the new view and copies it back into its own view. Zooms go through
-//! `craft_behavior::canvas::zoom` and clamp to the [`ZoomLadder`](craft_behavior::ZoomLadder). With Overscroll off
+//! `craft_behavior::canvas::zoom` and clamp to the [`ZoomScheme`](craft_behavior::ZoomScheme). With Overscroll off
 //! the caller clamps the result with the canvas's scroll limits.
 
 mod bar;

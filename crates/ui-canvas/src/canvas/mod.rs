@@ -103,7 +103,7 @@ use crate::contract::{
     Bind, Common, Component, Container, ContainerProps, Cx, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
 };
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::KeyUse;
 use crate::runtime::lock_keys;
 use crate::runtime::measure;
@@ -345,7 +345,7 @@ impl<'a> Canvas<'a> {
     fn view_commands(&self, cx: &mut Cx<'_, Self>, view: Option<CanvasView>) -> Option<(CanvasView, CommandMotion)> {
         self.props.command_scope?;
         let pixels_per_point = cx.env.scale().0;
-        let scheme = ZoomScheme::PHOTOSHOP; // P3(canvas-w1): cv.F8
+        let scheme = Env::of_root(&cx.core.ctx).view().get::<ZoomScheme>();
         let target = view.zip(self.document);
         for command in ViewCommands::ALL {
             let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, self.layer_bounds, pixels_per_point, &scheme));
@@ -393,7 +393,7 @@ impl<'a> Canvas<'a> {
         let mut motion = ViewMotion::take(&ctx, id);
         let pixels_per_point = cx.env.scale().0;
         let size = self.document_size().unwrap_or(Size::ZERO);
-        let scheme = ZoomScheme::PHOTOSHOP; // P3(canvas-w1): cv.F7
+        let scheme = Env::of_root(&ctx).view().get::<ZoomScheme>();
         let mut view = given;
         let area = self.view_rect(cx.content_rect, cx.style);
         if area.width() > 0.0 && area.height() > 0.0 {
@@ -497,7 +497,7 @@ impl<'a> Canvas<'a> {
     }
 
     /// The space the body and the tool see in this pass; `caps_lock` is whether Caps Lock is on in it.
-    fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool) -> Option<CanvasSpace> {
+    fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool, scheme: ZoomScheme) -> Option<CanvasSpace> {
         let (shown, target, easing, keys) = match self.settled {
             Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
             None => (self.given?, self.given?, false, BodyKeys::default()),
@@ -514,6 +514,7 @@ impl<'a> Canvas<'a> {
             .with_pasteboard(self.pasteboard)
             .with_background(background)
             .with_precise(self.precise_cursors != caps_lock)
+            .with_zoom_scheme(scheme)
             .with_canvas(id);
         Some(match self.picture {
             Some(slot) => space.with_picture(slot),
@@ -548,7 +549,8 @@ impl<'a> Canvas<'a> {
     fn tool_pass(&self, cx: &Cx<'_, Self>) -> ToolPass {
         let press = self.background_press(cx).0;
         let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
-        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
+        let scheme = Env::of_root(&cx.response.ctx).view().get::<ZoomScheme>();
+        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock, scheme);
         ToolPass {
             id: cx.response.id,
             rect: cx.response.rect,
@@ -725,9 +727,10 @@ impl Component for Canvas<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
+    fn finish(self, mut cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
-        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, multi_tap: None }
+        let multi_tap = cx.take_multi_tap();
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, multi_tap }
     }
 }
 

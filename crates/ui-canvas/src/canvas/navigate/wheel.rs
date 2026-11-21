@@ -8,7 +8,7 @@
 use super::NavigationOptions;
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomLadder, ZoomScheme};
+use craft_behavior::{CanvasView, Wheel, WheelNotch, WheelUnit, ZoomScheme};
 use craft_keymap::{Mods, Platform};
 use egui::{Pos2, Vec2};
 
@@ -138,6 +138,11 @@ impl WheelNavigation {
             self.residual = 0.0;
             return Some(WheelAction::Zoom(f64::from(factor)));
         }
+        // Two fingers moving together pan before any modifier rule reads the pass; the content follows them.
+        if options.touch_gestures && input.touch_pan != Vec2::ZERO && input.touch_pan.is_finite() {
+            self.residual = 0.0;
+            return Some(WheelAction::Pan(input.touch_pan));
+        }
         let scroll_finite = input.scroll.x.is_finite() && input.scroll.y.is_finite();
         let plain = !input.mods.cmd && !input.mods.ctrl;
         let zooms = if options.zoom_with_wheel { plain && !input.mods.alt } else { Self::alt_gesture(input.mods, input.os) };
@@ -174,12 +179,11 @@ impl WheelNavigation {
     /// zoom limit the view stays put. With Overscroll off the canvas clamps the result to the document. Returns
     /// whether the view changed.
     pub fn apply(view: &mut CanvasView, action: WheelAction, pointer: Pos2, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
-        let _ = scheme; // P3(canvas-w1): cv.F11
         let before = *view;
         match action {
             WheelAction::Zoom(factor) => {
                 let current = zoom::device(view, pixels_per_point);
-                let next = ZoomLadder::clamp(current * factor, size);
+                let next = scheme.clamp(current * factor, size);
                 if factor.is_finite() && factor > 0.0 && (next / current - 1.0).abs() > 1e-12 {
                     let at = zoom::wheel_anchor(view, pointer, size);
                     zoom::about(view, at, next, false, pixels_per_point);
@@ -188,7 +192,7 @@ impl WheelNavigation {
             WheelAction::SnapZoom(steps) => {
                 let dir = steps.signum();
                 let current = zoom::device(view, pixels_per_point);
-                let next = (0..steps.unsigned_abs()).fold(current, |z, _| ZoomLadder::step(z, dir, size));
+                let next = (0..steps.unsigned_abs()).fold(current, |z, _| scheme.step(z, dir, size));
                 if dir != 0 && (next / current - 1.0).abs() > 1e-12 {
                     zoom::about(view, pointer, next, false, pixels_per_point);
                 }

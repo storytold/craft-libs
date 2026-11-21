@@ -1,7 +1,8 @@
 //! Momentary tools, as in Photoshop: tools in effect only while a key is held.
 //!
 //! Space is the Hand while held, Cmd+Space (Ctrl+Space off the Mac) Zoom In, Alt+Space Zoom Out; Alt added to a held
-//! Zoom In zooms out. The keys are the [`MomentaryCommands`] set (`Kind::Momentary`): the board fires a press when the
+//! Zoom In zooms out. Rotate View is a command of its own, and with [`MomentaryShift::RotateView`] Shift added to the
+//! held Hand is Rotate View. The keys are the [`MomentaryCommands`] set (`Kind::Momentary`): the board fires a press when the
 //! key goes down and a release when it comes up. The set is scoped to the canvas (`canvasView`), so the commands go
 //! to the canvas that holds the key focus or surrounds it, else the one that held it last.
 //! [`ToolHost::run`](super::ToolHost::run) takes them for its canvas and folds them into [`Momentary`], which picks
@@ -92,7 +93,6 @@ pub struct Momentary {
     zoom: ZoomTool,
     rotate: RotateViewTool,
     /// What a held Shift does to the Hand.
-    #[allow(dead_code)] // P3(canvas-w1): cv.F10
     shift: MomentaryShift,
     /// The selected tool is the Hand: Cmd and Alt at a press then give Zoom In and Zoom Out.
     hand_selected: bool,
@@ -173,10 +173,14 @@ impl Momentary {
         match held {
             Some(held) => {
                 let tool = MomentaryTool::from(held);
-                Some(if mods.alt {
+                Some(if tool == MomentaryTool::RotateView {
+                    tool
+                } else if mods.alt {
                     MomentaryTool::ZoomOut
                 } else if tool == MomentaryTool::Hand && (mods.cmd || mods.ctrl) {
                     MomentaryTool::ZoomIn
+                } else if tool == MomentaryTool::Hand && mods.shift && self.shift == MomentaryShift::RotateView {
+                    MomentaryTool::RotateView
                 } else {
                     tool
                 })

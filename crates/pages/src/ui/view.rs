@@ -28,7 +28,7 @@ use crate::layout::{
     Fit, LayoutOptions, PageDisplay, PageSpacing, PagedLayout, SCREEN_POINTS_PER_POINT, ViewDefaults, ZOOM_RANGE, fit_scale, place_pages, shown_row,
 };
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
-use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
+use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomScheme};
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
     tool_pass,
@@ -128,12 +128,11 @@ impl PageViewState {
         self.current = page;
     }
 
-    /// Zoom In / Zoom Out: the next rung of craft-ui's [`ZoomLadder`] above (or below) the shown zoom, within
-    /// [`ZOOM_RANGE`] (Photoshop's rungs, the suite's one zoom ladder); a fit ends. The zoom a fit showed is the
-    /// start.
-    pub fn zoom_step(&mut self, larger: bool) {
+    /// Zoom In / Zoom Out: the next rung of `scheme` above (or below) the shown zoom, within [`ZOOM_RANGE`]; a fit
+    /// ends. The zoom a fit showed is the start.
+    pub fn zoom_step(&mut self, larger: bool, scheme: &ZoomScheme) {
         self.fit = Fit::None;
-        self.zoom = ZoomLadder::step_in_range(self.zoom, if larger { 1 } else { -1 }, ZOOM_RANGE);
+        self.zoom = scheme.step_in_range(self.zoom, if larger { 1 } else { -1 }, ZOOM_RANGE);
     }
 }
 

@@ -165,7 +165,6 @@ impl CanvasSpace {
 
     /// This space with the root env's zoom `scheme`.
     #[must_use]
-    #[allow(dead_code)] // P3(canvas-w1): cv.F6
     pub(crate) fn with_zoom_scheme(mut self, scheme: ZoomScheme) -> Self {
         self.zoom_scheme = scheme;
         self

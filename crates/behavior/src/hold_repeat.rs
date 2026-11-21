@@ -10,26 +10,33 @@ pub const INTERVAL: f64 = 0.05;
 /// nothing). A different concept from `HoldZoom`, which zooms continuously at a rate.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HoldRepeat {
-    #[allow(dead_code)] // P3(widgets-w2): wg.W35
     held_for: f64,
-    #[allow(dead_code)] // P3(widgets-w2): wg.W35
     fired: u32,
 }
 
 impl HoldRepeat {
     /// Starts a press: the one step due now.
     pub fn press(&mut self) -> u32 {
-        todo!("wg.W35")
+        *self = Self::default();
+        1
     }
 
     /// The steps due after `elapsed` more seconds of the press.
     pub fn hold(&mut self, elapsed: f64) -> u32 {
-        let _ = elapsed;
-        todo!("wg.W35")
+        self.held_for += elapsed.max(0.0);
+        let due = if self.held_for >= DELAY {
+            // Saturating float-to-int cast: a huge elapsed cannot panic.
+            ((self.held_for - DELAY) / INTERVAL).floor() as u32 + 1
+        } else {
+            0
+        };
+        let new = due.saturating_sub(self.fired);
+        self.fired = self.fired.max(due);
+        new
     }
 
     /// Ends the press.
     pub fn release(&mut self) {
-        todo!("wg.W35")
+        *self = Self::default();
     }
 }
