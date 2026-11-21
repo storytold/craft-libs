@@ -33,6 +33,8 @@ pub struct ThumbRequest {
     /// Whether an existing unpacked GPU texture for `key` is resident in the store and can accept an in-place
     /// region patch (`ThumbRender::Region` or `LoadedPicture::Region`).
     pub patchable: bool,
+    /// The revision of `key`'s unpacked GPU texture resident in the store, if any.
+    pub resident_revision: Option<Revision>,
 }
 
 /// Requested sides are multiples of this many pixels.
@@ -49,7 +51,7 @@ impl ThumbRequest {
         let pixels = points * pixels_per_point;
         let steps = if pixels.is_finite() { (pixels / SIZE_STEP as f32).ceil().max(1.0) as u32 } else { 1 };
         let side = steps.saturating_mul(SIZE_STEP).min(MAX_TEXTURE / SIZE_STEP * SIZE_STEP);
-        ThumbRequest { side, pixels_per_point, region: None, patchable: false }
+        ThumbRequest { side, pixels_per_point, region: None, patchable: false, resident_revision: None }
     }
 
     /// The request for the part `region` of the frame (fractions of the frame, 0 to 1).
@@ -357,8 +359,9 @@ impl<K: TextureKey> Thumbnails<K> {
     fn resolve(&self, ctx: &Context, source: &dyn ThumbSource<K>, key: &K, request: &ThumbRequest, priority: Priority) -> TextureState {
         let max_side = self.lock().options.max_side;
         let side = request.side.min((max_side / SIZE_STEP * SIZE_STEP).max(SIZE_STEP));
-        let patchable = self.loader.cache().has_texture(ctx, key);
-        let request = ThumbRequest { side, patchable, ..*request };
+        let resident_revision = self.loader.cache().texture_revision(ctx, key);
+        let patchable = resident_revision.is_some();
+        let request = ThumbRequest { side, patchable, resident_revision, ..*request };
         let revision = Revision::of(&(source.revision(key, &request), side, region_bits(request.region)));
         if let Some(state) = self.loader.ask(ctx, key, revision, priority) {
             return state;

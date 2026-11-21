@@ -476,6 +476,14 @@ impl<K: TextureKey> TextureStore<K> {
         self.with(ctx, |inner| matches!(inner.entries.get(key).map(|e| &e.picture), Some(Picture::Texture { .. })))
     }
 
+    /// The revision of `key`'s unpacked GPU texture resident in the store, if any.
+    pub fn texture_revision(&self, ctx: &Context, key: &K) -> Option<Revision> {
+        self.with(ctx, |inner| match &inner.entries.get(key) {
+            Some(Entry { revision, picture: Picture::Texture { .. }, .. }) => Some(*revision),
+            _ => None,
+        })
+    }
+
     /// The pixel dimensions of `key`'s stored texture, if it has an unpacked GPU texture in the store.
     pub fn texture_size(&self, ctx: &Context, key: &K) -> Option<PixelSize> {
         self.with(ctx, |inner| match &inner.entries.get(key)?.picture {

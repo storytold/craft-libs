@@ -252,6 +252,7 @@ fn a_region_update_patches_the_existing_texture_in_place_and_advances_revision()
     });
     let orig_id = orig_id.expect("revision 1 loaded");
     assert!(loader.cache().has_texture(&ctx, &1), "now has texture resident");
+    assert_eq!(loader.cache().texture_revision(&ctx, &1), Some(Revision::new(1)));
     assert_eq!(loader.cache().texture_size(&ctx, &1), Some(PixelSize::new(LARGE as u32, LARGE as u32)));
 
     // Request region update to revision 2
@@ -277,6 +278,7 @@ fn a_region_update_patches_the_existing_texture_in_place_and_advances_revision()
 
 struct TestPatchSource {
     seen_patchable: Cell<bool>,
+    seen_resident_revision: Cell<Option<Revision>>,
     render_count: Cell<usize>,
 }
 
@@ -287,6 +289,7 @@ impl ThumbSource<u32> for TestPatchSource {
 
     fn render(&self, _key: &u32, request: &ThumbRequest) -> ThumbRender {
         self.seen_patchable.set(request.patchable);
+        self.seen_resident_revision.set(request.resident_revision);
         let count = self.render_count.get();
         self.render_count.set(count + 1);
         if request.patchable {
@@ -302,12 +305,13 @@ fn thumbnails_routes_region_render_in_place_and_reports_patchable() {
     let frames = Frames::new();
     let ctx = frames.ctx.clone();
     let thumbs = Thumbnails::<u32>::in_context(&ctx, "test-patch", ThumbnailOptions::new());
-    let source = TestPatchSource { seen_patchable: Cell::new(false), render_count: Cell::new(0) };
+    let source = TestPatchSource { seen_patchable: Cell::new(false), seen_resident_revision: Cell::new(None), render_count: Cell::new(0) };
     let req = ThumbRequest::for_cell(LARGE as f32, 1.0);
 
-    // Initial render: patchable is false
+    // Initial render: patchable is false, resident_revision is None
     let initial = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
     assert!(!source.seen_patchable.get(), "first pass is not patchable");
+    assert_eq!(source.seen_resident_revision.get(), None, "first pass has no resident revision");
     let orig_id = match initial {
         TextureState::Ready(tex) => tex.id,
         other => panic!("expected Ready, got {other:?}"),
@@ -316,6 +320,7 @@ fn thumbnails_routes_region_render_in_place_and_reports_patchable() {
     // Second render: patchable is true and Region patches in place
     let patched = thumbs.state(&ctx, &source, &1, &req, Priority::VISIBLE);
     assert!(source.seen_patchable.get(), "second pass is patchable");
+    assert!(source.seen_resident_revision.get().is_some(), "second pass reports resident revision");
     match patched {
         TextureState::Ready(tex) => {
             assert_eq!(tex.id, orig_id, "texture patched in place");
