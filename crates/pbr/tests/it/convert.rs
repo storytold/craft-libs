@@ -474,13 +474,32 @@ fn materialx_emission_is_the_color_times_its_strength() {
 }
 
 #[test]
-fn materialx_alpha_and_its_mode() {
-    let colored = try_from_materialx(&mx(Shader::StandardSurface, &[("opacity", k(&[0.2, 0.4, 0.6]))])).unwrap();
-    assert!(close(colored.surface.alpha, 0.4));
+fn materialx_standard_surface_opacity_color_gives_its_luminance() {
+    let standard = |opacity: &[f32]| try_from_materialx(&mx(Shader::StandardSurface, &[("opacity", k(opacity))]));
+    let gray = standard(&[0.5; 3]).unwrap();
+    assert_eq!(gray.surface.alpha, 0.5);
+    assert!(gray.report.is_empty(), "{:?}", gray.report);
+    // 0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.6, the Rec.709 luminance; the mean would be 0.4.
+    let colored = standard(&[0.2, 0.4, 0.6]).unwrap();
+    assert!(close(colored.surface.alpha, 0.37192), "{}", colored.surface.alpha);
     assert_eq!(colored.surface.alpha_mode, AlphaMode::Blend);
     assert!(approximated(&colored, "opacity"));
-    let gray = try_from_materialx(&mx(Shader::StandardSurface, &[("opacity", k(&[0.5; 3]))])).unwrap();
-    assert!(!approximated(&gray, "opacity") && close(gray.surface.alpha, 0.5));
+    let green = standard(&[0.0, 1.0, 0.0]).unwrap();
+    assert!(close(green.surface.alpha, 0.7152), "{}", green.surface.alpha);
+    let near_white = standard(&[1.0, 1.0, 0.999_999_9]).unwrap();
+    assert!(near_white.surface.alpha <= 1.0 && near_white.surface.alpha >= 0.999_999_9);
+    for v in [f32::NAN, f32::INFINITY, -0.01, 1.01] {
+        bad_value(standard(&[0.5, v, 0.5]), "opacity");
+    }
+    // OpenPBR's geometry_opacity is a float in its node definition.
+    assert_eq!(
+        try_from_materialx(&mx(Shader::OpenPbr, &[("geometry_opacity", k(&[0.5; 3]))])).unwrap_err(),
+        ConvertError::Components { input: "geometry_opacity".into(), expected: 1, found: 3 }
+    );
+}
+
+#[test]
+fn materialx_alpha_and_its_mode() {
     let open = try_from_materialx(&mx(Shader::OpenPbr, &[("geometry_opacity", k(&[0.5]))])).unwrap();
     assert_eq!((open.surface.alpha, open.surface.alpha_mode), (0.5, AlphaMode::Blend));
 

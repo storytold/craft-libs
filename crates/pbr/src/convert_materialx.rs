@@ -210,8 +210,11 @@ impl Inputs {
 /// - Emission is the emission color times its strength: `emission_luminance` (reported as
 ///   approximated, since it is in nits), `emission`, or `emissive_strength`. A color whose
 ///   strength is 0 gives no emission.
-/// - Alpha is the opacity; Standard Surface's colored opacity gives the mean of its channels,
-///   reported as approximated when they differ. glTF PBR's `alpha_mode` 0, 1 and 2 give opaque,
+/// - Alpha is the opacity. Standard Surface's opacity is a color: equal channels give that value,
+///   and different channels give their luminance by the Rec.709 luma coefficients, reported as
+///   approximated, as the shader's own node graph reduces it with a `luminance` node. OpenPBR's
+///   `geometry_opacity` and glTF PBR's `alpha` are floats in their node definitions, so a color
+///   there is [`ConvertError::Components`]. glTF PBR's `alpha_mode` 0, 1 and 2 give opaque,
 ///   masked at `alpha_cutoff`, and blended; the other shaders blend when the opacity is below 1
 ///   or a texture sets it.
 /// - Every other input of the table (normals, specular color, anisotropy, transmission,
@@ -503,14 +506,11 @@ fn emission(inputs: &Inputs, shader: Shader, report: &mut ConversionReport) -> [
 /// Alpha and its mode.
 fn alpha(inputs: &Inputs, shader: Shader, report: &mut ConversionReport) -> Result<(f32, AlphaMode), ConvertError> {
     let opacity = inputs.value(Role::Opacity).unwrap_or([1.0; 3]);
-    let alpha = if shader == Shader::StandardSurface {
-        if opacity[0] != opacity[1] || opacity[1] != opacity[2] {
-            report.items.push(ReportItem::Approximated {
-                input: inputs.name(Role::Opacity).into(),
-                how: "is a color; the mean of its channels is the alpha",
-            });
-        }
-        (opacity[0] + opacity[1] + opacity[2]) / 3.0
+    let alpha = if shader == Shader::StandardSurface && (opacity[0] != opacity[1] || opacity[1] != opacity[2]) {
+        report
+            .items
+            .push(ReportItem::Approximated { input: inputs.name(Role::Opacity).into(), how: "is a color; its Rec.709 luminance is the alpha" });
+        luminance(opacity)
     } else {
         opacity[0]
     };
@@ -527,6 +527,15 @@ fn alpha(inputs: &Inputs, shader: Shader, report: &mut ConversionReport) -> Resu
         AlphaMode::Opaque
     };
     Ok((alpha, mode))
+}
+
+/// The luminance of a linear Rec.709 color, by the `rec709` luma coefficients of the MaterialX
+/// `luminance` node
+/// (<https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/libraries/stdlib/stdlib_defs.mtlx>),
+/// kept between the smallest and largest channel so that rounding cannot leave `0..=1`.
+fn luminance(c: [f32; 3]) -> f32 {
+    let y = 0.2126 * f64::from(c[0]) + 0.7152 * f64::from(c[1]) + 0.0722 * f64::from(c[2]);
+    (y as f32).clamp(c[0].min(c[1]).min(c[2]), c[0].max(c[1]).max(c[2]))
 }
 
 /// Keeps the displacement as a texture or an other input.
