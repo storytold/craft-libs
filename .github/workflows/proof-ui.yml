@@ -1,0 +1,35 @@
+name: Proof UI
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/proof-ui/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof-ui.yml"]
+  pull_request:
+    paths: ["crates/proof-ui/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof-ui.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: proof-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    timeout-minutes: 15
+    name: Proof UI (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: craft-proof-ui-linux
+      - run: cargo fmt -p craft-proof-ui --check
+      - run: cargo clippy -p craft-proof-ui --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-proof-ui --locked
