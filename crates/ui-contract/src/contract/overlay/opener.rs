@@ -178,16 +178,6 @@ impl crate::runtime::env::EnvValue for LayerFloor {
     }
 }
 
-/// Whether a layer opened by `opener` may cover the anchor [`opener_anchor`] gives it: the pointer, or the rect a context
-/// request named. Both are a context menu's anchor, a point or a row.
-pub(super) fn covers_anchor(opener: &Opener, opening: Opening, place: &Place) -> bool {
-    match opener_anchor(opener, opening, place) {
-        Anchor::Pointer => true,
-        Anchor::Rect(_) => opener.anchor.is_none() && matches!(opening, Opening::At(_)),
-        _ => false,
-    }
-}
-
 /// The anchor a layer opened by `opener` hangs from: the opener's own, else the layer's `Pointer` or `Corner`
 /// place, else the pointer for a context request a secondary release made, else the rect a key's context request
 /// named, else the opener's rect.

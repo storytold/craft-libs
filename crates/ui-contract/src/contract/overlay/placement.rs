@@ -1,13 +1,14 @@
 //! Where a shown layer goes: its anchor, the region and screen it stays in, and the room its body has.
 
 use super::host::{Layer, LayerMemory, memory_slot};
-use super::opener::{Opening, covers_anchor, opener_anchor};
+use super::opener::{Opening, opener_anchor};
 use super::place::{Anchor, OverlayFit, Place, ViewportShare};
 use super::props::Overlay;
 use crate::runtime::egui::areas::{self};
 use crate::runtime::env::Env;
 use crate::runtime::memory::MemoryStage;
 use crate::runtime::overlay::{self};
+use craft_behavior::OwnerClass;
 use craft_behavior::overlay::{PlaceRequest, Side};
 use egui::{Context, Id, Pos2, Rect};
 
@@ -51,15 +52,26 @@ pub(super) fn opened_overlay(ctx: &Context, overlay: &Overlay, stored: Option<Op
     Some((resolved, opening))
 }
 
-/// Whether a layer of `overlay` may cover its anchor when it fits on neither side of it: it hangs from the pointer, or
-/// from the rect a context request named (`covers_anchor`). `stored` is the opening the layer decided.
+/// Whether a layer of `overlay` may cover its anchor when it fits on neither side of it: a context menu's anchor, which
+/// is the pointer, the rect a context request named, or for a menu (its key class is [`OwnerClass::Menu`]) a point.
+/// `stored` is the opening the layer decided.
 pub(super) fn layer_covers_anchor(ctx: &Context, overlay: &Overlay, stored: Option<Opening>) -> bool {
-    match &overlay.opener {
+    let (anchor, requested) = match &overlay.opener {
         Some(first) => {
             let (opener, opening) = first.active(ctx, stored);
-            covers_anchor(opener, opening, &overlay.place)
+            (opener_anchor(opener, opening, &overlay.place), opener.anchor.is_none() && matches!(opening, Opening::At(_)))
         }
-        None => matches!(overlay.place, Place::Anchored { anchor: Anchor::Pointer, .. }),
+        None => match &overlay.place {
+            Place::Anchored { anchor, .. } => (anchor.clone(), false),
+            Place::Float(_) => return false,
+        },
+    };
+    match anchor {
+        Anchor::Pointer => true,
+        Anchor::Point(_) => overlay.keys == OwnerClass::Menu,
+        // `opener_anchor` gives a requested rect only for a context request's opening.
+        Anchor::Rect(_) => requested,
+        _ => false,
     }
 }
 
