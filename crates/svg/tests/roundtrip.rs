@@ -111,8 +111,8 @@ fn roundtrip_text_and_units() {
         unreachable!("written Scene must parse");
     };
     let root = doc.root_element();
-    assert_eq!(root.attribute("width"), Some("100mm"));
-    assert_eq!(length_strict("100mm", 100.0), Some(100.0 * 96.0 / 25.4));
+    assert_eq!(root.attribute("width"), Some("100.000mm"));
+    assert_eq!(length_strict("100.000mm", 100.0), Some(100.0 * 96.0 / 25.4));
     let Some(vb) = root.attribute("viewBox").and_then(parse_viewbox) else {
         unreachable!("viewBox must parse");
     };
