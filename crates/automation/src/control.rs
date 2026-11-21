@@ -228,8 +228,10 @@ impl ControlChannel {
     /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]), with success
     /// once nothing is queued or in flight. Call it once per pass, at the end of the pass (after its
     /// UI ran): the step that pass consumed counts as run, so the reply goes out with that pass
-    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass.
+    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass. It also has the host
+    /// keep its access trees, which `control` targets and `ui.find` read.
     pub fn poll_input(&mut self, host: &WindowHost) {
+        host.keep_access_trees();
         if host.take_injected_withdrawn() {
             self.input_cancelled(TARGET_CHANGED);
         } else if host.injected_idle_at_pass_end() {

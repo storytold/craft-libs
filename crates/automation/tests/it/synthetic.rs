@@ -410,8 +410,32 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
 fn a_point_that_is_not_finite_is_refused() {
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0))] {
-            assert_eq!(at.resolve(&|p| Some(p), None), Err(NOT_FINITE.to_owned()), "{at:?}"); // P3(widgets-w8): wg.W53
+            assert_eq!(at.resolve(&|p| Some(p), None), Err(NOT_FINITE.to_owned()), "{at:?}");
         }
     }
-    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None, None), Ok(pos2(3.0, 4.0))); // P3(widgets-w8): wg.W53
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None, None), Ok(pos2(3.0, 4.0)));
+}
+
+/// `ui.wheel` in lines queues whole notches in the line unit, clamped; without `unit` the turn is in points; an
+/// unknown unit is refused.
+#[trial]
+fn a_wheel_in_lines_turns_by_notches() {
+    fn turn(rig: &mut Rig, params: Value) -> (egui::MouseWheelUnit, egui::Vec2) {
+        rig.send("ui.wheel", params);
+        rig.take()
+            .into_iter()
+            .flat_map(|pass| pass.events)
+            .find_map(|event| match event {
+                Event::MouseWheel { unit, delta, .. } => Some((unit, delta)),
+                _ => None,
+            })
+            .expect("a pass saw the turn")
+    }
+    let mut rig = Rig::new();
+    assert_eq!(turn(&mut rig, json!({"x": 30, "y": 20, "dy": 2.4, "unit": "lines"})), (egui::MouseWheelUnit::Line, egui::vec2(0.0, 2.0)));
+    assert_eq!(turn(&mut rig, json!({"dy": 500, "unit": "lines"})).1, egui::vec2(0.0, 100.0), "notches are clamped");
+    assert_eq!(turn(&mut rig, json!({"dy": 2.4})), (egui::MouseWheelUnit::Point, egui::vec2(0.0, 2.4)));
+    let refused = input_method("ui.wheel", &json!({"dy": 1, "unit": "pages"}), &rig.host(), ViewportId::ROOT, &map);
+    assert!(matches!(refused, Some(Err(_))), "{refused:?}");
+    assert!(rig.host().injected_idle(), "the refused turn queued nothing");
 }

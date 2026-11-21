@@ -9,14 +9,15 @@ use std::collections::{HashMap, HashSet};
 /// The accessible name of the node, when it has a non-empty one: its own, else the first non-empty name of the nodes
 /// that label it (`labelled_by`).
 pub fn name(tree: &AccessTree, key: NodeKey) -> Option<&str> {
-    let _ = (tree, key);
-    todo!("wg.W14")
+    let named = |key: NodeKey| tree.name_of(key).filter(|name| !name.trim().is_empty());
+    named(key).or_else(|| tree.labelled_by_key(key).into_iter().find_map(named))
 }
 
 /// Whether the node declares an action a user can take: focus, click or a value change.
 pub fn is_interactive(tree: &AccessTree, key: NodeKey) -> bool {
-    let _ = (tree, key);
-    todo!("wg.W14")
+    [Declared::Focus, Declared::Click, Declared::Increment, Declared::Decrement, Declared::SetValue, Declared::Expand, Declared::Collapse]
+        .into_iter()
+        .any(|action| tree.declares_key(key, action))
 }
 
 /// A node's number in the tree.
@@ -125,6 +126,7 @@ impl AccessTree {
     }
 
     /// The tree of a frame that made none.
+    #[cfg(feature = "testing")]
     pub(crate) fn none() -> Self {
         AccessTree::new(TreeUpdate { nodes: Vec::new(), tree: None, tree_id: accesskit::TreeId::ROOT, focus: NodeId(0) })
     }

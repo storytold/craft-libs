@@ -11,6 +11,7 @@ mod tree;
 use crate::runtime::pass_state;
 use egui::{Context, FullOutput, Id, IdMap, IdSet, ViewportId};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::pass;
 
@@ -189,6 +190,39 @@ fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &IdSet) {
             hide(ctx, *id);
         }
     }
+}
+
+/// The context-data key of the flag that says trees are kept.
+fn keep_flag() -> Id {
+    Id::new("craft_ui.access_tree.keep")
+}
+
+/// The context-data key of the kept tree of `viewport`.
+fn tree_key(viewport: ViewportId) -> Id {
+    Id::new(("craft_ui.access_tree", viewport))
+}
+
+/// Turns AccessKit on and keeps the tree of every finished pass from now on, per viewport. No pass reads the kept
+/// trees, so they carry no state into a pass.
+pub(crate) fn keep(ctx: &Context) {
+    ctx.data_mut(|data| data.insert_temp(keep_flag(), true));
+    ctx.enable_accesskit();
+}
+
+/// The last tree [`store`] kept for `viewport`.
+pub(crate) fn kept(ctx: &Context, viewport: ViewportId) -> Option<Arc<AccessTree>> {
+    ctx.data(|data| data.get_temp(tree_key(viewport)))
+}
+
+/// Keeps the tree of the pass whose output this is, while trees are kept. It clones the update: the host reads it
+/// from the output after the pass.
+pub(crate) fn store(ctx: &Context, output: &FullOutput) {
+    if !ctx.data(|data| data.get_temp::<bool>(keep_flag())).unwrap_or(false) {
+        return;
+    }
+    let Some(update) = output.platform_output.accesskit_update.as_ref() else { return };
+    let tree = Arc::new(AccessTree::new(update.clone()));
+    ctx.data_mut(|data| data.insert_temp(tree_key(pass::current_viewport(ctx)), tree));
 }
 
 /// The tree update of a finished frame.
