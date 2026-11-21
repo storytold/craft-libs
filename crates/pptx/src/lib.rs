@@ -151,15 +151,29 @@ pub fn export(p: &Presentation, defaults: &dyn Defaults) -> Result<Vec<u8>, Erro
     write::export(p, defaults, write::CT_PRES)
 }
 
+/// [`export`] with a rasterizer: an SVG picture is written the way PowerPoint writes one, a PNG
+/// fallback in `a:blip/@r:embed` and the vector in `asvg:svgBlip`.
+pub fn export_with(p: &Presentation, defaults: &dyn Defaults, raster: write::Raster<'_>) -> Result<Vec<u8>, Error> {
+    write::export_with(p, defaults, write::CT_PRES, Some(raster))
+}
+
 /// Writes a package for `ext`: `potx` (template) and `ppsx` (slide show) differ from `pptx` only in
 /// the main part's content type.
 pub fn export_as(p: &Presentation, defaults: &dyn Defaults, ext: &str) -> Result<Vec<u8>, Error> {
-    let ct = match ext {
+    write::export(p, defaults, content_type_for(ext))
+}
+
+/// [`export_as`], with a rasterizer for SVG pictures as [`export_with`].
+pub fn export_as_with(p: &Presentation, defaults: &dyn Defaults, ext: &str, raster: write::Raster<'_>) -> Result<Vec<u8>, Error> {
+    write::export_with(p, defaults, content_type_for(ext), Some(raster))
+}
+
+fn content_type_for(ext: &str) -> &'static str {
+    match ext {
         "potx" => write::CT_TEMPLATE,
         "ppsx" => write::CT_SHOW,
         _ => write::CT_PRES,
-    };
-    write::export(p, defaults, ct)
+    }
 }
 
 /// Content type for a file name's extension.
