@@ -428,7 +428,7 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
         }
     }
     if let Some(cell) = bound.tab {
-        let key = session.tab.key(&setup.categories);
+        let key = session.tab.key(shared.categories);
         if *cell.borrow() != key {
             *cell.borrow_mut() = key;
         }

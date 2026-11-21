@@ -3,7 +3,7 @@
 use super::{CardCx, CardSource, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, NewDocumentDialog};
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Entry, Outcome as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::form::Field;
 use crate::patterns::presets::{GroupPath, PresetLibrary};
 use crate::pickers::Select;

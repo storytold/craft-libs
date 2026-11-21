@@ -14,7 +14,7 @@ use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::style::TypeRole;
 use crate::text::TextField;
-use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed, Selection};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Selection};
 use craft_i18n::Folder;
 use egui::{Response, Ui};
 use std::borrow::Cow;
@@ -490,7 +490,7 @@ impl<'a> ListManager<'a> {
                                 let delete = actions.iter().position(|action| action.id == DELETE);
                                 activated.set(delete.filter(|at| is_enabled(&actions[*at], entries, &folder, &session.name)));
                             }
-                            CollectionEvent::Rename(EditEvent::Commit { after: Mixed::Same(rename), .. }) => {
+                            CollectionEvent::Rename(EditEvent::Commit { after: rename, .. }) => {
                                 let name = rename.name.trim();
                                 if !name.is_empty() {
                                     session.name = name.to_owned();

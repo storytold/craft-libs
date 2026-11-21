@@ -5,7 +5,7 @@ use super::canvas_shell::slots as keys;
 use super::words::ShellWords;
 use crate::contract::{
     Access, Bind, Common, Component, Container, ContainerProps, Cx, DragPreview, DropMark, DropOperation, DropTarget, MeasureCx, Mount, Name, Overlay,
-    Pad, PaintUi, Pointer as _, Props as _, Role, Sizing, Styled as _,
+    Pad, PaintUi, Pointer as _, Props as _, Role, Sizing, Styled as _, WordSetCx as _,
 };
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Label, ShellEntry};

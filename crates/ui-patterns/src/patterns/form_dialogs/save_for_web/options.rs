@@ -392,8 +392,9 @@ fn color_table_section(ui: &mut Ui, kit: &Kit<'_>, live: &mut Live, asked: &mut 
             asked.color = Some(ColorRequest::new(PALETTE_COLOR_KEY, srgba(color)));
             live.editing = Some(color);
         }
-        if shown.delete && !selected.is_empty() {
-            asked.table.push(ColorTableEvent { edit: ColorTableEdit::Delete, colors: selected.clone() });
+        let deleted: Vec<[u8; 3]> = shown.delete.iter().filter_map(|at| palette.get(*at).copied()).collect();
+        if !deleted.is_empty() {
+            asked.table.push(ColorTableEvent { edit: ColorTableEdit::Delete, colors: deleted });
         }
         let tools = [
             ("web_colors", &words.web_shift, ColorTableEdit::WebShift),

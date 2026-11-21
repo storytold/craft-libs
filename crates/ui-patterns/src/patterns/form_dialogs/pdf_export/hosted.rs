@@ -244,7 +244,6 @@ impl HostedPdfExport {
 
     /// The Summary's text for the dialog's settings, as Save Summary… saves it, worded by `words`.
     pub fn summary_text(&self, words: &PdfExportWords) -> String {
-        // PLAN: assumed name and signature of type-w6's extracted warning lines (`show` and this call share them)
         let mut warnings = warning_lines(words, &self.settings, Self::catalog_of(&self.catalog));
         warnings.extend(self.host_warnings.iter().cloned());
         summary_text(words, &self.settings, &self.base(), &warnings)

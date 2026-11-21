@@ -180,8 +180,6 @@ pub enum ColorTableEdit {
     Shift([u8; 3]),
     /// Unshifts the colours.
     Unshift,
-    /// Shifts the colour to this colour.
-    Shift([u8; 3]),
     /// Unshifts every colour.
     UnshiftAll,
     /// Deletes the colours.

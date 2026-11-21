@@ -180,7 +180,7 @@ fn save_for_web_optimize(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let flags = extras(data, false, false);
     let (options, open) = data.value("web-optimize", (SaveForWebOptions::default(), true));
     let dialog =
-        SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).optimize(true).optimize_start(48 * 1024);
+        SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).optimize().optimize_start(48 * 1024);
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -193,7 +193,7 @@ fn save_for_web_optimize_result(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let answer = OptimizeAnswer::new(None, 31_800, 32 * 1024, true);
     let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options))
         .opened(Bind::bound(open))
-        .optimize(true)
+        .optimize()
         .optimize_answer(Ok(answer));
     with_extras(dialog, flags).show(ui).into()
 }

@@ -2,7 +2,7 @@
 
 use super::prompt::{Prompt, Reply, buttons};
 use super::words::DialogWords;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Show as _, ShowContainer as _};
 use crate::display::{Progress, Shade, Text};
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, Label};

@@ -8,7 +8,7 @@ use crate::contract::{
 use crate::display::{Shade, Text};
 use crate::layout_components::Stack;
 use crate::list::{List, ListRow};
-use crate::menu::search::{HelpEntry, SearchIndex, search_order};
+use crate::menu::search::{HelpEntry, SearchIndex, rank};
 use crate::popover::Popover;
 use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::env::{Env, Label};
@@ -70,7 +70,7 @@ impl crate::contract::Outcome for PaletteOutput {
 
 /// A search over the app's commands in a centred modal box: a search field over the matching commands.
 ///
-/// - Entries: [`HelpEntry`]s, found by label, English label or menu path and ranked by [`search_order`]. A row is one
+/// - Entries: [`HelpEntry`]s, found by label, English label or menu path and ranked by [`rank`]. A row is one
 ///   line: the label, the menu path (dropped when the label would get too narrow) and the command's chord at the end.
 ///   A command is enabled as the window under the palette has it: the palette closes before the command runs, so
 ///   its own modal layer blocks none. A disabled command is listed and does not run.
@@ -85,7 +85,9 @@ impl crate::contract::Outcome for PaletteOutput {
 pub struct CommandPalette<'a> {
     label: Label,
     entries: &'a [HelpEntry],
+    index: &'a SearchIndex,
     open: Bind<'a, bool>,
+    uses: Option<&'a dyn Fn(&CommandRef) -> u32>,
     /// The commands last run, newest first.
     #[prop]
     recents: Bind<'a, Vec<CommandRef>>,
@@ -95,15 +97,14 @@ impl<'a> CommandPalette<'a> {
     /// A palette named `label` over `entries`, ranked through `index` (which the app builds when its entries change),
     /// open while `open` is true.
     pub fn new(label: impl Into<Label>, entries: &'a [HelpEntry], index: &'a SearchIndex, open: Bind<'a, bool>) -> Self {
-        let _ = index; // P3(menus-w3): mn.M28
-        CommandPalette { label: label.into(), entries, open, recents: Bind::kept() }
+        CommandPalette { label: label.into(), entries, index, open, uses: None, recents: Bind::kept() }
     }
 
     /// The pick counts that rank the results, 0 for a command never picked.
     #[must_use]
-    pub fn uses(self, uses: &'a dyn Fn(&CommandRef) -> u32) -> Self {
-        let _ = (self, uses);
-        todo!("mn.M27")
+    pub fn uses(mut self, uses: &'a dyn Fn(&CommandRef) -> u32) -> Self {
+        self.uses = Some(uses);
+        self
     }
 
     /// Puts `command` first in `recents`, once, keeping the newest `RECENT`.
@@ -115,7 +116,7 @@ impl<'a> CommandPalette<'a> {
 
     /// Shows the palette while it is open.
     pub fn show(self, ui: &mut Ui) -> PaletteOutput {
-        let CommandPalette { label, entries, open, mut recents } = self;
+        let CommandPalette { label, entries, index, open, uses, mut recents } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
@@ -131,7 +132,6 @@ impl<'a> CommandPalette<'a> {
             .show(ui, |ui, cx| {
                 let recent: Vec<CommandRef> = recents.reborrow().read(cx).and_then(|held| held.same().cloned()).unwrap_or_default();
                 let texts = texts_of(entries, &cx.env);
-                let folder = cx.env.folder();
                 // The field is the stack's header and the key hint its footer, so the list takes the room left in
                 // the capped box and scrolls inside it. The three regions share the stack's memory.
                 Stack::new()
@@ -147,7 +147,7 @@ impl<'a> CommandPalette<'a> {
                     })
                     .show(ui, |ui, stack| {
                         let state = stack.memory::<Session>();
-                        let listed = listing(entries, &state.query, &folder, &texts, &recent);
+                        let listed = listing(entries, &state.query, index, uses, &recent);
                         let rows = row_data(&ctx, entries, &texts, &listed, &cx.env);
                         let source = Listed { keys: &listed, rows: &rows };
                         let stamp = stamp_of(&state.query);
@@ -201,13 +201,12 @@ fn texts_of(entries: &[HelpEntry], env: &crate::runtime::env::EnvView<'_>) -> Ve
 
 /// The entries the list shows, by position in `entries`: the matches for a query, best first, else the commands
 /// last run, newest first, else the first entries. A command appears once.
-fn listing(entries: &[HelpEntry], query: &str, folder: &craft_i18n::Folder, texts: &[[String; 3]], recent: &[CommandRef]) -> Vec<usize> {
-    let refs: Vec<[&str; 3]> = texts.iter().map(|[label, english, path]| [label.as_str(), english.as_str(), path.as_str()]).collect();
+fn listing(entries: &[HelpEntry], query: &str, index: &SearchIndex, uses: Option<&dyn Fn(&CommandRef) -> u32>, recent: &[CommandRef]) -> Vec<usize> {
+    let last: Vec<usize> = recent.iter().filter_map(|command| entries.iter().position(|entry| entry.command() == command)).collect();
     let candidates: Vec<usize> = if query.trim().is_empty() {
-        let last: Vec<usize> = recent.iter().filter_map(|command| entries.iter().position(|entry| entry.command() == command)).collect();
         if last.is_empty() { (0..entries.len()).collect() } else { last }
     } else {
-        search_order(folder, query, &refs)
+        rank(index, query, &last, &|at| uses.map_or(0, |uses| uses(entries[at].command())))
     };
     let limit = if query.trim().is_empty() { RECENT.max(FIRST_ROWS) } else { usize::MAX };
     let mut seen: Vec<&CommandRef> = Vec::new();

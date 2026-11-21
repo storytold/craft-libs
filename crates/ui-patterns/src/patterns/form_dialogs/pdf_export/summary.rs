@@ -3,7 +3,7 @@
 use super::PdfSection;
 use super::words::PdfExportWords;
 use crate::runtime::env::Label;
-use craft_pdf::settings::{Choice, ImageCompression, PdfSettings, UNSET_CHOICE};
+use craft_pdf::settings::{Choice, ImageCompression, PdfSettings, ProfileCatalog, UNSET_CHOICE};
 
 /// The value of one setting as the Summary compares and words it.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,6 +17,12 @@ enum Shown {
         id: &'static str,
         label: &'static str,
     },
+}
+
+/// The worded warnings of `settings` against `catalog`: the Summary's warnings, and what Save Summary… appends the
+/// host's to.
+pub(super) fn warning_lines(words: &PdfExportWords, settings: &PdfSettings, catalog: &dyn ProfileCatalog) -> Vec<String> {
+    settings.warnings(catalog).iter().map(|warning| words.warning_text(warning)).collect()
 }
 
 /// The Summary's lines for `settings` against `base`, then the `warnings`, with LF line breaks (CR and CRLF in values

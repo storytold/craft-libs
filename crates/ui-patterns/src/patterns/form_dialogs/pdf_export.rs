@@ -13,6 +13,7 @@ use self::sections::Sections;
 pub use self::sections::{ArtboardChoice, PasswordSwitches};
 pub(crate) use self::summary::check_range;
 pub use self::summary::differences;
+use self::summary::warning_lines;
 pub use self::summary::{RangeError, summary_text};
 pub use self::words::PdfExportWords;
 use super::form::FormDialog;
@@ -536,7 +537,7 @@ impl<'a> PdfExportDialog<'a> {
             };
             let settings_error =
                 |settings: &PdfSettings| settings.check(catalog).and_then(|()| settings.check_destination(catalog, color_mode)).err();
-            let warnings: Vec<String> = work.warnings(catalog).iter().map(|warning| words.warning_text(warning)).collect();
+            let warnings = warning_lines(&words, work, catalog);
             let changed = differences(&words, work, &base);
             let range_text = range_error(&live.artboards);
 

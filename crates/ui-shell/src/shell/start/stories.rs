@@ -2,7 +2,7 @@
 
 use super::{StartLink, StartScreen};
 use crate::buttons::Button;
-use crate::contract::{Bind, Show as _};
+use crate::contract::{Bind, Props as _, Show as _};
 use crate::primitives::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use crate::runtime::env::Label;
 use crate::shell::{RecentFile, RecentSort, RecentView, ScreenModeCommands, Template, ThumbKey};
