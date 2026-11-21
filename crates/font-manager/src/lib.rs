@@ -1,7 +1,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 //! Craft Font Manager as a library: the bundled font indexes and searching them, the installed
-//! fonts by family, and the font store interface installs and removals go through.
+//! fonts by family, the font store interface installs and removals go through, and the preview
+//! service client ([`remote`]).
 //!
 //! With the `egui` feature, [`FontsPanel`] is the whole interface as one panel that fills the `Ui`
 //! it is given, with no window, menu or eframe of its own, so ArtCraft Launcher can show it as its
@@ -12,6 +13,7 @@
 pub mod filter;
 pub mod index;
 pub mod installed;
+pub mod remote;
 pub mod store;
 
 #[cfg(feature = "egui")]
