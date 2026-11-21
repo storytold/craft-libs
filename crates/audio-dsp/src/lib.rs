@@ -2,7 +2,7 @@
 //!
 //! * [`loudness`]: ITU-R BS.1770-4 / EBU R128 loudness meter (momentary, short-term,
 //!   integrated, loudness range, sample peak, true peak) and the loudness-normalization helper.
-//! * [`effects`]: audio effects behind the common [`AudioEffect`] trait, with a registry
+//! * [`mod@effects`]: audio effects behind the common [`AudioEffect`] trait, with a registry
 //!   ([`effects()`]) describing every effect's parameters (range, unit, default) so a host and
 //!   its interface can build controls generically.
 //! * [`biquad`]: RBJ-cookbook biquads (TDF-II) with analytic magnitude response.

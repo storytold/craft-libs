@@ -23,8 +23,8 @@ use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 use super::view::PageSource;
 use crate::layout::SCREEN_POINTS_PER_POINT;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The page-turn parts: one over each gap between the columns and one over each side margin, indexed from the left.
 /// A click on one turns toward its side and a swipe starting on one turns by the swipe's direction.

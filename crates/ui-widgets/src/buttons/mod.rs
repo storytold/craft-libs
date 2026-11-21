@@ -5,8 +5,8 @@ pub(crate) mod face;
 pub mod icon_button;
 pub mod link;
 pub mod split_button;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 pub mod toggle_button;
 mod words;
 

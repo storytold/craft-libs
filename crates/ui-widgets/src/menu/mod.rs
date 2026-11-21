@@ -1,15 +1,15 @@
 //! Menu presets with `MenuItem` rows, menu-bar keys and mnemonics.
 
 pub mod bar;
-mod edit;
+pub(crate) mod edit;
 pub(crate) mod item;
 #[doc(hidden)]
 pub mod level;
-mod panel;
-mod popup;
+pub(crate) mod panel;
+pub(crate) mod popup;
 pub mod search;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle};

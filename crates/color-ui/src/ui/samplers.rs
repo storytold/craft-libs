@@ -34,8 +34,8 @@ use super::{InfoColor, SampleSize, SampleSizeSelect};
 use craft_ui::style::{ComponentStyle, StyleColor, StyleCx};
 use egui::{Pos2, Response, Ui, Vec2, vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The colour samplers' words, English by default.

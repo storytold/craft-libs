@@ -39,8 +39,8 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Where a grid or point row's numbers go: whole numbers have no decimals.
 const WHOLE: u32 = 0;

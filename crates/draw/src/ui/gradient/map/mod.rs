@@ -4,8 +4,8 @@
 //! It lives here rather than with the other adjustment editors in craft-imaging because it picks from the palette's
 //! [`GradientGroup`] presets, and a family crate depends on no other family crate but craft-color-ui.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvent, Mixed};
 use craft_ui::buttons::Button;

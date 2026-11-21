@@ -121,7 +121,7 @@ pub(crate) fn node_id(id: Id) -> NodeId {
 pub(crate) type NodeRole = accesskit::Role;
 
 /// The AccessKit vocabulary the testing kit reads a tree in.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use accesskit::{Role, Toggled};
 
 /// The AccessKit node number of `id`, the key an action request's target is matched by.

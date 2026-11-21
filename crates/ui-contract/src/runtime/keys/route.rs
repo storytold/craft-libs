@@ -679,7 +679,7 @@ mod space_held {
             let mut stop = Stop::new(self.id, crate::runtime::focus::KeyUse::of(craft_behavior::Input::Pointer));
             stop.root = self.root;
             stop.group = self.group;
-            StopRec { stop, scope: None }
+            StopRec { stop, scope: None, group_position: false }
         }
     }
 }

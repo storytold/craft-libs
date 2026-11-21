@@ -17,6 +17,7 @@ harness = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The egui parts: the Actions panel, the control channel's server side (screenshots, synthetic
 # input) and `ui` stories. Without it the crate has no egui: `ControlOptions`, `ControlClient`,
@@ -57,5 +58,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }

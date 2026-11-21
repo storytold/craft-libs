@@ -50,7 +50,7 @@ pub mod report;
 pub mod time;
 pub mod timecode;
 #[cfg(feature = "xml")]
-mod xml;
+pub(crate) mod xml;
 
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -69,33 +69,36 @@ pub use time::{TICKS_PER_SECOND, Tick, TimeRange, TimeView};
 pub use timecode::{TimeDisplay, TimeFormat, TimecodeError, format_time, parse_frames, parse_time};
 
 #[cfg(test)]
-mod cache_tests;
+pub(crate) mod cache_tests;
 #[cfg(test)]
-mod clips_tests;
+pub(crate) mod clips_tests;
 #[cfg(test)]
-mod clock_tests;
+pub(crate) mod clock_tests;
 #[cfg(test)]
-mod frames_tests;
+pub(crate) mod frames_tests;
 #[cfg(test)]
-mod preflight_tests;
+pub(crate) mod preflight_tests;
 #[cfg(test)]
-mod time_tests;
+pub(crate) mod time_tests;
 #[cfg(test)]
-mod timecode_tests;
+pub(crate) mod timecode_tests;
 
 /// The stories and trials this crate registers.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(all(test, feature = "screen-testing"))]
 extern crate self as craft_timeline;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

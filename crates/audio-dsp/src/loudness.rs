@@ -12,7 +12,7 @@
 //!   to the placement of blocks within 0.01 LU of the relative threshold.
 //! * Loudness range (EBU Tech 3342): short-term values, −70 LUFS absolute and −20 LU relative
 //!   gate, LRA = 95th − 10th percentile.
-//! * Sample peak and true peak (polyphase oversampling to ≥ 176.4 kHz, see [`crate::oversample`]).
+//! * Sample peak and true peak (polyphase oversampling to ≥ 176.4 kHz, in the crate's internal `oversample` module).
 
 use crate::biquad::{Biquad, Coeffs};
 use crate::oversample::{Interpolator, PolyphaseBank, TAPS_PER_PHASE, true_peak_factor};

@@ -181,7 +181,7 @@ fn a_ctrl_wheel_zoom_keeps_the_point_under_the_pointer_and_settles_in_its_own_fr
 /// five, before the top of the document stops the view.
 #[trial]
 fn a_ctrl_wheel_zoom_keeps_the_place_when_the_page_under_the_pointer_moves_down_a_row() {
-    ctrl_wheel_zoom_out(vec2(1280.0, 690.0), 3.2 * 1056.0, 3, vec2(7.0, 0.0), 4);
+    ctrl_wheel_zoom_out(vec2(1280.0, 690.0), 13.2 * 1056.0, 3, vec2(7.0, 0.0), 4);
 }
 
 /// `notches` Ctrl + wheel notches out, 8 frames apart, in a page view `room` big from `top` (screen points at 100 %)
@@ -878,4 +878,54 @@ fn a_tool_region_on_page_one_takes_a_press_over_a_canvas_control_there() {
     fixture.frame(vec![pointer::release(at + by)]);
     assert_eq!(tool.borrow().presses, 1, "a press in the region is the tool's");
     assert_eq!(crop.borrow().as_ref().map(|frame| frame.rect), Some(start), "the corner under the region does not move");
+}
+
+/// Wheel up with the page view at the top, `rulers` on or off: the first page's top edge on screen and the state's
+/// offset in every frame, after the settled frame. (#7149 item 7)
+fn wheel_up_at_the_top(rulers: bool) -> Vec<(f32, f64)> {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+        s.display = PageDisplay::Columns;
+        s.continuous = true;
+    })));
+    let top = Rc::new(Cell::new(0.0f32));
+    let (kept, shown) = (Rc::clone(&state), Rc::clone(&top));
+    let pages = DemoPages::new(20);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::WORD).rulers(rulers).show(ui, |_, _| ());
+        shown.set(out.pages.first().map_or(f32::NAN, |p| p.rect.min.y));
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(1280.0, 760.0));
+    fixture.settle();
+    fixture.frame(vec![egui::Event::PointerMoved(pos2(640.0, 400.0))]).settle();
+    let mut seen = vec![(top.get(), state.borrow().offset.1)];
+    for _ in 0..6 {
+        fixture.frame(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, 40.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        }]);
+        seen.push((top.get(), state.borrow().offset.1));
+        for _ in 0..3 {
+            fixture.frame(Vec::new());
+            seen.push((top.get(), state.borrow().offset.1));
+        }
+    }
+    seen
+}
+
+#[trial]
+fn a_wheel_up_at_the_top_never_moves_the_page_with_rulers_on_or_off() {
+    for rulers in [false, true] {
+        let seen = wheel_up_at_the_top(rulers);
+        let rest = seen[0];
+        for (n, frame) in seen.iter().enumerate() {
+            assert_eq!(*frame, rest, "rulers {rulers}: frame {n} moved the page off its top: {seen:?}");
+        }
+    }
 }

@@ -2,11 +2,11 @@
 //! composed from library components only.
 
 mod commands;
-mod editor;
+pub(crate) mod editor;
 mod model;
 mod panels;
-mod stories;
-mod tools;
+pub(crate) mod stories;
+pub(crate) mod tools;
 mod words;
 
 pub use commands::AppCommand;

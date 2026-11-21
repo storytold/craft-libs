@@ -16,7 +16,7 @@
 
 #[cfg(test)]
 #[cfg(unix)]
-mod tests;
+pub(crate) mod tests;
 
 use super::{Duplex, Error, Job, Printer, Scaling};
 use std::io::{Read, Write};

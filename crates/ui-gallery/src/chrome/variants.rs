@@ -4,7 +4,7 @@
 use super::card::Look;
 use super::overview::{Centre, Spec, SpecStory, apply, grid, on_background};
 use super::panels::{selected_of, target_story};
-use crate::viewer::{DIRECTIONS, MODES, VariantAxis, entry_of};
+use crate::viewer::{DIRECTIONS, MODES, SETS, VariantAxis, entry_of};
 use craft_i18n::Direction;
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Mode, ModeChoice};
@@ -22,7 +22,7 @@ use egui::Ui;
 pub struct VariantsIn {
     /// What the view repeats the story over.
     pub axis: VariantAxis,
-    /// The window's mode and direction.
+    /// The window's mode, direction and component set.
     pub shown: Look,
 }
 
@@ -56,6 +56,7 @@ fn noun(axis: VariantAxis) -> &'static str {
         VariantAxis::Mode => "mode",
         VariantAxis::Contrast => "contrast",
         VariantAxis::Size => "size",
+        VariantAxis::Set => "set",
         VariantAxis::Direction => "direction",
         VariantAxis::ControlSize => "control size",
         VariantAxis::DirectionAndControlSize => "direction and control size",
@@ -92,6 +93,9 @@ fn values(axis: VariantAxis) -> Option<Vec<Value>> {
                 .map(|choice| Value { label: choice.label, look: Look { direction: direction(choice.value), ..Look::default() } })
                 .collect(),
         ),
+        VariantAxis::Set => {
+            Some(SETS.0.iter().map(|choice| Value { label: choice.label, look: Look { set: Some(choice.value), ..Look::default() } }).collect())
+        }
         VariantAxis::ControlSize => {
             Some(sizes.iter().map(|(size, label)| Value { label, look: Look { size: Some(*size), ..Look::default() } }).collect())
         }
@@ -129,6 +133,7 @@ pub(super) fn show(ui: &mut Ui, c: &mut Centre<'_>) -> bool {
             let shown = |look: &Look| match axis {
                 VariantAxis::Mode => look.mode == window.mode,
                 VariantAxis::Direction => look.direction == window.direction,
+                VariantAxis::Set => look.set == window.set,
                 _ => false,
             };
             values

@@ -116,6 +116,8 @@ impl LeafPlaced {
 pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &mut C, trailing: Option<Trailing<'_>>) -> LeafPlaced {
     let scope = sub(at.id, "field");
     let enabled = at.under.enabled;
+    // Read before the child measures: nothing it does there may count as a child placed in flow.
+    let in_column = in_column(ui);
     let control_min = crate::contract::run::measure_under(child, &*ui, Some(at.id), craft_behavior::Proposal::Min, Some(at.under)).x;
     let input = LabelIn {
         scope,
@@ -131,7 +133,7 @@ pub(crate) fn leaf<C: Show>(ui: &mut Ui, env: &Env, at: &LeafLabel<'_>, child: &
         size: at.under.size,
         control_min,
         leaf: true,
-        in_column: in_column(ui),
+        in_column,
         claims: C::LABELLED_AFTER,
         status: false,
         trailing: trailing.as_ref().map_or(Vec2::ZERO, |trailing| trailing.size),
@@ -227,9 +229,15 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     placed
 }
 
-/// Whether a row shown in `flow` is a row of a vertical flow, not a member of a row's line.
+/// Whether a row shown in `flow` is a row of a vertical flow, not a member of a row's line. The first child of an
+/// unwrapped row that is itself a row of a vertical flow (`Scoped::column_row`) starts where that flow's rows start,
+/// so it counts as one of them: a check box that starts a row of a form lines up with the form's controls.
 pub(crate) fn in_column(flow: &Ui) -> bool {
-    !flow.layout().is_horizontal()
+    if !flow.layout().is_horizontal() {
+        return true;
+    }
+    let env = Env::of(flow);
+    env.column_row && crate::layout::at_flow_start(flow.ctx(), &env)
 }
 
 /// A control with its label after it that the label step moved into the control column (its `control` starts past

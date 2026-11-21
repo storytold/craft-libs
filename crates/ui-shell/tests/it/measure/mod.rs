@@ -1,6 +1,6 @@
 //! A measuring run delivers nothing and consumes nothing: what the real run after it needs is still there.
 
-mod record;
+pub(crate) mod record;
 
 use craft_ui::contract::{Bind, Politeness, Show as _};
 use craft_ui::runtime::commands::{FireSource, fire};

@@ -16,8 +16,8 @@ use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
 use egui::{Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A host's translator for the names a rail shows: a command's own label, and the label to show instead of it.
 pub type RailLabels<'a> = std::sync::Arc<dyn Fn(&str) -> String + 'a>;

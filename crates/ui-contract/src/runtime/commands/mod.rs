@@ -14,6 +14,8 @@ pub use library::{EditCommands, NavCommand, WindowCommand};
 pub use registry::CommandDefError;
 #[doc(hidden)]
 pub use registry::{SetEntry, sets};
+#[cfg(feature = "suite")]
+pub(crate) use registry::{StorySelection, configure_story_sets, with_story_sets};
 
 #[doc(hidden)]
 pub use board::declare_child;
@@ -29,12 +31,12 @@ pub(crate) use board::{
     begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
 };
 #[doc(hidden)]
-pub use board::{bound_around, take_around};
+pub use board::{bound_around, keymap_generation, take_around};
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use board::{chord_text_builds, keymap_builds};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
-pub(crate) use board::{keymap_generation, queued_for};
+pub(crate) use board::{keymap_built, queued_for};
 
 use crate::contract::{MemoKey, MemoProps, PlainData, Revision, Tracked};
 use craft_behavior::CommandFlags;

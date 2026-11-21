@@ -389,7 +389,9 @@ fn shown_on(bar: &MenuBar, target: Target) -> MenuBar {
             Node::Standard { .. } if !appkit => None,
             other => Some(other.clone()),
         });
-        tidy(shown.collect())
+        let mut kept: Vec<Node> = shown.collect();
+        tidy(&mut kept);
+        kept
     }
     let on = target.platforms();
     let menus = bar.menus.iter().map(|m| Menu { children: keep(&m.children, on, target == Target::Mac), ..m.clone() }).collect();
@@ -428,7 +430,7 @@ fn ensure_menu<'b>(bar: &'b mut MenuBar, role: MenuRole, english: &'static str, 
 /// Tidy every menu and drop the ones the moves emptied, unless `keep_empty`.
 fn finish(bar: &mut MenuBar, keep_empty: impl Fn(&Menu) -> bool) {
     for m in &mut bar.menus {
-        m.children = tidy(std::mem::take(&mut m.children));
+        tidy(&mut m.children);
     }
     bar.menus.retain(|m| !m.children.is_empty() || keep_empty(m));
 }

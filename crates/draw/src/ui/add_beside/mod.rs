@@ -2,7 +2,7 @@
 //! (Photoshop) or a connected object (FigJam) there. One canvas control for the Artboard tool and the connector
 //! tools: its buttons are parts in the canvas's arena, so a press on one reaches the control before the tool.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 

@@ -38,12 +38,12 @@
 //! [`EditHistory`]: craft_behavior::EditHistory
 //! [`FullWindowWorkspace`]: craft_ui::dialog::FullWindowWorkspace
 
-mod bar;
+pub(crate) mod bar;
 mod commands;
 mod edits;
-mod panel;
+pub(crate) mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tools;
 mod words;
@@ -68,14 +68,14 @@ use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
 use craft_ui::canvas::{NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
-use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
     SideFooter, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
 };
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::primitives::Checker;
-use craft_ui::rails::{LastUsed, ToolRail};
+use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
 use craft_ui::runtime::edit::next_gesture_id;
 use craft_ui::runtime::env::Env;
@@ -295,7 +295,8 @@ pub struct SelectMaskWorkspace {
     view: FullWindowView,
     mask_view: MaskViewState,
     tool: SelectMaskTool,
-    last_used: LastUsed<SelectMaskTool>,
+    last_used: Tracked<LastUsed<SelectMaskTool>>,
+    slots: Tracked<Vec<ToolSlot<SelectMaskTool>>>,
     options: SelectMaskToolOptions,
     canvas: SelectMaskCanvas,
     zoom_tool: ZoomTool,
@@ -351,7 +352,8 @@ impl SelectMaskWorkspace {
             checkerboard: open.checkerboard,
             view: FullWindowView::new(),
             tool: SelectMaskTool::Quick,
-            last_used: LastUsed::default(),
+            last_used: Tracked::new(LastUsed::default()),
+            slots: Tracked::new(SelectMaskTool::slots()),
             options: SelectMaskToolOptions::default(),
             canvas,
             zoom_tool: ZoomTool::new(open.navigation),
@@ -486,7 +488,6 @@ impl SelectMaskWorkspace {
         let words = env.words::<SelectMaskWords>();
         let common = env.words::<CommonWords>();
         let title = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
-        let slots = SelectMaskTool::slots();
         self.start_pass(ui.ctx());
         let request = self.request_now();
         let key = format!("{request:?}");
@@ -552,7 +553,7 @@ impl SelectMaskWorkspace {
                         if fired.phase == FirePhase::Release {
                             continue;
                         }
-                        let slot = slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
+                        let slot = work.slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
                         let tools: Vec<_> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                         let picked = slot.and_then(|slot| {
                             tool_pick(&tools, slot.id, &work.tool, &work.last_used, PickStep::of(&fired), |_| true).map(|entry| (slot.id, entry.id))
@@ -590,9 +591,9 @@ impl SelectMaskWorkspace {
                     let preview = falloff.as_ref().and_then(|falloff| work.canvas.resize().preview(falloff));
 
                     let shown = Row::new().fill().show(ui, |ui, _| {
-                        let rail = ToolRail::new(words.tools.clone(), &slots, &work.tool, &work.last_used).show_column(ui, |_, _| {});
+                        let rail = ToolRail::new(words.tools.clone(), &work.slots, &work.tool, &work.last_used).show_column(ui, |_, _| {});
                         if let Some(next) = rail.last_used {
-                            work.last_used = next;
+                            *work.last_used = next;
                         }
                         if let Some(tool) = rail.select {
                             work.pick(Some(&ctx), tool);

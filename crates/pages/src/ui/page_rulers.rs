@@ -2,8 +2,8 @@
 //! [`PageRulers`], which joins a [`TextRuler`], a [`VerticalRuler`] and
 //! [`MarginHandles`] around the page.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::{
@@ -17,7 +17,7 @@ use craft_ui::contract::{
     Access, Bind, Common, Component, Cx, Focus as _, IdSource, Input, MeasureCx, Name, NoValue, Numeric, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Show as _, Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
+use craft_ui::primitives::{PaintShape, RulerFace, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, TextLook, TypeRole};
@@ -80,6 +80,10 @@ pub struct VerticalRulerStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
+    /// The face: the prop's, else the component set's.
+    face: RulerFace,
+    /// The strip round the centred face's bar.
+    strip: StyleColor,
     /// The text range.
     fill: StyleColor,
     /// The margins above and below it.
@@ -113,6 +117,9 @@ struct Held(Option<(usize, f32)>);
 /// shaded as margin and the text range filled, and a drag of a grip is one gesture.
 ///
 /// - Ticks and numbers count from the page's top in the unit, through the canvas rulers' tick rule.
+/// - The face ([`RulerFace`]) is the prop's, else the component set's: the edge face hangs the ticks from the strip's
+///   inner edge with each number below its whole-unit tick; the centred face (Word's) draws a bar inset in the strip
+///   with the ticks centred on it and the numbers in place of the whole-unit ticks, over the text range only.
 /// - A grip drag reports a [`RowDrag`]: Begin, Update per move, Commit on release, Cancel on Escape. It snaps to the
 ///   ruler's step; Alt reports in `mods` that the drag is free of the snap and the position is not snapped.
 /// - The grips are one Tab stop: Page Down and Page Up pick the next or previous grip, the arrows nudge the focused one
@@ -133,13 +140,17 @@ pub struct VerticalRuler<'a> {
     /// The table row bottoms, points from the page's top, each a grip.
     #[prop]
     rows: &'a [f32],
+    /// The face; unset, the scope's component set picks it ([`RulerFace::of`]).
+    #[style_key]
+    #[prop]
+    face: Option<RulerFace>,
     report: Option<RowDrag>,
 }
 
 impl<'a> VerticalRuler<'a> {
     /// The ruler named `label` along `page`.
     pub fn new(label: impl Into<Label>, page: &'a PlacedPage) -> Self {
-        VerticalRuler { common: Common::new(), page, text: None, unit: DocUnit::points(), rows: &[], report: None }.label(label)
+        VerticalRuler { common: Common::new(), page, text: None, unit: DocUnit::points(), rows: &[], face: None, report: None }.label(label)
     }
 
     /// Screen points per page point.
@@ -170,12 +181,14 @@ impl Component for VerticalRuler<'_> {
     type Style = VerticalRulerStyle;
     type Output = VerticalRulerOutput;
 
-    fn style(cx: &StyleCx<'_>, _: VerticalRulerStyleKey) -> VerticalRulerStyle {
+    fn style(cx: &StyleCx<'_>, key: VerticalRulerStyleKey) -> VerticalRulerStyle {
         let tokens = cx.tokens;
         let colors = &tokens.color;
         VerticalRulerStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
+            face: key.face.unwrap_or(RulerFace::of(cx.set())),
+            strip: cx.color(colors.surface.chrome),
             // As `TextRuler`'s: the text range is the light well, the margins are shaded as the desk round the page.
             fill: cx.color(colors.surface.sunken),
             margin: cx.color(colors.surface.canvas),
@@ -307,37 +320,60 @@ impl Component for VerticalRuler<'_> {
         let text = ruler_text(self.unit, &numbers);
         let per_doc = text.units.per_doc;
         let shape = |rect: Rect| PaintShape::Rect(rect, CornerRadius::ZERO);
-        let draw = ui.draw();
-        draw.fill(&shape(rect), style.margin);
+        let face = style.face;
+        let bar = ui.content_painter(cx).ruler_bar(rect, TickEdge::Right, face);
         let page = Rect::from_x_y_ranges(rect.x_range(), self.y(0.0)..=self.y(self.page_height())).intersect(rect);
-        if let Some(range) = self.text {
-            let band = Rect::from_x_y_ranges(rect.x_range(), self.y(range.min)..=self.y(range.max)).intersect(page);
-            if band.is_positive() {
-                draw.fill(&shape(band), style.fill);
+        let draw = ui.draw();
+        // The edge face shades the whole strip; the centred face shades the page's span of its bar on the strip's own
+        // surface.
+        match face {
+            RulerFace::Edge => draw.fill(&shape(rect), style.margin),
+            RulerFace::Centred => {
+                draw.fill(&shape(rect), style.strip);
+                draw.fill(&shape(Rect::from_x_y_ranges(bar.x_range(), page.y_range())), style.margin);
             }
+        }
+        let text_band = self.text.map(|range| Rect::from_x_y_ranges(bar.x_range(), self.y(range.min)..=self.y(range.max)).intersect(page));
+        if let Some(band) = text_band.filter(|band| band.is_positive()) {
+            draw.fill(&shape(band), style.fill);
         }
         let grips: Vec<Rect> = self.rows.iter().map(|row| self.grip_rect(rect, style, *row)).collect();
         let (lo, hi) = (((page.min.y - self.y(0.0)) / scale).max(0.0), ((page.max.y - self.y(0.0)) / scale).max(0.0));
         let ticks: Vec<RulerTick> =
             Rulers::ticks(&text.units, TickRule::of_unit(self.unit.kind), f64::from(scale), (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc));
-        let marks: Vec<Tick> = ticks
-            .iter()
-            .map(|tick| self.y((tick.value / per_doc) as f32))
-            .zip(ticks.iter())
-            .filter(|(y, _)| (page.min.y..=page.max.y).contains(y))
-            .map(|(y, tick)| Tick::new(y - rect.min.y, tick.rank))
-            .collect();
-        ui.content_painter(cx).ticks(rect, TickEdge::Right, &marks);
         let draw = ui.draw();
         let color: StyleColor = cx.resolve(&style.label.color);
+        // The centred face numbers the text range only, as a word processor's vertical ruler does.
+        let numbered_span = match face {
+            RulerFace::Edge => page,
+            RulerFace::Centred => text_band.unwrap_or(page),
+        };
+        let mut runs = Vec::new();
         for tick in ticks.iter().filter(|tick| matches!(tick.rank, TickRank::Major)) {
             let y = self.y((tick.value / per_doc) as f32);
             let run = TextRun::new(text.tick_label(&numbers, tick.value, tick.step)).role(style.label.role).color(color);
             let size = draw.layout(&run, f32::INFINITY).size();
-            let boxed = Rect::from_min_size(pos2(rect.min.x, y + style.pad), vec2(rect.width(), size.y));
-            if page.contains_rect(boxed) && size.x <= rect.width() && !grips.iter().any(|grip| grip.intersects(boxed)) {
-                draw.text(boxed, &run);
+            let boxed = match face {
+                RulerFace::Edge => Rect::from_min_size(pos2(rect.min.x, y + style.pad), vec2(rect.width(), size.y)),
+                RulerFace::Centred => RulerFace::centred_number(bar, TickEdge::Right, y, size),
+            };
+            let span = Rect::from_x_y_ranges(rect.x_range(), numbered_span.y_range());
+            if span.contains_rect(boxed) && size.x <= bar.width() && !grips.iter().any(|grip| grip.intersects(boxed)) {
+                runs.push((boxed, run));
             }
+        }
+        let marks: Vec<Tick> = ticks
+            .iter()
+            .map(|tick| (self.y((tick.value / per_doc) as f32), tick))
+            .filter(|(y, _)| (page.min.y..=page.max.y).contains(y))
+            .map(|(y, tick)| Tick::new(y - bar.min.y, tick.rank))
+            .collect();
+        let boxes: Vec<Rect> = runs.iter().map(|(boxed, _)| *boxed).collect();
+        let marks = face.beside_numbers(TickEdge::Right, bar.min.y, marks, &boxes, style.pad);
+        ui.content_painter(cx).ticks(bar, TickEdge::Right, face, &marks);
+        let draw = ui.draw();
+        for (boxed, run) in &runs {
+            draw.text(*boxed, run);
         }
         for grip in &grips {
             draw.fill(&shape(*grip), style.margin);
@@ -374,7 +410,8 @@ pub struct PageRulersOutput {
 /// their edges win. It shows no guides, no zero point and no units menu; `Rulers` is unchanged.
 ///
 /// The text ruler counts from the text column's start edge and is cut to the page's width; the vertical ruler counts
-/// from the page's top and shades the margins. The strips are as thick as the canvas rulers' strips.
+/// from the page's top and shades the margins. The strips are as thick as the canvas rulers' strips. Both rulers take
+/// the face given here, else the scope's component set's.
 #[must_use = "show the rulers with `show_at`"]
 #[derive(craft_ui::contract::Pattern)]
 pub struct PageRulers<'a> {
@@ -393,6 +430,7 @@ pub struct PageRulers<'a> {
     mirrored_even: bool,
     id: IdSource,
     gaps_draggable: bool,
+    face: Option<RulerFace>,
 }
 
 impl<'a> PageRulers<'a> {
@@ -414,7 +452,14 @@ impl<'a> PageRulers<'a> {
             mirrored_even: false,
             id: IdSource::Auto,
             gaps_draggable: true,
+            face: None,
         }
+    }
+
+    /// The face of both rulers ([`TextRuler::face`], [`VerticalRuler::face`]); unset, the scope's component set picks it.
+    pub fn face(mut self, face: RulerFace) -> Self {
+        self.face = Some(face);
+        self
     }
 
     /// Salts the text ruler's id with `salt` (the caret paragraph's key): a new salt is a new ruler, so a drag open on
@@ -443,7 +488,7 @@ impl<'a> PageRulers<'a> {
         self
     }
 
-    /// Shows the tab selector in the corner, with the kind a click sets.
+    /// Shows the tab selector in the canvas's corner, with the kind a click sets.
     pub fn kind(mut self, kind: Option<TabAlign>) -> Self {
         self.kind = kind;
         self
@@ -503,12 +548,13 @@ impl<'a> PageRulers<'a> {
             mirrored_even,
             id,
             gaps_draggable,
+            face,
         } = self;
         let (words, interface_rtl) = {
             let env = Env::of(ui);
             (env.words::<PageRulersWords>(), env.view().direction().is_rtl())
         };
-        let (top_strip, left_strip) = Rulers::strips(ui, canvas_rect);
+        let (top_strip, left_strip, corner) = Rulers::strips(ui, canvas_rect);
         let page_size = (f64::from(page.rect.width()) / page.scale, f64::from(page.rect.height()) / page.scale);
         let shown = edges.reborrow().get().and_then(|edges| edges.same().copied()).unwrap_or_default();
         let rules = MarginRules::new(page_size, shown).gutter(gutter).mirrored_even(mirrored_even);
@@ -519,8 +565,8 @@ impl<'a> PageRulers<'a> {
         let scale = (page.scale as f32).max(f32::EPSILON);
 
         let rtl = right_to_left.unwrap_or(interface_rtl);
-        // The ruler counts from the column's start edge and covers the page's width; both are given as screen x, and the
-        // ruler places its own corner square.
+        // The ruler counts from the column's start edge and covers the page's width; both are given as screen x. With the
+        // tab selector it lies along the top strip and the canvas's corner, which holds the selector.
         let origin = page.rect.min.x + (if rtl { column.1 } else { column.0 }) * scale;
         let extent = Rangef::new(page.rect.min.x, page.rect.max.x);
         let mut horizontal = TextRuler::new(label.clone(), ruler, (column.1 - column.0).max(0.0))
@@ -533,14 +579,22 @@ impl<'a> PageRulers<'a> {
             .scale(scale)
             .right_to_left(rtl)
             .id_source(id);
+        let mut band = top_strip;
         if let Some(kind) = kind {
-            horizontal = horizontal.kind(kind);
+            horizontal = horizontal.kind(kind).corner(corner);
+            band = top_strip.union(corner);
         }
-        let ruler_out = horizontal.show_at(ui, top_strip);
+        if let Some(face) = face {
+            horizontal = horizontal.face(face);
+        }
+        let ruler_out = horizontal.show_at(ui, band);
 
         let vertical_label = Label::from(words.vertical.fill(&[("name", label.as_str())]));
-        let vertical =
-            VerticalRuler::new(vertical_label, page).text(Rangef::new(top as f32, bottom as f32)).unit(unit).rows(rows).show_at(ui, left_strip);
+        let mut vertical = VerticalRuler::new(vertical_label, page).text(Rangef::new(top as f32, bottom as f32)).unit(unit).rows(rows);
+        if let Some(face) = face {
+            vertical = vertical.face(face);
+        }
+        let vertical = vertical.show_at(ui, left_strip);
 
         let margins_label = Label::from(words.margins.fill(&[("name", label.as_str())]));
         let margins =

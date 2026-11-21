@@ -2,8 +2,8 @@
 //! boundaries (violet) and the baseline grid (light blue, from its zoom threshold) are hairlines drawn over the
 //! pages, under the selection.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::view::PlacedPage;
 use craft_behavior::{Input, Metrics, Sense};

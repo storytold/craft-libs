@@ -1,5 +1,5 @@
 //! Value controls: `Disclosure`.
 
 pub mod disclosure;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

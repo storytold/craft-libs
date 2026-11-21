@@ -22,8 +22,8 @@ use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 mod bar;
 mod sizing;
@@ -32,7 +32,7 @@ use bar::panel_names;
 
 pub(super) use bar::{BarRecord, CHEVRON, ColumnGrip, bar_band, bar_name, bar_slots, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
-pub use sizing::{GroupSize, column_cells, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
+pub use sizing::{GroupSize, column_cells, fit_widths, group_heights, scale_widths, stacked, width_bounds};
 
 const DIVIDER: PartKey = PartKey::new("divider");
 const EDGE: PartKey = PartKey::new("edge");
@@ -68,7 +68,7 @@ pub enum ColumnArrow {
     /// Collapses the column to icons, or expands it.
     #[default]
     Collapse,
-    /// Switches a stepped column ([`stepped`]) between one and two steps. Holds the steps it shows.
+    /// Switches a stepped column ([`DockSizes::stepped`](super::DockSizes::stepped)) between one and two steps. Holds the steps it shows.
     Steps(u16),
     /// Nothing: the column neither collapses nor has steps. It shows no double arrow, and its menu offers no
     /// collapse.
@@ -78,11 +78,11 @@ pub enum ColumnArrow {
 impl ColumnArrow {
     /// The arrow of `column`: an expanded column whose panels do not collapse (`collapses` false) switches steps
     /// when it is stepped and has none otherwise; any other column collapses or expands.
-    pub fn of<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, collapses: bool) -> Self {
+    pub fn of<P>(column: &Column<P>, sizes: &DockSizes, spec: &dyn Fn(&P) -> PanelSpec, collapses: bool) -> Self {
         if collapses || column.iconic {
             return ColumnArrow::Collapse;
         }
-        stepped(column, spec).map_or(ColumnArrow::Fixed, |(_, steps)| ColumnArrow::Steps(steps))
+        sizes.stepped(column, spec).map_or(ColumnArrow::Fixed, |(_, steps)| ColumnArrow::Steps(steps))
     }
 
     /// The steps a click gives a stepped column: two from one, else one. `None` for any other arrow.

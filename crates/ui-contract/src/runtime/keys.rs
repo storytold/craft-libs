@@ -33,7 +33,7 @@ pub use input::{down, keyed};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use intents::lent_taken;
 #[doc(hidden)]
 pub use intents::settle;
