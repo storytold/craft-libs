@@ -1,4 +1,4 @@
-use super::canvas::{Rect, clip_text, fill, rect_segs, runs, seg, stroke, text, text_angle, text_at, text_w, widest, wrap};
+use super::canvas::{Rect, clip_text, fill, point_segments, rect_segs, runs, seg, stroke, text, text_angle, text_at, text_w, widest, wrap};
 use super::format::format_value;
 use super::model::{DataLabel, Grouping, Kind, LabelPos, Series, Symbol};
 use super::parse::category_text;
@@ -525,35 +525,51 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
             }
         }
         if s.line {
-            stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), s.line_w.unwrap_or(LINE_W));
+            series_line(out, c, j, &pts);
         }
         if s.markers == Some(true) {
-            markers(out, pts.iter().flatten().copied(), c.marker_colour(j), s);
+            markers(out, &pts, |i| c.marker_colour(j, i), s);
         }
     }
 }
 
-/// A series' point markers in the series' symbol and size (`colour` fills or strokes them), for
-/// lines and scatter charts.
+/// Series `j`'s line through `pts`: one path in the series colour, or, when the chart varies
+/// colours by point ([`Chart::segmented`]), one straight segment per point in the colour of the point it ends at (a
+/// smoothed series is then drawn straight).
+fn series_line(out: &mut Vec<GraphicItem>, c: &Chart, j: usize, pts: &[Option<(f32, f32)>]) {
+    let Some(s) = c.series.get(j) else { return };
+    let w = s.line_w.unwrap_or(LINE_W);
+    if c.segmented(j) {
+        point_segments(out, pts, false, |i| c.point_colour(j, i), w);
+    } else {
+        stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), w);
+    }
+}
+
 /// Half a series' marker size, points; zero when it draws no markers.
 fn marker_half(s: &Series, drawn: bool) -> f32 {
     if drawn { s.marker_size.filter(|v| v.is_finite()).unwrap_or(6.0).clamp(2.0, 72.0) / 2.0 } else { 0.0 }
 }
 
-fn markers(out: &mut Vec<GraphicItem>, pts: impl Iterator<Item = (f32, f32)>, colour: Rgb, s: &Series) {
+/// A series' point markers in the series' symbol and size, for lines and scatter charts; point
+/// `i`'s marker is filled or stroked in `colour(i)`. Missing points have none.
+fn markers(out: &mut Vec<GraphicItem>, pts: &[Option<(f32, f32)>], colour: impl Fn(usize) -> Rgb, s: &Series) {
     const MARKER: f32 = 6.0;
     let size = s.marker_size.filter(|v| v.is_finite()).unwrap_or(MARKER).clamp(2.0, 72.0);
     let h = size / 2.0;
-    let shape = |out: &mut Vec<GraphicItem>, rect: [f32; 4], kind: ShapeKind| {
+    let shape = |out: &mut Vec<GraphicItem>, rect: [f32; 4], kind: ShapeKind, colour: Rgb| {
         out.push(GraphicItem::Shape { rect, kind, fill: Some(colour), stroke: None, stroke_width: 0.0, alpha: 1.0 });
     };
-    let mut strokes = Vec::new();
-    for (x, y) in pts {
+    // Stroked symbols (x, plus, star) of one colour in a row share a path.
+    let mut strokes: Vec<PathSeg> = Vec::new();
+    let mut stroke_colour = None;
+    for (i, (x, y)) in pts.iter().enumerate().filter_map(|(i, p)| p.map(|p| (i, p))) {
+        let colour = colour(i);
         match s.symbol {
-            Symbol::Circle => shape(out, [x - h, y - h, size, size], ShapeKind::Ellipse),
-            Symbol::Square => shape(out, [x - h, y - h, size, size], ShapeKind::Rectangle),
-            Symbol::Dot => shape(out, [x - h / 2.0, y - h / 2.0, h, h], ShapeKind::Ellipse),
-            Symbol::Dash => shape(out, [x - h, y - size / 6.0, size, size / 3.0], ShapeKind::Rectangle),
+            Symbol::Circle => shape(out, [x - h, y - h, size, size], ShapeKind::Ellipse, colour),
+            Symbol::Square => shape(out, [x - h, y - h, size, size], ShapeKind::Rectangle, colour),
+            Symbol::Dot => shape(out, [x - h / 2.0, y - h / 2.0, h, h], ShapeKind::Ellipse, colour),
+            Symbol::Dash => shape(out, [x - h, y - size / 6.0, size, size / 3.0], ShapeKind::Rectangle, colour),
             Symbol::Diamond => fill(
                 out,
                 vec![PathSeg::Move(x, y - h), PathSeg::Line(x + h, y), PathSeg::Line(x, y + h), PathSeg::Line(x - h, y), PathSeg::Close],
@@ -563,6 +579,10 @@ fn markers(out: &mut Vec<GraphicItem>, pts: impl Iterator<Item = (f32, f32)>, co
                 fill(out, vec![PathSeg::Move(x, y - h), PathSeg::Line(x + h, y + h), PathSeg::Line(x - h, y + h), PathSeg::Close], colour)
             }
             Symbol::X | Symbol::Plus | Symbol::Star => {
+                if let Some(prev) = stroke_colour.filter(|c| *c != colour) {
+                    stroke(out, std::mem::take(&mut strokes), prev, MARKER_STROKE);
+                }
+                stroke_colour = Some(colour);
                 if s.symbol != Symbol::Plus {
                     strokes.extend(seg(x - h, y - h, x + h, y + h));
                     strokes.extend(seg(x - h, y + h, x + h, y - h));
@@ -574,7 +594,9 @@ fn markers(out: &mut Vec<GraphicItem>, pts: impl Iterator<Item = (f32, f32)>, co
             }
         }
     }
-    stroke(out, strokes, colour, MARKER_STROKE);
+    if let Some(c) = stroke_colour {
+        stroke(out, strokes, c, MARKER_STROKE);
+    }
 }
 
 /// A polyline through `pts`, a smooth curve (Catmull-Rom pieces) when `smooth` and there are at
@@ -669,10 +691,10 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
             }
         }
         if s.line {
-            stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), s.line_w.unwrap_or(LINE_W));
+            series_line(out, c, j, &pts);
         }
         if s.markers != Some(false) {
-            markers(out, pts.iter().flatten().copied(), c.marker_colour(j), s);
+            markers(out, &pts, |i| c.marker_colour(j, i), s);
         }
     }
 }
