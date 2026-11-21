@@ -84,6 +84,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         comp.props(Internal::new()).theme.clone()
     }
 
+    fn fit_rank(&self, comp: &C) -> Option<u8> {
+        comp.props(Internal::new()).fit_rank
+    }
+
     fn memory_owner(&self, comp: &C) -> Option<Id> {
         comp.props(Internal::new()).owner
     }
@@ -649,6 +653,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             crate::contract::overlay::note_layer_closed(&cx.core.ctx, cx.core.id, why);
         }
         self.write_open(comp, cx);
+        // A drag held at the body's edge scrolls it, unless a scroller inside it took the step.
+        if let Some(scroll) = scroll_of(comp.props(Internal::new()))
+            && let Some(to) = self.edge_step_body(scroll, &cx.core.ctx, self.offset)
+        {
+            self.offset = to;
+        }
         if self.offset != self.offset_at_read || self.anchor != self.anchor_at_read {
             match comp.scroll() {
                 Some(mut bind) => {

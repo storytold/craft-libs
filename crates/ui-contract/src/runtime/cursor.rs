@@ -97,8 +97,15 @@ pub(crate) fn image_target(ctx: &Context) -> Option<ImageTarget> {
     if !shell.cursor_images(native) {
         return None;
     }
+    // A host that keeps its cursors at their size ignores the interface zoom.
+    let follows_zoom = crate::runtime::env::Env::of_root(ctx).cursor_follows_zoom;
+    let scale = match (shell.os == Os::Mac, follows_zoom) {
+        (_, false) => 1.0,
+        (true, true) => zoom,
+        (false, true) => pixels_per_point,
+    };
     Some(ImageTarget {
-        scale: if shell.os == Os::Mac { zoom } else { pixels_per_point },
+        scale,
         max_side: if shell.os == Os::Linux { MAX_SIDE_LINUX } else { MAX_SIDE },
     })
 }

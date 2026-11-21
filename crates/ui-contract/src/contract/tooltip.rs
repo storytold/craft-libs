@@ -222,6 +222,8 @@ struct TipCall<'a> {
 
 fn show_tip(call: TipCall<'_>) {
     let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text, rich, spec, wants_input, pressed, subject } = call;
+    // The host turned tooltips off: none shows, and one that was showing goes as it does when the pointer leaves.
+    let wants_input = wants_input && env.tooltips;
     let state_id = sub(id, "tip_state");
     let has_content = text.is_some() || rich.is_some();
     // A component with no tooltip content and no timer or fading layer left from before has nothing to advance.

@@ -515,7 +515,6 @@ pub(crate) trait Erased {
     fn theme_scope(&self) -> Option<ThemeScope>;
     /// The rank by which the component leaves a shrinking row whole.
     fn fit_rank(&self) -> Option<u8> {
-        // PLAN: `typed.rs` (`Erased for Typed`) and `body/hooks.rs` (`ShapeHooks::fit_rank` reading `ContainerProps::fit_rank`) are not in chrome-w5's Files table; their owner must forward the rank, or no body reports one.
         None
     }
     fn memory_owner(&self) -> Option<Id>;

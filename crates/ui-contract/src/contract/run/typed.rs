@@ -214,6 +214,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.theme_scope(self.comp.get_ref())
     }
 
+    fn fit_rank(&self) -> Option<u8> {
+        self.hooks.fit_rank(self.comp.get_ref())
+    }
+
     fn memory_owner(&self) -> Option<Id> {
         self.hooks.memory_owner(self.comp.get_ref())
     }
