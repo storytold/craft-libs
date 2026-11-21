@@ -185,7 +185,10 @@ fn open_all(paths: &[PathBuf], access: Access) -> Result<Vec<PathBuf>, AccessErr
             return Err(bad("an empty path names no folder".into()));
         }
         if cfg!(windows) {
-            check_windows_names(&without_verbatim_prefix(p).map_err(|e| bad(e.to_string()))?).map_err(|e| bad(e.to_string()))?;
+            let plain = without_verbatim_prefix(p).map_err(|e| bad(e.to_string()))?;
+            check_windows_names(&plain).map_err(|e| bad(e.to_string()))?;
+            let absolute = std::path::absolute(&plain).map_err(|e| bad(e.to_string()))?;
+            check_windows_names(&absolute).map_err(|e| bad(e.to_string()))?;
         }
         let resolved = std::fs::canonicalize(p).map_err(|e| bad(e.to_string()))?;
         if !resolved.is_dir() {
@@ -326,6 +329,8 @@ fn check_share(path: &Path, access: Access, roots: &[PathBuf]) -> Result<(), Acc
     let plain = without_verbatim_prefix(path)?;
     check_windows_names(&plain)?;
     let absolute = std::path::absolute(&plain).map_err(|e| AccessError::Unresolved { path: path.to_path_buf(), reason: e.to_string() })?;
+    // `absolute` turns `//?/` and `//./` into `\\?\` and `\\.\`, so the rules run on its result too.
+    check_windows_names(&absolute)?;
     let Some((server, share)) = network_share(&absolute) else {
         return Ok(());
     };
@@ -608,6 +613,9 @@ mod tests {
             r"\??\C:\work\x.json",
             r"\\?\GLOBALROOT\Device\Mup\server\share\x.json",
             r"\\?\pipe\x",
+            "//?/GLOBALROOT/Device/Mup/server/share/x.json",
+            "//./pipe/x",
+            r"//?\GLOBALROOT\Device\Mup\server\share\x.json",
         ] {
             for roots in [&local[..], &on_share[..]] {
                 assert!(matches!(check(p, roots), Err(AccessError::Verbatim { .. })), "{p}");
@@ -620,6 +628,8 @@ mod tests {
         assert!(matches!(e, AccessError::Verbatim { .. }), "{e}");
         let e = Roots::new(&[PathBuf::from(r"\??\UNC\craft-roots-test.invalid\share")], &[]).unwrap_err();
         assert!(matches!(&e, AccessError::BadRoot { reason, .. } if reason.contains(r"`\??\`")), "a root is checked before it is opened: {e}");
+        let e = Roots::new(&[PathBuf::from("//?/GLOBALROOT/Device/Mup/craft-roots-test.invalid/share")], &[]).unwrap_err();
+        assert!(matches!(&e, AccessError::BadRoot { reason, .. } if reason.contains(r"`\\?\`")), "{e}");
         let _ = std::fs::remove_dir_all(base);
     }
 
