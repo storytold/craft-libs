@@ -467,7 +467,7 @@ fn pick<T: Choice + Copy + PartialEq + Send + Sync>(
 ) {
     let entries: Vec<Entry<T>> = entries::<T>(kind, words).into_iter().map(|(choice, text)| Entry::new(choice, text)).collect();
     field(ui, id, label, enabled, |ui| {
-        let chosen = Select::new(label.clone(), Bind::given(*value), &options).show(ui);
+        let chosen = Select::new(label.clone(), Bind::given(*value), &entries).show(ui);
         if let Some(next) = chosen.value().cloned() {
             *value = next;
         }

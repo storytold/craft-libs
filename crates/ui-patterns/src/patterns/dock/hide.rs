@@ -54,6 +54,8 @@ impl<'a, P: Clone + Eq + Hash> Prune<'a, P> {
             HidePanels::None => true,
             HidePanels::All => false,
             HidePanels::Except(keep) => keep(panel),
+            // A way of hiding this code does not know hides nothing.
+            _ => true,
         };
         Prune { hide, keep: Some(Box::new(keep)), floating }
     }

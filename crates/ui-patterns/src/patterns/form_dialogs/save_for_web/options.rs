@@ -404,10 +404,10 @@ fn color_table_section(ui: &mut Ui, kit: &Kit<'_>, live: &mut Live, asked: &mut 
             ("trash", &words.delete_color, ColorTableEdit::Delete),
         ];
         Row::new().id_salt("table-tools").show(ui, |ui, _| {
-            for (icon, label, edit) in tools {
-                let button = IconButton::new(IconId::new(icon)).label(label.clone()).enabled(!selected.is_empty()).id_salt(icon).show(ui);
+            for (icon, label, edit) in &tools {
+                let button = IconButton::new(IconId::new(*icon)).label((*label).clone()).enabled(!selected.is_empty()).id_salt(*icon).show(ui);
                 if clicked(&button) {
-                    asked.table.push(ColorTableEvent { edit, colors: selected.clone() });
+                    asked.table.push(ColorTableEvent { edit: edit.clone(), colors: selected.clone() });
                 }
             }
             let more = IconButton::new(IconId::new("more")).label(words.table_menu.clone()).id_salt("menu").show(ui);

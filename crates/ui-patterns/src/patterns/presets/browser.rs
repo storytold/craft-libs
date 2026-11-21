@@ -826,7 +826,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
                 let preview = row.preview.clone();
                 move |cx: &ContentPainterCx, rect: Rect, painter: Option<&ThumbPainter<'_, K>>| match (painter, &preview) {
                     (Some(painter), _) => (painter.0)(cx, rect, ThumbInfo::new(&key, selected, false)),
-                    (None, Some(preview)) => (preview.paint)(cx, rect),
+                    (None, Some(preview)) => preview.paint.paint(cx, rect),
                     (None, None) => {}
                 }
             };
