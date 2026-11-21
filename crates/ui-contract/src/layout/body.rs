@@ -9,6 +9,7 @@ use crate::runtime::layout_memory;
 use crate::runtime::measure;
 use crate::runtime::memory::sub;
 use crate::runtime::pass_state;
+use craft_behavior::layout_memory::measure_tolerance;
 use craft_behavior::{Axis, ColumnWidth, Flow, GridCursor, GridMeasure};
 use egui::{Id, IdMap, Rect, Ui, Vec2};
 use std::borrow::Cow;
@@ -471,19 +472,34 @@ pub fn plan_levels(units: &[Vec<f32>], room: f32) -> Vec<usize> {
 /// continuous units leave at their least), and the continuous units narrow by their own rule in what is left. The level
 /// is kept with the row's measuring run, so a pass without one (nothing the row measures changed) shows each unit once,
 /// at its kept level. Outside a shrinking row the unit shows at level 0.
+///
+/// The unit shows on the row's line: a child of it that fills its height takes the line's height, as a direct child of
+/// the row does (`fill_size`). Its children are placed in the unit's own flow, not on slots of the line, and report no
+/// line to the row: a unit of two controls stays one line high. At its level it runs in the width the shrink step gave
+/// that level, a bounded room even in a row that scrolls, so its content lays out as in any room of that width: a
+/// centred row in it centres across its column, not in the view the row scrolls in.
 pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&mut Ui, usize)) {
     let ctx = ui.ctx().clone();
     let shrink = Env::of(ui).shrink;
-    // The unit's content is no unit of the row: it runs in a room of its own.
-    let own_room = Env::of(ui).derive_local(|scoped| scoped.start_room());
+    // The unit's content is no unit of the row: it runs in a room of its own, on the row's line only to fill it. Its
+    // children take no slots on the line and report nothing to the row: the unit's block is what stands in the row.
+    let line = Env::of(ui).row_line.map(|line| RowLine { places: false, ..line });
+    let own_room = Env::of(ui).derive_local(|scoped| {
+        scoped.start_room();
+        scoped.row_line = line;
+    });
     match shrink {
         Some(Shrink::Count(row)) => {
             let rtl = Env::of(ui).direction.is_rtl();
             let mut widths = Vec::with_capacity(levels);
             let mut widest = Vec2::ZERO;
-            // Each level measures at what it takes in no room: unbounded along x, in a region as wide as the row's.
-            // An infinite egui region would put right-to-left content's start edge at infinity.
-            let no_room = own_room.derive_local(|scoped| scoped.unbounded.0 = true);
+            // Each level measures at what it takes in no room: unbounded along x, in a region as wide as the row's,
+            // and off the row's line, which a probe is not placed on. An infinite egui region would put
+            // right-to-left content's start edge at infinity.
+            let no_room = own_room.derive_local(|scoped| {
+                scoped.unbounded.0 = true;
+                scoped.row_line = None;
+            });
             let width = ui.max_rect().width();
             for level in 0..levels.max(1) {
                 let installed = Env::install_for(ui, no_room.clone());
@@ -505,10 +521,28 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
         // The probe for the leasts of body units asks nothing of a levelled unit: its least is its last level.
         Some(Shrink::Least(_)) => {}
         Some(Shrink::Apply(row)) => {
-            let level = level_of(&ctx, row, key).min(levels.saturating_sub(1));
-            let installed = Env::install_for(ui, own_room);
-            show(ui, level);
-            Env::restore(&ctx, installed);
+            let (level, width) = level_of(&ctx, row, key);
+            let level = level.min(levels.saturating_sub(1));
+            match width {
+                Some(width) => {
+                    let rtl = Env::of(ui).direction.is_rtl();
+                    let bounded = own_room.derive_local(|scoped| scoped.unbounded.0 = false);
+                    // Half a pixel past the width the level measured at, as a bounded re-run of a measured body is given:
+                    // content that took exactly that width lays out the same here, never wrapping on a rounding.
+                    let width = width + measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
+                    let rect = Flow::new(ui.available_rect_before_wrap(), rtl).span(0.0, width);
+                    child::block(ui, Some(rect), child::column_layout(rtl), |ui| {
+                        let installed = Env::install_for(ui, bounded);
+                        show(ui, level);
+                        Env::restore(&ctx, installed);
+                    });
+                }
+                None => {
+                    let installed = Env::install_for(ui, own_room);
+                    show(ui, level);
+                    Env::restore(&ctx, installed);
+                }
+            }
         }
         Some(Shrink::Fit) | None => {
             let installed = Env::install_for(ui, own_room);
@@ -518,11 +552,13 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
     }
 }
 
-/// The level the shrink step of the row `row` gave its levelled unit `unit`: 0 without a record. The record keeps the
-/// level as the measure's height, which a row's shrink record has no other use for.
-fn level_of(ctx: &egui::Context, row: Id, unit: Id) -> usize {
+/// The level the shrink step of the row `row` gave its levelled unit `unit`, with the unit's width at that level: 0 and
+/// no width without a record. The record keeps the level as the measure's height, which a row's shrink record has no
+/// other use for.
+fn level_of(ctx: &egui::Context, row: Id, unit: Id) -> (usize, Option<f32>) {
     // A level is a small whole number written as `level as f32`: the cast back is exact.
-    layout_memory::shrink(ctx, shrink_key(row, unit)).map_or(0, |(found, _)| found.took.y.max(0.0) as usize)
+    layout_memory::shrink(ctx, shrink_key(row, unit))
+        .map_or((0, None), |(found, _)| (found.took.y.max(0.0) as usize, Some(found.took.x).filter(|width| width.is_finite() && *width > 0.0)))
 }
 
 /// Reports the least width of the body unit `body` of the row `row` that asks for it.
@@ -1186,7 +1222,7 @@ pub fn place_in_flow(ui: &mut Ui, size: Vec2) -> Rect {
 /// and its first line to the container whose header or body it starts.
 pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     let env = Env::of(ui);
-    let (line, target) = (env.row_line, env.first_line);
+    let (line, target) = (env.row_line.filter(|line| line.places), env.first_line);
     let child = InFlow { first: if child.line { child.first } else { one_line(child.first, size.y) }, ..child };
     // A one-line child of a bracketed row sits with its centre on the bracket's middle, between the controls its
     // rows reported before it.
@@ -1596,11 +1632,14 @@ pub(crate) fn members_line(ctx: &egui::Context, body: Id) -> Option<RowLine> {
         body,
         centre: Some(took.x),
         height: Some(took.y),
+        settled: true,
+        places: true,
     })
 }
 
 /// The line the unwrapped `Row` body `body` sets its children on: its own (`centre`, `height`), or the line `shared`
-/// high it shares with its container's inline header or end region, centred, when that centre is lower.
+/// high it shares with its container's inline header or end region, centred, when that centre is lower. Only its own
+/// line, which this pass's measuring run recorded, is settled.
 fn on_line(body: Id, own: Option<(f32, f32)>, shared: Option<f32>) -> RowLine {
     let (centre, height) = match (own, shared) {
         (Some((centre, height)), Some(shared)) => {
@@ -1611,17 +1650,20 @@ fn on_line(body: Id, own: Option<(f32, f32)>, shared: Option<f32>) -> RowLine {
         (None, Some(shared)) => (Some(shared / 2.0), Some(shared)),
         (None, None) => (None, None),
     };
-    RowLine { body, centre, height }
+    RowLine { body, centre, height, settled: own.is_some(), places: true }
 }
 
 /// Starts a sweep of a body's children in a measuring run: the body's first-line `target` and, for the unwrapped
-/// `Row` body `row`, its line start afresh.
-fn open_sweep(ctx: &egui::Context, target: Option<Id>, row: Option<Id>) {
+/// `Row` body `row`, its line start afresh, `least` high at least (`ContainerProps::least_height`).
+fn open_sweep(ctx: &egui::Context, target: Option<Id>, row: Option<Id>, least: f32) {
     if let Some(target) = target {
         open_first_lines(ctx, &[target]);
     }
     if let Some(row) = row {
-        pass_state::with::<RowLines, _>(ctx, |rows| rows.0.insert(row, LineTook::default()));
+        // The least height counts as a child of more than one line that high.
+        let mut took = LineTook::default();
+        took.add(None, least.max(0.0));
+        pass_state::with::<RowLines, _>(ctx, |rows| rows.0.insert(row, took));
     }
 }
 
@@ -1668,21 +1710,32 @@ fn found(ctx: &egui::Context, sizing: bool, id: Id, room: Vec2, took: Vec2) {
 /// the gap and size columns from the cells as they come.
 #[cfg(feature = "testing")]
 pub(crate) fn run_body<R>(ui: &mut Ui, env: &Env, id: Id, layout: &BodyLayout, gap: Vec2, body: impl FnMut(&mut Ui) -> R) -> R {
-    run_body_measured(ui, env, id, layout, gap, None, body).0
+    run_body_measured(ui, env, id, layout, gap, BodyLine::default(), body).0
+}
+
+/// What an unwrapped `Row` body's line starts from besides its children: the line `shared` with its container's inline
+/// header or end region, which the children are centred on, and the `least` height of the line
+/// (`ContainerProps::least_height`), which counts as a child of more than one line that high.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BodyLine {
+    pub(crate) shared: Option<f32>,
+    pub(crate) least: f32,
 }
 
 /// `run_body`, with the width the children take at the gap alone for a `Row` that places its block itself (`End`,
-/// `Center`, `SpaceBetween`): the width the body asks for, where the room it is placed in spans wider. `shared` is the
-/// line the body shares with its container's inline header or end region: an unwrapped `Row` sets its children on it.
+/// `Center`, `SpaceBetween`): the width the body asks for, where the room it is placed in spans wider. `line` is what
+/// an unwrapped `Row` body's line starts from: the line it shares with its container's inline header or end region,
+/// which it sets its children on, and its least height.
 pub(crate) fn run_body_measured<R>(
     ui: &mut Ui,
     env: &Env,
     id: Id,
     layout: &BodyLayout,
     gap: Vec2,
-    shared: Option<f32>,
+    line: BodyLine,
     mut body: impl FnMut(&mut Ui) -> R,
 ) -> (R, Option<f32>) {
+    let BodyLine { shared, least } = line;
     let rtl = env.direction.is_rtl();
     let ctx = ui.ctx().clone();
     let sizing = measure::active(&ctx);
@@ -1692,7 +1745,7 @@ pub(crate) fn run_body_measured<R>(
     // Each sweep and the real run start the body's flow, and a bracketed row's reports, afresh.
     let (after_rule, bracket) = (env.after_rule, env.bracket == Some(id));
     let body = |ui: &mut Ui| {
-        open_sweep(&ctx, target, row);
+        open_sweep(&ctx, target, row, least);
         pass_state::with::<FlowStarts, _>(&ctx, |starts| starts.0.insert(id, after_rule));
         if bracket {
             pass_state::with::<Brackets, _>(&ctx, |brackets| brackets.0.insert(id, BracketTook::default()));
