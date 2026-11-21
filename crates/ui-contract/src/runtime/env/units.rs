@@ -55,9 +55,7 @@ craft_ui::words! {
         yards_name: "units.yardsName" = "Yards";
         metres_name: "units.metresName" = "Metres";
         q_name: "units.qName" = "Q";
-        ha_name: "units.haName" = "H";
-        letters_name: "units.lettersName" = "Letters";
-        hyphens_name: "units.hyphensName" = "Hyphens";
+        ha_name: "units.haName" = "Ha";
     }
 }
 
@@ -151,7 +149,8 @@ pub enum UnitKind {
 }
 
 impl UnitKind {
-    /// The kinds that measure a length, which [`per_inch`](Self::per_inch) answers for: what a length field offers.
+    /// The lengths a unit choice offers. [`per_inch`](Self::per_inch) answers for more kinds (feet, yards, metres, Q,
+    /// Ha), which a typed number still reads.
     pub const LENGTHS: [UnitKind; 5] = [UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
 
     /// The kind a [`Reader`](craft_behavior::Reader) tag names: the tags `reader_over` registers are indexes of `ALL`.
@@ -321,8 +320,8 @@ impl ColumnSize {
 }
 
 /// A length kept in one unit and shown in another: what a length field reads and writes (`stored`, the document's
-/// unit) and what it shows and parses bare numbers in (`shown`, the user's unit). Both are `UnitKind::Pixels` or one
-/// of [`UnitKind::LENGTHS`]; the document's resolution sizes pixels.
+/// unit) and what it shows and parses bare numbers in (`shown`, the user's unit). Both are `UnitKind::Pixels` or any
+/// kind [`UnitKind::per_inch`] answers; the document's resolution sizes pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct LengthUnits {
