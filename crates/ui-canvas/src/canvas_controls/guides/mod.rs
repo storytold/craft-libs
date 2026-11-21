@@ -95,6 +95,8 @@ pub struct GuideStyle {
     focus: FocusLook,
     /// The width of a guide line.
     width: f32,
+    /// The width of the key guide's line.
+    key_width: f32,
     dash: f32,
     gap: f32,
 }
@@ -151,7 +153,6 @@ pub struct Guides<'a> {
     selected: &'a [GuideKey],
     /// The key guide, stroked at `stroke.medium`.
     #[prop]
-    #[allow(dead_code)] // P3(canvas-w5): cv.F27
     key_guide: Option<GuideKey>,
     /// Whether the pointer and the keyboard take guides (the Move tool, or the selection tools). Off, the guides only
     /// draw.
@@ -218,7 +219,7 @@ impl<'a> Guides<'a> {
 
     /// The first selected guide, the one the keys and the pointer act on.
     fn lead_selected(&self) -> Option<GuideKey> {
-        self.selected.first().copied() // P3(canvas-w5): cv.F27
+        self.selected.first().copied()
     }
 
     /// The positions a guide may be moved to with the keyboard.
@@ -472,6 +473,7 @@ impl Component for Guides<'_> {
             selected: cx.color(tokens.color.accent.solid),
             focus,
             width: tokens.stroke.thin,
+            key_width: tokens.stroke.medium,
             dash: tokens.stroke.dash,
             gap: tokens.stroke.dash_gap,
         }
@@ -504,7 +506,7 @@ impl Component for Guides<'_> {
                 .priority(HitPriority::new(HitLevel::Edge, 0))
                 .cursor(resize_cursor(&space.view, motion_across(guide.along)))
                 .focusable();
-            if self.lead_selected() == Some(guide.key) {
+            if self.selected.contains(&guide.key) {
                 part.selected().flags(Flags::SELECTED);
             }
             any = true;
@@ -538,15 +540,16 @@ impl Component for Guides<'_> {
         let focused = cx.focus_visible().then(|| cx.active_part()).flatten().filter(|part| part.key == GUIDE).and_then(|part| part.index);
         for guide in guides {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
-            let color =
-                if self.lead_selected() == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let key = self.key_guide == Some(guide.key);
+            let color = if key || self.selected.contains(&guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let width = if key { style.key_width } else { style.width };
             match guide.line {
-                GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(style.width) }, a, b, ppp)),
+                GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(width) }, a, b, ppp)),
                 GuideLine::Dashed => painter.dashed(&[a, b], Dashes::new(style.dash, style.gap), StrokeWidth::Thin, color),
-                GuideLine::Dots => painter.dashed(&[a, b], Dashes::new(style.width, style.gap), StrokeWidth::Thin, color),
+                GuideLine::Dots => painter.dashed(&[a, b], Dashes::new(width, style.gap), StrokeWidth::Thin, color),
             }
             if focused == Some(guide.key.get()) && (b - a).length() > 0.0 {
-                painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &footprint(&space, a, b, style.width), ppp));
+                painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &footprint(&space, a, b, width), ppp));
             }
         }
     }

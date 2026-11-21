@@ -458,7 +458,7 @@ note = "The modifiers held come from the press of the guide's part."
 [[setter]]
 type = "Guides"
 old = "selected(Option<u64>)"
-new = "selected_guide(GuideKey)"
+new = "selected_guides(&[GuideKey])"
 
 [[setter]]
 type = "Guides"

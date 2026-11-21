@@ -47,7 +47,7 @@ fn drag_first(fixture: &mut Fixture) {
 fn guides_over_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let guides = data.value("guides", guides());
     on_guides_canvas(ui, |ui, at, canvas| {
-        Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).selected_guides(&[GuideKey::new(2)]).show_at(ui, at) // P3(canvas-w5): cv.F27
+        Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).selected_guides(&[GuideKey::new(2)]).show_at(ui, at)
     })
 }
 
@@ -84,4 +84,24 @@ fn bounded_guides(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let guides = data.value("guides", guides());
     let page = DocRect::new(120.0, 80.0, 520.0, 320.0);
     on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).bounds(page).show_at(ui, at))
+}
+
+#[story(Guides<'static>, covers = [Default], drive = Drive::Never)]
+fn guides_with_several_selected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let guides = data.value("guides", guides());
+    on_guides_canvas(ui, |ui, at, canvas| {
+        Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).selected_guides(&[GuideKey::new(1), GuideKey::new(2)]).show_at(ui, at)
+    })
+}
+
+#[story(Guides<'static>, covers = [Default], drive = Drive::Never)]
+fn guides_with_a_key_guide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let guides = data.value("guides", guides());
+    on_guides_canvas(ui, |ui, at, canvas| {
+        Guides::new("Guides", canvas, Bind::bound(&mut *guides))
+            .interactive(true)
+            .selected_guides(&[GuideKey::new(2)])
+            .key_guide(GuideKey::new(1))
+            .show_at(ui, at)
+    })
 }

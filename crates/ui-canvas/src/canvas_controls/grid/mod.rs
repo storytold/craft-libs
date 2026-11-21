@@ -7,7 +7,7 @@ pub(super) mod stories;
 
 use crate::canvas::{CanvasSpace, GuideLine, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
-use crate::primitives::{GridInk, GridLook, GridStroke, grid_lines_with};
+use crate::primitives::{GridInk, GridLook, GridStroke, PaintSlot, grid_lines_with};
 use crate::runtime::env::Label;
 use crate::runtime::memory::Remember as _;
 use crate::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
@@ -118,7 +118,6 @@ pub struct CanvasGrid {
     /// The grid's shapes go into the canvas picture slot in show order, so shown before the picture the grid lies
     /// under the art; outside a slot it paints in place.
     #[prop(flag, name = "picture")]
-    #[allow(dead_code)] // P3(canvas-w5): cv.F28
     under_pictures: bool,
 }
 
@@ -227,11 +226,15 @@ impl Component for CanvasGrid {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        if canvas_space(&cx.env).is_none() {
-            return;
-        }
+        let Some(space) = canvas_space(&cx.env) else { return };
         let shapes = cx.recall::<GridShapes>().shapes;
-        ui.content_painter(cx).painter.extend(shapes.iter().cloned());
+        let painter = ui.content_painter(cx);
+        let first = (self.under_pictures && space.picture_slot().is_some()).then(|| PaintSlot::reserve(&painter.painter));
+        painter.painter.extend(shapes.iter().cloned());
+        if let Some(first) = first {
+            let ctx = painter.painter.ctx().clone();
+            space.paint_picture(&ctx, first.take_after(&ctx));
+        }
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {

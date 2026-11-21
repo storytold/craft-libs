@@ -281,10 +281,12 @@ impl<'a> Rulers<'a> {
             PressPhase::Drag { pos, .. } => (GesturePhase::Update, pos),
             PressPhase::Release { pos, click: false, .. } => (GesturePhase::Commit, pos),
             PressPhase::Cancel { .. } => (GesturePhase::Cancel, start.origin),
+            PressPhase::Down { .. } if press.double_pressed() => (GesturePhase::Commit, start.origin),
             _ => return None,
         };
         let along = if press.mods.alt { across_axis(part.guide_along()) } else { part.guide_along() };
-        let at = (phase != GesturePhase::Cancel && content.contains(pos)).then(|| {
+        // PLAN: a double press lies on the strip itself, outside `content`; the guides' bounds decide whether it lands.
+        let at = (phase != GesturePhase::Cancel && (press.double_pressed() || content.contains(pos))).then(|| {
             let across = coordinate_across(along, space.view.to_doc(pos));
             if press.mods.shift {
                 let (text, _) = space.rulers().across(along);

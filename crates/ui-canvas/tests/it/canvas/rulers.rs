@@ -1,9 +1,16 @@
 //! The ruler tick rule (`Rulers::ticks`): labelled ticks stay at least `LABEL_STEP_MIN` apart at every zoom.
 
-use craft_behavior::{RulerUnits, Ticks};
-use craft_ui::canvas::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, Rulers, StepLadder, TickRule};
+use craft_behavior::kurbo::Point;
+use craft_behavior::{CanvasView, RulerUnits, Ticks};
+use craft_ui::canvas::{Canvas, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerText, Rulers, StepLadder, TickRule};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::TickRank;
-use craft_ui::testing::trial;
+use craft_ui::runtime::env::UnitKind;
+use craft_ui::testing::{Fixture, trial};
+use egui::{Pos2, Rect, Vec2};
+use std::cell::Cell;
+use std::collections::BTreeSet;
+use std::rc::Rc;
 
 /// Screen points per document unit, from far out to deep in.
 const ZOOMS: [f64; 10] = [0.01, 0.0625, 0.25, 1.0 / 3.0, 1.0, 3.7, 16.0, 64.0, 320.0, 3200.0];
@@ -56,4 +63,37 @@ fn a_five_character_vertical_label_fits_the_least_label_step() {
         let pitch = tokens.typography.get(craft_theme::TypeRole::Caption).size;
         assert!(5.0 * pitch + tokens.space.gap.tight < LABEL_STEP_MIN, "{mode:?}: five characters at pitch {pitch}");
     }
+}
+
+/// The vertical extents of the tick marks the top strip paints over a canvas whose view is turned by `degrees`.
+fn top_tick_extents(degrees: f64) -> BTreeSet<(i32, i32)> {
+    let room = Vec2::new(800.0, 600.0);
+    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, room), Point::new(400.0, 300.0), 1.0).rotation(degrees);
+    let text = RulerText::new(RulerUnits::pixels(), UnitKind::Pixels);
+    let content = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&content);
+    let mut zero = Point::ZERO;
+    let mut fixture = Fixture::new(move |ui| {
+        Canvas::new("Document").view(view).show_rulers(true).rulers(text, text, Point::ZERO).show(ui, |ui, body| {
+            seen.set(Rulers::new("Rulers", Bind::bound(&mut zero)).show_at(ui, body.rect).content_rect());
+        });
+    });
+    fixture.room(room);
+    fixture.settle();
+    let strip_bottom = content.get().min.y;
+    fixture
+        .frame_shapes()
+        .iter()
+        .map(|shape| shape.visual_bounding_rect())
+        .filter(|bounds| bounds.width() < 3.0 && bounds.height() > 1.0 && bounds.max.y <= strip_bottom + 0.5)
+        .map(|bounds| ((bounds.min.y * 10.0).round() as i32, (bounds.max.y * 10.0).round() as i32))
+        .collect()
+}
+
+#[trial]
+fn ticks_stay_level_and_the_zero_label_sits_at_the_zero_point_in_a_turned_view() {
+    let level = top_tick_extents(0.0);
+    let turned = top_tick_extents(30.0);
+    assert!(!turned.is_empty(), "the turned view's top strip has tick marks");
+    assert!(turned.is_subset(&level), "tick marks keep the lengths and cross coordinates of the level view: {turned:?} against {level:?}");
 }
