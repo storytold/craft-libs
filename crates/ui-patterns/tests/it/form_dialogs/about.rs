@@ -95,6 +95,38 @@ fn the_listed_about_sets_its_blocks_apart() {
     assert!(before_caption > within + 1.0, "the built-with line stands apart from the links: {before_caption} against {within}");
 }
 
+// The centred layout (the default) sets its blocks apart: the gap from the version to the community button, from the
+// button to the link row and from the link row to the built-with line is wider than the one from the blurb to the
+// version. The button and the link row stand centred in the dialog, also when the dialog is wider than its lines.
+#[trial]
+fn the_centred_about_sets_its_blocks_apart_and_centres_the_button_and_links() {
+    let info = AboutInfo::new("PhotoCraft", "An image editor.", "1.0")
+        .community(AboutLink::new("Chat", "https://chat.example"))
+        .links([AboutLink::new("Website", "https://example.org"), AboutLink::new("Source", "https://example.org/source")])
+        .built_with("MIT");
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&info, &CREDITS).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let [chat, website, source] = ["Chat", "Website", "Source"].map(|name| fixture.by_label(name).expect("every link shows").rect);
+    let painted = |text: &str| fixture.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect).expect("the text shows");
+    let (blurb, version, caption) = (painted("An image editor."), painted("Version 1.0"), painted("MIT"));
+    let within = version.top() - blurb.bottom();
+    for (gap, what) in [
+        (chat.top() - version.bottom(), "the button stands apart from the version"),
+        (website.top() - chat.bottom(), "the links stand apart from the button"),
+        (caption.top() - source.bottom(), "the built-with line stands apart from the links"),
+    ] {
+        assert!(gap > within + 1.0, "{what}: {gap} against {within}");
+    }
+    // Centred across the body: the button and the link row share one middle, the dialog's.
+    let middle = fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect.center().x;
+    let links = website.union(source);
+    assert!((chat.center().x - links.center().x).abs() < 1.0, "the button and the link row share a middle: {chat:?}, {links:?}");
+    assert!((chat.center().x - middle).abs() < 1.0, "the button is centred: {} against {middle}", chat.center().x);
+    assert!(blurb.left() < chat.left() - 10.0, "the blurb still starts at the start edge");
+}
+
 /// The listed layout is a wide dialog (`LeastWidth::WideDialog`), as WordCraft's About: wider than the centred one
 /// with the same text.
 #[trial]
