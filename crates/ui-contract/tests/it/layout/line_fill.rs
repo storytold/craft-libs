@@ -1,8 +1,9 @@
 //! Filling the line of a row that takes its height from its content: a levelled unit stands on the row's line, a
-//! container that fills its height there runs its body in the line's height from the first frame, and a centred row in
-//! a unit of a row that scrolls centres across its own column, not in the view.
+//! container that fills its height there runs its body in the line's height from the first frame and measures its
+//! content while the row measures, and a centred row in a unit of a row that scrolls centres across its own column, not
+//! in the view.
 
-use craft_ui::contract::{ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{ContainerProps, HeaderRegion, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::{BodyLayout, RowAlign, levelled_unit};
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::body::Slab;
@@ -45,6 +46,32 @@ fn a_levelled_unit_stands_on_its_rows_line() {
         assert!(
             (fill.top() - row.top()).abs() <= SNAP && (fill.bottom() - row.bottom()).abs() <= SNAP,
             "{when}: the unit's filling child {fill:?} spans the row's line {row:?}"
+        );
+    }
+}
+
+/// A container that fills its height, on a row that shares its line with an inline header, measures its content while
+/// the row measures: the shared line, shorter than the content, never caps it, and both its lines show in the row.
+#[trial]
+fn a_fill_height_container_on_a_shared_line_shows_all_its_content() {
+    let (column, first, second) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let props = ContainerProps::new().layout(BodyLayout::row()).header(HeaderRegion::new().inline(true));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut egui::Ui| {
+        Slab::new(props.clone()).id_salt("bar").show(ui, |ui, _| {
+            Panel::new().layout(BodyLayout::stack()).sizing(Sizing::FillHeight).seen(&column).id_salt("column").show(ui, |ui, _| {
+                Probe::new(&first).id_salt("first").show(ui);
+                Probe::new(&second).id_salt("second").show(ui);
+            });
+        });
+    };
+    for (frames_run, when) in [(1, "in the first frame"), (4, "once settled")] {
+        frames.idle(frames_run, &mut show);
+        let (column, first, second) = (column.borrow().rect, first.borrow().rect, second.borrow().rect);
+        assert!(second.top() >= first.bottom() - SNAP, "{when}: the second line {second:?} sits under the first {first:?}");
+        assert!(
+            first.top() >= column.top() - SNAP && second.bottom() <= column.bottom() + SNAP,
+            "{when}: the column {column:?} holds both its lines, {first:?} and {second:?}"
         );
     }
 }

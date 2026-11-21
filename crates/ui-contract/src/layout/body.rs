@@ -1535,11 +1535,13 @@ pub(crate) fn members_line(ctx: &egui::Context, body: Id) -> Option<RowLine> {
         body,
         centre: Some(took.x),
         height: Some(took.y),
+        settled: true,
     })
 }
 
 /// The line the unwrapped `Row` body `body` sets its children on: its own (`centre`, `height`), or the line `shared`
-/// high it shares with its container's inline header or end region, centred, when that centre is lower.
+/// high it shares with its container's inline header or end region, centred, when that centre is lower. Only its own
+/// line, which this pass's measuring run recorded, is settled.
 fn on_line(body: Id, own: Option<(f32, f32)>, shared: Option<f32>) -> RowLine {
     let (centre, height) = match (own, shared) {
         (Some((centre, height)), Some(shared)) => {
@@ -1550,7 +1552,7 @@ fn on_line(body: Id, own: Option<(f32, f32)>, shared: Option<f32>) -> RowLine {
         (None, Some(shared)) => (Some(shared / 2.0), Some(shared)),
         (None, None) => (None, None),
     };
-    RowLine { body, centre, height }
+    RowLine { body, centre, height, settled: own.is_some() }
 }
 
 /// Starts a sweep of a body's children in a measuring run: the body's first-line `target` and, for the unwrapped

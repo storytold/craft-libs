@@ -294,7 +294,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.held = self.held(props, &env);
         self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(_)));
         self.in_column = label::in_column(ui);
-        self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
+        self.given.1 |= self.given_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
         let room = self.room.x - 2.0 * self.pads(props, scx.tokens).x;
@@ -317,7 +317,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let plan = self.measure_plan(at, cx.core.id, scrolled_share);
         let (vertical, pad) = (plan.vertical, plan.pad);
         let took = match plan.reused {
-            Some(reused) => self.take_reused(at, plan, reused),
+            Some(reused) => self.take_reused(plan, reused),
             // A share of a scrolling view is laid out as given while the content fits it, so the children that fill
             // share it; taller, the body takes its content height (the children that fill at their least) and the view
             // scrolls.
@@ -1808,6 +1808,7 @@ impl BodyHooks<'_> {
             None => self.mount_room(&props, at.ui, id, at.at, at.scx.tokens),
         };
         self.given = self.given_axes(&props, at.env, at.at);
+        self.given.1 |= self.given_room(&props, at.env, at.at, at.ui.ctx(), id);
         self.fixed_height = self.fixed_height(&props, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
         self.held = self.held(&props, at.env);
@@ -1871,14 +1872,9 @@ impl BodyHooks<'_> {
     }
 
     /// A record that serves: it stands for the run, and a kept one is noted under this run's inputs too.
-    fn take_reused(&mut self, at: &Measuring<'_, '_>, plan: MeasurePlan, (took, found): (Vec2, bool)) -> Vec2 {
-        let (ctx, id) = (&plan.ctx, plan.id);
+    fn take_reused(&mut self, plan: MeasurePlan, (took, found): (Vec2, bool)) -> Vec2 {
         if found {
-            layout_memory::kept_also_under(ctx, id, plan.key);
-        }
-        // A capped body whose content outgrew its room was laid out as given it: the record of its content says so.
-        if self.over_room(&self.props, at.env, at.at, ctx, id) {
-            self.given.1 = true;
+            layout_memory::kept_also_under(&plan.ctx, plan.id, plan.key);
         }
         took
     }
@@ -1893,6 +1889,8 @@ impl BodyHooks<'_> {
     }
 
     /// The measuring run of a capped body: its content height while that fits the room, else laid out as given the room.
+    /// A body already given its room (`given_room`: on its row's settled line, which holds the content the row measured)
+    /// fits it as laid out.
     fn measure_capped<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>, plan: MeasurePlan) -> Vec2 {
         let fits = self.room.y + plan.tolerance;
         let (content, kept) = crate::contract::draft(&plan.ctx, || self.measure_run(comp, at, cx, plan.key.clone(), None), |took| took.y <= fits);

@@ -119,8 +119,8 @@ impl<'b> BodyHooks<'b> {
     /// A container that fits its content in a bar (`ContainerProps::content_in_bar`) is not given the width there.
     /// A fill-width container whose body is a row, shown on the line of a row given its height, is given that height
     /// too: the line is a fixed cross extent, and the container fills it (a bar in a shell slot). A container that
-    /// fills its height on the line of a row that takes its height from its content is given the line's height once
-    /// the row's measuring run settled it (`line_height`).
+    /// fills its height where its parent sizes from its content is capped (`capped`), and `given_room` decides whether
+    /// it is given its room.
     pub(super) fn given_axes(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> (bool, bool) {
         let sizing = self.sizing(props);
         let fills_line = sizing == Sizing::FillWidth && unwrapped_row(props) && env.row_line.is_some();
@@ -128,22 +128,23 @@ impl<'b> BodyHooks<'b> {
         let (x, y) = (!sizing.content_width() && !fits_bar, sizing.fills_height() || fills_line);
         match (at, &props.mount) {
             (ShowAt::Rect(_), _) => (true, true),
-            (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && (!env.content.1 || self.line_height(props, env, at).is_some())),
+            (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && !env.content.1),
             (ShowAt::Flow, _) => (x, y),
         }
     }
 
     /// The height of the line an inline container that fills its height stands on, where `env` is its parent's: the
     /// line of an unwrapped row that takes its height from its content, once this pass's measuring run of the row
-    /// settled it. The container takes that height (`layout::fill_size`) and its body runs in it, so the children in
-    /// it that fill share it: a ribbon group as tall as the tallest group, its title at its foot. In the row's
-    /// measuring run there is no line yet, and the container measures its content.
+    /// settled it. The container's room is that height (`mount_room`), and it is given the room (`given_room`): its
+    /// body runs in it, so the children in it that fill share it (a ribbon group as tall as the tallest group, its
+    /// title at its foot). In the row's measuring run there is no settled line, not even where the row shares a line
+    /// with an inline header or an end region, and the container measures its content.
     pub(super) fn line_height(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> Option<f32> {
         let inline = matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline));
         if !(inline && self.sizing(props).fills_height() && env.content.1) {
             return None;
         }
-        env.row_line.and_then(|line| line.height).filter(|height| height.is_finite() && *height > 0.0)
+        env.row_line.filter(|line| line.settled).and_then(|line| line.height).filter(|height| height.is_finite() && *height > 0.0)
     }
 
     /// Whether a content-sized inline container passes the width its column gives it on to its own body, where `env`
@@ -208,13 +209,15 @@ impl<'b> BodyHooks<'b> {
             && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
     }
 
-    /// Whether a capped container's content is taller than its room, as this pass's measure found it (the record
-    /// `content` its measuring run leaves then): it takes the room and lays its children out as given the height there,
-    /// so the children that fill share it.
-    pub(super) fn over_room(&self, props: &ContainerProps, env: &Env, at: ShowAt, ctx: &Context, id: Id) -> bool {
+    /// Whether a capped container is given its room, so it lays its children out as given the height there and the
+    /// children that fill share it: the room is the settled line of the row it stands on (`line_height`), or its
+    /// content is taller than the room, as this pass's measure found it (the record `content` its measuring run leaves
+    /// then). Otherwise it takes its content height.
+    pub(super) fn given_room(&self, props: &ContainerProps, env: &Env, at: ShowAt, ctx: &Context, id: Id) -> bool {
         let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
         self.capped(props, env, at)
-            && layout_memory::measured(ctx, sub(id, "content")).is_some_and(|content| content.took.y > self.room.y + tolerance)
+            && (self.line_height(props, env, at).is_some()
+                || layout_memory::measured(ctx, sub(id, "content")).is_some_and(|content| content.took.y > self.room.y + tolerance))
     }
 
     /// What the regions took together, padding included, from the records a measuring run left in this pass, when they
