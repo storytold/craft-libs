@@ -55,14 +55,49 @@ pub fn hammersley(i: u32, n: u32) -> Option<[f32; 2]> {
 }
 
 /// The GGX normal distribution `D` at `n_dot_h` for perceptual `roughness`, with
-/// `α = max(roughness², 0.001)`: `α² / (π ((n·h)² (α² − 1) + 1)²)`, as glTF 2.0 Appendix B writes
-/// it in section B.3.2. Over the hemisphere, `D(h) (n·h)` integrates to 1.
+/// `α = max(roughness², 0.001)`: `α² χ⁺(n·h) / (π ((n·h)² (α² − 1) + 1)²)`, as glTF 2.0
+/// Appendix B writes it in section B.3.2, so it is 0 where `n·h` is 0 or less. Over the
+/// hemisphere, `D(h) (n·h)` integrates to 1.
 /// It is evaluated in `f64`, so it keeps its peak `1 / (π α²)` at `n·h = 1` for the smallest `α`.
 pub fn ggx_distribution(n_dot_h: f32, roughness: f32) -> f32 {
+    if n_dot_h <= 0.0 {
+        return 0.0;
+    }
     let a = f64::from((roughness * roughness).max(1e-3));
     let c2 = f64::from(n_dot_h) * f64::from(n_dot_h);
     let a2 = a * a;
     (a2 / (std::f64::consts::PI * (c2 * (a2 - 1.0) + 1.0).powi(2)).max(f64::MIN_POSITIVE)) as f32
+}
+
+/// [`ggx_distribution`] between the surface normal `n` and the half vector `h`, which need not
+/// be normalized. The denominator is written as `π ((n·h)² α² + |n × h|²)²`, equal to the one of
+/// section B.3.2 for unit vectors, with `(n·h)²` and `|n × h|²` taken from the vectors in `f64`.
+/// Near `n·h = 1` this is exact, where an `n·h` rounded to `f32` and passed to
+/// [`ggx_distribution`] can be one step below 1 and give a `D` about 20% low at the smallest `α`.
+/// It is 0 where `n·h` is 0 or less.
+///
+/// Returns [`PbrError::BadOption`] when `roughness` is not in `0..=1`, and
+/// [`PbrError::BadDirection`] when a vector is not finite or has zero length.
+pub fn ggx_distribution_between(n: [f32; 3], h: [f32; 3], roughness: f32) -> Result<f32, PbrError> {
+    if !(0.0..=1.0).contains(&roughness) {
+        return Err(PbrError::BadOption("the roughness is not in 0 to 1"));
+    }
+    let n = n.map(f64::from);
+    let h = h.map(f64::from);
+    let dot = |p: [f64; 3], q: [f64; 3]| p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+    let lengths = dot(n, n) * dot(h, h);
+    if !n.iter().chain(h.iter()).all(|c| c.is_finite()) || lengths == 0.0 || !lengths.is_finite() {
+        return Err(PbrError::BadDirection);
+    }
+    let c = dot(n, h);
+    if c <= 0.0 {
+        return Ok(0.0);
+    }
+    let x = [n[1] * h[2] - n[2] * h[1], n[2] * h[0] - n[0] * h[2], n[0] * h[1] - n[1] * h[0]];
+    let a = f64::from((roughness * roughness).max(1e-3));
+    let a2 = a * a;
+    let denom = (c * c * a2 + dot(x, x)) / lengths;
+    Ok((a2 / (std::f64::consts::PI * denom.powi(2)).max(f64::MIN_POSITIVE)) as f32)
 }
 
 /// `D` of [`ggx_distribution`] in `f32` for the sample table, with `a = α`. The denominator is at
@@ -71,11 +106,12 @@ fn ggx_d(cos_t: f32, a: f32) -> f32 {
     a * a / (PI * ((cos_t * cos_t) * (a * a - 1.0) + 1.0).powi(2)).max(f32::MIN_POSITIVE)
 }
 
-/// Sizes of the source pyramid after level 0: halved while it is wider than 8, at most 9 more.
+/// Sizes of the source pyramid after level 0: halved while it is wider than 8 or taller than 4,
+/// at most 9 more.
 fn pyramid_sizes(w: u32, h: u32) -> Vec<(u32, u32)> {
     let mut sizes = Vec::new();
     let mut size = (w, h);
-    while sizes.len() < 9 && size.0 > 8 {
+    while sizes.len() < 9 && (size.0 > 8 || size.1 > 4) {
         size = half_size(size.0, size.1);
         sizes.push(size);
     }

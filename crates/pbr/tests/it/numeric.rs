@@ -1,7 +1,9 @@
 //! Numeric properties of the filtering: constants stay constant, GGX is normalized, energy is
 //! kept, and the SH projection matches analytic irradiance.
 
-use craft_pbr::{EnvImage, Environment, Limits, PrefilterOptions, dir_of, ggx_distribution, irradiance, try_prefilter, try_sh9};
+use craft_pbr::{
+    EnvImage, Environment, Limits, PbrError, PrefilterOptions, dir_of, ggx_distribution, ggx_distribution_between, irradiance, try_prefilter, try_sh9,
+};
 
 use crate::{energy, env_from, max_rel_diff, opts};
 
@@ -61,6 +63,55 @@ fn ggx_projected_area_integrates_to_one() {
     }
 }
 
+#[test]
+fn ggx_is_zero_where_the_half_vector_is_not_above_the_surface() {
+    for roughness in [0.0, 0.5, 1.0] {
+        for n_dot_h in [0.0, -0.3, -1.0] {
+            assert_eq!(ggx_distribution(n_dot_h, roughness), 0.0, "roughness {roughness} at {n_dot_h}");
+        }
+        for h in [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.6, -0.8, 0.0]] {
+            assert_eq!(ggx_distribution_between([0.0, 1.0, 0.0], h, roughness), Ok(0.0), "roughness {roughness} at {h:?}");
+        }
+    }
+}
+
+/// `v` normalized in `f32`, divided by its largest component and then multiplied by the
+/// reciprocal of its length, as the crate normalizes directions.
+fn unit_f32(v: [f32; 3]) -> [f32; 3] {
+    let big = v[0].abs().max(v[1].abs()).max(v[2].abs());
+    let v = v.map(|c| c / big);
+    let inv = 1.0 / (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    v.map(|c| c * inv)
+}
+
+#[test]
+fn ggx_between_vectors_keeps_its_peak_off_axis() {
+    // With n, v and l all along (0.6, 0.6, 0.6), h equals n; their f32 dot product rounds below
+    // 1, which with α at its floor of 0.001 put D about 20% under the head-on peak.
+    let n = unit_f32([0.6; 3]);
+    let h = unit_f32([n[0] + n[0], n[1] + n[1], n[2] + n[2]]);
+    let peak = 1.0 / (std::f64::consts::PI * 1e-6);
+    for (n, h) in [([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]), (n, h), ([0.6; 3], [0.6; 3]), ([0.0, 2.0, 0.0], [0.0, 0.5, 0.0])] {
+        let d = f64::from(ggx_distribution_between(n, h, 0.0).unwrap());
+        assert!((d / peak - 1.0).abs() < 1e-5, "{n:?} {h:?}: {d} for {peak}");
+    }
+    // Away from the peak it is the scalar form at the same angle.
+    for (roughness, angle) in [(0.0f32, 0.05f32), (0.3, 0.4), (1.0, 1.2), (0.5, 1.5)] {
+        let h = [angle.sin(), 0.0, angle.cos()];
+        let d = ggx_distribution_between([0.0, 0.0, 1.0], h, roughness).unwrap();
+        let want = ggx_distribution(angle.cos(), roughness);
+        assert!((d / want - 1.0).abs() < 1e-3, "roughness {roughness} at {angle}: {d} for {want}");
+    }
+    for bad in [[0.0; 3], [f32::NAN, 0.0, 1.0], [f32::INFINITY, 0.0, 0.0]] {
+        assert_eq!(ggx_distribution_between(bad, [0.0, 0.0, 1.0], 0.5), Err(PbrError::BadDirection));
+        assert_eq!(ggx_distribution_between([0.0, 0.0, 1.0], bad, 0.5), Err(PbrError::BadDirection));
+    }
+    for bad in [f32::NAN, f32::INFINITY, -0.1, 1.5, 1e30] {
+        let got = ggx_distribution_between([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], bad);
+        assert!(matches!(got, Err(PbrError::BadOption(_))), "roughness {bad}: {got:?}");
+    }
+}
+
 /// The radiance of each level at least 32 pixels wide integrated over the sphere, relative to the
 /// source's. Narrower levels are left out: bilinear lookups between their few pixel centers miss
 /// the peak of a lobe, so the measurement, not the filtering, loses energy there.
@@ -93,6 +144,20 @@ fn prefiltering_keeps_the_light_energy() {
     eprintln!("patch: energy ratios {ratios:?}");
     for (l, r) in ratios.iter().enumerate() {
         assert!((r - 1.0).abs() < ENERGY_TOLERANCE, "patch level {l}: energy ratio {r}");
+    }
+}
+
+#[test]
+fn a_thin_bright_row_of_a_tall_source_keeps_its_energy() {
+    // 2 × 2048 with 16 lit rows at the horizon: the pyramid halves the height while the width
+    // stays at 2 or less, so rough levels read coarse levels instead of missing the rows.
+    let env = env_from(2, 2048, |_, y| if (1016..1032).contains(&y) { [1000.0; 3] } else { [0.0; 3] });
+    let source = energy(&env)[0];
+    let mips = try_prefilter(&env, &PrefilterOptions::default(), &Limits::default()).unwrap();
+    let ratios: Vec<f64> = mips.iter().map(|m| energy(m)[0] / source).collect();
+    eprintln!("tall source: energy ratios {ratios:?}");
+    for (l, r) in ratios.iter().enumerate() {
+        assert!((r - 1.0).abs() < ENERGY_TOLERANCE, "level {l}: energy ratio {r}");
     }
 }
 
