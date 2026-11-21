@@ -47,6 +47,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `mp3-encode` | `mp3::Encoder`; `encode`, `FileEncoder` for MP3 | craft-media `bitstream` |
 | `mpa-encode` | `mpa::encoder::Encoder` (Layer II / MP2 frames) | `mpa-decode`, `mp3-encode` |
 | `adpcm` | `adpcm::{ima, ms, yamaha, swf}`: decoders and encoders for IMA WAV, Microsoft, Yamaha and Flash ADPCM | craft-media `bitstream` |
+| `s302m` | `s302m::{decode, Encoder}`: SMPTE ST 302M packets (AES3 audio in MPEG-2 transport streams), 2 to 8 channels of 16, 20 or 24 bits | none |
 | `gsm-decode`, `gsm-encode` (`gsm`) | `gsm::Decoder`, `gsm::Encoder`, `gsm::decode`, `gsm::encode`: GSM 06.10 full-rate speech, bit-exact, raw `.gsm` and WAV (GSM 6.10) packings | none |
 | `vmd-decode` | `vmd::Decoder`: Sierra VMD sound (8-bit PCM and 16-bit DPCM), frame by frame from `craft_media::vmd` | none |
 | `peaks` | `peaks::Peaks` | none |
