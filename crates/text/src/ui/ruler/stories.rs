@@ -48,7 +48,16 @@ fn inches() -> DocUnit {
 fn with_stops_and_indents(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let kind = *data.value("kind", TabAlign::Left);
     let (values, values_at) = data.value_at("values", word());
-    let out = TextRuler::new("Ruler", values_at.bind(&mut *values), COLUMN).unit(inches()).kind(kind).show(ui);
+    // The selector shows in the corner the host gives, here at the band's start edge in the interface's direction.
+    let stage = craft_ui::testing::stage(ui);
+    let (strip, _, corner) = Rulers::strips(ui, stage);
+    let band = strip.union(corner);
+    let corner = if craft_ui::runtime::env::Env::of(ui).direction.is_rtl() {
+        egui::Rect::from_min_max(egui::pos2(band.max.x - corner.width(), band.min.y), band.max)
+    } else {
+        corner
+    };
+    let out = TextRuler::new("Ruler", values_at.bind(&mut *values), COLUMN).unit(inches()).kind(kind).corner(corner).show_at(ui, band);
     if let Some(next) = out.kind {
         *data.value("kind", TabAlign::Left) = next;
     }
@@ -90,7 +99,7 @@ const THREE_GAPS: [(f32, f32); 3] = [(108.0, 126.0), (225.0, 243.0), (342.0, 360
 fn over_a_page(ui: &mut Ui, data: &mut StoryData, face: Option<RulerFace>) -> StoryOutput {
     let (values, values_at) = data.value_at("values", word());
     let stage = craft_ui::testing::stage(ui);
-    let (strip, _) = Rulers::strips(ui, stage);
+    let (strip, _, _) = Rulers::strips(ui, stage);
     // The page starts at the strip's start edge: its right edge in a right-to-left interface.
     let (origin, extent) = if craft_ui::runtime::env::Env::of(ui).direction.is_rtl() {
         (strip.max.x - PAGE_MARGIN, egui::Rangef::new(strip.max.x - PAGE, strip.max.x))

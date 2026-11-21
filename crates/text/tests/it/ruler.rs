@@ -159,7 +159,7 @@ fn ruler_numbers_skip_margins_and_markers_thin_out_mirror_for_rtl_and_keep_clear
         }));
         let mut fixture = Fixture::new(move |ui| {
             let stage = craft_ui::testing::stage(ui);
-            let (strip, _) = Rulers::strips(ui, stage);
+            let (strip, _, _) = Rulers::strips(ui, stage);
             let origin = if rtl { strip.max.x - ORIGIN * scale } else { strip.min.x + ORIGIN * scale };
             TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), WIDTH).origin(origin).scale(scale).right_to_left(rtl).show_at(ui, strip);
         });
@@ -206,7 +206,7 @@ fn a_ruler_cut_to_an_extent_paints_no_tick_past_it() {
     let seen = strip_at.clone();
     let mut fixture = Fixture::new(move |ui| {
         let stage = craft_ui::testing::stage(ui);
-        let (strip, _) = Rulers::strips(ui, stage);
+        let (strip, _, _) = Rulers::strips(ui, stage);
         *seen.borrow_mut() = Some(strip);
         TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), 140.0)
             .unit(DocUnit::new(UnitKind::Inches, 96.0))
@@ -243,7 +243,7 @@ fn the_ruler_column_is_lighter_than_its_margins() {
     let seen = strip_at.clone();
     let mut fixture = Fixture::new(move |ui| {
         let stage = craft_ui::testing::stage(ui);
-        let (strip, _) = Rulers::strips(ui, stage);
+        let (strip, _, _) = Rulers::strips(ui, stage);
         *seen.borrow_mut() = Some(strip);
         TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), WIDTH)
             .origin(strip.min.x + ORIGIN)
@@ -345,7 +345,7 @@ fn page_ruler(set: ComponentSet, face: Option<RulerFace>, popup: bool) -> (Fixtu
     let mut fixture = Fixture::new(move |ui| {
         let ruler = |ui: &mut egui::Ui| {
             let stage = craft_ui::testing::stage(ui);
-            let (strip, _) = Rulers::strips(ui, stage);
+            let (strip, _, _) = Rulers::strips(ui, stage);
             *seen.borrow_mut() = Some(strip);
             let mut values = values.borrow_mut();
             let mut ruler = TextRuler::new("Ruler", Bind::bound(&mut *values), 432.0)
