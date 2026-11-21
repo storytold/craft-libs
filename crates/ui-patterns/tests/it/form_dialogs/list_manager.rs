@@ -3,8 +3,11 @@
 //! kind are not.
 
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::dialog::{DialogHost, DialogResult};
 use craft_ui::display::Text;
-use craft_ui::patterns::form_dialogs::{ActionEnabled, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerWords};
+use craft_ui::patterns::form_dialogs::{
+    ActionEnabled, HostedListManager, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerWords,
+};
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
@@ -157,4 +160,40 @@ fn a_committed_rename_reports_entry_and_name_and_escape_keeps_it() {
     fixture.type_text("X").idle(2);
     fixture.key(Key::Enter, Modifiers::NONE).idle(6);
     assert_eq!(renames(), 1, "an entry of another kind does not rename");
+}
+
+// On the dialog host an action that keeps the list open reaches the host once through `take_choice`, new entries show
+// in the open dialog, and an action that closes it is the dialog's answer.
+#[trial]
+fn a_hosted_list_manager_hands_over_kept_open_choices_and_answers_with_the_closing_one() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 700.0));
+    let words = ListManagerWords::default();
+    let actions = vec![ListManagerAction::run(&words), ListManagerAction::delete(&words)];
+    let entries = vec![ListManagerEntry::new("a", "Alpha"), ListManagerEntry::new("b", "Beta")];
+    host.borrow_mut().open(HostedListManager::new("macros", "Macros", "Macro name:", actions).entries(entries));
+    fixture.idle(6);
+    let press = |fixture: &mut Fixture, label: &str| {
+        let target = fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown"));
+        fixture.click(&target).idle(4);
+    };
+    let choice = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().get_mut::<HostedListManager>().and_then(HostedListManager::take_choice);
+
+    press(&mut fixture, "Beta");
+    press(&mut fixture, "Delete");
+    let deleted = choice(&host).expect("Delete hands its choice to the host");
+    assert_eq!((deleted.action.as_str(), deleted.entry.as_deref()), ("delete", Some("b")));
+    assert_eq!(choice(&host), None, "the choice is taken once");
+    assert!(host.borrow().is_open::<HostedListManager>(), "Delete keeps the list open");
+
+    host.borrow_mut().get_mut::<HostedListManager>().expect("open").set_entries(vec![ListManagerEntry::new("a", "Alpha")]);
+    fixture.idle(4);
+    assert!(fixture.by_label("Beta").is_none(), "the open list shows the new entries");
+
+    press(&mut fixture, "Alpha");
+    press(&mut fixture, "Run");
+    let answered = host.borrow_mut().take::<HostedListManager>();
+    assert!(matches!(&answered, Some(DialogResult::Ok(run)) if run.action == "run" && run.entry.as_deref() == Some("a")), "{answered:?}");
 }

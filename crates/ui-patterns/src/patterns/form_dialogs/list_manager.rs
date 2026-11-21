@@ -226,31 +226,65 @@ impl Outcome for ListManagerOutput {
 }
 
 /// A [`ListManager`] the [`DialogHost`](crate::dialog::DialogHost) owns, over its entries and actions. It answers with
-/// the [`ListManagerChoice`] of the action pressed, as `HostedNewWorkspace` answers with its value.
+/// the [`ListManagerChoice`] of the action that closed it, as `HostedNewWorkspace` answers with its value; the choice
+/// of an action that keeps it open (Delete, a rename) waits for [`take_choice`](HostedListManager::take_choice).
 pub struct HostedListManager {
     id: DialogId,
     key: String,
+    title: Label,
+    name_label: Label,
+    entries: Vec<ListManagerEntry>,
+    actions: Vec<ListManagerAction>,
+    renames: Option<u32>,
+    /// The name box's text, kept by the dialog.
+    name: String,
+    open: bool,
+    /// The choice of an action that kept the dialog open, until the host takes it.
+    choice: Option<ListManagerChoice>,
 }
 
 impl HostedListManager {
     /// A hosted list manager for the command `key`, titled `title` over a name box labelled `name_label`, with the
     /// buttons `actions`.
     pub fn new(key: impl Into<String>, title: impl Into<Label>, name_label: impl Into<Label>, actions: Vec<ListManagerAction>) -> Self {
-        let _ = (key, title, name_label, actions);
-        todo!("q345")
+        let key = key.into();
+        HostedListManager {
+            id: crate::dialog::dialog_id(&key),
+            key,
+            title: title.into(),
+            name_label: name_label.into(),
+            entries: Vec::new(),
+            actions,
+            renames: None,
+            name: String::new(),
+            open: true,
+            choice: None,
+        }
     }
 
     /// The entries the list opens with.
     #[must_use]
-    pub fn entries(self, entries: Vec<ListManagerEntry>) -> Self {
-        let _ = (self, entries);
-        todo!("q345")
+    pub fn entries(mut self, entries: Vec<ListManagerEntry>) -> Self {
+        self.entries = entries;
+        self
+    }
+
+    /// Entries of `kind` rename in place, as [`ListManager`]'s `renames`: a commit is a choice that keeps the dialog
+    /// open.
+    #[must_use]
+    pub fn renames(mut self, kind: u32) -> Self {
+        self.renames = Some(kind);
+        self
     }
 
     /// Replaces the entries of an open dialog; the name box keeps its text.
     pub fn set_entries(&mut self, entries: Vec<ListManagerEntry>) {
-        let _ = (self, entries);
-        todo!("q345")
+        self.entries = entries;
+    }
+
+    /// The choice of the last action that kept the dialog open (Delete, a rename), once.
+    pub fn take_choice(&mut self) -> Option<ListManagerChoice> {
+        self.choice.take()
     }
 }
 
@@ -262,8 +296,24 @@ impl StackDialog for HostedListManager {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ListManagerChoice>> {
-        let _ = ui;
-        todo!("q345")
+        let list = ListManager::new(self.title.clone(), self.name_label.clone(), &self.entries[..], &self.actions[..])
+            .name_box(Bind::bound(&mut self.name))
+            .opened(Bind::bound(&mut self.open));
+        let list = match self.renames {
+            Some(kind) => list.renames(kind),
+            None => list,
+        };
+        let shown = list.show(ui);
+        match (shown.closed, shown.choice) {
+            (Some(_), Some(choice)) => Some(DialogResult::Ok(choice)),
+            (Some(_), None) => Some(DialogResult::Cancel),
+            (None, choice) => {
+                if choice.is_some() {
+                    self.choice = choice;
+                }
+                None
+            }
+        }
     }
 
     fn key(&self) -> Option<&str> {
