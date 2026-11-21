@@ -17,15 +17,23 @@
 //! - On Windows these are refused, in the path as given and again in the path its links lead to:
 //!   device names (`CON`, `NUL`, `COM1`, `LPT¹` and the like, also with an extension), a `:`
 //!   after the drive, a file or folder name that ends in a dot or a space, a path that starts
-//!   with `\\.\`, and one that starts with `\\?\` unless it is a drive or UNC path with no `/`
-//!   and no empty, `.` or `..` name, such as a path [`Roots::check`] returned. The names follow
-//!   <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>.
+//!   with `\\.\` or `\??\`, and one that starts with `\\?\` unless it is a drive or UNC path with
+//!   no `/` and no empty, `.` or `..` name, such as a path [`Roots::check`] returned. The names
+//!   follow <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>.
+//! - On Windows a path on a network share (`\\server\share\...` or `\\?\UNC\server\share\...`,
+//!   also after it is made absolute against the working directory) is refused unless a root of
+//!   the requested kind is on the same server and share. This check and the name rules on the
+//!   path as given read only the text of the path, and run before any file system call, so a
+//!   path whose text names another share does not open a connection to that computer. A link or
+//!   junction inside a root that leads to another share is followed when the path is resolved,
+//!   which can connect to that share before the resolved path is refused. Roots are checked
+//!   against the name rules before they are opened too.
 //!
 //! A path is checked and then opened. Another program that swaps a folder for a link between the
 //! two steps can still reach outside the roots: the roots confine the client's tool arguments, not
 //! other programs on the computer.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Component, Path, PathBuf, Prefix};
 
@@ -86,7 +94,9 @@ impl fmt::Display for AccessError {
             AccessError::Device { path } => write!(f, "{} names a device, not a file", path.display()),
             AccessError::Stream { path } => write!(f, "{} has a `:` in a file or folder name", path.display()),
             AccessError::TrailingDotOrSpace { path } => write!(f, "{} has a file or folder name that ends in a dot or a space", path.display()),
-            AccessError::Verbatim { path } => write!(f, r"{} starts with `\\?\` or `\\.\`; give the path without that prefix", path.display()),
+            AccessError::Verbatim { path } => {
+                write!(f, r"{} starts with `\\?\`, `\\.\` or `\??\`; give the path without that prefix", path.display())
+            }
             AccessError::ParentOfMissing { path } => write!(f, "{} goes up with `..` below a folder that does not exist", path.display()),
             AccessError::BrokenLink { path } => write!(f, "{} is a link to something that does not exist", path.display()),
             AccessError::Unresolved { path, reason } => write!(f, "{} could not be resolved: {reason}", path.display()),
@@ -146,6 +156,9 @@ impl Roots {
         if roots.is_empty() {
             return Err(AccessError::NotGranted { access, path: path.to_path_buf() });
         }
+        if cfg!(windows) {
+            check_share(path, access, roots)?;
+        }
         let resolved = resolve(path)?;
         if roots.iter().any(|r| inside(&resolved, r)) {
             return Ok(resolved);
@@ -170,6 +183,9 @@ fn open_all(paths: &[PathBuf], access: Access) -> Result<Vec<PathBuf>, AccessErr
         let bad = |reason: String| AccessError::BadRoot { access, path: p.clone(), reason };
         if p.as_os_str().is_empty() {
             return Err(bad("an empty path names no folder".into()));
+        }
+        if cfg!(windows) {
+            check_windows_names(&without_verbatim_prefix(p).map_err(|e| bad(e.to_string()))?).map_err(|e| bad(e.to_string()))?;
         }
         let resolved = std::fs::canonicalize(p).map_err(|e| bad(e.to_string()))?;
         if !resolved.is_dir() {
@@ -299,6 +315,38 @@ fn without_verbatim_prefix(path: &Path) -> Result<PathBuf, AccessError> {
     Ok(plain)
 }
 
+/// The Windows checks that read only the text of `path`, run before any file system call: the name
+/// rules, and a refusal of a path on a network share that holds none of `roots`. A relative path
+/// is checked in the absolute form `std::path::absolute` gives it, which on Windows does not touch
+/// the file system, so a relative path under a working directory on a share is checked too.
+fn check_share(path: &Path, access: Access, roots: &[PathBuf]) -> Result<(), AccessError> {
+    if path.as_os_str().is_empty() {
+        return Err(AccessError::Empty);
+    }
+    let plain = without_verbatim_prefix(path)?;
+    check_windows_names(&plain)?;
+    let absolute = std::path::absolute(&plain).map_err(|e| AccessError::Unresolved { path: path.to_path_buf(), reason: e.to_string() })?;
+    let Some((server, share)) = network_share(&absolute) else {
+        return Ok(());
+    };
+    let same = |r: &PathBuf| network_share(r).is_some_and(|(s, sh)| s.eq_ignore_ascii_case(server) && sh.eq_ignore_ascii_case(share));
+    if roots.iter().any(same) {
+        return Ok(());
+    }
+    Err(AccessError::Outside { access, path: path.to_path_buf(), roots: list(roots) })
+}
+
+/// The server and share of a `\\server\share` or `\\?\UNC\server\share` path.
+fn network_share(path: &Path) -> Option<(&OsStr, &OsStr)> {
+    match path.components().next() {
+        Some(Component::Prefix(p)) => match p.kind() {
+            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => Some((server, share)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The Windows name rules applied to a path with its links followed, so a link or junction to a
 /// folder whose name the rules refuse is refused too.
 fn check_resolved_names(found: &Path) -> Result<(), AccessError> {
@@ -307,6 +355,11 @@ fn check_resolved_names(found: &Path) -> Result<(), AccessError> {
 
 /// The Windows name rules from the module documentation.
 fn check_windows_names(path: &Path) -> Result<(), AccessError> {
+    // `\??\` passes the rest of the path to Windows as an NT path, without its own name parsing.
+    let mut first = path.components();
+    if first.next() == Some(Component::RootDir) && first.next() == Some(Component::Normal("??".as_ref())) {
+        return Err(AccessError::Verbatim { path: path.to_path_buf() });
+    }
     for c in path.components() {
         match c {
             // These prefixes turn off Windows' own name parsing for the rest of the path.
@@ -526,6 +579,48 @@ mod tests {
         assert!(matches!(refused(r"\\?\C:\work\CON\x.txt"), AccessError::Device { .. }));
         assert!(matches!(refused(r"\\?\UNC\server\share\nul.txt"), AccessError::Device { .. }));
         assert!(matches!(refused(r"\\?\Volume{00000000-0000-0000-0000-000000000000}\x.txt"), AccessError::Verbatim { .. }));
+    }
+
+    /// These paths are refused from their text alone; a test that reached the file system would
+    /// try to connect to the server.
+    #[cfg(windows)]
+    #[test]
+    fn network_and_device_paths_are_refused_from_their_text() {
+        let local = [PathBuf::from(r"\\?\C:\work")];
+        let on_share = [PathBuf::from(r"\\?\UNC\server\share\work")];
+        let check = |p: &str, roots: &[PathBuf]| check_share(Path::new(p), Access::Read, roots);
+        for p in [r"\\server\share\x.json", r"\\?\UNC\server\share\x.json", "//server/share/x.json", r"\\server\share"] {
+            assert!(matches!(check(p, &local), Err(AccessError::Outside { access: Access::Read, .. })), "{p}");
+        }
+        for p in [r"\\server\share\work\x.json", r"\\?\UNC\server\share\work\x.json", r"\\SERVER\Share\elsewhere\x.json"] {
+            assert_eq!(check(p, &on_share), Ok(()), "a path on the root's share: {p}");
+        }
+        for p in [r"\\other\share\work\x.json", r"\\server\other\work\x.json", r"\\?\UNC\other\share\work"] {
+            assert!(matches!(check(p, &on_share), Err(AccessError::Outside { .. })), "{p}");
+        }
+        assert_eq!(check(r"C:\work\x.json", &local), Ok(()), "a drive path goes on to be resolved");
+        for p in [
+            r"\\.\pipe\x",
+            r"\\.\C:\work\x.json",
+            r"\\.\UNC\server\share\x.json",
+            r"\??\UNC\server\share\x.json",
+            "/??/UNC/server/share/x.json",
+            r"\??\C:\work\x.json",
+            r"\\?\GLOBALROOT\Device\Mup\server\share\x.json",
+            r"\\?\pipe\x",
+        ] {
+            for roots in [&local[..], &on_share[..]] {
+                assert!(matches!(check(p, roots), Err(AccessError::Verbatim { .. })), "{p}");
+            }
+        }
+        let (base, roots) = folders("network");
+        let e = roots.check(Path::new(r"\\craft-roots-test.invalid\share\x.json"), Access::Read).unwrap_err();
+        assert!(matches!(e, AccessError::Outside { .. }), "{e}");
+        let e = roots.check(Path::new(r"\??\UNC\craft-roots-test.invalid\share\x.json"), Access::Read).unwrap_err();
+        assert!(matches!(e, AccessError::Verbatim { .. }), "{e}");
+        let e = Roots::new(&[PathBuf::from(r"\??\UNC\craft-roots-test.invalid\share")], &[]).unwrap_err();
+        assert!(matches!(&e, AccessError::BadRoot { reason, .. } if reason.contains(r"`\??\`")), "a root is checked before it is opened: {e}");
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[cfg(windows)]
