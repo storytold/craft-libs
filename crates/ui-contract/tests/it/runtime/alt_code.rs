@@ -235,7 +235,10 @@ fn an_alt_numpad_code_types_its_character_once() {
         // The Alt release of a code that lost focus went to another window: this window's next lone Alt still alerts.
         let stuck = vec![vec![alt(true)], digit('0'), vec![Event::WindowFocused(false)], vec![Event::WindowFocused(true)]];
         session.send(stuck);
-        let lone = session.send(vec![vec![alt(true)], vec![alt(false)]]);
+        // A new physical Alt press distinguishes the deliberate tap from an inherited Alt report.
+        let down = vec![alt(true), key_press(Key::AltLeft, ALT)];
+        let up = vec![key_release(Key::AltLeft, Modifiers::NONE), alt(false)];
+        let lone = session.send(vec![down, up]);
         assert_eq!(lone, Typed { text: String::new(), lone_alt: true }, "{os:?}: a code whose release went elsewhere leaves no mark");
 
         let mut cyrillic = Session::new(os, AltCodePages::new(1251, 866));

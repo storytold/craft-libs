@@ -181,6 +181,10 @@ impl Strip<'_> {
                 alt.other_key = true;
                 true
             }
+            KeyEvent::FocusLost => {
+                *alt = AltTrack::default();
+                true
+            }
             KeyEvent::RightAlt(down) => {
                 alt.right = down;
                 // AltGr types characters: its Alt is no lone Alt, whichever of this event and the modifier change
@@ -565,7 +569,7 @@ pub(crate) fn claims_press(ctx: &Context, input: &RawInput) -> impl Fn(&egui::Ev
 }
 
 /// Updates the keys held after `event`: a press adds its key, a release removes it, and the window losing focus
-/// (which also reads as the right Alt coming up) forgets them all, since their releases go to another window.
+/// forgets them all, since their releases go to another window.
 fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
     match event {
         KeyEvent::Press { input, .. } => {
@@ -574,7 +578,7 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
             }
         }
         KeyEvent::Release { input } => down.retain(|key| Some(*key) != input.physical.or(input.typed)),
-        KeyEvent::RightAlt(false) => down.clear(),
+        KeyEvent::FocusLost | KeyEvent::RightAlt(false) => down.clear(),
         _ => {}
     }
 }
