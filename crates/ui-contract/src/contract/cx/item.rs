@@ -43,6 +43,7 @@ pub struct ItemCx<'a, 'r, K> {
     pub(crate) id: Id,
     pub(crate) memory: &'a mut MemoryStage,
     pub(crate) tip: Option<ItemTip<'r>>,
+    pub(crate) detail: Option<ItemTip<'r>>,
     pub(crate) openers: Vec<ItemOpener>,
     pub(crate) item: Id,
     pub(crate) cells: Vec<(craft_behavior::ColumnKey, Rect)>,
@@ -78,8 +79,7 @@ impl<'r, K> ItemCx<'_, 'r, K> {
     /// Shows `body` under the item, across the content width, in a child `Ui` with id `sub(item_id, "detail")`. It adds
     /// its height to the item's slot, which keeps its last shown height out of view.
     pub fn detail(&mut self, body: impl FnOnce(&mut Ui) + 'r) {
-        let _ = body;
-        todo!("ap.AP12")
+        self.detail = Some(Box::new(body));
     }
 
     /// The opener for the item's part `part`: after the collection is shown, `CollectionResponse::opener` gives the

@@ -155,6 +155,79 @@ fn pointer_commands_name_the_thumbnail_and_leave_the_selection() {
     assert!(!seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "the selection is left alone"); // P3(mechanical): dp.C12
 }
 
+/// A thumbnails-only row is its thumbnails: no label band, so it is narrower than a plain row, it paints no label, and
+/// the label is still its accessible name.
+#[trial]
+fn a_thumbnails_only_row_is_as_wide_as_its_thumbnails_and_named_by_its_label() {
+    use craft_ui::list::ThumbSize;
+    use egui::Rect;
+    use std::cell::Cell;
+    let (only, plain) = (Rc::new(Cell::new(Rect::NOTHING)), Rc::new(Cell::new(Rect::NOTHING)));
+    let (only_in, plain_in) = (only.clone(), plain.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Masks").show_items(ui, &source, &mut |key, _| {
+            let at = *key;
+            let (only, plain) = (only_in.clone(), plain_in.clone());
+            let row = ListRow::new(NAMES[at]).thumb(ThumbSize::Medium, move |_, rect| if at == 0 { only.set(rect) } else { plain.set(rect) });
+            if at == 0 { row.thumbnails_only() } else { row }
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let (row, other) = (fixture.by_label(NAMES[0]).expect("the row is named by its label").rect, fixture.by_label(NAMES[1]).expect("the plain row").rect);
+    let picture = only.get();
+    assert!(row.contains_rect(picture), "the row holds its thumbnail: {row:?} {picture:?}");
+    assert!(row.width() < other.width(), "the row is no wider than its thumbnails: {} vs {}", row.width(), other.width());
+    assert!(row.width() < 2.0 * picture.width() && row.height() < 2.0 * picture.height(), "the row is as large as its thumbnail: {row:?} {picture:?}");
+    let texts = fixture.texts();
+    assert!(!texts.iter().any(|text| text.text == NAMES[0]), "the row paints no label");
+    assert!(texts.iter().any(|text| text.text == NAMES[1]), "the plain row paints its label");
+}
+
+/// A drag on a thumbnail that carries a part drag starts with the primary button only: a secondary and a middle drag
+/// start no session and report no `PartDrag`.
+#[trial]
+fn a_part_drag_starts_only_with_the_primary_button() {
+    use craft_ui::list::{RowDragSpot, ThumbSize, ThumbTarget};
+    use craft_ui::testing::pointer;
+    use egui::{Event, Pos2, Rect};
+    use std::cell::Cell;
+    let seen: Events = Rc::new(RefCell::new(Vec::new()));
+    let picture = Rc::new(Cell::new(Rect::NOTHING));
+    let (held, painted) = (seen.clone(), picture.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = List::new("Layers").show_items(ui, &source, &mut |key, _| {
+            let painted = painted.clone();
+            ListRow::new(NAMES[*key])
+                .thumb(ThumbSize::Medium, move |_, rect| painted.set(rect))
+                .part_drag(RowDragSpot::Thumb(ThumbTarget::First), 7_u32)
+        });
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.settle();
+    let from = picture.get().center();
+    let primary: fn(Pos2, bool) -> Event = |at, down| if down { pointer::press(at) } else { pointer::release(at) };
+    let buttons: [fn(Pos2, bool) -> Event; 3] = [pointer::secondary, pointer::middle, primary];
+    let mut started = Vec::new();
+    for button in buttons {
+        seen.borrow_mut().clear();
+        fixture.frame(vec![pointer::moved(from)]);
+        fixture.frame(vec![button(from, true)]);
+        for step in 1..=4 {
+            fixture.frame(vec![pointer::moved(from + Vec2::new(10.0 * step as f32, 0.0))]);
+        }
+        fixture.frame(vec![button(from + Vec2::new(40.0, 0.0), false)]);
+        fixture.settle();
+        started.push(seen.borrow().iter().filter(|event| matches!(event, CollectionEvent::Item(_, RowEvent::PartDrag(_)))).count());
+    }
+    assert_eq!(started[..2], [0, 0], "a secondary and a middle drag start no part drag");
+    assert!(started[2] > 0, "the primary drag starts it");
+}
+
 /// A click on the selected event deselects it, so the details under the log close.
 #[trial]
 fn a_click_on_the_selected_event_deselects_it() {

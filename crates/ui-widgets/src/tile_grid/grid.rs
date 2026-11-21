@@ -29,6 +29,7 @@ use craft_behavior::{
 };
 use craft_keymap::{Chord, Key, Mods};
 use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::hash::Hash;
 
@@ -272,7 +273,6 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// How the groups are set apart: `Rule` starts every group after the first below a full-width divider row in place
     /// of its titled head.
     #[prop]
-    #[allow(dead_code)] // P3(appearance-w2): ap.AP6
     group_heads: GroupHeads,
     /// The layout of this pass, kept for the headers' parts and paint.
     laid: RefCell<Option<GridLayout>>,
@@ -421,6 +421,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         }
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
         let tail_height = self.items.row_height.of(cx);
+        let groups = self.shown_groups();
         let recipe = self.items.rows_stamp.map(|stamp| Recipe {
             stamp,
             width,
@@ -430,7 +431,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             justified: self.justified,
             around,
             group_header: spacing.group_header,
-            groups: self.groups.iter().map(|group| (group.start, group.count, group.open)).collect(),
+            groups: groups.iter().map(|group| (group.start, group.count, group.open)).collect(),
             tail: (self.tail.len(), tail_height),
         });
         if let (Some(previous), Some(recipe)) = (previous, &recipe)
@@ -441,7 +442,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         }
         let layout = if self.justified || !self.groups.is_empty() || !self.tail.is_empty() {
             let tiling = if self.justified { Tiling::justified(side) } else { Tiling::cards(side, aspect) };
-            let mut arrangement = arrange(&aspects_of(source), self.groups, width, tiling, spacing, around);
+            let mut arrangement = arrange(&aspects_of(source), &groups, width, tiling, spacing, around);
             arrangement.add_tail(self.tail.len(), tail_height, width, spacing);
             GridLayout::arranged(arrangement, width, around)
         } else {
@@ -485,6 +486,19 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         self.laid.borrow().as_ref().and_then(|layout| layout.arrangement().map(|arrangement| arrangement.tail_from()))
     }
 
+    /// The groups as they show: under `Rule` every group is open, whatever the app declared.
+    fn shown_groups(&self) -> Cow<'a, [TileGroup<K>]> {
+        match self.group_heads {
+            GroupHeads::Titled => Cow::Borrowed(self.groups),
+            GroupHeads::Rule => Cow::Owned(self.groups.iter().map(|group| group.clone().open(true)).collect()),
+        }
+    }
+
+    /// Group headers open and close their group: only titled heads do.
+    fn collapses(&self) -> bool {
+        self.collapsible && self.group_heads == GroupHeads::Titled
+    }
+
     fn group_rect(rect: Rect, view: Rect, rtl: bool) -> Rect {
         if rtl {
             Rect::from_min_max(pos2(view.min.x + view.max.x - rect.max.x, rect.min.y), pos2(view.min.x + view.max.x - rect.min.x, rect.max.y))
@@ -497,7 +511,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// disclosure column the grid owns when the groups open and close.
     fn header_row(&self, group: &TileGroup<K>, state: RowState) -> ListRow<'static> {
         let mut row = ListRow::new(group.title.clone()).heading().rows(self.items.row_height).node(false).depth(group.depth).state(state);
-        if self.collapsible {
+        if self.collapses() {
             row = row.group(group.open).disclosure_by_host();
         }
         if let Some(icon) = &group.icon {
@@ -531,7 +545,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         self.placed_tail.clear();
         let Some(arrangement) = self.laid.borrow().as_ref().and_then(|layout| layout.arrangement().cloned()) else { return };
         let (view, offset, rtl) = (cx.content_rect, cx.offset(), cx.flow.is_rtl());
-        let pinned = arrangement.pinned(offset.y as f32);
+        let rule = self.group_heads == GroupHeads::Rule;
+        // A rule has nothing to pin.
+        let pinned = if rule { None } else { arrangement.pinned(offset.y as f32) };
         let shift = view.min.to_vec2() - vec2(offset.x as f32, offset.y as f32);
         let clip = area;
         for (group, header) in arrangement.headers.iter().enumerate() {
@@ -542,6 +558,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             let rect = Self::group_rect(rect.translate(shift), view, rtl);
             let Some(declared) = self.groups.get(group) else { continue };
             if !rect.intersects(clip) {
+                continue;
+            }
+            if rule {
+                // A divider takes no press and no stop: it is placed for its paint only.
+                self.placed.push(Placed { group, rect, pinned: false, toggle: false });
                 continue;
             }
             let column = self
@@ -601,7 +622,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 }
             }
         }
-        let placed = self.placed.clone();
+        let placed = if self.group_heads == GroupHeads::Rule { Vec::new() } else { self.placed.clone() };
         for Placed { group, rect, .. } in placed {
             let Some(declared) = self.groups.get(group) else { continue };
             let part = section_part(&declared.key);
@@ -610,7 +631,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             if let Some(result) = cx.part_if_declared(part)
                 && let PressPhase::Release { start, click: true, .. } = result.press.phase
             {
-                let mods = result.press.mods;
+                let mods = crate::runtime::pointer::frame(&cx.core.ctx).pick_mods;
                 self.events.push(match start.button {
                     PointerButton::Secondary => {
                         GridEvent::GroupMenu { group, at: if cx.flow.is_rtl() { rect.right_bottom() } else { rect.left_bottom() } }
@@ -620,7 +641,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             } else if cx.part_activated(part) == Some(FireSource::Access) {
                 self.events.push(GridEvent::GroupPicked { group, mods: Mods::NONE });
             }
-            if self.collapsible && cx.part_activated(toggle).is_some() {
+            if self.collapses() && cx.part_activated(toggle).is_some() {
                 self.events.push(GridEvent::GroupOpen { group, open: !open });
             }
         }
@@ -634,7 +655,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 self.tail_clicked.push(key.clone());
             }
         }
-        if self.collapsible {
+        if self.collapses() {
             while let Some(request) = cx.intents().take_access() {
                 let Some(target) = request.target else { continue };
                 let wanted = match request.action {
@@ -665,7 +686,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                     let node = access.node(section_part(&group.key), Role::HEADING);
                     node.level(GROUP_LEVEL);
                     node.name = Name::Text(if group.detail.is_empty() { group.title.clone() } else { format!("{}, {}", group.title, group.detail) });
-                    if self.collapsible {
+                    if self.collapses() {
                         node.expanded = Some(group.open);
                     }
                 }
@@ -684,6 +705,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         for placed in &self.placed {
             let Some(group) = self.groups.get(placed.group) else { continue };
             let rect = placed.rect;
+            if self.group_heads == GroupHeads::Rule {
+                if placed.group > 0 {
+                    ui.draw().edge_rule(RuleKind::Divider, rect, RectSide::Top);
+                }
+                continue;
+            }
             if placed.pinned {
                 let draw = ui.draw();
                 draw.fill(&PaintShape::Rect(rect, CornerRadius::ZERO), style.pinned);
@@ -714,7 +741,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         let selected = self.rated(&cx);
         let mut response = cx.collection_response();
         let mut events = self.events;
-        let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
+        let mods = crate::runtime::pointer::frame(&cx.core.ctx).pick_mods;
         let group_of = |key: &K| self.groups.iter().position(|group| group.key == *key);
         let is_tail = |key: &K| self.tail.iter().any(|row| row.key == *key);
         let mut kept = Vec::with_capacity(response.events.len());
@@ -796,7 +823,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
     /// places.
     fn filtered<'s>(&self, source: &'s dyn ItemSource<K>, _: &crate::runtime::env::Env) -> Option<Box<dyn ItemSource<K> + 's>> {
         (!self.groups.is_empty() || !self.tail.is_empty())
-            .then(|| Box::new(Outline::new(source, self.groups, self.tail, self.collapsible)) as Box<dyn ItemSource<K> + 's>)
+            .then(|| Box::new(Outline::new(source, &self.shown_groups(), self.tail, self.collapses(), self.group_heads)) as Box<dyn ItemSource<K> + 's>)
     }
 
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> GridLayout {

@@ -1,6 +1,12 @@
 //! The tile grid's layout: justified rows fill the width with whole cards (picture and what the tile adds around it).
 
-use craft_ui::tile_grid::{Around, ArrangeSpacing, TileGroup, Tiling, arrange};
+use craft_behavior::keyed;
+use craft_ui::contract::ShowCollection as _;
+use craft_ui::testing::Fixture;
+use craft_ui::tile_grid::{Around, ArrangeSpacing, GridEvent, GroupHeads, Tile, TileGrid, TileGroup, Tiling, arrange};
+use egui::Vec2;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const WIDTH: f32 = 400.0;
 const ROW: f32 = 100.0;
@@ -40,4 +46,35 @@ fn a_leading_group_header_sits_at_the_top_edge_and_ungrouped_tiles_keep_the_inse
     assert!((header.left() - INSET).abs() < EPS && (WIDTH - header.right() - INSET).abs() < EPS, "the header keeps the side insets");
     let loose = arrange::<usize>(&aspects, &[], WIDTH, Tiling::justified(ROW), spacing(), Around::default());
     assert!((loose.rows[0].top - INSET).abs() < EPS, "tiles that open the grid keep the inset above them");
+}
+
+/// Under `GroupHeads::Rule` a head is a divider: it paints no title, a click on it reports no group event, and a group
+/// declared closed still shows its tiles; the group's title stays the heading's name.
+#[craft_ui::testing::trial]
+fn rule_group_heads_take_no_title_no_tab_stop_and_never_close() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let held = events.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..9).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let groups = [
+            TileGroup::new(100usize, 0, 3, "Alpha"),
+            TileGroup::new(101usize, 3, 3, "Beta").open(false),
+            TileGroup::new(102usize, 6, 3, "Gamma"),
+        ];
+        let out = TileGrid::new("Library")
+            .groups(&groups)
+            .collapsible()
+            .group_heads(GroupHeads::Rule)
+            .show_items(ui, &source, &mut |key, _| Tile::new(format!("Tile {}", key + 1)));
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(Vec2::new(600.0, 600.0));
+    fixture.settle();
+    assert!(!fixture.texts().iter().any(|text| text.text == "Beta"), "a rule head paints no title");
+    assert!(fixture.by_label("Tile 4").is_some(), "a group declared closed is open under Rule");
+    let head = fixture.by_label("Beta").expect("the heading keeps its name").rect;
+    fixture.click_at(head.center()).settle();
+    let grouped = events.borrow().iter().any(|event| matches!(event, GridEvent::GroupOpen { .. } | GridEvent::GroupPicked { .. } | GridEvent::GroupMenu { .. }));
+    assert!(!grouped, "a click on a rule reports no group event: {:?}", events.borrow());
 }
