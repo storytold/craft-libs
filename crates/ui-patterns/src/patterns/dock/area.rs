@@ -1057,8 +1057,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         Stack::new().fill_width().show(ui, |ui, body| pass.borrow_mut().panels.rail_footer(panel, ui, body));
                     })
                     .show_at(ui, cell, |ui, _| {
-                        // The icon column scrolls within the room left by the fixed footer.
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height.min(ui.available_height())), egui::Sense::hover());
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), egui::Sense::hover());
                         draw(ui, rect, open.clone())
                     })
                     .inner
