@@ -3,9 +3,11 @@
 use super::{ItemsHooks, Placement, members};
 use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, ListDrag, SelectMode};
 use crate::contract::{Collection, Cx};
+use crate::runtime::memory::sub;
+use crate::runtime::{drag, pointer};
 use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel};
 use craft_keymap::Mods;
-use egui::{Pos2, Rect, Vec2};
+use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::any::TypeId;
 
 /// What made a selection change, reported with it (`CollectionEvent::Selection`): a key, or a pointer pick with the
@@ -14,6 +16,13 @@ use std::any::TypeId;
 pub(super) enum PickBy {
     Keys,
     Pointer(Mods),
+}
+
+/// What the rest timer of `drag_select` last saw: the drag's pointer and the row it is timing.
+#[derive(Clone, Copy, Default)]
+struct DragRest {
+    pointer: Option<Pos2>,
+    row: Option<usize>,
 }
 
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {

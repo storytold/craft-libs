@@ -422,7 +422,7 @@ impl Keymap {
 
     /// The command a hold of `chord` runs where it applies, ranked as the other lookups rank.
     pub fn hold_of(&self, chord: &Chord, active: &Active<'_>) -> Option<CommandRef> {
-        match self.winners(Trigger { chord: chord.effective(self.platform), press: Press::Hold }, active, &[]) {
+        match self.winners(Trigger { chord: chord.effective(self.platform), press: PressKind::Hold }, active, &[]) {
             Winners::None => None,
             Winners::Run(i) => Some(self.catalog[i].command.clone()),
             Winners::Cycle(cycle) => cycle.first().map(|&i| self.catalog[i].command.clone()),
@@ -499,7 +499,7 @@ impl Keymap {
     /// [`shown_chord`](Self::shown_chord) of the command at catalog position `i`, from the bindings.
     fn shown_of(&self, i: usize) -> Option<Chord> {
         let home = &self.catalog[i].scope;
-        let single = || self.current[i].iter().filter(|(trigger, _)| trigger.press == Press::Single);
+        let single = || self.current[i].iter().filter(|(trigger, _)| trigger.press == PressKind::Single);
         let runs = |(trigger, scope): &&Bound| {
             let name = [scope.as_str()];
             let active = match self.scopes.kind(scope) {
@@ -507,7 +507,7 @@ impl Keymap {
                 ScopeKind::Panel => Active::panel(name[0]),
                 ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
             };
-            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), press: Press::Single }, &active, &[]) {
+            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), press: PressKind::Single }, &active, &[]) {
                 Winners::None => false,
                 Winners::Run(j) => j == i,
                 Winners::Cycle(cycle) => cycle.contains(&i),
@@ -531,7 +531,7 @@ impl Keymap {
             Lookup::Cycle(cycle) => return cycle.into_iter().next(),
             Lookup::None => {}
         }
-        let want = Trigger { chord: chord.effective(self.platform), press: Press::Single };
+        let want = Trigger { chord: chord.effective(self.platform), press: PressKind::Single };
         self.by_trigger.get(&want)?.iter().find(|&&(i, k)| self.at(i, k).is_some()).map(|&(i, _)| self.catalog[i].command.clone())
     }
 

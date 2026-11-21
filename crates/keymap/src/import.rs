@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::chord::{Chord, Press, Trigger};
+use crate::chord::{Chord, PressKind, Trigger};
 use crate::chord::foreign::{Flavor, ForeignError, ReadNote, read_foreign};
 use crate::command::CommandRef;
 use crate::keymap::{Binding, CommandDef, CommandKind, Keymap, MAX_BINDINGS, Policy};
@@ -968,7 +968,7 @@ fn key_codes(k: &ForeignKey) -> Vec<(String, bool)> {
 /// The first unscoped single-press default of command `i` as (modifiers text, key text), the forms codes decode to.
 fn default_parts(keymap: &Keymap, i: usize) -> Option<(String, String)> {
     let command = &keymap.catalog().get(i)?.command;
-    let chord = keymap.default_bindings(command).into_iter().find(|b| b.scope.is_none() && b.trigger.press == Press::Single)?.trigger.chord;
+    let chord = keymap.default_bindings(command).into_iter().find(|b| b.scope.is_none() && b.trigger.press == PressKind::Single)?.trigger.chord;
     let (key, full) = (chord.key.name(), chord.to_string());
     let mods = full.strip_suffix(key).unwrap_or_default().trim_end_matches('+');
     Some((mods.to_string(), key.to_string()))

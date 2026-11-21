@@ -823,9 +823,9 @@ impl Trigger {
     /// `one`, the chord's text, as this kind of press writes it.
     fn written(&self, one: String) -> String {
         match self.press {
-            Press::Single => one,
-            Press::Double => format!("{one} {one}"),
-            Press::Hold => format!("Hold {one}"),
+            PressKind::Single => one,
+            PressKind::Double => format!("{one} {one}"),
+            PressKind::Hold => format!("Hold {one}"),
         }
     }
 }

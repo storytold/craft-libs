@@ -129,9 +129,9 @@ impl Kbd {
             None => one,
         };
         match trigger.press {
-            craft_keymap::chord::Press::Single => one,
-            craft_keymap::chord::Press::Double => format!("{one} {one}"),
-            craft_keymap::chord::Press::Hold => words.kbd_hold.fill(&[("chord", one.as_str())]),
+            craft_keymap::chord::PressKind::Single => one,
+            craft_keymap::chord::PressKind::Double => format!("{one} {one}"),
+            craft_keymap::chord::PressKind::Hold => words.kbd_hold.fill(&[("chord", one.as_str())]),
         }
     }
 
