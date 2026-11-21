@@ -706,7 +706,7 @@ fn a_key_held_by_automation_reads_as_held() {
     for _ in 0..3 {
         frame();
     }
-    assert_eq!(*seen.borrow(), [egui::Key::A], "the held key reads as down");
+    assert_eq!(*seen.borrow(), [Key::A], "the held key reads as down");
     host.inject_let_go(ViewportId::ROOT, Key::A);
     for _ in 0..3 {
         frame();

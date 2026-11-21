@@ -1,7 +1,7 @@
 //! The click on a container's own surface: it reports in the pass of its primary release.
 
 use craft_behavior::Sense;
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::Block;
 use craft_ui::testing::{Frames, pointer, trial};
@@ -13,11 +13,16 @@ const PROBE: Vec2 = Vec2::new(40.0, 40.0);
 const BLOCK: Vec2 = Vec2::new(100.0, 60.0);
 
 /// What the shown container leaves for the trial to read.
-#[derive(Default)]
 struct Shown {
     rect: Cell<Rect>,
     clicked: Cell<bool>,
     seen: RefCell<Seen>,
+}
+
+impl Default for Shown {
+    fn default() -> Self {
+        Shown { rect: Cell::new(Rect::ZERO), clicked: Cell::default(), seen: RefCell::default() }
+    }
 }
 
 impl Shown {
@@ -28,7 +33,7 @@ impl Shown {
             Probe::new(&self.seen).size(PROBE).sense(Sense::CLICK).show(ui);
             Block::new(BLOCK).show(ui);
         });
-        self.rect.set(out.response.rect);
+        self.rect.set(out.output.rect);
     }
 }
 

@@ -252,7 +252,7 @@ fn a_wheel_over_an_open_popup_goes_to_the_popup_and_not_to_the_region_under_it()
     let mut frames = Frames::new();
     frames.idle(2, &mut show_frame);
     pointer::click(&mut frames, Pos2::new(50.0, 10.0), &mut show_frame);
-    let mut wheel_at = |frames: &mut Frames, at: Pos2, show_frame: &mut dyn FnMut(&mut Ui)| -> Vec<Id> {
+    let wheel_at = |frames: &mut Frames, at: Pos2, show_frame: &mut dyn FnMut(&mut Ui)| -> Vec<Id> {
         frames.frame(vec![pointer::moved(at)], &mut *show_frame);
         shares.borrow_mut().clear();
         frames.frame(vec![pointer::wheel(-30.0)], &mut *show_frame);

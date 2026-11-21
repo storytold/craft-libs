@@ -1,11 +1,11 @@
 //! Touch fingers: the multi-finger tap, the modal gate, the second finger that ends a press and the two-finger pan.
 
 use craft_behavior::{PressCancel, PressPhase, Sense, WheelTaker};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer;
 use craft_ui::testing::sensing::{ProbeRoot, show};
-use craft_ui::testing::wheel::{register, take};
+use craft_ui::testing::wheel::{register, take_share};
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::contract::PlainStyle;
 use egui::{Event, Id, Pos2, Rect, Response, TouchPhase, Ui, Vec2};
@@ -176,7 +176,7 @@ fn a_second_finger_cancels_an_open_press_and_two_fingers_moving_together_give_th
     let mut show_taker = move |ui: &mut Ui| {
         let ctx = ui.ctx().clone();
         register(&ctx, WheelTaker::new(id, Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))).horizontal(true).vertical(true).zoom(true));
-        if let Some(wheel) = take(&ctx, id) {
+        if let Some(wheel) = take_share(&ctx, id) {
             sink.borrow_mut().push(wheel.touch_pan);
         }
     };
