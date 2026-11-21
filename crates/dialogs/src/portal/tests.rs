@@ -19,6 +19,23 @@ fn a_portal_answer_falls_back_only_when_it_failed() {
     assert!(matches!(classify(0, slow, false, false, &nothing), Decision::Unavailable(_)), "a save without a file");
 }
 
+/// The portal's Save dialog gets the request's default-button label; a blank or missing one is not sent.
+#[trial]
+fn the_save_options_carry_the_accept_label() {
+    let label = |dialog: FileDialog| {
+        let req = SaveRequest::new(&dialog, String::new());
+        options(&req, "t").get("accept_label").and_then(|value| match value {
+            Value::Str(text) => Some(text.as_str().to_owned()),
+            _ => None,
+        })
+    };
+    assert_eq!(label(FileDialog::save().accept_label("Export")), Some("Export".to_owned()));
+    assert_eq!(label(FileDialog::save()), None);
+    let mut blank = FileDialog::save();
+    blank.accept_label = Some(" ".into());
+    assert_eq!(label(blank), None, "a blank label set on the field is not sent");
+}
+
 #[trial]
 fn file_uris_become_local_paths() {
     assert_eq!(file_uri_path("file:///home/me/Untitled-1.psd"), Some(PathBuf::from("/home/me/Untitled-1.psd")));
