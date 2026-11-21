@@ -15,6 +15,9 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! [`rng`] holds two seeded generators for repeatable test input, [`rng::XorShift64`] and
+//! [`rng::XorShift64Star`], each with `next`, `below`, `byte` and `fill`.
+//!
 //! On targets other than `wasm32`, [`deadline::with_deadline`] runs a test body on its own thread
 //! and fails the test when the body does not finish within its limit, and [`deadline::wait_until`]
 //! polls a condition until it holds and fails the test when the limit passes first. Both read an
@@ -39,6 +42,7 @@
 pub mod deadline;
 pub mod guards;
 pub mod hostile;
+pub mod rng;
 pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]
