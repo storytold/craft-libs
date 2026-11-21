@@ -1,6 +1,7 @@
 # craft-cdr
 
-A bounded Rust reader for `.cdr` drawings of versions 1 to 27 (and `.cdt` templates).
+A bounded Rust reader for `.cdr` drawings of versions 1 to 27 (and `.cdt` templates), and a
+writer of version 15 drawings.
 It reads the `WL` files of versions 1 and 2, the RIFF chunk tree of versions 3 and later with its
 compressed lists, the ZIP packages that versions 14 and later save (with the data streams of
 versions 16 and later) and the records listed below, and hands the engine a drawing in points,
@@ -100,11 +101,11 @@ table.
 | The nonzero fill rule, opacity and blend modes | the winding argument and the uniform transparency argument |
 
 Opacity is written as the reader reads argument 8000 (R47), and the fill rule as the reader reads
-argument 14001 (R52). The uniform transparency of every public sample R47 cites is 50%, and no
-public source says which fill rule each winding value means, so the direction of the opacity
-value and the value written for nonzero rest on the reader's own reading. Each layer gets an id
-(argument 40050), and every other page names the master page's guides, desktop and grid layers by
-those ids (R70); the master page's drawing layers are not named from the other pages.
+argument 14001 (R52). The uniform transparency of every public sample R47 cites is 50%, and the
+specifications R52 cites do not say which fill rule each winding value means, so the direction of
+the opacity value and the value written for nonzero rest on the reader's own reading. Each layer
+gets an id (argument 40050), and every other page names the master page's guides, desktop and grid
+layers by those ids (R70); the master page's drawing layers are not named from the other pages.
 
 The drawing's version and warnings are not written. A group that holds no shape or container is
 left out, a clipping container whose objects hold none is written as a plain shape, a subpath
@@ -118,26 +119,27 @@ file. A guideline on a hidden layer reads back hidden, and a guideline angle pas
 range is written as the same angle within one turn. Hidden groups and objects carry the same hide
 bit as hidden layers (R19); the specification's notes date that bit on groups and objects to a
 later program release than version 15 files, so a program of that version may show them. A spot
-color without a look is written with a black look. Dash lengths are written to whole outline widths and spot color tints to whole
-percent, as the file stores them.
+color without a look is written with a black look. Dash lengths are written to whole outline
+widths and spot color tints to whole percent, as the file stores them.
 
 Writing refuses a drawing that the reader would not read whole within the same `Limits`
 (objects, coordinates, dashes, arguments, chunks, clipped chunks, nesting depth, clip nesting,
 members and sizes), and groups nested deeper than the nesting depth, groups that hold nothing
-included. It also refuses what the file cannot hold or the reader would read back
-otherwise changed: a coordinate past 32 bits of 1/254000 inch, a number that is not finite, a
-page width or height that rounds to less than one coordinate unit, a negative outline width, a
-corner radius below 0 or more than a billionth past half the rectangle's shorter side (a radius
-within that is written as half), a color value, tint or opacity
-outside 0 to 1, more than 10 dash lengths, a negative one or one that rounds past 65,535, a
-pattern whose lengths all round to 0, a name longer than 256 UTF-16 units or holding a NUL, a spot
-color without a name, at a tint that rounds to 0 percent or at a tint too low for its look to read
-back within one step of 1/255, objects on the master page's grid layer, and a guideline at the
-edge of the coordinate range with no room for a second point on it.
+included. It also refuses what the file cannot hold or the reader would read back otherwise
+changed: a coordinate past 32 bits of 1/254000 inch, a number that is not finite, a page width or
+height that rounds to less than one coordinate unit, a negative outline width, a corner radius
+below 0 or more than a billionth past half the rectangle's shorter side (a radius within that is
+written as half), a color value, tint or opacity outside 0 to 1, more than 10 dash lengths, a
+negative one or one that rounds past 65,535, a pattern whose lengths all round to 0, a name longer
+than 256 UTF-16 units or holding a NUL, a spot color without a name, at a tint that rounds to 0
+percent or at a tint too low for its look to read back within one step of 1/255, objects on the
+master page's grid layer, and a guideline at the edge of the coordinate range with no room for a
+second point on it.
 
 ## Provenance
 
-`PROVENANCE.md` lists every record layout the reader relies on, with its public source and status.
+`PROVENANCE.md` lists every record layout the reader relies on, and the rows only the writer
+needs, with their public sources and status.
 Code cites the rows by id (`R1` ...), and `tests/it/provenance.rs` fails when a cited id has no row.
 The test inputs are synthetic drawings built by `src/synth.rs` and `src/synth_cmx.rs` (the
 `synth` feature); no third-party file is committed.

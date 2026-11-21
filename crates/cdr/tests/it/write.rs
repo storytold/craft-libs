@@ -299,13 +299,28 @@ fn a_written_file_is_a_version_15_package_and_the_same_each_time() {
 }
 
 #[test]
-fn clipped_groups_have_odd_ids_that_stay_distinct_when_halved() {
+fn each_container_names_its_own_clipped_group_by_the_stored_id() {
     let riff = riff_of(&write(&everything(), Limits::default()).unwrap());
     let ids: Vec<u32> =
         (0..riff.len() - 12).filter(|&p| &riff[p..p + 4] == b"spnd").map(|p| u32::from_le_bytes(riff[p + 8..p + 12].try_into().unwrap())).collect();
-    let mut halved: Vec<u32> = ids.iter().map(|id| (id + 1) >> 1).collect();
-    halved.dedup();
-    assert!(ids.len() > 1 && ids.iter().all(|id| id % 2 == 1) && halved.len() == ids.len(), "{ids:?}");
+    let mut distinct = ids.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(ids.len() > 1 && distinct.len() == ids.len(), "{ids:?}");
+    // The first u32 of each container argument (8005), from every `loda` record: a `loda` chunk's
+    // body starts with its own length.
+    let le32 = |at: usize| u32::from_le_bytes(riff[at..at + 4].try_into().unwrap()) as usize;
+    let mut named: Vec<u32> = (0..riff.len() - 28)
+        .filter(|&p| &riff[p..p + 4] == b"loda" && le32(p + 4) == le32(p + 8))
+        .flat_map(|p| {
+            let loda = p + 8;
+            let (n, offsets, types) = (le32(loda + 4), loda + le32(loda + 8), loda + le32(loda + 12));
+            (0..n).filter(move |i| le32(types + 4 * (n - 1 - i)) == 8005).map(move |i| le32(loda + le32(offsets + 4 * i)) as u32)
+        })
+        .collect();
+    named.sort_unstable();
+    // Each container names its group by the group's `spnd` id unchanged, and no two name one group.
+    assert_eq!(named, distinct);
 }
 
 #[test]
@@ -931,7 +946,8 @@ proptest! {
         dashes in prop::collection::vec(prop_oneof![-1.0..20.0f64, any::<f64>()], 0..12),
         opacity in prop_oneof![-0.5..1.5f32, any::<f32>()],
     ) {
-        let outline = Outline { width: w, color: Color::Gray(opacity), cap: Cap::Square, join: Join::Round, dashes, behind_fill: false, scale_with: false };
+        let outline =
+            Outline { width: w, color: Color::Gray(opacity), cap: Cap::Square, join: Join::Round, dashes, behind_fill: false, scale_with: false };
         // Corners within half the shorter side, so a rectangle of a size the file holds is written.
         let r = w.abs().min(h.abs()) / 4.0;
         let mut s = Shape::new(Geometry::Rect { w, h, radii: [r, 0.0, r, 0.0] }, Matrix(m), Some(Color::Rgb([opacity; 3])), Some(outline));

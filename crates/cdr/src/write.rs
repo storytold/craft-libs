@@ -79,7 +79,7 @@ const OBJECT_WALK: usize = 1 + 3 + 1 + 5;
 const MAX_DASHES: usize = 10;
 /// The most UTF-16 units of a name the reader keeps whole (`records.rs`).
 const MAX_NAME: usize = 256;
-/// Where a guideline's second point lies along it, in points: VectorCraft's own value.
+/// Where a guideline's second point lies along it, in points: the writer's own value.
 const GUIDE_REACH: f64 = 100.0;
 
 /// The `.cdr` file of `drawing`, version 15, within `limits`.
@@ -718,8 +718,8 @@ impl<'d> Writer<'d> {
                     if depth > MAX_CLIP_DEPTH {
                         return Err(Error::Limit("clip nesting"));
                     }
-                    // Odd ids 1, 3, 5 ..., which stay distinct when halved (R73).
-                    let id = len32(2 * self.clips.len() + 1)?;
+                    // Ids 1, 2, 3 ..., the same in the container and its group's `spnd` (R46, R73).
+                    let id = len32(self.clips.len() + 1)?;
                     if self.clips.is_empty() {
                         // The `doc` list's `LIST clpt`, which holds the clipped groups.
                         self.counted.set(self.counted.get().saturating_add(1));
@@ -1356,7 +1356,8 @@ fn merge(blend: Blend) -> u8 {
 
 /// A ZIP archive (R24) dated 1980-01-01: the stored `mimetype` member (R64), then the RIFF file
 /// made of `riff`'s parts, deflated (R25). The parts are compressed as they are, without being
-/// joined first, straight into the archive after the member's header.
+/// joined first, straight into the archive after the member's header. `craft_zip::Writer` streams
+/// an entry only with ZIP64 size fields, which `zip.rs` refuses, and otherwise takes one slice.
 fn package(riff: &[&[u8]]) -> Result<Vec<u8>, Error> {
     let size = riff.iter().map(|p| p.len()).fold(0usize, usize::saturating_add);
     let mut out = Vec::new();
