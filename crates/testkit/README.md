@@ -216,6 +216,45 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## log
+
+The `log` feature adds `craft_testkit::log` and the `log` dependency. The module is built on every target except `wasm32`.
+
+| Function | Captures | Returns |
+|---|---|---|
+| `warnings(f)` | warnings and errors logged on the calling thread while `f` runs | `Result<(T, Vec<String>), CaptureError>` with the messages |
+| `records(level, f)` | records at `level` or more severe logged on the calling thread while `f` runs | `Result<(T, Vec<CapturedRecord>), CaptureError>` with level, target and message |
+| `capture_global(level)` | records at `level` or more severe logged on any thread | `Result<GlobalCapture, CaptureError>`; `drain()` takes the records captured since the last drain |
+
+`log::set_logger` can be called once per process, so the first capture to install the logger sets the mode for the whole test binary: per thread (`warnings`, `records`) or process wide (`capture_global`). The functions return these errors without running the closure or changing the maximum level:
+
+| Error | When |
+|---|---|
+| `LoggerAlreadySet` | another logger was installed first |
+| `ModeConflict` | the binary already captures in the other mode |
+| `NestedCapture` | `warnings` or `records` is called inside a capture on the same thread |
+| `GlobalCaptureActive` | another `GlobalCapture` is alive; dropping it ends that capture, and the logger stays installed |
+
+A capture raises `log::max_level()` to the level it asks for and never lowers it. When the closure panics, the capture on that thread ends and the panic continues. Records from other threads do not appear in a per-thread capture.
+
+A capture keeps at most `MAX_RECORDS` (4,096) records and `MAX_BYTES` (1 MiB) of message and target text. Formatting a message stops at the first write that would take it past `MAX_BYTES`. A record over either limit is dropped and counted, and the capture returns `CaptureError::Overflow { dropped }` instead of a partial list. For `drain`, the limits apply to each interval between drains.
+
+Run process-wide captures in a binary of their own, for example a `[[test]]` with `harness = false`:
+
+```rust
+fn main() {
+    let capture = craft_testkit::log::capture_global(log::LevelFilter::Warn).expect("capture");
+    std::thread::Builder::new()
+        .name("audio".into())
+        .spawn(|| drop_the_plugin())
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let records = capture.drain().expect("drain");
+    assert!(records.iter().any(|r| r.message.contains("off the main thread")));
+}
+```
+
 ## Origin
 
 ### guards
@@ -242,6 +281,13 @@ Changes from `craft-media-testkit`'s `hammer`:
 | Code | Repository | Path | SHA |
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
+
+### log
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `log` (per thread) | storytold/craft-libs | `crates/docx/src/test_log.rs` (the same file as `crates/wordmodel/src/test_log.rs` and WordCraft's `crates/doc/src/test_log.rs` and `crates/formats/src/test_log.rs`) | `e3e31693` |
+| `log` (process wide) | storytold/soundcraft | `crates/clap-host/tests/editor_main_thread.rs:18-41` | `e6cbf761` |
 
 ## Migration
 
@@ -276,3 +322,11 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### log
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| craft-libs `docx`, `wordmodel` | their private `test_log.rs` | Pending: a separate pull request switches both |
+| WordCraft `doc`, `formats` | their private `test_log.rs` | Pending: a separate pull request in WordCraft |
+| SoundCraft `clap-host` | the logger in `tests/editor_main_thread.rs` | Pending: a separate pull request in SoundCraft switches it to `capture_global` |

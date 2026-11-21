@@ -25,6 +25,10 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! With the `log` feature, on targets other than `wasm32`, `log::warnings` and `log::records`
+//! capture the records the calling thread logs while a closure runs, and `log::capture_global`
+//! captures the records every thread logs. One test binary uses one of the two modes.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -39,6 +43,8 @@
 pub mod deadline;
 pub mod guards;
 pub mod hostile;
+#[cfg(all(feature = "log", not(target_arch = "wasm32")))]
+pub mod log;
 pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]

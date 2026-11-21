@@ -8,7 +8,27 @@ repository.workspace = true
 description = "Source-level platform regression guards and verification utilities for the Craft application suite"
 publish = false
 
+[features]
+# `log`: capture of the records a test logs, per thread or process wide.
+log = ["dep:log"]
+
 [dependencies]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+log = { workspace = true, optional = true }
+
+[[test]]
+name = "log_thread"
+required-features = ["log"]
+
+[[test]]
+name = "log_global"
+harness = false
+required-features = ["log"]
+
+[[test]]
+name = "log_foreign"
+required-features = ["log"]
 
 [lints]
 workspace = true
