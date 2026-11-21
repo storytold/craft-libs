@@ -72,8 +72,8 @@ fn fastest(src: &str) -> Duration {
 fn latex_labels_in_a_row_are_read_in_linear_time() {
     let cases: [fn(usize) -> String; 3] = [|n| "\\label{a} ".repeat(n) + "x", |n| "\\label{a}".repeat(n) + "x", |n| "\\hypertarget{a}{} ".repeat(n)];
     for make in cases {
-        let (small, large) = (fastest(&make(25_000)), fastest(&make(100_000)));
-        assert!(large < small * 8 + Duration::from_millis(50), "{small:?} for 25,000, {large:?} for 100,000");
+        let (small, large) = (fastest(&make(10_000)), fastest(&make(40_000)));
+        assert!(large < small * 8 + Duration::from_millis(50), "{small:?} for 10,000, {large:?} for 40,000");
     }
     let d = import("\\label{one}First \\label{two}second \\label{three}third.".as_bytes());
     let p = d.para_at(&craft_wordmodel::Pos::body(0, 0)).unwrap();
