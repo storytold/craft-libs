@@ -50,6 +50,7 @@ fn the_host_reports_each_viewports_settled_access_tree() {
     let root = egui::accesskit_root_id().accesskit_id();
 
     let main_tree = host.access_tree(ViewportId::ROOT).expect("the main window's tree is recorded");
+    let main_tree = main_tree.update();
     let main_nodes: Vec<u64> = main_tree.nodes.iter().map(|(id, _)| id.0).collect();
     assert!(main_nodes.contains(&main.accesskit_id().0), "the main window's tree holds its node");
     assert!(!main_nodes.contains(&kid.accesskit_id().0), "the main window's tree holds no node of the second window");
@@ -57,6 +58,7 @@ fn the_host_reports_each_viewports_settled_access_tree() {
     assert_eq!(main_tree.focus, root, "the recorded tree carries the settled focus");
 
     let kid_tree = host.access_tree(child).expect("the second window's tree is recorded");
+    let kid_tree = kid_tree.update();
     let kid_nodes: Vec<u64> = kid_tree.nodes.iter().map(|(id, _)| id.0).collect();
     assert!(kid_nodes.contains(&kid.accesskit_id().0), "the second window's tree is its own");
     assert!(!kid_nodes.contains(&main.accesskit_id().0), "the second window's tree holds no node of the main window");

@@ -125,6 +125,11 @@ impl AccessTree {
         AccessTree { update, below_hidden }
     }
 
+    /// The AccessKit update the tree reads, hidden nodes included.
+    pub fn update(&self) -> &TreeUpdate {
+        &self.update
+    }
+
     /// The tree of a frame that made none.
     #[cfg(feature = "testing")]
     pub(crate) fn none() -> Self {

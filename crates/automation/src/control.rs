@@ -257,7 +257,8 @@ impl ControlChannel {
             return;
         }
         // `ui.accessTree` takes no window: it reads the main window's tree.
-        let Some(update) = WindowHost::of(ctx).access_tree(egui::ViewportId::ROOT) else { return };
+        let Some(tree) = WindowHost::of(ctx).access_tree(egui::ViewportId::ROOT) else { return };
+        let update = tree.update();
         let nodes: Vec<Value> = update
             .nodes
             .iter()

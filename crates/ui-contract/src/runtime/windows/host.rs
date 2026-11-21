@@ -117,12 +117,6 @@ impl WindowHost {
         screenshot::facts(&self.ctx, viewport)
     }
 
-    /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
-    /// while AccessKit is off.
-    pub fn access_tree(&self, viewport: ViewportId) -> Option<crate::runtime::egui::access::TreeUpdate> {
-        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
-    }
-
     /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
     /// held after it, and a button held by earlier injected input stays down, so the move drags. With `rest` (seconds)
     /// the input counts as processed only once the pointer has rested that long. As a window never reports a NaN or
@@ -151,15 +145,16 @@ impl WindowHost {
         injected::inject_wheel(&self.ctx, viewport, at, delta, unit, mods);
     }
 
-    /// Turns AccessKit on, idempotent and off by default; from then the tree of every finished pass is kept per
-    /// viewport (`access_tree`).
+    /// Turns AccessKit on, idempotent and off by default; from then the settled tree of every finished pass is kept
+    /// per viewport (`access_tree`).
     pub fn keep_access_trees(&self) {
-        crate::runtime::egui::access::keep(&self.ctx);
+        self.ctx.enable_accesskit();
     }
 
-    /// The last kept access tree of `viewport`, `None` before the first.
+    /// The access tree of `viewport`'s latest settled pass, a host fact of the window as its screenshot facts are;
+    /// `None` while AccessKit is off or before the viewport has run.
     pub fn access_tree(&self, viewport: ViewportId) -> Option<std::sync::Arc<crate::runtime::egui::access::AccessTree>> {
-        crate::runtime::egui::access::kept(&self.ctx, viewport)
+        crate::runtime::egui::access::settled_tree(&self.ctx, viewport).map(|update| std::sync::Arc::new(crate::runtime::egui::access::AccessTree::new(update)))
     }
 
     /// Queues the release of what `released` names, at `at` or where the injected pointer is.
