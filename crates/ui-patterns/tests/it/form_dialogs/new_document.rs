@@ -302,14 +302,19 @@ fn section_captions_paint_in_capitals_and_keep_their_text() {
     assert!(fixture.by_label("Preset Details").is_some(), "the accessible name keeps the text as written");
 }
 
-/// The preset cards share the left column's width, and each card's title and size line are painted whole and centred
+/// The preset cards fill the left column's width, and each card's title and size line are painted whole and centred
 /// under the page outline.
 #[trial]
 fn the_preset_cards_fill_the_column_and_show_their_size_lines_whole() {
+    use craft_ui::contract::Gap;
     use craft_ui::runtime::access::Role;
+    use std::cell::Cell;
 
     let mut options = DocumentOptions::default();
+    let column_gap = Rc::new(Cell::new(0.0f32));
+    let shared = Rc::clone(&column_gap);
     let mut fixture = Fixture::new(move |ui| {
+        shared.set(Gap::Row.points(ui));
         let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
     });
     fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
@@ -319,11 +324,10 @@ fn the_preset_cards_fill_the_column_and_show_their_size_lines_whole() {
     assert!(cards.len() >= 3, "the tab lists presets");
     let first_row: Vec<_> = cards.iter().filter(|card| (card.rect.top() - cards[0].rect.top()).abs() < 1.0).collect();
     assert!(first_row.len() >= 2, "a row holds several cards");
-    let tree = fixture.tree();
-    let column = tree.parent_of_key(cards[0].node).and_then(|grid| tree.bounds_of(grid)).expect("the cards sit in a grid");
-    let gap = first_row[1].rect.left() - first_row[0].rect.right();
+    let details = fixture.by_label("Preset Details").expect("the details column").rect;
+    let column_end = details.left() - column_gap.get();
     let last = first_row.last().expect("a row has cards").rect;
-    assert!(column.right() - last.right() <= gap + 1.0, "the row's last card ends within a gap of the column's end: {last:?} in {column:?}");
+    assert!((column_end - last.right()).abs() <= 1.0, "the row's last card ends at the left column's end ({column_end}): {last:?}");
     for card in &first_row {
         let lines: Vec<_> = fixture.texts().iter().filter(|text| card.rect.contains_rect(text.rect)).collect();
         assert!(lines.iter().any(|text| text.text.contains('\u{d7}')), "the card shows its size line: {:?}", card.rect);
