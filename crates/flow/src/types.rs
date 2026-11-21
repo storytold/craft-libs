@@ -716,6 +716,9 @@ pub struct Para {
     pub index: Option<Box<(std::sync::Arc<str>, usize)>>,
     /// The group of paragraphs its markup kept as read belongs to (see [`Group`]).
     pub group: Option<Box<Group>>,
+    /// A list item's further paragraph, with no number of its own (`list` is `None`): the level
+    /// of the item it belongs to.
+    pub item: Option<u8>,
 }
 
 /// Paragraphs whose markup kept as read ties them together (a comment from one to another, a
@@ -1106,4 +1109,15 @@ pub fn ruby_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
 /// Text with characters the model reserves (U+FFFC) and stray controls removed.
 pub fn clean_text(s: &str) -> String {
     s.chars().filter(|c| *c != OBJ && (!c.is_control() || matches!(c, '\t' | '\n' | '\u{000C}' | '\u{000E}'))).collect()
+}
+
+/// Whether the paragraph at `i` in `blocks` is a list item's further paragraph, and the level of
+/// its item: HTML and Markdown keep it in its item, so the list doesn't start again after it.
+/// A plain paragraph or a heading (ODF's `text:h` may sit in a list item); the writers have no
+/// way to put the other kinds in an item.
+pub fn continues_list(blocks: &[FBlock], i: usize) -> Option<u8> {
+    match blocks.get(i) {
+        Some(FBlock::Para(p)) if p.list.is_none() && matches!(p.kind, Kind::Normal | Kind::Heading(_)) => p.item.map(|l| l.min(8)),
+        _ => None,
+    }
 }

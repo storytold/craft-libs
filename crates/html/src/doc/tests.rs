@@ -985,6 +985,18 @@ fn hostile_style_sheets_never_panic() {
     }
 }
 
+/// A list item's further paragraph keeps its alignment (and page break) in its item.
+#[test]
+fn an_items_further_paragraph_keeps_its_alignment() {
+    let mut one = Para { list: Some(model::ListInfo { ordered: true, ..Default::default() }), ..Default::default() };
+    one.push_text("One", &Fmt::default());
+    let mut cont = Para { item: Some(0), align: Some(Align::Center), ..Default::default() };
+    cont.spacing.left = Some(36.0);
+    cont.push_text("Cont", &Fmt::default());
+    let html = export(&model::to_doc(&Flow { blocks: vec![FBlock::Para(one), FBlock::Para(cont)], meta: Meta::default() }));
+    assert!(html.contains("<li>One<p style=\"text-align:center\">Cont</p></li>"), "{html}");
+}
+
 #[test]
 fn conflicting_mso_vmerge_declarations_last_wins() {
     let html_restart_wins = "<table><tr><td style='mso-yfti-vmerge: continue; mso-yfti-vmerge: restart'>A</td></tr></table>";
