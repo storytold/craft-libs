@@ -1,0 +1,22 @@
+//! HWPX, the XML format of Hancom Hangul documents (OWPML, KS X 6101): a ZIP package of a
+//! header part and section parts, read into the `craft-wordmodel` document model.
+//!
+//! Written from Hancom's public format documents only; see the README for the documents and
+//! their editions.
+//!
+//! 본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+mod error;
+mod header;
+mod package;
+mod units;
+mod xml;
+
+pub use error::HwpxError;
+
+/// Whether `bytes` look like an HWPX document: a ZIP archive whose `mimetype` names HWP, or
+/// which holds HWPX section parts.
+pub fn sniff(bytes: &[u8]) -> bool {
+    package::is_hwpx(bytes)
+}
