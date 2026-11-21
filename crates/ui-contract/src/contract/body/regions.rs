@@ -610,7 +610,11 @@ fn own_labels<R>(ui: &mut Ui, id: Id, (room, seed): (f32, Option<Columns>), foun
         group.offer(room);
         body(ui)
     });
-    (found.extent, found.unsettled) = (scoped.extent, scoped.unsettled);
+    found.extent = scoped.extent;
+    // A later sweep of the same run may take a row's measure from the earlier sweep without reading the column again
+    // (a stack's sweep at the width its first sweep found): that measure is still the one taken at the narrower
+    // column, so the rows run again whenever any sweep found one.
+    found.unsettled = scoped.unsettled.or(found.unsettled.take());
     result
 }
 

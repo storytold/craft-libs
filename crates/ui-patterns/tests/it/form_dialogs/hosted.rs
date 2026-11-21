@@ -464,3 +464,60 @@ fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
     alt_digit(&mut fixture, Key::Num7, "7", alt);
     assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks a listed method");
 }
+
+/// Image Size's and Canvas Size's Width and Height rows (a stack of fields beside the link) show as they measured, at
+/// 1x and 1.25x (#15483, #15538): each label sits beside its field, each field and unit select is as tall as a direct
+/// row's control (`reference`), and Height's label starts under Width's controls.
+#[trial]
+fn sizing_dialogs_show_width_and_height_beside_their_labels_at_full_height() {
+    for scale in [1.0, 1.25] {
+        let opens: [(fn(&mut DialogHost), &str); 2] = [
+            (
+                |host| {
+                    host.open(image_size());
+                },
+                "Resolution",
+            ),
+            (
+                |host| {
+                    host.open(canvas_size());
+                },
+                "Canvas extension color",
+            ),
+        ];
+        for (open, reference) in opens {
+            let host = Rc::new(RefCell::new(DialogHost::new()));
+            let mut fixture = fixture(&host);
+            fixture.pixels_per_point(scale);
+            open(&mut host.borrow_mut());
+            fixture.settle();
+            let rect = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name} is shown")).rect;
+            let label_of = |name: &str| {
+                // The field's label names the unit select's group, the number field's parent.
+                let tree = fixture.tree();
+                let mut node = fixture.by_label(name).unwrap_or_else(|| panic!("{name} is shown")).node;
+                let label = loop {
+                    if let Some(label) = tree.labelled_by_key(node).into_iter().next() {
+                        break label;
+                    }
+                    node = tree.parent_of_key(node).unwrap_or_else(|| panic!("{name} is labelled"));
+                };
+                tree.bounds_of(label).unwrap_or_else(|| panic!("{name}'s label is shown"))
+            };
+            let full = rect(reference).height();
+            for name in ["Width", "Height"] {
+                let (label, field) = (label_of(name), rect(name));
+                for part in [field, rect(&format!("{name} unit"))] {
+                    assert!(part.height() >= full - 0.5, "{name}'s controls are a full row tall at {scale}x ({reference}): {part:?} {full}");
+                }
+                assert!(label.max.x <= field.min.x + 0.5, "{name}'s label sits before its field at {scale}x ({reference}): {label:?} {field:?}");
+                assert!(
+                    label.min.y < field.max.y && label.max.y > field.min.y,
+                    "{name}'s label is on its field's line at {scale}x: {label:?} {field:?}"
+                );
+            }
+            let (width, height) = (rect("Width").union(rect("Width unit")), label_of("Height"));
+            assert!(height.min.y >= width.max.y - 0.5, "Height's row starts under Width's at {scale}x ({reference}): {height:?} {width:?}");
+        }
+    }
+}
