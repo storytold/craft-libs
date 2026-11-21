@@ -137,6 +137,20 @@ fn prefiltering_keeps_the_light_energy() {
 }
 
 #[test]
+fn a_thin_bright_row_of_a_tall_source_keeps_its_energy() {
+    // 2 × 2048 with 16 lit rows at the horizon: the pyramid halves the height while the width
+    // stays at 2 or less, so rough levels read coarse levels instead of missing the rows.
+    let env = env_from(2, 2048, |_, y| if (1016..1032).contains(&y) { [1000.0; 3] } else { [0.0; 3] });
+    let source = energy(&env)[0];
+    let mips = try_prefilter(&env, &PrefilterOptions::default(), &Limits::default()).unwrap();
+    let ratios: Vec<f64> = mips.iter().map(|m| energy(m)[0] / source).collect();
+    eprintln!("tall source: energy ratios {ratios:?}");
+    for (l, r) in ratios.iter().enumerate() {
+        assert!((r - 1.0).abs() < ENERGY_TOLERANCE, "level {l}: energy ratio {r}");
+    }
+}
+
+#[test]
 fn a_bright_patch_lights_the_normals_facing_it() {
     let env = env_from(128, 64, |x, y| if (30..34).contains(&x) && (30..34).contains(&y) { [500.0; 3] } else { [0.1; 3] });
     let mips = try_prefilter(&env, &PrefilterOptions::default(), &Limits::default()).unwrap();

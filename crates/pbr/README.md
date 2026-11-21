@@ -65,13 +65,17 @@ pixels in levels 1 to 5, 128 samples each).
 
 The algorithms come from the `crates/render/src/ibl.rs` files of TextureCraft and MaterialCraft,
 which held the same filtering code. With a firefly cap of 64, which both apps applied, the
-prefiltered levels match theirs for sources with even sides. Changes from those files:
+prefiltered levels match theirs for sources with even sides that are at least twice as wide as
+they are tall. Changes from those files:
 
 - Halving an odd side keeps its last column or row instead of dropping it.
 - The firefly cap is an option, off by default, and the source level bias is an option.
 - Sizes, buffer lengths, radiance values, options and directions are checked, and work and memory
   are bounded, before anything is allocated.
 - Level sizes never grow past the level before, so a source smaller than 4 × 2 is accepted.
+- The source pyramid halves a source while it is wider than 8 or taller than 4, so a source 8 or
+  fewer pixels wide and more than 4 tall also gets coarser levels. A source at least twice as wide
+  as it is tall gets the same pyramid as in those files.
 - The SH projection reads every pixel of the source instead of a source halved to 128 wide by
   plain averaging, which gave rows near the poles too much weight (a lit top row of a 256 × 128
   source counted twice). It integrates each basis function over the area of each pixel instead of

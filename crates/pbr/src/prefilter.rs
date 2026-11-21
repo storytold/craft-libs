@@ -98,11 +98,12 @@ fn ggx_d(cos_t: f32, a: f32) -> f32 {
     a * a / (PI * ((cos_t * cos_t) * (a * a - 1.0) + 1.0).powi(2)).max(f32::MIN_POSITIVE)
 }
 
-/// Sizes of the source pyramid after level 0: halved while it is wider than 8, at most 9 more.
+/// Sizes of the source pyramid after level 0: halved while it is wider than 8 or taller than 4,
+/// at most 9 more.
 fn pyramid_sizes(w: u32, h: u32) -> Vec<(u32, u32)> {
     let mut sizes = Vec::new();
     let mut size = (w, h);
-    while sizes.len() < 9 && size.0 > 8 {
+    while sizes.len() < 9 && (size.0 > 8 || size.1 > 4) {
         size = half_size(size.0, size.1);
         sizes.push(size);
     }
