@@ -2021,6 +2021,11 @@ dependencies = [
 [[package]]
 name = "craft-appkit"
 version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+]
 
 [[package]]
 name = "craft-assuan"
@@ -4566,6 +4571,7 @@ dependencies = [
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-host",
@@ -4582,6 +4588,7 @@ dependencies = [
  "tempfile",
  "wayland-client",
  "winsafe",
+ "x11rb",
 ]
 
 [[package]]
