@@ -140,8 +140,8 @@ pub struct ExportAsDialog<'a> {
     /// The formats the list offers.
     #[prop(into)]
     formats: Vec<ExportFormat>,
-    /// The resample methods the list offers, in the order of [`Resample::ALL`]; all of them when empty. A method the
-    /// list lacks, remembered or from a preset, opens as the first listed one.
+    /// The resample methods the list offers, in the order given; all of them when empty. A method the list lacks,
+    /// remembered or from a preset, opens as Automatic when listed, else as the first listed one.
     #[prop]
     methods: Vec<Resample>,
     /// The dialog's title in place of "Export As" ("Export As: Layer 1").
@@ -451,7 +451,7 @@ impl HostedExportAs {
         self
     }
 
-    /// The resample methods the list offers, in the order of [`Resample::ALL`]; all of them when empty
+    /// The resample methods the list offers, in the order given; all of them when empty
     /// ([`ExportAsDialog::methods`]).
     #[must_use]
     pub fn methods(mut self, methods: Vec<Resample>) -> Self {
