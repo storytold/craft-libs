@@ -451,20 +451,31 @@ fn layer_entries(riff: &[u8]) -> Vec<Entry> {
 
 #[test]
 fn a_guideline_runs_along_the_angle_it_stores() {
-    // The last three start a unit, a tenth and a hundredth of a unit inside a corner of the
-    // coordinate range.
+    // Starts `by` units inside a corner of the coordinate range.
     let near = |by: f64| Pt { x: u(i32::MAX) - by * u(1), y: u(i32::MAX) - by * u(1) };
+    let guide = |at: Pt, angle: f64| Drawing { guides: vec![Guideline { at, angle, hidden: false }], ..one_layer(Vec::new()) };
+    // A quarter of a unit past the corner, on the corner itself, and less than half a unit inside
+    // it, the start rounds onto the corner, and no other point of the line rounds within the range
+    // along it. The last line runs almost level, so every point of it in the range rounds onto the
+    // corner too, as does the line that starts on the corner and half a unit past it.
+    let on_corner = Pt { x: 608_735.521_984_251_9, y: 608_735.521_984_251_9 };
+    let level = [(near(-0.49), -0.9), (Pt { x: 608_735.521_984_252, y: 608_735.522_125_984_2 }, -0.00004)];
+    for (at, angle) in [near(-0.25), on_corner, near(0.1), near(0.01), near(0.00025)].map(|at| (at, -45.0)).into_iter().chain(level) {
+        assert!(matches!(write(&guide(at, angle), Limits::default()), Err(Error::Unwritable(_))), "{at:?}");
+    }
     let inside = [(pt(1000, 2000), 30.0), (pt(1000, 2000), -45.0), (pt(1000, 2000), 1e20)];
-    // A quarter of a unit past the corner the start still rounds within the range, and no other
-    // point on the line does.
-    let past = Drawing { guides: vec![Guideline { at: near(-0.25), angle: -45.0, hidden: false }], ..one_layer(Vec::new()) };
-    assert!(matches!(write(&past, Limits::default()), Err(Error::Unwritable(_))));
-    // On the corner itself, a second point lies less than a unit away along the line.
-    let on_corner = (Pt { x: 608_735.521_984_251_9, y: 608_735.521_984_251_9 }, -45.0);
-    for (at, angle) in inside.into_iter().chain([1.0, 0.1, 0.01, 0.00025].map(|by| (near(by), -45.0))).chain([on_corner]) {
+    // A unit or more inside the corner, a point a whole unit or more away on each axis fits;
+    // at 1.25 units the farthest points in the range round off the angle and a nearer one does not.
+    // At -44 degrees the only point along the line turns from it by exactly a degree. At -18
+    // degrees the one point along the line lies between whole units on both axes.
+    let between = Pt { x: u(i32::MAX) - 2.0 * u(1), y: u(i32::MAX) - 1.48 * u(1) };
+    // A start a unit and a half and half a unit inside the corner lies on the edges of rounding.
+    let edges = Pt { x: 608_735.521_559_055_1, y: 608_735.521_842_519_8 };
+    let near_corner = [(near(1000.0), -45.0), (near(1.25), -45.0), (near(1.0), -45.0), (near(1.0), -44.0), (between, -18.0), (edges, -45.0)];
+    for (at, angle) in inside.into_iter().chain(near_corner) {
         let corner = at.x > u(1_000_000);
         let d = Drawing { guides: vec![Guideline { at, angle, hidden: false }], ..one_layer(Vec::new()) };
-        let riff = riff_of(&write(&d, Limits::default()).unwrap());
+        let riff = riff_of(&write(&d, Limits::default()).unwrap_or_else(|e| panic!("{at:?} {angle}: {e}")));
         let le32 = |at: usize| u32::from_le_bytes(riff[at..at + 4].try_into().unwrap()) as usize;
         let i32_at = |at: usize| f64::from(i32::from_le_bytes(riff[at..at + 4].try_into().unwrap()));
         // The guideline object's `loda` (object type 0x16) and its first argument: 12 bytes, the
@@ -474,8 +485,11 @@ fn a_guideline_runs_along_the_angle_it_stores() {
         let a = (i32_at(arg + 12) / 1e6).to_radians();
         let (dx, dy) = (i32_at(arg + 24) - i32_at(arg + 16), i32_at(arg + 28) - i32_at(arg + 20));
         assert!(dx.hypot(dy) > if corner { 0.0 } else { 1000.0 });
-        // Off the stored direction by no more than the coordinates' rounding.
+        // Off the stored direction by no more than the coordinates' rounding, and, on either
+        // side, by no more than a degree.
         assert!((dx * a.sin() - dy * a.cos()).abs() <= 1.5, "{angle}: {dx} {dy}");
+        let turn = (dx * a.sin() - dy * a.cos()).abs().atan2((dx * a.cos() + dy * a.sin()).abs());
+        assert!(turn <= 1f64.to_radians() + 1e-12, "{angle}: {dx} {dy}");
     }
 }
 
@@ -888,6 +902,8 @@ fn values_outside_their_range_are_refused() {
     let far = Path { subpaths: vec![SubPath { start: Pt { x: 1e9, y: 0.0 }, segments: vec![Segment::Line(pt(0, 0))], closed: false }] };
     let cases = [
         ("negative outline width", with(Shape::new(rect_geometry(), Matrix::IDENTITY, None, Some(outlined(-1.0))))),
+        // A width of 0 reads back as no width.
+        ("positive outline width that rounds to 0", with(Shape::new(rect_geometry(), Matrix::IDENTITY, None, Some(outlined(u(1) / 4.0))))),
         ("negative corner radius", with(Shape::new(Geometry::Rect { w: 10.0, h: 10.0, radii: [-1.0, 0.0, 0.0, 0.0] }, Matrix::IDENTITY, None, None))),
         ("opacity past 1", with(opaque)),
         ("tint past 1", one_layer(vec![rect(100, 100, Some(Color::Spot { name: "Red".into(), tint: 1.5, look: Some([1.0, 1.0, 1.0]) }))])),

@@ -127,14 +127,15 @@ Writing refuses a drawing that the reader would not read whole within the same `
 members and sizes), and groups nested deeper than the nesting depth, groups that hold nothing
 included. It also refuses what the file cannot hold or the reader would read back otherwise
 changed: a coordinate past 32 bits of 1/254000 inch, a number that is not finite, a page width or
-height that rounds to less than one coordinate unit, a negative outline width, a corner radius
-below 0 or more than a billionth past half the rectangle's shorter side (a radius within that is
-written as half), a color value, tint or opacity outside 0 to 1, more than 10 dash lengths, a
-negative one or one that rounds past 65,535, a pattern whose lengths all round to 0, a name longer
-than 256 UTF-16 units or holding a NUL, a spot color without a name, at a tint that rounds to 0
-percent or at a tint too low for its look to read back within one step of 1/255, objects on the
-master page's grid layer, and a guideline at the edge of the coordinate range with no room for a
-second point on it.
+height that rounds to less than one coordinate unit, a negative outline width or a positive one
+that rounds to 0, a corner radius below 0 or more than a billionth past half the rectangle's
+shorter side (a radius within that is written as half), a color value, tint or opacity outside 0
+to 1, more than 10 dash lengths, a negative one or one that rounds past 65,535, a pattern whose
+lengths all round to 0, a name longer than 256 UTF-16 units or holding a NUL, a spot color without
+a name, at a tint that rounds to 0 percent or at a tint too low for its look to read back within
+one step of 1/255, objects on the master page's grid layer, and a guideline at the edge of the
+coordinate range with no room for a second point on it whose rounded coordinates lie within 1
+degree of its angle.
 
 ## Provenance
 

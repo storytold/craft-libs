@@ -81,6 +81,13 @@ const MAX_DASHES: usize = 10;
 const MAX_NAME: usize = 256;
 /// Where a guideline's second point lies along it, in points: the writer's own value.
 const GUIDE_REACH: f64 = 100.0;
+/// How far, in degrees, the line through a guideline's two points, once rounded, may turn from
+/// its stored angle: the writer's own value.
+const GUIDE_TURN: f64 = 1.0;
+/// How many units along the longer axis a guideline's second point is looked for in when no
+/// farther point lies along its angle: past 82 units, a rounded point turns less than
+/// `GUIDE_TURN`.
+const GUIDE_STEPS: i32 = 128;
 
 /// The `.cdr` file of `drawing`, version 15, within `limits`.
 ///
@@ -114,13 +121,14 @@ const GUIDE_REACH: f64 = 100.0;
 /// [`WriteError::Unwritable`] for what the file can't hold or the reader would read back otherwise
 /// changed: a coordinate past 32 bits of 1/254000 inch; a size, matrix or angle that is
 /// not finite; a page width or height that rounds to less than one coordinate unit; a negative
-/// outline width; a corner radius below 0 or more than a billionth past half the rectangle's
+/// outline width, or a positive one that rounds to 0; a corner radius below 0 or more than a billionth past half the rectangle's
 /// shorter side (a radius within that is written as half); a color value, tint or opacity outside
 /// 0 to 1; more than 10 dash lengths, one that is negative, not finite or rounds past 65,535, or a
 /// pattern whose lengths all round to 0; a name longer than 256 UTF-16 units or holding a NUL; a
 /// spot color without a name, at a tint that rounds to 0 percent or at a tint too low for its look
 /// to read back within one step of 1/255; objects on the master page's grid layer; a guideline at
-/// the edge of the coordinate range with no room for a second point on it.
+/// the edge of the coordinate range with no room for a second point on it whose rounded
+/// coordinates lie within 1 degree of its angle.
 pub fn write(drawing: &Drawing, limits: Limits) -> Result<Vec<u8>, Error> {
     // Every package holds two members (R64).
     if limits.members < 2 {
@@ -620,14 +628,59 @@ impl<'d> Writer<'d> {
         let (s, c) = (f64::from(i32::from_le_bytes(stored)) / 1_000_000.0).to_radians().sin_cos();
         let along = |k: f64| -> Result<Vec<u8>, Error> { Ok([coord(g.at.x + k * c)?, coord(g.at.y + k * s)?].concat()) };
         let first = along(0.0)?;
-        // A second point on the line, apart from the first once rounded: the point at the full
-        // reach, on the positive side first. When neither side has one in the file's range, the
-        // farthest point on each side whose coordinates round within the range, and of the two
-        // the one farther away. Rounding moves monotonically along the line, so the points that
-        // round within the range form one span around the first point; halving the step finds
-        // its end to the last representable value, and when neither end rounds apart from the
-        // first point, no point between them does.
-        let full = [GUIDE_REACH, -GUIDE_REACH].into_iter().find_map(|k| along(k).ok().filter(|p| *p != first));
+        // Whether a rounded second point lies apart from the first along the stored angle, on
+        // either side, within `GUIDE_TURN`.
+        let units = |p: &[u8], i: usize| p.get(4 * i..4 * i + 4).and_then(|b| b.try_into().ok()).map_or(0.0, |b| f64::from(i32::from_le_bytes(b)));
+        let along_angle = |p: &Vec<u8>| {
+            let (dx, dy) = (units(p, 0) - units(&first, 0), units(p, 1) - units(&first, 1));
+            // With room for the floating-point error of a turn of exactly `GUIDE_TURN`.
+            (dx != 0.0 || dy != 0.0) && (dx * s - dy * c).abs().atan2((dx * c + dy * s).abs()) <= GUIDE_TURN.to_radians() + 1e-12
+        };
+        // A second point on the line: the point at the full reach, on the positive side first.
+        // When neither side has one in the file's range, the farthest point on each side whose
+        // coordinates round within the range, and of the two the one farther away. Rounding moves
+        // monotonically along the line, so the points that round within the range form one span
+        // around the first point; halving the step finds its end to the last representable
+        // value. Short of a farthest point along the angle, which only happens within
+        // `GUIDE_STEPS` units of the range's edge, the farthest rounded point of the line within
+        // that distance that lies along the angle, on either side.
+        let full = [GUIDE_REACH, -GUIDE_REACH].into_iter().find_map(|k| along(k).ok().filter(along_angle));
+        let stepped = || {
+            // Each side's run of rounded points, walked outward from the start with `along`
+            // itself: a step of one unit's length at a time, and a halving search for where the
+            // rounded point changes, so every rounded point the line passes through is reached.
+            let reach = f64::from(GUIDE_STEPS) / (UNITS_PER_PT * c.abs().max(s.abs()));
+            let unit = 1.0 / UNITS_PER_PT;
+            let mut best: Option<(f64, Vec<u8>)> = None;
+            for side in [1.0, -1.0] {
+                let (mut k, mut current) = (0.0, first.clone());
+                loop {
+                    let next = |k: f64| side * (k.abs() + unit).min(reach);
+                    let mut far = next(k);
+                    while along(far).ok().as_ref() == Some(&current) && far.abs() < reach {
+                        k = far;
+                        far = next(k);
+                    }
+                    if along(far).ok().as_ref() == Some(&current) {
+                        break;
+                    }
+                    let (mut same, mut changed) = (k, far);
+                    loop {
+                        let mid = same + (changed - same) / 2.0;
+                        if mid == same || mid == changed {
+                            break;
+                        }
+                        if along(mid).ok().as_ref() == Some(&current) { same = mid } else { changed = mid }
+                    }
+                    let Ok(p) = along(changed) else { break };
+                    if along_angle(&p) && best.as_ref().is_none_or(|b| changed.abs() > b.0.abs()) {
+                        best = Some((changed, p.clone()));
+                    }
+                    (k, current) = (changed, p);
+                }
+            }
+            best.map(|(_, p)| p)
+        };
         let farthest = |end: f64| -> Option<(f64, Vec<u8>)> {
             let (mut ok, mut bad) = (0.0, end);
             loop {
@@ -644,11 +697,12 @@ impl<'d> Writer<'d> {
                 [farthest(GUIDE_REACH), farthest(-GUIDE_REACH)]
                     .into_iter()
                     .flatten()
-                    .filter(|(_, p)| *p != first)
+                    .filter(|(_, p)| along_angle(p))
                     .reduce(|a, b| if b.0.abs() > a.0.abs() { b } else { a })
                     .map(|(_, p)| p)
             })
-            .ok_or(Error::Unwritable("guidelines with no room for a second point"))?;
+            .or_else(stepped)
+            .ok_or(Error::Unwritable("guidelines with no room for a second point along their angle"))?;
         let mut arg = vec![0; 12];
         arg.extend(stored);
         arg.extend(&first);
@@ -976,7 +1030,12 @@ impl<'d> Writer<'d> {
         if o.width < 0.0 {
             return Err(Error::Unwritable("negative outline widths"));
         }
-        fields.extend(coord(o.width)?);
+        let width = coord(o.width)?;
+        // A width of 0 reads back as no width, which a positive width must not become.
+        if o.width > 0.0 && width == [0; 4] {
+            return Err(Error::Unwritable("outline widths that round to 0"));
+        }
+        fields.extend(width);
         // The stretch, 100 percent, and 2 bytes; the nib angle and 46 bytes.
         fields.extend(100u16.to_le_bytes());
         fields.extend([0; 2]);
