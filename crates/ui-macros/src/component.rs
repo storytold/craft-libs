@@ -236,8 +236,11 @@ fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Sh
     let helper = registry_helper(types)?;
     Ok(quote! {
         #gate
-        pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
-            #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+        #k::__register_contract! {
+            @suite
+            pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
+                #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+            }
         }
 
         // Outside the gate: the sample exists in every build, so it is never dead code where the registration is absent.
@@ -261,8 +264,11 @@ pub(crate) fn pattern_registrations(k: &TokenStream, types: &[Type], purpose: &s
     };
     quote! {
         #gate
-        pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
-            #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+        #k::__register_contract! {
+            @suite
+            pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
+                #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+            }
         }
         #gate
         const _: () = {
@@ -661,4 +667,38 @@ pub(crate) fn register(input: TokenStream) -> syn::Result<TokenStream> {
         return Ok(pattern_registrations(&k, &registered.types, "", &quote!(#k::contract::PatternProbe::of)));
     }
     registrations(&k, &registered.types, &registered.declared, registered.shape)
+}
+
+#[cfg(test)]
+mod registry_helper_tests {
+    use super::*;
+    use quote::quote;
+
+    #[test]
+    fn component_and_pattern_helpers_are_guarded_by_dependency_suite() {
+        let ty: Type = syn::parse_quote!(Example);
+        let declared = Declared { sample: Some(syn::parse_quote!(make_example)), ..Declared::default() };
+        let component = registrations(&quote!(craft_ui), std::slice::from_ref(&ty), &declared, Shape::Leaf).unwrap();
+        let pattern = pattern_registrations(&quote!(craft_ui), &[ty], "pattern", &quote!(probe));
+        for tokens in [component.clone(), pattern] {
+            let file: syn::File = syn::parse2(tokens).unwrap();
+            let suite = file
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    syn::Item::Macro(item) if item.mac.path.segments.last().is_some_and(|s| s.ident == "__register_contract") => Some(item),
+                    _ => None,
+                })
+                .expect("registry helper is protected by dependency suite");
+            let tokens = suite.mac.tokens.clone();
+            let helper: syn::ItemFn = syn::parse2(tokens.into_iter().skip(2).collect()).unwrap();
+            assert!(helper.sig.ident.to_string().starts_with("__registry_"));
+            assert!(helper.sig.inputs.iter().any(|arg| quote!(#arg).to_string().contains("Registry")));
+        }
+        let file: syn::File = syn::parse2(component).unwrap();
+        assert!(
+            file.items.iter().any(|item| matches!(item, syn::Item::Const(item) if quote!(#item).to_string().contains("make_example"))),
+            "sample remains referenced outside the dependency suite wrapper"
+        );
+    }
 }
