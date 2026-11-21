@@ -310,8 +310,10 @@ crate's decoder returns 7- and 8-channel AAC without a speaker assignment, in AA
 file needs that step before it is written again.
 
 An M4A's edit list skips the AAC encoder's priming (1024 frames) and ends at the last frame
-written, so the file decodes to the length that went in. An MP3, AC-3 or E-AC-3 stream has no
-place for that (see [Limits](#limits)). For a container of your own, use the codec modules below.
+written, so the file decodes to the length that went in. An MP3 file does the same with an Info
+frame in front of the audio: its LAME tag gives the encoder delay and the padding at the end, which
+this crate's reader and ffmpeg apply. An AC-3 or E-AC-3 stream has no place for them (see
+[Limits](#limits)). For a container of your own, use the codec modules below.
 
 ### Encode AAC packets
 
@@ -514,10 +516,12 @@ match craft_audio::decode(&bytes, None) {
 - ALAC: craft-media's MP4 muxer writes no `chan` box, so an M4A of more than two channels (from
   `EncodeFormat::Alac` or muxed from `alac::Encoder` packets) carries no explicit layout; decoders
   then use the standard ALAC layout for the count, which is the one written.
-- `EncodeFormat::Mp3`, `Ac3` and `Eac3` write raw streams, which cannot signal the codec's delay or
-  the length: the file decodes with 1057 (MP3) or 256 (AC-3, E-AC-3) frames of delay in front and
-  padded to whole frames at the end. MP3 gets no Xing / Info frame. `EncodeFormat::Aac` and `Alac`
-  (M4A) decode to the length written.
+- `EncodeFormat::Ac3` and `Eac3` write raw streams, which cannot signal the codec's delay or the
+  length: the file decodes with 256 frames of delay in front and padded to whole frames at the end.
+  `EncodeFormat::Mp3` (through its Info frame's LAME tag), `Aac` and `Alac` (M4A) decode to the
+  length written. The LAME tag's encoder string starts with `LAME`, which readers look for before
+  they use the delay and padding, though the encoder is this crate's; its other fields (replay gain,
+  lowpass, peak) are left empty.
 - An AAC M4A's length is in the edit list and the last packet's duration. This crate, Apple's
   decoders and ffmpeg 9 end the audio there; ffmpeg 8 skips the priming but plays the last
   packet's padding (under 1024 frames of near silence).
@@ -572,7 +576,7 @@ Each codec module's rustdoc lists the coding tools it implements.
 | MP1/MP2 (`mpa`) | ISO/IEC 11172-3, 13818-3 | Layer I and II, MPEG-1/2/2.5, 8–48 kHz; also the Layer II rate/mode pairs the spec disallows (ffmpeg's default mono 384 kbit/s); no free format | ffmpeg-encoded streams, 73–84 dB SNR |
 | MP2 encoder (`mpa::encoder`) | ISO/IEC 11172-3 (§2.4, Annex B and C), 13818-3 | Layer II, constant bit rate, mono or stereo (no joint stereo), 32/44.1/48 kHz at the spec's rate/mode pairs and 16/22.05/24 kHz at 8–160 kbit/s; no CRC | our decoder and ffmpeg decode the frames; SNR of 20–37 dB on tone mixes, and the 481-sample filter delay matches |
 | MP3 decoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, MPEG-1/2/2.5, 8–48 kHz, every bit rate, CBR and VBR; mono, stereo, dual channel, joint stereo (mid/side and intensity); long, short and mixed blocks; bit reservoir; CRC read, not checked; Xing / Info / VBRI and LAME tags; no free format (read through symphonia) | ffmpeg's float decoder: 127–131 dB SNR on LAME streams of every sampling frequency (CBR, VBR, CRC, no reservoir, transients with short blocks) and on this crate's encoder's; intensity stereo and mixed blocks through LAME frames edited to use them (112–131 dB) |
-| MP3 encoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, constant bit rate: 32–320 kbit/s at 32/44.1/48 kHz, 8–160 kbit/s at 16/22.05/24 kHz; mono, stereo, joint stereo (mid/side); bit reservoir; long blocks only; no Xing/Info tag, VBR, CRC or free format | ffmpeg decodes every Huffman code as intended; full encodes at every sampling frequency checked with ffprobe and by SNR of ffmpeg's decode |
+| MP3 encoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, constant bit rate: 32–320 kbit/s at 32/44.1/48 kHz, 8–160 kbit/s at 16/22.05/24 kHz; mono, stereo, joint stereo (mid/side); bit reservoir; long blocks only; no VBR, CRC or free format; the Info frame and LAME tag in `.mp3` files from `encode` / `FileEncoder` | ffmpeg decodes every Huffman code as intended; full encodes at every sampling frequency checked with ffprobe and by SNR of ffmpeg's decode |
 | ALAC (`alac`) | Apple's reference implementation | decode and encode, 1–8 channels, 16/20/24/32 bits (decode: any depth 1–32), fast mode, magic cookie in MP4/Matroska and CAF form | Apple's reference: same packets from the encoder, same samples from both decoders on 766 configurations; ffmpeg: bit-exact both ways |
 
 ### MP3 encoding
@@ -598,8 +602,9 @@ finite count as silence and the rest are clamped to ±4, so no input makes an in
   split and the Huffman table per region, and the bit reservoir (`main_data_begin`) bounded by the
   decoder's 7680-bit input buffer.
 - Not yet: block switching (short blocks; transients pre-echo), `scfsi` and `preflag`, intensity
-  stereo, a tonality-aware model, VBR/ABR, the Xing/Info and LAME gapless tags (the delay is not
-  signalled), CRC and free format.
+  stereo, a tonality-aware model, VBR/ABR, CRC and free format. `mp3::Encoder` writes frames only;
+  `encode` and `FileEncoder` put the Info frame with its LAME tag (frames, bytes, a seek table, the
+  delay and padding) in front of them.
 
 ### AC-3 and E-AC-3 encoding
 

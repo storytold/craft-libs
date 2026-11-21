@@ -386,6 +386,9 @@ pub(crate) struct Writer<W: Write + Seek> {
     /// Set when a write has failed: the encoder and the sink no longer agree, so the writer
     /// refuses every later call.
     failed: bool,
+    /// For MP3, the Info frame in front of the audio.
+    #[cfg(feature = "mp3-encode")]
+    info: Option<crate::mp3::info::Writer>,
 }
 
 impl<W: Write + Seek> Writer<W> {
@@ -442,7 +445,20 @@ impl<W: Write + Seek> Writer<W> {
             EncodeFormat::Aac | EncodeFormat::Alac => Sink::M4a(Box::new(M4a::new(out, &codec, sample_rate, channels as u32)?)),
             _ => Sink::Raw(out),
         };
-        Ok(Writer { codec, sink, map, bitrate, frames: 0, packets: Vec::new(), failed: false })
+        #[cfg(feature = "mp3-encode")]
+        let info =
+            (opts.format == EncodeFormat::Mp3).then(|| crate::mp3::info::Writer::new(sample_rate, channels, bitrate.unwrap_or(0) / 1000)).flatten();
+        Ok(Writer {
+            codec,
+            sink,
+            map,
+            bitrate,
+            frames: 0,
+            packets: Vec::new(),
+            failed: false,
+            #[cfg(feature = "mp3-encode")]
+            info,
+        })
     }
 
     pub(crate) fn bitrate(&self) -> Option<u32> {
@@ -455,6 +471,8 @@ impl<W: Write + Seek> Writer<W> {
             match &mut self.sink {
                 #[cfg(any(feature = "aac-encode", feature = "alac-encode"))]
                 Sink::M4a(m4a) => m4a.write(packet)?,
+                #[cfg(feature = "mp3-encode")]
+                Sink::Raw(out) if self.info.is_some() => self.info.as_mut().map_or(Ok(()), |info| info.write(out, &packet.data))?,
                 Sink::Raw(out) => out.write_all(&packet.data)?,
             }
         }
@@ -489,6 +507,10 @@ impl<W: Write + Seek> Writer<W> {
             #[cfg(any(feature = "aac-encode", feature = "alac-encode"))]
             Sink::M4a(m4a) => m4a.finish(&self.codec, self.frames),
             Sink::Raw(mut out) => {
+                #[cfg(feature = "mp3-encode")]
+                if let Some(info) = &self.info {
+                    info.finish(&mut out, self.frames)?;
+                }
                 out.flush()?;
                 Ok(out)
             }

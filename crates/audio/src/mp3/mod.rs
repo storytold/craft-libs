@@ -26,7 +26,9 @@
 //!   inner / outer quantization loops with scalefactors, Huffman table and region selection, and
 //!   the bit reservoir (`main_data_begin`).
 //! - Output: a plain stream of frames, no ID3 or Xing / Info tag, no CRC. The frames written one
-//!   after another are a playable `.mp3` file.
+//!   after another are a playable `.mp3` file. `craft_audio::encode` and `FileEncoder` put an
+//!   Info frame in front, whose LAME tag gives the delay and padding, so the file decodes to the
+//!   length encoded.
 //!
 //! From FilmCraft's `filmcraft-mp3enc` (storytold/filmcraft@4bec22b). Public items keep their
 //! names, so FilmCraft can re-export this module.
@@ -43,6 +45,8 @@ pub(crate) mod filterbank;
 #[cfg(feature = "mp3-encode")]
 mod huffman;
 mod huffman_tables;
+#[cfg(feature = "mp3-encode")]
+pub(crate) mod info;
 #[cfg(feature = "mp3-encode")]
 mod quantize;
 pub(crate) mod tables;
