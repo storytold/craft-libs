@@ -1,7 +1,8 @@
 //! Built-in words of the dialog family.
 
 craft_ui::words! {
-    /// The words of the dialog family: the standard prompts, the unsaved-changes question and the recovery dialog.
+    /// The words of the dialog family: the standard prompts, the unsaved-changes question, the recovery dialog and the
+    /// job progress window.
     /// Cancel, OK and "Don't show again" are the common words. The unsaved-changes question asks Yes, No and Cancel
     /// on Windows and Linux and Save, Don't Save and Cancel on macOS.
     pub struct DialogWords {

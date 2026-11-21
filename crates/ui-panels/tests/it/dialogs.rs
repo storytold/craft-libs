@@ -6,8 +6,8 @@ use craft_quit::{CloseAnswer, CloseScope};
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
-    UnsavedChangesDialog, dialog_id,
+    Alert, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, JobAnswer, JobProgress, PromptKind, RecoveredDocument,
+    RecoveryAnswer, RecoveryDialog, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog, dialog_id,
 };
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -15,7 +15,9 @@ use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, trial};
 use egui::{Modifiers, Rect, Response, Ui, Vec2, ViewportId, vec2};
 use std::cell::{Cell, RefCell};
+use serde_json::json;
 use std::rc::Rc;
+use std::time::Duration;
 
 /// A dialog with no content: it records whether it was the top of the stack when shown and finishes with
 /// `finish` once set.
@@ -160,6 +162,55 @@ fn a_dialog_that_closed_itself_shows_when_opened_again() {
         assert_eq!(host.borrow_mut().take::<SelfClosing>(), Some(DialogResult::Ok(())), "open {round}: OK answers");
         assert!(fixture.by_label("Reopen probe").is_none(), "open {round}: the closed dialog is gone");
     }
+}
+
+/// Automation answers the recovery prompt through its `choice` field: Discard is reachable, Recover is refused while
+/// the document is blocked, and a value that is no answer is refused.
+#[trial]
+fn automation_answers_a_recovery_prompt_with_discard() {
+    let ctx = egui::Context::default();
+    let mut host = DialogHost::new();
+    let age = Duration::from_secs(300);
+
+    let blocked = RecoveredDocument::new("poster", "poster.psd", age).blocked("Stop recording first");
+    let id = host.open(RecoveryDialog::new(blocked));
+    assert!(host.set_json_field(&ctx, id, "choice", json!("recover")).is_err(), "a blocked document refuses recover");
+    assert!(host.set_json_field(&ctx, id, "choice", json!("maybe")).is_err(), "an unknown choice is refused");
+    assert!(host.set_json_field(&ctx, id, "other", json!("discard")).is_err(), "an unknown field is refused");
+    assert_eq!(host.set_json_field(&ctx, id, "choice", json!("discard")), Ok(()));
+    assert!(host.confirm_by_id(&ctx, id));
+    assert_eq!(host.take::<RecoveryDialog>(), Some(DialogResult::Ok(RecoveryAnswer::Discard)));
+
+    let id = host.open(RecoveryDialog::new(RecoveredDocument::new("poster", "poster.psd", age)));
+    assert!(host.confirm_by_id(&ctx, id));
+    assert_eq!(host.take::<RecoveryDialog>(), Some(DialogResult::Ok(RecoveryAnswer::Recover)), "Recover is the default choice");
+}
+
+/// A job window that answered Cancel shows again when the app draws it for the next job.
+#[trial]
+fn a_job_window_shows_again_for_the_next_job_after_cancel() {
+    let drawing = Rc::new(Cell::new(true));
+    let answered = Rc::new(Cell::new(None));
+    let (on, got) = (Rc::clone(&drawing), Rc::clone(&answered));
+    let mut fixture = Fixture::new(move |ui| {
+        if on.get() {
+            if let Some(answer) = JobProgress::new("Exporting", "Page 1 of 3").show(ui).answer {
+                got.set(Some(answer));
+            }
+        }
+    });
+    fixture.idle(6);
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows for the first job");
+    let cancel = fixture.by_label("Cancel").expect("the window has Cancel");
+    fixture.click(&cancel).idle(4);
+    assert_eq!(answered.get(), Some(JobAnswer::Cancel));
+
+    drawing.set(false);
+    fixture.idle(3);
+    assert!(fixture.by_label("Exporting").is_none(), "the window is gone while no job wants it");
+    drawing.set(true);
+    fixture.idle(6);
+    assert!(fixture.by_label("Exporting").is_some(), "the window shows for the next job");
 }
 
 const BAND: PartKey = PartKey::new("band");

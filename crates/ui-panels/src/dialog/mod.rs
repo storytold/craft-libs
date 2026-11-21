@@ -1,5 +1,5 @@
 //! Dialog shells and prompts: `Dialog`, `DialogFrame`, `BlockingOverlay`, `Prompt` with its
-//! configurations (`Alert`, `StandardPrompt`, `UnsavedChangesDialog`, `RecoveryDialog`) and the values an app routes
+//! configurations (`Alert`, `StandardPrompt`, `UnsavedChangesDialog`, `RecoveryDialog`, `JobProgress`) and the values an app routes
 //! its dialogs by (`DialogStack`, `DialogHost`). Form dialogs build on the shells.
 
 mod alert;
