@@ -8,18 +8,29 @@
 //!
 //! The menu keeps its own state (where it is open, whether the opening key is held) in egui's
 //! memory under its id, so the app calls [`RadialMenu::show`] every frame and stores nothing.
+//!
+//! While the ring is open it takes every key press, typed or composed text and clipboard event,
+//! so a shortcut or a tool key does not reach the app's panels under it. Key releases still reach
+//! the app, so it can report the opening key's release with [`RadialMenu::release`]. egui's
+//! `key_down` still reports held keys; an app that acts on a held key reads
+//! [`RadialMenu::is_open`] before calling [`RadialMenu::show`] and skips that for the rest of the
+//! pass when the ring was open, since a pick or close in `show` ends the ring in that pass.
+//!
+//! In a right-to-left interface ([`crate::direction`]) the items run counterclockwise from the
+//! top, and Tab follows them.
 
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 use egui::{
-    Align2, Area, Context, Event, EventFilter, FocusDirection, FontId, Id, ImageSource, Key, Modifiers, Order, Pos2, Rect, Response, Role, Sense, Ui,
-    UiBuilder, Vec2, WidgetInfo, vec2,
+    Align2, Area, Context, Event, EventFilter, FocusDirection, FontId, Id, ImageSource, Key, Modifiers, Order, Pos2, Rect, Response, Role, Sense,
+    TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, vec2,
 };
 
 #[cfg(test)]
 mod tests;
 
-/// Most items one ring shows. Items past this are not drawn.
+/// Most items one ring shows. Items past this are not drawn, and the menu logs a warning when it
+/// opens with more.
 pub const MAX_ITEMS: usize = 8;
 /// Default distance from the ring's center to the center of each item.
 pub const RADIUS: f32 = 72.0;
@@ -27,14 +38,16 @@ pub const RADIUS: f32 = 72.0;
 pub const BUTTON: f32 = 40.0;
 /// Diameter of the close button in the middle.
 const CENTER: f32 = 28.0;
-/// Room under the ring for the highlighted item's caption.
+/// Room past the ring's disc, below or above it, kept on screen for a one-line caption.
 const CAPTION: f32 = 24.0;
 /// Room past the outer edge of the items that still counts as the ring.
 const MARGIN: f32 = 8.0;
-/// Room between an item's edge and its icon.
+/// Room between an item's edge and its icon, at most a quarter of the item's diameter.
 const ICON_INSET: f32 = 10.0;
 /// Largest radius or item size the menu accepts; larger or non-finite values fall back.
 const MAX_SIZE: f32 = 1024.0;
+/// Smallest item size the menu accepts.
+const MIN_BUTTON: f32 = 16.0;
 
 /// One command in the ring.
 #[derive(Clone, Debug)]
@@ -43,7 +56,11 @@ pub struct RadialItem {
     pub id: String,
     /// Tooltip, caption and accessible name. Translate it in the app.
     pub label: String,
+    /// A second line in the tooltip. For a disabled item, the reason it is disabled.
+    pub detail: Option<String>,
     /// Painted tinted with the text colors. Without one, the item shows the label's first letter.
+    /// An image rather than [`crate::menu::MenuItem`]'s glyph, since the ring shows no label
+    /// beside it.
     pub icon: Option<ImageSource<'static>>,
     /// `false`: drawn disabled, skipped by the keyboard, and a click picks nothing.
     pub enabled: bool,
@@ -52,7 +69,7 @@ pub struct RadialItem {
 impl RadialItem {
     /// An enabled item without an icon.
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { id: id.into(), label: label.into(), icon: None, enabled: true }
+        Self { id: id.into(), label: label.into(), detail: None, icon: None, enabled: true }
     }
 
     pub fn icon(mut self, icon: ImageSource<'static>) -> Self {
@@ -60,13 +77,20 @@ impl RadialItem {
         self
     }
 
-    pub fn enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// Present but unavailable, with the reason in its tooltip.
+    pub fn disabled(mut self, why: impl Into<String>) -> Self {
+        self.enabled = false;
+        self.detail = Some(why.into());
         self
     }
 }
 
-/// The two names the menu supplies itself. Translate them in the app.
+/// The two names the menu supplies itself. The defaults are English; translate them in the app.
 #[derive(Clone, Debug)]
 pub struct RadialLabels {
     /// The accessible name of the ring as a whole.
@@ -104,7 +128,9 @@ pub enum RingHit {
 }
 
 /// The angle of item `index` of `count`, in radians clockwise from straight up on screen. Item 0
-/// is at the top and the items are spaced evenly.
+/// is at the top and the items are spaced evenly. This and the other free functions here
+/// describe a left-to-right ring; a right-to-left interface draws it mirrored, and
+/// [`RadialMenu::hit_test`] tests an open ring as it is drawn.
 pub fn slot_angle(index: usize, count: usize) -> f32 {
     if count == 0 { 0.0 } else { TAU * (index % count) as f32 / count as f32 }
 }
@@ -114,6 +140,49 @@ pub fn slot_angle(index: usize, count: usize) -> f32 {
 pub fn slot_direction(index: usize, count: usize) -> Vec2 {
     let angle = slot_angle(index, count);
     vec2(angle.sin(), -angle.cos())
+}
+
+/// `direction` flipped left for right in a right-to-left interface. Applied to an item's place it
+/// gives where the item is drawn; applied to a direction on screen it gives the direction among
+/// the items' clockwise angles.
+fn mirrored(direction: Vec2, rtl: bool) -> Vec2 {
+    if rtl { vec2(-direction.x, direction.y) } else { direction }
+}
+
+/// Removes this pass's key presses, typed and composed text, clipboard events and assistive
+/// technology requests for widgets other than `ring`'s, so the panels drawn after an open ring do
+/// not see them. Key releases stay for the app.
+fn swallow_keys(ctx: &Context, ring: &[egui::accesskit::NodeId]) {
+    ctx.input_mut(|input| {
+        let modal = |e: &Event| match e {
+            Event::AccessKitActionRequest(request) => !ring.contains(&request.target_node),
+            _ => matches!(
+                e,
+                Event::Key { pressed: true, .. }
+                    | Event::Text(_)
+                    | Event::Copy
+                    | Event::Cut
+                    | Event::Paste(_)
+                    | Event::PasteImage(_)
+                    | Event::MiddleClickPaste { .. }
+                    | Event::Ime(_)
+            ),
+        };
+        input.events.retain(|e| !modal(e));
+        input.raw.events.retain(|e| !modal(e));
+    });
+}
+
+/// Where this pass's last primary button release happened, or `fallback` without one. egui's
+/// interaction position follows moves after the release in the same pass.
+fn release_pos(ctx: &Context, fallback: Option<Pos2>) -> Option<Pos2> {
+    ctx.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => Some(*pos),
+            _ => None,
+        })
+    })
+    .or(fallback)
 }
 
 /// The angle of `direction` in radians clockwise from straight up, in `0..TAU`.
@@ -199,6 +268,28 @@ pub fn caption_rect(anchor: Pos2, size: Vec2, screen: Rect) -> Rect {
     rect.translate(vec2(shift(rect.min.x, rect.max.x, screen.min.x, screen.max.x), shift(rect.min.y, rect.max.y, screen.min.y, screen.max.y)))
 }
 
+/// Which item the caption under the ring names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptionFor {
+    /// The item with keyboard focus, after the arrows or Tab moved it.
+    Focus,
+    /// The item with this index, which releasing the held opening key would pick.
+    Item(usize),
+    /// The item under the pointer, or else the one with focus.
+    Hover,
+    /// No caption: the held key aims at a disabled item.
+    Nothing,
+}
+
+/// How this pass draws the ring.
+#[derive(Clone, Copy, Debug)]
+struct View {
+    /// The interface runs right to left.
+    rtl: bool,
+    /// The slots that hold another command than in the last pass.
+    changed: [bool; MAX_ITEMS],
+}
+
 /// What the menu remembers between frames while it is open.
 #[derive(Clone, Copy, Debug)]
 struct State {
@@ -206,6 +297,9 @@ struct State {
     at: Pos2,
     /// The opening key is still down: releasing it over an item picks that item.
     held: bool,
+    /// The key that opened the ring, if the app named one. While `held`, its repeats are
+    /// ignored, and its release ends the hold.
+    opener: Option<Key>,
     /// The app reported the opening key's release; the next [`RadialMenu::show`] decides.
     released: bool,
     /// Where the pointer was when the ring opened.
@@ -217,6 +311,19 @@ struct State {
     pending: Option<Id>,
     /// Focus has not yet been placed in the ring.
     fresh: bool,
+    /// Each slot's command in the last pass.
+    commands: [Option<Id>; MAX_ITEMS],
+    /// The ring's widget that had focus at the end of the last pass.
+    last_focus: Option<Id>,
+    /// Each slot's command when the primary pointer button went down, while it is down.
+    press_commands: Option<[Option<Id>; MAX_ITEMS]>,
+    /// No pass has recorded `commands` yet.
+    fresh_commands: bool,
+    /// Where the pointer was at the end of the last pass.
+    last_pointer: Option<Pos2>,
+    /// The arrows or Tab moved the highlight. Releasing the opening key then picks nothing and
+    /// leaves the ring open, so Enter or a click picks.
+    keys_used: bool,
     /// The pass the ring opened in. Enter and Space in that pass do not pick: the ring has not
     /// been shown yet, and the key may be the one that opened it.
     opened_pass: u64,
@@ -236,16 +343,26 @@ impl RadialMenu {
         Self { id: id.into(), radius: RADIUS, button: BUTTON }
     }
 
-    /// Distance from the center to each item's center. Default [`RADIUS`].
+    /// Distance from the center to each item's center. Default [`RADIUS`]. A radius too small
+    /// for eight items to clear the close button and each other is raised to the smallest that
+    /// does; see [`Self::ring_radius`].
     pub fn radius(mut self, radius: f32) -> Self {
         self.radius = if radius.is_finite() { radius.clamp(0.0, MAX_SIZE) } else { RADIUS };
         self
     }
 
-    /// Diameter of one item. Default [`BUTTON`].
+    /// Diameter of one item, from 16 to 1024 pt. Default [`BUTTON`].
     pub fn button_size(mut self, size: f32) -> Self {
-        self.button = if size.is_finite() { size.clamp(0.0, MAX_SIZE) } else { BUTTON };
+        self.button = if size.is_finite() { size.clamp(MIN_BUTTON, MAX_SIZE) } else { BUTTON };
         self
+    }
+
+    /// The distance from the center to each item's center that the ring uses: the radius asked
+    /// for, or the smallest at which eight items clear the close button and each other.
+    pub fn ring_radius(&self) -> f32 {
+        let clear_center = CENTER / 2.0 + self.button / 2.0 + MARGIN / 2.0;
+        let clear_neighbors = self.button / (2.0 * (PI / MAX_ITEMS as f32).sin());
+        self.radius.max(clear_center).max(clear_neighbors)
     }
 
     /// The radius of the close button, inside which the pointer is over it.
@@ -253,14 +370,46 @@ impl RadialMenu {
         CENTER / 2.0
     }
 
-    /// The radius past which the pointer is outside the ring.
+    /// The radius past which the pointer is outside the ring. The ring's disc is drawn to here.
     pub fn outer_radius(&self) -> f32 {
-        self.radius + self.button / 2.0 + MARGIN
+        self.ring_radius() + self.button / 2.0 + MARGIN
     }
 
     /// How far the ring and its caption reach from the center in every direction.
     pub fn reach(&self) -> f32 {
-        self.radius + self.button / 2.0 + CAPTION
+        self.outer_radius() + CAPTION
+    }
+
+    /// The center of item `index`'s round button.
+    fn item_center(&self, center: Pos2, index: usize, count: usize, rtl: bool) -> Pos2 {
+        center + mirrored(slot_direction(index, count), rtl) * self.ring_radius()
+    }
+
+    /// The bounding square of item `index`'s round button: its widget and accessible bounds.
+    /// Neighboring squares can overlap at their corners, so what a click picks comes from
+    /// [`hit`], never from which square took it.
+    fn item_rect(&self, center: Pos2, index: usize, count: usize, rtl: bool) -> Rect {
+        Rect::from_center_size(self.item_center(center, index, count, rtl), Vec2::splat(self.button))
+    }
+
+    /// Where `pointer` lies relative to this ring while it is open with `count` items, tested as
+    /// the ring tests clicks: around the center it was moved to on screen, and mirrored in a
+    /// right-to-left interface. [`RingHit::Outside`] while the ring is closed.
+    pub fn hit_test(&self, ctx: &Context, pointer: Pos2, count: usize) -> RingHit {
+        let Some(state) = self.state(ctx) else {
+            return RingHit::Outside;
+        };
+        let center = fit_center(state.at, self.reach(), ctx.content_rect());
+        self.ring_hit(center, pointer, count.min(MAX_ITEMS), crate::direction::is_rtl(ctx))
+    }
+
+    fn ring_hit(&self, center: Pos2, pointer: Pos2, count: usize, rtl: bool) -> RingHit {
+        hit(center, center + mirrored(pointer - center, rtl), count, self.inner_radius(), self.outer_radius())
+    }
+
+    /// The bounding square of the close button: its widget and accessible bounds.
+    fn close_rect(&self, center: Pos2) -> Rect {
+        Rect::from_center_size(center, Vec2::splat(CENTER))
     }
 
     /// The id of item `index`'s widget, for focus and accessibility.
@@ -273,30 +422,71 @@ impl RadialMenu {
         self.id.with("close")
     }
 
-    /// Opens the ring around `at`, kept on screen. `held`: the key that opened it is still down,
-    /// and the app calls [`Self::release`] when it goes up. Opening a ring that is already open
-    /// leaves it as it is, so a repeating key does not move it or reset its gesture.
+    /// Opens the ring around `at`, kept on screen. `held`: the input that opened it, such as a
+    /// pen or mouse button, is still down, and the app calls [`Self::release`] when it ends. A
+    /// pointer button that opens the ring also reaches whatever egui assigned the press to
+    /// before the ring existed, so bind the ring to a button that no widget takes, or a key.
+    /// Opening a ring that is already open leaves it as it is, so a repeating key does not move it
+    /// or reset its gesture.
     pub fn open(&self, ctx: &Context, at: Pos2, held: bool) {
+        self.open_with(ctx, at, held, None);
+    }
+
+    /// Opens the ring around `at` from `key`, which is still down. Until it goes up, the ring
+    /// ignores its repeats, and its release does what [`Self::release`] does.
+    pub fn open_held_key(&self, ctx: &Context, at: Pos2, key: Key) {
+        self.open_with(ctx, at, true, Some(key));
+    }
+
+    fn open_with(&self, ctx: &Context, at: Pos2, held: bool, opener: Option<Key>) {
         if self.is_open(ctx) {
             return;
         }
         let restore = ctx.memory(|m| m.focused()).filter(|id| !self.owns(*id));
+        // With a named key, the gesture starts where the pointer was at that key's press in this
+        // pass: its last move before the press, or where it was when the pass began.
+        let pointer_at_open = match opener {
+            Some(key) => ctx.input(|i| {
+                let press = i.raw.events.iter().rposition(|e| matches!(e, Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key));
+                let before = press.map_or(&[][..], |at| &i.raw.events[..at]);
+                let moved = before.iter().rev().find_map(|e| match e {
+                    Event::PointerMoved(p) | Event::PointerButton { pos: p, .. } => Some(Some(*p)),
+                    Event::PointerGone => Some(None),
+                    _ => None,
+                });
+                match (press, moved) {
+                    (Some(_), Some(at)) => at,
+                    (Some(_), None) => i.pointer.latest_pos().map(|p| p - i.pointer.delta()),
+                    (None, _) => i.pointer.latest_pos(),
+                }
+            }),
+            None => ctx.pointer_latest_pos(),
+        };
         let state = State {
             at,
             held,
+            opener,
             released: false,
-            pointer_at_open: ctx.pointer_latest_pos(),
+            pointer_at_open,
             restore,
             pending: None,
             fresh: true,
+            commands: [None; MAX_ITEMS],
+            last_focus: None,
+            press_commands: None,
+            fresh_commands: true,
+            last_pointer: ctx.input(|i| i.pointer.latest_pos().map(|p| p - i.pointer.delta())),
+            keys_used: false,
             opened_pass: ctx.cumulative_pass_nr(),
         };
         ctx.data_mut(|d| d.insert_temp(self.id, state));
     }
 
-    /// The key that opened the ring went up. On the next [`Self::show`], when the pointer has
+    /// The input that opened the ring ended. [`Self::show`] does the same itself when the key passed
+    /// to [`Self::open_held_key`] goes up. On the next [`Self::show`], when the pointer has
     /// moved since the ring opened and lies off the close button, the enabled item in its
-    /// direction is picked. Otherwise the ring stays open for a click or the keyboard.
+    /// direction is picked. Otherwise, and always once the arrows or Tab have moved the
+    /// highlight, the ring stays open for Enter or a click.
     pub fn release(&self, ctx: &Context) {
         if let Some(mut state) = self.state(ctx)
             && state.held
@@ -331,6 +521,11 @@ impl RadialMenu {
         // egui hit-tests against the layers of the previous pass. Another pass right away drops
         // the ring's full-window layer, so the next click reaches what is underneath.
         ctx.request_repaint();
+        // A click that closed the ring also ends this pass's focus handling, which can clear the
+        // restored focus; the next [`Self::show`] requests it again.
+        if let Some(id) = state.restore {
+            ctx.data_mut(|d| d.insert_temp(self.id.with("restore"), id));
+        }
         ctx.memory_mut(|m| match state.restore {
             Some(id) => m.request_focus(id),
             None => {
@@ -343,58 +538,209 @@ impl RadialMenu {
 
     /// Draws the ring while it is open and returns how it ended this frame, if it did. Call it
     /// every frame before the app's own panels, so the ring reads Esc, Enter, Tab and the arrows
-    /// before a panel takes them. The ring draws on the foreground layer, above the panels, in
+    /// before a panel takes them, and call [`Self::open`] and [`Self::release`] for the opening
+    /// key before it. Consume the press that opens the ring, so it neither reaches the panels nor
+    /// moves the ring's highlight. The ring draws on the foreground layer, above the panels, in
     /// either order.
     pub fn show(&self, ctx: &Context, items: &[RadialItem], labels: &RadialLabels) -> Option<RadialEvent> {
+        let restore_key = self.id.with("restore");
+        if let Some(id) = ctx.data_mut(|d| {
+            let id = d.get_temp::<Id>(restore_key);
+            d.remove::<Id>(restore_key);
+            id
+        }) {
+            // Only when focus was cleared: a widget the picked command focused keeps it.
+            ctx.memory_mut(|m| {
+                if m.focused().is_none_or(|f| self.owns(f)) {
+                    m.request_focus(id);
+                }
+            });
+        }
         let mut state = self.state(ctx)?;
+        if state.fresh && items.len() > MAX_ITEMS {
+            log::warn!("radial menu: {} items passed, the first {MAX_ITEMS} are shown", items.len());
+        }
         let items = &items[..items.len().min(MAX_ITEMS)];
         let count = items.len();
+        let rtl = crate::direction::is_rtl(ctx);
         let screen = ctx.content_rect();
         let center = fit_center(state.at, self.reach(), screen);
+        let ring_hit = |p: Pos2| self.ring_hit(center, p, count, rtl);
         let enabled: Vec<bool> = items.iter().map(|item| item.enabled).collect();
         // Keyboard stops: the enabled items clockwise, then the close button.
         let mut stops: Vec<Id> = (0..count).filter(|i| enabled[*i]).map(|i| self.item_id(i)).collect();
         stops.push(self.close_id());
+        // The widgets an assistive technology may still act on while the ring is open.
+        let ring_nodes: Vec<egui::accesskit::NodeId> = stops.iter().map(Id::accesskit_id).collect();
+        let swallow_keys = |ctx: &Context| swallow_keys(ctx, &ring_nodes);
+        // Each slot's command, to tell when the app put another command in a slot.
+        let mut commands = [None; MAX_ITEMS];
+        for (slot, item) in commands.iter_mut().zip(items) {
+            *slot = Some(self.id.with(("command", item.id.as_str())));
+        }
 
-        if crate::focus::lost(ctx) {
+        // A loss and a return of window focus between two passes both count as a loss.
+        if crate::focus::lost(ctx) || ctx.input(|i| i.raw.events.iter().any(|e| matches!(e, Event::WindowFocused(false)))) {
+            swallow_keys(ctx);
             self.finish(ctx, state);
             return Some(RadialEvent::Closed);
+        }
+        let opening_pass = ctx.cumulative_pass_nr() == state.opened_pass;
+        // The opening key's hold, and where it ends among this pass's events: at a release of that
+        // key, but in the opening pass only one after the press that opened the ring.
+        let hold_key = state.opener.filter(|_| state.held);
+        let mut hold_ends = None;
+        // Where the pointer was when the opening key went up: its last move before the release,
+        // or where it was at the end of the last pass. `None` when the app reported the release.
+        let mut pointer_at_release: Option<Option<Pos2>> = None;
+        if let Some(opener) = hold_key {
+            let is_release = |e: &Event| matches!(e, Event::Key { key, pressed: false, .. } if *key == opener);
+            let release = ctx.input(|i| {
+                let from = if opening_pass {
+                    i.raw
+                        .events
+                        .iter()
+                        .rposition(|e| matches!(e, Event::Key { key, pressed: true, repeat: false, .. } if *key == opener))
+                        .map_or(0, |at| at + 1)
+                } else {
+                    0
+                };
+                let at = i.raw.events.iter().skip(from).position(is_release)? + from;
+                // `Some(None)`: the pointer left the window before the release.
+                let moved = i.raw.events[..at].iter().rev().find_map(|e| match e {
+                    Event::PointerMoved(p) | Event::PointerButton { pos: p, .. } => Some(Some(*p)),
+                    Event::PointerGone => Some(None),
+                    _ => None,
+                });
+                // The same release among the processed events: releases of the key are never
+                // consumed, so it is the one with as many before it.
+                let earlier = i.raw.events[..at].iter().filter(|e| is_release(e)).count();
+                let ends = i.events.iter().enumerate().filter(|(_, e)| is_release(e)).nth(earlier).map(|(n, _)| n);
+                Some((ends, moved.unwrap_or(state.last_pointer)))
+            });
+            if let Some((ends, at)) = release {
+                hold_ends = ends;
+                pointer_at_release = Some(at);
+                state.held = false;
+                state.released = true;
+            }
         }
 
         // Focus stays in the ring: on opening, and when the focused item was disabled or removed
         // while the ring is open, it goes to the first stop.
         state.pending = state.pending.filter(|id| stops.contains(id));
         let in_ring = ctx.memory(|m| m.focused()).is_some_and(|id| stops.contains(&id));
-        if std::mem::take(&mut state.fresh) || (state.pending.is_none() && !in_ring) {
+        // A focus request from outside the ring, such as an assistive technology's for a control
+        // under it, sends focus back to the ring's widget that last had it.
+        if std::mem::take(&mut state.fresh) {
             state.pending = Some(stops[0]);
+        } else if state.pending.is_none() && !in_ring {
+            state.pending = Some(state.last_focus.filter(|id| stops.contains(id)).unwrap_or(stops[0]));
         }
         // Keys step from where focus is going; Enter and Space act only on the widget that has
         // focus now, never on one focus has not reached yet.
         let has_focus = ctx.memory(|m| m.focused());
         let focused = state.pending.or(has_focus);
-        let focused_item = (0..count).find(|i| has_focus == Some(self.item_id(*i)));
+        // When the app changed the ring's commands since the last pass, no item is activated in
+        // this pass: the person aimed at or focused what was drawn before, and a new item moves
+        // every sector.
+        let layout_changed = !state.fresh_commands && state.commands != commands;
+        // The same holds for a pointer press made over the earlier commands.
+        let press_changed = state.press_commands.is_some_and(|at_press| at_press != commands);
+        let changed = [layout_changed || press_changed; MAX_ITEMS];
+        let focused_item = (0..count).find(|i| has_focus == Some(self.item_id(*i)) && !changed[*i]);
+
+        let pointer = ctx.pointer_latest_pos();
+        let moved_since_open = |p: Pos2| state.pointer_at_open.is_none_or(|open| open.distance(p) > self.inner_radius());
+        // While the key is held, the direction the pointer moved from where it was when the ring
+        // opened aims, at any distance, so a flick picks the same item when the ring had to move
+        // to stay on screen. Otherwise, the item under the pointer.
+        let aimed_slot = |p: Pos2, held: bool| {
+            if held {
+                let origin = state.pointer_at_open.unwrap_or(center);
+                if origin.distance(p) > self.inner_radius() { sector(mirrored(p - origin, rtl), count) } else { None }
+            } else {
+                match ring_hit(p) {
+                    RingHit::Slot(i) => Some(i),
+                    _ => None,
+                }
+            }
+        };
+        let aimed = |p: Pos2, held: bool| aimed_slot(p, held).filter(|i| enabled[*i]);
+
+        // The opening key went up this pass, and no Esc, Tab or arrow came before it: the flick it
+        // ends picks now, before any key that came after the release.
+        let keys_before_release = hold_ends.is_some_and(|end| {
+            ctx.input(|i| {
+                i.events[..end].iter().any(|e| {
+                    matches!(e, Event::Key { key, pressed: true, repeat, modifiers, .. }
+                        if matches!(key, Key::Escape | Key::Tab | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight)
+                            && !modifiers.alt
+                            && !(*repeat && hold_key == Some(*key)))
+                })
+            })
+        });
+        if let Some(at) = pointer_at_release
+            && !state.keys_used
+            && !keys_before_release
+            && let Some(i) = at.filter(|p| moved_since_open(*p)).and_then(|p| aimed(p, true)).filter(|i| !changed[*i])
+        {
+            swallow_keys(ctx);
+            let picked = items[i].id.clone();
+            self.finish(ctx, state);
+            return Some(RadialEvent::Picked(picked));
+        }
 
         // Keys are read before the ring's widgets exist, and egui's own focus step is canceled,
         // so a key moves focus once and never out of the ring.
         let mut event = None;
         let mut move_to = None;
-        let opening_pass = ctx.cumulative_pass_nr() == state.opened_pass;
+        let mut activate_after_move = false;
         let held = state.held;
         ctx.input_mut(|input| {
+            // Only a fresh press activates: a key repeat, a press in the opening pass, or any
+            // press while the opening key is held could be that key, and a held key picks on
+            // release instead. A press before the opening key's release in this pass came while
+            // it was held.
+            let after_hold = |at: usize| match hold_key {
+                Some(_) => hold_ends.is_some_and(|end| at > end),
+                None => !held,
+            };
+            let activate_at = input.events.iter().enumerate().rposition(|(at, e)| {
+                after_hold(at)
+                    && matches!(e, Event::Key { key: Key::Enter | Key::Space, pressed: true, repeat: false, modifiers, .. }
+                        if modifiers.matches_logically(Modifiers::NONE))
+            });
+            let fresh_press = activate_at.is_some();
+            // A Tab or arrow before that Enter in this pass moves the highlight first, and Enter
+            // then acts on where it moved.
+            let navigate_at = input.events.iter().position(|e| {
+                matches!(e, Event::Key { key, pressed: true, repeat, modifiers, .. }
+                    if matches!(key, Key::Tab | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight)
+                        && !modifiers.alt
+                        && !(*repeat && hold_key == Some(*key)))
+            });
+            let navigate_first = navigate_at.zip(activate_at).is_some_and(|(nav, act)| nav < act);
+            // Repeats of the opening key during its hold, up to its release, are not input to the
+            // ring. Repeats after the release come from a new press.
+            if let Some(opener) = hold_key {
+                let ends = hold_ends.unwrap_or(usize::MAX);
+                let mut at = 0;
+                input.events.retain(|e| {
+                    let before = at < ends;
+                    at += 1;
+                    !(before && matches!(e, Event::Key { key, pressed: true, repeat: true, .. } if *key == opener))
+                });
+            }
             if input.consume_key(Modifiers::NONE, Key::Escape) {
                 event = Some(RadialEvent::Closed);
                 return;
             }
-            // Only a fresh press activates: a key repeat, a press in the opening pass, or any
-            // press while the opening key is held could be that key, and a held key picks on
-            // release instead.
-            let fresh_press = input.events.iter().any(|e| {
-                matches!(e, Event::Key { key: Key::Enter | Key::Space, pressed: true, repeat: false, modifiers, .. }
-                    if modifiers.matches_logically(Modifiers::NONE))
-            });
             let enter = input.consume_key(Modifiers::NONE, Key::Enter);
             let space = input.consume_key(Modifiers::NONE, Key::Space);
-            if (enter || space) && fresh_press && !opening_pass && !held {
+            if (enter || space) && fresh_press && !opening_pass && navigate_first {
+                activate_after_move = true;
+            } else if (enter || space) && fresh_press && !opening_pass {
                 event = match focused_item {
                     Some(i) if enabled[i] => Some(RadialEvent::Picked(items[i].id.clone())),
                     Some(_) => None,
@@ -403,6 +749,12 @@ impl RadialMenu {
                 };
                 return;
             }
+            // egui's key matching ignores an extra Alt; Alt with Tab or an arrow belongs to
+            // neither the ring nor, while it is open, the panels under it.
+            input.events.retain(|e| {
+                !matches!(e, Event::Key { key: Key::Tab | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, pressed: true, modifiers, .. }
+                    if modifiers.alt)
+            });
             let at = focused.and_then(|id| stops.iter().position(|s| *s == id));
             // Shift+Tab first: a plain Tab check also matches Tab with Shift held.
             if input.consume_key(Modifiers::SHIFT, Key::Tab) {
@@ -414,74 +766,89 @@ impl RadialMenu {
                 return;
             }
             // An arrow pressed this frame counts even if it was released in the same frame, and an
-            // arrow still held counts too, so two arrows give a diagonal.
+            // arrow still held counts too, so two arrows give a diagonal. An arrow held as the
+            // opening key does not.
             let mut arrows = [(Key::ArrowUp, false), (Key::ArrowDown, false), (Key::ArrowLeft, false), (Key::ArrowRight, false)];
             let mut pressed = false;
             for (key, on) in &mut arrows {
                 let now = input.consume_key(Modifiers::NONE, *key);
                 pressed |= now;
-                *on = now || input.key_down(*key);
+                *on = now || (input.key_down(*key) && hold_key != Some(*key));
             }
             if pressed {
                 let [up, down, left, right] = arrows.map(|(_, on)| if on { 1.0 } else { 0.0 });
-                let direction = vec2(right - left, down - up);
+                let direction = mirrored(vec2(right - left, down - up), rtl);
                 move_to = nearest_enabled(direction, &enabled).and_then(|i| stops.iter().position(|s| *s == self.item_id(i)));
             }
         });
+        swallow_keys(ctx);
         ctx.memory_mut(|m| m.move_focus(FocusDirection::None));
+        if activate_after_move {
+            let target = move_to.and_then(|i| stops.get(i).copied()).or(has_focus);
+            event = match (0..count).find(|i| target == Some(self.item_id(*i))) {
+                Some(i) if enabled[i] && !changed[i] => Some(RadialEvent::Picked(items[i].id.clone())),
+                Some(_) => None,
+                None if target == Some(self.close_id()) => Some(RadialEvent::Closed),
+                None => None,
+            };
+        }
         if let Some(event) = event {
             self.finish(ctx, state);
             return Some(event);
         }
+        // Once the arrows or Tab have moved the highlight, a release never picks, and Enter picks
+        // the highlighted item.
         if let Some(stop) = move_to.and_then(|i| stops.get(i).copied()) {
             state.pending = Some(stop);
+            state.keys_used = true;
         }
 
-        let pointer = ctx.pointer_latest_pos();
-        let moved_since_open = |p: Pos2| state.pointer_at_open.is_none_or(|open| open.distance(p) > self.inner_radius());
-        // While the key is held, the direction the pointer moved from where it was when the ring
-        // opened aims, at any distance, so a flick picks the same item when the ring had to move
-        // to stay on screen. Otherwise, the item under the pointer.
-        let aimed = |p: Pos2, held: bool| {
-            let slot = if held {
-                let origin = state.pointer_at_open.unwrap_or(center);
-                if origin.distance(p) > self.inner_radius() { sector(p - origin, count) } else { None }
-            } else {
-                match hit(center, p, count, self.inner_radius(), self.outer_radius()) {
-                    RingHit::Slot(i) => Some(i),
-                    _ => None,
-                }
-            };
-            slot.filter(|i| enabled[*i])
-        };
         if std::mem::take(&mut state.released)
-            && let Some(i) = pointer.filter(|p| moved_since_open(*p)).and_then(|p| aimed(p, true))
+            && !state.keys_used
+            && let Some(i) =
+                pointer_at_release.unwrap_or(pointer).filter(|p| moved_since_open(*p)).and_then(|p| aimed(p, true)).filter(|i| !changed[*i])
         {
             let picked = items[i].id.clone();
             self.finish(ctx, state);
             return Some(RadialEvent::Picked(picked));
         }
-        let pointer_moved = ctx.input(|i| i.pointer.delta() != Vec2::ZERO);
+        // A key that moved the highlight this pass keeps it over a pointer move in the same pass.
+        let pointer_moved = move_to.is_none() && ctx.input(|i| i.pointer.delta() != Vec2::ZERO);
         if pointer_moved && let Some(i) = pointer.and_then(|p| aimed(p, state.held)) {
             state.pending = Some(self.item_id(i));
         }
 
+        // The caption names what Enter or a release would pick: the focused item once the keys
+        // moved it, or while the key is held, the item the pointer aims at. Aimed at a disabled
+        // item, which a release does not pick, it shows nothing rather than another item.
+        let caption_for = if state.keys_used {
+            CaptionFor::Focus
+        } else if let Some(i) = pointer.filter(|p| state.held && moved_since_open(*p)).and_then(|p| aimed_slot(p, true)) {
+            if enabled[i] { CaptionFor::Item(i) } else { CaptionFor::Nothing }
+        } else if pointer.is_some_and(moved_since_open) {
+            CaptionFor::Hover
+        } else {
+            // A pointer that has not moved since the ring opened rests on the close button by
+            // chance; the caption names the focused item that Enter would pick.
+            CaptionFor::Focus
+        };
         let mut ended = None;
         let mut visible = false;
         Area::new(self.id.with("area")).order(Order::Foreground).fixed_pos(screen.min).movable(false).constrain(false).show(ctx, |ui| {
             // A see-through layer over the whole window takes the clicks outside the ring, so
             // they close it instead of reaching what is underneath.
             visible = ui.is_visible();
-            let backdrop = ui.interact(screen, self.id.with("backdrop"), Sense::click());
+            // Clicks only: the backdrop is not a control a screen reader or Tab should reach.
+            let backdrop = ui.interact(screen, self.id.with("backdrop"), Sense::CLICK);
             // The area covers the window too, so `Context::layer_id_at` finds the ring's layer
             // for an app that reads the pointer itself.
             ui.expand_to_include_rect(screen);
             ui.scope_builder(UiBuilder::new().max_rect(screen).accessibility_role(Role::Menu).accessibility_label(labels.menu.clone()), |ui| {
-                ended = self.draw(ui, center, items, labels)
+                ended = self.draw(ui, center, items, labels, View { rtl, changed }, caption_for)
             });
             if ended.is_none() && backdrop.clicked() {
-                ended = match backdrop.interact_pointer_pos().map(|p| hit(center, p, count, self.inner_radius(), self.outer_radius())) {
-                    Some(RingHit::Slot(i)) if enabled[i] => Some(RadialEvent::Picked(items[i].id.clone())),
+                ended = match release_pos(ctx, backdrop.interact_pointer_pos()).map(ring_hit) {
+                    Some(RingHit::Slot(i)) if enabled[i] && !changed[i] => Some(RadialEvent::Picked(items[i].id.clone())),
                     Some(RingHit::Slot(_)) => None,
                     _ => Some(RadialEvent::Closed),
                 };
@@ -493,6 +860,17 @@ impl RadialMenu {
             if visible && let Some(id) = state.pending.take() {
                 ctx.memory_mut(|m| m.request_focus(id));
             }
+            state.last_pointer = pointer;
+            // A press lands on what was drawn in the last pass.
+            let drawn = if state.fresh_commands { commands } else { state.commands };
+            state.press_commands = match ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down())) {
+                (true, _) => Some(drawn),
+                (false, true) => state.press_commands,
+                (false, false) => None,
+            };
+            state.commands = commands;
+            state.fresh_commands = false;
+            state.last_focus = ctx.memory(|m| m.focused()).filter(|id| self.owns(*id)).or(state.last_focus);
             ctx.data_mut(|d| d.insert_temp(self.id, state));
             // Tab and the arrows stay with the ring's item that has focus.
             if let Some(id) = ctx.memory(|m| m.focused()).filter(|id| self.owns(*id)) {
@@ -505,37 +883,65 @@ impl RadialMenu {
     }
 
     /// Draws the items, the close button and the caption; returns a click's result.
-    fn draw(&self, ui: &mut Ui, center: Pos2, items: &[RadialItem], labels: &RadialLabels) -> Option<RadialEvent> {
+    fn draw(
+        &self,
+        ui: &mut Ui,
+        center: Pos2,
+        items: &[RadialItem],
+        labels: &RadialLabels,
+        view: View,
+        caption_for: CaptionFor,
+    ) -> Option<RadialEvent> {
+        let rtl = view.rtl;
         let count = items.len();
         let visuals = ui.visuals().clone();
         let painter = ui.painter().clone();
-        let disc = self.radius + self.button / 2.0 + MARGIN / 2.0;
-        painter.circle(center, disc, visuals.window_fill, visuals.window_stroke);
+        // The disc covers exactly the area where a click picks an item.
+        painter.circle(center, self.outer_radius(), visuals.window_fill, visuals.window_stroke);
 
         let mut ended = None;
-        let mut caption = None;
+        let (mut hover_caption, mut focus_caption, mut item_caption) = (None, None, None);
         for (index, item) in items.iter().enumerate() {
-            let rect = Rect::from_center_size(center + slot_direction(index, count) * self.radius, Vec2::splat(self.button));
+            let rect = self.item_rect(center, index, count, rtl);
             let sense = if item.enabled { Sense::click() } else { Sense::hover() };
             let response = ui.interact(rect, self.item_id(index), sense);
             let (label, enabled) = (item.label.clone(), item.enabled);
             response.widget_info(|| WidgetInfo::labeled(Role::MenuItem, enabled, label.as_str()));
-            let lit = item.enabled && (response.has_focus() || response.hovered());
-            if lit {
-                caption = Some(item.label.as_str());
+            if let Some(detail) = &item.detail {
+                ui.ctx().accesskit_node_builder(response.id, |node| node.set_description(detail.as_str()));
+            }
+            // The response covers the button's bounding square, which can overlap a neighbor's at
+            // the corners; the pointer is over the item only inside its circle.
+            let over = ui.ctx().pointer_hover_pos().is_some_and(|p| p.distance(rect.center()) <= self.button / 2.0);
+            let lit = item.enabled && (response.has_focus() || over);
+            let tip = match &item.detail {
+                Some(detail) => format!("{}\n{detail}", item.label),
+                None => item.label.clone(),
+            };
+            if over {
+                hover_caption = Some(tip.clone());
+            }
+            if response.has_focus() {
+                focus_caption = Some(tip.clone());
+            }
+            if caption_for == CaptionFor::Item(index) {
+                item_caption = Some(tip.clone());
             }
             self.paint_item(ui, &response, item, lit);
-            let response = response.on_hover_text(item.label.as_str());
-            if item.enabled && response.clicked() {
-                ended = Some(RadialEvent::Picked(item.id.clone()));
+            let response = if over { response.on_hover_text(tip) } else { response };
+            if response.clicked() {
+                ended = self.click(center, items, view, &response).or(ended);
             }
         }
 
-        let rect = Rect::from_center_size(center, Vec2::splat(CENTER));
-        let close = ui.interact(rect, self.close_id(), Sense::click());
+        let close = ui.interact(self.close_rect(center), self.close_id(), Sense::click());
         let name = labels.close.clone();
         close.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.as_str()));
-        let state = if close.hovered() || close.has_focus() { &visuals.widgets.hovered } else { &visuals.widgets.inactive };
+        let close_over = ui.ctx().pointer_hover_pos().is_some_and(|p| p.distance(center) <= CENTER / 2.0);
+        if close_over {
+            hover_caption = Some(labels.close.clone());
+        }
+        let state = if close_over || close.has_focus() { &visuals.widgets.hovered } else { &visuals.widgets.inactive };
         painter.circle(center, CENTER / 2.0, state.bg_fill, state.bg_stroke);
         let arm = CENTER / 5.0;
         for (a, b) in [(vec2(-arm, -arm), vec2(arm, arm)), (vec2(-arm, arm), vec2(arm, -arm))] {
@@ -543,49 +949,112 @@ impl RadialMenu {
         }
         if close.has_focus() {
             painter.circle_stroke(center, CENTER / 2.0 + 2.0, visuals.selection.stroke);
-            caption = Some(labels.close.as_str());
+            focus_caption = Some(labels.close.clone());
         }
-        let close = close.on_hover_text(labels.close.as_str());
+        let close = if close_over { close.on_hover_text(labels.close.as_str()) } else { close };
         if close.clicked() {
-            ended = Some(RadialEvent::Closed);
+            ended = self.click(center, items, view, &close).or(ended);
         }
 
+        let caption = match caption_for {
+            CaptionFor::Focus => focus_caption.or(hover_caption),
+            CaptionFor::Item(_) => item_caption.or(hover_caption),
+            CaptionFor::Hover => hover_caption.or(focus_caption),
+            CaptionFor::Nothing => None,
+        };
         if let Some(text) = caption {
-            let at = center + vec2(0.0, self.radius + self.button / 2.0 + CAPTION / 2.0);
             let screen = ui.max_rect();
-            let wrap = (screen.width() - 12.0).max(1.0);
-            let galley = painter.layout(text.to_owned(), FontId::proportional(13.0), visuals.text_color(), wrap);
-            let back = caption_rect(at, galley.size() + vec2(12.0, 4.0), screen);
-            painter.rect(back, 4.0, visuals.window_fill, visuals.window_stroke, egui::StrokeKind::Inside);
-            painter.galley(back.min + vec2(6.0, 2.0), galley, visuals.text_color());
+            let pad = ui.spacing().button_padding;
+            let wrap = (screen.width() - 2.0 * pad.x).max(1.0);
+            let font = TextStyle::Body.resolve(ui.style());
+            // Below the ring's disc, or above it, so the caption leaves the buttons uncovered.
+            // When neither side has room for the detail line, the caption shows the label alone,
+            // and the tooltip still has the detail. Without room for the label, there is no
+            // caption.
+            let place = |size: Vec2| {
+                let edge = self.outer_radius() + size.y / 2.0;
+                let (below, above) = (center + vec2(0.0, edge), center - vec2(0.0, edge));
+                if below.y + size.y / 2.0 <= screen.max.y {
+                    Some(below)
+                } else if above.y - size.y / 2.0 >= screen.min.y {
+                    Some(above)
+                } else {
+                    None
+                }
+            };
+            let mut galley = painter.layout(text.clone(), font.clone(), visuals.text_color(), wrap);
+            let mut at = place(galley.size() + 2.0 * pad);
+            if at.is_none()
+                && let Some((label, _)) = text.split_once('\n')
+            {
+                galley = painter.layout(label.to_owned(), font, visuals.text_color(), wrap);
+                at = place(galley.size() + 2.0 * pad);
+            }
+            if let Some(at) = at {
+                let back = caption_rect(at, galley.size() + 2.0 * pad, screen);
+                painter.rect(
+                    back,
+                    visuals.widgets.noninteractive.corner_radius,
+                    visuals.window_fill,
+                    visuals.window_stroke,
+                    egui::StrokeKind::Inside,
+                );
+                painter.galley(back.min + pad, galley, visuals.text_color());
+            }
         }
         ended
     }
 
+    /// What a click on an item's or the close button's widget does. A pointer click acts on
+    /// where it landed, as [`hit`] reads it: the bounding squares overlap at their corners. A
+    /// click with no pointer, from an assistive technology, acts on the widget itself, and on an
+    /// item only while its slot holds the command it held in the last pass.
+    fn click(&self, center: Pos2, items: &[RadialItem], view: View, response: &Response) -> Option<RadialEvent> {
+        let own = (0..items.len()).find(|i| response.id == self.item_id(*i));
+        let pointer = release_pos(&response.ctx, response.interact_pointer_pos()).filter(|_| response.clicked_by(egui::PointerButton::Primary));
+        let at = match pointer {
+            Some(p) => self.ring_hit(center, p, items.len(), view.rtl),
+            None if own.is_some_and(|i| view.changed[i]) => return None,
+            None => own.map_or(RingHit::Center, RingHit::Slot),
+        };
+        match at {
+            RingHit::Slot(i) if items[i].enabled && !view.changed[i] => Some(RadialEvent::Picked(items[i].id.clone())),
+            RingHit::Slot(_) => None,
+            RingHit::Center | RingHit::Outside => Some(RadialEvent::Closed),
+        }
+    }
+
     fn paint_item(&self, ui: &Ui, response: &Response, item: &RadialItem, lit: bool) {
         let rect = response.rect;
-        let radius = rect.width() / 2.0;
-        if radius <= 0.0 {
-            return;
-        }
+        let radius = self.button / 2.0;
         let visuals = ui.visuals();
         let state = if lit { &visuals.widgets.hovered } else { &visuals.widgets.inactive };
-        let tint = if item.enabled { state.fg_stroke.color } else { visuals.widgets.noninteractive.fg_stroke.color.gamma_multiply(0.5) };
+        let tint = if item.enabled { state.fg_stroke.color } else { visuals.weak_text_color() };
         let painter = ui.painter();
-        painter.circle(rect.center(), radius, state.bg_fill, state.bg_stroke);
+        if item.enabled {
+            painter.circle(rect.center(), radius, state.bg_fill, state.bg_stroke);
+        } else {
+            // A disabled item is an outline without a fill, so the difference does not rest on
+            // color alone.
+            painter.circle_stroke(rect.center(), radius, visuals.widgets.noninteractive.bg_stroke);
+        }
         if response.has_focus() {
             painter.circle_stroke(rect.center(), radius + 2.0, visuals.selection.stroke);
         }
         match &item.icon {
             Some(icon) => {
-                let inner = rect.shrink(ICON_INSET);
+                let inner = Rect::from_center_size(rect.center(), Vec2::splat(self.button)).shrink(ICON_INSET.min(self.button / 4.0));
                 if inner.is_positive() {
                     egui::Image::new(icon.clone()).tint(tint).paint_at(ui, inner);
                 }
             }
             None => {
+                // The theme's button font, at least 0.8 of the item's radius and at most its full
+                // radius, so a larger text size also enlarges the letter.
                 let letter: String = item.label.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-                painter.text(rect.center(), Align2::CENTER_CENTER, letter, FontId::proportional(radius * 0.8), tint);
+                let theme = TextStyle::Button.resolve(ui.style());
+                let font = FontId::new(theme.size.clamp(radius * 0.8, radius), theme.family);
+                painter.text(rect.center(), Align2::CENTER_CENTER, letter, font, tint);
             }
         }
     }
