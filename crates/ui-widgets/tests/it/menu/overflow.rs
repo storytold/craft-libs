@@ -1,6 +1,7 @@
 //! A menu taller than its room: it stays inside the room at the width of its rows, scrolls by the strips above and
 //! below its rows and by the wheel, and reopens at its first row; one that fits shows no strips. A tall submenu of a
-//! low row opens upward.
+//! low row opens upward. A context menu that fits on neither side of the pointer but fits the window covers the
+//! pointer instead of scrolling.
 
 use craft_host::target::Os;
 use craft_ui::buttons::Button;
@@ -106,6 +107,44 @@ fn a_menu_that_fits_shows_no_strips_and_hugs_its_rows() {
     let rect = menu_rect(&fixture);
     let (first, last) = (fixture.by_label(&row(0)).expect("the first row").rect, fixture.by_label(&row(ROWS - 1)).expect("the last row").rect);
     assert!(((first.top() - rect.top()) - (rect.bottom() - last.bottom())).abs() < 0.5, "as tall as its rows: {rect:?}, rows {first:?} to {last:?}");
+}
+
+/// A context menu of `rows` rows on a target `top` down the fixture's 800 x 600 window, right-clicked at the target's
+/// centre: the fixture, the menu's id and the pointer.
+fn context_menu(top: f32, rows: usize) -> (Fixture, Id, egui::Pos2) {
+    let menu = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&menu);
+    let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(top);
+        let target = Button::new("Target").show(ui);
+        let shown = Menu::context("Target menu", &target).show(ui, |ui, _| {
+            for at in 0..rows {
+                MenuItem::new(row(at)).show(ui);
+            }
+        });
+        seen.set(Some(shown.output.response.id));
+    });
+    fixture.settle();
+    let at = fixture.by_label("Target").expect("the target").center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]);
+    fixture.settle();
+    (fixture, menu.get().expect("the menu's id"), at)
+}
+
+#[trial]
+fn a_context_menu_too_tall_for_either_side_of_the_pointer_covers_it_and_shows_every_row_without_strips() {
+    let rows = 18;
+    let (fixture, menu, at) = context_menu(290.0, rows);
+    let room = fixture.ctx().content_rect();
+    let rect = menu_rect(&fixture);
+    assert!(strips(&fixture, menu).is_none(), "the menu {rect:?} fits the window {room:?}: no strips");
+    let (first, last) = (fixture.by_label(&row(0)).expect("the first row").rect, fixture.by_label(&row(rows - 1)).expect("the last row").rect);
+    let tall = last.bottom() - first.top();
+    assert!(tall > at.y - room.top() && tall > room.bottom() - at.y, "the rows ({tall}) fit on neither side of the pointer at {at:?}");
+    assert!(room.contains_rect(rect), "the menu {rect:?} stays inside the window {room:?}");
+    assert!(rect.contains_rect(first) && rect.contains_rect(last), "every row shows: {first:?} to {last:?} in {rect:?}");
 }
 
 /// A menu of `above` rows over a submenu row whose submenu has `rows` rows, in the fixture's 800 x 600 window.
