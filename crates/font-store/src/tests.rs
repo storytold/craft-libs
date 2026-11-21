@@ -894,7 +894,7 @@ mod store {
         assert_eq!(crate::store::resolve_preview_service(env, setting).as_deref(), Some("https://a.example.com"));
         assert_eq!(crate::store::resolve_preview_service(Some(""), setting).as_deref(), Some("https://b.example.com"));
         assert_eq!(crate::store::resolve_preview_service(None, None), None);
-        let source = |env, setting| crate::store::resolve_preview_source(env, setting).1;
+        let source = |env, setting| crate::store::resolve_preview_source(env, setting, None).1;
         assert_eq!(
             (source(env, setting), source(Some(" "), setting), source(None, None)),
             (PreviewServiceSource::Env, PreviewServiceSource::Saved, PreviewServiceSource::None)
@@ -903,6 +903,25 @@ mod store {
         assert_eq!(crate::store::resolve_preview_service(Some("http://fonts.example.com"), setting), None);
         assert_eq!(crate::store::resolve_preview_service(Some("http://127.0.0.1:9"), None).as_deref(), Some("http://127.0.0.1:9"));
         assert_eq!(crate::store::resolve_preview_service(Some("http://[::1]:9/x/"), None).as_deref(), Some("http://[::1]:9/x"));
+    }
+
+    #[test]
+    fn host_default_preview_service_comes_after_env_and_setting_and_is_never_saved() {
+        let dir = temp("preview-default");
+        let store =
+            |env| FontStore::new(dir.clone(), Caller::User).with_default_preview_service("https://default.example.com/").with_preview_env(env);
+        let user = store(None);
+        let in_effect = |s: &FontStore| (s.preview_service(), s.preview_service_source());
+        assert_eq!(in_effect(&user), (Some("https://default.example.com".into()), PreviewServiceSource::Default));
+        user.set_preview_service(Some("https://saved.example.com")).unwrap();
+        assert_eq!(in_effect(&user), (Some("https://saved.example.com".into()), PreviewServiceSource::Saved));
+        assert_eq!(in_effect(&store(Some("https://env.example.com"))), (Some("https://env.example.com".into()), PreviewServiceSource::Env));
+        user.set_preview_service(None).unwrap();
+        assert_eq!(in_effect(&user), (Some("https://default.example.com".into()), PreviewServiceSource::Default));
+        assert!(!std::fs::read_to_string(dir.join("settings.json")).unwrap().contains("default.example.com"));
+        // Another app sharing the store without a default has no service.
+        assert_eq!(FontStore::new(dir.clone(), Caller::User).with_preview_env(None).preview_service(), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

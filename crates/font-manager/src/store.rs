@@ -167,6 +167,12 @@ impl SuiteStore {
         Some(SuiteStore { store })
     }
 
+    /// Uses `url` as the preview service while neither [`PREVIEW_SERVICE_ENV`] nor the user's
+    /// setting names one; see [`FontStore::with_default_preview_service`]. Never saved.
+    pub fn with_default_preview_service(self, url: &str) -> SuiteStore {
+        SuiteStore { store: self.store.with_default_preview_service(url) }
+    }
+
     /// The store's HTTP client. Clones share the preview service's down state with installs;
     /// [`Previews::new`](crate::remote::Previews::new) takes it through [`Installer::http_client`].
     pub fn client(&self) -> Client {

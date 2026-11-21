@@ -260,6 +260,9 @@ pub struct FontStore {
     catalog: Option<Arc<Catalog>>,
     pub(crate) pack_removal_cursor: AtomicUsize,
     pub(crate) pack_removal_round_end: AtomicUsize,
+    /// The host's preview service, used while neither the environment nor the setting names one.
+    /// Never saved.
+    default_preview_service: Option<String>,
     /// Tests: stands in for the environment variable.
     #[cfg(test)]
     preview_env: Option<Option<String>>,
@@ -292,6 +295,7 @@ impl FontStore {
             catalog: None,
             pack_removal_cursor: AtomicUsize::new(0),
             pack_removal_round_end: AtomicUsize::new(0),
+            default_preview_service: None,
             #[cfg(test)]
             preview_env: None,
         }
@@ -308,6 +312,16 @@ impl FontStore {
     /// stops asking a service the store found unreachable, and the reverse.
     pub fn client(&self) -> Client {
         self.client.clone()
+    }
+
+    /// Uses `url` as the preview service while neither [`PREVIEW_SERVICE_ENV`] nor the user's
+    /// setting names one. The host's default is never written to `settings.json`, so clearing
+    /// the setting brings it back, and other apps sharing the store don't see it. An unusable
+    /// URL counts as none.
+    pub fn with_default_preview_service(mut self, url: &str) -> Self {
+        self.default_preview_service = normalize_service_url(url);
+        debug_assert!(self.default_preview_service.is_some(), "unusable preview service URL {url:?}");
+        self
     }
 
     /// Uses `client` for downloads (other timeouts).
@@ -360,7 +374,8 @@ impl FontStore {
     }
 
     /// The preview service's base URL, or `None` while there is none: [`PREVIEW_SERVICE_ENV`]
-    /// environment variable when set and not empty, else the `preview_service` setting. Installs
+    /// environment variable when set and not empty, else the `preview_service` setting, else the
+    /// host's default ([`FontStore::with_default_preview_service`]). Installs
     /// try its mirror (`<service>/v1/files/<sha256>`, `<service>/v1/licences/<sha256>`) before
     /// the index's URLs. A value that is not a usable URL counts as unset.
     pub fn preview_service(&self) -> Option<String> {
@@ -378,12 +393,12 @@ impl FontStore {
         let env = self.preview_env.clone().unwrap_or_else(|| std::env::var(PREVIEW_SERVICE_ENV).ok());
         #[cfg(not(test))]
         let env = std::env::var(PREVIEW_SERVICE_ENV).ok();
-        resolve_preview_source(env.as_deref(), self.settings().preview_service.as_deref())
+        resolve_preview_source(env.as_deref(), self.settings().preview_service.as_deref(), self.default_preview_service.as_deref())
     }
 
     /// Sets (or with `None` clears) the preview service in `settings.json`, from the user's own
     /// action. Only https URLs are accepted, and http for a loopback host. The environment
-    /// variable still takes precedence. [`Error::NotAllowed`] for an agent, [`Error::BadServiceUrl`]
+    /// variable still takes precedence; while the setting is clear, the host's default applies. [`Error::NotAllowed`] for an agent, [`Error::BadServiceUrl`]
     /// for an unusable URL.
     pub fn set_preview_service(&self, url: Option<&str>) -> Result<(), Error> {
         if self.caller != Caller::User {
@@ -1006,6 +1021,8 @@ pub enum PreviewServiceSource {
     Env,
     /// The `preview_service` setting in `settings.json`.
     Saved,
+    /// The host's default, [`FontStore::with_default_preview_service`].
+    Default,
     /// There is no service.
     None,
 }
@@ -1014,14 +1031,19 @@ pub enum PreviewServiceSource {
 /// unset.
 #[cfg(test)]
 pub(crate) fn resolve_preview_service(env: Option<&str>, setting: Option<&str>) -> Option<String> {
-    resolve_preview_source(env, setting).0
+    resolve_preview_source(env, setting, None).0
 }
 
-/// [`resolve_preview_service`] and where the value came from.
-pub(crate) fn resolve_preview_source(env: Option<&str>, setting: Option<&str>) -> (Option<String>, PreviewServiceSource) {
+/// The service in effect and where it came from: the environment value when set and not empty
+/// (alone: an unusable one means no service), else the setting when usable, else the host's
+/// default.
+pub(crate) fn resolve_preview_source(env: Option<&str>, setting: Option<&str>, default: Option<&str>) -> (Option<String>, PreviewServiceSource) {
     let (url, source) = match env.map(str::trim).filter(|e| !e.is_empty()) {
         Some(e) => (normalize_service_url(e), PreviewServiceSource::Env),
-        None => (setting.and_then(normalize_service_url), PreviewServiceSource::Saved),
+        None => match setting.and_then(normalize_service_url) {
+            Some(url) => (Some(url), PreviewServiceSource::Saved),
+            None => (default.and_then(normalize_service_url), PreviewServiceSource::Default),
+        },
     };
     if url.is_some() { (url, source) } else { (None, PreviewServiceSource::None) }
 }
