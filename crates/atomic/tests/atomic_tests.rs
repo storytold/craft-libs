@@ -1,10 +1,11 @@
 #[cfg(unix)]
 use craft_atomic::{NewFilePermissions, WriteOptions, atomic_write, write_new};
-use craft_atomic::{atomic_write_with, or_plain_fsync, write_new_with};
+use craft_atomic::{atomic_write_with, or_plain_fsync, sweep_temp_files, temp_name, write_new_with};
 use std::cell::Cell;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 struct TempDir(PathBuf);
 impl TempDir {
@@ -237,4 +238,67 @@ fn explicit_private_files_keep_callback_permissions() -> io::Result<()> {
     }
     assert_no_temp(&d.0);
     Ok(())
+}
+
+/// Writes the file `name` in `dir` and dates its modification time `age` in the past.
+fn leftover(dir: &Path, name: &str, age: Duration) -> io::Result<PathBuf> {
+    let p = dir.join(name);
+    std::fs::write(&p, b"interrupted save")?;
+    std::fs::File::options().write(true).open(&p)?.set_modified(SystemTime::now() - age)?;
+    Ok(p)
+}
+
+#[test]
+fn sweep_removes_only_old_staging_files() -> io::Result<()> {
+    let d = TempDir::new("sweep_old");
+    let other = std::process::id().wrapping_add(1);
+    let hour = Duration::from_secs(3600);
+    let orphan = leftover(&d.0, &format!(".scene.json.{other}-0.craft_tmp"), 2 * hour)?;
+    // A process id the system reused for this process does not protect an old orphan.
+    let same_pid = leftover(&d.0, &temp_name("scene.json"), 2 * hour)?;
+    let recent = leftover(&d.0, &format!(".scene.json.{other}-1.craft_tmp"), Duration::ZERO)?;
+    let document = leftover(&d.0, "scene.json", 2 * hour)?;
+
+    assert_eq!(sweep_temp_files(&d.0, hour)?, 2);
+    assert!(!orphan.exists() && !same_pid.exists());
+    assert!(recent.exists() && document.exists());
+    Ok(())
+}
+
+#[test]
+fn sweep_keeps_files_it_did_not_name_and_folders() -> io::Result<()> {
+    let d = TempDir::new("sweep_lookalike");
+    let other = std::process::id().wrapping_add(1);
+    let old = Duration::from_secs(7200);
+    let orphan = leftover(&d.0, &format!(".a.b.{other}-7.craft_tmp"), old)?;
+    let kept = [
+        leftover(&d.0, "notes.craft_tmp", old)?,
+        leftover(&d.0, &format!("scene.json.{other}-7.craft_tmp"), old)?,
+        leftover(&d.0, ".scene.json.12-x.craft_tmp", old)?,
+        leftover(&d.0, ".scene.json.-3.craft_tmp", old)?,
+        leftover(&d.0, ".12-3.craft_tmp", old)?,
+        leftover(&d.0, &format!(".scene.json.{other}-7.craft_tmp.bak"), old)?,
+        leftover(&d.0, ".scene.json.99999999999-7.craft_tmp", old)?,
+        // temp_name writes the process id and the counter without leading zeros.
+        leftover(&d.0, ".scene.json.012-0.craft_tmp", old)?,
+        leftover(&d.0, ".scene.json.12-03.craft_tmp", old)?,
+        // temp_name keeps at most 64 characters of the destination's name.
+        leftover(&d.0, &format!(".{}.{other}-7.craft_tmp", "s".repeat(65)), old)?,
+    ];
+    let longest = leftover(&d.0, &temp_name(&"s".repeat(80)), old)?;
+    let folder = d.0.join(format!(".scene.json.{other}-8.craft_tmp"));
+    std::fs::create_dir(&folder)?;
+
+    assert_eq!(sweep_temp_files(&d.0, Duration::ZERO)?, 2);
+    assert!(!orphan.exists() && !longest.exists());
+    assert!(kept.iter().all(|p| p.exists()), "a file without the staging name was removed");
+    assert!(folder.is_dir());
+    Ok(())
+}
+
+#[test]
+fn sweep_of_a_missing_folder_is_an_error() {
+    let d = TempDir::new("sweep_missing");
+    let err = sweep_temp_files(&d.0.join("absent"), Duration::ZERO).err().map(|e| e.kind());
+    assert_eq!(err, Some(io::ErrorKind::NotFound));
 }
