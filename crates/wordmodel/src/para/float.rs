@@ -182,8 +182,11 @@ pub struct Float {
     /// off, any VML shape in a header or footer): a picture watermark in a header that starts with a table.
     #[serde(skip_serializing_if = "is_false")]
     pub outside_cell: bool,
-    /// Stacking order among floating objects (`wp:anchor/@relativeHeight`): higher is drawn on
-    /// top. 0 = unknown, drawn in document order (objects inserted here, or from other formats).
+    /// Stacking order among the floating objects of its layer, one more than the file's
+    /// (`wp:anchor/@relativeHeight`, ODF's `draw:z-index`), so a file's lowest, 0, is 1: a higher
+    /// one is drawn over a lower one, whatever their order in the text, as Word does. 0 = none
+    /// (objects inserted by the app, or from other formats): stacks above every object that has
+    /// one, in text order.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub z: u32,
     /// The page a drawing anchored to a page is on, from 1 (ODF's `text:anchor-page-number`,
@@ -242,6 +245,12 @@ fn is_zero_u32(v: &u32) -> bool {
 }
 
 impl Float {
+    /// Where it stacks among the floating objects of its layer: see [`Float::z`]. None (0) is
+    /// past every stored order, `u32::MAX` included.
+    pub fn stack(&self) -> u64 {
+        if self.z > 0 { u64::from(self.z) } else { u64::from(u32::MAX) + 1 }
+    }
+
     /// The rotation and flips, the angle normalised to `0..360` (a NaN angle is no rotation).
     pub fn spin(&self) -> crate::geom::Spin {
         crate::geom::Spin::new(self.rot, self.flip_h, self.flip_v)
@@ -277,6 +286,20 @@ impl Float {
         let (w, h) = (crate::geom::finite(w).clamp(0.0, 4000.0), crate::geom::finite(h).clamp(0.0, 4000.0));
         let deg = crate::geom::normalize_degrees(self.rot);
         if modern && ((45.0..135.0).contains(&deg) || (225.0..315.0).contains(&deg)) { ((h - w) / 2.0, (w - h) / 2.0) } else { (0.0, 0.0) }
+    }
+    /// The rotation overhang `wp:effectExtent` records (x, y). From 45° up to 135° and from 225°
+    /// up to 315° Word measures the rotated bounds against the frame with width and height
+    /// exchanged, so a quarter turn records nothing; elsewhere this is [`Float::spin_pad`]. The
+    /// frame is chosen from the angle as a file stores it (60000ths of a degree, ECMA-376
+    /// §20.1.7.6), so an angle that rounds to 45° is measured as Word will read it back.
+    pub fn effect_spin_pad(&self, w: f32, h: f32) -> (f32, f32) {
+        let (w, h) = (crate::geom::finite(w).clamp(0.0, 4000.0), crate::geom::finite(h).clamp(0.0, 4000.0));
+        let spin = self.spin();
+        let (bw, bh) = spin.extent(w, h);
+        let stored = (crate::geom::normalize_degrees(spin.deg) as f64 * 60_000.0).round() as i64 % 21_600_000;
+        let deg = stored as f32 / 60_000.0;
+        let (fw, fh) = if (45.0..135.0).contains(&deg) || (225.0..315.0).contains(&deg) { (h, w) } else { (w, h) };
+        ((bw - fw) / 2.0, (bh - fh) / 2.0)
     }
     /// The effect extents, finite and clamped (left, top, right, bottom).
     pub fn effect_extent(&self) -> [f32; 4] {

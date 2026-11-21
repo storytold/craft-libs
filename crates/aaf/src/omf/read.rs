@@ -12,6 +12,10 @@ type Uid = [u8; 12];
 
 const MAX_REFERENCE_VISITS: usize = 65_536;
 
+/// A source-clip search stopped at its work limit.
+#[derive(Clone, Copy)]
+struct SearchLimit;
+
 struct R<'a, 'b> {
     c: &'b Container<'a>,
     report: &'b mut Report,
@@ -21,15 +25,49 @@ struct R<'a, 'b> {
     media: HashMap<Uid, Vec<u8>>,
     doc: Document,
     sources: HashMap<(Uid, u32, String), usize>,
+    /// Component visits left for [`R::segment`] over the whole document.
+    budget: usize,
+    /// Outcome of the source-clip search under each segment: deterministic, so it is made once.
+    clip_search: HashMap<u32, std::result::Result<Option<u32>, SearchLimit>>,
+    /// Visits and queued references left for source-clip searches over the whole document:
+    /// distinct roots over one shared graph would otherwise each search it in full.
+    search_budget: usize,
 }
 
+/// Components one document may expand into timeline items; a small file can reference the same
+/// sequence from many places and would otherwise multiply without bound.
+const MAX_COMPONENT_VISITS: usize = 1_000_000;
+
+/// Reported when the shared component budget runs out.
+const BUDGET_WARNING: &str = "OMF composition is too large to import completely (the remaining components are dropped)";
+/// Most visited components, and most queued references, one source-clip search may spend.
+const MAX_CLIP_SEARCH_VISITS: usize = 100_000;
+const MAX_CLIP_SEARCH_PENDING: usize = 1_000_000;
+/// Work all source-clip searches in one document may spend together.
+const MAX_DOCUMENT_SEARCH_WORK: usize = 2_000_000;
+
 pub(crate) fn read(bytes: &[u8], report: &mut Report) -> Result<Document> {
+    read_with_budget(bytes, report, MAX_COMPONENT_VISITS)
+}
+
+fn read_with_budget(bytes: &[u8], report: &mut Report, budget: usize) -> Result<Document> {
     let perr = |m: String| Error::Parse { format: "OMF", message: m };
     let c = Container::open(bytes).map_err(perr)?;
     let class_of = |o: u32| c.get(o, "OMFI:OOBJ:ObjClass").and_then(|v| v.get(..4).map(|b| [b[0], b[1], b[2], b[3]]));
     let head = c.objects.keys().copied().find(|&o| class_of(o) == Some(*b"HEAD")).ok_or_else(|| perr("no OMF header object".into()))?;
     let be = c.get(head, "OMFI:HEAD:ByteOrder").is_none_or(|v| v.first() != Some(&0x49));
-    let mut r = R { c: &c, report, be, mobs: HashMap::new(), media: HashMap::new(), doc: Document::default(), sources: HashMap::new() };
+    let mut r = R {
+        c: &c,
+        report,
+        be,
+        mobs: HashMap::new(),
+        media: HashMap::new(),
+        doc: Document::default(),
+        sources: HashMap::new(),
+        budget,
+        clip_search: HashMap::new(),
+        search_budget: MAX_DOCUMENT_SEARCH_WORK,
+    };
     let mob_list = r.refs(head, "OMFI:HEAD:Mobs");
     let mob_list = if mob_list.is_empty() {
         c.objects.keys().copied().filter(|&o| matches!(class_of(o).as_ref(), Some(b"CMOB" | b"MMOB" | b"SMOB"))).collect()
@@ -66,8 +104,14 @@ pub(crate) fn read(bytes: &[u8], report: &mut Report) -> Result<Document> {
         cmobs.iter().copied().filter(|m| r.uid(*m, "OMFI:MOBJ:MobID").is_none_or(|id| !referenced.contains(&id))).collect()
     };
     for m in top {
+        // every composition spends from the budget too: a list of up to 65,535 repeated entries must not yield that many
+        if r.budget == 0 && !r.doc.compositions.is_empty() {
+            r.report.warn(BUDGET_WARNING);
+            break;
+        }
         let comp = r.composition(m);
         r.doc.compositions.push(comp);
+        r.budget = r.budget.saturating_sub(1);
     }
     if r.doc.compositions.is_empty() {
         return Err(Error::Empty);
@@ -166,6 +210,13 @@ impl R<'_, '_> {
         let slots = self.refs(m, "OMFI:MOBJ:Slots");
         let mut na = 0;
         for s in slots {
+            if self.budget == 0 {
+                self.report.warn(BUDGET_WARNING);
+                break;
+            }
+            // Every slot spends a unit, skipped ones too: a list of up to 65,535 repeated slots
+            // must not cost that much work in each of 65,535 repeated compositions.
+            self.budget -= 1;
             let Some(seg) = self.r#ref(s, "OMFI:MSLT:Segment") else { continue };
             let rate = self.rational(s, "OMFI:MSLT:EditRate").filter(|r| r.0 > 0 && r.1 > 0).unwrap_or((25, 1));
             let kind = self.data_kind(seg);
@@ -213,13 +264,32 @@ impl R<'_, '_> {
 
     fn segment(&mut self, seg: u32, rate: (i64, i64), depth: usize) -> Vec<CItem> {
         let len = units_to_ticks(self.len(seg), rate.0, rate.1);
+        // Depth alone does not bound a graph that references the same component many times at
+        // every level, so each visit also spends from a per-document budget.
+        // A visit stopped by depth spends from it too.
+        if self.budget == 0 {
+            self.report.warn(BUDGET_WARNING);
+            return vec![CItem::Filler(len)];
+        }
+        self.budget -= 1;
         if depth > 32 {
             return vec![CItem::Filler(len)];
         }
         match &self.class(seg) {
             b"SEQU" => {
                 let mut out = Vec::new();
+                let mut expanded = 0i64;
                 for c in self.refs(seg, "OMFI:SEQU:Components") {
+                    if self.budget == 0 {
+                        // the rest of the sequence keeps its duration as one gap, not a gap per reference
+                        self.report.warn(BUDGET_WARNING);
+                        let rest = self.len(seg).saturating_sub(expanded);
+                        if rest > 0 {
+                            out.push(CItem::Filler(units_to_ticks(rest, rate.0, rate.1)));
+                        }
+                        break;
+                    }
+                    expanded = expanded.saturating_add(self.len(c));
                     out.extend(self.segment(c, rate, depth + 1));
                 }
                 out
@@ -306,12 +376,66 @@ impl R<'_, '_> {
             .find(|&s| self.r#ref(s, "OMFI:MSLT:TrackDesc").and_then(|t| self.u32(t, "OMFI:TRKD:TrackID")) == Some(track))
     }
 
-    fn first_clip(&self, seg: u32) -> Option<u32> {
-        match &self.class(seg) {
-            b"SCLP" => Some(seg),
-            b"SEQU" => self.refs(seg, "OMFI:SEQU:Components").into_iter().find_map(|c| self.first_clip(c)),
-            _ => None,
+    /// First source clip under `seg`, depth-first; a sequence referencing itself (directly or
+    /// through a cycle) ends the search rather than the stack. `Err` when the search spent its
+    /// budget of visited components or queued references before finishing (the answer is unknown).
+    fn first_clip(&mut self, seg: u32) -> std::result::Result<Option<u32>, SearchLimit> {
+        if let Some(found) = self.clip_search.get(&seg) {
+            return *found;
         }
+        let mut spent = 0;
+        let found = if self.search_budget == 0 {
+            Err(SearchLimit)
+        } else {
+            let visits = MAX_CLIP_SEARCH_VISITS.min(self.search_budget);
+            let pending = MAX_CLIP_SEARCH_PENDING.min(self.search_budget);
+            self.first_clip_within(seg, visits, pending, &mut spent)
+        };
+        self.search_budget = self.search_budget.saturating_sub(spent);
+        self.clip_search.insert(seg, found);
+        found
+    }
+
+    /// `spent` receives the visits plus queued references the search used.
+    fn first_clip_within(&self, seg: u32, max_visits: usize, max_pending: usize, spent: &mut usize) -> std::result::Result<Option<u32>, SearchLimit> {
+        let mut visited = HashSet::new();
+        let mut todo = vec![seg];
+        let mut queued = 1usize;
+        let found = Self::search_from(self, &mut visited, &mut todo, &mut queued, max_visits, max_pending);
+        *spent = visited.len().saturating_add(queued);
+        found
+    }
+
+    fn search_from(
+        &self,
+        visited: &mut HashSet<u32>,
+        todo: &mut Vec<u32>,
+        queued: &mut usize,
+        max_visits: usize,
+        max_pending: usize,
+    ) -> std::result::Result<Option<u32>, SearchLimit> {
+        while let Some(seg) = todo.pop() {
+            if !visited.insert(seg) {
+                continue;
+            }
+            if visited.len() > max_visits {
+                return Err(SearchLimit);
+            }
+            match &self.class(seg) {
+                b"SCLP" => return Ok(Some(seg)),
+                b"SEQU" => {
+                    let comps = self.refs(seg, "OMFI:SEQU:Components");
+                    // sequences may share one component list, so queued references grow with expansions, not visits
+                    *queued = queued.saturating_add(comps.len());
+                    if *queued > max_pending {
+                        return Err(SearchLimit);
+                    }
+                    todo.extend(comps.into_iter().rev());
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     fn resolve(&mut self, id: Uid, track: u32, start: Tick, master: Option<String>, depth: usize) -> Option<(usize, Tick)> {
@@ -328,7 +452,13 @@ impl R<'_, '_> {
         match &self.class(mob) {
             b"MMOB" => {
                 let key = master.unwrap_or_else(|| id.iter().map(|b| format!("{b:02x}")).collect());
-                let clip = self.first_clip(seg)?;
+                let clip = match self.first_clip(seg) {
+                    Ok(c) => c?,
+                    Err(SearchLimit) => {
+                        self.report.warn("a master mob is too large to search for its source clip (imported as a gap)");
+                        return None;
+                    }
+                };
                 let inner = units_to_ticks(self.i32(clip, "OMFI:SCLP:StartTime").unwrap_or(0), rate.0, rate.1);
                 let next = self.uid(clip, "OMFI:SCLP:SourceID")?;
                 let next_track = self.u32(clip, "OMFI:SCLP:SourceTrackID")?;
@@ -353,7 +483,9 @@ impl R<'_, '_> {
                 let file_rate = sr.filter(|r| r.0 > 0 && r.1 > 0).unwrap_or(rate);
                 let length = units_to_ticks(self.i32(desc, "OMFI:MDFL:Length").unwrap_or(0), file_rate.0, file_rate.1);
                 let summary = self.c.get(desc, "OMFI:WAVD:Summary").or_else(|| self.c.get(desc, "OMFI:AIFD:Summary")).unwrap_or_default();
-                let fmt = crate::pcm::parse_wav(&summary).or_else(|| crate::pcm::parse_aiff(&summary)).map(|(_, ch, sr, bits)| (ch as u32, sr, bits));
+                let fmt = craft_audio::essence_pcm::parse_wav(&summary)
+                    .or_else(|| craft_audio::essence_pcm::parse_aiff(&summary))
+                    .map(|(_, ch, sr, bits)| (ch as u32, sr, bits));
                 let mut path = None;
                 for l in self.refs(desc, "OMFI:MDES:Locator") {
                     let p = match &self.class(l) {
@@ -373,7 +505,8 @@ impl R<'_, '_> {
                 let (file_channels, sample_rate, bits) = fmt.unwrap_or((1, file_rate.0 as u32, 16));
                 let channel = (file_channels > 1 && sound_slots > 1).then(|| track.saturating_sub(1).min(file_channels - 1));
                 // timecode of the physical source
-                let tc = self.first_clip(seg).and_then(|clip| {
+                let first = self.first_clip(seg).ok().flatten();
+                let tc = first.and_then(|clip| {
                     let tid = self.uid(clip, "OMFI:SCLP:SourceID")?;
                     let tape = *self.mobs.get(&tid)?;
                     let (start_tc, fps, trate) = self.refs(tape, "OMFI:MOBJ:Slots").into_iter().find_map(|s| {
@@ -415,7 +548,7 @@ impl R<'_, '_> {
                     nested: None,
                 };
                 if let Some(d) = self.media.get(&id) {
-                    if let Some((pcm, ch, sr, b)) = crate::pcm::parse_wav(d).or_else(|| crate::pcm::parse_aiff(d)) {
+                    if let Some((pcm, ch, sr, b)) = craft_audio::essence_pcm::parse_wav(d).or_else(|| craft_audio::essence_pcm::parse_aiff(d)) {
                         s.embedded = Some(pcm);
                         s.file_channels = ch as u32;
                         s.channels = if s.channel.is_some() { 1 } else { ch as u32 };
@@ -435,5 +568,202 @@ impl R<'_, '_> {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::bento::Writer;
+    use super::*;
+
+    fn obj(w: &mut Writer, class: &[u8; 4]) -> u32 {
+        let id = w.new_object();
+        w.set(id, "OMFI:OOBJ:ObjClass", "omfi:ClassID", class);
+        id
+    }
+    fn list(w: &mut Writer, o: u32, p: &str, targets: &[u32]) {
+        let mut v = (targets.len() as u16).to_be_bytes().to_vec();
+        for t in targets {
+            v.extend_from_slice(&t.to_be_bytes());
+        }
+        w.set(o, p, "omfi:ObjRefArray", &v);
+    }
+
+    fn search(max_visits: usize, max_pending: usize, build: impl FnOnce(&mut Writer) -> u32) -> std::result::Result<Option<u32>, SearchLimit> {
+        let mut w = Writer::new();
+        let root = build(&mut w);
+        let bytes = w.finish();
+        let c = Container::open(&bytes).unwrap();
+        let mut report = Report::default();
+        let r = R {
+            c: &c,
+            report: &mut report,
+            be: true,
+            mobs: HashMap::new(),
+            media: HashMap::new(),
+            doc: Document::default(),
+            sources: HashMap::new(),
+            budget: 0,
+            clip_search: HashMap::new(),
+            search_budget: MAX_DOCUMENT_SEARCH_WORK,
+        };
+        r.first_clip_within(root, max_visits, max_pending, &mut 0)
+    }
+
+    #[test]
+    fn clip_search_reports_its_limits() {
+        // found within the limits
+        assert!(matches!(
+            search(10, 10, |w| {
+                let (s, c) = (obj(w, b"SEQU"), obj(w, b"SCLP"));
+                list(w, s, "OMFI:SEQU:Components", &[c]);
+                s
+            }),
+            Ok(Some(_))
+        ));
+        // too many distinct components before any clip
+        assert!(
+            search(5, 1000, |w| {
+                let (s, f) = (obj(w, b"SEQU"), (0..20).map(|_| obj(w, b"FILL")).collect::<Vec<_>>());
+                list(w, s, "OMFI:SEQU:Components", &f);
+                s
+            })
+            .is_err()
+        );
+        // few visits, but sequences that each queue a long list of references
+        assert!(
+            search(1000, 500, |w| {
+                let f = obj(w, b"FILL");
+                let inner: Vec<u32> = (0..20).map(|_| obj(w, b"SEQU")).collect();
+                for &i in &inner {
+                    list(w, i, "OMFI:SEQU:Components", &[f; 100]);
+                }
+                let s = obj(w, b"SEQU");
+                list(w, s, "OMFI:SEQU:Components", &inner);
+                s
+            })
+            .is_err()
+        );
+        // a search that ends without a clip is not a limit
+        assert!(matches!(search(10, 10, |w| obj(w, b"FILL")), Ok(None)));
+    }
+
+    #[test]
+    fn skipped_slots_spend_the_budget() {
+        let mut w = Writer::new();
+        let head = obj(&mut w, b"HEAD");
+        let cm = obj(&mut w, b"CMOB");
+        let slot = obj(&mut w, b"MSLT");
+        list(&mut w, cm, "OMFI:MOBJ:Slots", &[slot; 200]);
+        list(&mut w, head, "OMFI:HEAD:Mobs", &[cm]);
+        list(&mut w, head, "OMFI:HEAD:PrimaryMobs", &[cm]);
+        let bytes = w.finish();
+        let mut report = Report::default();
+        read_with_budget(&bytes, &mut report, 50).unwrap();
+        assert!(report.mentions(BUDGET_WARNING), "slots with no segment cost nothing before");
+    }
+
+    #[test]
+    fn a_source_clip_search_is_made_once_per_segment() {
+        let mut w = Writer::new();
+        let (s, c) = (obj(&mut w, b"SEQU"), obj(&mut w, b"SCLP"));
+        list(&mut w, s, "OMFI:SEQU:Components", &[c]);
+        let bytes = w.finish();
+        let c = Container::open(&bytes).unwrap();
+        let mut report = Report::default();
+        let mut r = R {
+            c: &c,
+            report: &mut report,
+            be: true,
+            mobs: HashMap::new(),
+            media: HashMap::new(),
+            doc: Document::default(),
+            sources: HashMap::new(),
+            budget: 0,
+            clip_search: HashMap::new(),
+            search_budget: MAX_DOCUMENT_SEARCH_WORK,
+        };
+        let first = r.first_clip(s).ok();
+        assert!(matches!(first, Some(Some(_))));
+        assert_eq!(r.clip_search.len(), 1);
+        assert_eq!(r.first_clip(s).ok(), first);
+        assert_eq!(r.clip_search.len(), 1);
+    }
+
+    #[test]
+    fn repeated_slots_and_compositions_spend_the_budget() {
+        let mut w = Writer::new();
+        let head = obj(&mut w, b"HEAD");
+        let cm = obj(&mut w, b"CMOB");
+        let dd = obj(&mut w, b"DDEF");
+        w.set(dd, "OMFI:DDEF:DataKindID", "omfi:UniqueName", b"omfi:data:Sound\0");
+        let fill = obj(&mut w, b"FILL");
+        w.set(fill, "OMFI:CPNT:DataKind", "omfi:ObjRef", &dd.to_be_bytes());
+        let slot = obj(&mut w, b"MSLT");
+        w.set(slot, "OMFI:MSLT:Segment", "omfi:ObjRef", &fill.to_be_bytes());
+        list(&mut w, cm, "OMFI:MOBJ:Slots", &[slot; 200]);
+        list(&mut w, head, "OMFI:HEAD:Mobs", &[cm]);
+        list(&mut w, head, "OMFI:HEAD:PrimaryMobs", &[cm; 200]);
+        let bytes = w.finish();
+        let mut report = Report::default();
+        let doc = read_with_budget(&bytes, &mut report, 50).unwrap();
+        let tracks: usize = doc.compositions.iter().map(|c| c.tracks.len()).sum();
+        assert!(tracks <= 50, "{tracks} tracks from a budget of 50");
+        assert!(doc.compositions.len() <= 2, "{} compositions", doc.compositions.len());
+        assert!(report.has_warnings());
+    }
+
+    fn with_reader<T>(bytes: &[u8], budget: usize, search_budget: usize, f: impl FnOnce(&mut R) -> T) -> (T, Report) {
+        let c = Container::open(bytes).unwrap();
+        let mut report = Report::default();
+        let mut r = R {
+            c: &c,
+            report: &mut report,
+            be: true,
+            mobs: HashMap::new(),
+            media: HashMap::new(),
+            doc: Document::default(),
+            sources: HashMap::new(),
+            budget,
+            clip_search: HashMap::new(),
+            search_budget,
+        };
+        let out = f(&mut r);
+        (out, report)
+    }
+
+    #[test]
+    fn depth_limited_components_spend_the_budget() {
+        // a chain 33 sequences deep whose last one repeats a depth-limited sequence many times
+        let mut w = Writer::new();
+        let deep = obj(&mut w, b"SEQU");
+        let chain: Vec<u32> = (0..33).map(|_| obj(&mut w, b"SEQU")).collect();
+        for pair in chain.windows(2) {
+            list(&mut w, pair[0], "OMFI:SEQU:Components", &[pair[1]]);
+        }
+        list(&mut w, chain[32], "OMFI:SEQU:Components", &[deep; 1000]);
+        let bytes = w.finish();
+        let (items, report) = with_reader(&bytes, 100, MAX_DOCUMENT_SEARCH_WORK, |r| r.segment(chain[0], (48_000, 1), 0));
+        assert!(items.len() <= 100, "{} items from a budget of 100", items.len());
+        assert!(report.mentions(BUDGET_WARNING));
+    }
+
+    #[test]
+    fn source_clip_searches_share_a_document_budget() {
+        // distinct roots over one shared clip-free graph
+        let mut w = Writer::new();
+        let fills: Vec<u32> = (0..50).map(|_| obj(&mut w, b"FILL")).collect();
+        let shared = obj(&mut w, b"SEQU");
+        list(&mut w, shared, "OMFI:SEQU:Components", &fills);
+        let roots: Vec<u32> = (0..30).map(|_| obj(&mut w, b"SEQU")).collect();
+        for &root in &roots {
+            list(&mut w, root, "OMFI:SEQU:Components", &[shared]);
+        }
+        let bytes = w.finish();
+        let (results, _) = with_reader(&bytes, 0, 500, |r| roots.iter().map(|&root| r.first_clip(root)).collect::<Vec<_>>());
+        assert!(matches!(results[0], Ok(None)), "the first search fits");
+        assert!(results.iter().any(|r| r.is_err()), "later searches run out of the shared budget");
+        let (results, _) = with_reader(&bytes, 0, MAX_DOCUMENT_SEARCH_WORK, |r| roots.iter().map(|&root| r.first_clip(root)).collect::<Vec<_>>());
+        assert!(results.iter().all(|r| matches!(r, Ok(None))));
     }
 }

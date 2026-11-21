@@ -298,6 +298,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         color: ColorData { kelvin_presets, baseline_exposure: baseline_exposure(&h), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists { list3: crate::raf_lens::corrections(&camera_name(bytes), &ifd, active), ..Default::default() },
         camera: ifd0

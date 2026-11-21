@@ -176,6 +176,8 @@ fn spa_float(flags: u16, p: &crate::officeart::Props) -> Float {
         dist: emu(dl, 9.0).max(emu(dr, 9.0)),
         dist_top: emu(dt, 0.0),
         dist_bottom: emu(db, 0.0),
+        // Layout in table cell off: placed outside the cell the shape is anchored in.
+        outside_cell: p.layout_in_cell == Some(false),
         ..Float::default()
     }
 }
