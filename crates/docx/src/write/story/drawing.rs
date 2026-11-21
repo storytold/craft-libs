@@ -39,7 +39,7 @@ impl Writer<'_> {
         // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
         // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
         let fx = fx.clamped();
-        if fx.is_identity() {
+        if !fx.changes_pixels() && fx.transparency == 0 {
             w.empty("a:blip", &[("r:embed", &rid)]);
         } else {
             w.open("a:blip", &[("r:embed", &rid)]);
@@ -64,6 +64,11 @@ impl Writer<'_> {
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
+        if let Some(radius) = fx.soft_edge_emu {
+            w.open("a:effectLst", &[]);
+            w.empty("a:softEdge", &[("rad", &n(i64::from(radius)))]);
+            w.close("a:effectLst");
+        }
         w.close("pic:spPr");
         w.close("pic:pic");
     }
@@ -263,6 +268,17 @@ impl Writer<'_> {
         w.close("w:drawing");
     }
 
+    /// One order for an anchored object, shared by generated and retained drawings.
+    pub(in crate::write) fn drawing_order(&mut self, float: &Float) -> u32 {
+        let z = if float.z > 0 {
+            self.zmap.get(&float.z).copied().unwrap_or(float.z.saturating_sub(1))
+        } else {
+            self.z = self.z.saturating_add(1);
+            self.z
+        };
+        self.anchor_z = z;
+        z
+    }
     pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
         let DrawingInfo { float, size: (iw, ih), docpr, name, alt, link } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
@@ -271,9 +287,9 @@ impl Writer<'_> {
         } else {
             let d = emu(float.dist.clamp(0.0, 1584.0));
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
-            // The stacking order read from the file is kept; objects without one stack in
-            // document order above it.
-            self.z = if float.z > 0 { float.z } else { self.z.saturating_add(1) };
+            // A stacking order read from a file is kept (one less: see `Float::z`); objects made
+            // here go above those.
+            let z = self.drawing_order(float);
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",
@@ -283,7 +299,7 @@ impl Writer<'_> {
                     ("distL", &d),
                     ("distR", &d),
                     ("simplePos", "0"),
-                    ("relativeHeight", &self.z.to_string()),
+                    ("relativeHeight", &z.to_string()),
                     ("behindDoc", behind),
                     ("locked", "0"),
                     ("layoutInCell", if float.outside_cell { "0" } else { "1" }),
@@ -317,9 +333,9 @@ impl Writer<'_> {
             }
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        // Word's effect extent also covers a rotated object's overhang (its rotated bounds), unless
+        // Word's effect extent also covers a rotated object's overhang (`Float::effect_spin_pad`), unless
         // the file it came from kept none.
-        let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.spin_pad(iw, ih) };
+        let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.effect_spin_pad(iw, ih) };
         let [el, et, er, eb] = float.effect_extent();
         let [el, et, er, eb] = [el + px, et + py, er + px, eb + py].map(emu);
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);

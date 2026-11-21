@@ -1,0 +1,64 @@
+name: Full validation
+
+# Add full-validation to a PR for uncapped validation of its merge ref. Keep the label across pushes.
+# Fast Workspace checks are not substitutes for these six completed native/PDF gate checks.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # An unrelated label event must not cancel an active full run.
+  group: full-validation-${{ github.event.action == 'labeled' && github.event.label.name != 'full-validation' && github.run_id || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  native:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-validation') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-validation'))
+    name: Full native
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["ubuntu-latest","windows-latest","macos-latest"]'
+      select-os: '[]'
+      timeout-minutes: 120
+      tools: ""
+      packages: mesa-vulkan-drivers libvulkan1
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      linux-env: WGPU_BACKEND=vulkan
+      windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
+      env: CRAFT_PRINT_REQUIRE_QUEUE=0
+      setup-command: bash scripts/ci-test-inputs.sh
+      command: |
+        python scripts/test-full-validation.py
+        bash scripts/ci-full-validation.sh
+
+  pdf-contracts:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-validation') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-validation'))
+    name: Full PDF contracts
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["ubuntu-latest","windows-latest","macos-latest"]'
+      select-os: '[]'
+      timeout-minutes: 120
+      tools: ""
+      craft-fonts-ref: ""
+      require-craft-fonts: false
+      env: RUSTFLAGS=--cfg craft_pdf_unicode_fixtures
+      setup-command: |
+        python scripts/test-fetch-pdf-test-fonts.py
+        python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
+        echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
+      command: |
+        unset CRAFT_HOSTILE_DIVISOR PROPTEST_CASES
+        cargo clippy -p craft-pdf --all-targets --all-features --locked -- -D warnings
+        cargo test -p craft-pdf --all-features --locked
+        cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked

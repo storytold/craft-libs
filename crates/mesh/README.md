@@ -11,8 +11,10 @@ a `Scene` into bytes. One Cargo feature per format, all on by default.
 | `gltf` | glTF 2.0 (`.gltf`) and GLB | yes | GLB | `serde_json` |
 | `threemf` | 3MF, core and materials extension | yes | no | `craft-opc`, `craft-xml` |
 | `fbx` | FBX 6.x and 7.x, binary and ASCII | yes | no | `miniz_oxide` |
+| `dae` | COLLADA (`.dae`), scenes, transforms, cameras | yes | no | `craft-xml` |
+| `abc` | Alembic (`.abc`), Ogawa container | yes | no | none |
 
-USD, Alembic and COLLADA are not here yet.
+USD is not here yet.
 
 ## The neutral model
 
@@ -24,8 +26,9 @@ USD, Alembic and COLLADA are not here yet.
 - `Part`: the faces of a mesh that share a group name, a material and a smoothing group. A face is
   a polygon of three or more `Corner`s; each corner indexes a position and optionally a normal and
   a UV. Formats with separate indices (OBJ) are kept exactly, and polygons stay whole.
-  `Part::triangles()` fans them; `Mesh::unified()` gives one vertex per distinct corner as a
-  triangle list, which is what a renderer wants.
+  `Part::triangles_in(&mesh.positions)` triangulates them (a fan for a convex face, ear clipping
+  in the face's plane for a concave one; `Part::triangles()` only fans); `Mesh::unified()` gives
+  one vertex per distinct corner as a triangle list, which is what a renderer wants.
 - `Material`: metallic-roughness factors, alpha mode, double-sided, unlit, and five texture slots.
   A `TextureRef` names an `Image`, a UV set and wrap modes. An `Image` is a URI the caller
   resolves or the encoded bytes the file embedded; nothing here decodes images.
@@ -83,7 +86,9 @@ metal, roughness from the glossiness); textures whose image is in `EXT_texture_w
 in a buffer view or a `data:` URI, or named; skins; translation, rotation and scale animations;
 cameras; `KHR_lights_punctual`. Primitives of a mesh that name the same accessors share their
 vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials with
-their texture transforms, and images. The other formats' writers do not write texture transforms.
+their texture transforms and sampler wrap modes, and images; `write_glb_with_options` also writes
+each sampler's `magFilter` and `minFilter` when its `GlbWriteOptions` set them. The other
+formats' writers do not write texture transforms.
 
 **3MF.** The package is opened with `craft-opc` and the model part found through its `3dmodel`
 relationship; `threemf::read_model_part` reads a model part's XML on its own. Mesh objects,

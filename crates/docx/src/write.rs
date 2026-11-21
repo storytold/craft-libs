@@ -4,6 +4,8 @@ mod bidi;
 mod embed;
 mod font_table;
 mod glossary;
+mod mail_merge;
+pub(crate) use mail_merge::keep_rels as mail_merge_rels;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
 mod math;
@@ -83,6 +85,26 @@ impl PartRels {
     }
 }
 
+/// Where Word's stacking orders (`relativeHeight`) start for objects made in Word.
+const FIRST_Z: u32 = 251_658_240;
+
+/// The `relativeHeight` the objects of `doc` that have none count up from, and the `relativeHeight`
+/// each stored order is written as when it isn't its own (wordcraft#2638). A stored order
+/// ([`craft_wordmodel::para::Float::z`]) is one more than the file's, and the new objects go above
+/// every stored one. When the stored orders leave no room for them below `u32::MAX` (a file using
+/// values that high; `u32::MAX` itself would read back as the order below it), the stored ones are
+/// numbered again from [`FIRST_Z`] in their order, so no two objects share an order and none goes
+/// out of range.
+pub(crate) fn stacking(doc: &Document) -> (u32, BTreeMap<u32, u32>) {
+    let (orders, unset) = doc.stacking_orders();
+    let top = orders.last().map_or(0, |z| z.saturating_sub(1)).max(FIRST_Z);
+    if u32::try_from(unset).ok().and_then(|n| top.checked_add(n)).is_some_and(|last| last < u32::MAX) {
+        return (top, BTreeMap::new());
+    }
+    let zmap: BTreeMap<u32, u32> = orders.iter().zip(FIRST_Z..=u32::MAX).map(|(&z, to)| (z, to)).collect();
+    (zmap.values().last().copied().unwrap_or(FIRST_Z), zmap)
+}
+
 pub(crate) struct Writer<'d> {
     doc: &'d Document,
     /// Numbered display equations written so far (automatic numbers are written as text).
@@ -96,7 +118,14 @@ pub(crate) struct Writer<'d> {
     docpr: u32,
     /// Shapes' own drawing ids written so far (connectors refer to them).
     shape_ids: std::collections::HashSet<u32>,
+    /// The last stacking order (`relativeHeight`) given to an object that had none.
     z: u32,
+    /// Stored stacking orders written as other `relativeHeight`s (see [`stacking`]); empty: each
+    /// as its own.
+    zmap: BTreeMap<u32, u32>,
+    /// The `relativeHeight` the last `wp:anchor` was written with, which a shape's VML fallback
+    /// gives as its `z-index`.
+    anchor_z: u32,
     /// Note part id → file note id, in first-reference order.
     footnotes: Vec<u32>,
     endnotes: Vec<u32>,
@@ -141,6 +170,14 @@ pub(crate) struct Writer<'d> {
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
 
+/// Options for saving a Word Open XML document.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WriteOptions {
+    /// Allows a save to drop unusable mail-merge settings and their source links.
+    /// Leave this off unless the caller has obtained consent for that loss.
+    pub discard_unusable_mail_merge: bool,
+}
+
 /// Write a `.docx` package.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
     write_as(doc, Flavor::Document)
@@ -148,7 +185,12 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
 
 /// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
 pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
-    zip_entries(&write_parts(doc, flavor)?)
+    write_as_with_options(doc, flavor, WriteOptions::default())
+}
+
+/// Write a Word Open XML package using explicit save options.
+pub fn write_as_with_options(doc: &Document, flavor: Flavor, options: WriteOptions) -> Result<Vec<u8>, DocxError> {
+    zip_entries(&write_parts(doc, flavor, options)?)
 }
 
 impl Writer<'_> {

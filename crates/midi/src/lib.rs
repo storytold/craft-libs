@@ -1,25 +1,27 @@
 //! MIDI file formats.
 //!
-//! - [`Note`], [`CtrlEvent`] and [`Sequence`]: the neutral model, the notes and channel events of
+//! - [`Note`], [`CtrlEvent`], [`SysExEvent`] and [`Sequence`]: the neutral model, including notes, channel events and SysEx packets of
 //!   one track, in ticks at [`PPQ`] (960) ticks per quarter note.
 //! - [`read_smf`] / [`write_smf`]: Standard MIDI File reading (format 0/1, format 2 best-effort)
 //!   and writing (format 0 or 1, 960 PPQ). [`read_smf_lenient`] reads what makes sense of a
 //!   damaged file and says what it could not. The reader treats its input as hostile: every length is
-//!   checked, variable-length quantities are bounded and track and event counts are capped.
+//!   checked, variable-length quantities are bounded and track/event counts and retained SysEx payload bytes are capped.
 //!
 //! Written from the public Standard MIDI Files 1.0 specification.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Live MIDI 1.0 channel-voice message decoding.
+pub mod live;
 mod sequence;
 mod smf;
 /// Source-timed SMF compatibility model, including tolerant and SMPTE reading.
 pub mod source_timed;
 pub mod sync;
 
-pub use sequence::{CtrlEvent, CtrlKind, Note, Sequence};
+pub use sequence::{CtrlEvent, CtrlKind, Note, Sequence, SysExEvent};
 pub use smf::{
-    LenientRead, MAX_EVENTS, MAX_TRACKS, MAX_WARNINGS, Smf, SmfTrack, TimedEvent, encode_meta_event, read_smf, read_smf_lenient, write_smf,
-    write_timed_smf,
+    LenientRead, MAX_EVENTS, MAX_SYSEX_BYTES, MAX_TRACKS, MAX_WARNINGS, Smf, SmfTrack, TimedEvent, encode_meta_event, read_smf, read_smf_lenient,
+    write_smf, write_timed_smf,
 };
 
 /// Ticks per quarter note used throughout the model.
@@ -44,6 +46,10 @@ pub enum MidiError {
     TooManyEvents(usize),
     #[error("too many tracks (limit {0})")]
     TooManyTracks(usize),
+    #[error("SysEx payload exceeds the file limit of {0} bytes")]
+    SysExTooLarge(usize),
+    #[error("MIDI file has more than {0} SysEx packets")]
+    TooManySysExPackets(usize),
     #[error("cannot write MIDI file: {0}")]
     Write(String),
 }
