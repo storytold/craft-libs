@@ -1477,9 +1477,7 @@ mod tests {
 
     #[test]
     fn codecs_without_a_packet_decoder_are_unsupported() {
-        for codec in [CodecId::H264] {
-            assert!(matches!(TrackDecoder::new(&CodecParams::new(codec), &[]), Err(AudioError::Unsupported(_))), "{codec:?}");
-        }
+        assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::H264), &[]), Err(AudioError::Unsupported(_))));
         #[cfg(not(feature = "vorbis-decode"))]
         assert!(matches!(TrackDecoder::new(&CodecParams::new(CodecId::Vorbis), &[]), Err(AudioError::Unsupported(m)) if m.contains("vorbis-decode")));
         // Vorbis needs its three header packets.
