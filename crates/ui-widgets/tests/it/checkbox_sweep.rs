@@ -80,6 +80,36 @@ fn a_completed_checkbox_sweep_replays_before_the_next_press() {
 }
 
 #[trial]
+fn a_completed_checkbox_sweep_allows_an_immediate_click_on_its_owner() {
+    for batched_click in [false, true] {
+        let values = Rc::new(RefCell::new([false; 2]));
+        let shown = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut values = shown.borrow_mut();
+            for (value, label) in values.iter_mut().zip(["Crossed checkbox", "Sweep owner"]) {
+                Checkbox::new(Bind::bound(value)).label(label).show(ui);
+            }
+        });
+        fixture.settle();
+        let crossed = fixture.by_label("Crossed checkbox").expect("crossed").center();
+        let owner = fixture.by_label("Sweep owner").expect("owner").center();
+
+        fixture.frame(vec![pointer::moved(owner)]);
+        fixture.frame(vec![pointer::press(owner), pointer::moved(crossed), pointer::release(crossed)]);
+        let mut click = vec![pointer::moved(owner), pointer::press(owner)];
+        if batched_click {
+            click.push(pointer::release(owner));
+        }
+        fixture.frame(click);
+        if !batched_click {
+            fixture.frame(vec![pointer::release(owner)]);
+        }
+        fixture.idle(2);
+        assert_eq!(*values.borrow(), [true, false], "the next click toggles the same owner (batched: {batched_click})");
+    }
+}
+
+#[trial]
 fn a_checkbox_sweep_uses_an_exposed_sliver_but_skips_covered_and_clipped_boxes() {
     let values = Rc::new(RefCell::new([false; 5]));
     let shown = values.clone();
