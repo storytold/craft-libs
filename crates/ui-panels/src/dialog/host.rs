@@ -583,13 +583,20 @@ impl DialogHost {
                 let DialogHost { stack, open, .. } = &mut *self;
                 let dialog = &mut open[at];
                 let ui_ctx = ui.ctx().clone();
-                let shown = crate::runtime::overlay::stack_place(&ui_ctx, place, id, || dialog.show_erased(ui, stack));
+                // The window is the dialog's frame: its background, then the content inside its margins.
+                ui.painter().rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+                let margin = egui::Margin::same(WINDOW_MARGIN);
+                let framed = egui::Frame::new()
+                    .inner_margin(margin)
+                    .show(ui, |ui| crate::runtime::overlay::stack_place(&ui_ctx, place, id, || dialog.show_erased(ui, stack)));
+                let shown = framed.inner;
                 let child = dialog.take_child_erased();
-                // The content's size plus the window's margins; it never asks for more than it has, so it settles.
-                // A sizing pass, or one that drew nothing across, keeps the size: the window would shrink to its
-                // margins and the content would never have the room to grow it back.
-                let drawn = ui.min_rect().size();
-                let want = if ui.is_sizing_pass() || drawn.min_elem() < 1.0 { size } else { (drawn + egui::vec2(16.0, 16.0)).round() };
+                // The content's size with the margins; it never asks for more than it has, so it settles. A sizing
+                // pass, or one that drew nothing across, keeps the size: the window would shrink to its margins and
+                // the content would never have the room to grow it back.
+                let drawn = framed.response.rect.size();
+                let content = drawn - margin.sum();
+                let want = if ui.is_sizing_pass() || content.min_elem() < 1.0 { size } else { drawn.round() };
                 if shown.is_some() {
                     close = true;
                 }
@@ -901,3 +908,6 @@ impl DialogHost {
         self.open.is_empty() && self.queued.is_empty()
     }
 }
+
+/// The margin between a windowed dialog's window and its content.
+const WINDOW_MARGIN: i8 = 16;

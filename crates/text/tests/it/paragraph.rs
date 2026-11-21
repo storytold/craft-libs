@@ -66,3 +66,31 @@ fn a_mixed_contextual_spacing_box_clicked_is_on_in_the_answer() {
     let answer = dialog.borrow_mut().take_ok().expect("OK filed its answer");
     assert_eq!(answer.format.contextual_spacing, Some(Some(true)), "the answer carries the box");
 }
+
+/// Drawn bare, for a window of its own that has the title and close button, the dialog shows its pages and its OK,
+/// Cancel and Tabs… without its own close box, and OK still files the answer.
+#[trial]
+fn a_bare_dialog_has_no_close_box_of_its_own_and_ok_answers() {
+    let shown_with = |bare: bool| {
+        let format =
+            ParagraphFormat { breaks: Some(LineBreakOptions::default()), asian: Some(AsianTypography::default()), ..ParagraphFormat::default() };
+        let dialog = Rc::new(RefCell::new(ParagraphDialog::new(format).word(true).held_ok().bare(bare)));
+        let shown = dialog.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+        });
+        fixture.idle(30);
+        (dialog, fixture)
+    };
+    let (_, framed) = shown_with(false);
+    assert!(framed.by_label("Close").is_some(), "the dialog over a window has its own close box");
+
+    let (dialog, mut fixture) = shown_with(true);
+    assert!(fixture.by_label("Close").is_none(), "the bare dialog leaves the close box to its window");
+    for label in ["Line and Page Breaks", "Asian Typography", "OK", "Cancel"] {
+        assert!(fixture.by_label(label).is_some(), "{label} is shown");
+    }
+    let ok = fixture.by_label("OK").expect("OK is shown");
+    fixture.click(&ok).idle(4);
+    assert!(dialog.borrow_mut().take_ok().is_some(), "OK filed its answer");
+}

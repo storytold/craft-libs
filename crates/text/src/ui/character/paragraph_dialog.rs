@@ -17,11 +17,12 @@ use std::cell::Cell;
 
 use crate::ui::length::{DocUnit, length_field, shown};
 use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec, SelectionChange, keyed};
-use craft_theme::variant::Tone;
+use craft_theme::variant::{Tone, Variant};
+use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Bind, CollectionEvent, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowCollection as _,
-    ShowContainer as _, SideLabel,
+    ShowContainer as _, SideLabel, Sizing,
 };
 use craft_ui::dialog::{
     ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field,
@@ -312,6 +313,9 @@ pub struct ParagraphDialog {
     tab: ParagraphTab,
     /// Whether OK files its answer for the app to judge instead of closing.
     hold: bool,
+    /// Whether the dialog draws only its content (pages and buttons), for a window of its own that has the title and
+    /// the close button (`DialogHost::run_windowed`).
+    bare: bool,
     held: HeldAnswer<ParagraphAnswer>,
 }
 
@@ -325,6 +329,7 @@ impl ParagraphDialog {
             word: false,
             tab: ParagraphTab::default(),
             hold: false,
+            bare: false,
             held: HeldAnswer::new(),
         }
     }
@@ -380,6 +385,9 @@ const SAMPLE_LINES: usize = 3;
 const PREVIEW_SAMPLES: f32 = 6.0;
 /// The index of the OK button among the dialog's buttons.
 const OK: usize = 0;
+/// The width of the pages and of the button column when the dialog draws only its content ([`ParagraphDialog::bare`]).
+const BARE_PAGE_WIDTH: f32 = 440.0;
+const BARE_BUTTON_WIDTH: f32 = 96.0;
 /// The index of the Tabs… button among the dialog's buttons.
 const TABS: usize = 2;
 /// The index of the Cancel button among the dialog's buttons.
@@ -856,6 +864,44 @@ impl ParagraphDialog {
         self
     }
 
+    /// Draws only the content: the pages and a column of OK, Cancel and Tabs…, without the dialog's frame, title and
+    /// close button, for a window of its own that has them (`DialogHost::run_windowed`). Enter is OK, Esc Cancel.
+    #[must_use]
+    pub fn bare(mut self, on: bool) -> Self {
+        self.bare = on;
+        self
+    }
+
+    /// The bare content: the pages beside the button column; the button picked, if any.
+    fn show_bare(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>, labels: [Label; 3], waiting: bool) -> Option<usize> {
+        let mut picked = None;
+        // The pages take a fixed width, as the dialog's do, so a window that follows its content keeps one width and
+        // follows only the height of the page shown (the preview fills what it is given).
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(BARE_PAGE_WIDTH);
+                self.body(ui, scope, valid);
+            });
+            ui.vertical(|ui| {
+                ui.set_width(BARE_BUTTON_WIDTH);
+                let enabled = valid.get() && !waiting;
+                for (at, label) in labels.into_iter().enumerate() {
+                    let button = Button::new(label).sizing(Sizing::FillWidth).enabled(at == CANCEL || enabled);
+                    let button = if at == OK { button.variant(Variant::PRIMARY) } else { button };
+                    if button.show(ui).clicks == 1 {
+                        picked = Some(at);
+                    }
+                }
+            });
+        });
+        let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        picked.or(match keys {
+            (_, true) => Some(CANCEL),
+            (true, _) if valid.get() && !waiting => Some(OK),
+            _ => None,
+        })
+    }
+
     /// The answer OK filed, once, for the app to judge.
     pub fn take_ok(&mut self) -> Option<ParagraphAnswer> {
         self.held.take()
@@ -903,6 +949,22 @@ impl StackDialog for ParagraphDialog {
             FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
             FooterButton::new(words.tabs.clone(), DialogRole::Other).stays_open(self.hold),
         ];
+        if self.bare {
+            let labels = [common.ok.clone(), common.cancel.clone(), words.tabs.clone()];
+            let picked = self.show_bare(ui, &scope, &valid, labels, waiting);
+            // A refused answer stands until a field changes, as in the dialog.
+            if refused.as_ref().is_some_and(|(_, format)| *format != self.format) {
+                self.held.clear_refusal();
+            }
+            return match picked {
+                Some(CANCEL) => Some(DialogResult::Cancel),
+                Some(at) if valid.get() => {
+                    let answer = self.answer(at == TABS);
+                    self.settle(answer).map(DialogResult::Ok)
+                }
+                _ => None,
+            };
+        }
         let shown = Dialog::new(words.title.clone())
             .button_place(ButtonPlace::Side)
             .buttons(buttons)
