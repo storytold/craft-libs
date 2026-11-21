@@ -96,3 +96,61 @@ fn a_reopened_find_switches_its_tab_and_keeps_what_the_user_set() {
     assert_eq!(fields["query"], "bird", "without a query Find what stays");
     assert_eq!(fields["goToTarget"], "Intro", "the new kinds show: the target names the new bookmark");
 }
+
+/// WordCraft #5070: focus is requested once, so Tab can leave and IME is not interrupted every pass.
+#[trial]
+fn opt_in_find_focus_follows_tabs_once_and_then_leaves_the_keyboard_alone() {
+    use craft_ui::testing::access;
+    use egui::{Key, Modifiers};
+
+    let dialog = Rc::new(RefCell::new(
+        FindReplaceDialog::new("", FindTab::GoTo)
+            .word(true)
+            .go_to_kinds(vec![GoToKind::typed("Page", "Enter a page number", true)])
+            .focus_inputs(true),
+    ));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(10);
+    let field = fixture.by_role(Role::TEXT_INPUT).first().copied().expect("the page box");
+    assert_eq!(access::focused_key(fixture.tree()), field.node, "opening focuses the page box");
+    fixture.type_text("7").idle(4);
+    assert_eq!(dialog.borrow().json_fields().unwrap()["goToTarget"], "7");
+    for _ in 0..4 {
+        fixture.idle(1);
+        assert!(!fixture.ime().is_some_and(|ime| ime.interrupt), "idle frames leave composition alone");
+    }
+    fixture.key(Key::Tab, Modifiers::NONE).idle(5);
+    let next = access::focused_key(fixture.tree());
+    assert_ne!(next, field.node, "Tab leaves the input");
+    fixture.idle(5);
+    assert_eq!(access::focused_key(fixture.tree()), next, "the box does not take the keyboard back");
+    fixture.key(Key::Tab, Modifiers::SHIFT).idle(5);
+    assert_eq!(access::focused_key(fixture.tree()), field.node, "Shift+Tab returns");
+
+    // An API request and a picked tab both rearm focus, but a normal pass does not.
+    dialog.borrow_mut().show_tab(FindTab::Find, Some("cat".to_owned()));
+    fixture.idle(5);
+    let find = fixture.by_role(Role::TEXT_INPUT).first().copied().expect("Find what");
+    assert_eq!(access::focused_key(fixture.tree()), find.node);
+    let goto = fixture.by_role(Role::TAB).into_iter().find(|target| access::name(fixture.tree(), target.node) == Some("Go To")).unwrap();
+    fixture.click(&goto).idle(5);
+    let page = fixture.by_role(Role::TEXT_INPUT).first().copied().expect("the page box returns");
+    assert_eq!(access::focused_key(fixture.tree()), page.node);
+    assert_eq!(dialog.borrow().json_fields().unwrap()["goToTarget"], "7", "focus does not clear the target");
+}
+
+#[trial]
+fn default_find_does_not_reclaim_focus_when_the_open_tab_is_requested_again() {
+    use craft_ui::testing::access;
+
+    let (mut fixture, dialog) = open(vec![GoToKind::typed("Page", "Enter a page number", true)]);
+    let next = button(&fixture, "Next").expect("Next");
+    fixture.click(&next).idle(4);
+    let held = access::focused_key(fixture.tree());
+    dialog.borrow_mut().show_tab(FindTab::GoTo, None);
+    fixture.idle(5);
+    assert_eq!(access::focused_key(fixture.tree()), held, "the default policy stays unchanged");
+}

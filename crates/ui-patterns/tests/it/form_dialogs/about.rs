@@ -14,6 +14,48 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
+/// WordCraft #5070's About case already follows the framework's focused-control ownership.
+#[trial]
+fn hosted_about_keeps_enter_with_a_focused_checkbox_and_closes_from_its_footer() {
+    use craft_ui::choice::Checkbox;
+    use craft_ui::contract::{Props as _, Show as _};
+    use egui::{Key, Modifiers};
+
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = host.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        shown.borrow_mut().run(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let mut checked = false;
+    let tab = AboutAppTab::new("details", "Details", move |ui| {
+        Checkbox::new(Bind::bound(&mut checked)).label("Keep details visible").show(ui);
+    });
+    let id = host.borrow_mut().open(HostedAbout::new(INFO.clone(), CREDITS.clone()).layout(AboutLayout::Listed).app_tab(tab).tab(AboutTab::App(0)));
+    fixture.idle(30);
+    let checkbox = fixture.by_role(Role::CHECK_BOX).first().copied().expect("the app tab's checkbox");
+    assert_eq!(access::name(fixture.tree(), checkbox.node), Some("Keep details visible"));
+    for _ in 0..8 {
+        if access::focused_key(fixture.tree()) == checkbox.node {
+            break;
+        }
+        fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+    }
+    assert_eq!(access::focused_key(fixture.tree()), checkbox.node);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(host.borrow().get_by_id::<HostedAbout>(id).is_some(), "Enter on the checkbox does not close About");
+    let close = fixture.by_label("Close").expect("the footer");
+    for _ in 0..8 {
+        if access::focused_key(fixture.tree()) == close.node {
+            break;
+        }
+        fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+    }
+    assert_eq!(access::focused_key(fixture.tree()), close.node, "Tab reaches Close");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(host.borrow().get_by_id::<HostedAbout>(id).is_none(), "Enter on Close still closes");
+}
+
 static INFO: LazyLock<AboutInfo> = LazyLock::new(|| AboutInfo::new("PhotoCraft", "An image editor.", "1.0"));
 static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
     Credits::new(
