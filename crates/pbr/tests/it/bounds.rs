@@ -85,6 +85,15 @@ fn prefiltering_over_the_byte_or_work_budget_is_refused() {
 }
 
 #[test]
+fn sh9_over_the_byte_budget_for_its_column_table_is_refused() {
+    // A 2048 × 1 source is 24 KiB; its column table holds six `f64` per column, 96 KiB.
+    let env = env_from(2048, 1, |_, _| [1.0; 3]);
+    let table = 2048 * 48;
+    assert_eq!(try_sh9(&env, &limits(|l| l.max_bytes = table - 1)), Err(PbrError::TooLarge(2048, 1)));
+    assert!(try_sh9(&env, &limits(|l| l.max_bytes = table)).is_ok());
+}
+
+#[test]
 fn nan_infinite_and_negative_radiance_is_refused() {
     let limits = Limits::default();
     for (i, bad) in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0].into_iter().enumerate() {
@@ -154,6 +163,11 @@ fn sources_over_the_size_limits_are_refused() {
     assert_eq!(try_sh9(&env, &few), Err(PbrError::TooLarge(16, 8)));
     let narrow = limits(|l| l.max_side = 8);
     assert_eq!(try_prefilter(&env, &PrefilterOptions::default(), &narrow), Err(PbrError::BadSize(16, 8)));
+    // Halving and resampling check the source too, not only the smaller result.
+    assert_eq!(env.try_half(&few), Err(PbrError::TooLarge(16, 8)));
+    assert_eq!(env.try_resampled(4, 2, &few), Err(PbrError::TooLarge(16, 8)));
+    assert_eq!(env.try_half(&narrow), Err(PbrError::BadSize(16, 8)));
+    assert_eq!(env.try_resampled(8, 4, &narrow), Err(PbrError::BadSize(16, 8)));
 }
 
 #[test]

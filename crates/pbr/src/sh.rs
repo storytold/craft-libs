@@ -10,9 +10,12 @@ use crate::{Limits, PbrError};
 /// convolved with the cosine lobe and divided by `π`: `Σ c_k Y_k(n)` times the albedo is the
 /// diffuse radiance a surface with normal `n` reflects. Every pixel of the source is projected,
 /// with each basis function integrated over the area of the pixel. Returns an error when the
-/// source is over `limits`.
+/// source is over `limits` or its table of column integrals, one per column, is over
+/// [`Limits::max_bytes`].
 pub fn try_sh9(env: &EnvImage, limits: &Limits) -> Result<[[f32; 3]; 9], PbrError> {
-    limits.check(env.width(), env.height())?;
+    let (w, h) = (env.width(), env.height());
+    limits.check(w, h)?;
+    limits.check_total_bytes(u64::from(w).checked_mul(size_of::<Column>() as u64), w, h)?;
     project(env)
 }
 

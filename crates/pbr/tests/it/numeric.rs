@@ -165,3 +165,33 @@ fn halving_an_odd_side_keeps_the_last_column_and_row() {
         assert!((mean(&half) - mean(&env)).abs() < 1e-5, "{w}x{h}: mean {} for {}", mean(&half), mean(&env));
     }
 }
+
+#[test]
+fn halving_averages_the_source_area_each_pixel_covers() {
+    let limits = Limits::default();
+    let value = |x: u32, y: u32| f64::from((x * 7 + y * 13) % 11) + 0.5;
+    // The share of source pixel `s` inside output pixel `i` when `src` pixels become `dst`.
+    let cover = |src: u32, dst: u32, i: u32, s: u32| {
+        let scale = f64::from(src) / f64::from(dst);
+        let (lo, hi) = (f64::from(i) * scale, f64::from(i + 1) * scale);
+        (hi.min(f64::from(s) + 1.0) - lo.max(f64::from(s))).max(0.0) / scale
+    };
+    for (w, h) in [(1u32, 1u32), (3, 1), (1, 3), (5, 3), (3, 5), (7, 4), (4, 7), (9, 9), (2047, 1)] {
+        let env = env_from(w, h, |x, y| [value(x, y) as f32; 3]);
+        let half = env.try_half(&limits).unwrap();
+        let (hw, hh) = (half.width(), half.height());
+        assert_eq!((hw, hh), ((w / 2).max(1), (h / 2).max(1)));
+        for oy in 0..hh {
+            for ox in 0..hw {
+                let mut want = 0.0;
+                for sy in 0..h {
+                    for sx in 0..w {
+                        want += value(sx, sy) * cover(w, hw, ox, sx) * cover(h, hh, oy, sy);
+                    }
+                }
+                let got = f64::from(half.pixels()[(oy * hw + ox) as usize][0]);
+                assert!((got - want).abs() < 1e-4 * want.max(1.0), "{w}x{h} at ({ox}, {oy}): {got} for {want}");
+            }
+        }
+    }
+}

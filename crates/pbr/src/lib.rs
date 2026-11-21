@@ -92,7 +92,8 @@ pub struct Limits {
     /// Most pixels (width × height) of one image. Default 2^22, which is 2048 × 2048.
     pub max_pixels: u64,
     /// Most bytes of pixel data one call holds at once: for [`try_prefilter`] the source copies,
-    /// the pyramid, every output level and the sample table together. Default 256 MiB.
+    /// the pyramid, every output level and the sample table together, and for [`try_sh9`] its
+    /// table of column integrals (48 bytes per column). Default 256 MiB.
     pub max_bytes: u64,
     /// Most levels [`try_prefilter`] makes. Default 8.
     pub max_levels: u32,

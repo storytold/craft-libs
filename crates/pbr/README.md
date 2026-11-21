@@ -45,7 +45,8 @@ file or network I/O and has no `unsafe` code.
   `width × width / 2`.
 - **Limits.** `Limits` caps the side (2048), the pixels of one image (2^22), the bytes one call
   holds at once (256 MiB, counting the source copies, the pyramid, every level and the sample
-  table of `try_prefilter`; a single level is only a copy of the source), the levels (8), the samples per pixel (1024) and the sample
+  table of `try_prefilter`, and the column table of `try_sh9`, 48 bytes per column; a single
+  level is only a copy of the source), the levels (8), the samples per pixel (1024) and the sample
   evaluations of one `try_prefilter` call (2^28). Every `try_` function checks its source against
   them and returns a `PbrError` before allocating over them, and a buffer is never larger than
   `isize::MAX` bytes even with raised limits. Pixel buffers are reserved fallibly
@@ -83,7 +84,12 @@ prefiltered levels match theirs for sources with even sides. Changes from those 
 - **TextureCraft.** Replace `texturecraft_render::ibl` with `craft_pbr`. Pass
   `PrefilterOptions` with `firefly_cap: Some(64.0)` to keep today's output. `EnvImage::from_rgba`
   becomes `EnvImage::try_from_rgba` followed by the app's import sizing: `try_half` while a side is
-  over 2048, then `try_resampled` up to at least 128 × 64.
+  over 2048, then `try_resampled` up to at least 128 × 64. The default `Limits` refuse a source
+  with a side over 2048 (a 4096 × 2048 source gives `PbrError::BadSize`), so the import passes
+  `Limits` with `max_side`, `max_pixels` and `max_bytes` raised to the largest source the app
+  accepts, and passes the same limits to each `try_half` and to `try_resampled`. The
+  `texturecraft_import` helper in `tests/it/moved.rs` uses `max_side` 2^16, `max_pixels` 2^26 and
+  `max_bytes` 1 GiB.
 - **MaterialCraft.** Replace `materialcraft_render::ibl` with `craft_pbr`, with the same
   `firefly_cap`. `by_id` stays in the app and maps view ids to `Environment::from_name`.
   `hammersley` returns `None` when `i` is not below `n`.

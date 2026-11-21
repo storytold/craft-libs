@@ -151,8 +151,9 @@ impl EnvImage {
 
     /// Box-downsamples by 2 to `max(width / 2, 1) × max(height / 2, 1)`. Each output pixel
     /// averages the source area it covers, so the last column or row of an odd side is kept in
-    /// the average.
+    /// the average. Returns an error when the source or the result is over `limits`.
     pub fn try_half(&self, limits: &Limits) -> Result<EnvImage, PbrError> {
+        limits.check(self.width, self.height)?;
         let (w, h) = half_size(self.width, self.height);
         let len = limits.check(w, h)?;
         let mut data = try_pixels(len)?;
@@ -165,13 +166,12 @@ impl EnvImage {
                 }
             });
         } else {
-            let (wx, wy) = (box_weights(self.width, w), box_weights(self.height, h));
             for_each_row(&mut data, w as usize, |y, row| {
-                let ys = wy.get(y).map_or(&[][..], Vec::as_slice);
+                let ys = box_span(self.height, h, y);
                 for (x, px) in row.iter_mut().enumerate() {
                     let mut acc = V3::ZERO;
-                    for &(sy, fy) in ys {
-                        for &(sx, fx) in wx.get(x).map_or(&[][..], Vec::as_slice) {
+                    for (sy, fy) in ys.clone() {
+                        for (sx, fx) in box_span(self.width, w, x) {
                             acc += self.get(sx as i64, sy as i64) * (fx * fy);
                         }
                     }
@@ -182,8 +182,10 @@ impl EnvImage {
         Ok(EnvImage { width: w, height: h, data })
     }
 
-    /// Resamples to `width × height` by bilinear lookup at each output pixel's direction.
+    /// Resamples to `width × height` by bilinear lookup at each output pixel's direction. Returns
+    /// an error when the source or the result is over `limits`.
     pub fn try_resampled(&self, width: u32, height: u32, limits: &Limits) -> Result<EnvImage, PbrError> {
+        limits.check(self.width, self.height)?;
         let len = limits.check(width, height)?;
         let mut data = try_pixels(len)?;
         let (w, h) = (width as usize, height as usize);
@@ -201,23 +203,18 @@ pub(crate) fn half_size(w: u32, h: u32) -> (u32, u32) {
     ((w / 2).max(1), (h / 2).max(1))
 }
 
-/// For each of `dst` output pixels along one axis, the source pixels it covers and the share of
-/// its width each covers. The shares of one output pixel add up to 1.
-fn box_weights(src: u32, dst: u32) -> Vec<Vec<(usize, f32)>> {
+/// The source pixels that output pixel `i` covers along one axis when `src` pixels become `dst`,
+/// each with the share of the output pixel's width it covers. The shares add up to 1. Nothing is
+/// allocated.
+fn box_span(src: u32, dst: u32, i: usize) -> impl Iterator<Item = (usize, f32)> + Clone {
     let scale = f64::from(src) / f64::from(dst);
-    (0..dst)
-        .map(|i| {
-            let (lo, hi) = (f64::from(i) * scale, f64::from(i + 1) * scale);
-            let first = lo.floor() as usize;
-            let last = (hi.ceil() as usize).min(src as usize);
-            (first..last)
-                .filter_map(|s| {
-                    let cover = (hi.min(s as f64 + 1.0) - lo.max(s as f64)) / scale;
-                    (cover > 0.0).then_some((s, cover as f32))
-                })
-                .collect()
-        })
-        .collect()
+    let (lo, hi) = (i as f64 * scale, (i as f64 + 1.0) * scale);
+    let first = lo.floor() as usize;
+    let last = (hi.ceil() as usize).min(src as usize);
+    (first..last).filter_map(move |s| {
+        let cover = (hi.min(s as f64 + 1.0) - lo.max(s as f64)) / scale;
+        (cover > 0.0).then_some((s, cover as f32))
+    })
 }
 
 /// A soft rectangular light: azimuth and elevation of its center and its half sizes, in degrees.
