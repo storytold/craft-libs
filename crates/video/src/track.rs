@@ -152,6 +152,23 @@ impl TrackDecoder {
         self.codec
     }
 
+    /// Whether this codec's validated track configuration declares an alpha plane.
+    ///
+    /// FFV1 v3 can answer this before the first packet, from its [extra plane
+    /// flag](https://www.rfc-editor.org/rfc/rfc9043.html#section-4.2.10). Other codecs currently
+    /// return `None`. Container alpha and alpha signaled in pictures can require separate inspection.
+    pub fn configured_alpha(&self) -> Option<bool> {
+        #[cfg(feature = "ffv1")]
+        match &self.inner {
+            Inner::Ffv1(decoder) => Some(decoder.has_alpha()),
+            // FFV1 is the only variant when no other dispatcher codec features are enabled.
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+        #[cfg(not(feature = "ffv1"))]
+        None
+    }
+
     /// The explicit worker-thread cap, or `None` when using the codec's default.
     pub fn threads(&self) -> Option<usize> {
         self.threads
