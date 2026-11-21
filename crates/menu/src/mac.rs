@@ -10,6 +10,11 @@
 //!   rebuilds the menu bar; labels, enabled and checked are updated in place. Opening or closing a
 //!   document ([`crate::window_key`]) rebuilds only the Window menu: AppKit adds its own items to
 //!   that menu (window tiling, the window list), so muda can't insert rows there by position.
+//! - With [`MacOptions::disabled_key_equivalents`] off, a disabled item has no key equivalent, and
+//!   enabling or disabling it changes its key equivalent in place. muda 0.21's `set_accelerator(None)`
+//!   leaves the old key equivalent on the `NSMenuItem`, so a disabled item is taken out and put back
+//!   at its index, which gives it a new `NSMenuItem` without one. In the Window and Help menus, where
+//!   AppKit adds rows of its own, that menu or the menu bar is rebuilt instead.
 //! - A chosen item is a click or a key equivalent: AppKit's current event says which. A key
 //!   equivalent goes back to egui as the key press that was made (the event's modifiers, not the
 //!   item's: AppKit may match ⌘R to a ⇧⌘R item), so the app's key rules still apply. A shortcut
@@ -36,10 +41,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{CheckMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, IsMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
 
@@ -85,17 +90,28 @@ pub struct MacOptions {
     /// in the Window menu ([`MenuBar::documents`]) and keeps them in one window turns it off: AppKit
     /// would list that window as well.
     pub window_list: bool,
+    /// Give a disabled item its key equivalent. On by default. AppKit matches a disabled item's key
+    /// equivalent and drops the key-down, so its chord never reaches the window or egui. Off, a
+    /// disabled item has none, and its chord reaches egui as a key press, for an app that answers a
+    /// greyed command's chord itself. The [`MenuBar`] keeps the item's shortcut either way, so
+    /// enabling or disabling an item never rebuilds the menu bar.
+    pub disabled_key_equivalents: bool,
 }
 
 impl Default for MacOptions {
     fn default() -> MacOptions {
-        MacOptions { window_list: true }
+        MacOptions { window_list: true, disabled_key_equivalents: true }
     }
 }
 
 impl MacOptions {
     pub fn window_list(mut self, on: bool) -> MacOptions {
         self.window_list = on;
+        self
+    }
+
+    pub fn disabled_key_equivalents(mut self, on: bool) -> MacOptions {
+        self.disabled_key_equivalents = on;
         self
     }
 }
@@ -237,6 +253,65 @@ struct Entry {
     target: Target,
     label: String,
     enabled: bool,
+    /// The item's key equivalent while it is enabled.
+    accel: Option<Accelerator>,
+    /// The menu that holds the item.
+    parent: Submenu,
+    place: Place,
+}
+
+/// Where an item is, for changing its key equivalent in place
+/// ([`MacOptions::disabled_key_equivalents`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// In a menu AppKit adds no rows to, so muda's index of the item is AppKit's.
+    Own,
+    /// A row of the Window menu.
+    Window,
+    /// A row of the Help menu.
+    Help,
+}
+
+/// What a key equivalent change in place could not do, and the rebuild that does it instead.
+enum Rebuild {
+    Window,
+    Bar,
+}
+
+impl Entry {
+    /// Give the item its key equivalent when `enabled`, and take it away when not.
+    fn show_key(&self, id: &str, enabled: bool) -> Result<(), Rebuild> {
+        let key = if enabled { self.accel } else { None };
+        let fallback = || if self.place == Place::Window { Rebuild::Window } else { Rebuild::Bar };
+        let done = catch_unwind(AssertUnwindSafe(|| -> muda::Result<bool> {
+            let item: &dyn IsMenuItem = match &self.handle {
+                Handle::Plain(h) => {
+                    h.set_accelerator(key)?;
+                    h
+                }
+                Handle::Check(h) => {
+                    h.set_accelerator(key)?;
+                    h
+                }
+            };
+            if enabled {
+                return Ok(true);
+            }
+            // muda kept `None`, but the `NSMenuItem` still has the old key equivalent: the item gets
+            // a new one, without it, when it is inserted again.
+            if self.place != Place::Own {
+                return Ok(false);
+            }
+            let Some(at) = self.parent.items().iter().position(|k| *k.id() == id) else { return Ok(false) };
+            self.parent.remove(item)?;
+            self.parent.insert(item, at)?;
+            Ok(true)
+        }));
+        match done {
+            Ok(Ok(true)) => Ok(()),
+            _ => Err(fallback()),
+        }
+    }
 }
 
 /// What choosing an item reports.
@@ -246,6 +321,30 @@ struct Target {
     command: CommandRef,
     chord: Option<Chord>,
     layout_shortcut: bool,
+}
+
+/// How many failed builds in a row are tried again without a new sync ([`MacMenu::rebuild`]).
+const RETRIES: u8 = 3;
+
+/// How long a menu change waits before it is tried again: after a failed build, and while a menu is
+/// open.
+const RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// How long is left before a retried build is due at `retry_at`; `None` when it is due (or none is).
+fn waiting(retry_at: Option<Instant>, now: Instant) -> Option<Duration> {
+    retry_at.and_then(|at| at.checked_duration_since(now)).filter(|d| !d.is_zero())
+}
+
+/// After a build from an update: the failed builds in a row, and whether to try again later
+/// without a new sync ([`MacMenu::rebuild`]).
+fn after_build(retries: u8, built: bool) -> (u8, bool) {
+    if built {
+        (0, false)
+    } else if retries < RETRIES {
+        (retries.saturating_add(1), true)
+    } else {
+        (retries, false)
+    }
 }
 
 /// The native items by muda id.
@@ -263,6 +362,13 @@ struct MacMenu {
     tx: Sender<Event>,
     rx: Receiver<Event>,
     structure: u64,
+    /// The last build failed: the menus may not show the latest [`MenuBar`] (an item enabled or
+    /// disabled with its key equivalent kept), so the next update builds again.
+    stale: bool,
+    /// Failed builds in a row since the last one that worked ([`MacMenu::rebuild`]).
+    retries: u8,
+    /// A retried build waits until then ([`MacMenu::rebuild`]); frames before it leave it pending.
+    retry_at: Option<Instant>,
     window: Option<WindowMenu>,
     /// The latest menus, waiting for the open menu to close.
     pending: Option<MenuBar>,
@@ -280,6 +386,9 @@ impl MacMenu {
             tx,
             rx,
             structure: 0,
+            stale: false,
+            retries: 0,
+            retry_at: None,
             window: None,
             pending: None,
             options,
@@ -300,7 +409,7 @@ impl MacMenu {
             let menu = muda::Menu::new();
             let mut special = Vec::new();
             for m in &bar.menus {
-                let (sub, ids) = submenu(&mut entries, m)?;
+                let (sub, ids) = submenu(&mut entries, m, self.options)?;
                 menu.append(&sub)?;
                 if m.role == MenuRole::Window {
                     window = Some((sub.clone(), ids, window_key(bar)));
@@ -325,10 +434,12 @@ impl MacMenu {
                 self.entries = entries;
                 self.window = window;
                 self.structure = structure_key(bar);
+                self.stale = false;
                 self.publish();
                 true
             }
             _ => {
+                self.stale = true;
                 // The new menu may have been made NSApp's before the failure.
                 if let Some(old) = &self.menu {
                     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -349,11 +460,11 @@ impl MacMenu {
     /// Falls back to a full build when that fails.
     fn rebuild_window(&mut self, bar: &MenuBar) {
         let (Some(menu), Some((old, old_ids, _))) = (self.menu.clone(), self.window.clone()) else {
-            self.build(bar);
+            self.rebuild(bar);
             return;
         };
         let Some((at, spec)) = bar.menus.iter().enumerate().find(|(_, m)| m.role == MenuRole::Window) else {
-            self.build(bar);
+            self.rebuild(bar);
             return;
         };
         let mut entries = self.entries.clone();
@@ -361,7 +472,7 @@ impl MacMenu {
             entries.remove(id);
         }
         let replaced = catch_unwind(AssertUnwindSafe(|| -> muda::Result<WindowMenu> {
-            let (sub, ids) = submenu(&mut entries, spec)?;
+            let (sub, ids) = submenu(&mut entries, spec, self.options)?;
             menu.remove(&old)?;
             if let Err(e) = menu.insert(&sub, at) {
                 let _ = menu.insert(&old, at);
@@ -379,17 +490,31 @@ impl MacMenu {
                 self.publish();
             }
             _ => {
-                self.build(bar);
+                self.rebuild(bar);
             }
         }
     }
 
+    /// [`MacMenu::build`] for an update. After a failed build the menus are stale, and nothing may
+    /// sync them again (the driver skips a layout equal to the last one), so a failed build is
+    /// tried again later, up to [`RETRIES`] times in a row; after that the next sync tries again.
+    fn rebuild(&mut self, bar: &MenuBar) {
+        let built = self.build(bar);
+        let (retries, again) = after_build(self.retries, built);
+        self.retries = retries;
+        if again {
+            self.retry_at = Some(Instant::now() + RETRY_DELAY);
+            self.retry_later(bar.clone());
+        }
+    }
+
     fn update(&mut self, bar: &MenuBar) {
-        if self.menu.is_none() || structure_key(bar) != self.structure {
-            self.build(bar);
+        if self.menu.is_none() || self.stale || structure_key(bar) != self.structure {
+            self.rebuild(bar);
             return;
         }
-        if self.window.as_ref().map(|w| w.2) != Some(window_key(bar)) {
+        // Without a Window menu there is nothing to rebuild: one appearing changes `structure_key`.
+        if self.window.as_ref().is_some_and(|w| w.2 != window_key(bar)) {
             self.rebuild_window(bar);
         }
         // Items by muda id: the n-th item of a command, depth first, is its n-th native item.
@@ -398,6 +523,7 @@ impl MacMenu {
             let id = native_id(&it.command, |id| items.contains_key(id));
             items.insert(id, it);
         }
+        let mut rebuild = None;
         for (id, e) in &mut self.entries {
             let Some(it) = items.get(id) else { continue };
             if e.label != it.label {
@@ -414,6 +540,15 @@ impl MacMenu {
                     Handle::Check(h) => h.set_enabled(it.enabled),
                 }
                 e.enabled = it.enabled;
+                if !self.options.disabled_key_equivalents
+                    && e.accel.is_some()
+                    && let Err(r) = e.show_key(id, it.enabled)
+                {
+                    rebuild = match (rebuild, r) {
+                        (Some(Rebuild::Bar), _) | (_, Rebuild::Bar) => Some(Rebuild::Bar),
+                        _ => Some(Rebuild::Window),
+                    };
+                }
             }
             // Compare with AppKit's own state: muda flips a check item when it's chosen, and the
             // app's state wins (a radio item chosen again stays selected).
@@ -423,31 +558,42 @@ impl MacMenu {
                 h.set_checked(c);
             }
         }
+        match rebuild {
+            Some(Rebuild::Bar) => self.rebuild(bar),
+            Some(Rebuild::Window) => self.rebuild_window(bar),
+            None => {}
+        }
     }
 
     /// Nothing else may wake egui when the menu closes (Escape goes to the menu), so look again.
     fn retry_later(&mut self, bar: MenuBar) {
         self.pending = Some(bar);
-        self.ctx.request_repaint_after(Duration::from_millis(250));
+        self.ctx.request_repaint_after(RETRY_DELAY);
     }
 }
 
 /// A top-level menu, and the muda ids of the items it added to `entries`.
-fn submenu(entries: &mut Entries, m: &Menu) -> muda::Result<(Submenu, Vec<String>)> {
+fn submenu(entries: &mut Entries, m: &Menu, options: MacOptions) -> muda::Result<(Submenu, Vec<String>)> {
     let before: HashSet<String> = entries.keys().cloned().collect();
     let sub = Submenu::new(escape(&m.title), true);
-    append(entries, &sub, &m.children)?;
+    let place = match m.role {
+        MenuRole::Window => Place::Window,
+        MenuRole::Help => Place::Help,
+        _ => Place::Own,
+    };
+    append(entries, &sub, &m.children, place, options)?;
     let ids = entries.keys().filter(|id| !before.contains(*id)).cloned().collect();
     Ok((sub, ids))
 }
 
-fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<()> {
+/// `place` is where `sub` is: a submenu of it is a menu of its own, which AppKit adds no rows to.
+fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node], place: Place, options: MacOptions) -> muda::Result<()> {
     for n in nodes {
         match n {
             Node::Separator => sub.append(&PredefinedMenuItem::separator())?,
             Node::Submenu { label, children, .. } => {
                 let s = Submenu::new(escape(label), !children.is_empty());
-                append(entries, &s, children)?;
+                append(entries, &s, children, Place::Own, options)?;
                 sub.append(&s)?;
             }
             Node::Standard { kind, label } => {
@@ -466,20 +612,21 @@ fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<
                 let id = native_id(&it.command, |id| entries.contains_key(id));
                 let chord = it.shortcut;
                 let accel = chord.as_ref().filter(|c| native_ok(c)).and_then(accelerator);
+                let shown = if it.enabled || options.disabled_key_equivalents { accel } else { None };
                 let handle = match it.kind {
                     ItemKind::Check(c) | ItemKind::Radio(c) => {
-                        let h = CheckMenuItem::with_id(id.clone(), escape(&it.label), it.enabled, c, accel);
+                        let h = CheckMenuItem::with_id(id.clone(), escape(&it.label), it.enabled, c, shown);
                         sub.append(&h)?;
                         Handle::Check(h)
                     }
                     ItemKind::Plain => {
-                        let h = MenuItem::with_id(id.clone(), escape(&it.label), it.enabled, accel);
+                        let h = MenuItem::with_id(id.clone(), escape(&it.label), it.enabled, shown);
                         sub.append(&h)?;
                         Handle::Plain(h)
                     }
                 };
                 let target = Target { command: it.command.clone(), chord, layout_shortcut: it.layout_shortcut };
-                let entry = Entry { handle, target, label: it.label.clone(), enabled: it.enabled };
+                let entry = Entry { handle, target, label: it.label.clone(), enabled: it.enabled, accel, parent: sub.clone(), place };
                 entries.insert(id, entry);
             }
         }
@@ -495,6 +642,7 @@ impl Backend for MacMenu {
             return;
         }
         self.pending = None;
+        self.retry_at = None;
         self.update(bar);
     }
 
@@ -517,6 +665,12 @@ impl Backend for MacMenu {
             out.push(event);
         }
         // After the events: they were chosen from the menus as they were.
+        if let Some(wait) = waiting(self.retry_at, Instant::now()) {
+            // A retried build waits out its delay, however many frames come first.
+            self.ctx.request_repaint_after(wait);
+            return out;
+        }
+        self.retry_at = None;
         if let Some(bar) = self.pending.take() {
             if self.tracking() {
                 self.retry_later(bar);
@@ -683,6 +837,34 @@ mod tests {
         assert_eq!(code("Cmd+Delete"), Accelerator::new(Modifiers::META, Code::Delete), "forward delete, as egui's Key::Delete");
         assert_eq!(code("Cmd+Backspace"), Accelerator::new(Modifiers::META, Code::Backspace));
         assert_eq!(code("Cmd++"), code("Cmd+="), "⌘+ is the ⌘= key");
+    }
+
+    /// A failed build is tried again later, up to `RETRIES` times in a row, without a new sync;
+    /// a build that works ends the run.
+    #[test]
+    fn a_failed_build_is_tried_again_up_to_retries_times() {
+        let mut retries = 0;
+        let mut again = 0;
+        for _ in 0..10 {
+            let (r, a) = after_build(retries, false);
+            retries = r;
+            again += usize::from(a);
+        }
+        assert_eq!(again, usize::from(RETRIES), "a failing build is retried RETRIES times, then waits for a sync");
+        assert_eq!(after_build(retries, true), (0, false), "a build that works resets the count");
+        assert_eq!(after_build(0, false), (1, true), "the first failure schedules a retry");
+    }
+
+    /// A retried build is not due until its delay has passed, whatever frames come before.
+    #[test]
+    fn a_retried_build_waits_out_its_delay() {
+        let now = Instant::now();
+        let at = now + RETRY_DELAY;
+        assert_eq!(waiting(Some(at), now), Some(RETRY_DELAY), "a frame right after the failure waits");
+        assert!(waiting(Some(at), now + Duration::from_millis(100)).is_some(), "a frame within the delay waits");
+        assert_eq!(waiting(Some(at), at), None, "due at the delay's end");
+        assert_eq!(waiting(Some(at), at + Duration::from_millis(1)), None, "due after it");
+        assert_eq!(waiting(None, now), None, "nothing to wait for");
     }
 
     #[test]

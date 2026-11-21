@@ -193,6 +193,12 @@ window and lists them in the Window menu itself (`MenuBar::documents`) would see
 installs with
 `mac::install_with(ctx, &bar, MacOptions::default().window_list(false))`.
 
+AppKit takes a disabled item's key equivalent: the key-down never reaches the window, so egui
+doesn't see the chord. An app that answers a greyed command's chord itself (a status line saying
+why it isn't available) installs with `MacOptions::default().disabled_key_equivalents(false)`. A
+disabled item then has no key equivalent while the `MenuBar` keeps its shortcut, and enabling or
+disabling it changes only that item, not the whole menu bar.
+
 Only shortcuts with ⌘ or ⌃ become key equivalents. The others (`B`, `⇧B`, `⌥B`, a bare `F5`) are
 tool keys the app handles itself; as key equivalents AppKit would take them from text fields.
 The native menu does not show them: muda 0.21 gives no access to the `NSMenuItem`, and its
