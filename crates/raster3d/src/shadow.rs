@@ -1,0 +1,530 @@
+//! Shadow maps: per-light sizing within a scene-wide texel budget, the light-space depth
+//! rasterizer and the environment light's orthographic map.
+
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
+use rayon::prelude::*;
+
+use crate::scene::{EnvInfo, Scene, ShadowMap, TexInfo, validate};
+use crate::shade::sample;
+use crate::{Limits, RenderError};
+
+/// Hard cap on the shadow depth texels (`f32`) of one scene, about 104 MB. It holds one point
+/// light's full 2048-texel cube (6 × 2048² ≈ 25.2 M texels).
+pub const MAX_SHADOW_TEXELS: u64 = 26_000_000;
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn len3(a: [f64; 3]) -> f64 {
+    dot3(a, a).sqrt()
+}
+
+/// `a / |a|`, or `a` unchanged when its length is 0.
+fn normalize3(a: [f64; 3]) -> [f64; 3] {
+    let l = len3(a);
+    if l > 0.0 { a.map(|v| v / l) } else { a }
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale3(a: [f64; 3], k: f64) -> [f64; 3] {
+    a.map(|v| v * k)
+}
+
+/// The first three rows of the world → light transform looking from `eye` along `fwd`, with
+/// `down` as the +y axis's hint: rows right, down and forward (orthonormal), applied after a
+/// translation by −`eye`. A zero `fwd` looks along +z; a `down` along `fwd` is replaced by +y,
+/// or by −z when `fwd` is near vertical.
+fn basis(eye: [f64; 3], fwd: [f64; 3], down: [f64; 3]) -> [[f32; 4]; 3] {
+    let f = normalize3(fwd);
+    let f = if len3(f) == 0.0 { [0.0, 0.0, 1.0] } else { f };
+    let mut d = sub3(down, scale3(f, dot3(down, f)));
+    if len3(d) < 1e-9 {
+        d = if f[1].abs() < 0.99 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, -1.0] };
+        d = sub3(d, scale3(f, dot3(d, f)));
+    }
+    let d = normalize3(d);
+    let r = normalize3(cross3(d, f));
+    let rot = [[r[0], r[1], r[2], 0.0], [d[0], d[1], d[2], 0.0], [f[0], f[1], f[2], 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut tr = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    tr[0][3] = -eye[0];
+    tr[1][3] = -eye[1];
+    tr[2][3] = -eye[2];
+    let mut m = [[0.0f64; 4]; 4];
+    for i in 0..4 {
+        for j in 0..4 {
+            m[i][j] = (0..4).map(|k| rot[i][k] * tr[k][j]).sum();
+        }
+    }
+    [0, 1, 2].map(|r| m[r].map(|v| v as f32))
+}
+
+/// Light-space near plane of a perspective shadow map.
+const NEAR: f32 = 1.0;
+
+/// A caster's corner in light space with its texture coordinates.
+type LightCorner = ([f32; 3], [f32; 2]);
+
+/// A corner on the map: (x, y), 1/z (1 for an orthographic map), depth and texture coordinates.
+type MapCorner = ([f64; 2], f32, f32, [f32; 2]);
+
+/// Triangle `t`'s corners in `m`'s light space, clipped against the near plane for a
+/// perspective map.
+fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
+    let q: Vec<LightCorner> = ids
+        .iter()
+        .map(|&i| {
+            let p = s.vertices[i].pos;
+            let v = &m.view;
+            ([0, 1, 2].map(|r| v[r][0] * p[0] + v[r][1] * p[1] + v[r][2] * p[2] + v[r][3]), s.vertices[i].uv)
+        })
+        .collect();
+    let mut poly = q;
+    if !m.ortho {
+        let mut out = vec![];
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            let (da, db) = (a.0[2] - NEAR, b.0[2] - NEAR);
+            if da >= 0.0 {
+                out.push(a);
+            }
+            if (da >= 0.0) != (db >= 0.0) {
+                let k = da / (da - db);
+                let lerp = |x: f32, y: f32| x + (y - x) * k;
+                out.push(([lerp(a.0[0], b.0[0]), lerp(a.0[1], b.0[1]), lerp(a.0[2], b.0[2])], [lerp(a.1[0], b.1[0]), lerp(a.1[1], b.1[1])]));
+            }
+        }
+        poly = out;
+    }
+    poly
+}
+
+/// The light-space polygon on `m`'s texels.
+fn map_corners(m: &ShadowMap, poly: &[LightCorner]) -> Vec<MapCorner> {
+    let c = m.size as f32 * 0.5;
+    poly.iter()
+        .map(|(p, uv)| {
+            if m.ortho {
+                ([(p[0] * m.focal + c) as f64, (p[1] * m.focal + c) as f64], 1.0, p[2], *uv)
+            } else {
+                let iz = 1.0 / p[2];
+                ([(p[0] * m.focal * iz + c) as f64, (p[1] * m.focal * iz + c) as f64], iz, p[2], *uv)
+            }
+        })
+        .collect()
+}
+
+/// A caster's alpha test: the base texture and the material's base alpha and opacity. A texel
+/// is skipped when its alpha is below `cutoff`, or when `masked` and its alpha is 1e-5 or less,
+/// as shading discards a masked fragment.
+struct AlphaTest<'a> {
+    tex: &'a TexInfo,
+    base: f32,
+    opacity: f32,
+    cutoff: f32,
+    masked: bool,
+}
+
+impl AlphaTest<'_> {
+    fn discards(&self, a: f32) -> bool {
+        a < self.cutoff || (self.masked && a <= 1e-5)
+    }
+}
+
+/// Rasterize one map triangle's nearest depth into `d` (`n × n` texels).
+fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<&AlphaTest>, d: &mut [f32]) {
+    let n = m.size as usize;
+    let (a, b, cc) = (tri[0].0, tri[1].0, tri[2].0);
+    let area = (b[0] - a[0]) * (cc[1] - a[1]) - (b[1] - a[1]) * (cc[0] - a[0]);
+    if area.abs() < 1e-12 {
+        return;
+    }
+    let x0 = a[0].min(b[0]).min(cc[0]).floor().max(0.0) as usize;
+    let x1 = (a[0].max(b[0]).max(cc[0]).ceil().max(0.0) as usize).min(n);
+    let y0 = a[1].min(b[1]).min(cc[1]).floor().max(0.0) as usize;
+    let y1 = (a[1].max(b[1]).max(cc[1]).ceil().max(0.0) as usize).min(n);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+            let e0 = ((cc[0] - b[0]) * (py - b[1]) - (cc[1] - b[1]) * (px - b[0])) / area;
+            let e1 = ((a[0] - cc[0]) * (py - cc[1]) - (a[1] - cc[1]) * (px - cc[0])) / area;
+            let e2 = 1.0 - e0 - e1;
+            if e0 < 0.0 || e1 < 0.0 || e2 < 0.0 {
+                continue;
+            }
+            let l = [e0 as f32, e1 as f32, e2 as f32];
+            let (z, uv) = if m.ortho {
+                (l[0] * tri[0].2 + l[1] * tri[1].2 + l[2] * tri[2].2, [0, 1].map(|i| l[0] * tri[0].3[i] + l[1] * tri[1].3[i] + l[2] * tri[2].3[i]))
+            } else {
+                let iz = l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1;
+                let z = 1.0 / iz;
+                (z, [0, 1].map(|i| (l[0] * tri[0].3[i] * tri[0].1 + l[1] * tri[1].3[i] * tri[1].1 + l[2] * tri[2].3[i] * tri[2].1) * z))
+            };
+            let px = &mut d[y * n + x];
+            if z >= *px {
+                continue;
+            }
+            if let Some(t) = alpha
+                && t.discards(sample(t.tex, &s.texels, uv[0], uv[1])[3] * t.base * t.opacity)
+            {
+                continue;
+            }
+            *px = z;
+        }
+    }
+}
+
+/// The texels of `m` inside a map triangle's bounding box, as [`raster_triangle`] visits them.
+fn triangle_texels(m: &ShadowMap, tri: [MapCorner; 3]) -> u64 {
+    let n = m.size as usize;
+    let (a, b, cc) = (tri[0].0, tri[1].0, tri[2].0);
+    let area = (b[0] - a[0]) * (cc[1] - a[1]) - (b[1] - a[1]) * (cc[0] - a[0]);
+    if area.abs() < 1e-12 {
+        return 0;
+    }
+    let x0 = a[0].min(b[0]).min(cc[0]).floor().max(0.0) as usize;
+    let x1 = (a[0].max(b[0]).max(cc[0]).ceil().max(0.0) as usize).min(n);
+    let y0 = a[1].min(b[1]).min(cc[1]).floor().max(0.0) as usize;
+    let y1 = (a[1].max(b[1]).max(cc[1]).ceil().max(0.0) as usize).min(n);
+    (x1.saturating_sub(x0) as u64).saturating_mul(y1.saturating_sub(y0) as u64)
+}
+
+/// The depth tests rendering `maps` takes: one per caster and map, plus each map triangle's
+/// bounding-box texels. When the casters times the maps already exceed `limit`, that product.
+/// Returns [`RenderError::BadShadowInputs`] when a caster's corners in a map are not finite,
+/// since the rasterizer would skip that caster.
+fn shadow_work(s: &Scene, maps: &[ShadowMap], casters: &[usize], limit: u64) -> Result<u64, RenderError> {
+    let pairs = (maps.len() as u64).saturating_mul(casters.len() as u64);
+    if pairs > limit {
+        return Ok(pairs);
+    }
+    let finite = |c: &MapCorner| c.0.iter().all(|v| v.is_finite()) && c.1.is_finite() && c.2.is_finite();
+    let per_map = |m: &ShadowMap| -> Option<u64> {
+        casters.iter().try_fold(0, |acc: u64, &t| {
+            let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
+            let poly = light_poly(s, m, ids);
+            if poly.len() < 3 {
+                return Some(acc.saturating_add(1));
+            }
+            let scr = map_corners(m, &poly);
+            if !scr.iter().all(finite) {
+                return None;
+            }
+            Some((1..scr.len() - 1).fold(acc.saturating_add(1), |acc, k| acc.saturating_add(triangle_texels(m, [scr[0], scr[k], scr[k + 1]]))))
+        })
+    };
+    maps.par_iter().map(per_map).try_reduce(|| 0, |a, b| Some(a.saturating_add(b))).ok_or(RenderError::BadShadowInputs)
+}
+
+/// Rasterize the shadow-casting triangles' light-space depth into `m`'s texels.
+fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Vec<f32> {
+    let n = m.size as usize;
+    let mut d = vec![f32::INFINITY; n * n];
+    for &t in casters {
+        let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
+        let mat = &s.materials[s.vertices[ids[0]].material as usize];
+        // A masked caster takes the material's cutoff, as shading does; a blended one keeps a
+        // cutoff of 0.5.
+        let masked = mat.alpha_mode == 1;
+        let cutoff = if masked { mat.alpha_cutoff } else { 0.5 };
+        let alpha = (mat.alpha_mode != 0 && mat.tex_base >= 0).then(|| AlphaTest {
+            tex: &s.textures[mat.tex_base as usize],
+            base: mat.base[3],
+            opacity: mat.opacity,
+            cutoff,
+            masked,
+        });
+        // A masked or blended caster without a base texture has one alpha; when shading discards
+        // it, it casts no shadow.
+        let a = mat.base[3] * mat.opacity;
+        if mat.alpha_mode != 0 && mat.tex_base < 0 && ((masked && a < cutoff) || a <= 1e-5) {
+            continue;
+        }
+        let poly = light_poly(s, m, ids);
+        if poly.len() < 3 {
+            continue;
+        }
+        let scr = map_corners(m, &poly);
+        for k in 1..scr.len() - 1 {
+            raster_triangle(s, m, [scr[0], scr[k], scr[k + 1]], alpha.as_ref(), &mut d);
+        }
+    }
+    d
+}
+
+/// Long side of a quality shadow map: one map texel per pixel of the `width × height` raster
+/// (the supersampled size when the scene is supersampled), to a power of two,
+/// clamped to 512..4096. Draft renders keep a flat 512.
+pub fn shadow_map_size(width: u32, height: u32, draft: bool) -> u32 {
+    if draft {
+        return 512;
+    }
+    let side = width.max(height).clamp(512, 4096);
+    let mut size = 512u32;
+    while size < side {
+        size *= 2;
+    }
+    size
+}
+
+/// Per-face size of a point light's cube map: the full map size, capped at 2048 so one cube fits
+/// [`MAX_SHADOW_TEXELS`]. Draft renders take half the map size.
+pub fn shadow_point_face_size(size: u32, draft: bool) -> u32 {
+    if draft { (size / 2).max(1) } else { size.min(2048) }
+}
+
+/// Per-light map sizes (`None` = this light gets no shadow map). `kinds`: 0 = no shadows (costs
+/// nothing), 1 = single map (spot or parallel), 2 = point cube (budgeted as its six faces).
+/// Lights start at their full size; while the scene exceeds [`MAX_SHADOW_TEXELS`] the largest
+/// map above its floor (512, or 128 for a cube face) is halved, the earliest light first on
+/// ties, and once every light is at its floor the last lights lose their shadows. Deterministic,
+/// and O(n log n) in the light count.
+pub fn shadow_sizes(width: u32, height: u32, draft: bool, kinds: &[u32]) -> Vec<Option<u32>> {
+    let base = shadow_map_size(width, height, draft);
+    let faces = |k: u32| -> u64 { if k == 2 { 6 } else { 1 } };
+    let floor = |k: u32| -> u32 { if k == 2 { 128 } else { 512 } };
+    let mut sizes: Vec<u32> = kinds
+        .iter()
+        .map(|&k| match k {
+            0 => 0,
+            2 => shadow_point_face_size(base, draft),
+            _ => base,
+        })
+        .collect();
+    let cost = |z: u32, k: u32| -> u64 { (z as u64) * (z as u64) * faces(k) };
+    let mut total: u64 = sizes.iter().zip(kinds).map(|(&z, &k)| cost(z, k)).sum();
+    // Largest size first, then the lowest index.
+    let mut heap: BinaryHeap<(u32, Reverse<usize>)> =
+        sizes.iter().zip(kinds).enumerate().filter(|(_, (z, k))| **z > floor(**k)).map(|(i, (&z, _))| (z, Reverse(i))).collect();
+    while total > MAX_SHADOW_TEXELS {
+        let Some((z, Reverse(i))) = heap.pop() else { break };
+        let k = kinds[i];
+        total -= cost(z, k) - cost(z / 2, k);
+        sizes[i] = z / 2;
+        if z / 2 > floor(k) {
+            heap.push((z / 2, Reverse(i)));
+        }
+    }
+    for i in (0..sizes.len()).rev() {
+        if total <= MAX_SHADOW_TEXELS {
+            break;
+        }
+        total -= cost(sizes[i], kinds[i]);
+        sizes[i] = 0;
+    }
+    sizes.into_iter().map(|z| (z > 0).then_some(z)).collect()
+}
+
+/// The environment light's shadow map: one orthographic map of `size` texels over the sphere at
+/// `centre` with `radius`, seen from the environment's dominant direction `e.sun` (the light
+/// travels from the bright region into the scene). Its penumbra is at least eight output
+/// pixels, or four map texels where those are coarser, plus half the light's shadow diffusion
+/// up to 24 pixels.
+///
+/// Returns [`RenderError::BadShadowInputs`] for a zero size, a radius that is not positive and
+/// finite, a center that is not finite, a direction that is zero or not finite, or inputs whose
+/// map would hold a value that is not finite in `f32`.
+pub fn try_env_shadow_map(e: EnvInfo, centre: [f64; 3], radius: f64, size: u32) -> Result<ShadowMap, RenderError> {
+    let ok = size > 0
+        && radius.is_finite()
+        && radius > 0.0
+        && centre.iter().all(|v| v.is_finite())
+        && e.sun.iter().all(|v| v.is_finite())
+        && e.sun != [0.0; 3]
+        && e.shadow_diffusion.is_finite();
+    if !ok {
+        return Err(RenderError::BadShadowInputs);
+    }
+    let m = env_shadow_map(e, centre, radius, size);
+    if !(m.focal.is_finite() && m.focal > 0.0 && m.radius.is_finite() && m.view.iter().flatten().all(|v| v.is_finite())) {
+        return Err(RenderError::BadShadowInputs);
+    }
+    Ok(m)
+}
+
+fn env_shadow_map(e: EnvInfo, centre: [f64; 3], radius: f64, size: u32) -> ShadowMap {
+    let texel = 2.0 * radius / size as f64;
+    let soft = (4.0 * texel).max(8.0) + (e.shadow_diffusion as f64 * 0.5).min(24.0);
+    let sun = e.sun.map(|v| v as f64);
+    let dir = [-sun[0], -sun[1], -sun[2]];
+    let eye = [centre[0] + sun[0] * radius * 2.0, centre[1] + sun[1] * radius * 2.0, centre[2] + sun[2] * radius * 2.0];
+    let hint = if dir[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    let focal = (size as f64 * 0.5 / radius) as f32;
+    ShadowMap { view: basis(eye, dir, hint), focal, ortho: true, size, offset: 0, bias: 1.5, radius: soft as f32 }
+}
+
+/// The triangles whose material casts shadows.
+fn caster_list(s: &Scene) -> Vec<usize> {
+    (0..s.indices.len() / 3)
+        .filter(|&t| s.materials.get(s.vertices[s.indices[3 * t] as usize].material as usize).is_some_and(|m| m.casts_shadows))
+        .collect()
+}
+
+/// The bounding sphere of the scene's vertices: (center, radius + 1).
+fn bounding_sphere(s: &Scene) -> ([f64; 3], f64) {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for v in &s.vertices {
+        for k in 0..3 {
+            lo[k] = lo[k].min(v.pos[k] as f64);
+            hi[k] = hi[k].max(v.pos[k] as f64);
+        }
+    }
+    let centre = [0, 1, 2].map(|k| (lo[k] + hi[k]) * 0.5);
+    let radius = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt() * 0.5 + 1.0;
+    (centre, radius)
+}
+
+/// The maps of light `li` at `size`, appended to `maps`.
+fn light_maps(s: &Scene, li: usize, size: u32, sphere: ([f64; 3], f64), maps: &mut Vec<ShadowMap>) {
+    let (centre, radius) = sphere;
+    let l = s.lights[li];
+    // Penumbra width in output pixels; the sampling bias is independent of it.
+    let soft = 1.0 + (l.shadow_diffusion * 0.5).min(24.0);
+    let pos = l.pos.map(|v| v as f64);
+    let dir = l.dir.map(|v| v as f64);
+    let hint = if dir[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    match l.kind {
+        0 => {
+            let eye = [centre[0] - dir[0] * radius * 2.0, centre[1] - dir[1] * radius * 2.0, centre[2] - dir[2] * radius * 2.0];
+            let focal = (size as f64 * 0.5 / radius) as f32;
+            maps.push(ShadowMap { view: basis(eye, dir, hint), focal, ortho: true, size, offset: 0, bias: 1.5, radius: soft });
+        }
+        1 => {
+            let half = (l.cos_outer.clamp(-1.0, 1.0).acos() as f64 + 0.05).min(1.45);
+            let focal = (size as f64 * 0.5 / half.tan()) as f32;
+            maps.push(ShadowMap { view: basis(pos, dir, hint), focal, ortho: false, size, offset: 0, bias: 1.5, radius: soft });
+        }
+        _ => {
+            let fs = size;
+            for (f, d) in [
+                ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                ([-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+                ([0.0, -1.0, 0.0], [0.0, 0.0, 1.0]),
+                ([0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+                ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+            ] {
+                maps.push(ShadowMap { view: basis(pos, f, d), focal: fs as f32 * 0.5, ortho: false, size: fs, offset: 0, bias: 1.5, radius: soft });
+            }
+        }
+    }
+}
+
+/// Render the shadow maps of every shadow-casting light (lights whose `shadow` is 0 or more),
+/// and of the environment light when it casts shadows and has a dominant direction
+/// (`env.shadow` 0 or more, `env.sun != [0; 3]`): one orthographic map from that direction over
+/// the scene's bounding sphere, after the lights' maps. Map sizes come from [`shadow_sizes`] at
+/// the scene's raster size. Each light's `shadow` becomes the index of its first map, or −1 when
+/// it gets none; with no shadow-casting triangle, every mark is cleared.
+///
+/// [`Scene::shadows`] and [`Scene::shadow_texels`] are replaced, and the indices a call writes
+/// request the same maps again, so a second call gives the same maps and marks. The scene is
+/// checked first, as for [`crate::try_render`], and the depth tests the maps take (one per
+/// caster and map, plus each caster's bounding box in each map) are limited by
+/// [`Limits::max_work`]. On an error the scene is left as it was.
+pub fn try_shadow_maps(s: &mut Scene, draft: bool, limits: &Limits) -> Result<(), RenderError> {
+    validate(s, limits)?;
+    let marks = (s.lights.clone(), s.env);
+    let result = shadow_maps_checked(s, draft, limits);
+    if result.is_err() {
+        (s.lights, s.env) = marks;
+    }
+    result
+}
+
+fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<(), RenderError> {
+    let casters = caster_list(s);
+    // The environment light casts a shadow when marked and its image has a dominant direction;
+    // with nothing to cast one, its mark is cleared either way.
+    let env_shadow = !casters.is_empty() && s.env.is_some_and(|e| e.shadow >= 0 && e.sun != [0.0; 3]);
+    if !env_shadow && let Some(e) = &mut s.env {
+        e.shadow = -1;
+    }
+    if casters.is_empty() {
+        for l in &mut s.lights {
+            l.shadow = -1;
+        }
+        s.shadows.clear();
+        s.shadow_texels.clear();
+        return Ok(());
+    }
+    // A parallel or spot light's map looks along its direction.
+    if s.lights.iter().any(|l| l.shadow >= 0 && l.kind < 2 && l.dir == [0.0; 3]) {
+        return Err(RenderError::BadShadowInputs);
+    }
+    let sphere = bounding_sphere(s);
+    let kinds: Vec<u32> = s
+        .lights
+        .iter()
+        .map(|l| {
+            if l.shadow < 0 {
+                0
+            } else if l.kind > 1 {
+                2
+            } else {
+                1
+            }
+        })
+        // The environment light's map is a single orthographic one.
+        .chain(std::iter::once(if env_shadow { 1 } else { 0 }))
+        .collect();
+    let sizes = shadow_sizes(s.width, s.height, draft, &kinds);
+    let mut maps: Vec<ShadowMap> = vec![];
+    for li in 0..s.lights.len() {
+        let Some(size) = sizes.get(li).copied().flatten() else {
+            s.lights[li].shadow = -1;
+            continue;
+        };
+        if s.lights[li].shadow < 0 {
+            s.lights[li].shadow = -1;
+            continue;
+        }
+        let first = maps.len() as i32;
+        light_maps(s, li, size, sphere, &mut maps);
+        s.lights[li].shadow = first;
+    }
+    if env_shadow && let Some(e) = s.env {
+        match sizes.get(s.lights.len()).copied().flatten() {
+            Some(size) => {
+                let first = maps.len() as i32;
+                maps.push(env_shadow_map(e, sphere.0, sphere.1, size));
+                if let Some(e) = &mut s.env {
+                    e.shadow = first;
+                }
+            }
+            // The texel budget dropped it.
+            None => {
+                if let Some(e) = &mut s.env {
+                    e.shadow = -1;
+                }
+            }
+        }
+    }
+    // Finite vertices far from the origin can still give a view that does not fit f32.
+    let usable = |m: &ShadowMap| m.focal.is_finite() && m.focal > 0.0 && m.radius.is_finite() && m.view.iter().flatten().all(|v| v.is_finite());
+    if !maps.iter().all(usable) {
+        return Err(RenderError::BadShadowInputs);
+    }
+    let needed = shadow_work(s, &maps, &casters, limits.max_work)?;
+    if needed > limits.max_work {
+        return Err(RenderError::TooMuchWork { needed, limit: limits.max_work });
+    }
+    let texels: Vec<Vec<f32>> = maps.par_iter().map(|m| shadow_raster(s, m, &casters)).collect();
+    let mut all = Vec::with_capacity(texels.iter().map(Vec::len).sum());
+    for (m, t) in maps.iter_mut().zip(texels) {
+        m.offset = u32::try_from(all.len()).map_err(|_| RenderError::TooManyShadowTexels)?;
+        all.extend(t);
+    }
+    s.shadows = maps;
+    s.shadow_texels = all;
+    Ok(())
+}

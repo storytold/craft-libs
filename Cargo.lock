@@ -3152,6 +3152,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-raster3d"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-raw"
 version = "0.1.0"
 dependencies = [
