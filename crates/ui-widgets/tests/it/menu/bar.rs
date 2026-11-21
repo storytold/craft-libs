@@ -375,3 +375,124 @@ fn holding_alt_runs_the_memoized_view_of_a_menu_bar() {
     fixture.hold(Modifiers::NONE);
     assert!(frame(&mut fixture) > 0, "Alt coming up runs the view, which drops the underlines");
 }
+
+/// What a window's own Space does: the canvas's momentary Hand, say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::CommandSet)]
+#[command(prefix = "trialHand", scope = "trial.hand")]
+#[non_exhaustive]
+pub enum HandCommand {
+    #[command(label = "Hand", default = "Space")]
+    Hand,
+}
+
+/// Space on the menu bar that F10 or a lone Alt focused opens no menu: the press goes on to the window's own Space
+/// command (a canvas's Hand), as in the reference application, where Space is always the Hand, and the shortcut gives
+/// the keyboard back to the stop the bar took it from. Enter and Down still open the focused title's menu.
+#[trial]
+fn space_on_the_focused_bar_opens_no_menu_and_reaches_the_window() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::layout_components::Stack;
+    use craft_ui::runtime::commands::Commands as _;
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let (hands, clicks, button) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
+    let (seen_hands, seen_clicks, seen_button) = (Rc::clone(&hands), Rc::clone(&clicks), Rc::clone(&button));
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&File", |ui| {
+            MenuItem::new("&New").show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        Stack::new().command_scope(<HandCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<HandCommand>().is_some() {
+                seen_hands.set(seen_hands.get() + 1);
+            }
+            let shown = Button::new("Layer").show(ui);
+            if shown.clicked() {
+                seen_clicks.set(seen_clicks.get() + 1);
+            }
+            seen_button.set(Some(shown.response.id));
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let layer = button.get().expect("the button ran");
+    for (enter, alt) in [(None, false), (None, true), (Some(Key::Enter), false), (Some(Key::ArrowDown), false)] {
+        request(fixture.ctx(), FocusTarget::Id(layer));
+        fixture.settle();
+        let before = (hands.get(), clicks.get());
+        if alt {
+            fixture.hold(Modifiers::ALT).settle();
+            fixture.hold(Modifiers::NONE).settle();
+        } else {
+            fixture.key(Key::F10, Modifiers::NONE);
+            fixture.settle();
+        }
+        assert!(fixture.focused_stop().is_some_and(|(id, _)| id != layer), "the bar takes the keyboard (alt {alt})");
+        if let Some(key) = enter {
+            fixture.key(key, Modifiers::NONE);
+            fixture.settle();
+            assert!(fixture.by_label("New").is_some(), "{key:?} opens the focused title's menu");
+            assert_eq!((hands.get(), clicks.get()), before, "{key:?} reaches neither the window nor the button");
+            fixture.key(Key::Escape, Modifiers::NONE);
+            fixture.key(Key::Escape, Modifiers::NONE);
+            fixture.settle();
+            continue;
+        }
+        fixture.key(Key::Space, Modifiers::NONE);
+        fixture.settle();
+        assert!(fixture.by_label("New").is_none(), "Space opens no menu (alt {alt})");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(layer), "Space takes the keyboard off the bar, back to the button (alt {alt})");
+        assert_eq!(hands.get(), before.0 + 1, "the press reaches the window's Space command (alt {alt})");
+        assert_eq!(clicks.get(), before.1, "and activates nothing else (alt {alt})");
+    }
+}
+
+/// With nothing focused the window's document canvas is the key target: a bar that F10 or a lone Alt focused then
+/// gives the keyboard back to the canvas, so Space, the canvas's Hand, matches there and leaves the bar in one press.
+#[trial]
+fn space_on_a_bar_focused_from_nothing_goes_to_the_document_canvas() {
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::layout_components::Stack;
+    use craft_ui::runtime::commands::Commands as _;
+    use craft_ui::runtime::focus::{KeyUse, host_canvas};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let canvas = egui::Id::unique("document canvas");
+    let hands = Rc::new(Cell::new(0));
+    let seen_hands = Rc::clone(&hands);
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&File", |ui| {
+            MenuItem::new("&New").show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        Stack::new().command_scope(<HandCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<HandCommand>().is_some() {
+                seen_hands.set(seen_hands.get() + 1);
+            }
+            let rect = ui.available_rect_before_wrap();
+            ui.interact(rect, canvas, egui::Sense::click());
+            host_canvas(ui.ctx(), canvas, KeyUse::CANVAS);
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    for alt in [false, true] {
+        assert!(fixture.focused_stop().is_none_or(|(id, _)| id == canvas), "nothing but the canvas holds the keyboard (alt {alt})");
+        if alt {
+            fixture.hold(Modifiers::ALT).settle();
+            fixture.hold(Modifiers::NONE).settle();
+        } else {
+            fixture.key(Key::F10, Modifiers::NONE);
+            fixture.settle();
+        }
+        assert!(fixture.focused_stop().is_some_and(|(id, _)| id != canvas), "the bar takes the keyboard (alt {alt})");
+        let before = hands.get();
+        fixture.key(Key::Space, Modifiers::NONE);
+        fixture.settle();
+        assert!(fixture.by_label("New").is_none(), "Space opens no menu (alt {alt})");
+        assert_eq!(hands.get(), before + 1, "Space reaches the canvas's command (alt {alt})");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(canvas), "and the keyboard goes to the canvas (alt {alt})");
+    }
+}
