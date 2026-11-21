@@ -1,4 +1,4 @@
-use crate::{ColorReplacement, RenderCache, derive_settings};
+use crate::{ColorMapping, RenderCache, derive_settings};
 use hayro_interpret::color::Color;
 use hayro_interpret::encode::EncodedShadingPattern;
 use hayro_interpret::font::Glyph;
@@ -840,7 +840,7 @@ pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped
     /// while rendering (the "reading colours" view setting).
-    color_replacement: Option<ColorReplacement>,
+    color_replacement: Option<ColorMapping>,
     /// PdfCraft patch (17): while the page's annotations are being drawn, paints keep their
     /// colours — reading colours replace document colours, never annotation colours.
     in_annotations: bool,
@@ -994,7 +994,7 @@ impl Renderer {
         height: u16,
         settings: RenderSettings,
         cache: &RenderCache<'_>,
-        color_replacement: Option<ColorReplacement>,
+        color_replacement: Option<ColorMapping>,
         preview: bool,
     ) -> Self {
         Self {
@@ -1806,7 +1806,11 @@ impl Renderer {
         }
         match paint {
             Paint::Color(c) => {
-                let mapped = replacement.map(c.to_rgba().to_rgba8(), is_text);
+                let mapped = replacement.replacement.map_with(
+                    c.to_rgba().to_rgba8(),
+                    is_text,
+                    replacement.solid_color_map,
+                );
                 let rgba = hayro_interpret::color::AlphaColor::from_rgba8(
                     mapped[0], mapped[1], mapped[2], mapped[3],
                 );
