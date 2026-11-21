@@ -59,7 +59,9 @@ pub use crate::codecs::tiff_ifd::{ExtraSampleKind, InkSet, TiffInfo, TiffPage, T
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
-pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Detection, Format, FormatCaps, PrefixDetector, caps, detect, detect_prefix, from_extension};
+pub use crate::format::{
+    ASYMMETRIC_EXCEPTIONS, Detection, Format, FormatCaps, PrefixDetector, caps, detect, detect_prefix, from_extension, ftyp_brands,
+};
 pub use crate::image::{
     ChannelLayout, CryptomatteBuffer, CryptomatteLayer, DecodeWarning, DeepChannel, DeepImage, ExrChannelInfo, ExrPartInfo, ExtraSample, Image,
     MAX_EXTRA_SAMPLES, Metadata, SampleType, convert_samples,
