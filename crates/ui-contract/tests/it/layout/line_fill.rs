@@ -1,9 +1,11 @@
-//! Filling the line of a row that takes its height from its content: a levelled unit stands on the row's line, and a
-//! container that fills its height there runs its body in the line's height from the first frame.
+//! Filling the line of a row that takes its height from its content: a levelled unit stands on the row's line, a
+//! container that fills its height there runs its body in the line's height from the first frame, and a centred row in
+//! a unit of a row that scrolls centres across its own column, not in the view.
 
-use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
-use craft_ui::layout::{BodyLayout, levelled_unit};
+use craft_ui::contract::{ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::layout::{BodyLayout, RowAlign, levelled_unit};
 use craft_ui::testing::{Frames, trial};
+use craft_ui_test_kit::body::Slab;
 use craft_ui_test_kit::contract::{Panel, Probe, Seen};
 use egui::{Id, Rect, Vec2};
 use std::cell::RefCell;
@@ -63,4 +65,29 @@ fn a_fill_height_container_on_a_content_height_row_runs_its_body_in_the_line() {
             "{when}: the column's filling child {fill:?} takes what its column leaves of the row's line {row:?}"
         );
     }
+}
+
+#[trial]
+fn a_centred_row_in_a_unit_of_a_scrolling_row_centres_across_its_column() {
+    let (wide, small) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let mut frames = Frames::new();
+    frames.idle(5, |ui| {
+        let row = ContainerProps::new().layout(BodyLayout::row()).scroll(Scroll::horizontal()).sizing(Sizing::FillWidth);
+        Slab::new(row).id_salt("row").show(ui, |ui, _| {
+            levelled_unit(ui, Id::new("unit"), 1, |ui, _| {
+                Panel::new().layout(BodyLayout::stack()).id_salt("column").show(ui, |ui, _| {
+                    Probe::new(&wide).size(Vec2::new(200.0, 20.0)).id_salt("wide").show(ui);
+                    let centred = ContainerProps::new().layout(BodyLayout::row().align(RowAlign::Center)).sizing(Sizing::FillWidth);
+                    Slab::new(centred).id_salt("centred").show(ui, |ui, _| {
+                        Probe::new(&small).id_salt("small").show(ui);
+                    });
+                });
+            });
+        });
+    });
+    let (wide, small) = (wide.borrow().rect, small.borrow().rect);
+    assert!(
+        (small.center().x - wide.center().x).abs() <= SNAP,
+        "the centred probe {small:?} sits in the middle of its column, under the wide probe {wide:?}"
+    );
 }

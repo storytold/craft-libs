@@ -400,7 +400,9 @@ pub fn plan_levels(units: &[Vec<f32>], room: f32) -> Vec<usize> {
 /// at its kept level. Outside a shrinking row the unit shows at level 0.
 ///
 /// The unit shows on the row's line: a child of it that fills its height takes the line's height, as a direct child of
-/// the row does (`fill_size`).
+/// the row does (`fill_size`). At its level it runs in the width the shrink step gave that level, a bounded room even
+/// in a row that scrolls, so its content lays out as in any room of that width: a centred row in it centres across
+/// its column, not in the view the row scrolls in.
 pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&mut Ui, usize)) {
     let ctx = ui.ctx().clone();
     let shrink = Env::of(ui).shrink;
@@ -443,10 +445,25 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
         // The probe for the leasts of body units asks nothing of a levelled unit: its least is its last level.
         Some(Shrink::Least(_)) => {}
         Some(Shrink::Apply(row)) => {
-            let level = level_of(&ctx, row, key).min(levels.saturating_sub(1));
-            let installed = Env::install_for(ui, own_room);
-            show(ui, level);
-            Env::restore(&ctx, installed);
+            let (level, width) = level_of(&ctx, row, key);
+            let level = level.min(levels.saturating_sub(1));
+            match width {
+                Some(width) => {
+                    let rtl = Env::of(ui).direction.is_rtl();
+                    let bounded = own_room.derive_local(|scoped| scoped.unbounded.0 = false);
+                    let rect = Flow::new(ui.available_rect_before_wrap(), rtl).span(0.0, width);
+                    child::block(ui, Some(rect), child::column_layout(rtl), |ui| {
+                        let installed = Env::install_for(ui, bounded);
+                        show(ui, level);
+                        Env::restore(&ctx, installed);
+                    });
+                }
+                None => {
+                    let installed = Env::install_for(ui, own_room);
+                    show(ui, level);
+                    Env::restore(&ctx, installed);
+                }
+            }
         }
         Some(Shrink::Fit) | None => {
             let installed = Env::install_for(ui, own_room);
@@ -456,11 +473,13 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
     }
 }
 
-/// The level the shrink step of the row `row` gave its levelled unit `unit`: 0 without a record. The record keeps the
-/// level as the measure's height, which a row's shrink record has no other use for.
-fn level_of(ctx: &egui::Context, row: Id, unit: Id) -> usize {
+/// The level the shrink step of the row `row` gave its levelled unit `unit`, with the unit's width at that level: 0 and
+/// no width without a record. The record keeps the level as the measure's height, which a row's shrink record has no
+/// other use for.
+fn level_of(ctx: &egui::Context, row: Id, unit: Id) -> (usize, Option<f32>) {
     // A level is a small whole number written as `level as f32`: the cast back is exact.
-    layout_memory::shrink(ctx, shrink_key(row, unit)).map_or(0, |(found, _)| found.took.y.max(0.0) as usize)
+    layout_memory::shrink(ctx, shrink_key(row, unit))
+        .map_or((0, None), |(found, _)| (found.took.y.max(0.0) as usize, Some(found.took.x).filter(|width| width.is_finite() && *width > 0.0)))
 }
 
 /// Reports the least width of the body unit `body` of the row `row` that asks for it.
