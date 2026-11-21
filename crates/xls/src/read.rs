@@ -506,6 +506,8 @@ struct SheetState<'g> {
     drawing: Vec<u8>,
     /// The sheet has an AutoFilterInfo record: its filter is on.
     filtered: bool,
+    /// DefaultRowHeight's `fDyZero`: rows without a Row record are hidden (zero high).
+    rows_hidden_by_default: bool,
 }
 
 impl SheetState<'_> {
@@ -666,6 +668,7 @@ fn worksheet<'g>(
         palette: g.styles.color_table(),
         drawing: vec![],
         filtered: false,
+        rows_hidden_by_default: false,
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -710,7 +713,7 @@ fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut Report
     let (shapes, mut skipped_pictures) = drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records);
     // The sheet's grid, built only when a picture sits inside a group and must be made cells.
     let grid = shapes.iter().any(|s| matches!(s.place, drawing::Place::InGroup { .. })).then(|| {
-        let default_row = f64::from(st.sheet.default_row_height.unwrap_or(DEFAULT_ROW_HEIGHT));
+        let default_row = if st.rows_hidden_by_default { 0.0 } else { f64::from(st.sheet.default_row_height.unwrap_or(DEFAULT_ROW_HEIGHT)) };
         drawing::Grid::new(
             |c| st.sheet.columns.get(&c).map_or(DEFAULT_COLUMN_WIDTH, |c| if c.hidden { 0.0 } else { f64::from(c.width) }),
             |r| st.sheet.rows.get(&u32::from(r)).map_or(default_row, |r| if r.hidden { 0.0 } else { f64::from(r.height) }),
@@ -891,6 +894,8 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         0x0225 => {
             let flags = c.u16()?;
             let height = c.u16()?;
+            // With fDyZero the height is the one rows get when shown, not the one they have.
+            st.rows_hidden_by_default = flags & 0x0002 != 0;
             if flags & 0x0002 == 0 && height > 0 {
                 st.sheet.default_row_height = Some(height);
             }

@@ -170,10 +170,8 @@ fn group(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShap
                     None => s.client.map(|anchor| Frame { anchor, space, scale: [1.0; 2], offset: [0.0; 2] }),
                     Some(f) => s.child.map(|child| f.nested(child, space)),
                 };
-                // A group that can't be placed places none of its members.
-                if inner.is_none() {
-                    return;
-                }
+                // A group that can't be placed leaves out the members placed by it; a member with
+                // its own cell anchor keeps it.
             }
             None => out.extend(place(&s, frame)),
         }
@@ -228,8 +226,9 @@ fn shape(sp: &[u8], budget: &mut Allowance<'_>) -> Sp {
         match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
             rt::FOPT => {
-                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB && !e.is_complex).last() {
-                    s.pib = Some(e.op);
+                // The last `pib` entry counts; a complex one (its operand a length) is no index.
+                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
+                    s.pib = (!e.is_complex).then_some(e.op);
                 }
             }
             rt::FSP => s.patriarch = body.get(4).is_some_and(|f| f & 0x04 != 0),
@@ -274,7 +273,8 @@ impl Grid {
         };
         let width = |i: usize| u16::try_from(i).map_or(0.0, &col_width);
         let height = |i: usize| u16::try_from(i).map_or(0.0, &row_height);
-        Grid { cols: sums(1 << 16, &width), rows: sums(1 << 16, &height) }
+        // A BIFF8 sheet has 256 columns and 65,536 rows: a picture's cells stay among them.
+        Grid { cols: sums(256, &width), rows: sums(1 << 16, &height) }
     }
 
     /// A picture's cells: its own, or those its fractions of its group's box fall in.
@@ -470,6 +470,29 @@ mod tests {
                 PictureShape { pib: 3, place: Place::Cells(outside) },
             ]
         );
+    }
+
+    /// A group whose own box can't be placed (no anchor) leaves out the members placed by it, and
+    /// keeps a member with its own cell anchor.
+    #[test]
+    fn a_group_that_cannot_be_placed_keeps_its_cell_anchored_members() {
+        let head = rec(0x000F, 0xF004, &[fsp(0x1), rect_rec(0xF009, [0, 0, 1000, 1000])].concat());
+        let child = rec(0x000F, 0xF004, &[pib(1), rect_rec(0xF00F, [0, 0, 500, 500])].concat());
+        let cells = [2, 0, 2, 0, 4, 0, 4, 0];
+        let own = rec(0x000F, 0xF004, &[pib(2), client(cells)].concat());
+        let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &[head, child, own].concat()));
+        let got = picture_shapes(&dg, &mut MAX_RECORDS.clone()).0;
+        let [col1, dx1, row1, dy1, col2, dx2, row2, dy2] = cells;
+        assert_eq!(got, [PictureShape { pib: 2, place: Place::Cells(ClientAnchor { col1, dx1, row1, dy1, col2, dx2, row2, dy2 }) }]);
+    }
+
+    /// A picture's cells stay in a BIFF8 sheet's 256 columns, even when every column is hidden.
+    #[test]
+    fn grouped_pictures_stay_in_the_sheets_columns() {
+        let group = ClientAnchor { col1: 1, dx1: 0, row1: 1, dy1: 0, col2: 5, dx2: 0, row2: 9, dy2: 0 };
+        let place = Place::InGroup { group, frac: [0.0, 0.0, 0.5, 0.5] };
+        let a = Grid::new(|c| if c < 256 { 0.0 } else { 1000.0 }, |_| 100.0).anchor(&place);
+        assert!(a.col1 < 256 && a.col2 < 256, "{a:?}");
     }
 
     /// A fraction of a group's box falls in the cell the grid's column widths and row heights put

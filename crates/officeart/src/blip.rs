@@ -200,22 +200,18 @@ pub fn picture(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Picture> 
     Some(Picture { ext, content_type, data })
 }
 
-/// A WMF BLIP's records with its placeable header put back, the header taking its place in
-/// `limit` and charged to `work` with the records: `None` when the whole file doesn't fit.
+/// A WMF BLIP as a `.wmf` file: its records, with the placeable header the BLIP leaves out put
+/// back so the picture keeps its size, within `limit` bytes and `work`. Putting the header in
+/// front copies the records again, so that copy is charged whole. When it doesn't fit, or the
+/// bounds can't make a placeable header, the records are kept as they are: a WMF without one.
 pub fn with_placeable_header(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
-    let header = blip.header?;
-    let head = crate::wmf::PLACEABLE_HEADER;
-    if !work.charge(head, "metafile") {
-        return None;
+    let records = blip.bytes(limit, work)?;
+    let Some(header) = blip.header.filter(|h| crate::wmf::gets_header(h)) else { return Some(records) };
+    let whole = records.len().checked_add(crate::wmf::PLACEABLE_HEADER)?;
+    if whole > limit || !work.charge(whole, "metafile") {
+        return Some(records);
     }
-    match limit.checked_sub(head).and_then(|l| blip.bytes(l, work)) {
-        Some(records) => crate::wmf::with_placeable_header(header, records),
-        None => {
-            // Nothing was made: the header's share goes back.
-            work.left = work.left.saturating_add(head);
-            None
-        }
-    }
+    crate::wmf::with_placeable_header(header, records)
 }
 
 /// The BLIP record of an `OfficeArtFBSE` body: embedded after it, or in the delay stream, where
