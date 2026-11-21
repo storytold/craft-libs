@@ -347,9 +347,8 @@ mod tests {
             base.light.contrast = 12.0;
             // Using a stored value outside today's control range detects whole-model normalization.
             base.optics.distortion = 123.0;
-            let result = migrate_camera_raw(
-                &base,
-                &json!({
+            let fields: Value = serde_json::from_str(
+                r#"{
                     "unknownField": [1, 2],
                     "encodingGamma": 1.8,
                     "temperature": 18,
@@ -402,8 +401,10 @@ mod tests {
                     "shadowTint": -6,
                     "calibrationHue": [4, -3, 2],
                     "calibrationSat": [8, -5, 6]
-                }),
-            )?;
+                }"#,
+            )
+            .map_err(|_| MigrationError::InvalidSettingsObject)?;
+            let result = migrate_camera_raw(&base, &fields)?;
 
             let mut expected = base.clone();
             expected.wb.mode = WbMode::Custom;
