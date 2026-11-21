@@ -9,7 +9,7 @@
 
 use rayon::prelude::*;
 
-use crate::scene::{Scene, Vertex, validate, validate_shadow_refs};
+use crate::scene::{NO_PART, Scene, Vertex, validate, validate_aux, validate_shadow_refs};
 use crate::shade::{Frag, shade};
 use crate::{Limits, RenderError};
 
@@ -28,6 +28,58 @@ pub struct Target {
     pub color: Vec<[f32; 4]>,
     /// Camera-space depth of the nearest opaque surface (∞ where empty).
     pub depth: Vec<f32>,
+}
+
+/// The auxiliary outputs of one surface per pixel, each row-major from the top row at the size
+/// of the color they come with.
+///
+/// The surface of a pixel is the nearest opaque surface drawn there (after an alpha test or a
+/// single-sided back face hands the pixel to the next surface), or a transparent fragment that
+/// adds alpha above 0 and is nearer in camera depth than the surface before it. All three planes
+/// name the same surface.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AuxPlanes {
+    /// Camera-space depth of the surface (the third row of [`Scene::view`]), ∞ where empty. For
+    /// a transparent surface this differs from [`Target::depth`], which holds opaque surfaces only.
+    pub depth: Vec<f32>,
+    /// Unit normal of the surface in view space, `[0, 0, 0]` where empty: the interpolated vertex
+    /// normal (a vector of length 1e-20 or less is read as `[0, 0, −1]`), reversed on a back face,
+    /// turned by the upper-left 3 × 3 of [`Scene::view`] and normalized. Normal textures are not
+    /// applied.
+    pub normal: Vec<[f32; 3]>,
+    /// [`Scene::part_ids`] of the surface's triangle, [`NO_PART`] where empty.
+    pub part_id: Vec<u32>,
+}
+
+/// A rendered target with its auxiliary outputs at raster size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuxTarget {
+    pub target: Target,
+    pub aux: AuxPlanes,
+}
+
+/// One band's rows of the auxiliary planes.
+struct AuxRow<'a> {
+    depth: &'a mut [f32],
+    normal: &'a mut [[f32; 3]],
+    part: &'a mut [u32],
+}
+
+impl AuxRow<'_> {
+    /// Make (camera depth `z`, normal `n` and `part`) the surface of pixel `i`.
+    fn set(&mut self, i: usize, z: f32, n: [f32; 3], part: u32) {
+        self.depth[i] = z;
+        self.normal[i] = n;
+        self.part[i] = part;
+    }
+
+    /// Make the surface of pixel `i` the given one when its camera depth `z` is nearer than the
+    /// pixel's (a NaN depth always replaces it, so the render reports it, and is never replaced).
+    fn offer(&mut self, i: usize, z: f32, n: impl FnOnce() -> [f32; 3], part: u32) {
+        if !self.depth[i].is_nan() && (z.is_nan() || z < self.depth[i]) {
+            self.set(i, z, n(), part);
+        }
+    }
 }
 
 /// A clipped triangle in screen space; `w` holds, per corner, its weights over the original
@@ -384,6 +436,19 @@ struct Pass<'a> {
 /// covers it.
 type Visibility = Vec<(u32, f32, [f32; 3])>;
 
+/// The surviving opaque fragment that [`Band::fallback`] finds for a discarded pixel.
+#[derive(Clone, Copy)]
+struct Survivor {
+    /// Ndc z.
+    z: f32,
+    color: [f32; 4],
+    /// Camera depth.
+    depth: f32,
+    /// The screen triangle and its weights at the pixel.
+    tri: u32,
+    l: [f32; 3],
+}
+
 /// The visibility depth of a pixel with no opaque surface: below the far plane's 0, so a
 /// fragment on the far plane is drawn.
 const EMPTY: f32 = -1.0;
@@ -401,6 +466,28 @@ impl Band<'_> {
         let view = self.s.view;
         let z = view[2][0] * p[0] + view[2][1] * p[1] + view[2][2] * p[2] + view[2][3];
         if z.is_finite() { z } else { f32::NAN }
+    }
+
+    /// The unit view-space normal of a fragment for [`AuxPlanes::normal`], computed in `f64`.
+    /// [`crate::scene::validate_aux`] has checked that the view's 3 × 3 is invertible, so the
+    /// turned vector has a length above 0.
+    fn view_normal(&self, f: &Frag) -> [f32; 3] {
+        let unit = |v: [f64; 3], floor: f64| {
+            let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            (len > floor && len.is_finite()).then(|| v.map(|x| x / len))
+        };
+        let mut n = unit(f.normal.map(f64::from), 1e-20).unwrap_or([0.0, 0.0, -1.0]);
+        if !f.front {
+            n = n.map(|x| -x);
+        }
+        let v = &self.s.view;
+        let r: [f64; 3] = std::array::from_fn(|row| (0..3).map(|c| f64::from(v[row][c]) * n[c]).sum());
+        unit(r, 0.0).map_or([f32::NAN; 3], |r| r.map(|x| x as f32))
+    }
+
+    /// The part ID of screen triangle `t`.
+    fn part(&self, t: &STri) -> u32 {
+        self.s.part_ids.get(t.tri as usize).copied().unwrap_or(NO_PART)
     }
 
     /// The nearest opaque triangle covering each pixel of the band.
@@ -427,7 +514,9 @@ impl Band<'_> {
     /// Shade each pixel's visible opaque fragment. A discarded fragment (alpha test, back face)
     /// gives way to the nearest surviving fragment under the pixel, and the pixel's visibility
     /// depth becomes that fragment's ([`EMPTY`] when none survives).
-    fn shade_opaque(&self, opaque: Pass, vis: &mut Visibility, crow: &mut [[f32; 4]], drow: &mut [f32]) {
+    /// When `aux` is given, each shaded pixel's fragment with alpha above 0 becomes its auxiliary
+    /// surface.
+    fn shade_opaque(&self, opaque: Pass, vis: &mut Visibility, crow: &mut [[f32; 4]], drow: &mut [f32], aux: &mut Option<AuxRow>) {
         let s = self.s;
         let mut discarded = vec![false; self.rows * self.w];
         for i in 0..self.rows * self.w {
@@ -435,11 +524,17 @@ impl Band<'_> {
             if ti == u32::MAX {
                 continue;
             }
-            let f = frag(s, &opaque.tris[ti as usize], l);
+            let t = &opaque.tris[ti as usize];
+            let f = frag(s, t, l);
             match shade(s, &f) {
                 Some(c) => {
                     crow[i] = c;
                     drow[i] = self.cam_z(f.pos);
+                    if let Some(a) = aux
+                        && c[3] > 0.0
+                    {
+                        a.set(i, drow[i], self.view_normal(&f), self.part(t));
+                    }
                 }
                 None => discarded[i] = true,
             }
@@ -452,10 +547,16 @@ impl Band<'_> {
                 continue;
             }
             match best {
-                Some((z, c, d)) => {
-                    crow[i] = c;
-                    drow[i] = d;
-                    vis[i].1 = z;
+                Some(b) => {
+                    crow[i] = b.color;
+                    drow[i] = b.depth;
+                    vis[i].1 = b.z;
+                    if let Some(a) = aux
+                        && b.color[3] > 0.0
+                    {
+                        let t = &opaque.tris[b.tri as usize];
+                        a.set(i, b.depth, self.view_normal(&frag(s, t, b.l)), self.part(t));
+                    }
                 }
                 None => vis[i].1 = EMPTY,
             }
@@ -464,13 +565,12 @@ impl Band<'_> {
 
     /// For each discarded pixel of the band, the nearest surviving opaque fragment of a screen
     /// triangle other than the pixel's visible one, inside the depth range as in
-    /// [`Band::visibility`]: (ndc z, color, camera depth). Triangles are
+    /// [`Band::visibility`]. Triangles are
     /// visited in index order over their bounding boxes, so this pass tests no more pixels than
     /// [`Band::visibility`], and among fragments at equal depth the first triangle's is kept.
-    #[allow(clippy::type_complexity)]
-    fn fallback(&self, opaque: Pass, vis: &Visibility, discarded: &[bool]) -> Vec<Option<(f32, [f32; 4], f32)>> {
+    fn fallback(&self, opaque: Pass, vis: &Visibility, discarded: &[bool]) -> Vec<Option<Survivor>> {
         let (s, w, y0, rows) = (self.s, self.w, self.y0, self.rows);
-        let mut best: Vec<Option<(f32, [f32; 4], f32)>> = vec![None; rows * w];
+        let mut best: Vec<Option<Survivor>> = vec![None; rows * w];
         for &tj in opaque.bins {
             let t2 = &opaque.tris[tj as usize];
             for y in t2.bbox[1].max(y0)..t2.bbox[3].min(y0 + rows as i32) {
@@ -481,11 +581,11 @@ impl Band<'_> {
                         continue;
                     }
                     if let Some((z, l2)) = cover(t2, x as f64 + 0.5, y as f64 + 0.5)
-                        && nearer(z, best[i].map_or(EMPTY, |b| b.0))
+                        && nearer(z, best[i].map_or(EMPTY, |b| b.z))
                     {
                         let f2 = frag(s, t2, l2);
                         if let Some(c) = shade(s, &f2) {
-                            best[i] = Some((z, c, self.cam_z(f2.pos)));
+                            best[i] = Some(Survivor { z, color: c, depth: self.cam_z(f2.pos), tri: tj, l: l2 });
                         }
                     }
                 }
@@ -495,7 +595,9 @@ impl Band<'_> {
     }
 
     /// Transparent fragments in order, blended over the opaque result where they are nearer.
-    fn blend_transparent(&self, trans: Pass, vis: &Visibility, crow: &mut [[f32; 4]]) {
+    /// When `aux` is given, a fragment with alpha above 0 is offered as the pixel's auxiliary
+    /// surface.
+    fn blend_transparent(&self, trans: Pass, vis: &Visibility, crow: &mut [[f32; 4]], aux: &mut Option<AuxRow>) {
         let (s, w, y0, rows) = (self.s, self.w, self.y0, self.rows);
         for &ti in trans.bins {
             let t = &trans.tris[ti as usize];
@@ -505,11 +607,17 @@ impl Band<'_> {
                     let i = r + x as usize;
                     if let Some((z, l)) = cover(t, x as f64 + 0.5, y as f64 + 0.5)
                         && nearer(z, vis[i].1)
-                        && let Some(c) = shade(s, &frag(s, t, l))
                     {
+                        let f = frag(s, t, l);
+                        let Some(c) = shade(s, &f) else { continue };
                         let d = crow[i];
                         let k = 1.0 - c[3];
                         crow[i] = [c[0] + d[0] * k, c[1] + d[1] * k, c[2] + d[2] * k, c[3] + d[3] * k];
+                        if let Some(a) = aux
+                            && c[3] > 0.0
+                        {
+                            a.offer(i, self.cam_z(f.pos), || self.view_normal(&f), self.part(t));
+                        }
                     }
                 }
             }
@@ -517,22 +625,69 @@ impl Band<'_> {
     }
 }
 
-/// Rasterize and shade set-up screen triangles into a target of `pixels` pixels.
-fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Target {
+/// Rasterize and shade set-up screen triangles into a target of `pixels` pixels, with the
+/// auxiliary planes when `aux` is true (empty planes otherwise).
+fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize, aux: bool) -> (Target, AuxPlanes) {
     let (w, h) = (s.width as usize, s.height as usize);
     let bands = (h as i32 + BAND - 1) / BAND;
     let ob = bin(opaque, bands);
     let tb = bin(trans, bands);
     let mut color = vec![[0.0f32; 4]; pixels];
     let mut depth = vec![f32::INFINITY; pixels];
-    color.par_chunks_mut(w * BAND as usize).zip(depth.par_chunks_mut(w * BAND as usize)).enumerate().for_each(|(band, (crow, drow))| {
+    let band_rows = w * BAND as usize;
+    let render = |band: usize, crow: &mut [[f32; 4]], drow: &mut [f32], mut arow: Option<AuxRow>| {
         let b = Band { s, y0: band as i32 * BAND, rows: crow.len() / w, w };
         let (op, tp) = (Pass { tris: opaque, bins: &ob[band] }, Pass { tris: trans, bins: &tb[band] });
         let mut vis = b.visibility(op);
-        b.shade_opaque(op, &mut vis, crow, drow);
-        b.blend_transparent(tp, &vis, crow);
-    });
-    Target { width: s.width, height: s.height, color, depth }
+        b.shade_opaque(op, &mut vis, crow, drow, &mut arow);
+        b.blend_transparent(tp, &vis, crow, &mut arow);
+    };
+    let mut planes = if aux {
+        AuxPlanes { depth: vec![f32::INFINITY; pixels], normal: vec![[0.0; 3]; pixels], part_id: vec![NO_PART; pixels] }
+    } else {
+        AuxPlanes::default()
+    };
+    if aux {
+        color
+            .par_chunks_mut(band_rows)
+            .zip(depth.par_chunks_mut(band_rows))
+            .zip(planes.depth.par_chunks_mut(band_rows))
+            .zip(planes.normal.par_chunks_mut(band_rows))
+            .zip(planes.part_id.par_chunks_mut(band_rows))
+            .enumerate()
+            .for_each(|(band, ((((crow, drow), depth), normal), part))| render(band, crow, drow, Some(AuxRow { depth, normal, part })));
+    } else {
+        color
+            .par_chunks_mut(band_rows)
+            .zip(depth.par_chunks_mut(band_rows))
+            .enumerate()
+            .for_each(|(band, (crow, drow))| render(band, crow, drow, None));
+    }
+    (Target { width: s.width, height: s.height, color, depth }, planes)
+}
+
+/// Checks the scene (with the checks of the auxiliary outputs when `aux` is true) and sets up
+/// its screen triangles: (pixel count, opaque, transparent).
+fn prepare(s: &Scene, limits: &Limits, aux: bool) -> Result<(usize, Vec<STri>, Vec<STri>), RenderError> {
+    if aux {
+        limits.check_aux(s.width, s.height, None)?;
+    }
+    let pixels = validate(s, limits)?;
+    if aux {
+        validate_aux(s)?;
+    }
+    validate_shadow_refs(s)?;
+    let clip = clip_positions(s)?;
+    let mut work = 0;
+    let opaque = setup(s, &clip, 0..s.opaque_count as usize, &mut work, limits.max_work)?;
+    let trans = setup(s, &clip, s.opaque_count as usize..s.indices.len(), &mut work, limits.max_work)?;
+    Ok((pixels, opaque, trans))
+}
+
+/// The first pixel whose color is not finite or whose depth is NaN: finite inputs near the top
+/// of the `f32` range can still overflow in shading.
+fn bad_pixel(t: &Target) -> Option<usize> {
+    t.color.iter().zip(&t.depth).position(|(c, d)| !c.iter().all(|v| v.is_finite()) || d.is_nan())
 }
 
 /// Rasterize and shade the scene at its raster size.
@@ -540,18 +695,30 @@ fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Target {
 /// The scene is checked first (see [`Limits`]); an empty scene gives a transparent target with
 /// infinite depth. A triangle whose clipped polygon has zero area draws nothing.
 pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
-    let pixels = validate(s, limits)?;
-    validate_shadow_refs(s)?;
-    let clip = clip_positions(s)?;
-    let mut work = 0;
-    let opaque = setup(s, &clip, 0..s.opaque_count as usize, &mut work, limits.max_work)?;
-    let trans = setup(s, &clip, s.opaque_count as usize..s.indices.len(), &mut work, limits.max_work)?;
-    let t = raster(s, &opaque, &trans, pixels);
-    // Finite inputs near the top of the f32 range can still overflow in shading.
-    if let Some(i) = t.color.iter().zip(&t.depth).position(|(c, d)| !c.iter().all(|v| v.is_finite()) || d.is_nan()) {
-        return Err(RenderError::BadPixel(i));
+    let (pixels, opaque, trans) = prepare(s, limits, false)?;
+    let (t, _) = raster(s, &opaque, &trans, pixels, false);
+    match bad_pixel(&t) {
+        Some(i) => Err(RenderError::BadPixel(i)),
+        None => Ok(t),
     }
-    Ok(t)
+}
+
+/// [`try_render`] with the auxiliary outputs ([`AuxPlanes`]): the same target, bit for bit, and
+/// the camera depth, view-space normal and part ID of each pixel's surface.
+///
+/// Besides the checks of [`try_render`], [`Scene::part_ids`] must hold one ID per triangle and
+/// none may be [`NO_PART`], and, when the scene has a triangle, the upper-left 3 × 3 of
+/// [`Scene::view`] must be invertible. The
+/// render holds 20 more bytes per raster pixel than [`try_render`], and their sum with the
+/// target's must fit `isize::MAX` bytes.
+pub fn try_render_with_aux(s: &Scene, limits: &Limits) -> Result<AuxTarget, RenderError> {
+    let (pixels, opaque, trans) = prepare(s, limits, true)?;
+    let (target, aux) = raster(s, &opaque, &trans, pixels, true);
+    let bad_aux = || aux.depth.iter().zip(&aux.normal).position(|(d, n)| d.is_nan() || !n.iter().all(|v| v.is_finite()));
+    match bad_pixel(&target).or_else(bad_aux) {
+        Some(i) => Err(RenderError::BadPixel(i)),
+        None => Ok(AuxTarget { target, aux }),
+    }
 }
 
 #[cfg(test)]

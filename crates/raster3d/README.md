@@ -77,6 +77,24 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   linear. Pixels with alpha of 1e-6 or less are left as they are. `try_render_cpu` renders and
   resolves by `Scene::ssaa`, and rejects a factor that does not divide the raster size before it
   renders.
+- **Auxiliary outputs.** `try_render_with_aux`, `try_resolve_aux` and `try_render_cpu_with_aux`
+  return the same color as `try_render`, `try_resolve` and `try_render_cpu`, bit for bit, and
+  `AuxPlanes`: three planes at the color's size, row-major from the top row, that describe one
+  surface per pixel. `depth` is the surface's camera depth (`f32`, the units of `Scene::view`),
+  infinity where empty. `normal` is its unit normal in view space, `[0, 0, 0]` where empty: the
+  interpolated vertex normal (one of length 1e-20 or less is read as `[0, 0, −1]`), reversed on a
+  back face, turned by the upper-left 3 × 3 of `Scene::view` and normalized; normal textures are
+  not applied. `part_id` is the `Scene::part_ids` entry of the surface's triangle (`u32`), or
+  `NO_PART` (`u32::MAX`) where empty; a triangle cut by clipping keeps its ID. Only a fragment that
+  adds alpha above 0 can be the surface: the nearest opaque surface drawn at the pixel, including
+  the one found under a discarded fragment, or a nearer transparent fragment; of several such
+  fragments the nearest is kept. `depth` therefore differs from `Target::depth`, which holds opaque surfaces only. The
+  resolve copies the depth, normal and part ID of one subsample of each block, the one with the
+  smallest depth (the first in row-major order on ties), so it does not average depths across
+  surfaces or mix IDs; a pixel holds one ID, not every surface that covers part of it. These
+  functions need one part ID per triangle, none of them `NO_PART`, and, for a scene with a
+  triangle, a view whose upper-left 3 × 3 is invertible. The other functions do not read
+  `Scene::part_ids` and do not allocate the planes.
 - **Limits.** `Limits` caps the raster pixels (2^24), the triangles of a scene (2^22), its vertices, used or not (3 × 2^22), the lights
   (1024) and the coverage tests of the visibility and transparent passes (2^31: the pixels of every
   clipped triangle's bounding box, plus one per triangle). Every `try_` function checks the scene
@@ -99,7 +117,13 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   not divide both sides and for buffers of the wrong length. `try_encode` returns an error for a
   pixel that is not finite, an alpha below 0 or above 1 (beyond 1e-4 of rounding), or a color whose
   division by alpha or encoding overflows, and changes no pixel then. The renderer holds 40 bytes per raster
-  pixel and up to seven clipped triangles of about 140 bytes per scene triangle. The search for a
+  pixel and up to seven clipped triangles of about 140 bytes per scene triangle. With auxiliary
+  outputs it holds 20 bytes more per raster pixel, and `try_render_cpu_with_aux` also 40 bytes per
+  output pixel for the resolve; the sum must fit `isize::MAX` bytes, or the call returns
+  `TooLarge` before it allocates. `try_render_with_aux` returns `BadPartIdCount`,
+  `ReservedPartId` or `BadTransform` for the part IDs and view above, and `BadPixel` when an
+  auxiliary depth overflows `f32`; `try_resolve_aux` returns `BadDataLength` for a plane of the
+  wrong length. The search for a
   surviving fragment under discarded opaque pixels visits each opaque triangle's bounding box
   once more, so it runs no more coverage tests than the visibility pass.
 

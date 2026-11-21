@@ -26,6 +26,13 @@
 //! before it allocates the target: malformed indices, references and spans, values that are not
 //! finite, sizes, triangle counts, light counts and coverage work over the limits. Rows run on
 //! several threads with rayon.
+//!
+//! **Auxiliary outputs.** [`try_render_with_aux`], [`try_resolve_aux`] and
+//! [`try_render_cpu_with_aux`] also return, for each pixel, the camera depth, the unit view-space
+//! normal and the part ID ([`Scene::part_ids`]) of one surface: the nearest opaque surface drawn
+//! there, or a nearer transparent fragment that added color. Each plane is row-major from the top
+//! row at the color's size; an empty pixel holds infinity, `[0, 0, 0]` and [`NO_PART`]. The
+//! renderers without them do not allocate these planes.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -35,9 +42,9 @@ mod scene;
 mod shade;
 mod shadow;
 
-pub use raster::{GUARD_BAND, Target, try_render};
-pub use resolve::{Image, try_encode, try_render_cpu, try_resolve};
-pub use scene::{EnvInfo, Light, Material, Scene, ShadowMap, TexInfo, Vertex};
+pub use raster::{AuxPlanes, AuxTarget, GUARD_BAND, Target, try_render, try_render_with_aux};
+pub use resolve::{AuxImage, Image, try_encode, try_render_cpu, try_render_cpu_with_aux, try_resolve, try_resolve_aux};
+pub use scene::{EnvInfo, Light, Material, NO_PART, Scene, ShadowMap, TexInfo, Vertex};
 pub use shade::{linear_to_srgb, sample, srgb_to_linear};
 pub use shadow::{MAX_SHADOW_TEXELS, shadow_map_size, shadow_point_face_size, shadow_sizes, try_env_shadow_map, try_shadow_maps};
 
@@ -73,9 +80,17 @@ pub enum RenderError {
     /// A vertex's clip-space position is not finite.
     #[error("vertex {0} is outside the range the clip transform can hold")]
     BadClipPosition(usize),
-    /// The clip or view transform, the eye or the camera direction is not finite.
-    #[error("the camera transform is not finite")]
+    /// The clip or view transform, the eye or the camera direction is not finite, or (for the
+    /// auxiliary outputs of a scene with a triangle) the upper-left 3 × 3 of the view transform,
+    /// which turns normals to view space, is singular.
+    #[error("the camera transform is not finite or cannot turn normals to view space")]
     BadTransform,
+    /// [`Scene::part_ids`] does not hold one ID per triangle (auxiliary outputs).
+    #[error("the scene holds {found} part ids where {expected} triangles need one each")]
+    BadPartIdCount { expected: usize, found: usize },
+    /// The part ID of a triangle (by index) is [`NO_PART`], which marks a pixel with no surface.
+    #[error("triangle {0} has the part id reserved for an empty pixel")]
+    ReservedPartId(usize),
     /// A material value is not finite or out of range (an alpha mode other than 0 to 2, or a
     /// metallic, roughness or occlusion strength outside 0 to 1, for example), or names a texture
     /// that does not exist.
@@ -140,7 +155,7 @@ pub enum RenderError {
     BadDataLength { expected: usize, found: usize },
     /// A pixel's color is not finite, or its alpha is negative or over 1. [`try_render`] returns
     /// it for a rendered pixel whose color or depth overflowed `f32` (finite inputs near the top
-    /// of its range).
+    /// of its range), and [`try_render_with_aux`] also for an auxiliary depth or normal that did.
     #[error("pixel {0} has a color that is not finite or an alpha out of range")]
     BadPixel(usize),
 }
@@ -193,4 +208,29 @@ impl Limits {
         }
         usize::try_from(pixels).map_err(|_| RenderError::TooLarge(w, h))
     }
+
+    /// [`Limits::check`] for a render with auxiliary outputs, which also holds
+    /// [`AUX_BYTES_PER_PIXEL`] more bytes per raster pixel and, when it is resolved by `k` per side
+    /// (`resolve` is `Some(k)`), [`AUX_BYTES_PER_OUTPUT`] per output pixel: the sum of all of them
+    /// must fit `isize::MAX`. Nothing is allocated.
+    pub(crate) fn check_aux(&self, w: u32, h: u32, resolve: Option<u32>) -> Result<usize, RenderError> {
+        let pixels = self.check(w, h)?;
+        let raster = u64::from(w) * u64::from(h);
+        let out = resolve.map_or(0, |k| raster / u64::from(k.max(1)).pow(2));
+        let bytes = raster
+            .checked_mul(BYTES_PER_PIXEL + AUX_BYTES_PER_PIXEL)
+            .and_then(|b| b.checked_add(out.checked_mul(AUX_BYTES_PER_OUTPUT)?))
+            .ok_or(RenderError::TooLarge(w, h))?;
+        if bytes > MAX_ALLOC_BYTES {
+            return Err(RenderError::TooLarge(w, h));
+        }
+        Ok(pixels)
+    }
 }
+
+/// Bytes the auxiliary outputs add per raster pixel: depth (4), normal (12) and part ID (4).
+const AUX_BYTES_PER_PIXEL: u64 = 20;
+
+/// Bytes a resolve with auxiliary outputs holds per output pixel: color (16), the mean depth that
+/// [`try_resolve`] computes (4), depth (4), normal (12) and part ID (4).
+const AUX_BYTES_PER_OUTPUT: u64 = 40;

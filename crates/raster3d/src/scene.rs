@@ -203,6 +203,11 @@ pub struct Scene {
     /// back to front.
     pub indices: Vec<u32>,
     pub opaque_count: u32,
+    /// The part ID of each triangle, in the order of [`Scene::indices`]: one per three indices.
+    /// [`crate::try_render_with_aux`] reports it for the surface of each pixel, and a triangle cut
+    /// by clipping keeps its ID. Any value but [`NO_PART`] is an ID, 0 included. The renderers
+    /// without auxiliary outputs do not read it, and it may be empty for them.
+    pub part_ids: Vec<u32>,
     pub materials: Vec<Material>,
     pub textures: Vec<TexInfo>,
     pub texels: Vec<[f32; 4]>,
@@ -213,6 +218,32 @@ pub struct Scene {
     pub ambient: [f32; 3],
     /// Shading inputs and outputs are linear (no sRGB conversion needed).
     pub linear_io: bool,
+}
+
+/// The part ID of a pixel with no surface; [`Scene::part_ids`] may not hold it.
+pub const NO_PART: u32 = u32::MAX;
+
+/// Checks what the auxiliary outputs need beyond [`validate`]: one part ID per triangle, none of
+/// them [`NO_PART`], and, when the scene has a triangle, a view whose upper-left 3 × 3 (the
+/// transform of normals) is invertible.
+pub(crate) fn validate_aux(s: &Scene) -> Result<(), RenderError> {
+    let expected = s.indices.len() / 3;
+    if s.part_ids.len() != expected {
+        return Err(RenderError::BadPartIdCount { expected, found: s.part_ids.len() });
+    }
+    if let Some(i) = s.part_ids.iter().position(|&p| p == NO_PART) {
+        return Err(RenderError::ReservedPartId(i));
+    }
+    if expected == 0 {
+        return Ok(());
+    }
+    let m = |r: usize, c: usize| f64::from(s.view[r][c]);
+    let det = m(0, 0) * (m(1, 1) * m(2, 2) - m(1, 2) * m(2, 1)) - m(0, 1) * (m(1, 0) * m(2, 2) - m(1, 2) * m(2, 0))
+        + m(0, 2) * (m(1, 0) * m(2, 1) - m(1, 1) * m(2, 0));
+    if det == 0.0 || !det.is_finite() {
+        return Err(RenderError::BadTransform);
+    }
+    Ok(())
 }
 
 fn finite<const N: usize>(v: &[f32; N]) -> bool {

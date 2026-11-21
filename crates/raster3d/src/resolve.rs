@@ -2,8 +2,8 @@
 
 use rayon::prelude::*;
 
-use crate::raster::{Target, try_render};
-use crate::scene::Scene;
+use crate::raster::{AuxPlanes, AuxTarget, Target, try_render, try_render_with_aux};
+use crate::scene::{NO_PART, Scene};
 use crate::shade::linear_to_srgb;
 use crate::{Limits, RenderError};
 
@@ -13,6 +13,13 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
     pub data: Vec<[f32; 4]>,
+}
+
+/// A resolved image with its auxiliary outputs at the image's size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuxImage {
+    pub image: Image,
+    pub aux: AuxPlanes,
 }
 
 /// Alpha above 1 that [`try_encode`] accepts as rounding from blending.
@@ -77,6 +84,54 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
         }
     });
     Ok((img, depth))
+}
+
+/// Resolve a supersampled target and its auxiliary outputs down by `k` per side. The color is
+/// [`try_resolve`]'s, bit for bit. Each output pixel's depth, normal and part ID are copied
+/// together from one subsample of its `k × k` block: the one with the smallest finite depth, the
+/// first in row-major order on ties. A block with no surface gives ∞, `[0, 0, 0]` and
+/// [`NO_PART`]; depths are not averaged and IDs are not mixed.
+///
+/// Returns the errors of [`try_resolve`], and [`RenderError::BadDataLength`] when an auxiliary
+/// plane does not hold width × height values.
+pub fn try_resolve_aux(t: &AuxTarget, k: u32) -> Result<AuxImage, RenderError> {
+    let tt = &t.target;
+    if k == 0 || !tt.width.is_multiple_of(k) || !tt.height.is_multiple_of(k) {
+        return Err(RenderError::BadFactor { k, width: tt.width, height: tt.height });
+    }
+    let expected = area(tt.width, tt.height).ok_or(RenderError::TooLarge(tt.width, tt.height))?;
+    for found in [tt.color.len(), tt.depth.len(), t.aux.depth.len(), t.aux.normal.len(), t.aux.part_id.len()] {
+        if found != expected {
+            return Err(RenderError::BadDataLength { expected, found });
+        }
+    }
+    let (image, _) = try_resolve(tt, k)?;
+    let (w, out) = (image.width as usize, image.data.len());
+    let mut aux = AuxPlanes { depth: vec![f32::INFINITY; out], normal: vec![[0.0; 3]; out], part_id: vec![NO_PART; out] };
+    if out == 0 {
+        return Ok(AuxImage { image, aux });
+    }
+    let (k, tw) = (k as usize, tt.width as usize);
+    aux.depth.par_chunks_mut(w).zip(aux.normal.par_chunks_mut(w)).zip(aux.part_id.par_chunks_mut(w)).enumerate().for_each(
+        |(y, ((drow, nrow), prow))| {
+            for x in 0..w {
+                let mut best: Option<usize> = None;
+                for j in 0..k {
+                    for i in 0..k {
+                        let s = (y * k + j) * tw + x * k + i;
+                        let z = t.aux.depth[s];
+                        if z.is_finite() && best.is_none_or(|b| z < t.aux.depth[b]) {
+                            best = Some(s);
+                        }
+                    }
+                }
+                if let Some(s) = best {
+                    (drow[x], nrow[x], prow[x]) = (t.aux.depth[s], t.aux.normal[s], t.aux.part_id[s]);
+                }
+            }
+        },
+    );
+    Ok(AuxImage { image, aux })
 }
 
 /// Output pixel (`x`, `y`) of a `k`-per-side resolve, summed in `f64`.
@@ -149,4 +204,17 @@ pub fn try_render_cpu(s: &Scene, limits: &Limits) -> Result<(Image, Vec<f32>), R
         return Err(RenderError::BadFactor { k, width: s.width, height: s.height });
     }
     try_resolve(&try_render(s, limits)?, k)
+}
+
+/// [`try_render_with_aux`] and [`try_resolve_aux`] by the scene's supersampling factor, as
+/// [`try_render_cpu`]: the image is [`try_render_cpu`]'s, bit for bit. The resolve's output
+/// planes count toward the byte check of [`try_render_with_aux`], which runs before anything is
+/// rendered.
+pub fn try_render_cpu_with_aux(s: &Scene, limits: &Limits) -> Result<AuxImage, RenderError> {
+    let k = s.ssaa.max(1);
+    if !s.width.is_multiple_of(k) || !s.height.is_multiple_of(k) {
+        return Err(RenderError::BadFactor { k, width: s.width, height: s.height });
+    }
+    limits.check_aux(s.width, s.height, Some(k))?;
+    try_resolve_aux(&try_render_with_aux(s, limits)?, k)
 }
