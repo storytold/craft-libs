@@ -15,6 +15,21 @@ use std::rc::Rc;
 const TITLES: [&str; 3] = ["One", "Two", "Three"];
 
 #[trial]
+fn overflowing_document_tabs_remain_readable_and_have_scroll_arrows() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..12).map(|i| DocumentTab::new(i, format!("Document number {i}, scanned.pdf"))).collect();
+        DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+    });
+    fixture.room(egui::vec2(600.0, 100.0)).settle();
+    let first = fixture.by_label("Document number 0, scanned.pdf").expect("first tab").rect;
+    let second = fixture.by_label("Document number 1, scanned.pdf").expect("second tab remains visible").rect;
+    assert!(first.width() > 100.0 && second.width() > 100.0, "tabs remain readable: {first:?}, {second:?}");
+    assert!(fixture.by_label("Scroll tabs left").is_some());
+    assert!(fixture.by_label("Scroll tabs right").is_some());
+}
+
+#[trial]
 fn document_tabs_leave_space_between_neighbours() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
     let mut fixture = Fixture::new(|ui| {
