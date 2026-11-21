@@ -16,3 +16,10 @@ craft-fonts-build = { path = "../.." }
 
 [lints]
 workspace = true
+
+# Files of other crates that this crate's build or tests read. CI selects this crate's tests
+# when one of them changes (craft-common-actions' select-platforms).
+[package.metadata.craft]
+reads = [
+    "crates/fonts-build/tests/fixture/craft-fonts",
+]

@@ -385,6 +385,11 @@ impl Decoder {
         self.draft = on;
     }
 
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> bool {
+        self.draft
+    }
+
     /// Force decoding inside pictures (wavefront rows, tiles, filters next to parsing) on or off;
     /// None (the default) decides per picture. Has no effect without a thread pool. For tests and
     /// benchmarks.
@@ -833,6 +838,7 @@ fn make_picture(o: &Output<FrameRef>) -> Picture {
         chroma_height: cch as u32,
         chroma,
         bit_depth: bd,
+        bit_depth_chroma: o.frame.bit_depth_c,
         y,
         u,
         v,
