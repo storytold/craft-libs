@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use egui::{ImageSource, load::Bytes};
+use egui::{Color32, Image, ImageSource, Rect, Ui, Vec2, load::Bytes};
+
+use crate::direction::{self, HasDirection};
 
 /// Literal substitutions for trusted, embedded, monochrome SVG assets.
 ///
@@ -72,6 +74,42 @@ impl SvgIconSet {
         let bytes = self.icons.get(name).or_else(|| self.icons.get(self.fallback)).cloned().unwrap_or_default();
         ImageSource::Bytes { uri: format!("{}{name}.svg", self.uri_prefix).into(), bytes: Bytes::Shared(bytes) }
     }
+}
+
+/// An egui image for `name` in the interface direction: the mirror partner of a
+/// [`direction::SWAPPED_ICONS`] glyph right to left, drawn flipped in place for a
+/// [`direction::FLIPPED_ICONS`] one, and `name` as it is otherwise.
+pub fn image(d: &impl HasDirection, set: &SvgIconSet, name: &str, size: f32, tint: Color32) -> Image<'static> {
+    let icon = direction::icon(d, name);
+    let mut img = image_raw(set, icon.name, size, tint);
+    if icon.flip {
+        img = img.uv(icon.uv());
+    }
+    img
+}
+
+/// The un-mirrored icon: canvas cursors and badges, and the opt-out for glyphs that point at
+/// the canvas or a physical timeline ([`paint_ltr`]).
+pub fn image_raw(set: &SvgIconSet, name: &str, size: f32, tint: Color32) -> Image<'static> {
+    Image::new(set.source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
+}
+
+/// Paint `name` centred in `rect`, mirrored in a right-to-left interface ([`image`]).
+pub fn paint(d: &impl HasDirection, ui: &Ui, set: &SvgIconSet, rect: Rect, name: &str, size: f32, tint: Color32) {
+    let r = Rect::from_center_size(rect.center(), Vec2::splat(size));
+    image(d, set, name, size, tint).paint_at(ui, r);
+}
+
+/// Paint an icon that must not follow the interface direction: timeline transport and tools
+/// whose glyph points at the canvas.
+pub fn paint_ltr(ui: &Ui, set: &SvgIconSet, rect: Rect, name: &str, size: f32, tint: Color32) {
+    let r = Rect::from_center_size(rect.center(), Vec2::splat(size));
+    image_raw(set, name, size, tint).paint_at(ui, r);
+}
+
+/// Whether the set contains `name` after direction mapping, so swapped-glyph lookups stay true.
+pub fn exists(d: &impl HasDirection, set: &SvgIconSet, name: &str) -> bool {
+    set.contains(direction::icon_name(d, name))
 }
 
 #[cfg(test)]

@@ -27,7 +27,11 @@
 //! sets it on every theme's style; with crates.io egui, egui's own chrome stays left to right.
 //! Installing a whole new [`egui::Style`] resets the field, so call [`apply`] after changing theme.
 
-use egui::{Align, Align2, AsIdSalt, Context, Id, InnerResponse, Key, Layout, Panel, Rect, RectAlign, Ui, pos2, vec2};
+use std::sync::Arc;
+
+use egui::{
+    Align, Align2, AsIdSalt, Context, FontSelection, Id, InnerResponse, Key, Layout, Panel, Rect, RectAlign, Response, Ui, WidgetText, pos2, vec2,
+};
 
 pub use craft_i18n::Direction;
 
@@ -198,6 +202,74 @@ pub fn forward(d: &impl HasDirection) -> f32 {
 /// An anchor written for left to right, mirrored in a right-to-left interface.
 pub fn align2(d: &impl HasDirection, ltr: Align2) -> Align2 {
     if is_rtl(d) { ltr.flipped_x() } else { ltr }
+}
+
+/// The min-x of a `w`-wide element hugging `rect`'s reading-start edge with margin `off`, for
+/// `Rect::from_min_size`: `rect.left() + off` left-to-right, `rect.right() - off - w`
+/// right-to-left, so the element grows inward from the start edge.
+pub fn start_x_w(d: &impl HasDirection, rect: Rect, off: f32, w: f32) -> f32 {
+    if is_rtl(d) { rect.right() - off - w } else { rect.left() + off }
+}
+
+/// The x for a `w`-wide painted element placed `off` beyond `rect` in reading order (a label
+/// after a thumbnail): `rect.right() + off` left-to-right, `rect.left() - off - w` right-to-left.
+/// With an alignment anchor instead of a galley, pass `w = 0.0` and [`start_align2`].
+pub fn after_x(d: &impl HasDirection, rect: Rect, off: f32, w: f32) -> f32 {
+    if is_rtl(d) { rect.left() - off - w } else { rect.right() + off }
+}
+
+/// [`Align2`] for `Painter::text` hugging the reading-start edge of a row: `LEFT_CENTER`
+/// left-to-right, `RIGHT_CENTER` right-to-left.
+pub fn start_align2(d: &impl HasDirection) -> Align2 {
+    if is_rtl(d) { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }
+}
+
+/// The body layout for dialog and window bodies: in a right-to-left interface blocks align to
+/// the reading start (`top_down(Align::Max)`) and nested `ui.horizontal` rows mirror; in a
+/// left-to-right interface it is egui's default `top_down(Align::Min)`.
+pub fn body_layout(d: &impl HasDirection) -> Layout {
+    if is_rtl(d) { Layout::top_down(Align::Max) } else { Layout::top_down(Align::Min) }
+}
+
+/// The base direction of a text line in the interface: right-to-left in a right-to-left
+/// interface, left-to-right otherwise.
+pub fn text_direction(d: &impl HasDirection) -> egui::epaint::text::TextDirection {
+    if is_rtl(d) { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::LeftToRight }
+}
+
+/// A label inside a mirrored body ([`body_layout`]): in a right-to-left interface the
+/// paragraph base direction is pinned right-to-left and the galley aligns to the reading-start
+/// edge, so mixed Arabic/Latin lines keep their phrase order and hug that edge. Left-to-right
+/// this is egui's plain label, unchanged.
+pub fn body_label(ui: &mut Ui, d: &impl HasDirection, text: impl Into<WidgetText>) -> Response {
+    let text = text.into();
+    if !is_rtl(d) {
+        return ui.label(text);
+    }
+    let mut job = Arc::unwrap_or_clone(text.into_layout_job(ui.style(), FontSelection::Default, ui.text_valign()));
+    job.direction = text_direction(d);
+    job.halign = Align::Max;
+    ui.label(WidgetText::LayoutJob(Arc::new(job)))
+}
+
+/// The body of an open popup. egui pins popup bodies left-to-right whatever the direction flag,
+/// so in a right-to-left interface every popup body scopes itself through this helper: justified
+/// rows that mirror. The cross align stays `Min` so the sizing pass measures the rows' width, not
+/// the full default area width; the sizing pass itself runs with the fork's direction flag off,
+/// so reading-end-anchored rows do not lock in that full width. Left-to-right the popup's own
+/// layout is used unchanged, sizing pass included.
+pub fn popup_body<R>(ui: &mut Ui, d: &impl HasDirection, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    if !is_rtl(d) {
+        return add_contents(ui);
+    }
+    if ui.is_sizing_pass() {
+        ui.style_mut().set_right_to_left(false);
+        let r = add_contents(ui);
+        ui.style_mut().set_right_to_left(is_rtl(d));
+        r
+    } else {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(Layout::top_down_justified(Align::Min)), add_contents).inner
+    }
 }
 
 // Popups.
@@ -372,6 +444,18 @@ pub fn icon<'a>(d: &impl HasDirection, name: &'a str) -> Icon<'a> {
         }
     }
     Icon { name, flip: FLIPPED_ICONS.contains(&name) }
+}
+
+/// The mirror-image partner of `name` in a right-to-left interface ([`SWAPPED_ICONS`]), else
+/// `name` unchanged. Name-only projection of [`icon`], for lookups that must see the swapped
+/// glyph, such as a set-membership check.
+pub fn icon_name<'a>(d: &impl HasDirection, name: &'a str) -> &'a str {
+    icon(d, name).name
+}
+
+/// Whether `name` is drawn flipped in place in a right-to-left interface ([`FLIPPED_ICONS`]).
+pub fn icon_flipped(d: &impl HasDirection, name: &str) -> bool {
+    icon(d, name).flip
 }
 
 // What never mirrors.
