@@ -12,7 +12,7 @@ build. The build reads a local checkout named by `CRAFT_FONTS_DIR` instead.
 |---|---|
 | `CRAFT_FONTS_DIR` unset or empty | Empty table. |
 | `CRAFT_FONTS_DIR` = a craft-fonts checkout | Every selected face of `fonts/manifest.txt`, embedded with `include_bytes!`. |
-| `CRAFT_FONTS_DIR` set, but no manifest or a missing font file | `cargo::warning`, empty table. |
+| `CRAFT_FONTS_DIR` set, but no manifest, a missing font file, or a font file whose SHA-256 is not the manifest's | `cargo::warning`, empty table. |
 | `CRAFT_FONTS_REQUIRED=1` (exactly `1`; other values are ignored) | Error instead when the directory is unset, unreadable, has no selected face, or has no face for a script passed to `scripts`. |
 
 Give `CRAFT_FONTS_DIR` as an absolute path: Cargo runs build scripts in the package's directory.
@@ -200,3 +200,10 @@ One face per line, eight or nine fields separated by `" | "`; craft-fonts' `docs
 defines them. Lines starting with `#` are comments. A file field ending in `#<n>` names face `n` of
 a font collection (`fonts/noto-sans-cjk/NotoSansCJK.ttc#2`); without it the index is 0. The ninth
 field, `role`, is `ui` on interface faces and absent elsewhere. Fields after the ninth are ignored.
+
+Each selected font file is hashed and compared with the line's `sha256` field, in either letter
+case; a field that is not 64 hex digits is not checked. A mismatch is `Error::HashMismatch`, treated
+like a missing font file: a build error with `CRAFT_FONTS_REQUIRED=1`, and a `cargo::warning` with an
+empty table otherwise. Without `CRAFT_FONTS_REQUIRED=1`, the hashes are kept in
+`craft-fonts-sha256.txt` beside the generated table, with each file's size and modification time,
+and a file is hashed again only when one of those changes. A required build hashes every file.

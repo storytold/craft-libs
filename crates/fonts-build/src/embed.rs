@@ -239,7 +239,12 @@ impl Embed {
 
         let selected = match &dir {
             None => Err(Error::NotSet),
-            Some(dir) => self.select(dir, cargo).and_then(|faces| if required { self.check_required(dir, faces) } else { Ok(faces) }),
+            Some(dir) => self
+                .select(dir, cargo)
+                // A required (release) build reads every file: a copy that keeps the size and the
+                // modification time would get past the cache.
+                .and_then(|faces| check_hashes(dir, faces, (!required).then(|| out.parent().unwrap_or(Path::new("")))))
+                .and_then(|faces| if required { self.check_required(dir, faces) } else { Ok(faces) }),
         };
         let mut selected = selected;
         if let Ok(faces) = &mut selected {
@@ -512,6 +517,83 @@ impl Embed {
     }
 }
 
+/// The file, beside the generated table, that keeps each checked font file's SHA-256 with its size
+/// and modification time, so a rerun of a build that is not required does not hash unchanged files
+/// again.
+const HASH_CACHE: &str = "craft-fonts-sha256.txt";
+
+/// Check each face's file against the SHA-256 its manifest line gives: a mismatch is an
+/// [`Error::HashMismatch`]. A line whose hash field is not 64 hex digits is not checked. Faces of
+/// one collection share a file, which is hashed once. With `cache_dir`, a file whose size and
+/// modification time match its [`HASH_CACHE`] line there is not read again.
+fn check_hashes(dir: &Path, faces: Vec<Face>, cache_dir: Option<&Path>) -> Result<Vec<Face>, Error> {
+    let cache_file = cache_dir.map(|cache_dir| cache_dir.join(HASH_CACHE));
+    let old_text = cache_file.as_ref().and_then(|cache_file| read_text_bounded(cache_file, MAX_MANIFEST_BYTES).ok());
+    let old = old_text.as_deref().map(parse_hash_cache).unwrap_or_default();
+    let mut new: Vec<(String, u64, u128, String)> = Vec::new();
+    for face in &faces {
+        let expected = &face.entry.sha256;
+        if !crate::sha256::is_hex_digest(expected) {
+            continue;
+        }
+        let key = face.path.to_str().map(str::to_owned);
+        let stamp = file_stamp(&face.path);
+        let known = key.as_ref().and_then(|key| {
+            new.iter()
+                .chain(&old)
+                .find(|(path, size, modified, _)| path == key && stamp == Some((*size, *modified)))
+                .map(|(.., sha256)| sha256.clone())
+        });
+        let actual = match known {
+            Some(sha256) => sha256,
+            None => crate::sha256::file_hex(&face.path, MAX_FILE_BYTES).map_err(|source| Error::Read { path: face.path.clone(), source })?,
+        };
+        if let (Some(key), Some((size, modified))) = (key, stamp)
+            && !new.iter().any(|(path, ..)| *path == key)
+        {
+            new.push((key, size, modified, actual.clone()));
+        }
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(Error::HashMismatch {
+                manifest: dir.join("fonts/manifest.txt"),
+                file: face.entry.file.clone(),
+                expected: expected.clone(),
+                actual,
+            });
+        }
+    }
+    let text: String = new.iter().map(|(path, size, modified, sha256)| format!("{sha256}\t{size}\t{modified}\t{path}\n")).collect();
+    // The cache only saves time: a directory that can't hold it costs a rehash on the next run.
+    if let Some(cache_file) = cache_file
+        && !new.is_empty()
+        && old_text.as_deref() != Some(text.as_str())
+    {
+        let _ = std::fs::write(&cache_file, text);
+    }
+    Ok(faces)
+}
+
+/// The lines of a [`HASH_CACHE`] file: SHA-256, size, modification time in nanoseconds since the
+/// epoch and path, separated by tabs. Lines that don't read are skipped.
+fn parse_hash_cache(text: &str) -> Vec<(String, u64, u128, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(4, '\t');
+            let sha256 = fields.next().filter(|s| crate::sha256::is_hex_digest(s))?;
+            let size = fields.next()?.parse().ok()?;
+            let modified = fields.next()?.parse().ok()?;
+            Some((fields.next()?.to_owned(), size, modified, sha256.to_owned()))
+        })
+        .collect()
+}
+
+/// A file's size and modification time in nanoseconds since the epoch, when the system gives both.
+fn file_stamp(path: &Path) -> Option<(u64, u128)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some((metadata.len(), modified.as_nanos()))
+}
+
 /// Whether the interface faces need `c`: CJK and later blocks, except emoji and other pictographs
 /// (the emoji faces draw them), variation selectors, tags and a byte order mark.
 fn needs_glyph(c: char) -> bool {
@@ -750,6 +832,9 @@ pub enum Error {
     /// A path that goes into a `cargo::rerun-if-changed` line has a line break, which would start
     /// another cargo instruction.
     LineBreakInPath { path: PathBuf },
+    /// A font file's SHA-256 is not the one its manifest line gives: the file is damaged, or the
+    /// checkout's files and manifest are out of step.
+    HashMismatch { manifest: PathBuf, file: String, expected: String, actual: String },
 }
 
 impl fmt::Display for Error {
@@ -786,6 +871,9 @@ impl fmt::Display for Error {
                 write!(f, "{}: {file:?} is not a file inside the checkout", manifest.display())
             }
             Self::LineBreakInPath { path } => write!(f, "{path:?} has a line break: cargo could not be told to watch it"),
+            Self::HashMismatch { manifest, file, expected, actual } => {
+                write!(f, "{}: {file:?} has SHA-256 {actual}, but the manifest gives {expected}", manifest.display())
+            }
         }
     }
 }
