@@ -369,7 +369,6 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
     }
 }
 
-/// The character style a CHPX grpprl names (`sprmCIstd`), if any: the last one.
 /// The character sprms whose values survive `sprmCIstd` ([MS-DOC] §2.6.1: "During steps 1 and 3,
 /// preserve the previous values of the following"): revision marks and their authors, dates and
 /// save IDs, right-to-left and complex-script text, hidden field and web text, special
@@ -416,6 +415,7 @@ pub(crate) fn after_istd<'g>(grpprl: &'g [u8]) -> impl Iterator<Item = Prl<'g>> 
     sprm::iter(grpprl).enumerate().filter(move |(i, p)| p.sgc() == 2 && last.is_none_or(|l| *i >= l || kept_by_istd(p.op))).map(|(_, p)| p)
 }
 
+/// The character style a CHPX grpprl names (`sprmCIstd`), if any: the last one.
 pub(crate) fn char_style_istd(grpprl: &[u8]) -> Option<u16> {
     sprm::iter(grpprl).filter(|p| p.op == C_ISTD).filter_map(|p| u16_of(&p)).last()
 }

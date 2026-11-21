@@ -1280,6 +1280,26 @@ fn a_comment_at_the_end_of_the_text_closes_in_the_last_paragraph() {
 }
 
 #[test]
+fn a_comment_referenced_past_the_main_text_is_not_read() {
+    // A hostile table: the reference CP (9) is past the main text's end (6), inside the comment
+    // subdocument, so no body position holds it. The comment is left out, not kept with no anchor.
+    use craft_wordmodel::para::InlineObject;
+    let mut atrd = vec![0u8; 20];
+    atrd[16..20].copy_from_slice(&[0xFF; 4]);
+    let d = Doc6 {
+        text: b"Alpha\r\x05 C\r\r",
+        stories: [0, 0, 0, 5, 0],
+        comments: (&[9, 10], &[0, 4, 5], &atrd),
+        owners: b"\x03Ann",
+        ..Default::default()
+    };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let anchored =
+        doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter(|o| matches!(o, InlineObject::CommentStart { .. })).count();
+    assert!(doc.comments.is_empty() && anchored == 0, "no comment and no anchor: {:?}", doc.comments);
+}
+
+#[test]
 fn comments_are_read_and_anchored_at_their_references() {
     // As Word 95 writes two comments (`atn2`): 0x05 at each reference, the stories after the main
     // text in the comment subdocument (0x44), 20-byte ATRDs and 8-bit authors. Word reads Bob

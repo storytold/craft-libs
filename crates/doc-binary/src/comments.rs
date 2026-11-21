@@ -40,6 +40,17 @@ pub(crate) struct RawComment {
     pub(crate) range: Option<(u32, u32)>,
 }
 
+/// The comments a document can show: one whose reference is past the end of the main text
+/// (`text_len` CPs; a hostile table) has no place in the text and is left out, and a range is cut
+/// at that end. A reference at the end itself closes in the last paragraph.
+pub(crate) fn in_main_text(comments: Vec<RawComment>, text_len: u32) -> Vec<RawComment> {
+    comments
+        .into_iter()
+        .filter(|c| c.cp <= text_len)
+        .map(|c| RawComment { range: c.range.map(|(a, b)| (a.min(text_len), b.min(text_len))), ..c })
+        .collect()
+}
+
 /// The layout of one format's comments.
 #[derive(Clone, Copy)]
 pub(crate) enum Layout {
