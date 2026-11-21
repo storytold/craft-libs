@@ -16,35 +16,20 @@ impl ImageColorSpace {
     }
 }
 
-/// PdfCraft patch (47): the most pixels a codestream may decode to (2^28, the renderer's
-/// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`). Its size comes from the SIZ marker,
-/// not the image dictionary, and the decoder allocates it infallibly: a tiny file could ask for
-/// tens of gigabytes and abort the process (#5078).
-///
-/// It is checked against `Image::width()` x `height()` at full resolution: the SIZ image area,
-/// divided by a component subsampling (`XRsiz`, `YRsiz`) that every component shares, the size the
-/// decoder allocates each channel and component tile at. Components sampled differently leave the
-/// area undivided. So a 2x2-subsampled 32768 x 32768 area decodes to, and counts as, 2^28.
-const MAX_PIXELS: u64 = 1 << 28;
-
 /// PdfCraft patch: the least output `limit` a JPEG 2000 image is held to: the limit comes from the
 /// image dictionary's size, which a decoder may round differently from the codestream's.
 const MIN_LIMIT: usize = 64 << 20;
 
-/// Decode a JPEG 2000 image (JP2 file or raw codestream) for an image XObject described by
-/// `params`, refusing codestreams over [`MAX_PIXELS`] or `limit` bytes; `None` when it can't be decoded.
-pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams, limit: usize) -> Option<FilterResult<'static>> {
-    decode_with_pixel_limit(data, params, limit, MAX_PIXELS)
-}
-
-/// [`decode`] with `max_pixels` in place of [`MAX_PIXELS`], so a test can exercise the
-/// full-resolution size check on a small image without an attacker-sized allocation.
-fn decode_with_pixel_limit(
-    data: &[u8],
-    params: &ImageDecodeParams,
-    limit: usize,
-    max_pixels: u64,
-) -> Option<FilterResult<'static>> {
+/// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
+/// `max_pixels` the most pixels the codestream may decode to. A codestream's size comes from the
+/// SIZ marker, not the image dictionary, and the decoder allocates it infallibly, so a tiny file
+/// could ask for tens of gigabytes and abort the process (#5078).
+///
+/// The count is checked against `Image::width()` x `height()` at full resolution: the SIZ image
+/// area, divided by a component subsampling (`XRsiz`, `YRsiz`) that every component shares, the
+/// size the decoder allocates each channel and component tile at. Components sampled differently
+/// leave the area undivided.
+pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams, limit: usize, max_pixels: u64) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
     let settings = DecodeSettings {
@@ -71,7 +56,7 @@ fn decode_with_pixel_limit(
     //
     // PdfCraft patch (47): the header is read at full resolution first, because
     // `target_resolution` shrinks `width()` and `height()` but each tile's coefficients are still
-    // allocated at full size (review on #5086); see `MAX_PIXELS`.
+    // allocated at full size (review on #5086); see `decode`.
     let full_resolution = DecodeSettings {
         target_resolution: None,
         ..settings
@@ -123,7 +108,7 @@ fn decode_with_pixel_limit(
     };
     let has_alpha = image.has_alpha();
     // PdfCraft patch: the decoder sizes its output from the codestream's own dimensions, not the
-    // image dictionary's, and allocates it infallibly. Refuse more than `MAX_PIXELS` pixels or
+    // image dictionary's, and allocates it infallibly. Refuse more than `max_pixels` pixels or
     // more than `limit` bytes before decoding, and reserve the buffer fallibly.
     if u64::from(width) * u64::from(height) > max_pixels {
         return None;
@@ -339,7 +324,7 @@ fn scale(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode, decode_with_pixel_limit, image_area_offset, scale, without_refused_enumerated_colour};
+    use super::{decode, image_area_offset, scale, without_refused_enumerated_colour};
     use crate::bit_reader::{BitReader, bit_mask};
     use crate::object::stream::{ImageColorSpace, ImageDecodeParams};
     use alloc::vec::Vec;
@@ -510,7 +495,7 @@ mod tests {
             height: 2,
             ..ImageDecodeParams::default()
         };
-        let result = decode(PALETTE_JP2, &params, usize::MAX).unwrap();
+        let result = decode(PALETTE_JP2, &params, usize::MAX, 1 << 28).unwrap();
         let image = result.image_data.unwrap();
         assert!(matches!(image.color_space, Some(ImageColorSpace::Rgb)));
         let red = [255, 0, 0];
@@ -530,8 +515,16 @@ mod tests {
             height: 2,
             ..ImageDecodeParams::default()
         };
-        let result = decode(PALETTE_JP2, &params, usize::MAX).unwrap();
+        let result = decode(PALETTE_JP2, &params, usize::MAX, 1 << 28).unwrap();
         assert_eq!(&*result.data, &[0, 1, 0, 1, 1, 0, 1, 0][..]);
+    }
+
+    /// The codestream's 8 pixels are decoded with a pixel limit of 8 and refused with one of 7.
+    #[test]
+    fn the_pixel_limit_given_is_the_one_applied() {
+        let params = ImageDecodeParams { is_indexed: true, num_components: Some(1), width: 4, height: 2, ..ImageDecodeParams::default() };
+        assert_eq!(decode(PALETTE_JP2, &params, usize::MAX, 8).map(|r| r.data.len()), Some(8));
+        assert!(decode(PALETTE_JP2, &params, usize::MAX, 7).is_none());
     }
 
     /// A 1x1, 1-bit codestream (one empty packet, so its sample is the midpoint 1) as a JP2 file
@@ -566,8 +559,16 @@ mod tests {
     /// precision; an image without a palette keeps its own (1 bit here).
     #[test]
     fn palette_colours_are_eight_bit_and_other_samples_keep_their_precision() {
-        let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
-        let bpc = |data: &[u8]| decode(data, &params, usize::MAX).and_then(|r| r.image_data).map(|d| d.bits_per_component);
+        let params = ImageDecodeParams {
+            width: 1,
+            height: 1,
+            ..ImageDecodeParams::default()
+        };
+        let bpc = |data: &[u8]| {
+            decode(data, &params, usize::MAX, 1 << 28)
+                .and_then(|r| r.image_data)
+                .map(|d| d.bits_per_component)
+        };
         let mut palette = Vec::new();
         for (kind, body) in [(&b"pclr"[..], &[0, 2, 3, 7, 7, 7, 255, 0, 0, 64, 128, 192][..]), (b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 2])] {
             palette.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());
@@ -620,7 +621,7 @@ mod tests {
                 target_dimension: Some((2, 2)),
                 ..ImageDecodeParams::default()
             };
-            let result = decode(&one_level_codestream(x, y), &params, usize::MAX).unwrap();
+            let result = decode(&one_level_codestream(x, y), &params, usize::MAX, 1 << 28).unwrap();
             let image = result.image_data.unwrap();
             assert_eq!((image.width, image.height), (expected, expected), "offset ({x}, {y})");
             assert_eq!(result.data.as_ref(), alloc::vec![128; (expected * expected) as usize], "offset ({x}, {y})");
@@ -680,10 +681,10 @@ mod tests {
     #[test]
     fn a_codestream_over_the_pixel_cap_is_refused() {
         let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
-        assert!(decode(&jp2_with_size(1, 1, 0), &params, usize::MAX).is_some());
-        assert!(decode(&jp2_with_size(65536, 65536, 0), &params, usize::MAX).is_none());
+        assert!(decode(&jp2_with_size(1, 1, 0), &params, usize::MAX, 1 << 28).is_some());
+        assert!(decode(&jp2_with_size(65536, 65536, 0), &params, usize::MAX, 1 << 28).is_none());
         let small_target = ImageDecodeParams { target_dimension: Some((1, 1)), ..params };
-        assert!(decode(&jp2_with_size(65536, 65536, 4), &small_target, usize::MAX).is_none());
+        assert!(decode(&jp2_with_size(65536, 65536, 4), &small_target, usize::MAX, 1 << 28).is_none());
     }
 
     /// The size check uses the full-resolution size, not the target's. With four decomposition
@@ -702,12 +703,12 @@ mod tests {
             target_dimension: Some((1, 1)),
             ..ImageDecodeParams::default()
         };
-        let reduced = decode(&image, &small_target, usize::MAX).expect("a 64x64 image decodes at a 1x1 target");
+        let reduced = decode(&image, &small_target, usize::MAX, 1 << 28).expect("a 64x64 image decodes at a 1x1 target");
         let size = reduced.image_data.as_ref().map(|d| (d.width, d.height));
         assert!(
             size.is_some_and(|(w, h)| u64::from(w) * u64::from(h) <= 1024),
             "the target shrinks the image under the limit: {size:?}"
         );
-        assert!(decode_with_pixel_limit(&image, &small_target, usize::MAX, 1024).is_none());
+        assert!(decode(&image, &small_target, usize::MAX, 1024).is_none());
     }
 }
