@@ -4275,7 +4275,11 @@ pub(crate) mod tests {
         let strict = format!("{aff}SFX 3 Y 1\nSFX 3 0 c/2 .\n");
         let without_stem = AffixDict::from_hunspell(&strict, "1\nw/1\n", &[]).unwrap_err();
         assert!(without_stem.contains("`x2` is not a flag number"), "{without_stem}");
-        assert_eq!(AffixDict::from_hunspell(&strict, dic, &[]).unwrap_err(), without_stem, "the lenient stem cache cannot validate a strict continuation");
+        assert_eq!(
+            AffixDict::from_hunspell(&strict, dic, &[]).unwrap_err(),
+            without_stem,
+            "the lenient stem cache cannot validate a strict continuation"
+        );
     }
 
     #[test]
@@ -4291,7 +4295,11 @@ pub(crate) mod tests {
         let dic = "1\nword/1\n";
         let stem_error = AffixDict::from_hunspell_capped(aliases, dic, &[], false, 2).unwrap_err();
         assert!(stem_error.contains("stems carry more than 2 flags"), "{stem_error}");
-        assert_eq!(AffixDict::from_hunspell_capped(&both, dic, &[], false, 2).unwrap_err(), stem_error, "stem aggregate limits precede either continuation error");
+        assert_eq!(
+            AffixDict::from_hunspell_capped(&both, dic, &[], false, 2).unwrap_err(),
+            stem_error,
+            "stem aggregate limits precede either continuation error"
+        );
     }
 
     /// ONLYINCOMPOUND survives the compact format without compound rules too, and with them it
