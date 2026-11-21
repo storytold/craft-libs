@@ -40,8 +40,8 @@ pub(crate) use icon::SvgIcon;
 pub use icon::{Glyph, IconMark, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names};
 pub use ime_surface::ImeSurface;
 pub use kit::{
-    Checker, CheckerArea, GridAxis, GridCrowding, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark,
-    ellipse, fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
+    Checker, CheckerArea, GridAxis, GridCrowding, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, RulerFace, Tick, TickEdge, TickRank, dashed,
+    drop_mark, ellipse, fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
 };
 pub use marker::{Marker, MarkerSize};
 pub use paint_slot::PaintSlot;
@@ -67,9 +67,9 @@ pub use tool::ToolIcon;
 #[cfg(feature = "testing")]
 pub use textures::FakeThumbSource;
 pub use textures::{
-    CachedTexture, LoadFailure, LoadResult, LoadedPicture, LoaderOptions, MAX_TEXTURE, Priority, Revision, TextureBudget, TextureKey, TextureLoader,
-    TextureState, TextureStatistics, TextureStore, TextureStoreOptions, TextureWords, ThumbFit, ThumbJob, ThumbPaint, ThumbRender, ThumbRequest,
-    ThumbSource, ThumbnailOptions, Thumbnails, fit_image, fit_rect, reduce_image, texture_factor, texture_side, thumb_image,
+    CachedTexture, LoadFailure, LoadResult, LoadedPicture, LoaderOptions, MAX_TEXTURE, Priority, Revision, Serials, TextureBudget, TextureKey,
+    TextureLoader, TextureState, TextureStatistics, TextureStore, TextureStoreOptions, TextureWords, ThumbFit, ThumbJob, ThumbPaint, ThumbRender,
+    ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails, fit_image, fit_rect, reduce_image, texture_factor, texture_side, thumb_image,
 };
 
 pub(crate) use draw::DataMode;

@@ -1,11 +1,11 @@
 //! `SliderField`: a slider and a number field over one value.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, Outcome, PaintUi, Props as _, Role, SideLabel, Sizing,
-    Validity, WordSetCx as _,
+    Bind, BindCheck, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, Outcome, PaintUi, Props as _, Role, SideLabel,
+    Sizing, Validity, WordSetCx as _,
 };
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::{ComponentStyle, StyleCx};
@@ -184,8 +184,8 @@ struct Look {
     field_sizing: Option<Sizing>,
 }
 
-/// The composite's check on a number, as a child with the same value type reads it.
-type Check<'c, V> = Option<&'c dyn Fn(&V) -> Validity<V>>;
+/// The composite's check, which its children check their values with.
+type Check<'c> = Option<BindCheck<'c, f64>>;
 
 impl Look {
     /// The step the host set, when it is a usable one.
@@ -199,13 +199,13 @@ impl Look {
 
     /// The slider showing `shown`. Its check is the composite's, so a value the composite refuses or warns about
     /// looks invalid or warned on the slider too, and a value it fixes is fixed before the composite adopts it.
-    fn slider<'c>(&self, name: &Label, shown: Mixed<f64>, check: Check<'c, f64>, face: Option<TrackFace<'c>>) -> Slider<'c> {
+    fn slider<'c>(&self, name: &Label, shown: Mixed<f64>, check: Check<'c>, face: Option<TrackFace<'c>>) -> Slider<'c> {
         let mut bind = Bind::given(shown);
         if let Some(reset) = self.reset {
             bind = bind.reset(reset);
         }
         if let Some(check) = check {
-            bind = bind.check(check);
+            bind = bind.check_with(check, BindCheck::validity);
         }
         let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
         let slider = match face {
@@ -223,7 +223,7 @@ impl Look {
     }
 
     /// The number field showing `shown`, with the composite's check as the slider has it.
-    fn field<'c>(&self, name: &Label, shown: Mixed<f64>, check: Check<'c, Option<f64>>) -> NumberField<'c> {
+    fn field<'c>(&self, name: &Label, shown: Mixed<f64>, check: Check<'c>) -> NumberField<'c> {
         let number = match shown {
             Mixed::Same(value) => Mixed::Same(Some(value)),
             Mixed::Mixed => Mixed::Mixed,
@@ -233,7 +233,7 @@ impl Look {
             bind = bind.reset(Some(reset));
         }
         if let Some(check) = check {
-            bind = bind.check(check);
+            bind = bind.check_with(check, |check, value| value.map_or(Validity::Ok, |value| lifted(check.validity(&value))));
         }
         let step = self.field_step();
         let field = NumberField::new(name.clone(), bind)
@@ -335,9 +335,7 @@ impl Component for SliderField<'_> {
         // The group has no stop, so its tooltip, and with it the reason it is disabled, is carried by the first stop.
         let face = self.track_face.take();
         let bind = self.value.reborrow();
-        let on_slider = |value: &f64| bind.validity(value);
-        let on_field = |value: &Option<f64>| value.map_or(Validity::Ok, |value| lifted(bind.validity(&value)));
-        let field_view = look.field(&name, shown, Some(&on_field));
+        let field_view = look.field(&name, shown, Some(bind.check_of()));
         let field_view = match cx.resolved.tooltip {
             Some(tooltip) => field_view.tooltip(tooltip.clone()),
             None => field_view,
@@ -350,7 +348,7 @@ impl Component for SliderField<'_> {
             SliderFieldLayout::Inline => ui.child("field", place(field), field_view),
         };
         self.out_of_range = typed.out_of_range.clone();
-        let dragged = ui.child("slider", place(track), look.slider(&name, shown, Some(&on_slider), face));
+        let dragged = ui.child("slider", place(track), look.slider(&name, shown, Some(bind.check_of()), face));
         let start = *self.range.start();
         cx.adopt(&typed, &start, |value, mine| {
             if let Some(value) = value {

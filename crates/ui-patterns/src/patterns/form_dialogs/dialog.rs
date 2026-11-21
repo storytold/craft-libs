@@ -2,7 +2,7 @@
 //! owned by a `DialogHost`. A command form is a `ParamDialog` without a preview.
 
 use super::fields::{DialogFields, FieldValue};
-use crate::patterns::presets::{PresetKind, PresetRow};
+use crate::patterns::presets::{PresetKind, PresetRow, PresetSource};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, ListingRequest, PathRequest};
 
 use super::form::{FormDialog, FormDialogWords};
@@ -38,8 +38,8 @@ use serde_json::Value;
 
 use std::borrow::Cow;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the parameter dialog beside the common OK and Cancel.
@@ -243,9 +243,10 @@ pub struct ParamDialog<'a> {
     /// dialog open; a press comes back as `ParamDialogOutput::footer_action`.
     #[prop]
     extra_buttons: Vec<(String, Label)>,
-    /// The patterns the dialog's [`ParamKind::Pattern`] rows offer.
+    /// The patterns the dialog's [`ParamKind::Pattern`] rows offer. A hosted dialog's build gives a source over
+    /// owned inputs.
     #[prop]
-    patterns: Cow<'a, [PresetRow<String>]>,
+    patterns: Option<PresetSource<'a, String>>,
     /// A muted line at the footer's start edge, left of the buttons (a file size estimate, say).
     #[prop(into)]
     footer_note: Option<Label>,
@@ -314,7 +315,7 @@ impl<'a> ParamDialog<'a> {
             click_centres: true,
             canvas: None,
             extra_buttons: Vec::new(),
-            patterns: Cow::Borrowed(&[]),
+            patterns: None,
             footer_note: None,
             below: None,
             shaped: None,
@@ -494,7 +495,8 @@ impl<'a> ParamDialog<'a> {
         let shown = form.show(ui, |ui, cx, values| {
             if cx.first() && !host_opened {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<DialogFields>>(key).clone());
-                Self::open_values(&params, &patterns, saved.as_ref(), values);
+                let offered = patterns.as_ref().map(|source| source.rows(ui.ctx(), &Env::of(ui))).unwrap_or_default();
+                Self::open_values(&params, &offered, saved.as_ref(), values);
             }
             for answer in cx.take_answers() {
                 let answered = match &answer {
@@ -531,10 +533,10 @@ impl<'a> ParamDialog<'a> {
                 live.view = live.view.centred_on(point, texture.size);
             }
             let mut show_rows = |ui: &mut Ui, values: &mut DialogFields| {
-                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values))
-                    .patterns(&patterns)
-                    .preview_colors(&preview_colors)
-                    .sliders(layout.sliders());
+                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values)).preview_colors(&preview_colors).sliders(layout.sliders());
+                if let Some(source) = patterns.as_ref() {
+                    shown = shown.patterns(source);
+                }
                 if let Some(canvas) = canvas {
                     shown = shown.canvas(canvas);
                 }
@@ -636,7 +638,7 @@ impl ResetFooter {
     pub fn new(ui: &Ui, cancel: Option<Label>, alt_resets: bool) -> Self {
         let env = Env::of(ui);
         ResetFooter {
-            resetting: alt_resets && crate::runtime::pointer::frame(ui.ctx()).mods.alt,
+            resetting: alt_resets && crate::runtime::pointer::mods(ui.ctx()).alt,
             cancel: cancel.unwrap_or_else(|| env.words::<CommonWords>().cancel.clone()),
             reset: env.words::<ParamDialogWords>().reset.clone(),
             extra: Vec::new(),
@@ -811,7 +813,9 @@ impl HostedParamDialog {
     ) -> Self {
         let key = key.into();
         let ParamDialog { params, remember, patterns, previews, .. } = build(&mut fields);
-        let (params, patterns) = (params.into_owned(), patterns.into_owned());
+        // No pass runs here: the rows are built in the root scope, whose words name them; only their keys are read.
+        let patterns = patterns.map(|source| source.rows(ctx, &Env::of_root(ctx))).unwrap_or_default();
+        let params = params.into_owned();
         let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
         let id = dialog_id(key.as_str());

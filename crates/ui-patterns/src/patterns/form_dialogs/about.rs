@@ -3,8 +3,8 @@
 
 mod contributors;
 mod credits;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};
 pub use credits::{AboutInfo, AboutLink, Contributor, Credits, ModelCredit};

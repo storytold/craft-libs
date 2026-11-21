@@ -33,17 +33,34 @@ fi
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 """
-TEST_SOURCE = """
-cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
-cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
+# The `platforms` job's selection: no tests when no crate changed, otherwise a nextest filter.
+SELECT_GUARD = """
+if [ "$CRAFT_TESTS" = none ]; then
+  echo "No crate changed: no tests to run."
+  exit 0
+fi
+"""
+# The Windows leg runs these without the replay audit, which runs on Linux only.
+TEST_RUN = """
+cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
 cargo test --workspace --doc --all-features --locked
-cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
+cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+"""
+TEST_SOURCE = SELECT_GUARD + """
+cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+if [ "$RUNNER_OS" = Linux ]; then
+  CRAFT_UI_AUDIT_REPLAY=1 cargo nextest run --workspace --all-features --locked --profile ci -E "($CRAFT_TEST_FILTER) & (package(craft-ui-contract) | package(craft-ui-widgets) | package(craft-ui-panels) | package(craft-ui-patterns) | package(craft-ui-shell) | package(craft-ui-gallery) | package(craft-menu))" --no-tests=warn --lib --bins --tests
+fi
+cargo test --workspace --doc --all-features --locked
+cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 """
 WINDOWS_SETUP = """powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'"""
 EXPECTED_SOURCE = {
     "lint-command": LINT_SOURCE,
     "command": TEST_SOURCE,
-    "windows-command": WINDOWS_SETUP + "\n" + TEST_SOURCE,
+    "windows-command": SELECT_GUARD + WINDOWS_SETUP + "\n" + TEST_RUN,
 }
 
 
@@ -78,11 +95,12 @@ esac
 """
 
 
-def commands(os_name, fail="", name="command", source=None):
+def commands(os_name, fail="", name="command", source=None, tests="all", test_filter="all()"):
     validate_source(WORKFLOW.read_text() if source is None else source, name)
     return subprocess.run(
         ["bash", "-euo", "pipefail", "-c", HARNESS],
-        env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail, "BLOCK": name},
+        env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail, "BLOCK": name,
+             "CRAFT_TESTS": tests, "CRAFT_TEST_FILTER": test_filter},
         text=True, capture_output=True, check=False,
     )
 
@@ -92,12 +110,25 @@ COMMON = [
     "clippy --workspace --all-targets --locked -- -D warnings",
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
-TESTS = [
-    "nextest run --workspace --all-features --locked --profile ci --lib --bins --tests",
-    "nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench",
-    "test --workspace --doc --all-features --locked",
-    "nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests",
-]
+def test_commands(test_filter="all()"):
+    return [line.strip()[len("cargo "):].replace('"$CRAFT_TEST_FILTER"', test_filter)
+            for line in TEST_RUN.splitlines() if line.strip()]
+
+
+AUDIT_PACKAGES = " | ".join(
+    f"package({name})" for name in ("craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-patterns",
+                                    "craft-ui-shell", "craft-ui-gallery", "craft-menu"))
+
+
+def linux_test_commands(test_filter="all()"):
+    tests = test_commands(test_filter)
+    audit = (f"nextest run --workspace --all-features --locked --profile ci -E ({test_filter}) & ({AUDIT_PACKAGES}) "
+             "--no-tests=warn --lib --bins --tests")
+    return tests[:2] + [audit] + tests[2:]
+
+
+TESTS = test_commands()
+LINUX_TESTS = linux_test_commands()
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -112,14 +143,29 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_linux_and_macos_run_one_feature_set_with_doctests(self):
-        for os_name in ("Linux", "macOS"):
+        for os_name, expected in (("Linux", LINUX_TESTS), ("macOS", TESTS)):
             with self.subTest(os=os_name):
                 result = commands(os_name)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), TESTS)
+                self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_a_selection_filters_every_nextest_run_and_none_runs_nothing(self):
+        selected = "package(=craft-geom) | package(=craft-svg)"
+        result = commands("Linux", tests="some", test_filter=selected)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), linux_test_commands(selected))
+        # The doctests stay whole-workspace; every nextest run carries the filter, and the replay
+        # audit runs only the selected UI crates.
+        self.assertIn("test --workspace --doc --all-features --locked", result.stdout.splitlines())
+        filters = [re.search(r" -E (.*) --no-tests=warn ", line)[1]
+                   for line in result.stdout.splitlines() if line.startswith("nextest")]
+        self.assertEqual(filters, [selected, selected, f"({selected}) & ({AUDIT_PACKAGES})", selected])
+        result = commands("Linux", tests="none", test_filter="none()")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["No crate changed: no tests to run."])
 
     def test_each_stage_failure_remains_fatal(self):
-        for name, stages in (("lint-command", COMMON), ("command", TESTS)):
+        for name, stages in (("lint-command", COMMON), ("command", LINUX_TESTS)):
             for index, command in enumerate(stages):
                 with self.subTest(block=name, command=command):
                     result = commands("Linux", command, name)
@@ -130,7 +176,7 @@ class WorkspaceTests(unittest.TestCase):
         validate_source(WORKFLOW.read_text(), "windows-command")
         source = block(WORKFLOW.read_text(), "windows-command")
         cargo = [line.strip() for line in source.splitlines() if line.strip().startswith("cargo ")]
-        self.assertEqual(cargo, ["cargo " + command for command in TESTS])
+        self.assertEqual(cargo, [line.strip() for line in TEST_RUN.splitlines() if line.strip()])
 
     def test_workflow_source_is_rejected_before_starting_any_process(self):
         source = WORKFLOW.read_text()
@@ -186,6 +232,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
         # Pushes to next run Linux only.
         self.assertIn("&& github.ref != 'refs/heads/next'", source)
+        # Every leg reads the test selection of the platforms job.
+        self.assertIn("  native:\n    name: Workspace\n    needs: platforms\n", source)
+        self.assertIn("          select-tests: true\n", source)
+        self.assertIn("        CRAFT_TESTS=${{ needs.platforms.outputs.tests }}\n"
+                      "        CRAFT_TEST_FILTER=${{ needs.platforms.outputs.filter }}\n", source)
+        self.assertIn("      env: *env\n", source)
         # The macOS and Windows legs run the Linux leg's blocks, not copies of them.
         self.assertIn("      lint-command: &lint |\n", source)
         self.assertIn("      command: &command |\n", source)

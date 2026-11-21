@@ -4,8 +4,10 @@ use craft_behavior::ColumnWidth;
 use craft_cms::convert::CmykConverter;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
-use craft_ui::contract::{Outcome as _, Pattern, Props as _, Show as _, ShowContainer as _};
-use craft_ui::display::Text;
+use craft_ui::contract::{Gap, Outcome as _, Pattern, Props as _, Show as _, ShowContainer as _};
+use craft_ui::display::{Divider, Text};
+use craft_ui::form::{Field, FieldGroup};
+use craft_ui::layout::{CellAlign, GridFit};
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::runtime::env::{Env, Label};
@@ -13,15 +15,14 @@ use egui::{Response, Ui};
 
 use super::SamplerReadout;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What a missing value shows.
 const DASH: &str = "–";
 
-/// The grid's columns: a name and its value, twice, so that the two readouts of a line stand side by side and each
-/// column lines up down the grid.
-const COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content];
+/// A block's two halves, equal in width.
+const HALVES: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 
 craft_ui::words! {
     /// The words of the Info panel, in the installed language unless set.
@@ -179,9 +180,10 @@ impl<'a> InfoReadings<'a> {
     }
 }
 
-/// A read-only grid: RGB beside CMYK, the Ruler tool's measure (the angle A beside the length L, or a protractor's arms
-/// L1 and L2 stacked beside it), X/Y beside W/H, the document size, then one row group per sampler; a dash for a
-/// missing value; `document: None` shows "No document" as a centred notice in place of the grid.
+/// A read-only panel of blocks, a rule between them, each block two equal halves of labelled readouts: RGB beside CMYK
+/// (in percent), the Ruler tool's measure (the angle A beside the length L, or a protractor's arms L1 and L2 stacked
+/// beside it), X/Y beside W/H, the document size, then a position block and a colour block per sampler; a dash for a
+/// missing value; `document: None` shows "No document" as a centred notice in place of the blocks.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]
 pub struct InfoPanel<'a> {
@@ -192,43 +194,38 @@ pub struct InfoPanel<'a> {
 /// A name and its value, or `None` for a dash.
 type Cell = (Label, Option<Label>);
 
+/// One block: the readouts of its left and right halves.
+type Block = [Vec<Cell>; 2];
+
 /// The value of a number, or `None` when it is missing.
 fn number(value: Option<impl ToString>) -> Option<Label> {
     value.map(|value| Label::from(value.to_string()))
 }
 
-/// A name and its value in two grid cells, or two empty cells.
-fn pair(ui: &mut Ui, cell: Option<Cell>) {
-    match cell {
-        Some((name, value)) => {
-            Text::new(name).show(ui);
-            Text::new(value.unwrap_or_else(|| Label::from(DASH))).show(ui);
-        }
-        None => {
-            Text::new(Label::from("")).show(ui);
-            Text::new(Label::from("")).show(ui);
-        }
-    }
+/// The value of a CMYK percent, or `None` when it is missing.
+fn percent(value: Option<u8>) -> Option<Label> {
+    value.map(|value| Label::from(format!("{value}%")))
 }
 
-/// A grid of lines, each two name and value pairs.
-fn table(ui: &mut Ui, lines: Vec<[Option<Cell>; 2]>) {
-    let _ = Grid::new(&COLUMNS).show(ui, |ui, _| {
-        for [left, right] in lines.iter().cloned() {
-            pair(ui, left);
-            pair(ui, right);
+/// A half of a block: its readouts as the fields of one form group, so the names carry their colons and share a
+/// column and the values line up.
+fn half(ui: &mut Ui, cells: &[Cell]) {
+    let _ = FieldGroup::new(Label::from("")).gap(Gap::Tight).show(ui, |ui, _| {
+        for (name, value) in cells {
+            let value = value.clone().unwrap_or_else(|| Label::from(DASH));
+            let _ = Field::new(name.clone()).value(value.as_str()).show(ui, |ui, _| {
+                Text::new(value.clone()).show(ui);
+            });
         }
     });
 }
 
-/// `cells` two to a line.
-fn in_pairs(cells: Vec<Cell>) -> Vec<[Option<Cell>; 2]> {
-    let mut cells = cells.into_iter();
-    let mut lines = Vec::new();
-    while let Some(left) = cells.next() {
-        lines.push([Some(left), cells.next()]);
-    }
-    lines
+/// A block: two equal halves, which stay beside each other in a narrow panel.
+fn block(ui: &mut Ui, [left, right]: &Block) {
+    let _ = Grid::new(&HALVES).fit(GridFit::Fixed).cells(CellAlign::Top).show(ui, |ui, _| {
+        half(ui, left);
+        half(ui, right);
+    });
 }
 
 impl<'a> InfoPanel<'a> {
@@ -250,38 +247,47 @@ impl<'a> InfoPanel<'a> {
         Stack::new()
             .label(label)
             .show(ui, |ui, _| {
-                let mut lines = Vec::new();
-                for (at, cmyk_name) in cmyk_names.iter().enumerate() {
-                    let rgb = rgb_names.get(at).map(|rgb_name| (rgb_name.clone(), number(readings.color.map(|color| color.rgb[at]))));
-                    lines.push([rgb, Some((cmyk_name.clone(), number(readings.color.map(|color| color.cmyk[at]))))]);
-                }
+                let color = readings.color;
+                let rgb = rgb_names.iter().enumerate().map(|(at, name)| (name.clone(), number(color.map(|color| color.rgb[at])))).collect();
+                let cmyk = cmyk_names.iter().enumerate().map(|(at, name)| (name.clone(), percent(color.map(|color| color.cmyk[at])))).collect();
+                let mut blocks = vec![[rgb, cmyk]];
                 match &readings.measure {
                     Some(InfoMeasure::Line { angle, length }) => {
-                        lines.push([Some((name(&words.angle), Some(angle.clone()))), Some((name(&words.length), Some(length.clone())))]);
+                        blocks.push([vec![(name(&words.angle), Some(angle.clone()))], vec![(name(&words.length), Some(length.clone()))]]);
                     }
                     Some(InfoMeasure::Protractor { angle, first, second }) => {
-                        lines.push([Some((name(&words.angle), Some(angle.clone()))), Some((name(&words.length1), Some(first.clone())))]);
-                        lines.push([None, Some((name(&words.length2), Some(second.clone())))]);
+                        blocks.push([
+                            vec![(name(&words.angle), Some(angle.clone()))],
+                            vec![(name(&words.length1), Some(first.clone())), (name(&words.length2), Some(second.clone()))],
+                        ]);
                     }
                     None => {}
                 }
                 let (position, extent) = (readings.position.as_ref(), readings.extent.as_ref());
                 let axes = [(name(&words.x), name(&words.w)), (name(&words.pos_y), name(&words.h))];
+                let (mut at, mut size) = (Vec::new(), Vec::new());
                 for (axis, (position_name, extent_name)) in axes.into_iter().enumerate() {
-                    lines.push([
-                        Some((position_name, position.map(|at| at[axis].clone()))),
-                        Some((extent_name, extent.map(|size| size[axis].clone()))),
-                    ]);
+                    at.push((position_name, position.map(|at| at[axis].clone())));
+                    size.push((extent_name, extent.map(|size| size[axis].clone())));
                 }
-                table(ui, lines);
+                blocks.push([at, size]);
+                for (at, readings) in blocks.iter().enumerate() {
+                    if at > 0 {
+                        Divider::horizontal().show(ui);
+                    }
+                    block(ui, readings);
+                }
                 let size = words.document.fill(&[("width", &width.to_string()), ("height", &height.to_string())]);
+                Divider::horizontal().show(ui);
                 Text::new(Label::from(size)).show(ui);
                 for (readout, position) in readings.samplers {
+                    Divider::horizontal().show(ui);
                     Text::new(Label::from(format!("#{}", readout.number))).show(ui);
-                    let mut lines = vec![[Some((name(&words.x), Some(position[0].clone()))), Some((name(&words.pos_y), Some(position[1].clone())))]];
-                    lines.extend(in_pairs(rgb_names.iter().zip(readout.rgb).map(|(name, value)| (name.clone(), number(Some(value)))).collect()));
-                    lines.extend(in_pairs(cmyk_names.iter().zip(readout.cmyk).map(|(name, value)| (name.clone(), number(Some(value)))).collect()));
-                    table(ui, lines);
+                    let place = [vec![(name(&words.x), Some(position[0].clone()))], vec![(name(&words.pos_y), Some(position[1].clone()))]];
+                    let rgb = rgb_names.iter().zip(readout.rgb).map(|(name, value)| (name.clone(), number(Some(value)))).collect();
+                    let cmyk = cmyk_names.iter().zip(readout.cmyk).map(|(name, value)| (name.clone(), percent(Some(value)))).collect();
+                    block(ui, &place);
+                    block(ui, &[rgb, cmyk]);
                 }
             })
             .output

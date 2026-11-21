@@ -58,9 +58,12 @@ impl<'a> EnvView<'a> {
         self.scoped.measure
     }
 
-    /// The roving group of the innermost body with `ContainerProps.roving`.
-    pub(crate) fn roving(&self) -> Option<Id> {
-        self.scoped.roving
+    /// The content-sized `Stack` column whose first sweep runs now, if the scope is a direct child of it in flow.
+    pub(crate) fn column_first_sweep(&self) -> Option<Id> {
+        match self.scoped.column {
+            Some(super::ColumnSweep::Count(column)) => Some(column),
+            _ => None,
+        }
     }
 
     /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).
@@ -113,11 +116,13 @@ impl<'a> EnvView<'a> {
     /// The platform and the running viewport's window facts: the OS, the capabilities and the window's kind,
     /// chrome, state, insets and focus.
     pub fn shell(&self) -> &'a ShellInfo {
+        crate::runtime::replay::note_input(&self.scoped.ctx, crate::runtime::inputs::Input::Shell);
         &self.scoped.shell
     }
 
     /// The keyboard layout: which character each key position types, for text that names a key.
     pub fn keyboard_layout(&self) -> &'a craft_keymap::Layout {
+        crate::runtime::replay::note_input(&self.scoped.ctx, crate::runtime::inputs::Input::Keyboard);
         &self.scoped.keyboard
     }
 

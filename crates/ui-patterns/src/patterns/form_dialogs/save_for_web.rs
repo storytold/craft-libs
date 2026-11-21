@@ -9,9 +9,11 @@ use super::size_model::LinkedSize;
 use super::sizing::{Resample, SizingWords};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
 
-use crate::contract::{Bind, Held, NoValue, Outcome, Props as _, ShowContainer as _};
+use crate::contract::{Bind, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 
+use crate::display::Text;
 use crate::layout_components::{Row, Stack};
+use crate::style::TypeRole;
 
 use crate::runtime::env::{Env, Label};
 
@@ -22,7 +24,7 @@ use crate::runtime::overlay::CloseReason;
 use craft_behavior::{PixelSize, Selection};
 use craft_keymap::{Chord, Key, Mods};
 
-use craft_theme::Rgba;
+use craft_theme::{Rgba, variant::Tone};
 
 use egui::load::SizedTexture;
 use egui::{Response, Ui};
@@ -34,8 +36,8 @@ use std::path::{Path, PathBuf};
 mod options;
 mod panes;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use panes::WebPane;
 
@@ -123,6 +125,7 @@ craft_ui::words! {
         image_size: "saveForWeb.imageSize" = "Image Size";
         width: "saveForWeb.width" = "Width";
         height: "saveForWeb.height" = "Height";
+        constrain: "saveForWeb.constrainProportions" = "Constrain proportions";
         size_unit: "saveForWeb.sizeUnit" = "Unit";
         percent: "saveForWeb.percent" = "Percent";
         fit: "saveForWeb.fit" = "Fit";
@@ -348,6 +351,9 @@ pub struct SaveForWebDialog<'a> {
     /// The document's slices, for the Slices choice.
     #[prop]
     slices: &'a [WebSlice],
+    /// A notice from the host about slices omitted from the preview and export.
+    #[prop]
+    slice_warning: Option<Label>,
     /// Binds the view tab to `view`: the dialog shows the bound view and writes the tab the user picks, so the host
     /// and the dialog share one value.
     #[prop]
@@ -373,6 +379,7 @@ impl<'a> SaveForWebDialog<'a> {
             saving: false,
             answers: Vec::new(),
             slices: &[],
+            slice_warning: None,
             view: None,
             frame: None,
         }
@@ -380,7 +387,22 @@ impl<'a> SaveForWebDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> SaveForWebOutput {
-        let SaveForWebDialog { name, size, pictures, options, open, presets, animation, remember, saving, answers, slices, view, frame } = self;
+        let SaveForWebDialog {
+            name,
+            size,
+            pictures,
+            options,
+            open,
+            presets,
+            animation,
+            remember,
+            saving,
+            answers,
+            slices,
+            slice_warning,
+            view,
+            frame,
+        } = self;
         let mut view_held = view.map(Held::new);
         let mut frame_held = frame.map(Held::new);
         let env = Env::of(ui);
@@ -411,8 +433,7 @@ impl<'a> SaveForWebDialog<'a> {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<Last>>(key).clone());
                 live = Live::open(size, saved.as_ref());
                 if let Some(last) = &saved {
-                    // The slices and palette edits belong to one document, so a remembered set leaves them at their defaults.
-                    *options = SaveForWebOptions { percent: 100.0, ..last.options.without_document_fields() };
+                    *options = last.options.without_document_fields();
                     restored = true;
                 }
             }
@@ -449,6 +470,7 @@ impl<'a> SaveForWebDialog<'a> {
                 }
             }
             let before = (options.clone(), live.link.pixels(), live.view, live.frame);
+            options.apply_size(&mut live.link);
             // A frame the host set is a change from the one the last pass showed: the panes are encoded again.
             if let Some(bound) = frame_held.as_mut().and_then(|held| held.read(&mut **cx)) {
                 live.frame = bound;
@@ -474,7 +496,10 @@ impl<'a> SaveForWebDialog<'a> {
                         slices,
                         chosen: options.slices.selected(),
                     };
-                    panes::show(ui, &reads, &mut live, &mut slice_click)
+                    panes::show(ui, &reads, &mut live, &mut slice_click);
+                    if let Some(warning) = &slice_warning {
+                        Text::new(warning.clone()).role(TypeRole::Caption).tone(Tone::Warn).show(ui);
+                    }
                 });
                 Stack::new().id_salt("settings").show(ui, |ui, _| {
                     let kit =
@@ -486,9 +511,6 @@ impl<'a> SaveForWebDialog<'a> {
                 options.slices.select(number, add);
             }
 
-            if live.link.pixels() != before.1 {
-                options.percent = percent_of(live.link.pixels(), live.link.original());
-            }
             if (options.clone(), live.link.pixels(), live.view, live.frame) != before {
                 live.revision += 1;
             }

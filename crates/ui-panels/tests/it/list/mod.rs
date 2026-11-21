@@ -1,3 +1,3 @@
 //! The `List` component's own settings, over the item step.
 
-mod row_trailing;
+pub(crate) mod row_trailing;

@@ -5,8 +5,8 @@
 //! commits the name, Escape or Cancel closes it, and a name the host refuses shows its message under the field and
 //! keeps the prompt open.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::event::PresetEvent;
 use super::files::{PresetFileRequest, PresetFiles};
@@ -15,7 +15,7 @@ use super::panel_menu::PresetCommands;
 use super::picker::PresetPicker;
 use super::words::PresetWords;
 use crate::buttons::{Button, IconButton};
-use crate::contract::{Bind, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Trigger, Validity, clicked};
+use crate::contract::{Bind, MemoKey, MemoProps, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Trigger, Validity, clicked};
 use crate::display::Divider;
 use crate::form::Field;
 use crate::layout_components::Row;
@@ -61,21 +61,74 @@ pub enum NamedPresetStyle {
     Menu,
 }
 
-type NameCheckFn<'a> = Box<dyn Fn(&str) -> Option<PresetError> + 'a>;
-
 /// Whether a name may be used: the host's answer for a typed name.
-pub struct NameCheck<'a>(NameCheckFn<'a>);
+pub struct NameCheck<'a>(Box<dyn NameChecker + 'a>);
 
 impl<'a> NameCheck<'a> {
-    /// The check that runs `check`.
-    pub fn new(check: impl Fn(&str) -> Option<PresetError> + 'a) -> Self {
-        NameCheck(Box::new(check))
+    /// The check `check`, reading `inputs` (the names already taken, as [`PresetNames`](super::PresetNames)). The
+    /// inputs are props and `check` is a `fn`, which captures nothing, as a binding's `check_with` takes them, so a
+    /// memoized view that holds the row sees every input of the check.
+    pub fn new<I: MemoProps + 'a>(inputs: I, check: fn(&I, &str) -> Option<PresetError>) -> Self {
+        NameCheck(Box::new(WithInputs { inputs, check }))
+    }
+
+    fn refuses(&self, name: &str) -> Option<PresetError> {
+        self.0.refuses(name)
     }
 }
 
-impl NameCheck<'_> {
+/// By its inputs and its `fn`, walked only when a memoized view takes the key.
+impl MemoProps for NameCheck<'_> {
+    fn key(&self, key: &mut MemoKey) {
+        self.0.key(key);
+    }
+}
+
+/// A name check: its answer, and the key of its inputs and `fn`.
+trait NameChecker {
+    fn refuses(&self, name: &str) -> Option<PresetError>;
+    fn key(&self, key: &mut MemoKey);
+}
+
+struct WithInputs<I> {
+    inputs: I,
+    check: fn(&I, &str) -> Option<PresetError>,
+}
+
+impl<I: MemoProps> NameChecker for WithInputs<I> {
     fn refuses(&self, name: &str) -> Option<PresetError> {
-        (self.0)(name)
+        (self.check)(&self.inputs, name)
+    }
+
+    fn key(&self, key: &mut MemoKey) {
+        self.inputs.key(key);
+        key.write(&(self.check as usize).to_le_bytes());
+    }
+}
+
+/// What the name field checks a typed name against: the host's check, the suggestion an empty field stands for, the
+/// name of the preset being renamed and the messages.
+#[derive(MemoProps)]
+struct Naming<'n, 'c> {
+    check_name: Option<&'n NameCheck<'c>>,
+    fallback: Option<&'n str>,
+    own: Option<&'n str>,
+    taken: &'n Label,
+    invalid: &'n Label,
+}
+
+impl Naming<'_, '_> {
+    /// Why `name` cannot be used, as the field shows it.
+    fn problem(&self, name: &str) -> Option<Label> {
+        let own = self.own.is_some_and(|label| label.to_lowercase() == name.to_lowercase());
+        if name.is_empty() || own {
+            return None;
+        }
+        let error = self.check_name?.refuses(name)?;
+        Some(match error {
+            PresetError::NameTaken => self.taken.clone(),
+            _ => self.invalid.clone(),
+        })
     }
 }
 
@@ -157,14 +210,14 @@ enum Ask {
 #[must_use = "show the row with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(NamedPresetRow<'static, u32>))]
-pub struct NamedPresetRow<'a, K: Value + Eq + Hash + 'static> {
+pub struct NamedPresetRow<'a, K: Value + Eq + Hash + crate::contract::MemoProps + 'static> {
     label: Label,
     picker: PresetPicker<'a, K>,
     /// The name the New prompt starts with, and the name an empty field stands for.
     #[prop(into)]
     suggest_name: Option<String>,
     /// Whether a typed name may be used.
-    #[prop(func = "Fn(&str) -> Option<PresetError>")]
+    #[prop]
     check_name: Option<NameCheck<'a>>,
     /// Which presets are built in.
     #[prop(func = "Fn(&K) -> bool")]
@@ -177,7 +230,7 @@ pub struct NamedPresetRow<'a, K: Value + Eq + Hash + 'static> {
     style: NamedPresetStyle,
 }
 
-impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
+impl<'a, K: Value + Eq + Hash + crate::contract::MemoProps + 'static> NamedPresetRow<'a, K> {
     /// A row named `label` around `picker`.
     pub fn new(label: impl Into<Label>, picker: PresetPicker<'a, K>) -> Self {
         NamedPresetRow {
@@ -197,7 +250,8 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
         let common = env.words::<CommonWords>();
-        let rows = picker.preset_rows();
+        let kept = picker.preset_source().rows(ui.ctx(), &env);
+        let rows = kept.as_slice();
         let is_built_in = |key: &K| built_in.as_ref().is_some_and(|test| test.passes(key));
         let suggestion = suggest_name.as_deref().unwrap_or("");
         let mut picker = Some(picker);
@@ -235,29 +289,23 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
                 if let Some(draft) = naming.as_mut() {
                     let fallback = draft.target.is_none().then_some(suggestion);
                     let target_label = draft.target.as_ref().and_then(|key| rows.iter().find(|row| row.key == *key)).map(|row| row.label.as_str());
-                    let problem = |name: &str| -> Option<Label> {
-                        let own = target_label.is_some_and(|label| label.to_lowercase() == name.to_lowercase());
-                        if name.is_empty() || own {
-                            return None;
-                        }
-                        let error = check_name.as_ref()?.refuses(name)?;
-                        Some(match error {
-                            PresetError::NameTaken => words.name_taken.clone(),
-                            _ => words.name_invalid.clone(),
-                        })
+                    let naming = Naming {
+                        check_name: check_name.as_ref(),
+                        fallback,
+                        own: target_label,
+                        taken: &words.name_taken,
+                        invalid: &words.name_invalid,
                     };
                     let edit = Field::new(words.name.clone())
                         .id_salt("name")
                         .show(ui, |ui, _| {
-                            let check = |text: &String| match problem(&effective_name(text, fallback)) {
-                                Some(message) => Validity::Refuse(Message::new(message)),
-                                None => Validity::Ok,
-                            };
-                            TextField::new(words.name.clone(), Bind::given(draft.text.clone()).check(check))
-                                .id_salt("name-text")
-                                .select_on_focus()
-                                .submits()
-                                .show(ui)
+                            let bind = Bind::given(draft.text.clone()).check_with(&naming, |naming, text| {
+                                match naming.problem(&effective_name(text, naming.fallback)) {
+                                    Some(message) => Validity::Refuse(Message::new(message)),
+                                    None => Validity::Ok,
+                                }
+                            });
+                            TextField::new(words.name.clone(), bind).id_salt("name-text").select_on_focus().submits().show(ui)
                         })
                         .inner;
                     let (mut submitted, mut escaped) = (false, false);
@@ -275,7 +323,7 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
                     let name = effective_name(&draft.text, fallback);
                     if cancel || escaped {
                         done = true;
-                    } else if (ok || submitted) && !name.is_empty() && problem(&name).is_none() {
+                    } else if (ok || submitted) && !name.is_empty() && naming.problem(&name).is_none() {
                         match draft.target.clone() {
                             None => events.push(NamedPresetEvent::Create { name }),
                             Some(key) if target_label != Some(name.as_str()) => events.push(NamedPresetEvent::Rename { key, text: name }),

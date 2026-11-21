@@ -1,15 +1,21 @@
 //! The row line: a child of an unwrapped row that is one line sits with its centre on the row's line; a child of more
-//! than one line (a column, a field with its label above or a help line below) sits at the row's top.
+//! than one line (a column, a field with a help line below) sits at the row's top. A control with its label after it
+//! or above it, and a field labelled above, sit on the line by their control, as a bare control does, in a row and in
+//! a grid's cell.
 
+use craft_behavior::ColumnWidth;
 use craft_theme::ControlSize;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{FieldLayout, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, FieldLayout, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::Text;
 use craft_ui::form::{Field, Help};
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, last_pass_measuring_runs, trial};
 use egui::Rect;
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// Half a pixel at the scales the box runs.
 const ROUNDING: f32 = 0.5;
@@ -102,10 +108,10 @@ fn columns_sit_at_the_rows_top_and_lines_on_the_line() {
     assert!(four.top() <= control(&fixture, &["Go"]).top() + ROUNDING, "the four-line column starts below the button's top");
 }
 
-/// A field labelled above its control is two lines and sits at the row's top, so a button beside it sits level with
-/// the label, not the control.
+/// A field labelled above its control sits on the row's line by its control, as a control labelled above does: a
+/// button beside it sits level with the control, and the label stands above the line.
 #[trial]
-fn a_field_labelled_above_sits_at_the_rows_top() {
+fn a_field_labelled_above_sits_on_the_row_line_by_its_control() {
     let fixture = settled(|ui| {
         Row::new().show(ui, |ui, _| {
             Field::new("Caption").layout(FieldLayout::Above).sizing(Sizing::Content).show(ui, |ui, _| {
@@ -116,5 +122,46 @@ fn a_field_labelled_above_sits_at_the_rows_top() {
     });
     let (caption, control, button) = (text(&fixture, "Caption"), text(&fixture, "X"), text(&fixture, "Y"));
     assert!(caption.bottom() < control.top(), "the label sits above its control");
-    assert!(button.center().y < control.top(), "the button {button:?} sits level with the label, above the control {control:?}");
+    assert!((button.center().y - control.center().y).abs() <= ROUNDING, "the button {button:?} sits on the control's line {control:?}");
+}
+
+/// A check box whose label runs to a second line under it, beside a button in a row: its box sits on the button's
+/// line and the label's second line hangs below. In a grid's cell, beside a taller cell, a check box with its label
+/// after it sits on the line of the button in the next cell.
+#[trial]
+fn a_labelled_check_box_sits_with_its_box_on_a_buttons_line_in_a_row_and_a_grid_cell() {
+    const LONG: &str = "Smooth the edges of every selection the tool makes";
+    for grid in [false, true] {
+        let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+        let out = Rc::clone(&seen);
+        let fixture = settled(move |ui| {
+            let room = Rect::from_min_size(ui.available_rect_before_wrap().min, egui::vec2(260.0, 400.0));
+            let out = Rc::clone(&out);
+            Stack::new().fill().show_at(ui, room, move |ui, _| {
+                if grid {
+                    Grid::new(&[ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content]).show(ui, |ui, _| {
+                        Stack::new().show(ui, |ui, _| {
+                            Text::new("A").show(ui);
+                            Text::new("B").show(ui);
+                        });
+                        let button = Button::new("Go").show(ui).rect;
+                        let check = Checkbox::new(Bind::given(true)).label("Snap").show(ui).response.rect;
+                        out.set((button, check));
+                    });
+                } else {
+                    Row::new().show(ui, |ui, _| {
+                        let button = Button::new("Go").show(ui).rect;
+                        let check = Checkbox::new(Bind::given(true)).label(LONG).show(ui).response.rect;
+                        out.set((button, check));
+                    });
+                }
+            });
+        });
+        let (button, check) = seen.get();
+        let at = if grid { "in a grid's cell" } else { "in a row" };
+        if !grid {
+            assert!(text(&fixture, LONG).bottom() > check.bottom() + ROUNDING, "the label runs to a second line under the box {check:?}");
+        }
+        assert!((button.center().y - check.center().y).abs() <= ROUNDING, "{at}: the box {check:?} sits on the button's line {button:?}");
+    }
 }

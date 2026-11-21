@@ -18,7 +18,7 @@ const TILE_STEPS: usize = 17;
 ///
 /// A tile other than [`Ramp`](GradientTile::Ramp) is one `craft_color_ui::ui::smooth_mesh` sampled through
 /// [`t_at`](GradientTile::t_at). `p` below is a point in the tile's unit square (0 to 1, y down) and `c` its centre.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum GradientTile {
     /// The ramp chip: the gradient along its length.
@@ -56,7 +56,7 @@ impl GradientTile {
 }
 
 /// The outline a [`GradientTile::Focus`] gradient follows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum FocusOutline {
     /// A circle.

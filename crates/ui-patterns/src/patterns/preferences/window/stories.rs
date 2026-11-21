@@ -1,7 +1,7 @@
 //! Stories of `PreferencesWindow`.
 
 use super::{PreferencesState, PreferencesWindow};
-use crate::contract::{Bind, Entry};
+use crate::contract::Entry;
 use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesDraft, PreferencesModel, RowKind, RowSpec};
 use crate::runtime::env::UnitKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -109,8 +109,8 @@ impl PreferencesDraft for Demo {
 
 fn window(ui: &mut Ui, data: &mut StoryData, state: PreferencesState, demo: Demo) -> StoryOutput {
     let mut demo = data.value("demo", demo).clone();
-    let state = data.value("state", state);
-    let shown = PreferencesWindow::new(Bind::bound(state)).embedded().show(ui, &mut demo).into();
+    let (state, state_at) = data.value_at("state", state);
+    let shown = PreferencesWindow::new(state_at.bind(state)).embedded().show(ui, &mut demo).into();
     *data.value("demo", Demo::default()) = demo;
     shown
 }

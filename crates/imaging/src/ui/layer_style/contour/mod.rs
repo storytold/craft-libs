@@ -2,17 +2,15 @@
 //! the contour as a curve.
 
 mod editor;
-#[cfg(feature = "screen-testing")]
-mod stories;
-
-use std::sync::Arc;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvents, Mixed};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, EditResponse, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::ThumbAspect;
-use craft_ui::patterns::presets::{PickerField, PresetEvent, PresetFooterEvent, PresetPicker, PresetRow, PresetState};
+use craft_ui::patterns::presets::{PickerField, PresetEvent, PresetFns, PresetFooterEvent, PresetPicker, PresetRow, PresetSource, PresetState};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Rect, Response, Ui};
@@ -78,14 +76,15 @@ impl ContourWords {
     }
 }
 
-/// A host's interpolation of a contour's points, shared with the thumbnails' painters.
-pub(crate) type SharedSampler = Arc<dyn Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync>;
+/// A host's interpolation of a contour's points (levels in, levels out), shared with the thumbnails' painters. A `fn`,
+/// which captures nothing, so the contour presets key it by its address.
+pub type ContourSampler = fn(&[[f32; 2]]) -> Vec<f32>;
 
 /// The levels of a contour as a curve: input and output run `0..=255`.
 const LEVELS: f32 = 255.0;
 
 /// A contour a picker lists: one of the built-in contours or one of the user's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ContourKey {
     /// The built-in contour at this place of [`Contour::presets`].
@@ -153,24 +152,39 @@ impl Outcome for ContourFieldOutput {
     }
 }
 
-/// The rows of the contour picker: the built-in contours, then the user's, named by `words`, with a thumbnail of each
-/// curve. `sampler` interpolates the points as the engine does; without it the thumbnails use a monotone cubic.
-pub fn contour_rows(presets: &[Contour], user: &[Contour], words: &ContourWords, sampler: Option<SharedSampler>) -> Vec<PresetRow<ContourKey>> {
+/// What the contour presets are built from.
+#[derive(craft_ui::contract::MemoProps)]
+struct ContourInputs<'a> {
+    presets: &'a [Contour],
+    user: &'a [Contour],
+    #[memo_props(hash = "a fn pointer: its address names the code, which captures nothing")]
+    sampler: Option<ContourSampler>,
+}
+
+/// The presets of the contour picker: the built-in contours, then the user's, with a thumbnail of each curve; the
+/// user's may be deleted. `sampler` interpolates the points as the engine does; without it the thumbnails use a
+/// monotone cubic.
+pub fn contour_source<'a>(presets: &'a [Contour], user: &'a [Contour], sampler: Option<ContourSampler>) -> PresetSource<'a, ContourKey> {
+    let fns = PresetFns::new(contour_rows).can_delete(|_, key| matches!(key, ContourKey::User(_)));
+    PresetSource::new(ContourInputs { presets, user, sampler }, fns)
+}
+
+/// The rows of the contour picker, named by the scope's words.
+fn contour_rows(inputs: &ContourInputs<'_>, env: &Env) -> Vec<PresetRow<ContourKey>> {
+    let words = env.words::<ContourWords>();
+    let sampler = inputs.sampler;
     let row = |key: ContourKey, contour: &Contour| {
         let name = words.contour_name(&contour.name).to_owned();
-        let curve = Arc::new(to_curve(contour));
-        let sampler = sampler.clone();
-        PresetRow::item(key, name, 0).preview(ThumbAspect::SQUARE, move |painter, rect| paint_thumbnail(painter, rect, &curve, sampler.as_deref()))
+        let curve = to_curve(contour);
+        PresetRow::item(key, name, 0).preview(ThumbAspect::SQUARE, move |painter, rect| paint_thumbnail(painter, rect, &curve, sampler))
     };
-    let presets = presets.iter().enumerate().map(|(i, contour)| row(ContourKey::Preset(i), contour));
-    let user = user.iter().enumerate().map(|(i, contour)| row(ContourKey::User(i), contour));
+    let presets = inputs.presets.iter().enumerate().map(|(i, contour)| row(ContourKey::Preset(i), contour));
+    let user = inputs.user.iter().enumerate().map(|(i, contour)| row(ContourKey::User(i), contour));
     presets.chain(user).collect()
 }
 
-type SamplerFn = dyn Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync;
-
 /// A thumbnail of a contour: its curve in the curve preview's look (plot, quarter grid, diagonal).
-fn paint_thumbnail(painter: &ContentPainterCx<'_>, rect: Rect, curve: &Curve, sampler: Option<&SamplerFn>) {
+fn paint_thumbnail(painter: &ContentPainterCx<'_>, rect: Rect, curve: &Curve, sampler: Option<ContourSampler>) {
     let Curve::Points { points, corners } = curve else { return };
     let outputs = Curve::through(points, corners, |points| match sampler {
         Some(sampler) => sampler(points),
@@ -206,21 +220,22 @@ pub fn from_curve(curve: &Curve, name: &str) -> Option<Contour> {
 pub struct ContourField<'a> {
     label: Label,
     contour: Bind<'a, Contour>,
-    rows: &'a [PresetRow<ContourKey>],
+    source: &'a PresetSource<'a, ContourKey>,
     state: Bind<'a, PresetState<ContourKey>>,
     user: &'a [Contour],
     anti_alias: Option<Bind<'a, Option<bool>>>,
 }
 
 impl<'a> ContourField<'a> {
-    /// A field named `label` over `contour`, choosing among `rows` ([`contour_rows`]); `state` is the browser's view.
+    /// A field named `label` over `contour`, choosing among `source` ([`contour_source`]); `state` is the browser's
+    /// view.
     pub fn new(
         label: impl Into<Label>,
         contour: Bind<'a, Contour>,
-        rows: &'a [PresetRow<ContourKey>],
+        source: &'a PresetSource<'a, ContourKey>,
         state: Bind<'a, PresetState<ContourKey>>,
     ) -> Self {
-        Self { label: label.into(), contour, rows, state, user: &[], anti_alias: None }
+        Self { label: label.into(), contour, source, state, user: &[], anti_alias: None }
     }
 
     /// The user's contours, the targets of [`ContourKey::User`].
@@ -237,7 +252,7 @@ impl<'a> ContourField<'a> {
 
     /// Shows the field and returns this pass's edit and requests.
     pub fn show(self, ui: &mut Ui) -> ContourFieldOutput {
-        let Self { label, mut contour, rows, mut state, user, mut anti_alias } = self;
+        let Self { label, mut contour, source, mut state, user, mut anti_alias } = self;
         let env = Env::of(ui);
         let words = env.words::<ContourWords>();
         let presets = Contour::presets();
@@ -254,10 +269,9 @@ impl<'a> ContourField<'a> {
             let mut anti_events = EditEvents::new();
             let mut picked = None;
             Row::new().show(ui, |ui, root| {
-                let picker = PresetPicker::new(label.clone(), Bind::bound(&mut key), rows, state.reborrowed())
+                let picker = PresetPicker::new(label.clone(), Bind::bound(&mut key), source, state.reborrowed())
                     .field(PickerField::Thumbnail)
                     .columns(4)
-                    .can_delete(|key| matches!(key, ContourKey::User(_)))
                     .edit_face()
                     .show(ui);
                 for event in &picker.events {

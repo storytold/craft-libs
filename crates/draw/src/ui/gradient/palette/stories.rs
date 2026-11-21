@@ -1,7 +1,6 @@
 //! Stories of the gradient palette.
 
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::patterns::presets::{PresetState, PresetView};
 use craft_ui::testing::{StoryData, StoryOutput, story};
 use egui::Ui;
@@ -31,8 +30,8 @@ fn palette(ui: &mut Ui, data: &mut StoryData, view: PresetView) -> StoryOutput {
     let recent = [pair([0.2, 0.8, 0.4], [0.1, 0.2, 0.6])];
     let mut initial = PresetState::new();
     initial.view = view;
-    let state = data.value("state", initial);
-    let shown = GradientPalette::new("Gradients", &groups, Bind::bound(&mut *state))
+    let (state, state_at) = data.value_at("state", initial);
+    let shown = GradientPalette::new("Gradients", &groups, state_at.bind(&mut *state))
         .recent(&recent)
         .selected(GradientRef::Item { group: 0, item: 1 })
         .show(ui);
@@ -62,8 +61,8 @@ fn gradient_palette_tiles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     items.push(GradientItem::new("Focus, rectangle", stops.clone()).tile(GradientTile::Focus { outline: FocusOutline::Rect, focus }));
     items.push(GradientItem::new("Ramp", stops));
     let groups = [GradientGroup::new("Tiles", items)];
-    let state = data.value("state", PresetState::<GradientRef>::new());
-    let shown = GradientPalette::new("Gradient tiles", &groups, Bind::bound(&mut *state)).show(ui);
+    let (state, state_at) = data.value_at("state", PresetState::<GradientRef>::new());
+    let shown = GradientPalette::new("Gradient tiles", &groups, state_at.bind(&mut *state)).show(ui);
     StoryOutput::from(shown)
 }
 

@@ -1,8 +1,8 @@
 //! `Keytips`: the Alt and F10 key hints of a ribbon. Badges over its tabs and controls name the letters that pick a
 //! tab or run a command, so the whole ribbon is reachable from the keyboard without moving focus off the document.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

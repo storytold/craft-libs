@@ -16,6 +16,12 @@ struct Reading {
 /// Whether Caps Lock is on in this pass: the state injected input holds, else the platform's.
 #[doc(hidden)]
 pub fn caps_lock(ctx: &Context) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
+    caps_on(ctx)
+}
+
+/// `caps_lock` without noting the read.
+pub(crate) fn caps_on(ctx: &Context) -> bool {
     if let Some(on) = crate::runtime::egui::injected::caps_lock(ctx) {
         return on;
     }

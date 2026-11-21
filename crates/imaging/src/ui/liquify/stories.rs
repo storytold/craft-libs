@@ -12,7 +12,6 @@ use egui::{Color32, ColorImage, Ui};
 use craft_behavior::PixelSize;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::contract::Bind;
 use craft_ui::dialog::HostedWorkspace;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::primitives::Revision;
@@ -181,8 +180,8 @@ fn workspace_with_the_mesh_shown(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
 
 #[story(LiquifyPanel<'static>, covers = [Default], drive = Drive::Never)]
 fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = data.value("settings", LiquifySettings::default());
-    LiquifyPanel::new(Bind::bound(settings)).show(ui).into()
+    let (settings, settings_at) = data.value_at("settings", LiquifySettings::default());
+    LiquifyPanel::new(settings_at.bind(settings)).show(ui).into()
 }
 
 #[story(LiquifyPanel<'static>, covers = [], drive = Drive::Never)]
@@ -194,7 +193,7 @@ fn panel_with_the_backdrop_shown(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
         backdrop_opacity: BACKDROP_OPACITY,
         ..LiquifySettings::default()
     };
-    let settings = data.value("settings", shown);
+    let (settings, settings_at) = data.value_at("settings", shown);
     let layers = [(LAYER_SKY, "Sky".to_owned()), (LAYER_HOUSE, "House".to_owned())];
-    LiquifyPanel::new(Bind::bound(settings)).layers(&layers).show(ui).into()
+    LiquifyPanel::new(settings_at.bind(settings)).layers(&layers).show(ui).into()
 }

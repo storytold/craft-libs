@@ -4,6 +4,8 @@ mod bidi;
 mod embed;
 mod font_table;
 mod glossary;
+mod mail_merge;
+pub(crate) use mail_merge::keep_rels as mail_merge_rels;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
 mod math;
@@ -168,6 +170,14 @@ pub(crate) struct Writer<'d> {
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
 
+/// Options for saving a Word Open XML document.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WriteOptions {
+    /// Allows a save to drop unusable mail-merge settings and their source links.
+    /// Leave this off unless the caller has obtained consent for that loss.
+    pub discard_unusable_mail_merge: bool,
+}
+
 /// Write a `.docx` package.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
     write_as(doc, Flavor::Document)
@@ -175,7 +185,12 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
 
 /// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
 pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
-    zip_entries(&write_parts(doc, flavor)?)
+    write_as_with_options(doc, flavor, WriteOptions::default())
+}
+
+/// Write a Word Open XML package using explicit save options.
+pub fn write_as_with_options(doc: &Document, flavor: Flavor, options: WriteOptions) -> Result<Vec<u8>, DocxError> {
+    zip_entries(&write_parts(doc, flavor, options)?)
 }
 
 impl Writer<'_> {

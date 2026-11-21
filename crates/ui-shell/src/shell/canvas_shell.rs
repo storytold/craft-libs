@@ -18,8 +18,8 @@
 //!                +----------------------+
 //! ```
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::app_shell::{RegionBody, ShellRegion};
 use super::words::ShellWords;

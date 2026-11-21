@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The key of the image request the Choose button files.
 pub const WATERMARK_IMAGE_KEY: &str = "watermark";

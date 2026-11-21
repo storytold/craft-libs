@@ -3,7 +3,6 @@
 use super::{GradientEditor, GradientEditorOutput};
 use crate::ui::gradient::{ColorStop, GradientStops, OpacityStop, StopRef, StopRows, StopRules};
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -56,34 +55,34 @@ fn combined() -> GradientStops {
 
 #[story(GradientEditor<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn gradient_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let stops = data.value("stops", split());
-    let output = GradientEditor::new("Gradient", Bind::bound(stops)).show(ui);
+    let (stops, stops_at) = data.value_at("stops", split());
+    let output = GradientEditor::new("Gradient", stops_at.bind(stops)).show(ui);
     hinted(ui, data, output)
 }
 
 #[story(GradientEditor<'static, u8>, covers = [], drive = Drive::Never)]
 fn gradient_editor_combined(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let stops = data.value("stops", combined());
-    let output = GradientEditor::new("Gradient", Bind::bound(stops)).rules(StopRules::new(StopRows::Combined)).show(ui);
+    let (stops, stops_at) = data.value_at("stops", combined());
+    let output = GradientEditor::new("Gradient", stops_at.bind(stops)).rules(StopRules::new(StopRows::Combined)).show(ui);
     hinted(ui, data, output)
 }
 
 #[story(GradientEditor<'static, u8>, covers = [], drive = Drive::Never)]
 fn gradient_editor_color_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let stops = data.value("stops", GradientStops::new(vec![color(0.0, [0.0, 0.0, 0.0]), color(1.0, [1.0, 1.0, 1.0])]));
-    GradientEditor::new("Gradient map", Bind::bound(stops)).rules(StopRules::new(StopRows::ColorOnly).stops(2, 64)).show(ui).into()
+    let (stops, stops_at) = data.value_at("stops", GradientStops::new(vec![color(0.0, [0.0, 0.0, 0.0]), color(1.0, [1.0, 1.0, 1.0])]));
+    GradientEditor::new("Gradient map", stops_at.bind(stops)).rules(StopRules::new(StopRows::ColorOnly).stops(2, 64)).show(ui).into()
 }
 
 /// The colour popover on, a colour stop selected.
 #[story(GradientEditor<'static, u8>, covers = [], drive = Drive::Never)]
 fn gradient_editor_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (stops, selected) = data.value("state", (split(), Some(StopRef::Color(0))));
-    let output = GradientEditor::new("Gradient", Bind::bound(stops)).color_popover(true).shared_selection(Bind::bound(selected)).show(ui);
+    let ((stops, selected), state_at) = data.value_at("state", (split(), Some(StopRef::Color(0))));
+    let output = GradientEditor::new("Gradient", state_at.bind(stops)).color_popover(true).shared_selection(state_at.bind(selected)).show(ui);
     hinted(ui, data, output)
 }
 
 #[story(GradientEditor<'static, u8>, covers = [], drive = Drive::Never, title = "Disabled")]
 fn gradient_editor_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let stops = data.value("stops", split());
-    GradientEditor::new("Gradient", Bind::bound(stops)).enabled(false).show(ui).into()
+    let (stops, stops_at) = data.value_at("stops", split());
+    GradientEditor::new("Gradient", stops_at.bind(stops)).enabled(false).show(ui).into()
 }

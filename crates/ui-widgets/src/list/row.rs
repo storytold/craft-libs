@@ -23,7 +23,7 @@ mod paint;
 mod placement;
 mod show;
 mod style;
-mod thumb;
+pub(crate) mod thumb;
 mod trailing;
 
 use crate::contract::Hosting;

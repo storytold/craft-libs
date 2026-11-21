@@ -3,7 +3,7 @@
 //! and reading them from a font are always available; the sliders are on `ui`.
 
 #[cfg(feature = "ui")]
-mod sliders;
+pub(crate) mod sliders;
 #[cfg(feature = "ui")]
 pub use sliders::*;
 

@@ -18,8 +18,8 @@ use craft_ui::style::SurfaceKind;
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The builder's words, English by default.
@@ -445,7 +445,7 @@ impl Rows<'_> {
                     .id_salt((path.to_vec(), "add"))
                     .show(ui);
                 if clicked(&plus) {
-                    let group = pointer::frame(ui.ctx()).mods.alt && depth < MAX_DEPTH;
+                    let group = pointer::mods(ui.ctx()).alt && depth < MAX_DEPTH;
                     let item = if group { ConditionItem::Group(self.new_group()) } else { ConditionItem::Rule(self.new_rule()) };
                     *insert = Some((at + 1, item));
                 }

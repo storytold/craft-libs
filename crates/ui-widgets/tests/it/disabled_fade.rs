@@ -7,13 +7,13 @@ use craft_behavior::IconId;
 use craft_theme::variant::Tone;
 use craft_theme::{Opacity, Srgba};
 use craft_ui::buttons::{Button, IconButton};
-use craft_ui::contract::{Lazy, Props as _, Show as _};
+use craft_ui::contract::{MemoProps, MemoView, Props as _, Show as _};
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::DataColor;
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, MemoRun, last_frame_memo_runs, trial};
 use craft_ui::tile_grid::{BadgeKind, BadgeSlot, Tile, TileBadge};
 use egui::epaint::ColorMode;
 use egui::{Color32, Rect, Shape, Ui, pos2};
@@ -125,27 +125,36 @@ fn a_disabled_faded_component_paints_its_enabled_look_faded_once() {
     );
 }
 
-/// A settled region holding a disabled faded tile runs nothing, and replays the veiled paint of the frame that ran.
+/// A view holding a disabled tile.
+#[derive(MemoProps)]
+struct Faded {}
+
+fn faded(_: &mut Faded, ui: &mut Ui) {
+    tile(ui, false);
+}
+
+/// The runs of every view in the last frame.
+fn view_runs(frames: &Frames) -> usize {
+    last_frame_memo_runs(&frames.ctx).iter().filter(|(_, _, run)| *run == MemoRun::Ran).count()
+}
+
+/// A settled memoized view holding a disabled faded tile runs nothing, and replays the veiled paint of the frame that
+/// ran.
 #[trial]
-fn a_settled_region_replays_a_faded_component_without_running_it() {
-    let runs = Cell::new(0);
+fn a_settled_view_replays_a_faded_component_without_running_it() {
     let scene = |ui: &mut Ui| {
-        Lazy::new("faded", 0.0).settles(true).show(ui, |ui| {
-            runs.set(runs.get() + 1);
-            tile(ui, false);
-        });
+        MemoView::new("faded", Faded {}, faded).show(ui);
     };
     let ran = colors(&settled_shapes(&mut Frames::new(), |ui| {
         tile(ui, false);
     }));
     let mut frames = Frames::new();
     frames.frame(vec![], scene);
-    assert!(runs.get() > 0, "the first frame runs the region");
+    assert!(view_runs(&frames) > 0, "the first frame runs the view");
     frames.idle(30, scene);
     for frame in 0..4 {
-        runs.set(0);
         let shapes = frames.frame_shapes(scene);
-        assert_eq!(runs.get(), 0, "settled frame {frame} ran the region");
+        assert_eq!(view_runs(&frames), 0, "settled frame {frame} ran the view");
         assert_eq!(colors(&shapes), ran, "settled frame {frame} paints the veiled colours a run paints");
     }
 }

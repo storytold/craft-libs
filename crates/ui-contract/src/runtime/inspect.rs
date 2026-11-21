@@ -178,6 +178,29 @@ pub struct Recorded {
     pub hits: Vec<HitArea>,
 }
 
+/// A replay at another place keeps the record its run made, moved with it.
+impl crate::runtime::Shift for Arc<Recorded> {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        let elements =
+            self.elements.iter().map(|element| Element { rect: by.rect(element.rect), content: by.rect(element.content), ..element.clone() });
+        let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), ..hit.clone() });
+        Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        if self.elements.len() != to.elements.len() || self.hits.len() != to.hits.len() {
+            return Arc::clone(self);
+        }
+        let elements = self.elements.iter().zip(&to.elements).map(|(element, to)| Element {
+            rect: element.rect.snapped(&to.rect, within),
+            content: element.content.snapped(&to.content, within),
+            ..element.clone()
+        });
+        let hits = self.hits.iter().zip(&to.hits).map(|(hit, to)| HitArea { rect: hit.rect.snapped(&to.rect, within), ..hit.clone() });
+        Arc::new(Recorded { layer: self.layer, elements: elements.collect(), hits: hits.collect() })
+    }
+}
+
 impl Recorded {
     /// The rect of the element at `index` where Tab stops on it: its hit area when it has one, else its box.
     pub fn stop_rect(&self, index: usize) -> Option<Rect> {
@@ -237,12 +260,19 @@ pub fn record<R>(ui: &mut Ui, key: Id, body: impl FnOnce(&mut Ui) -> R) -> (R, O
     let out = body(ui);
     let Some(open) = pass_state::with::<Log, _>(&ctx, |log| log.open.pop()) else { return (out, None) };
     let recorded = Arc::new(finish(&ctx, open));
-    write(&ctx, key, |kept| {
-        let changed = kept.recorded.as_deref() != Some(&*recorded);
-        kept.recorded = Some(Arc::clone(&recorded));
+    keep(&ctx, key, &recorded);
+    // A memoized view that replays this region keeps its record as the run left it.
+    crate::runtime::replay::journal(&ctx, || (key, Arc::clone(&recorded)), |ctx, (key, recorded)| keep(ctx, *key, recorded));
+    (out, Some(recorded))
+}
+
+/// Keeps `recorded` as the record of the region `key`.
+fn keep(ctx: &Context, key: Id, recorded: &Arc<Recorded>) {
+    write(ctx, key, |kept| {
+        let changed = kept.recorded.as_deref() != Some(&**recorded);
+        kept.recorded = Some(Arc::clone(recorded));
         changed
     });
-    (out, Some(recorded))
 }
 
 /// The latest record of the region `key`, read as a value: when the region shows later in the pass with a different
@@ -295,9 +325,9 @@ fn write(ctx: &Context, key: Id, edit: impl FnOnce(&mut Kept) -> bool) {
     }
 }
 
-/// Notes an edit of the record `read` that `editor` made: a settled region that read it runs, and so does the pass when
-/// something read it earlier in the pass.
-fn edited(ctx: &Context, read: BindKey, editor: Id) {
+/// Notes an edit of the record `read` that `editor` made: a settled memoized view that read it runs, and so does the
+/// pass when something read it earlier in the pass.
+pub(crate) fn edited(ctx: &Context, read: BindKey, editor: Id) {
     crate::runtime::lazy::note_edit(ctx, read);
     if reads::earlier(ctx, read, editor).other {
         log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "{editor:?} edited {read:?}, read earlier in the pass");

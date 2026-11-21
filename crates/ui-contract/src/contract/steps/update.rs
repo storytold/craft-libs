@@ -18,7 +18,7 @@ pub(crate) fn takes_activation(resolved: &Resolved<'_>) -> bool {
 /// `Intent::Activate` carries them, and the pass's pointer frame reads them from the same input a pointer activation's
 /// modifiers come from (Alt+Enter adds the way Alt+click does).
 pub(crate) fn key_activation(ctx: &egui::Context) -> crate::contract::Activation {
-    crate::contract::Activation { by_key: true, mods: crate::runtime::pointer::frame(ctx).mods }
+    crate::contract::Activation { by_key: true, mods: crate::runtime::pointer::frame_raw(ctx).mods }
 }
 
 /// Step 9, update, the part the library writes: the keyboard activation.
@@ -104,7 +104,7 @@ fn double_click(core: &CxCore<'_>) -> Option<Option<PartRef>> {
 /// Whether this pass releases the secondary button over the component, its text part included (a widget of its own
 /// over it): a right click on it.
 pub(crate) fn secondary_click(core: &CxCore<'_>) -> bool {
-    crate::runtime::pointer::frame(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary)
+    crate::runtime::pointer::frame_raw(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary)
         && (core.response.hovered()
             || core.texts.as_ref().is_some_and(|(key, _)| {
                 core.ctx.read_response(crate::primitives::text_adapter::text_id(core.id, *key)).is_some_and(|text| text.hovered())

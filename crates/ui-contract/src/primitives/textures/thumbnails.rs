@@ -486,7 +486,7 @@ fn paint_placeholder(cx: &ContentPainterCx<'_>, rect: Rect, paper: Option<DataCo
 fn paint_failure(cx: &ContentPainterCx<'_>, rect: Rect) {
     let side = cx.tokens.size.icon.sm.min(rect.width().min(rect.height()));
     let icon = Rect::from_center_size(rect.center(), vec2(side, side));
-    crate::primitives::icon::paint(&cx.painter, cx.tokens, cx.direction, icon, &IconSpec::svg(IconId::new("warning")), false);
+    crate::primitives::icon::paint(&cx.painter, cx.tokens, cx.direction, icon, &IconSpec::svg(IconId::new("warning")), false, false);
 }
 
 /// A [`ThumbSource`] for stories and tests in every crate: pictures made from the key and a revision the test sets,

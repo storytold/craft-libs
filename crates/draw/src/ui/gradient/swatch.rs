@@ -12,8 +12,8 @@ use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRow
 
 use super::GradientTile;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a gradient swatch: the colour swatch's height, corners and ring.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

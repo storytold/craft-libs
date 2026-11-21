@@ -1,7 +1,9 @@
 //! `DockEvent`, `FloatSpace` and `HidePanels`: what a dock reports to the host and the host tells a dock.
 
-use super::{DockCommands, DockSizes, DragUnit};
+use super::{DockCommands, DockSizes, DragUnit, PanelKey};
+use crate::contract::{MemoProps, Tracked};
 use egui::{Rect, Vec2};
+use std::collections::BTreeSet;
 
 /// A request for host state outside the layout, or a report of where something ended up.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,23 +44,19 @@ pub enum DockEvent<P> {
 /// Which panels the host hides. Protected panels always stay. While the shell hides the panels and keeps the tools
 /// (Shift+Tab), the panels `Except` names stay and every other panel hides; while it hides the dock (Tab), every panel
 /// hides.
+///
+/// The set is a `Tracked` value, so a dock keys what it shows by the set's revision and keeps the pruned layout until
+/// the set, the workspace or the shell's visibility changes.
+#[derive(Clone, Copy, MemoProps)]
 #[non_exhaustive]
-pub enum HidePanels<'a, P> {
+pub enum HidePanels<'a> {
     /// Hides none.
     None,
     /// Hides every panel.
     All,
-    /// Every panel except those for which the function returns true.
-    Except(&'a dyn Fn(&P) -> bool),
+    /// Every panel except those whose [`PanelKey`] the set holds.
+    Except(&'a Tracked<BTreeSet<PanelKey>>),
 }
-
-impl<P> Clone for HidePanels<'_, P> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<P> Copy for HidePanels<'_, P> {}
 
 /// Where a docking command floats a panel, group or column when it gives no rect. A dock records one each pass;
 /// the host reads it to turn a command into placements.
@@ -69,8 +67,9 @@ pub struct FloatSpace<P> {
     pub area: Rect,
     /// Room between the area's top-left corner and a unit a command floats.
     pub inset: f32,
-    /// The height of a floating window's title row (`DockSizes::title_row`), which a drop keeps under the pointer.
-    pub title_row: f32,
+    /// The height above a floated window's body (`DockSizes::window_chrome`): its title row, which a drop keeps under
+    /// the pointer, and the band over it where floats show in the app window.
+    pub chrome: f32,
     /// The size a unit floats at when neither its panel nor where it came from gives one. Its height is also the
     /// most a panel, group or column floats at.
     pub default_size: Vec2,
@@ -87,11 +86,18 @@ impl<P: PartialEq> FloatSpace<P> {
         FloatSpace {
             area,
             inset: sizes.cascade_inset,
-            title_row: sizes.title_row,
+            chrome: sizes.window_chrome(true),
             default_size: sizes.float_size,
             panels: Vec::new(),
             side_edge_zones: false,
         }
+    }
+
+    /// For an area whose floats open in OS windows (`on`), whose chrome is their title row alone.
+    #[must_use]
+    pub fn in_os_windows(mut self, sizes: &DockSizes, on: bool) -> Self {
+        self.chrome = sizes.window_chrome(!on);
+        self
     }
 
     /// For an area drawn with `DockConfig::side_edge_zones` when the area has not drawn yet (a headless run).
@@ -120,7 +126,7 @@ impl<P: PartialEq> FloatSpace<P> {
 
     /// The size `unit` floats at: a panel's own float size, else the size it had where it came from (`source`), else
     /// the default. A window keeps its own size. A panel, group or column takes the source's width and its height
-    /// with the window's title row above it, at most the default height: the dock passes the height its content
+    /// with the window's chrome above it, at most the default height: the dock passes the height its content
     /// measures at in that room, so content that fills floats at the default height.
     pub fn size_of(&self, unit: &DragUnit<P>, source: Option<Vec2>) -> Vec2 {
         let own = match unit {
@@ -129,15 +135,15 @@ impl<P: PartialEq> FloatSpace<P> {
         };
         let framed = |size: Vec2| match unit {
             DragUnit::Window(_) => size,
-            _ => Vec2::new(size.x, (size.y + self.title_row).min(self.default_size.y)),
+            _ => Vec2::new(size.x, (size.y + self.chrome).min(self.default_size.y)),
         };
         own.or(source.map(framed)).unwrap_or(self.default_size)
     }
 
     /// The height a panel, group or column's content is measured in for a float of it: the default height less the
-    /// window's title row.
+    /// window's chrome.
     pub fn content_room(&self) -> f32 {
-        (self.default_size.y - self.title_row).max(0.0)
+        (self.default_size.y - self.chrome).max(0.0)
     }
 
     fn find(sizes: &[(P, Vec2)], panel: &P) -> Option<Vec2> {

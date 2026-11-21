@@ -1,7 +1,7 @@
 //! `PreferencesPage`: the preferences body without a window, applying each value at once.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::model::{PageSpec, PreferencesModel};
 use super::rows::{RowsOut, ShownRow, reset_button, show_row};
@@ -284,21 +284,24 @@ fn show_page<H: PreferencesModel + ?Sized>(
     } else if page.groups.is_empty() && !searching {
         Notice::new(Tone::Info, words.empty_page.clone()).layout(NoticeLayout::Centred).show(ui);
     }
-    for (at, group) in page.groups.iter().enumerate() {
-        let mut rows = |ui: &mut Ui| {
-            let name = group.title.clone().unwrap_or_else(|| page.title.clone());
-            FieldGroup::new(name).show(ui, |ui, _| {
-                for row in &group.rows {
-                    show_row(ui, host, row, units, &mut out.rows);
+    if !page.groups.is_empty() {
+        FieldGroup::new(page.title.clone()).show(ui, |ui, _| {
+            for (at, group) in page.groups.iter().enumerate() {
+                let mut rows = |ui: &mut Ui| {
+                    Stack::new().id_salt(at).show(ui, |ui, _| {
+                        for row in &group.rows {
+                            show_row(ui, host, row, units, &mut out.rows);
+                        }
+                    });
+                };
+                match &group.title {
+                    Some(title) => {
+                        Section::fixed(title.clone()).id_salt(at).show(ui, |ui, _| rows(ui));
+                    }
+                    None => rows(ui),
                 }
-            });
-        };
-        match &group.title {
-            Some(title) => {
-                Section::fixed(title.clone()).id_salt(at).show(ui, |ui, _| rows(ui));
             }
-            None => rows(ui),
-        }
+        });
     }
     if let Some(note) = &page.footnote {
         Text::new(note.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
