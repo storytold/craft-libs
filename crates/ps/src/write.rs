@@ -347,13 +347,17 @@ const SHADING_BOUNDS_PLACES: u32 = 7;
 ///
 /// `stops` are `(offset, components)` pairs; consecutive pairs with strictly increasing offsets
 /// become `FunctionType 2` linear segments (wrapped in a `FunctionType 3` stitching function when
-/// there are two or more). Each stop's `components` are clamped to the first `components_len`
-/// values.
+/// there are two or more). If `stops` has no strictly increasing pair, the first stop is written as
+/// a constant `FunctionType 2` function. Does nothing when `stops` is empty or `components_len` is
+/// zero. Each stop's `components` are clamped to `components_len` values (zero-padded if shorter).
 pub fn push_shading(s: &mut String, kind: ShadingKind, color_space: &str, coords: &[f64], components_len: usize, stops: &[(f64, Vec<f32>)]) {
+    if components_len == 0 || stops.is_empty() {
+        return;
+    }
     let comps = |c: &[f32]| -> String {
         let mut out = String::from("[");
-        for v in c.iter().take(components_len) {
-            push_num(&mut out, f64::from(*v));
+        for i in 0..components_len {
+            push_num(&mut out, f64::from(c.get(i).copied().unwrap_or(0.0)));
             out.push(' ');
         }
         if out.ends_with(' ') {
@@ -365,6 +369,10 @@ pub fn push_shading(s: &mut String, kind: ShadingKind, color_space: &str, coords
     let segments: Vec<_> = stops.windows(2).filter(|w| w[1].0 > w[0].0).collect();
     let interp = |w: &&[(f64, Vec<f32>)]| format!("<< /FunctionType 2 /Domain [0 1] /C0 {} /C1 {} /N 1 >>", comps(&w[0].1), comps(&w[1].1));
     let function = match segments.as_slice() {
+        [] => {
+            let c = comps(&stops[0].1);
+            format!("<< /FunctionType 2 /Domain [0 1] /C0 {c} /C1 {c} /N 1 >>")
+        }
         [one] => interp(one),
         many => {
             let mut f = String::from("<< /FunctionType 3 /Domain [0 1] /Functions [\n");
@@ -794,6 +802,43 @@ mod tests {
         assert!(multi.contains("/ShadingType 3 /ColorSpace /DeviceGray"));
         assert!(multi.contains("/FunctionType 3 /Domain [0 1] /Functions ["));
         assert!(multi.contains("/Bounds [0.1234567 ] /Encode [0 1 0 1 ]"));
+    }
+
+    #[test]
+    fn shading_handles_empty_single_and_flat_stops() {
+        let mut empty = String::new();
+        push_shading(&mut empty, ShadingKind::Axial, "/DeviceRGB", &[0.0, 0.0, 10.0, 0.0], 3, &[]);
+        push_shading(&mut empty, ShadingKind::Axial, "/DeviceRGB", &[0.0, 0.0, 10.0, 0.0], 0, &[(0.0, vec![1.0, 0.0, 0.0])]);
+        assert!(empty.is_empty());
+
+        let mut single = String::new();
+        push_shading(&mut single, ShadingKind::Axial, "/DeviceRGB", &[0.0, 0.0, 10.0, 0.0], 3, &[(0.5, vec![1.0])]);
+        assert!(single.contains("/FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1"));
+        assert!(!single.contains("/FunctionType 3"));
+
+        let mut flat = String::new();
+        push_shading(
+            &mut flat,
+            ShadingKind::Axial,
+            "/DeviceRGB",
+            &[0.0, 0.0, 10.0, 0.0],
+            3,
+            &[(0.5, vec![1.0, 0.0, 0.0]), (0.5, vec![0.0, 0.0, 1.0])],
+        );
+        assert!(flat.contains("/FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1"));
+        assert!(!flat.contains("/FunctionType 3"));
+
+        let mut hard_edge = String::new();
+        push_shading(
+            &mut hard_edge,
+            ShadingKind::Axial,
+            "/DeviceRGB",
+            &[0.0, 0.0, 10.0, 0.0],
+            3,
+            &[(0.0, vec![1.0, 0.0, 0.0]), (0.5, vec![1.0, 0.0, 0.0]), (0.5, vec![0.0, 0.0, 1.0]), (1.0, vec![0.0, 0.0, 1.0])],
+        );
+        assert!(hard_edge.contains("/FunctionType 3"));
+        assert!(hard_edge.contains("/Bounds [0.5 ] /Encode [0 1 0 1 ]"));
     }
 
     #[test]

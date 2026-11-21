@@ -197,6 +197,13 @@ pub struct Stamped<T> {
     value: T,
 }
 
+impl<T> Stamped<T> {
+    /// The record as its viewport's latest pass left it.
+    pub(crate) fn value(&self) -> &T {
+        &self.value
+    }
+}
+
 impl<T: Default> PerViewport<T> {
     fn record(&mut self, viewport: ViewportId) -> &mut T {
         let at = match self.records.iter().position(|(id, _)| *id == viewport) {
@@ -255,6 +262,11 @@ impl<T: Stored> PerViewport<T> {
         if !registered {
             Self::register_prune(ctx);
         }
+    }
+
+    /// Runs `f` on the record of `viewport` when it has one; creates none.
+    pub(crate) fn with_existing<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        T::records(ctx, |records| records.records.iter_mut().find(|(id, _)| *id == viewport).map(|(_, record)| f(record)))
     }
 
     /// Runs `f` on the record of every viewport that has one.
@@ -633,7 +645,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H0: one press per pass.
     let frame = pass::frame_nr(ctx, viewport);
     let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(&mut events, frame, &mut record.held));
-    // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left.
+    // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left. The events sent
+    // to the focus are counted first, before the IME and key stages take theirs.
+    keys::count_sent(ctx, viewport, &events);
     ime::input_hook(ctx, &mut events, viewport);
     let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {
@@ -743,6 +757,8 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     for prune in prunes {
         prune(&ctx, &live);
     }
+    #[cfg(feature = "testing")]
+    crate::runtime::egui::access::check_parents_acyclic(&ctx);
     RUNNING.with(|running| {
         let mut running = running.borrow_mut();
         if let Some(at) = running.iter().rposition(|pass| pass.ctx == ctx) {

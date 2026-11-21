@@ -36,6 +36,7 @@ pub use scroll::{STRIP_BACK, STRIP_FORWARD};
 #[cfg(feature = "suite")]
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
+pub use window::grip_band;
 pub(crate) use window::keep_inside;
 
 /// The scroll region's view in the last pass that showed it.
@@ -165,6 +166,9 @@ pub(super) struct BodyHooks<'b> {
     /// The container is a row of a vertical flow, not a member of a row's line (`label::in_column`), as its parent
     /// flow showed it this run: its own measuring run shows its content in a flow of its own.
     in_column: bool,
+    /// The line just before the container in its flow is a rule (`layout::flow_start`), as its parent flow showed it
+    /// this run: a rule above its header is not drawn, so two rules never follow each other.
+    after_rule: bool,
     /// A bottom-anchored region is following the end of its content.
     follows_end: bool,
 }
@@ -241,6 +245,7 @@ impl<'b> BodyHooks<'b> {
             held: false,
             across: false,
             in_column: true,
+            after_rule: false,
             follows_end: false,
         }
     }

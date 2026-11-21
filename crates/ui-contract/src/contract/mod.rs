@@ -53,22 +53,24 @@ pub use crate::runtime::pending::{Job, Pending, Progress};
 #[doc(hidden)]
 pub use body::REORDER_BAND;
 #[doc(hidden)]
+pub use body::grip_band;
 pub use body::pad_of;
 #[doc(hidden)]
 pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
     ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest,
-    ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState,
-    SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed,
+    RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
 #[doc(hidden)]
 pub use container::InMenu;
 pub use container::{
-    BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
-    Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
+    BandFill, Bracket, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion,
+    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope,
+    WrapWidth,
 };
 pub use craft_tracked::{PlainData, Revision, Tracked};
 pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
@@ -416,19 +418,6 @@ pub trait Component: Meta + Sized {
     /// Content size only; the pipeline adds padding and minimum size.
     fn measure(&mut self, _cx: &MeasureCx<'_, Self>) -> Vec2 {
         Vec2::ZERO
-    }
-
-    /// Set when `measure_pair` may answer a paired request. The default avoids calling the hook for legacy components.
-    const PAIRED_MEASURE: bool = false;
-
-    /// Optionally answers an ideal and a least content measure together. The answers must match `measure` under
-    /// the two supplied contexts, including the external inputs each reads, and leave the component as those calls
-    /// would. The component's fill declaration and label-scope reads must not change during either measure. Both
-    /// answers are replayed under the union of those inputs, so use this only when that preserves each answer. Return
-    /// `None` without reading either context or changing state to keep the ordinary separate calls;
-    /// that is the default.
-    fn measure_pair(&mut self, _ideal: &MeasureCx<'_, Self>, _least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
-        None
     }
 
     /// The axis along which the component takes all the room the flow offers when that is more than it measured,

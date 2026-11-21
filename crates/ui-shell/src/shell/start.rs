@@ -28,7 +28,7 @@ use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
 use crate::sections::Section;
-use crate::style::{Corners, StyleCx, SurfaceKind, SurroundLook, TypeRole};
+use crate::style::{Corners, DataColor, StyleCx, SurfaceKind, SurroundLook, TypeRole};
 use crate::tile_grid::{CaptionPlace, Tile, TileGrid};
 use craft_behavior::{IconId, Proposal, SelectionChange, keyed};
 use craft_theme::variant::{CustomVariant, Emphasis, RadiusStep, Tone, VariantLook};
@@ -59,6 +59,13 @@ const HOME_DROP_ICON: f32 = 34.0;
 // design: allow[literal-size/vec2](the desktop Home page's outer margins are larger than any spacing token)
 const HOME_DESKTOP_INSET: Vec2 = vec2(36.0, 54.0);
 const HOME_DROP_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-drop", home_drop_look);
+/// New and Open on the desktop Home page: the control radius, not the pill of dialog buttons.
+const HOME_NEW_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-new", home_new_look);
+const HOME_OPEN_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-open", home_open_look);
+/// A row of the Home rail (Home, Learn, the community links): no edge or fill at rest, muted ink that turns normal
+/// under the pointer. The selected row keeps normal ink and an accent bar at its leading edge.
+const HOME_ROW_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-row", home_row_look);
+const HOME_ROW_SELECTED_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-row-selected", home_row_selected_look);
 
 /// The revealed part of a recent row that takes the file off the list.
 pub(super) const REMOVE: TrailingPart = TrailingPart::new(0);
@@ -214,6 +221,16 @@ pub struct StartScreen<'a> {
     /// The text of the link that fires [`StartAction::MoreTemplates`].
     #[prop(into)]
     more_templates: Option<Label>,
+    /// The width and height parts of a card and row picture (16:9 unless the pictures are another shape, as a page 3:4).
+    picture: (u16, u16),
+    /// The zoom of a card's picture, a factor on the card thumbnail: the cards keep that size and do not grow to fill
+    /// the row, so as many as fit stand side by side (default: twice the card thumbnail, grown to fill the row).
+    #[prop(quantity = "zoom factor")]
+    card_zoom: Option<f32>,
+    /// The pictures are opaque pages on this paper, which is document data: no transparency grid shows, and a file
+    /// without a picture shows its icon on the card, not on a sunken tile (default: photos).
+    #[prop]
+    page_paper: Option<DataColor>,
     /// The desktop Home layout set by [`Self::home_layout`].
     home: Option<HomeLayout<'a>>,
 }
@@ -282,7 +299,18 @@ impl<'a> StartScreen<'a> {
             layout: StartLayout::default(),
             title: None,
             more_templates: None,
+            picture: (PICTURE_WIDE, PICTURE_HIGH),
+            card_zoom: None,
+            page_paper: None,
         }
+    }
+
+    /// The shape of the pictures of cards and rows, wide to high (default 16:9). A zero part keeps the default.
+    pub fn picture_aspect(mut self, wide: u16, high: u16) -> Self {
+        if wide > 0 && high > 0 {
+            self.picture = (wide, high);
+        }
+        self
     }
 
     /// Uses a Home layout with a title above the page and a separate group of links at the bottom of its rail.
@@ -314,6 +342,12 @@ pub(super) struct Page<'p> {
     pub(super) env: &'p Env,
     pub(super) words: &'p ShellWords,
     pub(super) thumbnails: Option<ThumbHost<'p>>,
+    /// The width and height parts of a picture.
+    pub(super) picture: (u16, u16),
+    /// The zoom of a card's picture, when the app sets one.
+    pub(super) card_zoom: Option<f32>,
+    /// The paper of page pictures, when the app's pictures are pages.
+    pub(super) paper: Option<DataColor>,
     pub(super) drop_hint: Option<&'p Label>,
     pub(super) now: Option<i64>,
     pub(super) actions: &'p RefCell<Vec<StartAction>>,
@@ -341,39 +375,54 @@ impl<'p> Page<'p> {
             tile = tile.detail(detail);
         }
         match self.thumbnails {
-            Some((thumbnails, source)) => {
-                tile.thumb(ThumbAspect::new(PICTURE_WIDE, PICTURE_HIGH), move |cx, rect| paint_thumb(cx, rect, thumbnails, source, &key))
-            }
+            Some((thumbnails, source)) => tile.thumb(ThumbAspect::new(self.picture.0, self.picture.1), {
+                let paper = self.paper;
+                move |cx, rect| paint_thumb(cx, rect, thumbnails, source, &key, paper)
+            }),
             None => tile.icon(IconId::new("file")),
         }
     }
 
     pub(super) fn grid<K: Clone + Eq + std::hash::Hash + Send + Sync + 'static>(&self, label: Label, deletable: bool) -> TileGrid<'static, K> {
-        TileGrid::<K>::new(label)
+        let grid = TileGrid::<K>::new(label)
             .select(SelectMode::Single)
             .deletable(deletable)
             .activate(ActivateOn::Click)
             .caption(CaptionPlace::Below)
             .detail_line()
             .card()
-            .aspect(f32::from(PICTURE_WIDE) / f32::from(PICTURE_HIGH))
-            .zoom(CARD_ZOOM)
-            .fill_row()
-            .sizing(Sizing::FillWidth)
-            .natural_height(true)
+            .aspect(f32::from(self.picture.0) / f32::from(self.picture.1));
+        let grid = match self.card_zoom {
+            Some(zoom) => grid.zoom(zoom),
+            None => grid.zoom(CARD_ZOOM).fill_row(),
+        };
+        grid.sizing(Sizing::FillWidth).natural_height(true)
     }
 }
 
 /// The thumbnail of `key` in `rect`, asked for at the size it paints. The store paints the placeholder while the
 /// picture is not ready and the failure mark when it failed; a key the source has no picture for (`Blank`) gets the
 /// file icon on the sunken tile.
-pub(super) fn paint_thumb(cx: &ContentPainterCx, rect: Rect, thumbnails: &Thumbnails<ThumbKey>, source: &dyn ThumbSource<ThumbKey>, key: &ThumbKey) {
+pub(super) fn paint_thumb(
+    cx: &ContentPainterCx,
+    rect: Rect,
+    thumbnails: &Thumbnails<ThumbKey>,
+    source: &dyn ThumbSource<ThumbKey>,
+    key: &ThumbKey,
+    paper: Option<DataColor>,
+) {
     let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
     let state = thumbnails.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
-    if thumbnails.paint(cx, rect, &state, &ThumbPaint::default()) {
+    let paint = match paper {
+        Some(paper) => ThumbPaint::default().checker(false).paper(paper),
+        None => ThumbPaint::default(),
+    };
+    if thumbnails.paint(cx, rect, &state, &paint) {
         return;
     }
-    cx.surface(rect, SurfaceKind::Sunken, Corners::None);
+    if paper.is_none() {
+        cx.surface(rect, SurfaceKind::Sunken, Corners::None);
+    }
     let side = cx.style_cx().tokens.size.icon.lg;
     cx.icon(Rect::from_center_size(rect.center(), Vec2::splat(side)), &IconSpec::svg(IconId::new("file")));
 }
@@ -408,13 +457,40 @@ pub(super) fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead:
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, layout, title, more_templates, home } =
-            self;
+        let StartScreen {
+            view,
+            sort,
+            recent,
+            pinned,
+            templates,
+            max_recent,
+            now,
+            thumbnails,
+            links,
+            drop_hint,
+            layout,
+            title,
+            more_templates,
+            picture,
+            card_zoom,
+            page_paper,
+            home,
+        } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, actions: &actions };
+        let page = Page {
+            env: &env,
+            words: &words,
+            thumbnails,
+            picture,
+            card_zoom,
+            paper: page_paper,
+            drop_hint: drop_hint.as_ref(),
+            now,
+            actions: &actions,
+        };
         let view = RefCell::new(view);
         let sort = RefCell::new(sort);
 
@@ -517,9 +593,9 @@ impl HomeLayout<'_> {
                     Stack::new().id_salt("home-page").fill().pad(Pad::Regular).gap(gap).scroll(Scroll::vertical()).show_at(ui, content, |ui, cx| {
                         let top = ui.available_rect_before_wrap().top();
                         if !wide {
-                            let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| new_and_open(page, ui, Sizing::FillWidth));
+                            let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| home_new_and_open(page, ui));
                         }
-                        let _ = Text::new(self.title.clone()).role(TypeRole::Display).show(ui);
+                        let _ = Text::new(self.title.clone()).role(TypeRole::Heading).show(ui);
                         home_divider(ui);
                         sections(ui, cx, top + content.height() / 2.0, wide);
                         if !wide {
@@ -535,7 +611,7 @@ impl HomeLayout<'_> {
         let stack = || Stack::new().id_salt("home-rail").pad(Pad::Regular).gap(Gap::Section);
         let top = |ui: &mut Ui| {
             let _ = Stack::new().id_salt("home-actions").gap(Gap::Stack).fill_width().show(ui, |ui, _| {
-                new_and_open(page, ui, Sizing::FillWidth);
+                home_new_and_open(page, ui);
             });
             home_divider(ui);
             home_links(ui, page, "home-nav", links, Gap::Section);
@@ -585,7 +661,8 @@ fn home_columns(room: Rect, rtl: bool) -> (Rect, Rect) {
 
 fn home_links(ui: &mut Ui, page: &Page<'_>, id: &'static str, links: &[StartLink], gap: Gap) {
     if !links.is_empty() {
-        let _ = Stack::new().id_salt(id).gap(gap).label(page.words.start_links.clone()).fill_width().show(ui, |ui, _| link_items(ui, links, true));
+        let _ =
+            Stack::new().id_salt(id).gap(gap).label(page.words.start_links.clone()).fill_width().show(ui, |ui, cx| home_link_items(ui, cx, links));
     }
 }
 
@@ -604,6 +681,78 @@ fn home_divider(ui: &mut Ui) {
 fn home_edge(tokens: &Tokens) -> Rgba {
     let color = &tokens.color;
     if color.line.divider == color.surface.canvas { color.text.faint } else { color.line.divider }
+}
+
+fn home_new_look(tokens: &Tokens) -> VariantLook {
+    Variant::PRIMARY.resolve(tokens).radius(RadiusStep::Control)
+}
+
+fn home_open_look(tokens: &Tokens) -> VariantLook {
+    home_drop_look(tokens)
+}
+
+fn home_row_look(tokens: &Tokens) -> VariantLook {
+    let mut look = Variant::GHOST.resolve(tokens).radius(RadiusStep::Control);
+    look.text.rest = tokens.color.text.muted;
+    look.muted.rest = tokens.color.text.muted;
+    look
+}
+
+fn home_row_selected_look(tokens: &Tokens) -> VariantLook {
+    Variant::GHOST.resolve(tokens).radius(RadiusStep::Control)
+}
+
+/// New and Open on the desktop Home page, filling the rail (or the narrow page's row).
+fn home_new_and_open(page: &Page<'_>, ui: &mut Ui) {
+    let words = page.words;
+    let new = Button::new(words.new.clone()).id_salt("new").variant(Variant::Custom(HOME_NEW_LOOK)).sizing(Sizing::FillWidth);
+    if clicked(&new.show(ui)) {
+        page.push(StartAction::New);
+    }
+    let open = Button::new(words.open.clone()).id_salt("open").variant(Variant::Custom(HOME_OPEN_LOOK)).sizing(Sizing::FillWidth);
+    if clicked(&open.show(ui)) {
+        page.push(StartAction::Open);
+    }
+}
+
+/// The rows of a Home rail group: each link is a full-width row with its icon, a URL opening in the browser (the URL
+/// is its tooltip) and a command firing as a pointer activation. A selected row has an accent bar at its leading edge.
+fn home_link_items(ui: &mut Ui, cx: &mut BodyCx<'_>, links: &[StartLink]) {
+    for (at, link) in links.iter().enumerate() {
+        let look = if link.selected { HOME_ROW_SELECTED_LOOK } else { HOME_ROW_LOOK };
+        let mut button =
+            Button::new(link.label.clone()).id_salt(("start-link", at)).variant(Variant::Custom(look)).align(HAlign::Start).sizing(Sizing::FillWidth);
+        if let Some(icon) = &link.icon {
+            button = button.icon(icon.clone());
+        }
+        if let StartLinkTarget::Url(url) = &link.target {
+            button = button.tooltip(url.clone());
+        }
+        let shown = button.show(ui);
+        if link.selected {
+            home_selected_bar(ui, shown.response().rect);
+        }
+        if clicked(&shown) {
+            match &link.target {
+                StartLinkTarget::Url(url) => cx.open_url(url, false),
+                StartLinkTarget::Command(command) => {
+                    let _ = commands::fire(ui.ctx(), command.clone(), FireSource::Pointer);
+                }
+            }
+        }
+    }
+}
+
+/// The accent bar at the leading edge of the selected Home row, as tall as its icon.
+fn home_selected_bar(ui: &mut Ui, row: Rect) {
+    let env = Env::of(ui);
+    let style = StyleCx::of_env(ui.ctx(), &env);
+    // The accent mark's look: `accent.solid`, `stroke.thick` wide.
+    let look = style.rule(RuleKind::DropMark);
+    let scale = ui.ctx().pixels_per_point();
+    let bar = Rect::from_center_size(row.center(), vec2(row.width(), env.tokens.size.icon.md.min(row.height())));
+    let side = if env.direction.is_rtl() { RectSide::Right } else { RectSide::Left };
+    ui.painter().extend(Rule::edge(&look, bar, side, scale));
 }
 
 fn home_drop_look(tokens: &Tokens) -> VariantLook {

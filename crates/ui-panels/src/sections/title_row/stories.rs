@@ -56,3 +56,9 @@ fn title_row_with_icon_and_subtitle(ui: &mut Ui, _: &mut StoryData) -> StoryOutp
 fn title_row_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TitleRow::new("Preset details").strength(HeaderStrength::Caption).show(ui).edit.into()
 }
+
+#[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
+fn title_row_bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    // A floating window's drag bar: no title, the Close action at the end.
+    TitleRow::new("").strength(HeaderStrength::Bar).actions([HeaderAction::Close]).show(ui).edit.into()
+}

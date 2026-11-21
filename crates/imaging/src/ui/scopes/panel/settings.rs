@@ -4,7 +4,19 @@ use crate::ui::histogram::LevelRange;
 use crate::ui::scopes::clipping::{ClippingDiagnostic, ClippingMode, ClippingWarnings};
 
 /// The panel's view (its menu's Compact, Expanded and All Channels View).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    craft_ui::contract::MemoProps,
+    craft_ui::contract::PlainData,
+)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ScopeView {
@@ -20,7 +32,7 @@ pub enum ScopeView {
 /// The scope panel's persisted section: the app keeps it with its preferences (PhotoCraft's
 /// `histogramPanel` and `filter.cameraRaw.scope`). Unknown fields are ignored, missing ones take
 /// their defaults.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ScopeSettings {
@@ -93,7 +105,7 @@ impl ScopeSettings {
 
 /// What the panel keeps for the app between passes: the persisted settings and the selected
 /// level range (not persisted).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct ScopePanelState {
     /// The persisted section.

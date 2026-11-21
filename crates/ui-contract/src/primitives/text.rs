@@ -5,15 +5,15 @@ use crate::runtime::egui::memory;
 use crate::runtime::egui::text_layout;
 pub use crate::style::Span;
 use crate::style::text_measure::{paragraph_job, span_format};
-use crate::style::{StyleColor, TypeRole, UiTokens};
+use crate::style::{LetterCase, StyleColor, TypeRole, UiTokens};
 use craft_i18n::Direction;
 use egui::epaint::text::FontCacheRevision;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, Context, Galley};
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut, Range};
+use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
 /// How a run fits its room.
@@ -118,6 +118,11 @@ impl<'a> TextRun<'a> {
     /// Sets the type role.
     pub fn role(mut self, role: TypeRole) -> Self {
         self.role = role;
+        if role.letter_case() == LetterCase::Upper {
+            for span in &mut self.spans {
+                span.text = Cow::Owned(span.text.to_uppercase());
+            }
+        }
         self
     }
 
@@ -256,12 +261,29 @@ struct CachedText {
     key: LayoutKey,
     layout: Option<Arc<TextLayout>>,
     least: Option<f32>,
+    /// The pass that last read or wrote the entry.
+    used: u64,
+    /// What the entry retains, as [`retained_bytes`] estimates it.
+    bytes: usize,
 }
+
+/// Passes an entry stays without being read: egui's galley cache drops a galley unused for one pass; the memo keeps
+/// an entry longer, so text whose body replays its kept measurement for a few passes still finds its layout when the
+/// body runs again.
+const UNUSED_PASSES: u64 = 60;
+/// The most the memo retains in all, as [`retained_bytes`] estimates it: the per-entry caps in `put` bound one
+/// entry, this bounds many wide paragraphs at many widths.
+const BUDGET_BYTES: usize = 32 * 1024 * 1024;
+/// Where an eviction over the budget stops, below the budget so that one eviction covers many new entries.
+const EVICT_TO_BYTES: usize = BUDGET_BYTES / 4 * 3;
 
 #[derive(Default)]
 struct TextMemo {
     entries: HashMap<u64, Vec<CachedText>>,
-    order: VecDeque<u64>,
+    /// The sum of the entries' `bytes`.
+    bytes: usize,
+    /// The current pass, as of the last access.
+    pass: u64,
     generation: u64,
     font_revision: Option<FontCacheRevision>,
 }
@@ -269,15 +291,39 @@ struct TextMemo {
 fn with_memo<R>(ctx: &Context, f: impl FnOnce(&mut TextMemo) -> R) -> R {
     // Mark the viewport as using fonts so same-pass changes wait, just as a fresh layout would.
     let font_revision = ctx.fonts_mut(|fonts| fonts.cache_revision_and_mark_used());
+    let pass = ctx.cumulative_pass_nr();
     memory::with::<TextMemo, _>(ctx, |memo| {
         if memo.font_revision.as_ref() != Some(&font_revision) {
             memo.entries.clear();
-            memo.order.clear();
+            memo.bytes = 0;
             memo.generation = memo.generation.wrapping_add(1);
             memo.font_revision = Some(font_revision);
         }
+        if memo.pass != pass {
+            memo.pass = pass;
+            memo.retain(|entry| pass.saturating_sub(entry.used) < UNUSED_PASSES);
+        }
         f(memo)
     })
+}
+
+/// What a memo entry keeps alive: its key's text, and its galley's text, glyphs and mesh.
+fn retained_bytes(key: &LayoutKey, layout: Option<&TextLayout>) -> usize {
+    use egui::epaint::Vertex;
+    use egui::epaint::text::{Glyph, LayoutSection};
+    use std::mem::size_of;
+    let text: usize = key.run.spans.iter().map(|span| size_of::<Span<'_>>() + span.text.len()).sum();
+    let galley = layout.map_or(0, |layout| {
+        let galley = &layout.galley;
+        let glyphs: usize = galley.rows.iter().map(|placed| placed.row.glyphs.len()).sum();
+        galley.job.text.len()
+            + galley.job.sections.len() * size_of::<LayoutSection>()
+            + glyphs * size_of::<Glyph>()
+            + galley.num_vertices * size_of::<Vertex>()
+            + galley.num_indices * size_of::<u32>()
+            + layout.full.as_ref().map_or(0, |full| full.len())
+    });
+    size_of::<CachedText>() + text + galley
 }
 
 impl LayoutQuery<'_> {
@@ -346,8 +392,12 @@ impl LayoutQuery<'_> {
 }
 
 impl TextMemo {
-    fn get(&self, key: &LayoutQuery<'_>) -> Option<&CachedText> {
-        self.entries.get(&key.hash())?.iter().find(|entry| key.matches(&entry.key))
+    /// The entry for `key`, marked as used in this pass.
+    fn get(&mut self, key: &LayoutQuery<'_>) -> Option<&CachedText> {
+        let pass = self.pass;
+        let entry = self.entries.get_mut(&key.hash())?.iter_mut().find(|entry| key.matches(&entry.key))?;
+        entry.used = pass;
+        Some(entry)
     }
 
     fn put(&mut self, key: &LayoutQuery<'_>, layout: Option<Arc<TextLayout>>, least: Option<f32>) {
@@ -356,6 +406,7 @@ impl TextMemo {
             return;
         }
         let hash = key.hash();
+        let pass = self.pass;
         if let Some(entry) = self.entries.get_mut(&hash).and_then(|bucket| bucket.iter_mut().find(|entry| key.matches(&entry.key))) {
             if layout.is_some() {
                 entry.layout = layout;
@@ -363,20 +414,52 @@ impl TextMemo {
             if least.is_some() {
                 entry.least = least;
             }
+            entry.used = pass;
+            let bytes = retained_bytes(&entry.key, entry.layout.as_deref());
+            self.bytes = self.bytes - entry.bytes + bytes;
+            entry.bytes = bytes;
             return;
         }
-        // Bound retained text and galleys, including colliding keys.
-        if self.order.len() >= 4096
-            && let Some(old) = self.order.pop_front()
-            && let Some(bucket) = self.entries.get_mut(&old)
-        {
-            bucket.remove(0);
-            if bucket.is_empty() {
-                self.entries.remove(&old);
-            }
+        let key = key.owned();
+        let bytes = retained_bytes(&key, layout.as_deref());
+        if self.bytes + bytes > BUDGET_BYTES {
+            self.evict_to(EVICT_TO_BYTES.saturating_sub(bytes));
         }
-        self.entries.entry(hash).or_default().push(CachedText { key: key.owned(), layout, least });
-        self.order.push_back(hash);
+        self.bytes += bytes;
+        self.entries.entry(hash).or_default().push(CachedText { key, layout, least, used: pass, bytes });
+    }
+
+    /// Drops the least recently used entries until the memo retains no more than `bytes`.
+    fn evict_to(&mut self, bytes: usize) {
+        let mut ages: Vec<(u64, usize)> = self.entries.values().flatten().map(|entry| (entry.used, entry.bytes)).collect();
+        ages.sort_unstable_by_key(|&(used, _)| used);
+        let mut left = self.bytes;
+        let mut last = None;
+        for (used, size) in ages {
+            if left <= bytes {
+                break;
+            }
+            left -= size;
+            last = Some(used);
+        }
+        if let Some(last) = last {
+            self.retain(|entry| entry.used > last);
+        }
+    }
+
+    fn retain(&mut self, keep: impl Fn(&CachedText) -> bool) {
+        let mut bytes = 0;
+        self.entries.retain(|_, bucket| {
+            bucket.retain(|entry| keep(entry));
+            bytes += bucket.iter().map(|entry| entry.bytes).sum::<usize>();
+            !bucket.is_empty()
+        });
+        self.bytes = bytes;
+    }
+
+    #[cfg(all(feature = "testing", any(test, feature = "suite")))]
+    fn len(&self) -> usize {
+        self.entries.values().map(Vec::len).sum()
     }
 }
 
@@ -390,7 +473,8 @@ impl TextRun<'_> {
             direction: env.direction,
             ink: env.ink,
             fonts: env.fonts,
-            width: max_width.to_bits(),
+            // A `Line` run lays out at infinite width whatever the room (`job`), so every room shares one entry.
+            width: if self.wrap == Wrap::Line { f32::INFINITY } else { max_width }.to_bits(),
             scale: ctx.pixels_per_point().to_bits(),
         }
     }
@@ -651,125 +735,6 @@ pub(crate) fn note_painted(ctx: &Context, layout: &TextLayout) {
     }
 }
 
-/// The full text of a layout, materialized only when read.
-///
-/// Dereferences to `String` so existing field reads continue to work.
-pub struct LayoutText {
-    galley: Arc<Galley>,
-    original: Option<Arc<str>>,
-    value: Arc<OnceLock<String>>,
-    changed: Option<String>,
-}
-
-impl LayoutText {
-    fn shared(&self) -> Self {
-        Self { galley: self.galley.clone(), original: self.original.clone(), value: self.value.clone(), changed: self.changed.clone() }
-    }
-}
-
-impl std::fmt::Debug for LayoutText {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.deref(), f)
-    }
-}
-
-impl std::fmt::Display for LayoutText {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self.deref(), f)
-    }
-}
-
-impl AsRef<str> for LayoutText {
-    fn as_ref(&self) -> &str {
-        self.deref()
-    }
-}
-
-impl PartialEq for LayoutText {
-    fn eq(&self, other: &Self) -> bool {
-        self.deref() == other.deref()
-    }
-}
-
-impl PartialEq<&str> for LayoutText {
-    fn eq(&self, other: &&str) -> bool {
-        self.deref() == other
-    }
-}
-
-impl PartialEq<String> for LayoutText {
-    fn eq(&self, other: &String) -> bool {
-        self.deref() == other
-    }
-}
-
-impl Deref for LayoutText {
-    type Target = String;
-
-    fn deref(&self) -> &String {
-        self.changed.as_ref().unwrap_or_else(|| self.value.get_or_init(|| self.original.as_deref().unwrap_or(&self.galley.job.text).to_owned()))
-    }
-}
-
-impl DerefMut for LayoutText {
-    fn deref_mut(&mut self) -> &mut String {
-        let (value, original, galley) = (&self.value, &self.original, &self.galley);
-        self.changed.get_or_insert_with(|| value.get_or_init(|| original.as_deref().unwrap_or(&galley.job.text).to_owned()).clone())
-    }
-}
-
-/// A layout's single-row direction runs, built only when read.
-///
-/// Dereferences to `Vec<LayoutRun>` so existing field reads continue to work.
-pub struct LayoutRuns {
-    galley: Arc<Galley>,
-    value: Arc<OnceLock<Vec<LayoutRun>>>,
-    changed: Option<Vec<LayoutRun>>,
-}
-
-impl LayoutRuns {
-    fn shared(&self) -> Self {
-        Self { galley: self.galley.clone(), value: self.value.clone(), changed: self.changed.clone() }
-    }
-}
-
-impl std::fmt::Debug for LayoutRuns {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.deref(), f)
-    }
-}
-
-impl PartialEq for LayoutRuns {
-    fn eq(&self, other: &Self) -> bool {
-        self.deref() == other.deref()
-    }
-}
-
-impl PartialEq<Vec<LayoutRun>> for LayoutRuns {
-    fn eq(&self, other: &Vec<LayoutRun>) -> bool {
-        self.deref() == other
-    }
-}
-
-impl Deref for LayoutRuns {
-    type Target = Vec<LayoutRun>;
-
-    fn deref(&self) -> &Vec<LayoutRun> {
-        self.changed.as_ref().unwrap_or_else(|| {
-            self.value.get_or_init(|| if self.galley.rows.len() <= 1 { TextLayout::build_row_runs(&self.galley, 0) } else { Vec::new() })
-        })
-    }
-}
-
-impl DerefMut for LayoutRuns {
-    fn deref_mut(&mut self) -> &mut Vec<LayoutRun> {
-        let (value, galley) = (&self.value, &self.galley);
-        self.changed.get_or_insert_with(|| {
-            value.get_or_init(|| if galley.rows.len() <= 1 { TextLayout::build_row_runs(galley, 0) } else { Vec::new() }).clone()
-        })
-    }
-}
-
 /// A run laid out whole on its line, and its width at its readable least: what a text that elides measures at
 /// `Proposal::Min`.
 #[derive(Clone)]
@@ -789,59 +754,51 @@ impl LeastLayout {
 }
 
 /// A laid-out run.
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct TextLayout {
     /// The galley.
     pub galley: Arc<Galley>,
     /// The layout cut text.
     pub elided: bool,
-    /// The full text, as the tooltip and accessible name of an elided run.
-    pub full: LayoutText,
+    /// The full text when it differs from the galley's, which a cut shortened.
+    full: Option<Arc<str>>,
     /// The first row's baseline, from the layout's top.
     pub first_baseline: f32,
-    /// The bidi runs of a single-row layout; empty for a wrapped one.
-    pub runs: LayoutRuns,
+    /// The bidi runs of a single-row layout, built on first read and shared by the layout's clones.
+    runs: Arc<OnceLock<Vec<LayoutRun>>>,
     /// The run's paint angle, in radians clockwise about the layout's top-left corner.
     pub rotation: f32,
 }
 
-impl Clone for TextLayout {
-    fn clone(&self) -> Self {
-        Self {
-            galley: self.galley.clone(),
-            elided: self.elided,
-            full: self.full.shared(),
-            first_baseline: self.first_baseline,
-            runs: self.runs.shared(),
-            rotation: self.rotation,
-        }
-    }
-}
-
 impl TextLayout {
     pub(crate) fn new(galley: Arc<Galley>, elided: bool, full: String) -> TextLayout {
-        let original = (galley.job.text != full).then(|| Arc::<str>::from(full));
-        Self::from_job(galley, elided, original)
+        let full = (galley.job.text != full).then(|| Arc::<str>::from(full));
+        Self::from_job(galley, elided, full)
     }
 
+    /// The layout of `galley`; `full` is the full text when it differs from the galley's.
     pub(super) fn from_job(galley: Arc<Galley>, elided: bool, full: Option<Arc<str>>) -> TextLayout {
         let first_baseline = galley.rows.first().map_or(0.0, |placed| match placed.row.glyphs.first() {
             Some(glyph) => placed.pos.y + glyph.pos.y,
             None => placed.pos.y + placed.row.size.y,
         });
-        let full = LayoutText { galley: galley.clone(), original: full, value: Arc::new(OnceLock::new()), changed: None };
-        let runs = LayoutRuns { galley: galley.clone(), value: Arc::new(OnceLock::new()), changed: None };
-        TextLayout { galley, elided, full, first_baseline, runs, rotation: 0.0 }
+        TextLayout { galley, elided, full, first_baseline, runs: Arc::default(), rotation: 0.0 }
+    }
+
+    /// The layout with `galley` in place of its own, the same text placed elsewhere.
+    pub(super) fn with_galley(self, galley: Arc<Galley>) -> TextLayout {
+        TextLayout { galley, runs: Arc::default(), ..self }
     }
 
     /// The full text, as the tooltip and accessible name of an elided run.
     pub fn full(&self) -> &str {
-        &self.full
+        self.full.as_deref().unwrap_or(&self.galley.job.text)
     }
 
     /// The bidi runs of a single-row layout; empty for a wrapped one.
     pub fn runs(&self) -> &[LayoutRun] {
-        &self.runs
+        self.runs.get_or_init(|| if self.galley.rows.len() <= 1 { Self::build_row_runs(&self.galley, 0) } else { Vec::new() })
     }
 
     /// One run per maximal stretch of glyphs with one direction; an empty row is one empty left-to-right run.
@@ -875,11 +832,7 @@ impl TextLayout {
             .map(|at| {
                 let placed = &self.galley.rows[at];
                 let text = placed.row.glyphs.iter().map(|glyph| glyph.chr).collect();
-                let runs = if self.galley.rows.len() == 1 && self.runs.changed.is_none() {
-                    self.runs().to_vec()
-                } else {
-                    Self::build_row_runs(&self.galley, at)
-                };
+                let runs = if self.galley.rows.len() == 1 { self.runs().to_vec() } else { Self::build_row_runs(&self.galley, at) };
                 (text, egui::Rect::from_min_size(placed.pos, placed.row.size), runs)
             })
             .collect()
@@ -962,86 +915,76 @@ impl ReadingMeasure {
 #[cfg(all(feature = "testing", any(test, feature = "suite")))]
 pub(crate) mod memo_tests {
     use super::{
-        Arc, Context, Cow, Direction, HAlign, LayoutRun, Span, StackFacts, StyleColor, TextEnv, TextRun, TypeRole, UiTokens, Wrap, with_memo,
+        Arc, BUDGET_BYTES, Context, Cow, Direction, HAlign, Span, StackFacts, StyleColor, TextEnv, TextRun, TypeRole, UNUSED_PASSES, UiTokens, Wrap,
+        with_memo,
     };
     use crate::testing::trial;
     use craft_theme::{Appearance, Contrast, Mode, Size, TextSize, builtins, resolve};
 
-    #[trial]
-    fn cached_layout_does_not_call_egui_layout_for_a_sentinel() {
+    fn tokens() -> UiTokens {
         let appearance =
             Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
-        let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
+        UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact)
+    }
+
+    fn env(tokens: &UiTokens) -> TextEnv<'_> {
+        TextEnv { tokens, direction: Direction::Ltr, ink: crate::style::rgba_color(tokens.tokens().color.text.normal), fonts: StackFacts::default() }
+    }
+
+    /// Runs one pass of `ctx` with `f`.
+    fn pass(ctx: &Context, f: impl FnMut(&Context)) {
+        let mut output = ctx.run_pass(Default::default(), f);
+        output.textures_delta.clear();
+    }
+
+    fn entries(ctx: &Context) -> usize {
+        with_memo(ctx, |memo| memo.len())
+    }
+
+    #[trial]
+    fn cached_layout_does_not_call_egui_layout_for_a_sentinel() {
+        let tokens = tokens();
+        let env = env(&tokens);
         let ctx = Context::default();
-        let env = TextEnv {
-            tokens: &tokens,
-            direction: Direction::Ltr,
-            ink: crate::style::rgba_color(tokens.tokens().color.text.normal),
-            fonts: StackFacts::default(),
-        };
         let run = TextRun::new("cached layout");
         let mut first = None;
-        let mut output = ctx.run_pass(Default::default(), |ctx| first = Some(run.layout(ctx, &env, 100.0).galley));
-        output.textures_delta.clear();
+        pass(&ctx, |ctx| first = Some(run.layout(ctx, &env, 100.0).galley));
         // Let egui evict its own galleys while our external memo retains the layout.
         for _ in 0..2 {
-            let mut output = ctx.run_pass(Default::default(), |_| {});
-            output.textures_delta.clear();
+            pass(&ctx, |_| {});
         }
-        let mut output = ctx.run_pass(Default::default(), |ctx| {
+        pass(&ctx, |ctx| {
             assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), 0);
             let cached = run.layout(ctx, &env, 100.0);
             assert!(first.as_ref().is_some_and(|first| Arc::ptr_eq(first, &cached.galley)));
             assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), 0, "a memo hit must not call egui layout_job");
         });
-        output.textures_delta.clear();
     }
 
     #[trial]
     fn layouts_reuse_equal_inputs_and_font_updates_invalidate_them() {
-        let appearance =
-            Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
-        let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
+        let tokens = tokens();
+        let env = env(&tokens);
         let ctx = Context::default();
-        let mut output = ctx.run_pass(Default::default(), |ctx| {
-            let env = TextEnv {
-                tokens: &tokens,
-                direction: Direction::Ltr,
-                ink: crate::style::rgba_color(tokens.tokens().color.text.normal),
-                fonts: StackFacts::default(),
-            };
+        pass(&ctx, |ctx| {
             let run = TextRun::new("a label long enough to elide").elide();
             let first = run.layout(ctx, &env, 80.0);
             let second = run.layout(ctx, &env, 80.0);
             assert!(Arc::ptr_eq(&first.galley, &second.galley));
-            assert!(first.runs.value.get().is_none());
-            assert!(first.full.value.get().is_none());
-            let mut cold = first.clone();
-            cold.full.push('?');
-            cold.runs.clear();
-            assert!(cold.runs().is_empty());
+            // The runs are built on first read, once for every copy of the memo's layout.
+            assert!(first.runs.get().is_none());
             assert_eq!(first.full(), "a label long enough to elide");
-            assert_ne!(cold.full(), first.full());
-            assert!(second.full.value.get().is_some());
-            let _ = first.runs();
-            assert!(second.runs.value.get().is_some());
-            let _: String = first.full.clone();
-            let _: Vec<LayoutRun> = first.runs.clone();
-            let mut changed = first.clone();
-            changed.full.push('!');
-            changed.runs.clear();
-            assert_eq!(first.full(), "a label long enough to elide");
-            assert_ne!(changed.full(), first.full());
             assert!(!first.runs().is_empty());
-            assert!(changed.runs().is_empty());
+            assert!(second.runs.get().is_some());
             let again = run.layout(ctx, &env, 80.0);
             assert_eq!(again.full(), first.full());
             assert_eq!(again.runs(), first.runs());
+            let before = entries(ctx);
             let _ = run.layout(ctx, &env, 120.0);
             let _ = run.least_width(ctx, &env);
             let least_key = run.layout_key(ctx, &env, f32::INFINITY);
             with_memo(ctx, |memo| {
-                assert_eq!(memo.order.len(), 3);
+                assert_eq!(memo.len(), before + 2, "a new room and the least width each add an entry");
                 assert!(memo.get(&least_key).is_some_and(|entry| entry.least.is_some()));
             });
             let mut variants = Vec::new();
@@ -1097,22 +1040,22 @@ pub(crate) mod memo_tests {
             changed.rotation = 0.5;
             variants.push(changed);
             for changed in variants {
-                let before = with_memo(ctx, |memo| memo.order.len());
+                let before = entries(ctx);
                 let _ = changed.layout(ctx, &env, 80.0);
                 let _ = changed.layout(ctx, &env, 80.0);
-                assert_eq!(with_memo(ctx, |memo| memo.order.len()), before + 1);
+                assert_eq!(entries(ctx), before + 1);
             }
             let rtl = TextEnv { direction: Direction::Rtl, ..env };
-            let _ = run.layout(ctx, &rtl, 80.0);
             let ink = TextEnv { ink: crate::style::rgba_color(tokens.tokens().color.text.muted), ..env };
             assert_ne!(ink.ink, env.ink);
-            let _ = run.layout(ctx, &ink, 80.0);
-            let fonts = TextEnv { fonts: StackFacts { semibold: true, ..env.fonts }, ..env };
-            let _ = run.layout(ctx, &fonts, 80.0);
-            let fonts = TextEnv { fonts: StackFacts { system_ui: true, ..env.fonts }, ..env };
-            let _ = run.layout(ctx, &fonts, 80.0);
-            let fonts = TextEnv { fonts: StackFacts { line_ratio: 1.25, ..env.fonts }, ..env };
-            let _ = run.layout(ctx, &fonts, 80.0);
+            let semibold = TextEnv { fonts: StackFacts { semibold: true, ..env.fonts }, ..env };
+            let system_ui = TextEnv { fonts: StackFacts { system_ui: true, ..env.fonts }, ..env };
+            let line_ratio = TextEnv { fonts: StackFacts { line_ratio: 1.25, ..env.fonts }, ..env };
+            for changed in [rtl, ink, semibold, system_ui, line_ratio] {
+                let before = entries(ctx);
+                let _ = run.layout(ctx, &changed, 80.0);
+                assert_eq!(entries(ctx), before + 1);
+            }
             let mut changed_tokens = (**tokens.tokens()).clone();
             let equal_tokens = UiTokens::new(Arc::new(changed_tokens.clone()), Contrast::Standard, Size::Compact);
             let equal_env = TextEnv { tokens: &equal_tokens, ..env };
@@ -1124,40 +1067,28 @@ pub(crate) mod memo_tests {
             let mut collision = run.layout_key(ctx, &styled, 80.0);
             collision.tokens = tokens.key();
             with_memo(ctx, |memo| assert!(memo.get(&collision).is_none(), "a token-hash collision must not reuse a different token set"));
+            let before = entries(ctx);
             let _ = run.layout(ctx, &styled, 80.0);
-            let before = with_memo(ctx, |memo| memo.order.len());
-            assert_eq!(before, 26);
+            assert_eq!(entries(ctx), before + 1);
         });
-        output.textures_delta.clear();
         // A direct egui font replacement bypasses framework hooks; the revision must detect it.
         let mut definitions = ctx.fonts(|fonts| fonts.definitions().clone());
         definitions.families.insert(egui::FontFamily::Name("memo trial".into()), Vec::new());
         ctx.set_fonts(definitions);
-        let mut output = ctx.run_pass(Default::default(), |ctx| {
-            with_memo(ctx, |memo| assert!(memo.order.is_empty()));
-        });
-        output.textures_delta.clear();
+        pass(&ctx, |ctx| assert_eq!(entries(ctx), 0));
     }
 
     #[trial]
     fn idle_text_reuses_galleys_and_changed_text_lays_out_once_per_width() {
-        let appearance =
-            Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
-        let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
+        let tokens = tokens();
+        let env = env(&tokens);
         let ctx = Context::default();
         let run = TextRun::new("the initial label for the cache trial").wrap(Wrap::Wrap);
-        let env = TextEnv {
-            tokens: &tokens,
-            direction: Direction::Ltr,
-            ink: crate::style::rgba_color(tokens.tokens().color.text.normal),
-            fonts: StackFacts::default(),
-        };
-        let mut output = ctx.run_pass(Default::default(), |ctx| {
+        pass(&ctx, |ctx| {
             let _ = run.layout(ctx, &env, 80.0);
             let _ = run.layout(ctx, &env, 120.0);
         });
-        output.textures_delta.clear();
-        let mut output = ctx.run_pass(Default::default(), |ctx| {
+        pass(&ctx, |ctx| {
             let before = ctx.fonts(|fonts| fonts.num_galleys_in_cache());
             let _ = run.layout(ctx, &env, 80.0);
             let _ = run.layout(ctx, &env, 120.0);
@@ -1167,18 +1098,83 @@ pub(crate) mod memo_tests {
             let _ = changed.layout(ctx, &env, 120.0);
             assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), before + 2);
         });
-        output.textures_delta.clear();
         let scale = 2.0;
         ctx.set_pixels_per_point(scale);
-        let mut output = ctx.run_pass(Default::default(), |ctx| {
+        pass(&ctx, |ctx| {
             assert_eq!(ctx.pixels_per_point(), scale);
-            let before = with_memo(ctx, |memo| memo.order.len());
+            let before = entries(ctx);
             let _ = run.layout(ctx, &env, 80.0);
-            let after = with_memo(ctx, |memo| memo.order.len());
+            let after = entries(ctx);
             let _ = run.layout(ctx, &env, 80.0);
-            assert_eq!(with_memo(ctx, |memo| memo.order.len()), after);
+            assert_eq!(entries(ctx), after);
             assert_eq!(after, before + 1, "a new scale has its own cached layout");
         });
-        output.textures_delta.clear();
+    }
+
+    #[trial]
+    fn a_line_label_keeps_one_entry_at_every_room() {
+        let tokens = tokens();
+        let env = env(&tokens);
+        let ctx = Context::default();
+        let line = TextRun::new("a one-line label");
+        let wrapped = TextRun::new("a wrapping paragraph").wrap(Wrap::Wrap);
+        pass(&ctx, |ctx| {
+            let first = line.layout(ctx, &env, 100.0);
+            let before = entries(ctx);
+            // A window resize offers the label a new room every pass.
+            for room in (101..150).map(|room| room as f32) {
+                assert!(Arc::ptr_eq(&line.layout(ctx, &env, room).galley, &first.galley), "a Line run hits at room {room}");
+            }
+            let _ = line.least_width(ctx, &env);
+            assert_eq!(entries(ctx), before, "the label's rooms and its least width share one entry");
+            for room in [100.0, 120.0, 140.0] {
+                let _ = wrapped.layout(ctx, &env, room);
+            }
+            assert_eq!(entries(ctx), before + 3, "a wrapping run keeps one entry per room");
+        });
+    }
+
+    #[trial]
+    fn a_used_label_stays_while_a_changing_label_churns() {
+        let tokens = tokens();
+        let env = env(&tokens);
+        let ctx = Context::default();
+        let label = TextRun::new("a static label");
+        let mut first = None;
+        let passes = 3 * UNUSED_PASSES;
+        for at in 0..passes {
+            pass(&ctx, |ctx| {
+                let shown = label.layout(ctx, &env, 100.0).galley;
+                assert!(Arc::ptr_eq(first.get_or_insert_with(|| shown.clone()), &shown), "the static label hits in pass {at}");
+                let _ = TextRun::new(format!("frame {at}")).layout(ctx, &env, 100.0);
+            });
+        }
+        // Each pass leaves one entry for the changing label; only the passes still kept hold theirs.
+        let kept = entries(&ctx);
+        assert!(kept > 1 && (kept as u64) <= UNUSED_PASSES + 1, "{kept} entries after {passes} passes");
+    }
+
+    #[trial]
+    fn many_wide_paragraphs_at_many_widths_stay_within_the_budget() {
+        let tokens = tokens();
+        let env = env(&tokens);
+        let ctx = Context::default();
+        let paragraph = "A paragraph wide enough to wrap into many rows at every width the trial offers. ".repeat(150);
+        let run = TextRun::new(&paragraph).wrap(Wrap::Wrap);
+        pass(&ctx, |ctx| {
+            let mut added = 0;
+            let mut room = 200.0;
+            // Lay out until the layouts would have retained twice the budget.
+            while added <= 2 * BUDGET_BYTES {
+                let layout = run.layout(ctx, &env, room);
+                added += super::retained_bytes(&run.layout_key(ctx, &env, room).owned(), Some(&layout));
+                with_memo(ctx, |memo| {
+                    assert!(memo.bytes <= BUDGET_BYTES, "{} bytes retained", memo.bytes);
+                    assert_eq!(memo.bytes, memo.entries.values().flatten().map(|entry| entry.bytes).sum::<usize>());
+                });
+                assert!(Arc::ptr_eq(&run.layout(ctx, &env, room).galley, &layout.galley), "the newest layout is kept");
+                room += 7.0;
+            }
+        });
     }
 }

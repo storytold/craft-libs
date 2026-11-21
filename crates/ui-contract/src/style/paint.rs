@@ -199,8 +199,6 @@ pub struct ScrollBarLook {
     pub thumb_width: Stateful<f32>,
     /// The shortest the thumb gets along the bar.
     pub min_thumb: f32,
-    /// The length of the fade at an edge past which content is hidden.
-    pub fade: f32,
 }
 
 /// The shortest a scroll bar's thumb gets along the bar, whatever the bar's kind.
@@ -245,7 +243,6 @@ pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> Scro
         thickness,
         thumb_width: Stateful::new(rest).off(craft_theme::States::new(rest, thickness, thickness, rest)),
         min_thumb: min_thumb(tokens),
-        fade: tokens.size.scroll_fade,
     }
 }
 

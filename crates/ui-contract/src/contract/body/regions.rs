@@ -11,7 +11,7 @@ use crate::runtime::egui::{alloc, child, style};
 use crate::runtime::env::{Env, RowLine};
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
-use crate::style::{RuleKind, UiTokens, rule_look};
+use crate::style::{RuleKind, RuleLook, RuleWidth, UiTokens, rule_look};
 use egui::{Align, Id, Layout, Pos2, Rect, Ui, UiBuilder, Vec2};
 
 /// The slots of a container's own header parts at the edges of the header's line (`Container::header_parts`).
@@ -84,12 +84,13 @@ pub(super) struct RuleBands {
 }
 
 impl RuleBands {
-    /// The bands of `props`' rules in `tokens` on a display of `pixels_per_point`.
-    pub(super) fn of(props: &ContainerProps, tokens: &UiTokens, pixels_per_point: f32) -> Self {
+    /// The bands of `props`' rules in `tokens` on a display of `pixels_per_point`. A rule above separates the
+    /// container from what precedes it in flow: right after a rule (`after_rule`) there is none.
+    pub(super) fn of(props: &ContainerProps, tokens: &UiTokens, pixels_per_point: f32, after_rule: bool) -> Self {
         let width = rule_look(tokens, RuleKind::Divider).width.points(pixels_per_point);
         let on = |rule: bool| if rule { width } else { 0.0 };
         RuleBands {
-            above: on(props.header.is_some_and(|header| header.rule_above)),
+            above: on(!after_rule && props.header.is_some_and(|header| header.rule_above)),
             under: on(props.header.is_some_and(|header| header.rule && !header.inline)),
             footer: on(props.footer.is_some_and(|footer| footer.rule)),
             end: on(props.end.is_some_and(|end| end.rule)),
@@ -153,6 +154,15 @@ pub(super) struct Regions {
     pub(super) rules: [Option<(Rect, RectSide)>; 4],
 }
 
+impl Regions {
+    /// The regions with the header's band, which may spread over the padding, below `top`: the bottom of the band a
+    /// layer keeps clear for its top grip.
+    pub(super) fn below(mut self, top: f32) -> Regions {
+        self.header.min.y = self.header.min.y.max(top);
+        self
+    }
+}
+
 /// The sizes of the header, footer and end region that the regions are placed from (zero or `None` for a region the
 /// container lacks or that has not measured).
 #[derive(Clone, Copy)]
@@ -205,6 +215,30 @@ pub(super) fn paint_rules(ui: &mut Ui, env: &Env, regions: &Regions) {
     let ppp = ui.ctx().pixels_per_point();
     for (band, side) in regions.rules.iter().flatten() {
         ui.painter().extend(Rule::edge(&rule, *band, *side, ppp));
+    }
+}
+
+/// The bracket of a linked `Row` (`Bracket::Linked`) from what its rows reported in `took`: a tick from the end of the
+/// first and the last row's controls, `space.gap.tight` past them, to the middle child's centre line, and a stroke
+/// along that line from each tick to the middle child's edge. `text.muted`, `stroke.thin` wide.
+pub(super) fn paint_bracket(ui: &mut Ui, env: &Env, took: &crate::layout::BracketTook, rtl: bool) {
+    let (Some(first), Some(last), Some(end), Some(middle)) = (took.first, took.last, took.end, took.middle) else { return };
+    if last <= first {
+        return;
+    }
+    let tokens = &env.tokens;
+    let tight = tokens.tokens().space.gap.tight;
+    let look = RuleLook { color: crate::style::rgba_color(tokens.color.text.muted), width: RuleWidth::Points(tokens.stroke.thin) };
+    let ppp = ui.ctx().pixels_per_point();
+    let (start, line) = if rtl { (-end - tight, middle.center().x) } else { (end + tight, middle.center().x) };
+    let painter = ui.painter();
+    for (from, to) in [
+        (Pos2::new(start, first), Pos2::new(line, first)),
+        (Pos2::new(start, last), Pos2::new(line, last)),
+        (Pos2::new(line, first), Pos2::new(line, middle.top().max(first))),
+        (Pos2::new(line, middle.bottom().min(last)), Pos2::new(line, last)),
+    ] {
+        painter.extend(Rule::shapes(&look, from, to, ppp));
     }
 }
 
@@ -601,7 +635,11 @@ fn own_labels<R>(ui: &mut Ui, id: Id, (room, seed): (f32, Option<Columns>), foun
         group.offer(room);
         body(ui)
     });
-    (found.extent, found.unsettled) = (scoped.extent, scoped.unsettled);
+    found.extent = scoped.extent;
+    // A later sweep of the same run may take a row's measure from the earlier sweep without reading the column again
+    // (a stack's sweep at the width its first sweep found): that measure is still the one taken at the narrower
+    // column, so the rows run again whenever any sweep found one.
+    found.unsettled = scoped.unsettled.or(found.unsettled.take());
     result
 }
 

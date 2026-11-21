@@ -2,7 +2,7 @@
 //! indentation (before text, and a first-line or hanging indent by an amount), spacing before and after, line
 //! spacing, with a live sample of the result and a Tabs… button. OK applies everything as one change.
 //!
-//! The Paragraph controls ([`ParagraphControls`](super::ParagraphControls)) are Photoshop's panel; this is the office
+//! The Paragraph controls ([`ParagraphControls`](super::ParagraphControls)) are Photoshop's panel; this is the productivity
 //! apps' dialog over the same paragraph.
 //!
 //! ```ignore
