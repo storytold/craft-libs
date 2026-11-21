@@ -178,13 +178,13 @@ struct GridSizes {
 }
 
 impl GridSizes {
-    fn of(cx: &StyleCx<'_>, card: bool, rows: RowHeight) -> GridSizes {
+    fn of(cx: &StyleCx<'_>, card: bool, rows: RowHeight, action_place: TileActionPlace) -> GridSizes {
         let spacing =
             ArrangeSpacing::new(if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack }, cx.tokens.space.gap.inline, rows.of(cx));
         GridSizes {
             card: cx.tokens.size.thumb.card,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
-            around: Tile::around(cx, card),
+            around: Tile::around(cx, card, action_place),
             spacing,
             // Bare tiles sit with no gap between them: the room around each picture keeps them apart.
             bare_spacing: if card { spacing } else { ArrangeSpacing { gap: 0.0, ..spacing } },
@@ -477,7 +477,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// The layout of this pass: `previous` when it was made from the same recipe, else a new arrangement. A card is
     /// the picture plus what the tile adds around it in every tiling.
     fn laid_out(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, item: Option<Vec2>, cx: &StyleCx<'_>) -> GridLayout {
-        let style = GridSizes::of(cx, self.card, self.items.row_height);
+        let style = GridSizes::of(cx, self.card, self.items.row_height, self.action_place);
         let spacing = style.spacing(self.caption);
         let around = style.around.get(self.caption, self.detail_line);
         // A card never outgrows the grid: in a column narrower than a card the card takes the column.
@@ -981,7 +981,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         if self.card_columns == 0 {
             return 0.0;
         }
-        let style = GridSizes::of(cx, self.card, self.items.row_height);
+        let style = GridSizes::of(cx, self.card, self.items.row_height, self.action_place);
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
         let around = style.around.get(self.caption, self.detail_line);
         let card = style.card(self.picture_side(&style, item, around), aspect, around).x;

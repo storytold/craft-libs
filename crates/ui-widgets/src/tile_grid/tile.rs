@@ -57,7 +57,7 @@ pub enum TileActionPlace {
     /// In the picture's end-top corner.
     #[default]
     Corner,
-    /// In a band along the picture's edge.
+    /// Below the caption, with the check above the picture and a selection fill across the tile.
     Band,
 }
 
@@ -147,8 +147,18 @@ pub(super) struct AroundPicture {
 }
 
 impl AroundPicture {
-    fn of(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
-        let around = |place: CaptionPlace, detail: bool| Sizes::of(cx, card, place).around(place, detail);
+    fn of(cx: &StyleCx<'_>, card: bool, action_place: TileActionPlace) -> AroundPicture {
+        let around = |place: CaptionPlace, detail: bool| {
+            let sizes = Sizes::of(cx, card, place);
+            let mut around = sizes.around(place, detail);
+            if action_place == TileActionPlace::Band {
+                around.start = sizes.bar + sizes.column(place);
+                around.end = sizes.bar;
+                around.top += sizes.bar;
+                around.bottom += sizes.bar;
+            }
+            around
+        };
         AroundPicture {
             below: around(CaptionPlace::Below, false),
             below_detail: around(CaptionPlace::Below, true),
@@ -401,6 +411,7 @@ pub struct Tile<'a> {
     #[prop]
     check: Option<ToggleState>,
     /// Where the hover actions sit: the grid's, applied to its tiles.
+    #[style_key]
     #[prop]
     action_place: TileActionPlace,
     /// The icon face reads in this colour from data in place of the face colour.
@@ -529,8 +540,8 @@ impl<'a> Tile<'a> {
     }
 
     /// What a tile adds around its picture for every caption arrangement.
-    pub(super) fn around(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
-        AroundPicture::of(cx, card)
+    pub(super) fn around(cx: &StyleCx<'_>, card: bool, action_place: TileActionPlace) -> AroundPicture {
+        AroundPicture::of(cx, card, action_place)
     }
 
     /// Whether the caption band holds a detail line.
@@ -573,8 +584,9 @@ impl<'a> Tile<'a> {
         let column = sizes.column(self.caption);
         let band_height = sizes.caption(self.caption, self.has_detail_line());
         let (start, rest) = flow.take_start(column);
-        let picture = Rect::from_min_max(rest.rect().min, rest.rect().max - Vec2::new(0.0, band_height));
-        let band = Rect::from_min_max(egui::pos2(rest.rect().min.x, picture.bottom()), rest.rect().max);
+        let controls = if self.action_place == TileActionPlace::Band { sizes.bar } else { 0.0 };
+        let picture = Rect::from_min_max(rest.rect().min + Vec2::new(0.0, controls), rest.rect().max - Vec2::new(0.0, band_height + controls));
+        let band = Rect::from_min_max(egui::pos2(rest.rect().min.x, picture.bottom()), rest.rect().max - Vec2::new(0.0, controls));
         let (caption, name, detail, marks) = match self.caption {
             CaptionPlace::Below => {
                 let above = if sizes.card { sizes.inset } else { sizes.tight };
@@ -634,7 +646,8 @@ impl<'a> Tile<'a> {
         let margin = sizes.inset + sizes.tight;
         let check = self.check.map(|_| {
             let across = pictures.span(margin, faces.check.x);
-            let at = Rect::from_min_size(egui::pos2(across.min.x, picture.top() + margin), faces.check);
+            let top = if self.action_place == TileActionPlace::Band { area.top() } else { picture.top() + margin };
+            let at = Rect::from_min_size(egui::pos2(across.min.x, top), faces.check);
             (at, at.expand(sizes.tight))
         });
         let face = faces.action;
@@ -646,7 +659,7 @@ impl<'a> Tile<'a> {
                     Rect::from_min_size(egui::pos2(across.min.x, picture.top() + margin + at as f32 * (face.y + sizes.tight)), face)
                 })
                 .collect(),
-            // A row centred over the picture's lower edge, above the badge bar and the offline band.
+            // A row centred below the caption.
             TileActionPlace::Band => {
                 let count = self.actions.len() as f32;
                 let row = count * face.x + (count - 1.0).max(0.0) * sizes.tight;
@@ -654,7 +667,7 @@ impl<'a> Tile<'a> {
                 (0..self.actions.len())
                     .map(|at| {
                         let across = pictures.span(lead + at as f32 * (face.x + sizes.tight), face.x);
-                        Rect::from_min_size(egui::pos2(across.min.x, floor - margin - face.y), face)
+                        Rect::from_min_size(egui::pos2(across.min.x, band.bottom()), face)
                     })
                     .collect()
             }
@@ -737,8 +750,12 @@ impl Component for Tile<'_> {
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
         let sizes = Sizes::of(cx, key.card, key.caption);
-        // Selection and hover are rings around the picture; only a card has a fill of its own.
-        let fill = if key.card {
+        // Band tiles use the collection's selection fill over the whole tile.
+        let fill = if key.action_place == TileActionPlace::Band {
+            Stateful::new(c(clear))
+                .off(States::new(c(clear), c(state.hover), c(state.pressed), c(clear)))
+                .on(States::new(c(state.selected), c(state.selected_hover), c(state.selected), c(state.selected)))
+        } else if key.card {
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
             Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(States::new(rest, hover, pressed, rest))
@@ -751,9 +768,12 @@ impl Component for Tile<'_> {
             .on(States::new(accent, accent, accent, accent))
             .when(Flags::CURRENT, accent);
         let (thin, thick) = (tokens.stroke.thin, tokens.stroke.thick);
-        let ring_width =
-            Stateful::new(0.0).off(States::new(0.0, thin, thin, 0.0)).on(States::new(thick, thick, thick, thick)).when(Flags::CURRENT, thick);
-        let halo_width = Stateful::new(0.0).on(States::new(thin, thin, thin, thin)).when(Flags::CURRENT, thin);
+        let ring_width = if key.action_place == TileActionPlace::Band { Stateful::new(0.0) } else {
+            Stateful::new(0.0).off(States::new(0.0, thin, thin, 0.0)).on(States::new(thick, thick, thick, thick)).when(Flags::CURRENT, thick)
+        };
+        let halo_width = if key.action_place == TileActionPlace::Band { Stateful::new(0.0) } else {
+            Stateful::new(0.0).on(States::new(thin, thin, thin, thin)).when(Flags::CURRENT, thin)
+        };
         let radius = UiTokens::corner(tokens.shape.radius.control);
         let surface = SurfaceLook::new(fill).radius(radius);
         let surface = if key.card { surface.kind(SurfaceKind::Raised) } else { surface };
@@ -766,7 +786,12 @@ impl Component for Tile<'_> {
         let on_bar = |ink: StyleColor, side: f32| IconLook::new(side, Stateful::new(ink)).on(Stateful::new(plate));
         TileStyle {
             surface,
-            metrics: Metrics::new().padding(Insets::new(sizes.inset, sizes.inset, sizes.inset, sizes.inset)).gap(sizes.tight),
+            metrics: Metrics::new().padding(Insets::new(
+                if key.action_place == TileActionPlace::Band { sizes.bar } else { sizes.inset },
+                if key.action_place == TileActionPlace::Band { sizes.bar } else { sizes.inset },
+                sizes.inset,
+                sizes.inset,
+            )).gap(sizes.tight),
             name: if key.card {
                 TextLook::new(TypeRole::BodyStrong, ink(c(text.normal)))
             } else {
@@ -1003,10 +1028,12 @@ impl Component for Tile<'_> {
         }
         // A card's picture is the sunken surface, which the placeholder's fill matches.
         let placeholder = if !style.sizes.card && cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
-        if style.sizes.card {
-            ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
-        } else {
-            ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+        if self.action_place != TileActionPlace::Band {
+            if style.sizes.card {
+                ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
+            } else {
+                ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+            }
         }
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
@@ -1031,14 +1058,16 @@ impl Component for Tile<'_> {
         self.paint_bar(ui, cx, &placed);
         self.paint_pills(ui, cx, &placed);
         // The action icons use interface ink; a document picture can have any colour behind them.
-        if let Some(plate) = placed.actions.iter().copied().reduce(|all, rect| all.union(rect)) {
+        if self.action_place != TileActionPlace::Band && let Some(plate) = placed.actions.iter().copied().reduce(|all, rect| all.union(rect)) {
             ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);
         }
         for (at, ((icon, command, _), _)) in self.actions.iter().zip(&placed.actions).enumerate() {
             ui.face(ACTION.at(at as u64), IconButton::command(icon.clone(), command.clone()));
         }
         if let (Some(state), Some((_, plate))) = (self.check, placed.check) {
-            ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);
+            if self.action_place != TileActionPlace::Band {
+                ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);
+            }
             let value = match state {
                 ToggleState::Mixed => Mixed::Mixed,
                 state => Mixed::Same(state == ToggleState::On),
