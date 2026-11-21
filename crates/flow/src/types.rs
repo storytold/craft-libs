@@ -50,8 +50,7 @@ pub fn kept_link(target: &str) -> Option<Arc<str>> {
     kept
 }
 
-/// What an importer leaves out to stay within a limit (review of #3873: no limit drops data
-/// without saying so).
+/// Content an importer leaves out, for example to stay within a limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dropped {
     /// A font name over [`MAX_FONT_NAME`].
@@ -66,6 +65,8 @@ pub enum Dropped {
     Spaces,
     /// Markdown table rows and columns past the table limits or the document's cell budget.
     TableCells,
+    /// An HTML image could not be loaded or recognized and was replaced by its alt text.
+    HtmlImage,
 }
 
 impl Dropped {
@@ -80,6 +81,7 @@ impl Dropped {
             Dropped::Spaces => {
                 "import: the document's `text:s` elements ask for more spaces than it keeps; past that each stands for one".to_string()
             }
+            Dropped::HtmlImage => "import: an HTML image could not be loaded or recognized; alt text is used if available".to_string(),
             Dropped::TableCells => format!(
                 "import: Markdown tables keep {} columns and {} rows at most, and {} cells in all; the rest are left out",
                 craft_wordmodel::table::MAX_COLS,
@@ -91,14 +93,14 @@ impl Dropped {
 
     /// Whether this thread's import has logged this kind ([`dropped`]).
     pub fn reported(self) -> bool {
-        REPORTED.with(|r| r.get() & (1u8 << (self as u8)) != 0)
+        REPORTED.with(|r| r.get() & (1u16 << (self as u8)) != 0)
     }
 }
 
 /// Log that the importer left something of `kind` out: once per kind per imported document
 /// ([`begin_import`]), not once per item.
 pub fn dropped(kind: Dropped) {
-    let bit = 1u8 << (kind as u8);
+    let bit = 1u16 << (kind as u8);
     if REPORTED.with(|r| r.replace(r.get() | bit)) & bit == 0 {
         log::warn!("{}", kind.message());
     }
