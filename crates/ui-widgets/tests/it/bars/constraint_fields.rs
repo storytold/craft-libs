@@ -1,4 +1,4 @@
-//! `ConstraintFields`: the style pick, the typed sides, the swap, the greyed state and the Fixed Size units.
+//! `ConstraintFields`: the style pick, the typed sides, Tab between them, the swap, the greyed state and the Fixed Size units.
 
 use craft_behavior::PixelSize;
 use craft_behavior::geometry::Constraint;
@@ -61,4 +61,46 @@ fn typed_lengths_convert_through_the_document_in_every_unit() {
     assert_eq!(typed(UnitKind::Inches, "250px", true), Constraint::Size(250.0, 480.0), "pixels in an Inches field");
     assert_eq!(typed(UnitKind::Inches, "50%", true), Constraint::Size(500.0, 480.0), "percent of the width");
     assert_eq!(typed(UnitKind::Pixels, "50%", false), Constraint::Size(640.0, 250.0), "percent of the height");
+}
+
+/// Tab goes from Width straight to Height, so both sides are typed in one pass; the swap button between them is the
+/// Tab stop after Height, and Space there swaps. Shift+Tab goes back to Width.
+#[trial]
+fn tab_moves_from_width_straight_to_height() {
+    for start in [Constraint::Ratio(4.0, 3.0), Constraint::Size(640.0, 480.0)] {
+        let (mut fixture, state) = rig(start, None, true);
+        let (w, h) = fields(&fixture);
+        fixture.click(&w);
+        fixture.key(Key::A, Modifiers::COMMAND);
+        fixture.type_text("16");
+        fixture.key(Key::Tab, Modifiers::NONE);
+        fixture.settle();
+        assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), h.node, "{start:?}: Tab from Width lands on Height");
+        fixture.key(Key::A, Modifiers::COMMAND);
+        fixture.type_text("9");
+        fixture.key(Key::Enter, Modifiers::NONE);
+        fixture.settle();
+        let typed = match start {
+            Constraint::Ratio(..) => Constraint::Ratio(16.0, 9.0),
+            _ => Constraint::Size(16.0, 9.0),
+        };
+        assert_eq!(state.get(), typed, "{start:?}: both sides typed with one Tab between them");
+        let swap = fixture.by_label("Swaps height and width").expect("the swap button");
+        assert!(w.rect.max.x <= swap.rect.min.x && swap.rect.max.x <= h.rect.min.x, "{start:?}: the swap sits between the fields");
+        fixture.click(&h);
+        fixture.key(Key::Tab, Modifiers::NONE);
+        fixture.settle();
+        assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), swap.node, "{start:?}: Tab from Height lands on the swap");
+        fixture.key(Key::Space, Modifiers::NONE);
+        fixture.settle();
+        let swapped = match start {
+            Constraint::Ratio(..) => Constraint::Ratio(9.0, 16.0),
+            _ => Constraint::Size(9.0, 16.0),
+        };
+        assert_eq!(state.get(), swapped, "{start:?}: Space on the swap exchanges the sides");
+        fixture.click(&h);
+        fixture.key(Key::Tab, Modifiers::SHIFT);
+        fixture.settle();
+        assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), w.node, "{start:?}: Shift+Tab from Height lands on Width");
+    }
 }
