@@ -193,6 +193,11 @@ impl<K> LayersEvent<K> {
         Self::Activate { row, on }
     }
 
+    /// A committed rename of `layer` to `text`, which the panel gives trimmed, not empty and not the unchanged name.
+    pub fn rename(layer: K, text: impl Into<String>) -> Self {
+        Self::Rename { layer, text: text.into() }
+    }
+
     /// A layer's effects and Smart Filter rows asked to open or close.
     pub fn fx_open(layer: K, open: bool, all: bool) -> Self {
         Self::FxOpen { layer, open, all }
