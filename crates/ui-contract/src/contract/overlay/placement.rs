@@ -52,10 +52,13 @@ pub(super) fn opened_overlay(ctx: &Context, overlay: &Overlay, stored: Option<Op
     Some((resolved, opening))
 }
 
-/// Whether a layer of `overlay` may cover its anchor when it fits on neither side of it: a context menu's anchor, which
-/// is the pointer, the rect a context request named, or for a menu (its key class is [`OwnerClass::Menu`]) a point.
-/// `stored` is the opening the layer decided.
+/// Whether a layer of `overlay` may cover its anchor when it fits on neither side of it: a menu's layer (its key class
+/// is [`OwnerClass::Menu`]) hung at the pointer, at a point, or at the rect a context request named. No other overlay
+/// covers its anchor: a tooltip or a popover at the pointer stays off it. `stored` is the opening the layer decided.
 pub(super) fn layer_covers_anchor(ctx: &Context, overlay: &Overlay, stored: Option<Opening>) -> bool {
+    if overlay.keys != OwnerClass::Menu {
+        return false;
+    }
     let (anchor, requested) = match &overlay.opener {
         Some(first) => {
             let (opener, opening) = first.active(ctx, stored);
@@ -67,8 +70,7 @@ pub(super) fn layer_covers_anchor(ctx: &Context, overlay: &Overlay, stored: Opti
         },
     };
     match anchor {
-        Anchor::Pointer => true,
-        Anchor::Point(_) => overlay.keys == OwnerClass::Menu,
+        Anchor::Pointer | Anchor::Point(_) => true,
         // `opener_anchor` gives a requested rect only for a context request's opening.
         Anchor::Rect(_) => requested,
         _ => false,

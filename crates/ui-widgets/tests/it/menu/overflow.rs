@@ -1,11 +1,12 @@
 //! A menu taller than its room: it stays inside the room at the width of its rows, scrolls by the strips above and
 //! below its rows and by the wheel, and reopens at its first row; one that fits shows no strips. A tall submenu of a
-//! low row opens upward. A context menu that fits on neither side of the pointer but fits the window covers the
-//! pointer instead of scrolling.
+//! low row opens upward. A context menu that fits on neither side of the pointer, or of the control a key asked it
+//! for, but fits the window covers its anchor instead of scrolling; a tooltip at the pointer never covers the pointer.
 
 use craft_host::target::Os;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Entry, Role, STRIP_BACK, STRIP_FORWARD, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::tooltip::DELAY;
+use craft_ui::contract::{Bind, Entry, Props as _, Role, STRIP_BACK, STRIP_FORWARD, Show as _, ShowContainer as _, TooltipAt, TooltipSpec, Trigger};
 use craft_ui::menu::bar::{MenuBar, MenuTitle};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::Select;
@@ -145,6 +146,46 @@ fn a_context_menu_too_tall_for_either_side_of_the_pointer_covers_it_and_shows_ev
     assert!(tall > at.y - room.top() && tall > room.bottom() - at.y, "the rows ({tall}) fit on neither side of the pointer at {at:?}");
     assert!(room.contains_rect(rect), "the menu {rect:?} stays inside the window {room:?}");
     assert!(rect.contains_rect(first) && rect.contains_rect(last), "every row shows: {first:?} to {last:?} in {rect:?}");
+}
+
+/// The same menu asked for with Shift+F10 on the focused target: it hangs from the target's rect, which it covers.
+#[trial]
+fn a_context_menu_a_key_asked_for_covers_its_target_when_it_fits_neither_side() {
+    let rows = 18;
+    let (mut fixture, menu, _) = context_menu(290.0, rows);
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(fixture.by_role(Role::MENU).is_empty(), "Escape closes the menu the pointer opened");
+    let target = fixture.by_label("Target").expect("the target").rect;
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::F10, Modifiers::SHIFT).settle();
+    let room = fixture.ctx().content_rect();
+    let rect = menu_rect(&fixture);
+    assert!(strips(&fixture, menu).is_none(), "the menu {rect:?} fits the window {room:?}: no strips");
+    let (first, last) = (fixture.by_label(&row(0)).expect("the first row").rect, fixture.by_label(&row(rows - 1)).expect("the last row").rect);
+    assert!(rect.contains_rect(first) && rect.contains_rect(last), "every row shows: {first:?} to {last:?} in {rect:?}");
+    assert!(rect.intersects(target), "the menu {rect:?} covers its target {target:?}");
+}
+
+/// A tooltip at the pointer too tall for either side of it stays off the pointer: it opens on its preferred side,
+/// below, where the room is larger, and does not slide up over the pointer as a menu does.
+#[trial]
+fn a_tooltip_at_the_pointer_too_tall_for_either_side_does_not_cover_the_pointer() {
+    let text = (0..40).map(|line| format!("Line {line}")).collect::<Vec<_>>().join("\n");
+    let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(200.0);
+        Button::new("Target").tooltip(TooltipSpec::new(text.clone()).at(TooltipAt::Pointer)).show(ui);
+    });
+    fixture.settle();
+    let at = fixture.by_label("Target").expect("the target").center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    let tips = fixture.by_role(Role::TOOLTIP);
+    let tip = tips.first().expect("the tooltip shows").rect;
+    let room = fixture.ctx().content_rect();
+    let lines = fixture.texts().iter().filter(|run| run.text.starts_with("Line ")).fold(Rect::NOTHING, |all, run| all.union(run.rect));
+    assert!(lines.height() > at.y - room.top() && lines.height() > room.bottom() - at.y, "the text ({lines:?}) fits on neither side of {at:?}");
+    assert!(tip.top() >= at.y, "the tooltip {tip:?} opens below the pointer at {at:?} and does not cover it");
 }
 
 /// A menu of `above` rows over a submenu row whose submenu has `rows` rows, in the fixture's 800 x 600 window.
