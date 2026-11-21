@@ -58,6 +58,7 @@ const CLOSED: &[&str] = &[
     "ReorderMove",      // built or matched in craft-ui-patterns
     "RowState",         // built or matched in craft-ui-widgets
     "RuleLook",         // built or matched in craft-ui-canvas
+    "RulerFace",        // matched by every ruler (craft-text, craft-pages, craft-ui-canvas): a new face must be drawn by each
     "ShellRegions",     // built or matched in craft-ui-shell
     "SizeLimits",       // built or matched in craft-ui-panels
     "StoryOutput",      // built or matched in craft-ui-widgets

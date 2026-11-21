@@ -22,7 +22,7 @@ use craft_ui::runtime::inspect;
 use craft_ui::runtime::layout_memory;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, Panel};
 use craft_ui::style::SurfaceKind;
-use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration};
+use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration, least_stage_width};
 
 /// A story's show function.
 type StoryFn = fn(&mut Ui, &mut StoryData) -> StoryOutput;
@@ -57,6 +57,8 @@ pub struct Look {
     /// The control size.
     #[memo_props(hash = "a fieldless enum of the theme")]
     pub size: Option<ControlSize>,
+    /// The component set.
+    pub set: Option<craft_theme::ComponentSet>,
 }
 
 /// One story a card shows.
@@ -252,7 +254,7 @@ impl Card<'_> {
                 let gap = Gap::Item.points(ui);
                 // The narrowest a column of stories may be is the least story width, as the old gallery's grids kept
                 // their cases.
-                let least = Env::of(ui).tokens.size.story.width_min;
+                let least = least_stage_width(&Env::of(ui).tokens);
                 let fit = ((ui.available_width() + gap) / (least + gap)).floor() as usize;
                 let columns = fit.clamp(1, usize::from(most).clamp(1, COLUMNS.len()));
                 Grid::new(&COLUMNS[..columns]).gap(Gap::Item).fill_width().show(ui, |ui, _| {
@@ -512,6 +514,9 @@ fn story_view(props: &mut StoryProps<'_>, ui: &mut Ui) -> Rect {
                     env.direction = look.direction;
                     env.size = look.size;
                     env.wheel = host.gated.then_some(craft_ui::runtime::env::WheelScope::Gated);
+                    if let Some(set) = look.set {
+                        env.values.set(set);
+                    }
                 },
                 |ui| match region {
                     Some(key) => inspect::record(ui, key, |ui| show(ui, data)).0,
