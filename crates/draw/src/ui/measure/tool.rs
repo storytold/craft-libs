@@ -120,6 +120,8 @@ fn show_lines(ui: &mut Ui, rect: Rect, line: RulerLine) {
     let Some(space) = canvas_space(&env.view()) else { return };
     let segment = |from: Point, to: Point| {
         let (from, to) = (space.view.to_screen(from), space.view.to_screen(to));
+        // A non-finite point gives a NaN distance, which never reaches the lag: the segment draws nothing, as the
+        // line preview's own finite guard did.
         (from.distance(to) >= MIN_LENGTH).then(|| PaintShape::Path(vec![from, to]))
     };
     let content = ContentPainterCx::new(ui.painter().with_clip_rect(rect), &env, env.ink);
@@ -128,10 +130,10 @@ fn show_lines(ui: &mut Ui, rect: Rect, line: RulerLine) {
         if let Some(segment) = segment(line.start, line.end) {
             draw.stroke(&segment, StrokeWidth::Hairline, ink);
         }
-        if let Some(arm) = line.protractor {
-            if let Some(segment) = segment(line.start, arm) {
-                draw.stroke(&segment, StrokeWidth::Hairline, ink);
-            }
+        if let Some(arm) = line.protractor
+            && let Some(segment) = segment(line.start, arm)
+        {
+            draw.stroke(&segment, StrokeWidth::Hairline, ink);
         }
     });
 }
