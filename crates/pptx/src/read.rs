@@ -1078,6 +1078,7 @@ fn read_master(imp: &mut Imp, path: &str, doc: &Doc, docs: &HashMap<String, Doc>
         id: MasterId(0),
         theme: imp.defaults.theme(),
         preserve: root.attr_local("preserve").and_then(value::to_bool).unwrap_or(false),
+        body_style_present: Some(false),
         ..Default::default()
     };
     if let Some(t) = part.rels.first("theme")
@@ -1107,6 +1108,7 @@ fn read_master(imp: &mut Imp, path: &str, doc: &Doc, docs: &HashMap<String, Doc>
         }
         if let Some(s) = ts.child(Local("bodyStyle")) {
             m.body_style = dml::list_style(&mut Src(imp, &part), s);
+            m.body_style_present = Some(true);
         }
         if let Some(s) = ts.child(Local("otherStyle")) {
             m.other_style = dml::list_style(&mut Src(imp, &part), s);

@@ -69,8 +69,7 @@ pub type ModelResult<T> = std::result::Result<T, ModelError>;
 
 /// What the caller supplies where a file or a presentation leaves something out. The reader asks
 /// for a master when a file has none it can read, and for the theme of a master that names none;
-/// the writer for a master when the presentation has none, and for the text styles a master or
-/// the presentation leaves empty.
+/// the writer for a master when the presentation has none, and for fallback text styles.
 pub trait Defaults {
     /// A slide master for slides of `size`, with at least one layout. Its ids (master, layouts,
     /// shapes) are above `after`; returns the master and the largest id it used.
@@ -79,7 +78,8 @@ pub trait Defaults {
     fn theme(&self) -> Theme {
         Theme::default()
     }
-    /// The title, body and other text styles written for a master whose own are empty.
+    /// Fallback title and other styles for empty values, plus the body style for a newly authored
+    /// or older master model with no information about its original body style.
     fn master_styles(&self) -> (text::ListStyle, text::ListStyle, text::ListStyle) {
         Default::default()
     }
@@ -865,6 +865,10 @@ pub struct Master {
     pub background: Option<Background>,
     pub title_style: text::ListStyle,
     pub body_style: text::ListStyle,
+    /// Whether the imported slide master contained `p:bodyStyle`. An explicit empty style and an
+    /// omitted style behave differently. Authored masters and older models can leave this unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_style_present: Option<bool>,
     pub other_style: text::ListStyle,
     pub layouts: Vec<Layout>,
     /// `bg1`→`lt1` etc. Default mapping when empty.
