@@ -36,7 +36,7 @@ fn linked_fields_equal_columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 #[story(LinkedFields<'static, 2>, covers = [], drive = Drive::Never)]
 fn linked_fields_percent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let linked = *data.value("linked", true);
-    LinkedFields::new("Scale", Bind::bound(data.value("scale", Mixed::each([Some(100.0); 2]))), Bind::given(linked))
+    LinkedFields::new("Scale", data.bind("scale", Mixed::each([Some(100.0); 2])), Bind::given(linked))
         .captions(["W", "H"])
         .range(1.0..=1000.0)
         .unit_kind(UnitKind::Percent)
@@ -47,7 +47,7 @@ fn linked_fields_percent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(LinkedFields<'static, 2>, covers = [], drive = Drive::Never)]
 fn linked_fields_link_caption(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let linked = *data.value("linked", true);
-    LinkedFields::new("Margins", Bind::bound(data.value("link caption", Mixed::each([Some(12.0); 2]))), Bind::given(linked))
+    LinkedFields::new("Margins", data.bind("link caption", Mixed::each([Some(12.0); 2])), Bind::given(linked))
         .captions(["Inside", "Outside"])
         .caption_with(1, SideLabel::new().link())
         .layout(LinkedLayout::Column)

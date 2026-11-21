@@ -42,7 +42,7 @@ fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn field_link_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("Opacity")
         .side(SideLabel::new().link().scrub(true))
-        .show(ui, |ui, _| NumberField::new("Opacity", Bind::bound(data.value("link", Some(100.0)))).scrub_by_label().show(ui))
+        .show(ui, |ui, _| NumberField::new("Opacity", data.bind("link", Some(100.0))).scrub_by_label().show(ui))
         .into()
 }
 

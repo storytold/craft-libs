@@ -159,7 +159,7 @@ const MOST_ARTBOARDS: u32 = 4;
 #[story(NewDocumentDialog<'static>, covers = [], drive = Drive::Never)]
 fn new_document_dialog_with_host_details(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut settings = data.value("settings", StorySettings::default()).clone();
-    let output = NewDocumentDialog::over(Bind::bound(&mut settings)).opened(Bind::bound(data.value("open", true))).show(ui);
+    let output = NewDocumentDialog::over(Bind::bound(&mut settings)).opened(data.bind("open", true)).show(ui);
     *data.value("settings", StorySettings::default()) = settings;
     output.into()
 }
@@ -180,7 +180,7 @@ fn new_document_dialog_saving_host_details(ui: &mut Ui, data: &mut StoryData) ->
     let output = NewDocumentDialog::over(Bind::bound(&mut settings))
         .saved(Bind::bound(&mut library))
         .tab(Bind::bound(&mut tab))
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui);
     *data.value("settings", StorySettings::default()) = settings;
     *data.value("library", seeded_library()) = library;

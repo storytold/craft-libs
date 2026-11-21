@@ -33,7 +33,7 @@ fn fill_stroke(
     shown: ColorPanelShown,
     tweak: impl FnOnce(ColorPanel<'_>) -> ColorPanel<'_>,
 ) -> StoryOutput {
-    let panel = ColorPanel::new(Bind::bound(data.value("state", state)), COLORS).layout(ColorPanelLayout::FillStroke).shown(shown);
+    let panel = ColorPanel::new(data.bind("state", state), COLORS).layout(ColorPanelLayout::FillStroke).shown(shown);
     tweak(panel).show(ui).into()
 }
 

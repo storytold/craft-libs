@@ -37,7 +37,7 @@ fn color_ramp_web_safe(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ColorRamp<'static>, covers = [], drive = Drive::Never)]
 fn color_ramp_recolor_clicks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = ColorRamp::new("Color ramp", RampKind::Spectrum, Bind::bound(data.value("pick", pick()))).recolor_clicks(true).kind_name("RGB Spectrum").show(ui);
+    let shown = ColorRamp::new("Color ramp", RampKind::Spectrum, data.bind("pick", pick())).recolor_clicks(true).kind_name("RGB Spectrum").show(ui);
     let last = data.note("last", String::new());
     if let Some(recolor) = shown.recolor {
         *last = format!("{recolor:?}");

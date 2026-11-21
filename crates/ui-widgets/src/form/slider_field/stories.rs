@@ -20,7 +20,7 @@ fn slider_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// Words at the two ends of the track, as a softness or a contrast control names its extremes.
 #[story(SliderField<'static>, covers = [], drive = Drive::Never)]
 fn slider_field_end_words(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    SliderField::new("Softness", Bind::bound(data.value("softness", 50.0)), PERCENT)
+    SliderField::new("Softness", data.bind("softness", 50.0), PERCENT)
         .marks_labelled([(0.0, "Soft"), (100.0, "Hard")])
         .show(ui)
         .into()
