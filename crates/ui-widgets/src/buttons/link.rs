@@ -88,10 +88,25 @@ impl Component for Link {
         let run = self.run(cx.resolved.label);
         // At its least a link that elides is at its readable least.
         if cx.proposal == Proposal::Min && self.cut_first() {
-            return Vec2::new(cx.least_width(&run), painted_height(&cx.layout_at(&run, f32::INFINITY)));
+            let least = cx.least(&run);
+            return Vec2::new(least.width, painted_height(&least.whole));
         }
         let layout = cx.layout_at(&run, cx.room.unwrap_or(f32::INFINITY));
         Vec2::new(layout.size().x, painted_height(&layout))
+    }
+
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        if !self.cut_first() {
+            return None;
+        }
+        let run = self.run(ideal.resolved.label);
+        let layout = ideal.layout_at(&run, ideal.room.unwrap_or(f32::INFINITY));
+        let ideal_size = Vec2::new(layout.size().x, painted_height(&layout));
+        let width = least.least_width(&run);
+        let whole = least.layout_at(&run, f32::INFINITY);
+        Some((ideal_size, Vec2::new(width, painted_height(&whole))))
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {

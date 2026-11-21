@@ -175,7 +175,7 @@ impl Rules {
                 if corner && !lines.is_empty() && self.hold(mods) != AspectHold::Free {
                     // The reach at the press view: the rule `Snap::at` sets the tolerance with; a crop drag never
                     // changes the zoom.
-                    let Some(reach) = snap_tolerance(drag.press_view.as_ref().unwrap_or(view), mods, self.os, false) else {
+                    let Some(reach) = snap_tolerance(drag.press_view.as_ref().unwrap_or(view), mods, self.os, snap.options().suspend, false) else {
                         return (to, Vec::new());
                     };
                     match slid_along(point, point - candidate.center(), lines, reach) {

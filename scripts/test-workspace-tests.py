@@ -13,7 +13,9 @@ WORKFLOW = ROOT / ".github/workflows/workspace.yml"
 
 
 def block(text, name):
-    match = re.search(r"^      " + re.escape(name) + r": \|\n((?:        .*\n|\n)+)", text, re.M)
+    # The Linux call names each shared block with a YAML anchor (`command: &command |`), and the
+    # macOS and Windows call refers to it, so this first block is the one every leg runs.
+    match = re.search(r"^      " + re.escape(name) + r": (?:&[\w-]+ )?\|\n((?:        .*\n|\n)+)", text, re.M)
     if match is None:
         raise AssertionError(f"missing command block: {name}")
     return "\n".join(line[8:] for line in match[1].splitlines())
@@ -31,16 +33,27 @@ fi
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 """
-TEST_SOURCE = """
-cargo nextest run --workspace --all-features --locked --profile ci
+# The Windows leg has its own block without the replay audit, which runs on Linux only.
+WINDOWS_TEST_SOURCE = """
+cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
+cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
 cargo test --workspace --doc --all-features --locked
-cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
+cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
+"""
+TEST_SOURCE = """
+cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
+cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
+if [ "$RUNNER_OS" = Linux ]; then
+  CRAFT_UI_AUDIT_REPLAY=1 cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests -E 'package(craft-ui-contract) | package(craft-ui-widgets) | package(craft-ui-panels) | package(craft-ui-patterns) | package(craft-ui-shell) | package(craft-ui-gallery) | package(craft-menu)'
+fi
+cargo test --workspace --doc --all-features --locked
+cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
 """
 WINDOWS_SETUP = """powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'"""
 EXPECTED_SOURCE = {
     "lint-command": LINT_SOURCE,
     "command": TEST_SOURCE,
-    "windows-command": WINDOWS_SETUP + "\n" + TEST_SOURCE,
+    "windows-command": WINDOWS_SETUP + "\n" + WINDOWS_TEST_SOURCE,
 }
 
 
@@ -90,10 +103,15 @@ COMMON = [
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
 TESTS = [
-    "nextest run --workspace --all-features --locked --profile ci",
+    "nextest run --workspace --all-features --locked --profile ci --lib --bins --tests",
+    "nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench",
     "test --workspace --doc --all-features --locked",
-    "nextest run -p craft-image-codecs -p craft-text --locked --profile ci",
+    "nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests",
 ]
+AUDIT = "nextest run --workspace --all-features --locked --profile ci --lib --bins --tests -E " + " | ".join(
+    f"package({name})" for name in ("craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-patterns",
+                                    "craft-ui-shell", "craft-ui-gallery", "craft-menu"))
+LINUX_TESTS = TESTS[:2] + [AUDIT] + TESTS[2:]
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -108,14 +126,14 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_linux_and_macos_run_one_feature_set_with_doctests(self):
-        for os_name in ("Linux", "macOS"):
+        for os_name, expected in (("Linux", LINUX_TESTS), ("macOS", TESTS)):
             with self.subTest(os=os_name):
                 result = commands(os_name)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), TESTS)
+                self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_each_stage_failure_remains_fatal(self):
-        for name, stages in (("lint-command", COMMON), ("command", TESTS)):
+        for name, stages in (("lint-command", COMMON), ("command", LINUX_TESTS)):
             for index, command in enumerate(stages):
                 with self.subTest(block=name, command=command):
                     result = commands("Linux", command, name)
@@ -177,8 +195,18 @@ class WorkspaceTests(unittest.TestCase):
     def test_workflow_stays_shared_and_keeps_platform_gates(self):
         source = WORKFLOW.read_text()
         self.assertIn("uses: storytold/craft-common-actions/.github/workflows/gate.yml@main", source)
-        # Pushes to next run Linux only; every other run keeps all three.
-        self.assertIn('\'["ubuntu-latest","windows-latest","macos-latest"]\'', source)
+        self.assertIn('os: \'["ubuntu-latest"]\'', source)
+        self.assertIn('os: \'["windows-latest","macos-latest"]\'', source)
+        self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
+        # Pushes to next run Linux only.
+        self.assertIn("&& github.ref != 'refs/heads/next'", source)
+        # The macOS and Windows legs run the Linux leg's blocks, not copies of them.
+        self.assertIn("      lint-command: &lint |\n", source)
+        self.assertIn("      command: &command |\n", source)
+        self.assertIn("      lint-command: *lint\n", source)
+        self.assertIn("      command: *command\n", source)
+        # Only the Linux leg keeps workspace crates; the cache budget has no room for the others.
+        self.assertEqual(source.count("cache-workspace-crates: true"), 1)
         self.assertIn("  msrv:", source)
         self.assertIn("  wasm:", source)
         self.assertIn("python3 scripts/test-workspace-tests.py", block(source, "lint-command"))

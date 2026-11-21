@@ -3,7 +3,7 @@
 use crate::contract::PaneEdge;
 use crate::runtime::env::RevealEdge;
 use crate::runtime::frame::ChromeToggle;
-use crate::shell::Slot;
+use crate::shell::{ScreenMode, Slot};
 use egui::{Pos2, Rect, pos2};
 
 /// The width of the strip along a window edge where the pointer reveals the edge's hidden slots.
@@ -157,9 +157,16 @@ impl Reveal {
         }
     }
 
-    /// Whether `slot` on `edge` shows: its `visible` flag in normal mode; in body-only mode, if it reveals and a Tab
-    /// or edge reveal shows it.
-    pub(crate) fn shows(&self, slot: &Slot, edge: PaneEdge, only: bool, allow_reveal: bool) -> bool {
+    /// Whether `slot` on `edge` shows in `mode`. The screen bar shows in Focus and Immersive only; the drop-down slot in
+    /// Focus while `dropped` is set. Any other slot: its `visible` flag in normal mode; in body-only mode, if it
+    /// reveals and a Tab or edge reveal shows it.
+    pub(crate) fn shows(&self, slot: &Slot, edge: PaneEdge, only: bool, allow_reveal: bool, mode: ScreenMode, dropped: bool) -> bool {
+        if slot.is_screen_bar() {
+            return mode.has_screen_bar();
+        }
+        if slot.drops_down() {
+            return mode == ScreenMode::Focus && dropped;
+        }
         if !only {
             return slot.is_visible();
         }

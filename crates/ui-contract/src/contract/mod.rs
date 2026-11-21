@@ -5,6 +5,7 @@ mod collection;
 mod container;
 mod cx;
 pub(crate) mod editor;
+pub use editor::EditorHandle;
 mod entry;
 mod faces;
 pub(crate) mod footer_slot;
@@ -12,15 +13,16 @@ pub mod ghost;
 mod group;
 mod held;
 mod hosted;
-mod items;
-mod label;
+pub(crate) mod items;
+pub(crate) mod label;
 mod lazy;
-#[cfg(feature = "testing")]
-mod level;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
+pub(crate) mod level;
+#[cfg(feature = "suite")]
 mod level_table;
 mod looks;
 mod memo;
+mod memo_view;
 mod mount;
 pub mod overlay;
 mod pages;
@@ -55,10 +57,10 @@ pub use body::pad_of;
 #[doc(hidden)]
 pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
-    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRequest, ColumnSort,
-    ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest, ItemKeys, LeadOnOpen,
-    LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState, SelectMode, ShownRow,
-    SpaceAction, ToggleColumn, ToggleEdit,
+    ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
+    ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest,
+    ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState,
+    SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
@@ -85,28 +87,27 @@ pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;
 pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_rename, section_part};
+pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
 pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
 pub use lazy::Lazy;
 #[doc(hidden)]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
 pub use memo::{MemoKey, MemoProps, Stateless};
+pub use memo_view::{MemoView, Outbox};
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
 pub use props::{Common, Props, Resolved, Tooltip, TooltipAt, TooltipSpec, TooltipWhen};
 #[doc(hidden)]
-#[cfg(feature = "testing")]
-pub use registry::registrations;
-#[doc(hidden)]
 pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, PatternKind, PatternProbe, Probe, Registration, ShowEntry};
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindMut, EditResponse, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
@@ -119,7 +120,7 @@ use std::hash::Hash;
 use std::ops::Deref;
 
 pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFile, OsFiles, WindowDropTarget};
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
@@ -127,6 +128,7 @@ pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]
 pub(crate) use steps::queue_reveal;
+pub use steps::scroll_step;
 pub(crate) use steps::{child_reveal, peek_reveal, queue_child_reveal, take_reveal};
 pub(crate) use steps::{draft, keeping_ids};
 
@@ -361,7 +363,8 @@ pub trait Component: Meta + Sized {
     }
     /// Whether the component paints its label as visible text. `false` for a face that shows only an icon or a
     /// glyph: with no tooltip set, its label is then its tooltip, since the label is the only visible name the
-    /// pointer can reach. A component whose answer varies per instance overrides `shows_label`.
+    /// pointer can reach. A component whose answer varies per instance overrides `shows_label`. A canvas control's
+    /// label is never its tooltip, whatever this says: its rect is the canvas, and its parts name themselves.
     const SHOWS_LABEL: bool = true;
     /// Whether the control draws only its mark and its text is the label step's, placed after it: a check box, a
     /// radio button or a switch. `Show::show` then runs the label step for an instance that carries a label and sits
@@ -413,6 +416,19 @@ pub trait Component: Meta + Sized {
     /// Content size only; the pipeline adds padding and minimum size.
     fn measure(&mut self, _cx: &MeasureCx<'_, Self>) -> Vec2 {
         Vec2::ZERO
+    }
+
+    /// Set when `measure_pair` may answer a paired request. The default avoids calling the hook for legacy components.
+    const PAIRED_MEASURE: bool = false;
+
+    /// Optionally answers an ideal and a least content measure together. The answers must match `measure` under
+    /// the two supplied contexts, including the external inputs each reads, and leave the component as those calls
+    /// would. The component's fill declaration and label-scope reads must not change during either measure. Both
+    /// answers are replayed under the union of those inputs, so use this only when that preserves each answer. Return
+    /// `None` without reading either context or changing state to keep the ordinary separate calls;
+    /// that is the default.
+    fn measure_pair(&mut self, _ideal: &MeasureCx<'_, Self>, _least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        None
     }
 
     /// The axis along which the component takes all the room the flow offers when that is more than it measured,
@@ -542,6 +558,9 @@ pub trait Container: Component + HasProps + Meta<Shape = shape::Body> {
     /// Fills the footer region.
     fn footer(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
+    /// Fills the region under the body and above the footer, whatever the footer's place.
+    fn body_end(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
     /// Fills the end region, after the body.
     fn end(&mut self, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
@@ -635,8 +654,9 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     }
 
     /// The width the collection asks for when it takes its width from its content, over its widest row: a grid of
-    /// cards asks for its declared number of columns. 0 asks for nothing. `item` is as `item_layout_from` gets it.
-    fn ideal_width(&self, _item: Option<Vec2>, _cx: &StyleCx<'_>) -> f32 {
+    /// cards asks for its declared number of columns. 0 asks for nothing. `item` is as `item_layout_from` gets it;
+    /// `rows` is the number of rows the source holds, for a collection whose rows stand side by side.
+    fn ideal_width(&self, _item: Option<Vec2>, _rows: usize, _cx: &StyleCx<'_>) -> f32 {
         0.0
     }
 
@@ -645,7 +665,8 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
-    /// Adjusts the item the closure built for a row, from the row's state.
+    /// Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this
+    /// makes, under the row-hook contract on `ItemCx`.
     fn dress<'r>(&self, item: Self::Item<'r>, _row: &RowState) -> Self::Item<'r> {
         item
     }
@@ -655,6 +676,17 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     fn rename_editor(&mut self, _ui: &mut Ui, _draft: Bind<'_, String>, _label: Rect, _name: &str) -> Option<EditResponse<String>> {
         None
     }
+
+    /// Whether the collection hosts a component in the header cell of `column`: the header then calls `header_cell`
+    /// for it and paints no label.
+    fn hosts_header(&self, _column: &ColumnKey) -> bool {
+        false
+    }
+
+    /// Hosts a component in the header cell of `column`, in `rect`, measured and shown under `key` (the column's index
+    /// among the declared columns, so a move or a hide keeps it). Called only for a column `hosts_header` answers
+    /// `true` for.
+    fn header_cell(&mut self, _ui: &mut PaintUi<'_>, _column: &ColumnKey, _key: HostedKey, _rect: Rect) {}
 
     /// The text the rename field of the item `key` opens with; `None` for the item's own text.
     fn rename_draft(&self, _key: &Self::Key) -> Option<String> {
@@ -743,31 +775,31 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 /// Shows a container with its body.
 pub trait ShowContainer: Container + sealed::ShowContainer {
     /// Shows the container in the flow of `ui`.
-    fn show<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, None)
+    fn show<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, &mut body, None)
     }
 
     /// Shows the container at `rect`, with no allocation: a frame over a split or a layer the parent places.
-    fn show_at<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, None)
+    fn show_at<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), &mut body, None)
     }
 
     /// Shows the container at `rect` and takes that rect's room in the flow of `ui`: what is shown after it lies
     /// past it, as after [`show`](Self::show).
-    fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container_taking(&mut Some(self), ui, rect, body)
+    fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
+        run::show_container_taking(&mut Some(self), ui, rect, &mut body)
     }
 
     /// Measures the container with `body` without allocating: steps 1 to 5 under the id `show` would use next, with
     /// the body, header, footer and end regions run once in an invisible sizing pass, laid out as `show` lays them
     /// out. The size comes from this pass's content alone; along an axis the body scrolls on it is at most the room.
-    fn measure_in<R>(&mut self, ui: &Ui, proposal: Proposal, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Vec2 {
-        run::measure_container(self, ui, proposal, body)
+    fn measure_in<R>(&mut self, ui: &Ui, proposal: Proposal, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Vec2 {
+        run::measure_container(self, ui, proposal, &mut body)
     }
 
     /// Shows the container with rich tooltip content.
-    fn show_with_tip<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, Some(Box::new(tip)))
+    fn show_with_tip<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R> {
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, &mut body, Some(Box::new(tip)))
     }
 
     /// Shows the container at `rect` with rich tooltip content.
@@ -775,10 +807,10 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
         self,
         ui: &mut Ui,
         rect: Rect,
-        body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+        mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
         tip: impl FnOnce(&mut Ui),
     ) -> Inner<Self::Output, R> {
-        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, Some(Box::new(tip)))
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), &mut body, Some(Box::new(tip)))
     }
 }
 

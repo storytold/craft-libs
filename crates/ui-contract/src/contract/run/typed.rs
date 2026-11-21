@@ -12,7 +12,7 @@ use crate::contract::{
 use crate::primitives::{FaceRecord, face_id};
 use crate::runtime::access::{Politeness, SetPosition};
 use crate::runtime::commands::{self, ResolvedCommand};
-use crate::runtime::env::{AppValues, Env, Message, ThemeScope};
+use crate::runtime::env::{AppValues, Env, Label, Message, ThemeScope};
 use crate::runtime::focus;
 use crate::runtime::layout_memory::Inputs;
 use crate::runtime::memory::{MemoryStage, sub};
@@ -174,6 +174,11 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
     fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs) {
         let style = step_style(&self.style);
         steps::measure_content(self.comp.get(), input, style, resolved, self.shown.as_deref())
+    }
+
+    fn measure_content_pair(&mut self, ideal: &MeasureIn<'_>, least: &MeasureIn<'_>, resolved: &Resolved<'_>) -> Option<((Vec2, Vec2), Inputs)> {
+        let style = step_style(&self.style);
+        steps::measure_content_pair(self.comp.get(), ideal, least, style, resolved, self.shown.as_deref())
     }
 
     fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2 {
@@ -383,7 +388,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn settle_values(&mut self) -> steps::ValueEdit {
-        steps::settle(self.comp, self.cx)
+        steps::settle(self.comp, self.cx, self.hooks.in_flow(self.comp))
     }
 
     fn access(&self) -> (Access, Option<String>) {
@@ -520,8 +525,103 @@ fn measure_shape<C: Component>(
     proposal: Proposal,
     under: Option<&crate::contract::cx::Under>,
     hooks: &mut dyn ShapeHooks<C>,
+    purpose: super::MeasureFor,
 ) -> Vec2 {
-    super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under)
+    super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under, purpose)
+}
+
+/// Step 1 and style from a measure immediately followed by a show of the same leaf.
+pub(crate) struct PreparedLeaf<C: Component> {
+    source: Env,
+    inputs: StepInputs,
+    style_key: C::StyleKey,
+    step1: steps::EnvStep,
+    style: Arc<C::Style>,
+}
+
+#[derive(PartialEq)]
+struct StepInputs {
+    label: Label,
+    enabled: Option<bool>,
+    read_only: Option<bool>,
+    size: Option<craft_theme::ControlSize>,
+    glyphs: Option<crate::style::GlyphRole>,
+    variant: Option<Variant>,
+}
+
+impl StepInputs {
+    fn of(common: &Common) -> Option<Self> {
+        // A command or catalogue word can change independently during measure; disabled children get a different
+        // inherited env in the label step. Those cases take the ordinary path.
+        if common.command.is_some() || matches!(&common.label, Label::Word(_)) || common.enabled == Some(false) {
+            return None;
+        }
+        Some(Self {
+            label: common.label.clone(),
+            enabled: common.enabled,
+            read_only: common.read_only,
+            size: common.size,
+            glyphs: common.glyphs,
+            variant: common.variant,
+        })
+    }
+}
+
+impl<C: Component> PreparedLeaf<C> {
+    pub(crate) fn matches(&self, child: &C, source: &Env) -> bool {
+        self.source.same_source(source)
+            && StepInputs::of(child.common(Internal::new())).as_ref() == Some(&self.inputs)
+            && child.style_key() == self.style_key
+    }
+}
+
+/// Measures a leaf and keeps its steps only when the same component and scope are still present afterwards.
+pub(crate) fn measure_under_prepared<C: Show>(
+    comp: &mut C,
+    ui: &Ui,
+    id: Id,
+    proposal: Proposal,
+    under: &crate::contract::cx::Under,
+) -> (Vec2, Option<PreparedLeaf<C>>) {
+    let Some(inputs) = StepInputs::of(comp.common(Internal::new())) else {
+        return (measure_under(comp, ui, Some(id), proposal, Some(under)), None);
+    };
+    let source = Env::of(ui);
+    let key = comp.style_key();
+    let mut hooks = LeafHooks { scope: None };
+    let mut typed = Typed::new(Held::Lent(comp), &mut hooks);
+    let (size, step1) = super::measure_shape_with(&mut typed, ui, Some(id), proposal, Some(under), super::MeasureFor::Component);
+    let style = typed.style.clone();
+    drop(typed);
+    let prepared = style.and_then(|style| {
+        (source.same_source(&Env::of(ui)) && StepInputs::of(comp.common(Internal::new())).as_ref() == Some(&inputs) && comp.style_key() == key)
+            .then_some(PreparedLeaf { source, inputs, style_key: key, step1, style })
+    });
+    (size, prepared)
+}
+
+/// Shows the same leaf with steps kept by `measure_under_prepared`.
+pub(crate) fn show_leaf_prepared<C: Show>(
+    slot: &mut Option<C>,
+    ui: &mut Ui,
+    at: ShowAt,
+    tip: Option<TipFn<'_>>,
+    prepared: PreparedLeaf<C>,
+) -> C::Output {
+    let PreparedLeaf { step1, style, .. } = prepared;
+    #[cfg(feature = "testing")]
+    {
+        crate::runtime::measure::count_prepared_leaf(ui.ctx());
+        let env = Env::of(ui);
+        let scx = steps::style_cx(ui.ctx(), &env, &step1);
+        crate::testing::style::record::<C>(ui.ctx(), &scx, held(slot).style_key(), &style);
+    }
+    let mut hooks = LeafHooks { scope: held(slot).common(Internal::new()).command_scope };
+    let mut typed = Typed::owned(slot, &mut hooks);
+    typed.style = Some(Arc::clone(&style));
+    let style: Arc<dyn StyleView> = style;
+    super::run_with(&mut typed, ui, at, tip, Some(super::PreparedStep { step1, style }));
+    typed.output()
 }
 
 pub(crate) fn show_leaf<C: Component + Meta<Shape = crate::contract::shape::Leaf>>(
@@ -542,7 +642,7 @@ pub(crate) fn show_container_taking<C: Container, R>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     rect: Rect,
-    body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Inner<C::Output, R> {
     let shown = show_container(slot, ui, ShowAt::Rect(rect), body, None);
     crate::runtime::egui::alloc::advance_past(ui, rect);
@@ -553,7 +653,7 @@ pub(crate) fn show_container<C: Container, R>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     at: ShowAt,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     tip: Option<TipFn<'_>>,
 ) -> Inner<C::Output, R> {
     if let Some(output) = unshown(held(slot), ui) {
@@ -634,7 +734,13 @@ pub(crate) fn measure_under<C: Component>(
     proposal: Proposal,
     under: Option<&crate::contract::cx::Under>,
 ) -> Vec2 {
-    measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None })
+    measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None }, super::MeasureFor::Component)
+}
+
+/// Measures `face` as `PaintUi::face` will show it, as part of the measure call of the composite whose `under` it
+/// takes: as [`measure_under`], with no transcript leaf of its own.
+pub(crate) fn measure_face<C: Component>(face: &mut C, ui: &Ui, id: Id, proposal: Proposal, under: &crate::contract::cx::Under) -> Vec2 {
+    measure_shape(face, ui, Some(id), proposal, Some(under), &mut LeafHooks { scope: None }, super::MeasureFor::Face)
 }
 
 /// Measures a container with `body` as `show` will show it: steps 1 to 5, with the body, header, footer and end
@@ -643,13 +749,13 @@ pub(crate) fn measure_container<C: Container, R>(
     comp: &mut C,
     ui: &Ui,
     proposal: Proposal,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Vec2 {
     let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
         body(ui, cx);
     };
     let mut hooks = crate::contract::body::BodyHooks::of(comp, &mut call);
-    measure_shape(comp, ui, None, proposal, None, &mut hooks)
+    measure_shape(comp, ui, None, proposal, None, &mut hooks, super::MeasureFor::Component)
 }
 
 /// A measuring run's extent: the shape's `measured_extent` under a `Cx` that senses nothing and writes only to the

@@ -1,14 +1,68 @@
 //! Stories of the menu rows and the menu.
 
 use super::{Menu, MenuItem};
-use crate::buttons::Button;
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::buttons::{Button, IconButton};
+use crate::contract::{Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
-use crate::layout_components::Stack;
+use crate::layout_components::{Row, Stack};
+use crate::primitives::ContentPainterCx;
+use crate::runtime::commands::EditCommands;
+use crate::style::DataColor;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use craft_behavior::IconId;
+use craft_behavior::{Axis, IconId};
 use craft_theme::ControlSize;
-use egui::Ui;
+use egui::{Color32, CornerRadius, Rect, Ui};
+
+/// A sample that paints a colour ramp from `from` to `to` across its slot, as a style or colour preset row previews
+/// its look.
+fn ramp_sample(from: Color32, to: Color32) -> impl FnOnce(&ContentPainterCx<'_>, Rect) {
+    move |cx, rect| {
+        cx.ramp(rect, CornerRadius::ZERO, &[(0.0, DataColor::new(from)), (1.0, DataColor::new(to))], Axis::X);
+    }
+}
+
+const WARM: (Color32, Color32) = (Color32::from_rgb(250, 200, 60), Color32::from_rgb(220, 60, 40));
+const COOL: (Color32, Color32) = (Color32::from_rgb(80, 200, 220), Color32::from_rgb(40, 60, 200));
+
+/// Rows with a sample between the label and the shortcut; the disabled row fades its sample.
+#[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
+fn menu_item_samples(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Stack::new()
+        .show(ui, |ui, _| {
+            MenuItem::new("Sunset").sample(ramp_sample(WARM.0, WARM.1)).shortcut("Ctrl+Alt+1").show(ui);
+            MenuItem::new("Ocean").sample(ramp_sample(COOL.0, COOL.1)).shortcut("Ctrl+Alt+2").show(ui);
+            MenuItem::new("Ember").sample(ramp_sample(WARM.1, WARM.0)).enabled(false).show(ui)
+        })
+        .inner
+        .map(StoryOutput::from)
+        .unwrap_or_default()
+}
+
+/// Rows whose sample stands in for the label; the label stays each row's name.
+#[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
+fn menu_item_sample_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Stack::new()
+        .show(ui, |ui, _| {
+            MenuItem::new("Warm").sample(ramp_sample(WARM.0, WARM.1)).sample_only().show(ui);
+            MenuItem::new("Cool").sample(ramp_sample(COOL.0, COOL.1)).sample_only().show(ui)
+        })
+        .inner
+        .map(StoryOutput::from)
+        .unwrap_or_default()
+}
+
+/// A command row that hides its command's chord, under one that shows it.
+#[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
+fn menu_item_hidden_shortcut(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Stack::new()
+        .show(ui, |ui, _| {
+            MenuItem::command(EditCommands::Paste).show(ui);
+            MenuItem::command(EditCommands::Copy).hide_shortcut().show(ui)
+        })
+        .inner
+        .map(StoryOutput::from)
+        .unwrap_or_default()
+}
 
 #[story(MenuItem<'static>, covers = [Default], drive = Drive::Activate)]
 fn menu_item(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -61,7 +115,7 @@ fn menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     in_row(ui, |ui| {
         let opener = Button::new("File").show(ui);
         let mut ran = false;
-        let shown = Menu::new("File").size(size).open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+        let shown = Menu::new("File").size(size).open(data.bind("open", true)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
             ran |= icon(MenuItem::new("&New").shortcut("Ctrl+N"), "image").show(ui).ran;
             ran |= icon(MenuItem::new("Open").shortcut("Ctrl+O"), "settings").show(ui).ran;
             MenuItem::submenu("Open Recent").show(ui);
@@ -81,7 +135,7 @@ fn menu_taller_than_the_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
     in_row(ui, |ui| {
         let opener = Button::new("Fonts").show(ui);
         let mut ran = false;
-        let shown = Menu::new("Fonts").open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+        let shown = Menu::new("Fonts").open(data.bind("open", true)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
             for name in FONTS {
                 ran |= MenuItem::new(name).show(ui).ran;
             }
@@ -149,9 +203,34 @@ fn menu_of_values(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     in_row(ui, |ui| {
         let opener = Button::new("Zoom").show(ui);
         let entries = [Entry::new(0u8, "Fit in Window").checked(true), Entry::new(1, "Fill Screen"), Entry::separator(), Entry::new(2, "100%")];
-        let picked = Menu::new("Zoom").values().open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).pick(ui, &entries);
+        let picked = Menu::new("Zoom").values().open(data.bind("open", true)).opened_by(&opener, Trigger::Click).pick(ui, &entries);
         let ran = picked.picked.is_some();
         let mut output = StoryOutput::from(picked);
+        output.clicked |= ran;
+        output
+    })
+}
+
+/// A menu opened from a button with a formatting bar above it in its own layer, its list open.
+#[story(Menu<'static>, covers = [], drive = Drive::Never)]
+fn menu_with_companion(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    in_row(ui, |ui| {
+        let opener = Button::new("Format").show(ui);
+        let mut bar = |ui: &mut Ui| {
+            Row::new().show(ui, |ui, _| {
+                for (icon, label) in [("bold", "Bold"), ("italic", "Italic"), ("underline", "Underline")] {
+                    IconButton::new(IconId::new(icon)).label(label).id_salt(icon).show(ui);
+                }
+            });
+        };
+        let mut ran = false;
+        let shown = Menu::new("Format").open(data.bind("open", true)).opened_by(&opener, Trigger::Click).companion(&mut bar).show(ui, |ui, _| {
+            ran |= MenuItem::new("Copy").shortcut("Ctrl+C").show(ui).ran;
+            ran |= MenuItem::new("Paste").shortcut("Ctrl+V").show(ui).ran;
+            Divider::horizontal().show(ui);
+            ran |= MenuItem::new("Clear formatting").show(ui).ran;
+        });
+        let mut output = StoryOutput::from(shown.output);
         output.clicked |= ran;
         output
     })

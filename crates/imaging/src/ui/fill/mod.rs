@@ -22,14 +22,14 @@
 //! [`FullWindowDialog`]: craft_ui::dialog::FullWindowDialog
 //! [`EditHistory`]: craft_behavior::EditHistory
 
-mod bar;
+pub(crate) mod bar;
 mod commands;
 mod lasso;
 mod overlay;
-mod panel;
-mod preview_pane;
+pub(crate) mod panel;
+pub(crate) mod preview_pane;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;
 mod words;

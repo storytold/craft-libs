@@ -1,21 +1,26 @@
 //! The dialog host and stack.
 
-use craft_behavior::{Metrics, PartKey, Sense};
+use craft_behavior::{Metrics, MotionMode, PartKey, Sense};
 use craft_host::target::{Os, WindowChrome};
 use craft_quit::{CloseAnswer, CloseScope};
-use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::overlay::{Dismiss, Outside};
+use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
+    Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
     UnsavedChangesDialog, dialog_id,
 };
+use craft_ui::display::Text;
+use craft_ui::popover::Popover;
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::style::{ComponentStyle, StyleCx};
-use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, trial};
-use egui::{Modifiers, Rect, Response, Ui, Vec2, ViewportId, vec2};
+use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, pointer, trial};
+use egui::{Modifiers, Pos2, Rect, Response, Ui, Vec2, ViewportId, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A dialog with no content: it records whether it was the top of the stack when shown and finishes with
 /// `finish` once set.
@@ -93,6 +98,61 @@ fn a_parent_with_an_open_child_refuses_confirm() {
     assert!(host.confirm_by_id(&frames.ctx, child));
     assert!(host.confirm_by_id(&frames.ctx, parent), "with the child closed, the parent confirms");
     assert_eq!(host.take::<Probe<1>>(), Some(DialogResult::Ok(1)));
+}
+
+/// A dialog that asks for a `Probe<3>` child in the show after `ask` is set, and finishes with `finish` once set.
+struct Asker {
+    ask: bool,
+    child: Option<ChildDialog>,
+    finish: Option<DialogResult<u32>>,
+}
+
+impl StackDialog for Asker {
+    type Result = u32;
+
+    fn id(&self) -> DialogId {
+        dialog_id("asker")
+    }
+
+    fn show(&mut self, _: &mut Ui, _: &DialogStack) -> Option<DialogResult<u32>> {
+        if std::mem::take(&mut self.ask) {
+            self.child = Some(ChildDialog::new(Probe::<3>::new("asked")));
+        }
+        self.finish.take()
+    }
+
+    fn take_child(&mut self) -> Option<ChildDialog> {
+        self.child.take()
+    }
+}
+
+/// A child a dialog asks for in its show opens over it, once, and shows from the next pass; a dialog that finishes in
+/// the show that asked takes its request with it.
+#[trial]
+fn a_child_a_dialog_asks_for_opens_over_it_once() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    let asker = host.open(Asker { ask: false, child: None, finish: None });
+    run(&mut host, &mut frames);
+    assert!(!host.is_open::<Probe<3>>(), "no request, no child");
+
+    host.get_mut::<Asker>().unwrap().ask = true;
+    run(&mut host, &mut frames);
+    assert!(host.is_open::<Probe<3>>(), "the request opens the child in the run of the show that asked");
+    assert_eq!(host.get::<Probe<3>>().unwrap().shows, 0, "a child opened during the run shows from the next pass");
+    let parent = host.open_dialogs().into_iter().find(|open| open.id == dialog_id("asked")).and_then(|open| open.parent);
+    assert_eq!(parent, Some(asker));
+
+    run(&mut host, &mut frames);
+    assert_eq!(host.get::<Probe<3>>().unwrap().shows, 1);
+    assert_eq!(host.open_dialogs().len(), 2, "the request is taken once");
+
+    assert!(host.cancel::<Probe<3>>(&frames.ctx));
+    let dialog = host.get_mut::<Asker>().unwrap();
+    dialog.ask = true;
+    dialog.finish = Some(DialogResult::Cancel);
+    run(&mut host, &mut frames);
+    assert!(host.is_empty(), "a dialog that finished does not leave its child open");
 }
 
 /// A story of a hosted alert whose title is the story's `title` knob.
@@ -322,9 +382,249 @@ fn each_open_of_a_dialog_has_its_own_serial() {
     assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
 }
 
+/// The title of the hosted modal the nudge and popup trials open.
+const NUDGED: &str = "Nudge probe";
+
+/// The body text of that modal.
+const NUDGED_BODY: &str = "Press beside this dialog.";
+
+/// A hosted modal with a line of text and OK; while `above` is on, a popover opened from its body shows above it.
+struct Nudged {
+    above: Arc<AtomicBool>,
+}
+
+impl Nudged {
+    fn new() -> Self {
+        Nudged { above: Arc::new(AtomicBool::new(false)) }
+    }
+}
+
+impl StackDialog for Nudged {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id("nudged")
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let above = Arc::clone(&self.above);
+        let shown = Dialog::new(NUDGED).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, _| {
+            Text::new(NUDGED_BODY).show(ui);
+            let mut open = above.load(Ordering::Relaxed);
+            kept_popover(ui, "Above options", &mut open, ABOVE);
+            above.store(open, Ordering::Relaxed);
+        });
+        shown.output.closed.map(|_| DialogResult::Ok(()))
+    }
+}
+
+/// The text inside the popover opened above the modal.
+const ABOVE: &str = "Above the dialog";
+
+/// The text inside the popover open beneath the modal.
+const BENEATH: &str = "Beneath the dialog";
+
+/// A popover bound to `open` that no press outside, focus move or Escape closes: only a close the runtime queues does.
+fn kept_popover(ui: &mut Ui, label: &'static str, open: &mut bool, text: &'static str) {
+    Popover::new(label, Bind::bound(open)).dismiss(Dismiss::new().outside(Outside::Keep)).escape(false).show(ui, |ui, _| {
+        Text::new(text).show(ui);
+    });
+}
+
+/// The rect of the open dialog in the latest frame; `None` while none shows.
+fn dialog_rect(fixture: &Fixture) -> Option<Rect> {
+    fixture.by_role(Role::DIALOG).first().map(|dialog| dialog.rect)
+}
+
+/// A pointer move to `at`, a press there and its release, each in a frame of its own; `during` runs after each frame.
+fn press_at(fixture: &mut Fixture, at: Pos2, mut during: impl FnMut(&Fixture)) {
+    for event in [pointer::moved(at), pointer::press(at), pointer::release(at)] {
+        fixture.frame(vec![event]);
+        during(fixture);
+    }
+}
+
+/// The stroked rects the latest frame painted, with their strokes.
+fn strokes(shapes: &[egui::Shape]) -> Vec<(Rect, egui::Stroke)> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.stroke.width > 0.0 => Some((rect.rect, rect.stroke)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A hosted modal under full motion: a press inside does nothing; a press beside shakes it, also when the press frame
+/// runs a second pass; a second press while it shakes does not start it over, so it is at rest by the end of the first
+/// shake; and a dialog closed while it shakes opens again at rest. Under reduced motion the press flashes its edge and
+/// the dialog never moves.
+#[trial]
+fn a_press_beside_a_modal_dialog_nudges_it_once_and_it_comes_to_rest() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let rerun = Rc::new(Cell::new(false));
+    let (shown, again) = (Rc::clone(&host), Rc::clone(&rerun));
+    let mut fixture = Fixture::new(move |ui| {
+        shown.borrow_mut().run(ui);
+        if again.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the press frame runs twice");
+        }
+    });
+    fixture.motion(MotionMode::Full);
+    host.borrow_mut().open(Nudged::new());
+    fixture.settle().idle(12);
+    let rest = dialog_rect(&fixture).expect("the modal shows");
+    let beside = Pos2::new(4.0, 4.0);
+    assert!(!rest.contains(beside), "the press point lies beside the dialog");
+
+    // On the dialog's own padding, beside its text and buttons.
+    let inside = Pos2::new(rest.left() + 2.0, rest.center().y);
+    let mut moved = false;
+    press_at(&mut fixture, inside, |fixture| moved |= dialog_rect(fixture) != Some(rest));
+    for _ in 0..12 {
+        fixture.frame(Vec::new());
+        moved |= dialog_rect(&fixture) != Some(rest);
+    }
+    assert!(!moved, "a press inside the dialog does not nudge it");
+    assert!(host.borrow().is_open::<Nudged>(), "the press inside left the dialog open");
+
+    // The nudge starts in the press frame, which runs two passes; the press reaches only the first.
+    fixture.frame(vec![pointer::moved(beside)]);
+    rerun.set(true);
+    fixture.frame(vec![pointer::press(beside)]);
+    rerun.set(false);
+    assert!(fixture.passes() > 1, "the press frame ran a second pass");
+    fixture.frame(vec![pointer::release(beside)]);
+    moved |= dialog_rect(&fixture) != Some(rest);
+    // Frames two to four after the first press: a second press while the shake runs.
+    press_at(&mut fixture, beside, |fixture| moved |= dialog_rect(fixture) != Some(rest));
+    // Frames five to ten: the open motion's duration is nine frames, so the first shake is over by the tenth.
+    for _ in 0..6 {
+        fixture.frame(Vec::new());
+        moved |= dialog_rect(&fixture) != Some(rest);
+    }
+    assert!(moved, "a press beside the dialog moves it");
+    assert_eq!(dialog_rect(&fixture), Some(rest), "the dialog is back at rest when the first nudge ends");
+    assert!(!fixture.repaint_requested(), "the second press did not start the nudge over");
+    assert!(host.borrow().is_open::<Nudged>(), "the presses beside left the dialog open");
+
+    // A dialog closed in the middle of a nudge opens again as one that never was nudged.
+    let reopened = |fixture: &mut Fixture, nudge: bool| -> Vec<Option<Rect>> {
+        if nudge {
+            press_at(fixture, beside, |_| {});
+        } else {
+            fixture.idle(3);
+        }
+        assert!(host.borrow_mut().cancel::<Nudged>(fixture.ctx()), "the open dialog cancels");
+        fixture.frame(Vec::new());
+        host.borrow_mut().open(Nudged::new());
+        (0..10).map(|_| dialog_rect(fixture.frame(Vec::new()))).collect()
+    };
+    let calm = reopened(&mut fixture, false);
+    fixture.settle().idle(12);
+    let after_nudge = reopened(&mut fixture, true);
+    assert_eq!(after_nudge, calm, "a reopened dialog does not carry the nudge it closed in");
+
+    // Reduced motion: two edge flashes over the dialog, which stays where it is.
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.motion(MotionMode::Reduced);
+    host.borrow_mut().open(Nudged::new());
+    fixture.settle().idle(12);
+    let rest = dialog_rect(&fixture).expect("the modal shows");
+    let calm = strokes(&fixture.frame_shapes());
+    let mut moved = false;
+    press_at(&mut fixture, beside, |fixture| moved |= dialog_rect(fixture) != Some(rest));
+    let mut flashed = false;
+    for _ in 0..10 {
+        let painted = strokes(&fixture.frame_shapes());
+        flashed |= painted.iter().any(|stroke| !calm.contains(stroke) && stroke.0.contains(rest.center()));
+        moved |= dialog_rect(&fixture) != Some(rest);
+    }
+    assert!(flashed, "under reduced motion a press beside flashes the dialog's edge");
+    assert!(!moved, "under reduced motion the dialog does not move");
+    fixture.idle(4);
+    let after = strokes(&fixture.frame_shapes());
+    assert!(after.iter().all(|stroke| calm.contains(stroke)), "the flash is over once the nudge ends");
+}
+
+/// A popup open beneath a modal closes in the pass the modal first shows; a popup opened above the modal afterwards
+/// stays open.
+#[trial]
+fn a_new_modal_closes_the_popups_beneath_it() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let beneath = Rc::new(Cell::new(true));
+    let (shown, below) = (Rc::clone(&host), Rc::clone(&beneath));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut open = below.get();
+        kept_popover(ui, "Beneath options", &mut open, BENEATH);
+        below.set(open);
+        shown.borrow_mut().run(ui);
+    });
+    fixture.settle();
+    assert!(beneath.get() && fixture.by_label(BENEATH).is_some(), "the popup beneath is open before the modal");
+
+    let dialog = Nudged::new();
+    let above = Arc::clone(&dialog.above);
+    host.borrow_mut().open(dialog);
+    // The modal's first pass queues the close; the popup's owner takes it in the pass after.
+    fixture.frame(Vec::new());
+    assert!(fixture.by_label(NUDGED_BODY).is_some(), "the modal shows in its first pass");
+    fixture.idle(2);
+    assert!(!beneath.get(), "the popup beneath the new modal closed");
+    fixture.settle();
+    assert!(fixture.by_label(BENEATH).is_none(), "the closed popup is gone from the screen");
+
+    above.store(true, Ordering::Relaxed);
+    fixture.settle().idle(6);
+    assert!(above.load(Ordering::Relaxed), "a popup opened above the shown modal stays open");
+    assert!(fixture.by_label(ABOVE).is_some(), "the popup above the modal shows");
+}
+
+/// A dialog whose modality the test sets, as current state.
+struct Tool {
+    modeless: bool,
+}
+
+impl StackDialog for Tool {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id("tool")
+    }
+
+    fn modeless(&self) -> bool {
+        self.modeless
+    }
+
+    fn show(&mut self, _: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        None
+    }
+}
+
+/// `shows_modal` reads the open dialogs' modality as it is now: an empty host shows none; a modeless dialog alone is
+/// not modal; a modal opened in this pass counts at once, with no pass run; a startup modal still queued does not;
+/// closing the modal returns it to false; a dialog that turns modal while open counts.
+#[trial]
+fn shows_modal_follows_the_open_dialogs_modality() {
+    let frames = Frames::new();
+    let mut host = DialogHost::new();
+    assert!(!host.shows_modal(), "an empty host shows no modal");
+    host.open(Tool { modeless: true });
+    assert!(!host.shows_modal(), "a modeless dialog alone is not modal");
+    host.enqueue(StartupStage::Warning, Probe::<3>::new("queued"));
+    assert!(!host.shows_modal(), "a startup modal still in the queue is not shown");
+    host.open(Probe::<1>::new("modal"));
+    assert!(host.shows_modal(), "a modal opened this pass counts before any pass runs");
+    assert!(host.cancel::<Probe<1>>(&frames.ctx));
+    assert!(!host.shows_modal(), "with the modal closed only the modeless dialog is open");
+    host.get_mut::<Tool>().expect("the tool is open").modeless = false;
+    assert!(host.shows_modal(), "the modality is the dialog's current state");
+}
+
 /// A dialog with a text field and a number field before any other control, holding `name` and `radius`.
 fn first_field_dialog(name: Rc<RefCell<String>>, radius: Rc<Cell<Option<f64>>>, number_first: bool) -> Fixture {
-    use craft_ui::contract::Bind;
     use craft_ui::text::{NumberField, TextField};
     Fixture::new(move |ui| {
         let mut open = true;

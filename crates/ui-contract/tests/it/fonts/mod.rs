@@ -1,9 +1,10 @@
 //! Interface fonts.
 
-mod document;
-mod on_demand;
-mod served;
-mod stack;
+pub(crate) mod document;
+pub(crate) mod face_run;
+pub(crate) mod on_demand;
+pub(crate) mod served;
+pub(crate) mod stack;
 
 /// Builds a minimal SFNT font mapping `glyphs` (`(codepoint, has_outline)`) under `family`.
 /// When `colr` is `true`, every mapped glyph also carries a COLRv0 record (and a `CPAL` table)

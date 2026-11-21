@@ -14,8 +14,8 @@ pub use appearance::{
 };
 pub use catalog::{Catalog, ComponentInfo, Declared, Entry, StoryGroup, display_name};
 pub use commands::GalleryCommands;
-pub use layout::{PanelId, default_components, default_for, default_theme, load as load_layout, open_tabs, reconciled, save as save_layout};
-pub use picks::{CardState, DialogState, by_level, entry_of, levels};
+pub use layout::{PanelId, TabName, default_components, default_for, default_theme, load as load_layout, open_tabs, reconciled, save as save_layout};
+pub use picks::{CardState, Cells, DialogState, by_level, entry_of, levels};
 pub use settings::GallerySettings;
-pub use state::{Browser, Cells, Preview, Viewer, Workspace};
-pub use tree::{TreeKey, TreeRow, TreeRows, groups, level_named, open_level_of_selection, rows, slug};
+pub use state::{Browser, Preview, Viewer, Workspace};
+pub use tree::{TreeKey, TreeRow, TreeRows, groups, level_named, open_level, open_level_of_selection, rows, slug};

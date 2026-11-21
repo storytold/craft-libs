@@ -177,6 +177,8 @@ pub enum Intent {
     Text(Arc<str>),
     /// Tab in a component whose key filter keeps it.
     Tab,
+    /// Shift+Tab in a document canvas's editor part that keeps Tab.
+    BackTab,
     /// An edit command the focused component lists.
     Edit(EditCommand),
     /// Switch to the next or previous page.

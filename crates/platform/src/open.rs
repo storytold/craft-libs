@@ -1,8 +1,11 @@
-//! Files reaching the app from outside, and the app handing files to the system.
+//! OS requests reaching the app from outside, and the app handing files to the system.
 //!
-//! - [`FileIntake`]: one queue for files the OS asks the app to open (Finder double-click, Open
-//!   With, a Dock drop, a second launch handing its paths to the first) and files dropped on the
-//!   window, with where they were dropped ([`DropTarget`]).
+//! - [`FileIntake`]: one queue for the OS requests: files the OS asks the app to open (Finder
+//!   double-click, Open With, a Dock drop, a second launch handing its paths to the first), files
+//!   dropped on the window with where they were dropped ([`DropTarget`]), and the OS asking the
+//!   app to quit.
+//! - `apple_events` (macOS, feature `apple-events`): the open-documents and quit Apple events,
+//!   fed into a [`FileIntake`].
 //! - [`natural_cmp`], [`same_file`]: the order files open in and the check that keeps an open
 //!   file from opening twice.
 //! - [`OPEN_FAILED`] and the other [`PlatformText`]s: the open errors every app words the same way.
@@ -23,6 +26,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use craft_host::Wake;
 
 pub use craft_docpath::names::natural_cmp;
+
+#[cfg(all(target_os = "macos", feature = "apple-events"))]
+pub mod apple_events;
 
 use crate::PlatformText;
 
@@ -82,6 +88,8 @@ pub enum Intake {
         /// Where they landed.
         target: DropTarget,
     },
+    /// The OS asked the app to quit.
+    Quit,
 }
 
 /// The sending side of a [`FileIntake`]: `Send + Clone`, for the threads that hear the OS (the
@@ -98,7 +106,49 @@ const _: () = {
     sendable::<IntakeSender>();
 };
 
+/// A source of OS requests that lives on the UI thread (the Apple-event inbox is not `Send`),
+/// emptied into its [`IntakeSender`] by [`FileIntake::take`].
+#[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
+struct RegisteredDrain {
+    queue: std::sync::Weak<Mutex<VecDeque<Intake>>>,
+    drain: std::rc::Rc<dyn Fn(&IntakeSender)>,
+}
+
+#[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
+thread_local! {
+    static DRAINS: std::cell::RefCell<Vec<RegisteredDrain>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Keeps a drain registered on the thread that registered it; dropping it unregisters.
+#[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
+pub(crate) struct DrainRegistration {
+    drain: std::rc::Rc<dyn Fn(&IntakeSender)>,
+}
+
+#[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
+impl Drop for DrainRegistration {
+    fn drop(&mut self) {
+        DRAINS.with(|drains| drains.borrow_mut().retain(|d| !std::rc::Rc::ptr_eq(&d.drain, &self.drain)));
+    }
+}
+
 impl IntakeSender {
+    /// Wakes the UI without queueing anything: for a source that must not drain where it hears
+    /// the OS (it may hold its own lock there) and is drained by [`FileIntake::take`] instead.
+    #[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
+    pub(crate) fn wake_ui(&self) {
+        self.wake.wake();
+    }
+
+    /// Registers `drain`, which [`FileIntake::take`] runs on the calling thread before it returns,
+    /// to move the requests a thread-bound source collected into this intake.
+    #[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
+    pub(crate) fn register_drain(&self, drain: impl Fn(&IntakeSender) + 'static) -> DrainRegistration {
+        let drain: std::rc::Rc<dyn Fn(&IntakeSender)> = std::rc::Rc::new(drain);
+        DRAINS.with(|drains| drains.borrow_mut().push(RegisteredDrain { queue: Arc::downgrade(&self.queue), drain: std::rc::Rc::clone(&drain) }));
+        DrainRegistration { drain }
+    }
+
     /// Queues an OS open request and wakes the UI (`wake` is the app's `request_repaint`).
     pub fn open(&self, paths: Vec<PathBuf>) {
         if paths.is_empty() {
@@ -109,22 +159,41 @@ impl IntakeSender {
         push(&self.queue, Intake::Open(paths));
         self.wake.wake();
     }
+
+    /// Queues files dropped on the window and wakes the UI; an empty list is ignored.
+    pub fn dropped(&self, files: Vec<DroppedFile>, target: DropTarget) {
+        if files.is_empty() {
+            return;
+        }
+        push(&self.queue, Intake::Dropped { files, target });
+        self.wake.wake();
+    }
+
+    /// Queues an OS quit request and wakes the UI.
+    pub fn quit(&self) {
+        push(&self.queue, Intake::Quit);
+        self.wake.wake();
+    }
 }
 
-/// Files waiting to be opened, read once per frame on the UI thread (spec Q-S4F-7).
+/// OS requests waiting for the app (files to open, files dropped, quit), read once per frame on
+/// the UI thread (spec Q-S4F-7).
 ///
-/// The app makes one at startup, gives [`sender`](Self::sender) to whatever hears the OS, pushes
-/// drops from its frame with [`dropped`](Self::dropped), and takes the batches with
+/// The app makes one at startup, gives [`sender`](Self::sender) to whatever hears the OS
+/// (`apple_events::install` on macOS, its single-instance socket elsewhere), pushes drops
+/// through a sender's [`dropped`](IntakeSender::dropped), and takes the requests with
 /// [`take`](Self::take). An [`Intake::Open`] batch comes made absolute and sorted by
 /// [`natural_cmp`] of the path text; the app focuses documents already open ([`same_file`]) and
 /// opens the rest, then brings its window to the front (on Wayland, a user-attention request).
+/// [`Intake::Quit`] closes the app the way its own Quit command does.
 ///
 /// ```ignore
 /// let (intake, sender) = FileIntake::new(Wake::new(move || ctx.request_repaint()));
-/// // macOS: the app's Apple Event handler calls `sender.open(paths)`; elsewhere its single-instance socket does.
+/// #[cfg(target_os = "macos")]
+/// let _events = craft_platform::open::apple_events::install(sender.clone());
 /// // each frame:
-/// intake.dropped(ctx.input(|i| i.raw.dropped_files.iter().map(to_dropped).collect()), target);
-/// for batch in intake.take() { app.open_batch(batch); }
+/// intake.sender().dropped(ctx.input(|i| i.raw.dropped_files.iter().map(to_dropped).collect()), target);
+/// for request in intake.take() { app.handle(request); }
 /// ```
 pub struct FileIntake {
     queue: Arc<Mutex<VecDeque<Intake>>>,
@@ -144,16 +213,23 @@ impl FileIntake {
         self.sender.clone()
     }
 
-    /// Queues files dropped this frame; an empty list is ignored.
-    pub fn dropped(&self, files: Vec<DroppedFile>, target: DropTarget) {
-        if !files.is_empty() {
-            push(&self.queue, Intake::Dropped { files, target });
-        }
-    }
-
-    /// The batches in arrival order, emptied.
+    /// The requests in arrival order, emptied.
     // pc: crates/ui-egui/src/file_open.rs:157 open_paths (absolute, sorted)
     pub fn take(&self) -> Vec<Intake> {
+        #[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
+        {
+            let mine: Vec<_> = DRAINS.with(|drains| {
+                drains
+                    .borrow()
+                    .iter()
+                    .filter(|d| d.queue.upgrade().is_some_and(|q| Arc::ptr_eq(&q, &self.queue)))
+                    .map(|d| std::rc::Rc::clone(&d.drain))
+                    .collect()
+            });
+            for drain in mine {
+                drain(&self.sender);
+            }
+        }
         let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         queue.drain(..).collect()
     }

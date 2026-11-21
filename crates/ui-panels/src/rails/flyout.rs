@@ -15,8 +15,8 @@ use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
 use egui::{Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The face over the whole button.
 const FACE: PartKey = PartKey::new("face");
@@ -90,9 +90,9 @@ struct Held(bool);
 
 /// What the parts step resolved for the tools this pass.
 struct Laid {
-    resolved: Vec<Option<ResolvedCommand>>,
+    resolved: Vec<Option<std::sync::Arc<ResolvedCommand>>>,
     /// The click command as resolved, when the button has one.
-    click: Option<ResolvedCommand>,
+    click: Option<std::sync::Arc<ResolvedCommand>>,
     shown: usize,
 }
 
@@ -185,7 +185,7 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
 
     /// The command the face stands for: the click command when there is one, else the shown tool's.
     fn lead<'l>(&self, laid: &'l Laid) -> Option<&'l ResolvedCommand> {
-        if self.click.is_some() { laid.click.as_ref() } else { laid.resolved.get(laid.shown).and_then(Option::as_ref) }
+        if self.click.is_some() { laid.click.as_deref() } else { laid.resolved.get(laid.shown).and_then(Option::as_deref) }
     }
 }
 

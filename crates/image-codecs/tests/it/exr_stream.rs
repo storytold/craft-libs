@@ -48,6 +48,70 @@ fn change_window(bytes: &mut [u8], width: i32, height: i32) {
     bytes[at + 12..at + 16].copy_from_slice(&(height - 1).to_le_bytes());
 }
 
+fn cropped_exr(display_size: usize, origin: (i32, i32), alpha: bool) -> Vec<u8> {
+    use exr::prelude::{
+        AnyChannel, AnyChannels, Blocks, Compression, Encoding, FlatSamples, ImageAttributes, IntegerBounds, Layer, LayerAttributes, LineOrder,
+        WritableImage,
+    };
+    let mut channels = vec![
+        AnyChannel::new("R", FlatSamples::F16(vec![f16::from_f32(0.25); 4])),
+        AnyChannel::new("G", FlatSamples::F16(vec![f16::from_f32(0.5); 4])),
+        AnyChannel::new("B", FlatSamples::F16(vec![f16::from_f32(0.75); 4])),
+    ];
+    if alpha {
+        channels.push(AnyChannel::new("A", FlatSamples::F16(vec![f16::ONE; 4])));
+    }
+    let channels = AnyChannels::sort(channels.into_iter().collect());
+    let layer = Layer::new(
+        (2, 2),
+        LayerAttributes { layer_position: exr::math::Vec2(origin.0, origin.1), ..Default::default() },
+        Encoding { compression: Compression::Uncompressed, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing },
+        channels,
+    );
+    let image = exr::image::Image::from_layers(ImageAttributes::new(IntegerBounds::new((0, 0), (display_size, display_size))), vec![layer]);
+    let mut out = Cursor::new(Vec::new());
+    image.write().to_buffered(&mut out).unwrap();
+    out.into_inner()
+}
+
+#[test]
+fn contained_display_stage_matches_whole_decode_and_preserves_half_samples() {
+    let bytes = cropped_exr(4, (1, 1), true);
+    let whole = decode(&bytes).unwrap();
+    assert_eq!(whole.dimensions(), (4, 4));
+    assert_eq!(whole.sample_type(), SampleType::F16);
+    assert!(matches!(whole.warnings.first(), Some(DecodeWarning::DisplayWindowStage { stage: (4, 4), origin: (1, 1) })));
+    let mut stream = Decoder::new(Cursor::new(&bytes), &|| false).unwrap();
+    let expected = whole.convert(ChannelLayout::Rgba, SampleType::F32);
+    let mut actual = vec![0; expected.data().len()];
+    while let Some(band) = stream.next_band(&|| false).unwrap() {
+        assert_eq!((band.x, band.width), (0, 4));
+        let start = band.y as usize * 4 * 16;
+        actual[start..start + band.data.len()].copy_from_slice(&band.data);
+    }
+    // Stream API emits F32 RGBA; compare values after widening the whole-file half samples.
+    assert_eq!(actual, expected.data());
+    for p in actual[..4 * 16].as_chunks::<16>().0 {
+        assert_eq!(f32::from_le_bytes(p[12..16].try_into().unwrap()), 0.0);
+    }
+}
+
+#[test]
+fn oversized_contained_display_stage_is_rejected_by_both_decoders() {
+    let bytes = cropped_exr(262_145, (0, 0), true);
+    assert!(matches!(decode(&bytes), Err(CodecError::LimitExceeded(_))));
+    assert!(matches!(Decoder::new(Cursor::new(bytes), &|| false), Err(CodecError::LimitExceeded(_))));
+}
+
+#[test]
+fn opaque_display_padding_does_not_overwrite_rgb_channels() {
+    let image = decode(&cropped_exr(4, (1, 1), false)).unwrap();
+    assert_eq!(image.layout(), ChannelLayout::Rgb);
+    let samples = image.to_f16_samples().unwrap();
+    assert!(samples[..3].iter().all(|sample| *sample == f16::ZERO));
+    assert_eq!(samples[15..18], [f16::from_f32(0.25), f16::from_f32(0.5), f16::from_f32(0.75)]);
+}
+
 #[test]
 fn enormous_header_is_not_a_whole_image_allocation() {
     let mut bytes = fixture(ChannelLayout::Rgb, SampleType::F16, ExrCompression::Zip16);

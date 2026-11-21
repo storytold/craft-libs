@@ -13,10 +13,10 @@
 //! one the title takes the first letter no earlier title holds. The mnemonic is underlined while Alt is held.
 //!
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
-//! matches by label, English label or menu path, each as a command row with its path as detail.
+//! matches by label, English label, menu path or command id, each as a command row with its path as detail.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::search::{HelpEntry, search_order};
 use super::words::MenuWords;
@@ -114,9 +114,11 @@ impl Component for TitleFace {
         face::measure(
             cx,
             &FaceSpec {
+                arrangement: crate::buttons::Arrangement::Inline,
                 label: cx.resolved.label,
                 role: None,
                 lead: None,
+                picture: None,
                 trail: None,
                 loading: false,
                 mnemonic: None,
@@ -135,9 +137,11 @@ impl Component for TitleFace {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let spec = FaceSpec {
+            arrangement: crate::buttons::Arrangement::Inline,
             label: cx.resolved.label,
             role: None,
             lead: None,
+            picture: None,
             trail: None,
             loading: false,
             mnemonic: self.mnemonic,
@@ -233,8 +237,10 @@ struct BarState {
 #[derive(Clone, Debug, Default)]
 struct Query(String, u32, bool);
 
+craft_ui_contract::stays!(BarFact);
+
 /// What the bar published for `is_open` and `is_focused`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct BarFact {
     open: bool,
     focused: bool,
@@ -407,14 +413,14 @@ impl<'a> MenuBar<'a> {
         Self::open_only(cx, slots, declared, slots[to]);
     }
 
-    /// The help search's entries as `[label, English label, path]` texts.
-    fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 3]> {
+    /// The help search's entries as `[label, English label, path, command id]` texts.
+    fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 4]> {
         entries
             .iter()
             .map(|entry| {
                 let path: Vec<String> = entry.path().iter().map(|label| env.resolve(label).as_str().to_owned()).collect();
                 let english = entry.english().map(|label| env.resolve(label).as_str().to_owned());
-                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator)]
+                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator), entry.command().id.clone()]
             })
             .collect()
     }
@@ -579,8 +585,10 @@ impl Component for MenuBar<'_> {
                                     }
                                 }
                                 query.1 = query.1.saturating_add(1);
-                                let refs: Vec<[&str; 3]> =
-                                    rows.iter().map(|[label, english, path]| [label.as_str(), english.as_str(), path.as_str()]).collect();
+                                let refs: Vec<[&str; 4]> = rows
+                                    .iter()
+                                    .map(|[label, english, path, id]| [label.as_str(), english.as_str(), path.as_str(), id.as_str()])
+                                    .collect();
                                 let mut seen: Vec<&CommandRef> = Vec::new();
                                 let listed: Vec<usize> = search_order(&folder, &query.0, &refs)
                                     .into_iter()

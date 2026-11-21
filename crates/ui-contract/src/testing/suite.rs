@@ -31,16 +31,17 @@ pub use size::{reflowed, text_size_case};
 pub use states::required_states;
 pub use variants::rtl_case;
 
+use super::Registry;
 use super::fixture::Fixture;
-use super::story::{Story, stories};
+use super::story::Story;
 use crate::contract::{PatternProbe, Probe, Registration, ShapeKind};
 use libtest_mimic::{Failed, Trial};
 use std::cell::OnceCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 /// What a case reads: the registered type, the stories written for it, and what the cases share of them.
-struct Subject {
-    probe: &'static Probe,
+struct Subject<'a> {
+    probe: &'a Probe,
     stories: Vec<Story>,
     /// The stories are the home package's, the one that registers the type. Stories another package declares for the
     /// type run only the per-story cases there; the cases about the type as a whole (its required states, its
@@ -62,8 +63,8 @@ struct Base {
     plan: drive::Plan,
 }
 
-impl Subject {
-    fn new(probe: &'static Probe, stories: Vec<Story>, home: bool) -> Self {
+impl<'a> Subject<'a> {
+    fn new(probe: &'a Probe, stories: Vec<Story>, home: bool) -> Self {
         let bases = stories.iter().map(|_| OnceCell::new()).collect();
         Subject { probe, stories, home, bases, style_sources: OnceCell::new(), style_ctx: OnceCell::new() }
     }
@@ -171,8 +172,8 @@ fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
 
 /// The cases of `group` over the stories of the type `probe` describes, and with `check_exemptions` the check that
 /// each exemption names a known case. `home`: the stories are the package's that registers the type ([`Subject::home`]).
-fn run_group(probe: &'static Probe, group: &'static Group, check_exemptions: bool, home: bool, stories: Vec<Story>) -> Result<(), Failed> {
-    let subject = Subject::new(probe, stories, home);
+fn run_group(probe: Probe, group: &'static Group, check_exemptions: bool, home: bool, stories: Vec<Story>) -> Result<(), Failed> {
+    let subject = Subject::new(&probe, stories, home);
     let mut failures = Vec::new();
     if check_exemptions && home {
         for exemption in probe.exempt {
@@ -182,7 +183,7 @@ fn run_group(probe: &'static Probe, group: &'static Group, check_exemptions: boo
         }
     }
     for case in group.cases() {
-        if !runs_for(case, probe) {
+        if !runs_for(case, &probe) {
             continue;
         }
         match catch_unwind(AssertUnwindSafe(|| (case.run)(&subject))) {
@@ -197,10 +198,11 @@ fn run_group(probe: &'static Probe, group: &'static Group, check_exemptions: boo
 /// The trials of one package: a trial per registered type and group of cases, `suite::<type>::<group>`; the same for
 /// each type another linked package registers and this package has stories of, over those stories and without the
 /// cases about the type as a whole (`Subject::home`); and one per story naming a type that is not linked.
-pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Vec<Trial> {
+pub fn trials(package: &'static str, registry: &Registry) -> Vec<Trial> {
     let library = package.replace('-', "_");
-    let own: Vec<_> = stories().into_iter().filter(|entry| entry.crate_name == package && entry.crate_target == library).collect();
-    let probes: Vec<&'static Probe> = registered.iter().copied().filter_map(Registration::probe).collect();
+    let own: Vec<_> = registry.stories().iter().filter(|entry| entry.crate_name == package && entry.crate_target == library).collect();
+    let own_registrations = registry.registrations().iter().filter(|entry| entry.crate_name() == package && entry.crate_target() == library);
+    let probes: Vec<Probe> = own_registrations.clone().filter_map(Registration::probe).copied().collect();
     let mut trials = Vec::new();
     for probe in probes.iter().copied() {
         let mut stories: Vec<Story> = own.iter().filter(|entry| (entry.type_name)() == probe.type_name()).map(|entry| entry.story).collect();
@@ -209,18 +211,23 @@ pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Ve
         }
         for (index, group) in GROUPS.iter().enumerate() {
             let stories = stories.clone();
+            let story_sets = registry.story_selection();
             let name = format!("suite::{}::{}", probe.type_name(), group.name);
-            trials.push(Trial::test(name, move || run_group(probe, group, index == 0, true, stories)));
+            trials.push(Trial::test(name, move || {
+                crate::runtime::commands::with_story_sets(&story_sets, || run_group(probe, group, index == 0, true, stories))
+            }));
         }
     }
-    let patterns: Vec<&'static PatternProbe> = registered.iter().copied().filter_map(Registration::pattern_probe).collect();
+    let patterns: Vec<PatternProbe> = own_registrations.filter_map(Registration::pattern_probe).copied().collect();
     for pattern in &patterns {
         let stories: Vec<Story> = own.iter().filter(|entry| (entry.type_name)() == pattern.type_name()).map(|entry| entry.story).collect();
         let name = pattern.type_name();
-        trials.push(Trial::test(format!("suite::{name}"), move || pattern::run(name, &stories).map_err(Failed::from)));
+        let story_sets = registry.story_selection();
+        trials.push(Trial::test(format!("suite::{name}"), move || {
+            crate::runtime::commands::with_story_sets(&story_sets, || pattern::run(name, &stories).map_err(Failed::from))
+        }));
     }
     // Stories of a type another linked package registers run that type's cases here, as its visitors.
-    let linked = crate::contract::registrations();
     let mut visited: Vec<&'static str> = Vec::new();
     for entry in &own {
         let name = (entry.type_name)();
@@ -231,21 +238,28 @@ pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Ve
             continue;
         }
         let stories: Vec<Story> = own.iter().filter(|entry| (entry.type_name)() == name).map(|entry| entry.story).collect();
-        if let Some(probe) = linked.iter().copied().find_map(|registration| registration.probe().filter(|probe| probe.type_name() == name)) {
+        let registration = (entry.registration)();
+        if let Some(probe) = registration.probe().copied() {
             visited.push(name);
             for group in GROUPS {
                 let stories = stories.clone();
-                trials.push(Trial::test(format!("suite::{name}::{}", group.name), move || run_group(probe, group, false, false, stories)));
+                let story_sets = registry.story_selection();
+                trials.push(Trial::test(format!("suite::{name}::{}", group.name), move || {
+                    crate::runtime::commands::with_story_sets(&story_sets, || run_group(probe, group, false, false, stories))
+                }));
             }
-        } else if linked.iter().any(|registration| registration.pattern_probe().is_some_and(|pattern| pattern.type_name() == name)) {
+        } else if registration.pattern_probe().is_some() {
             visited.push(name);
-            trials.push(Trial::test(format!("suite::{name}"), move || pattern::run(name, &stories).map_err(Failed::from)));
+            let story_sets = registry.story_selection();
+            trials.push(Trial::test(format!("suite::{name}"), move || {
+                crate::runtime::commands::with_story_sets(&story_sets, || pattern::run(name, &stories).map_err(Failed::from))
+            }));
         } else {
             let message = format!("the story `{}` shows `{name}`, which is not in the linked registrations", entry.story.name);
             trials.push(Trial::test(format!("suite::stories::{}", entry.story.name), move || Err(Failed::from(message))));
         }
     }
-    for entry in stories().into_iter().filter(|entry| entry.crate_name == package && entry.crate_target != library) {
+    for entry in registry.stories().iter().filter(|entry| entry.crate_name == package && entry.crate_target != library) {
         let message = format!(
             "the story `{}` is declared in the target `{}`; stories live in the library crate's `stories` module",
             entry.story.name, entry.crate_target

@@ -5,9 +5,10 @@ use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks, 
 use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, FooterPlace, FooterRegion, HeaderRegion, Mount, Overlay, Pad,
-    Props as _, Role, SaveKey, ShowContainer as _,
+    Props as _, Role, SaveKey, Show as _, ShowContainer as _,
 };
 use crate::edit::outer::{self, OuterEnd};
+use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::access::Access;
 use crate::runtime::env::Label;
 use crate::runtime::focus::Initial;
@@ -18,7 +19,8 @@ use crate::sections::{DialogRole, FooterButton};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{CancelRule, Metrics, Sense};
 use craft_host::target::WindowState;
-use egui::{Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
+use craft_theme::variant::Tone;
+use egui::{Align2, Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
 
 /// The style of a dialog: the surface and padding come from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -33,6 +35,8 @@ type GuardFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) -> bool + 'a>;
 type OnPickFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) + 'a>;
 
 type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
+
+type RefusalFn<'a> = Box<dyn FnMut() -> Option<Label> + 'a>;
 
 /// Where a dialog's buttons stand. Wherever they stand, the dialog shows them: their roles, the platform's order,
 /// Enter and Escape, access keys, the close guard and `on_pick` are the dialog's.
@@ -57,7 +61,9 @@ pub enum ButtonPlace {
 ///   session slot that starts open. The close action, Escape and `BodyCx::request_close` write `false`.
 /// - Placement and size: saved across runs under [`remember`](Dialog::remember); a resizable dialog also saves the
 ///   size the user left it at.
-/// - A modal dialog blocks input below it in every window; a press outside does nothing.
+/// - A modal dialog blocks input below it in every window; a press outside nudges it (a short damped shake, or two
+///   accent edge flashes under reduced motion) and changes nothing else.
+/// - A refusal ([`refusal`](Dialog::refusal)) shows as a bad-tone notice under the body, above the footer.
 /// - Escape closes a modal dialog, and a modeless one with a footer; a modeless tool window without one ignores it.
 /// - Focus starts on the body's first text or number field, else on the default button, else nowhere.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -98,6 +104,11 @@ pub struct Dialog<'a> {
     /// The body ran in this pass: the header region marks it.
     body_shown: bool,
     alert: bool,
+    /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
+    /// display of a held answer's refusal. The closure is called in that hook in every run that shows it, after the
+    /// body ran, so a notice never trails an edit by a pass; `None` shows no notice.
+    #[prop(boxed = "FnMut() -> Option<Label> + 'a")]
+    refusal: Option<RefusalFn<'a>>,
 }
 
 impl<'a> Dialog<'a> {
@@ -134,6 +145,7 @@ impl<'a> Dialog<'a> {
             picked: None,
             body_shown: false,
             alert: false,
+            refusal: None,
         }
         .label(title)
     }
@@ -193,11 +205,11 @@ impl<'a> Dialog<'a> {
         })
     }
 
-    /// Where the dialog first opens, as a screen position of its top-left corner; the middle of the window without
-    /// it. A saved placement comes first.
+    /// Where the dialog first opens, as a screen position of its `corner`; the middle of the window without it. A saved
+    /// placement comes first.
     #[must_use]
-    pub fn first_place(self, at: Pos2) -> Self {
-        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::at(at))))
+    pub fn first_place(self, at: Pos2, corner: Align2) -> Self {
+        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::corner_at(at, corner))))
     }
 
     /// Saves the placement and size under `key`, so a reopened dialog sits where the user left it.
@@ -240,6 +252,14 @@ impl<'a> Dialog<'a> {
     #[must_use]
     pub fn roomy(mut self, on: bool) -> Self {
         self.props = self.props.pad(if on { crate::contract::Pad::Roomy } else { crate::contract::Pad::Regular });
+        self
+    }
+
+    /// The least width of the dialog's content from the size role `least`, in place of `size.dialog.least`: a wide
+    /// dialog (`LeastWidth::WideDialog`) whose tabs hold tables.
+    #[must_use]
+    pub fn least_width(mut self, least: crate::contract::LeastWidth) -> Self {
+        self.props = self.props.least_width(least);
         self
     }
 
@@ -484,6 +504,13 @@ impl Container for Dialog<'_> {
         }
         frame::header(ui, cx, frame::close_action(self.closable));
         self.keep_window_draggable(ui);
+    }
+
+    /// The refusal notice, under the body and above the footer: the reason is read in every run, after the body ran.
+    fn body_end(&mut self, ui: &mut Ui, _cx: &mut BodyCx<'_>) {
+        if let Some(reason) = self.refusal.as_mut().and_then(|reason| reason()) {
+            Notice::new(Tone::Bad, reason).layout(NoticeLayout::Inline).show(ui);
+        }
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

@@ -80,7 +80,7 @@ choices!(SCALES: Scale = [
 choices!(DIRECTIONS: Direction = [(Direction::Ltr, "ltr", "LTR"), (Direction::Rtl, "rtl", "RTL")]);
 
 /// What a Variants view repeats the story over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum VariantAxis {
     /// Every built-in theme.

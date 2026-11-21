@@ -46,6 +46,9 @@ pub struct AppOverrides {
     pub pins: ModePins,
     /// Fixed colours per mode used only with [`Contrast::High`].
     pub high_contrast: ModePins,
+    /// The app's own shape, in place of the theme's `shape` for that app (an app whose buttons are rounded
+    /// rectangles under a theme of capsules). `None` keeps the theme's.
+    pub shape: Option<ShapeSeed>,
 }
 
 impl ThemeDef {

@@ -10,7 +10,9 @@ use crate::buttons::IconButton;
 use crate::contract::clicked;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::form::{read_bind, write_bind};
-use crate::patterns::presets::{GroupPath, NamedPresetEvent, NamedPresetRow, PickerField, PresetLibrary, PresetPicker, PresetRow, PresetState};
+use crate::patterns::presets::{
+    GroupPath, NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetLibrary, PresetPicker, PresetRow, PresetState,
+};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathKind, PathRequest};
 use crate::text::TextField;
 use craft_behavior::IconId;
@@ -723,7 +725,7 @@ impl Pass<'_> {
             let picker = PresetPicker::new(words.preset.clone(), Bind::given(current), &rows, Bind::bound(&mut held.picker)).field(PickerField::Name);
             NamedPresetRow::new(words.preset.clone(), picker)
                 .suggest_name(words.new_preset_name.as_str().to_owned())
-                .check_name(|typed| presets.name_error(typed))
+                .check_name(NameCheck::new(presets.names(), |names, typed| names.name_error(typed)))
                 .show(ui)
         };
         for event in shown.events {

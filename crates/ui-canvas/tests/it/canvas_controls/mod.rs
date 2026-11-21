@@ -1,13 +1,13 @@
 //! The canvas controls: `Guides`, `SmartGuides`, selection outlines, grids and brush overlays on a `Canvas`.
 
-mod brush;
+pub(crate) mod brush;
 
-mod grid;
+pub(crate) mod grid;
 
-mod guides;
+pub(crate) mod guides;
 
-mod marquee;
+pub(crate) mod marquee;
 
-mod outline;
+pub(crate) mod outline;
 
-mod task_bar;
+pub(crate) mod task_bar;

@@ -3,8 +3,8 @@
 //! The pattern puts a `TextField::search` over a `TileGrid`. The field drives the grid: Up and Down move into the
 //! tiles, Enter picks the active tile, and focus stays in the field. A click on a tile picks it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::PickerWords;
 use crate::contract::{
@@ -14,9 +14,10 @@ use crate::contract::{
 use crate::layout_components::Stack;
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
+use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::text::TextField;
 use crate::tile_grid::{CaptionPlace, GridEvent, Tile, TileGrid, TileGroup};
-use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed, Selection};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed, Selection, SelectionChange, keyed};
 use craft_i18n::matcher::Matcher;
 use egui::{Response, Ui};
 use std::borrow::Cow;
@@ -108,6 +109,23 @@ pub struct IconPicker<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     label: Label,
     value: Bind<'a, Option<K>>,
     groups: &'a [IconPickerGroup<K>],
+    /// How the groups show: as headings over their cells, or as a filter row.
+    #[prop]
+    group_display: IconPickerGroups,
+    /// Shown when there are no cells.
+    #[prop(into)]
+    empty: Option<Label>,
+}
+
+/// How an [`IconPicker`] shows its groups.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IconPickerGroups {
+    /// Each group's name is a heading over its cells.
+    #[default]
+    Headings,
+    /// A filter row: All first, then each group.
+    Filter,
 }
 
 /// The visible cells as the grid's source, keyed by position.
@@ -142,19 +160,26 @@ impl<K> ItemSource<usize> for Cells<'_, K> {}
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
     /// A picker named `label` over `value`, choosing among the cells of `groups`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<K>>, groups: &'a [IconPickerGroup<K>]) -> Self {
-        IconPicker { label: label.into(), value, groups }
+        IconPicker { label: label.into(), value, groups, group_display: IconPickerGroups::default(), empty: None }
     }
 
     /// Shows the picker and returns what the user did this pass.
     pub fn show(self, ui: &mut Ui) -> IconPickerOutput<K> {
-        let IconPicker { label, mut value, groups } = self;
-        let shown = Stack::new().show(ui, |ui, cx| Self::body(ui, cx, &label, &mut value, groups));
+        let IconPicker { label, mut value, groups, group_display, empty } = self;
+        let shown = Stack::new().show(ui, |ui, cx| Self::body(ui, cx, &label, &mut value, groups, (group_display, empty.as_ref())));
         shown.inner.unwrap_or_else(|| IconPickerOutput { response: shown.output.clone(), picked: None, search_changed: false })
     }
 
     /// The search field over the grid, inside the picker's root container. The names of the closed groups are kept in
     /// the container's memory.
-    fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, label: &Label, value: &mut Bind<'a, Option<K>>, groups: &[IconPickerGroup<K>]) -> IconPickerOutput<K> {
+    fn body(
+        ui: &mut Ui,
+        cx: &mut BodyCx<'_>,
+        label: &Label,
+        value: &mut Bind<'a, Option<K>>,
+        groups: &[IconPickerGroup<K>],
+        (group_display, empty): (IconPickerGroups, Option<&Label>),
+    ) -> IconPickerOutput<K> {
         let env = Env::of(ui);
         let words = env.words::<PickerWords>();
         let grid_id = ui.scope_id().with("icons");
@@ -166,15 +191,42 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
         };
         let matcher = (!query.is_empty()).then(|| Matcher::new(&env.folder(), &query));
 
+        // The chosen category under `Filter`: 0 is All, `n` the group at `n - 1`. The strip's change applies before the
+        // cells are built, so the grid shows the new category in the same pass.
+        let mut category = 0;
+        if group_display == IconPickerGroups::Filter {
+            category = cx.memory::<Category>().0.min(groups.len());
+            let tabs: Vec<(usize, String)> = std::iter::once((0, words.all.as_str().to_owned()))
+                .chain(groups.iter().enumerate().map(|(at, group)| (at + 1, group.name.clone())))
+                .collect();
+            let source = keyed(&tabs, |tab: &(usize, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
+            let strip = TabStrip::new(label.clone())
+                .kind(TabKind::Text)
+                .shown(category)
+                .show_items(ui, &source, &mut |key, _| Tab::new(tabs[*key].1.clone()));
+            for event in &strip.response.events {
+                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    && let Some(key) = keys.last()
+                {
+                    category = (*key).min(groups.len());
+                }
+            }
+            // A tab the strip moved to its overflow menu is picked there, and reported as `picked`.
+            if let Some(key) = strip.picked {
+                category = key.min(groups.len());
+            }
+            cx.memory::<Category>().0 = category;
+        }
+
         let mut items = Vec::new();
         let mut named = Vec::new();
-        for group in groups {
+        for (_, group) in groups.iter().enumerate().filter(|(at, _)| category == 0 || at + 1 == category) {
             let kept: Vec<&IconPickerItem<K>> =
                 group.items.iter().filter(|item| matcher.as_ref().is_none_or(|matcher| item.matches(matcher))).collect();
             if kept.is_empty() {
                 continue;
             }
-            if !group.name.is_empty() {
+            if group_display == IconPickerGroups::Headings && !group.name.is_empty() {
                 named.push((items.len(), kept.len(), group.name.clone()));
             }
             items.extend(kept);
@@ -202,8 +254,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
             .groups(&shown_groups)
             .collapsible()
             .selection(Bind::given(selection))
-            .rows_stamp(query_stamp(&query))
-            .empty(words.icon_no_match.clone())
+            .rows_stamp(query_stamp(&query, category))
+            .empty(empty.cloned().unwrap_or_else(|| words.icon_no_match.clone()))
             .show_items(ui, &source, &mut |at, _| {
                 let item = source.items[*at];
                 let tile = Tile::new(item.label.clone());
@@ -245,10 +297,14 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
 #[derive(Clone, Default)]
 struct ClosedGroups(HashSet<String>);
 
-/// The rows stamp of a search text: the same text keeps the layout, another one rebuilds it.
-fn query_stamp(query: &str) -> u64 {
+/// The category the filter row shows: 0 is All, `n` the group at `n - 1`.
+#[derive(Clone, Default)]
+struct Category(usize);
+
+/// The rows stamp of a search text inside a category: the same pair keeps the layout, another one rebuilds it.
+fn query_stamp(query: &str, category: usize) -> u64 {
     use std::hash::Hasher as _;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    query.hash(&mut hasher);
+    (query, category).hash(&mut hasher);
     hasher.finish()
 }

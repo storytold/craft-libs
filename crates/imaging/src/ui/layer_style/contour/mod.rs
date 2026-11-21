@@ -2,8 +2,8 @@
 //! the contour as a curve.
 
 mod editor;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

@@ -33,7 +33,7 @@ pub(crate) fn variants<C: Component>(asked: Option<Variant>) -> (Variant, Varian
 /// size; variant; label.
 /// `(requested, variant)` comes from `variants`.
 pub(crate) fn env(ctx: &Context, env: &Env, common: &Common, (requested, variant): (Variant, Variant)) -> EnvStep {
-    let command = common.command.as_ref().map(|command| Arc::new(commands::resolve_bound(ctx, &env.commands, command)));
+    let command = common.command.as_ref().map(|command| commands::resolve_bound(ctx, &env.commands, command));
     let label = match (&common.label, &command) {
         (Label::Empty, Some(command)) => Label::Shared(command.label.clone()),
         (label, _) => label.resolved(&env.words),

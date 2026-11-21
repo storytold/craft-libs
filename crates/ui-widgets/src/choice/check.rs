@@ -49,7 +49,8 @@ impl Component for Checkbox<'_> {
     fn style(cx: &StyleCx<'_>, _: CheckboxStyleKey) -> CheckboxStyle {
         let control = cx.control();
         CheckboxStyle {
-            metrics: Metrics::new().min_size(Vec2::new(0.0, control.height)),
+            // In a ribbon, the look's row height (`RibbonLook::row`), so check boxes stand at its buttons' pitch.
+            metrics: Metrics::new().min_size(Vec2::new(0.0, crate::buttons::row_height(cx, control.height))),
             focus: cx.focus_look(),
             well: super::indicator(cx, cx.surface(SurfaceKind::Well).radius),
             mark: super::mark(cx),
@@ -92,5 +93,5 @@ impl Component for Checkbox<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

@@ -29,8 +29,8 @@ use std::sync::Arc;
 mod typed;
 
 pub(crate) use typed::{
-    MemberNode, MemberPrep, MemberShown, measure_container, measure_under, measured_extent, member_prepare, member_show, paint_face, show_container,
-    show_container_taking, show_items, show_leaf,
+    MemberNode, MemberPrep, MemberShown, PreparedLeaf, measure_container, measure_face, measure_under, measure_under_prepared, measured_extent,
+    member_prepare, member_show, paint_face, show_container, show_container_taking, show_items, show_leaf, show_leaf_prepared,
 };
 
 /// Where a component is placed.
@@ -390,6 +390,7 @@ fn blank_core<'a>(
         reveal: None,
         member_tip: None,
         header_stops: Vec::new(),
+        roving_member: false,
         press_cancel: None,
         scroll_moves: Vec::new(),
         value_parts: Default::default(),
@@ -438,6 +439,7 @@ pub(crate) struct TypeFacts {
     pub canvas_control: bool,
     pub labelled_after: bool,
     pub binds_view: bool,
+    pub paired_measure: bool,
     /// `DISABLED` is `Faded`.
     pub faded: bool,
     /// `RULE`.
@@ -459,6 +461,7 @@ impl TypeFacts {
             canvas_control: C::CANVAS_CONTROL,
             labelled_after: C::LABELLED_AFTER,
             binds_view: C::BINDS_VIEW,
+            paired_measure: C::PAIRED_MEASURE,
             faded: C::DISABLED == super::DisabledLook::Faded,
             rule: C::RULE,
             style_key: TypeId::of::<C::StyleKey>(),
@@ -497,6 +500,7 @@ pub(crate) trait Erased {
     fn cut_first(&self) -> bool;
     /// What `C::measure` gives for the shown value.
     fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs);
+    fn measure_content_pair(&mut self, ideal: &MeasureIn<'_>, least: &MeasureIn<'_>, resolved: &Resolved<'_>) -> Option<((Vec2, Vec2), Inputs)>;
     fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2;
     fn pass_extent(&mut self, at: &Measuring<'_, '_>) -> Vec2;
     /// Builds the component's `Cx` over `core` and `style` (what `style` gave), runs `rest` with it, then `finish`.
@@ -665,9 +669,11 @@ fn expand_for_overflow(ui: &mut Ui, at: ShowAt, rect: Rect, overflow: f32, rtl: 
 }
 
 /// What the component senses itself: a disabled one that shows a reason on focus stays a Tab stop and senses nothing else.
+/// One bound to an edit command keeps the focus where it is on a press, so the edit reaches the focused component.
 fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense {
     match (inert, resolved.enabled) {
         (true, _) => Sense::HOVER,
+        (false, true) if resolved.command.is_some_and(|command| command.edit) => e.sense().difference(Sense::TAKE_FOCUS).union(Sense::KEEP_FOCUS),
         (false, true) => e.sense(),
         (false, false) if steps::takes_focus(resolved) => Sense::HOVER | e.comp_sense().intersection(Sense::FOCUS),
         (false, false) => Sense::HOVER,
@@ -677,9 +683,11 @@ fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense 
 /// The widget that holds the component's text or editor and the keys it keeps, when it has either.
 fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, memory: &mut MemoryStage) -> (Option<Id>, Option<focus::KeyUse>) {
     let text = parts.text.decl.as_ref().map(|decl| {
+        let decl = &decl.part;
         let widget = crate::primitives::text_adapter::text_id(id, decl.key);
         let held = crate::contract::text::held_selection(memory, id);
-        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, base, &decl.options))
+        let draft = crate::contract::text::draft(memory, id);
+        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, draft.as_deref().unwrap_or(&decl.shown), base, &decl.options))
     });
     let editor =
         parts.text.editor.as_ref().map(|decl| (crate::primitives::ImeSurface::of(id, decl.key).widget(), super::editor::keys_of(base, decl.purpose)));
@@ -696,7 +704,6 @@ struct StopsStep<'a> {
     rtl: bool,
     env: &'a Env,
     resolved: &'a Resolved<'a>,
-    inert: bool,
     holder_widget: Option<Id>,
     member: Option<crate::runtime::env::ArenaId>,
     own: Sense,
@@ -705,7 +712,7 @@ struct StopsStep<'a> {
 
 /// Registers the focus stops of a component that has any; one that sets `STOPS = false` has none, which a debug build checks.
 fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, parts: &PartsStep) {
-    let StopsStep { ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys } = at;
+    let StopsStep { ctx, id, rtl, env, resolved, holder_widget, member, own, text_keys } = at;
     let body_roving = e.roving();
     if !facts.stops && body_roving.is_none() {
         debug_assert!(
@@ -730,15 +737,15 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
         ctx,
         id,
         holder: holder_widget.unwrap_or_else(|| member.map_or(id, |arena| arena.0)),
-        focusable: !inert && steps::takes_focus(resolved) && own.contains(Sense::FOCUS) && env.item != Some(id),
-        parts_focus: !inert && steps::takes_focus(resolved),
+        focusable: steps::takes_focus(resolved) && own.contains(Sense::FOCUS) && env.item != Some(id),
+        parts_focus: steps::takes_focus(resolved),
         text,
         press_only: text && resolved.read_only && !facts.holds_cells(),
         keys,
         role: role.resettable(resettable).value(value).text(text).moves(role.moves || keys.moves).deletes(role.deletes || keys.deletes || text),
         rtl,
         parts,
-        group: steps::member_group(ctx, env.roving, id),
+        group: env.roving.filter(|_| e.core_ref().roving_member),
         body: env.roving,
         row: env.row,
         item: env.item == Some(id),
@@ -850,7 +857,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let scope = enter_scope(p, ui);
     let env = host_env.unwrap_or(p.env);
     if let Some(mut h) = sense_steps(p, ui, host_at, env) {
-        update_steps(p, &h);
+        update_steps(p, env, &h);
         overlay_step(p, ui, env, &h);
         state_steps(p, ui, env, &h);
         paint_step(p, ui, env, &mut h);
@@ -880,8 +887,10 @@ struct HostStep {
     /// The component's own direction: right to left unless its axis keeps its order.
     rtl: bool,
     rect: Rect,
-    /// The parts step 7 declared.
-    decls: super::cx::Decls,
+    /// What step 7 declared: the parts, roving groups and text parts. The stops register from it after `update`.
+    parts: PartsStep,
+    /// The egui widget of the component's text part or editor, which holds key focus for it.
+    holder_widget: Option<Id>,
     text_keys: Option<focus::KeyUse>,
     own: Sense,
     member: Option<crate::runtime::env::ArenaId>,
@@ -965,7 +974,6 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     let own = if env.item == Some(id) { own.difference(Sense::CLICK | Sense::FOCUS) | Sense::HOVER } else { own };
     let arena = e.arena();
     let member = if arena || facts.text() { None } else { env.arena };
-    stops_step(StopsStep { ctx: &ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys }, e, facts, &parts);
     // A body's wheel share is its scroll taker (body step, step 7); the gate value does not take the wheel. A body root that
     // senses the wheel itself (a canvas) registers like any other component. A collection that senses the wheel itself
     // registers in the item step, with its notch.
@@ -1084,7 +1092,8 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         id,
         rtl,
         rect,
-        decls: parts.decls,
+        parts,
+        holder_widget,
         text_keys,
         own,
         member,
@@ -1102,7 +1111,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
 /// Step 9, update, with the body's roving group, which registers after `update`.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn update_steps(p: &mut Pass<'_, '_, '_>, h: &HostStep) {
+fn update_steps(p: &mut Pass<'_, '_, '_>, env: &Env, h: &HostStep) {
     let (facts, ctx, id, rtl) = (p.facts, &h.ctx, h.id, h.rtl);
     let e = &mut *p.p;
     // 9 update
@@ -1128,6 +1137,10 @@ fn update_steps(p: &mut Pass<'_, '_, '_>, h: &HostStep) {
     }
     e.updated();
     steps::record_context(e.core_ref());
+    // The stops register after `update`, which says whether the component joins its body's roving group.
+    let at =
+        StopsStep { ctx, id, rtl, env, resolved: p.resolved, holder_widget: h.holder_widget, member: h.member, own: h.own, text_keys: h.text_keys };
+    stops_step(at, e, facts, &h.parts);
     // The body's group registers after `update`, which may change its rules from what the component knows now.
     if let Some(roving) = e.roving() {
         let core = e.core_ref();
@@ -1245,13 +1258,17 @@ fn content_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
 /// `paint_over`, after the `over` parts are placed, so the children it shows stack above them (8.3).
 fn paint_over_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) {
     ui.set_clip_rect(h.outer_clip);
-    sensing::place_over_widgets(ui, h.id, h.member, h.decls.parts());
+    sensing::place_over_widgets(ui, h.id, h.member, h.parts.decls.parts());
     ui.set_clip_rect(h.inside);
     let e = &mut *p.p;
     let fade = steps::fade(ui, env, e.core());
     e.paint_over(ui, env);
     steps::unfade(ui, e.core(), fade);
     ui.set_clip_rect(h.outer_clip);
+    // Every member of the root's arena has joined: its widgets take their senses.
+    if h.member.is_none() {
+        sensing::widen_root(&h.ctx, h.id, p.facts.role == Role::None);
+    }
 }
 
 /// Steps 15 (settle) and 16 (report, then the tooltip), and the activation step 17 fires.
@@ -1274,17 +1291,20 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         facts,
         &steps::ReportIn {
             node: h.node,
-            decls: &h.decls,
+            decls: &h.parts.decls,
             sense: h.own,
             live: e.live(),
             scrolls: e.scrolls(),
             expanded: e.expanded(),
             position: e.position(),
-            group: steps::member_group(ctx, env.roving, id),
+            group: env.roving.filter(|_| e.core_ref().roving_member),
+            owns: e.roving().map(|_| steps::body_group(id)),
         },
     );
     let shows_label = e.shows_label();
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, message });
+    let tip_in =
+        tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.parts.decls, shows_label, canvas_control: facts.canvas_control, message };
+    tooltip::run(e.core_ref(), tip_in);
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;
@@ -1356,7 +1376,7 @@ pub(crate) fn close_bar_line(ctx: &Context, line: Id) {
     }
 }
 
-/// Empties the shapes of `held` painted this pass. The run record of a settling region is taken when it closes, after
+/// Empties the shapes of `held` painted this pass. The run record of a memoized view is taken when it closes, after
 /// this, so a replay repeats the line as it shows.
 fn take_back(ctx: &Context, held: &[HeldRule]) {
     let pass = ctx.cumulative_pass_nr();
@@ -1390,22 +1410,39 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
 /// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
+pub(super) struct PreparedStep {
+    step1: steps::EnvStep,
+    style: Arc<dyn StyleView>,
+}
+
 pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    run_with(t, ui, at, tip, None);
+}
+
+fn run_with(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
+    if crate::runtime::pass_state::in_component_tree() {
+        return run_in_context(t, ui, at, tip, prepared);
+    }
+    let ctx = ui.ctx().clone();
+    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip, prepared));
+}
+
+fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
     let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
     match cell {
         Some((grid, column, sized)) => {
             let ctx = ui.ctx().clone();
-            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip));
+            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip, prepared));
         }
-        None => run_steps(t, ui, at, tip),
+        None => run_steps(t, ui, at, tip, prepared),
     }
 }
 
 /// Steps 1 to 17 of `run`. A component's children run inside step 5 (a body's measuring run) and inside the passes
 /// of steps 6 to 16, so the frames on that path keep only what the run reads after them: each step runs in its own
 /// function, and `run_steps` holds what steps 1 to 5 found.
-fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
-    let begun = begin(t, ui);
+fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
+    let begun = begin(t, ui, prepared);
     let mut stage = begun.open_stage(t);
     let mixed = value_step(t, &begun, &mut stage);
     let resolved = begun.resolved(t);
@@ -1470,7 +1507,7 @@ impl Begun {
 /// Steps 1 to 3: env, style and id.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
+fn begin(t: &mut dyn Erased, ui: &Ui, prepared: Option<PreparedStep>) -> Begun {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);
@@ -1487,9 +1524,14 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
     // scope, and everything it shows inherits it.
     let env = scoped_env(&ctx, Env::of(ui), t.theme_scope());
     let common: Common = t.take_common();
-    let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
-    // 2 style
-    let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
+    let (step1, style) = match prepared {
+        Some(prepared) => (prepared.step1, prepared.style),
+        None => {
+            let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
+            let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
+            (step1, style)
+        }
+    };
     // 3 id
     let id = steps::id(ui, &common.id, !sizing, true, facts.style_key, facts.name);
     if recording {
@@ -1615,8 +1657,8 @@ fn measure_step(
     let ask = |t: &mut dyn Erased, proposal: Proposal, room: Option<f32>, extent: Vec2| {
         measured(t, &MeasureIn { ui: &*ui, env, proposal, room }, style, resolved, extent)
     };
-    let (size, inputs) = ask(&mut *t, Proposal::Ideal, room, extent);
-    let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
+    // Legacy components keep their original ordering: measure before asking whether they fill.
+    let initial = (!facts.paired_measure).then(|| ask(&mut *t, Proposal::Ideal, room, extent));
     // A control in a label scope reports its narrowest width, in a measuring run too: the real run's label step reads
     // it to decide whether the row fits the label beside it.
     let in_label = shape == ShapeKind::Leaf && scope::in_label(ctx);
@@ -1627,10 +1669,36 @@ fn measure_step(
     let tells_least = shape == ShapeKind::Leaf
         && matches!(at, ShowAt::Flow)
         && [craft_behavior::Axis::X, craft_behavior::Axis::Y].into_iter().any(|axis| fills(axis) && crate::layout::counting_fills(ui, axis));
-    let min = (in_label || tells_least).then(|| {
-        let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
-        Call { proposal: Proposal::Min, room: None, inputs, took }
-    });
+    let pair = if facts.paired_measure
+        && (in_label || tells_least || (shape == ShapeKind::Leaf && matches!(shrink, Some(crate::layout::Shrink::Count(_)))))
+    {
+        let ideal_input = MeasureIn { ui, env, proposal: Proposal::Ideal, room };
+        let least_input = MeasureIn { ui, env, proposal: Proposal::Min, room: None };
+        t.measure_content_pair(&ideal_input, &least_input, resolved).map(|((ideal, least), inputs)| {
+            let size = steps::measure(style, &ideal_input, ideal, extent, resolved);
+            let least = steps::measure(style, &least_input, least, Vec2::ZERO, resolved);
+            (size, inputs, least, ideal)
+        })
+    } else {
+        None
+    };
+    let paired = pair.as_ref().map(|(_, _, least, content)| (*least, *content));
+    let (size, ideal, min) = match pair {
+        Some((size, inputs, least, _)) => {
+            let ideal = Call { proposal: Proposal::Ideal, room, inputs: inputs.clone(), took: size };
+            let min = Call { proposal: Proposal::Min, room: None, inputs, took: least };
+            (size, ideal, Some(min))
+        }
+        None => {
+            let (size, inputs) = initial.unwrap_or_else(|| ask(&mut *t, Proposal::Ideal, room, extent));
+            let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
+            let min = (in_label || tells_least).then(|| {
+                let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
+                Call { proposal: Proposal::Min, room: None, inputs, took }
+            });
+            (size, ideal, min)
+        }
+    };
     let min_took = min.as_ref().filter(|_| in_label).map(|min| min.took);
     // A leaf's measure calls are what its body's layout takes from it: a measuring run keeps them in the body's
     // transcript, and a real run its kept transcript serves checks them against this run's. A leaf shown at a rect
@@ -1690,10 +1758,13 @@ fn measure_step(
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
             // The `Ideal` size in no room, and the least width at which its content shows whole.
             let input = MeasureIn { ui, env, proposal: Proposal::Ideal, room: None };
-            let (content, _) = t.measure_content(&input, resolved);
+            let content = match paired.filter(|_| room.is_none()) {
+                Some((_, content)) => content,
+                None => t.measure_content(&input, resolved).0,
+            };
             let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
             let whole = steps::whole(style, content, Vec2::ZERO, resolved);
-            let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
+            let least = paired.map_or_else(|| ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x, |(least, _)| least.x);
             crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
         }
         Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),
@@ -1813,10 +1884,39 @@ fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
     }
 }
 
+/// What a measure outside the component's own show is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeasureFor {
+    /// A component its caller shows, or sizes a rect by: a leaf of the transcript of the body it is measured in.
+    Component,
+    /// A composite's face (`MeasureCx::face`), measured inside the composite's own run (measure, parts or header
+    /// parts). Only the composite's measure call sizes the composite, and its answer and inputs are the transcript's
+    /// record, so the face keeps no leaf of its own.
+    Face,
+}
+
 /// Measures the component in `t` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would
 /// use next (or `id`). It reads memory through a peek, registers no id and applies nothing. `under` is the
 /// composite's resolved `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
-pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<&super::cx::Under>) -> Vec2 {
+pub(super) fn measure_shape(
+    t: &mut dyn Erased,
+    ui: &Ui,
+    id: Option<Id>,
+    proposal: Proposal,
+    under: Option<&super::cx::Under>,
+    purpose: MeasureFor,
+) -> Vec2 {
+    measure_shape_with(t, ui, id, proposal, under, purpose).0
+}
+
+fn measure_shape_with(
+    t: &mut dyn Erased,
+    ui: &Ui,
+    id: Option<Id>,
+    proposal: Proposal,
+    under: Option<&super::cx::Under>,
+    purpose: MeasureFor,
+) -> (Vec2, steps::EnvStep) {
     let facts = t.facts();
     let env = match under {
         Some(under) => super::cx::child_env(&Env::of(ui), under),
@@ -1846,14 +1946,14 @@ pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposa
     };
     let ask = |t: &mut dyn Erased, proposal: Proposal| measured(t, &MeasureIn { ui, env: &env, proposal, room: None }, &*style, &resolved, extent);
     let (took, inputs) = ask(&mut *t, proposal);
-    if leaf && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
+    if leaf && purpose == MeasureFor::Component && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
         let calls = &mut [Call { proposal, room: None, inputs, took }];
         crate::runtime::layout_memory::leaf_call(ui.ctx(), id, calls, |proposal, _| ask(&mut *t, proposal).0);
     }
     if let Some(key) = t.bind_key(id) {
         reads::note(ui.ctx(), key, id, true, &[Sample { proposal, room: None, took }]);
     }
-    took
+    (took, step1)
 }
 
 /// The flags a host passes to its faces: the validity of its value. The rest (focus, selection, open) belong to the

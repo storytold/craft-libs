@@ -345,6 +345,16 @@ impl AccessTree {
         self.lookup(NodeId(key.0)).and_then(Node::aria_current).is_some_and(|current| current != accesskit::AriaCurrent::False)
     }
 
+    /// The level a node by key states: a heading's outline level, a list item's list level, a tree item's depth.
+    pub fn level_of(&self, key: NodeKey) -> Option<usize> {
+        self.lookup(NodeId(key.0))?.level()
+    }
+
+    /// The address a link node by key goes to.
+    pub fn url_of(&self, key: NodeKey) -> Option<&str> {
+        self.lookup(NodeId(key.0))?.url()
+    }
+
     /// The nearest ancestor of `id` that screen readers see: AccessKit's consumer drops generic containers.
     pub fn parent_of(&self, id: Id) -> Option<NodeKey> {
         self.parent_of_key(NodeKey::of(id))
@@ -444,5 +454,24 @@ impl AccessTree {
     /// The children of a node by key.
     pub fn children_of(&self, key: NodeKey) -> Vec<NodeKey> {
         self.lookup(NodeId(key.0)).map_or_else(Vec::new, |node| node.children().iter().map(|child| NodeKey(child.0)).collect())
+    }
+
+    /// The nodes screen readers report directly under the node of `key`, in order: AccessKit's consumer drops a
+    /// generic container and reports its children in its place, and drops a hidden node with what lies below it.
+    pub fn seen_children_of(&self, key: NodeKey) -> Vec<NodeKey> {
+        let mut seen = Vec::new();
+        let mut pending: Vec<NodeKey> = self.children_of(key).into_iter().rev().collect();
+        while let Some(child) = pending.pop() {
+            let Some(node) = self.lookup(NodeId(child.0)) else { continue };
+            if node.is_hidden() {
+                continue;
+            }
+            if node.role() == NodeRole::GenericContainer {
+                pending.extend(self.children_of(child).into_iter().rev());
+            } else {
+                seen.push(child);
+            }
+        }
+        seen
     }
 }

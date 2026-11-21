@@ -19,8 +19,8 @@ fn tile(cx: &ContentPainterCx<'_>, rect: Rect, _: &PatternSwatch) {
 }
 
 fn editor(ui: &mut Ui, data: &mut StoryData, start: PatternFillOptions, library: &[PatternSwatch]) -> StoryOutput {
-    let options = data.value("options", start);
-    let out = PatternFillEditor::new("Pattern fill", Bind::bound(options), library).thumbnails(tile).show(ui);
+    let (options, options_at) = data.value_at("options", start);
+    let out = PatternFillEditor::new("Pattern fill", options_at.bind(options), library).thumbnails(tile).show(ui);
     StoryOutput::from(out)
 }
 
@@ -38,13 +38,10 @@ fn pattern_fill_preset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PatternFillEditor<'static>, covers = [Default], drive = Drive::Never)]
 fn pattern_fill_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let library = swatches();
-    let mut options = data.value("options", PatternFillOptions::bitmap("bubbles")).clone();
-    let mut open = *data.value("open", true);
-    FormDialog::new("Pattern Fill", Bind::bound(&mut options)).opened(Bind::bound(&mut open)).show(ui, |ui, _, value| {
+    let ((options, options_at), (open, open_at)) = data.pair_at(("options", PatternFillOptions::bitmap("bubbles")), ("open", true));
+    FormDialog::new("Pattern Fill", options_at.bind(options)).opened(open_at.bind(open)).show(ui, |ui, _, value| {
         PatternFillEditor::new("Pattern fill", Bind::bound(value), &library).thumbnails(tile).show(ui);
         true
     });
-    *data.value("options", PatternFillOptions::bitmap("bubbles")) = options;
-    *data.value("open", true) = open;
     StoryOutput::default()
 }

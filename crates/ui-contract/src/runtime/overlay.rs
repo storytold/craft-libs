@@ -292,7 +292,13 @@ fn with_persist<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Pers
 
 /// Whether the layer `id` was shown last frame.
 pub fn is_open(ctx: &Context, id: Id) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| pass.last.iter().any(|entry| entry.id == id))
+}
+
+/// The layers shown last frame, as the tracked input `Overlays` compares them: each one's id and whether it exits.
+pub(crate) fn open_state(ctx: &Context) -> Vec<(Id, bool)> {
+    with_pass(ctx, |pass| pass.last.iter().map(|entry| (entry.id, entry.exiting)).collect())
 }
 
 /// Queues a close of the layer `id` (a popup or a container). The owner's step 9 or `OverlayUi::show` collects it and
@@ -361,6 +367,7 @@ pub(crate) fn peek_close(ctx: &Context, id: Id) -> Option<CloseReason> {
 
 /// Whether any layer of the running viewport that `filter` counts was shown last frame.
 pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| {
         pass.last.iter().filter(|entry| !entry.exiting).any(|entry| match filter {
             OpenFilter::Any => true,
@@ -372,6 +379,7 @@ pub fn any_open(ctx: &Context, filter: OpenFilter) -> bool {
 
 /// The layer that receives Cancel: the newest member of the topmost family that takes keys.
 pub fn top(ctx: &Context) -> Option<Id> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     let viewport = pass::current_viewport(ctx);
     let raised = with_persist(ctx, viewport, |persist| persist.raised.clone());
     with_pass(ctx, |pass| {
@@ -396,6 +404,7 @@ pub(crate) fn popup_above(ctx: &Context, layer: Layer, below: Layer) -> bool {
 
 /// `id` and everything opened from inside it, shown last frame.
 pub fn family(ctx: &Context, id: Id) -> SmallVec<[Id; 4]> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| {
         let mut out: SmallVec<[Id; 4]> = SmallVec::new();
         if pass.last.iter().any(|entry| entry.id == id) {
@@ -412,7 +421,7 @@ pub fn family(ctx: &Context, id: Id) -> SmallVec<[Id; 4]> {
 }
 
 /// Every layer of the running viewport shown last frame, not exiting, parent first.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn open_entries(ctx: &Context) -> Vec<OpenEntry> {
     with_pass(ctx, |pass| pass.last.iter().filter(|entry| !entry.exiting).cloned().collect())
 }
@@ -420,6 +429,7 @@ pub(crate) fn open_entries(ctx: &Context) -> Vec<OpenEntry> {
 /// The entry of the layer `id` shown last frame.
 #[doc(hidden)]
 pub fn entry(ctx: &Context, id: Id) -> Option<OpenEntry> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Overlays);
     with_pass(ctx, |pass| pass.last.iter().find(|entry| entry.id == id).cloned())
 }
 
@@ -479,7 +489,7 @@ pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side
     });
     let viewport = pass::current_viewport(ctx);
     let first = (pass::root_frame_nr(ctx), pass::pass_nr(ctx, viewport));
-    let (down, released) = pointer::with_pass_pointer(ctx, |read| {
+    let (down, released) = pointer::with_pass_raw(ctx, |read| {
         let released = read.frame.as_ref().filter(|frame| frame.release == Some(craft_behavior::PointerButton::Primary)).map(|frame| frame.pos);
         (read.primary_down, released)
     });
@@ -536,7 +546,6 @@ pub(crate) fn note_pressed_outside(ctx: &Context, id: Id) {
 }
 
 /// Whether a primary press landed outside the layer `id` in this pass while its dismissal kept it open.
-#[doc(hidden)]
 pub fn pressed_outside(ctx: &Context, id: Id) -> bool {
     with_pass(ctx, |pass| pass.pressed_outside.contains(&id))
 }
@@ -720,7 +729,7 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (current, last_ids) = with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>()));
-    let pressed = pointer::frame(ctx).press.map(|press| press.origin);
+    let pressed = pointer::frame_raw(ctx).press.map(|press| press.origin);
     let order = with_persist(ctx, viewport, |persist| {
         let stamp = |id: Id, persist: &mut Persist| {
             persist.counter += 1;
