@@ -155,6 +155,12 @@ pub struct Swatch<T: Value + 'static = ()> {
     /// A thin edge in the text colour just inside the outline.
     #[prop(flag)]
     marked: bool,
+    /// Splits the well: the colour on the reading-start half and this colour on the other (a before and after pair).
+    #[prop]
+    after: Option<Srgba>,
+    /// The well shows the circle of hues instead of the colour: a choice that stands for every hue.
+    #[prop(flag)]
+    hue_wheel: bool,
     /// The shape of the well.
     #[prop]
     shape: SwatchShape,
@@ -175,6 +181,8 @@ impl Swatch<()> {
             cell: false,
             well: false,
             marked: false,
+            after: None,
+            hue_wheel: false,
             shape: SwatchShape::default(),
             picker: None,
             checked: false,
@@ -194,6 +202,8 @@ impl<T: Value + 'static> Swatch<T> {
             cell: self.cell,
             well: self.well,
             marked: self.marked,
+            after: self.after,
+            hue_wheel: self.hue_wheel,
             shape: self.shape,
             picker: self.picker,
             checked: false,
@@ -279,7 +289,8 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked, self.shape);
+        let face = Face { shape: self.shape, after: self.after, hue_wheel: self.hue_wheel, rtl: cx.flow.is_rtl() };
+        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked, face);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
@@ -289,16 +300,64 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 }
 
+/// The shape of a well, and how it is filled besides its colour: split with an after colour, or the circle of hues.
+#[derive(Clone, Copy, Debug, Default)]
+struct Face {
+    shape: SwatchShape,
+    after: Option<Srgba>,
+    hue_wheel: bool,
+    /// The reading start is on the right: the after colour takes the left half.
+    rtl: bool,
+}
+
+/// The wedges of a hue circle: one every ten degrees.
+const HUE_WEDGES: u16 = 36;
+
+/// The full-strength colour of `degrees` on the hue circle (0 red, 120 green, 240 blue).
+fn hue_color(degrees: f32) -> Color32 {
+    let h = degrees.rem_euclid(360.0) / 60.0;
+    let x = 1.0 - (h % 2.0 - 1.0).abs();
+    let (r, g, b) = match h as u8 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    };
+    let byte = |c: f32| (c * f32::from(u8::MAX)).round() as u8;
+    Color32::from_rgb(byte(r), byte(g), byte(b))
+}
+
 /// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
-/// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool, shape: SwatchShape) {
-    let outline = |rect: Rect| match shape {
+/// of a mixed one; on a square well, the circle of hues or a split with the after colour by `face`), then the outline
+/// ring, the mark when `marked`, and the selection ring, in `state`. A hexagon well shows only its colour.
+fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool, face: Face) {
+    let outline = |rect: Rect| match face.shape {
         SwatchShape::Square => PaintShape::Rect(rect, style.radius),
         SwatchShape::Hexagon => PaintShape::Polygon(hexagon(rect)),
     };
     let edge = outline(well);
-    match shape {
-        SwatchShape::Square => draw.swatch_well(well, style.radius, color.same().copied()),
+    match face.shape {
+        SwatchShape::Square if face.hue_wheel => {
+            let (centre, reach) = (well.center(), well.size().length());
+            draw.clipped(well, |draw| {
+                for i in 0..HUE_WEDGES {
+                    let turn = 360.0 / f32::from(HUE_WEDGES);
+                    let (from, to) = (f32::from(i) * turn, f32::from(i + 1) * turn);
+                    let at = |degrees: f32| centre + egui::Vec2::angled(-degrees.to_radians()) * reach;
+                    draw.data_fill(&PaintShape::Polygon(vec![centre, at(from), at(to)]), DataColor::new(hue_color((from + to) / 2.0)));
+                }
+            });
+        }
+        SwatchShape::Square => {
+            draw.swatch_well(well, style.radius, color.same().copied());
+            if let Some(after) = face.after {
+                let half =
+                    if face.rtl { Rect::from_min_max(well.min, well.center_bottom()) } else { Rect::from_min_max(well.center_top(), well.max) };
+                draw.clipped(half, |draw| draw.swatch_well(well, style.radius, Some(after)));
+            }
+        }
         SwatchShape::Hexagon => draw.swatch_polygon_well(&hexagon(well), color.same().copied()),
     }
     draw.stroke(&edge, StrokeWidth::Thin, state.resolve(&style.edge));
@@ -353,6 +412,6 @@ impl SwatchFace {
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false, SwatchShape::Square));
+        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false, Face::default()));
     }
 }
