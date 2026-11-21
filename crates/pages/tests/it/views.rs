@@ -3,7 +3,7 @@
 
 use craft_behavior::geometry::{CropBox, SnapKind, SnapOptions, SnapTarget};
 use craft_behavior::kurbo;
-use craft_behavior::{Axis, CancelReason, CanvasView};
+use craft_behavior::{Axis, CancelReason, CanvasView, EditCommand};
 use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{
@@ -14,7 +14,9 @@ use craft_ui::contract::{Bind, Role, Show as _};
 
 use craft_ui::primitives::textures::TextureStoreOptions;
 use craft_ui::primitives::{Draw, EditorPurpose};
+use craft_ui::runtime::commands::{CommandState, EditCommands, resolve};
 use craft_ui::runtime::env::Env;
+use craft_ui::runtime::focus::EditSet;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Key, Modifiers, pos2, vec2};
 use std::cell::{Cell, RefCell};
@@ -954,4 +956,47 @@ fn go_to_a_point_inside_a_page_puts_it_at_the_top() {
     let (first, offset, _, at) = gone_to(5, 0.5, false);
     assert_eq!(first, Some(5), "the first page in view is the one gone to");
     assert!((offset - at).abs() < 0.01, "the view's top {offset} is the point gone to, {at}");
+}
+
+/// `PageView::inactive_edits` forwards to its inner canvas editor: Cut resolves disabled while inactive and enabled
+/// once active, and Undo/Redo fall through to app command states while inactive.
+#[trial]
+fn page_view_forwards_inactive_edits_to_its_editor_canvas() {
+    let state = Rc::new(RefCell::new(PageViewState::default()));
+    let inactive = Rc::new(Cell::new(EditSet::NONE.with(EditCommand::Cut).with(EditCommand::Undo).with(EditCommand::Redo)));
+    let (kept_state, kept_inactive) = (Rc::clone(&state), Rc::clone(&inactive));
+    let pages = DemoPages::new(2);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept_state.borrow().clone();
+        PageView::new("Pages", &pages, &mut now, PAPER)
+            .options(LayoutOptions::ACROBAT)
+            .editor(EditorPurpose::Text)
+            .inactive_edits(kept_inactive.get())
+            .show(ui, |_, _| ());
+        *kept_state.borrow_mut() = now;
+    });
+    fixture.command_state(EditCommands::Cut, CommandState::new().enabled(true));
+    fixture.command_state(EditCommands::Undo, CommandState::new().enabled(false));
+    fixture.command_state(EditCommands::Redo, CommandState::new().enabled(false));
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+
+    let canvas_rect = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").rect;
+    fixture.click_at(canvas_rect.center());
+    fixture.settle();
+    assert!(fixture.focused().is_some(), "clicking the page view focuses its editor canvas");
+
+    assert!(!resolve(fixture.ctx(), EditCommands::Cut).enabled, "inactive Cut resolves disabled on focused PageView");
+    assert!(!resolve(fixture.ctx(), EditCommands::Undo).enabled, "inactive Undo falls through to disabled app state");
+    assert!(!resolve(fixture.ctx(), EditCommands::Redo).enabled, "inactive Redo falls through to disabled app state");
+
+    fixture.command_state(EditCommands::Undo, CommandState::new().enabled(true));
+    fixture.command_state(EditCommands::Redo, CommandState::new().enabled(true));
+    fixture.settle();
+    assert!(resolve(fixture.ctx(), EditCommands::Undo).enabled, "inactive Undo follows enabled app state");
+    assert!(resolve(fixture.ctx(), EditCommands::Redo).enabled, "inactive Redo follows enabled app state");
+
+    inactive.set(EditSet::NONE.with(EditCommand::Undo).with(EditCommand::Redo));
+    fixture.settle();
+    assert!(resolve(fixture.ctx(), EditCommands::Cut).enabled, "active Cut resolves enabled on focused PageView");
 }
