@@ -4,7 +4,7 @@ use crate::{
     interpret::{InterpreterSettings, InterpreterWarning},
     syntax::page::Page,
 };
-pub use hayro::{ColorReplacement, RenderCache};
+pub use hayro::{ColorReplacement, RenderCache, SolidColorMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{
     Arc,
@@ -109,6 +109,21 @@ pub fn render_into<'a>(
     options: &Options,
     buffer: &mut [u8],
 ) -> Result<Diagnostics, Error> {
+    render_into_with_color_map(page, cache, settings, options, None, buffer)
+}
+
+/// Render with an optional caller-provided RGB transform for the paints selected by
+/// [`Options::color_replacement`]. Alpha and the normal paint exclusions are preserved.
+/// The transform is called synchronously for eligible paints and should be inexpensive.
+/// The buffer must be discarded after any error.
+pub fn render_into_with_color_map<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    settings: &InterpreterSettings,
+    options: &Options,
+    solid_color_map: Option<SolidColorMap>,
+    buffer: &mut [u8],
+) -> Result<Diagnostics, Error> {
     let [width, height] = dimensions(page, options)?;
     let expected = u64::from(width) * u64::from(height) * 4;
     if u64::try_from(buffer.len()).ok() != Some(expected) {
@@ -149,7 +164,8 @@ pub fn render_into<'a>(
             options.background[3],
         ),
     };
-    catch_unwind(AssertUnwindSafe(|| hayro::render_into(page, cache, &settings, &rs, buffer))).map_err(|_| Error::BackendPanic)?;
+    catch_unwind(AssertUnwindSafe(|| hayro::render_into_with_color_map(page, cache, &settings, &rs, solid_color_map, buffer)))
+        .map_err(|_| Error::BackendPanic)?;
     if cancelled() {
         return Err(Error::Cancelled);
     }
