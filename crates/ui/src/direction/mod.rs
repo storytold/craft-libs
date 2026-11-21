@@ -31,6 +31,18 @@ use egui::{Align, Align2, AsIdSalt, Context, Id, InnerResponse, Key, Layout, Pan
 
 pub use craft_i18n::Direction;
 
+pub mod layout;
+
+// The geometry helpers whose names also exist here with a different shape (`start_x`, `end_x`,
+// `start_align`, `step`) stay under `layout::`.
+pub use layout::{
+    advance, after_x, body_label, body_layout, clamp_window_min_size, dialog_content, dialog_row, elided_galley, end_align, end_corner_anchor,
+    end_span, end_text_anchor, float_window_x, form_grid, full_row, full_trailing, glyph_x, grid_cells, horizontal_centered, hscroll_row, ltr,
+    ltr_grid, ltr_vertical, name_span, paint_elided, paint_label_span, popup_anchor_reading_end, popup_area_near, popup_body, row_end_edge,
+    row_width, scroll_grid, settings_grid, settings_row, sizing_pass_ltr, start_cell, start_edge, start_rect, start_span, start_text_anchor,
+    start_x_w, text_direction, trailing_min, window_body,
+};
+
 /// The environment variable that forces a direction whatever the language and setting.
 pub const ENV_VAR: &str = "CRAFT_UI_DIRECTION";
 
@@ -94,7 +106,7 @@ pub fn apply(ctx: &Context, dir: Direction) {
 /// same name, so [`apply`] reaches egui's method on the fork and this no-op everywhere else. The
 /// same source thus builds against both without a feature.
 #[allow(dead_code, reason = "unused when egui has the inherent method")]
-trait SetRightToLeft {
+pub(crate) trait SetRightToLeft {
     fn set_right_to_left(&mut self, _right_to_left: bool) {}
 }
 
