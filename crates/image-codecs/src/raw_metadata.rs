@@ -144,7 +144,7 @@ pub enum SrgbRenderingIntent {
 /// Insert one sRGB chunk after IHDR and remove old sRGB declarations through IEND.
 ///
 /// The source must already contain sRGB samples. Images with an ICC or cICP color
-/// declaration are refused so the edit cannot override a competing profile.
+/// declaration or conflicting legacy gamma or chromaticities are refused.
 /// The output is bounded by `max_bytes`. Pixel and other chunk bytes are preserved.
 pub fn with_png_srgb(png: &[u8], intent: SrgbRenderingIntent, max_bytes: usize) -> Result<Vec<u8>, CodecError> {
     let mut chunk = [0; 13];
@@ -173,6 +173,16 @@ fn rewrite_png_header_chunk(png: &[u8], kind: &[u8; 4], replacement: &[u8], max_
         match &chunk[4..8] {
             name if name == kind => removed += chunk.len(),
             b"iCCP" | b"cICP" if kind == b"sRGB" => return Err(error(Format::Png, "PNG already declares an ICC or cICP color profile")),
+            b"gAMA" if kind == b"sRGB" && &chunk[8..chunk.len() - 4] != 45_455u32.to_be_bytes().as_slice() => {
+                return Err(error(Format::Png, "PNG gAMA is incompatible with sRGB"));
+            }
+            b"cHRM" if kind == b"sRGB" => {
+                // PNG Third Edition, table 17. The encoded values are scaled by 100,000.
+                const SRGB_CHROMATICITIES: [u32; 8] = [31_270, 32_900, 64_000, 33_000, 30_000, 60_000, 15_000, 6_000];
+                if &chunk[8..chunk.len() - 4] != SRGB_CHROMATICITIES.map(u32::to_be_bytes).as_flattened() {
+                    return Err(error(Format::Png, "PNG cHRM is incompatible with sRGB"));
+                }
+            }
             b"IEND" if chunk.len() == 12 => break at,
             b"IEND" => return Err(CodecError::malformed(Format::Png, "nonempty IEND")),
             _ => {}
@@ -495,6 +505,41 @@ mod tests {
         }
         assert!(matches!(with_png_srgb(&plain, intent, plain.len() + 12), Err(CodecError::LimitExceeded(_))));
         assert_eq!(with_png_srgb(&plain, intent, plain.len() + 13).unwrap().len(), plain.len() + 13);
+    }
+
+    #[test]
+    fn png_srgb_rewrite_requires_compatible_legacy_color_chunks() {
+        fn chunk(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = (payload.len() as u32).to_be_bytes().to_vec();
+            bytes.extend_from_slice(kind);
+            bytes.extend_from_slice(payload);
+            let crc = crc32fast::hash(&bytes[4..]);
+            bytes.extend_from_slice(&crc.to_be_bytes());
+            bytes
+        }
+
+        let image = crate::Image::from_u8(1, 1, crate::ChannelLayout::Rgb, vec![15, 20, 35]).unwrap();
+        let plain = crate::encode(&image, Format::Png, &crate::EncodeOptions::default()).unwrap();
+        let (header, rest) = plain.split_at(33);
+        let gamma = chunk(b"gAMA", &45_455u32.to_be_bytes());
+        let standard = [31_270u32, 32_900, 64_000, 33_000, 30_000, 60_000, 15_000, 6_000];
+        let chroma = chunk(b"cHRM", &standard.map(u32::to_be_bytes).concat());
+        let compatible = [header, &gamma, &chroma, rest].concat();
+        let intent = SrgbRenderingIntent::Perceptual;
+        let marker = b"\0\0\0\x01sRGB\0\xae\xce\x1c\xe9";
+        assert_eq!(with_png_srgb(&compatible, intent, usize::MAX).unwrap(), [header, marker, &gamma, &chroma, rest].concat());
+
+        let other_gamma = chunk(b"gAMA", &45_454u32.to_be_bytes());
+        let mut other_chroma = standard;
+        other_chroma[7] += 1;
+        let other_chroma = chunk(b"cHRM", &other_chroma.map(u32::to_be_bytes).concat());
+        let incomplete_chroma = chunk(b"cHRM", &standard[..7].iter().flat_map(|value| value.to_be_bytes()).collect::<Vec<_>>());
+        let conflicts = [(&other_gamma, &chroma), (&gamma, &other_chroma), (&gamma, &incomplete_chroma)];
+        let rejected = conflicts.map(|(g, c)| {
+            let incompatible = [header, g, c, rest].concat();
+            matches!(with_png_srgb(&incompatible, intent, usize::MAX), Err(CodecError::Encode { .. }))
+        });
+        assert_eq!(rejected, [true; 3]);
     }
 
     #[test]
