@@ -329,7 +329,7 @@ impl Files for BrowserFiles {
             let picked = match JsFuture::from(promise).await {
                 // A failed write or close is the save's failure; it never downloads.
                 Ok(handle) => match write_handle(&handle, &bytes).await {
-                    Ok(()) => Picked::Paths(vec![PathBuf::from(&name)]),
+                    Ok(()) => Picked::Saved { path: PathBuf::from(&name), file_type: None },
                     Err(error) => Picked::Failed(error),
                 },
                 Err(error) => rejected(&error_name(&error), &name, || download(&name, mime, &bytes)),
