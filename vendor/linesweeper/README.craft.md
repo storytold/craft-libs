@@ -15,6 +15,8 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 ## Local patches
 
+`src/sweep/sweep_line.rs` also differs from the archive, in one doc comment.
+
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
@@ -24,6 +26,15 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 | `docs/sweep.typ` | Two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. |
 | `docs/sweep.typ` | The lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. |
 | `src/sweep/sweep_line.rs`, `src/topology.rs` | Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change. Code comments label the change `Craft patch (clippy lints)`. |
+
+`docs/sweep.typ` has one more change:
+
+- `docs/sweep.typ`: the crossing-height lemma (`lem-intersection-height-error`) and its proof divide
+  the starting gap `beta(y_0) - alpha(y_0)` by the sum of both gaps. With the ending gap
+  `alpha(y_1) - beta(y_1)` as the numerator, gaps of 1 and 3 gave `t = 0.75`, while the segments
+  cross at `t = 0.25`. The proof's inverse-slope difference is `d/(y_1 - y_0)`; the package has
+  `d/(y_1 - y_1)`, whose denominator is zero. The lemma's bound and the later bound on the crossing
+  height use the absolute values of `1/m_alpha` and `1/m_beta`, because the slopes can be negative.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
