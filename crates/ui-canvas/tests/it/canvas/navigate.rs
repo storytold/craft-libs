@@ -84,6 +84,62 @@ fn cmd_or_ctrl_with_page_down_scrolls_a_focused_canvas_sideways_on_every_os() {
     }
 }
 
+/// Page keys keep their screen-sized steps at 4×, and Home/End align the document corners in the shown view.
+#[trial]
+fn page_keys_pan_the_zoomed_canvas_and_jump_to_its_corners() {
+    let document = Size::new(4000.0, 4000.0);
+    let room = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+    let view = Rc::new(Cell::new(CanvasView::new(room, Point::new(2000.0, 2000.0), 4.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(document).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas).settle();
+    let start = view.get();
+    assert_eq!(start.zoom, 4.0);
+    let (width, height) = (f64::from(start.rect.width()), f64::from(start.rect.height()));
+
+    let press = |fixture: &mut Fixture, key: Key, modifiers: Modifiers| {
+        fixture.key(key, modifiers).settle();
+        let after = view.get();
+        assert_eq!(after.zoom, 4.0, "{key:?} keeps the zoom");
+        after
+    };
+    for (key, modifiers, dx, dy) in [
+        (Key::PageDown, Modifiers::NONE, 0.0, height / 4.0),
+        (Key::PageUp, Modifiers::NONE, 0.0, -height / 4.0),
+        (Key::PageDown, Modifiers::SHIFT, 0.0, 2.5),
+        (Key::PageUp, Modifiers::COMMAND, -width / 4.0, 0.0),
+        (Key::PageDown, Modifiers::COMMAND | Modifiers::SHIFT, 2.5, 0.0),
+    ] {
+        let before = view.get().center;
+        let delta = press(&mut fixture, key, modifiers).center - before;
+        assert!((delta.x - dx).abs() < 1e-3 && (delta.y - dy).abs() < 1e-3, "{key:?} {modifiers:?}: {delta:?}, expected ({dx}, {dy})");
+    }
+
+    for (rotation, flip) in [(0.0, false), (90.0, false), (0.0, true), (-90.0, true)] {
+        view.set(start.rotation(rotation).flip_x(flip));
+        fixture.settle();
+        for (key, corner, inward) in [
+            (Key::Home, Point::ZERO, Point::new(1.0, 1.0)),
+            (Key::End, Point::new(document.width, document.height), Point::new(document.width - 1.0, document.height - 1.0)),
+        ] {
+            let after = press(&mut fixture, key, Modifiers::NONE);
+            let (rect, at) = (after.rect, after.to_screen(corner));
+            assert!(
+                [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()].into_iter().any(|corner| corner.distance(at) < 1e-2),
+                "{key:?} at {rotation}°, mirrored {flip}: the document corner {at:?} meets a corner of {rect:?}"
+            );
+            assert!(rect.contains(after.to_screen(inward)), "{key:?} at {rotation}°, mirrored {flip}: the document extends into the canvas");
+        }
+    }
+}
+
 #[trial]
 fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sideways() {
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
