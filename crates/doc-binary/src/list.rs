@@ -314,15 +314,21 @@ fn level_of(l: &RawLvl, lvl_index: usize, fonts: &[String]) -> Level {
         }
     }
     // Number text: characters listed in rgbxchNums are level placeholders (their value is
-    // the zero-based level); bullet chars carry 0xF000 flag bits to strip.
+    // the zero-based level); bullet chars carry 0xF000 flag bits to strip. A surrogate pair is
+    // one character outside the BMP, so it is decoded as a pair.
     let mut text = String::new();
-    for (i, &c) in l.xst.iter().enumerate() {
+    let mut i = 0;
+    while let Some(&c) = l.xst.get(i) {
         if l.rgbxch_nums.contains(&(i as u8 + 1)) && c <= 8 {
             text.push('%');
             text.push((b'1' + c as u8) as char);
+        } else if let Some(pair) = l.xst.get(i + 1).and_then(|&low| char::decode_utf16([c, low]).next()?.ok()).filter(|p| u32::from(*p) > 0xFFFF) {
+            text.push(pair);
+            i += 1;
         } else {
             text.push(bullet_char(c, chr.font.as_deref()));
         }
+        i += 1;
     }
     if text.is_empty() {
         text.push('\u{2022}');
