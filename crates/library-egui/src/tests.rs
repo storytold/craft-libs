@@ -33,6 +33,8 @@ struct Pages {
     second: bool,
     /// The params of each listing of the folders.
     lists: Vec<Value>,
+    /// The folder's file couldn't be read when the pane read it.
+    broken: bool,
 }
 
 impl Host for Pages {
@@ -50,6 +52,9 @@ impl Host for Pages {
         let pages = json!([{"index": 0, "title": "Cover", "hidden": false}, {"index": 1, "title": "Terms", "hidden": true}]);
         let (file, title) = if self.second { ("/lib/second.doc", "Second") } else { ("/lib/contract.doc", "Contract") };
         match id {
+            "library.list" if params.get("file").is_some() && self.broken => {
+                Ok(json!([{"file": file, "title": title, "pages": [], "error": "contract.doc could not be read"}]))
+            }
             "library.list" if params.get("file").is_some() => Ok(json!([{"file": file, "title": title, "pages": pages}])),
             "library.list" => {
                 self.lists.push(params);
@@ -532,6 +537,9 @@ struct Many {
     files: usize,
     items: usize,
     search_ms: u64,
+    /// Files from this one on are listed with their one page, as files known from their names
+    /// are.
+    listed_from: Option<usize>,
     /// The files read and the searches asked.
     read: Vec<String>,
     searches: Vec<Value>,
@@ -552,7 +560,15 @@ impl Host for Many {
                     Ok(json!([{"file": f, "title": f, "pages": pages}]))
                 }
                 None => Ok(Value::Array(
-                    (0..self.files).map(|i| json!({"file": format!("/lib/doc{i}.doc"), "folder": "/lib", "title": format!("doc{i}")})).collect(),
+                    (0..self.files)
+                        .map(|i| {
+                            let mut f = json!({"file": format!("/lib/doc{i}.doc"), "folder": "/lib", "title": format!("doc{i}")});
+                            if self.listed_from.is_some_and(|from| i >= from) {
+                                f["pages"] = json!([{"index": 0, "title": "p0", "hidden": false}]);
+                            }
+                            f
+                        })
+                        .collect(),
                 )),
             },
             "library.search" => {
@@ -615,8 +631,8 @@ fn only_the_files_laid_out_are_read_and_keep_their_items() {
     assert!(h.query_by_label_contains(&format!("Showing the first {laid_out} of 400 files")).is_some());
 }
 
-/// A search runs a few files a frame, each file on its own, so a large Library never stalls the
-/// window, and its hits are ranked as one search.
+/// A search runs a few files a frame, each file on its own, so a large Library's search doesn't
+/// hold one frame for every file, and its hits are ranked as one search.
 #[test]
 fn a_search_runs_a_few_files_a_frame() {
     let mut h = many(Many { files: 20, items: 2, search_ms: 5, ..Default::default() });
@@ -665,4 +681,98 @@ fn only_the_rows_in_view_are_drawn() {
     h.run_steps(8);
     assert!(h.query_by_label("Page 2000: p1999").is_some(), "the last row, scrolled to");
     assert!(h.query_by_label("Page 1: p0").is_none());
+}
+
+/// A file that couldn't be read when the pane read it is searched too: it may have been fixed
+/// since, and the Library reads it again when it changed.
+#[test]
+fn a_file_that_couldnt_be_read_is_searched_too() {
+    let mut h = harness(Pages { folders: vec!["/lib".into()], broken: true, ..Default::default() });
+    assert!(h.query_by_label("contract.doc could not be read").is_some());
+    h.state_mut().0.query = "terms".into();
+    for _ in 0..30 {
+        h.step();
+    }
+    assert_eq!(h.state().0.hits(), Some(1));
+}
+
+/// Folders removed and added back draw their thumbnails again and forget their element names, as
+/// the same paths may hold other files; choosing another of the folders keeps them.
+#[test]
+fn folders_that_come_back_draw_their_thumbnails_again() {
+    let thumbs = |h: &Harness<'static, (State, Pages)>| h.state().1.asked.iter().filter(|a| *a == "library.thumbnail").count();
+    let both = vec!["/lib".to_string(), "/more".to_string()];
+    let mut h = harness(Pages { folders: both.clone(), ..Default::default() });
+    let drawn = thumbs(&h);
+    assert!(drawn > 0);
+    h.state_mut().0.elements.insert(("/lib/contract.doc".into(), 0), vec![("Old".into(), 1)]);
+    h.state_mut().0.folder = Some("/lib".into());
+    h.run_steps(4);
+    assert_eq!(thumbs(&h), drawn, "another folder chosen: the thumbnails are kept");
+    assert!(!h.state().0.elements.is_empty());
+    // One folder removed and added back.
+    h.state_mut().1.folders = vec!["/more".into()];
+    h.run_steps(2);
+    h.state_mut().1.folders = both.clone();
+    h.run_steps(4);
+    let again = thumbs(&h);
+    assert!(again > drawn, "drawn again: {again} after {drawn}");
+    assert!(h.state().0.elements.is_empty());
+    // Every folder removed and added back.
+    h.state_mut().1.folders.clear();
+    h.run_steps(2);
+    h.state_mut().1.folders = both;
+    h.run_steps(4);
+    assert!(thumbs(&h) > again);
+}
+
+/// Only the files read are laid out: files past them, though listed with their items (known
+/// from their names), wait, and let go of those items.
+#[test]
+fn only_the_files_read_are_laid_out() {
+    let h = many(Many { files: 400, items: 100, listed_from: Some(150), ..Default::default() });
+    assert!(h.state().0.ready());
+    let laid_out = MAX_SHOWN_ITEMS / 100;
+    assert!(h.query_by_label_contains(&format!("Showing the first {laid_out} of 400 files")).is_some());
+    assert!(h.state().0.files.iter().skip(laid_out).all(|f| f.items.is_none()));
+}
+
+/// A query is at most what the Library searches for: no more can be typed, and one the app set
+/// longer is cut to it.
+#[test]
+fn a_query_is_at_most_what_the_library_takes() {
+    let max = craft_library::MAX_QUERY;
+    let mut h = many(Many { files: 2, items: 1, ..Default::default() });
+    h.state_mut().0.query = "x".repeat(max + 40);
+    for _ in 0..60 {
+        h.step();
+        if h.state().0.hits().is_some() {
+            break;
+        }
+    }
+    assert_eq!(h.state().0.query.chars().count(), max);
+    assert_eq!(h.state().0.hits(), Some(2));
+    assert!(h.state().1.searches.iter().all(|p| p["query"].as_str().is_some_and(|q| q.chars().count() == max)));
+    h.state_mut().0.query.clear();
+    h.step();
+    h.get_by_role(egui::accesskit::Role::TextInput).focus();
+    h.step();
+    h.get_by_role(egui::accesskit::Role::TextInput).type_text(&"y".repeat(max + 40));
+    h.step();
+    assert_eq!(h.state().0.query.chars().count(), max, "typed");
+}
+
+/// A row keeps the height its thumbnails gave it when their textures are let go, as the oldest
+/// are once many are drawn, so the rows after it stay where they are.
+#[test]
+fn rows_keep_their_heights_when_textures_go() {
+    let mut h = pics(40, true, LABELS, false);
+    h.run_steps(4);
+    let before = tops(&h, 40);
+    assert!(before.len() >= 2, "{before:?}");
+    let st = h.state_mut();
+    st.thumbs.clear();
+    st.thumb_order.clear();
+    h.step();
+    assert_eq!(tops(&h, 40), before);
 }

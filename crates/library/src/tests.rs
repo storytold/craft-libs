@@ -455,6 +455,27 @@ fn a_refresh_reads_again_the_files_that_couldnt_be_read() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A file that opened but whose items couldn't be read is opened again by a refresh, even when
+/// it was fixed without its size or time changing.
+#[test]
+fn a_refresh_opens_again_a_file_whose_items_couldnt_be_read() {
+    let dir = folder("reopen");
+    let path = dir.join("item.frag");
+    std::fs::write(&path, "ITEM").unwrap();
+    let when = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let folders = vec![s(&dir)];
+    let mut lib = Library::new(Fragile);
+    let file = s(&path);
+    let failed = lib.list(&Disk, &folders, &json!({"file": file})).unwrap();
+    assert!(failed[0]["error"].is_string(), "{failed}");
+    std::fs::write(&path, "FINE").unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+    let read = lib.list(&Disk, &folders, &json!({"refresh": true, "file": file})).unwrap();
+    assert!(read[0].get("error").is_none(), "{read}");
+    assert_eq!(read[0]["pageCount"], json!(2));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// One file can be searched on its own, and a hit says whether its item is hidden.
 #[test]
 fn one_file_is_searched_on_its_own() {

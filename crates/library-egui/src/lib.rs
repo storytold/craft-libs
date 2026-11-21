@@ -12,11 +12,13 @@
 //! which it draws in [`Host::tab`]. Every word the pane shows, the app's and the pane's own
 //! ([`words`]), goes through [`Host::text`], so the app can show it in the person's language.
 //!
-//! Files are read, and searched, a few per frame, so a large Library fills in without stalling
-//! the window. At most [`MAX_SHOWN_FILES`] files and about [`MAX_SHOWN_ITEMS`] items are read and
-//! laid out at once, and only the rows of the grid in view are drawn. The pane scrolls its own
-//! grid within the space it can be seen in, so its folder and search controls stay in view even
-//! when the app puts it in a scroll area. A Library whose files each hold one item (pictures,
+//! Files are read, and searched, a few per frame: a frame that has spent its few milliseconds
+//! starts no other file, so a large Library fills in while the window keeps drawing. Each read is
+//! a call to the app that the frame waits for, though, so one slow file, or listing the folders,
+//! holds that frame until it is done. At most [`MAX_SHOWN_FILES`] files and about
+//! [`MAX_SHOWN_ITEMS`] items are read and laid out at once, and only the rows of the grid in view
+//! are drawn. The pane scrolls its own grid within the space it can be seen in, so its folder and
+//! search controls stay in view even when the app puts it in a scroll area. A Library whose files each hold one item (pictures,
 //! icons) shows them in one grid ([`Labels::one_per_file`]).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
@@ -32,7 +34,8 @@ use serde_json::{Value, json};
 /// The shared tab's id: the items of the Library's documents.
 pub const ITEMS: &str = "items";
 
-/// Time spent reading or searching files per frame, in seconds.
+/// Time spent reading or searching files per frame, in seconds: no file is started after it, but
+/// one started runs to its end.
 const READ_BUDGET: f64 = 0.012;
 /// Thumbnails drawn per frame.
 const THUMBS_PER_FRAME: usize = 2;
@@ -54,6 +57,8 @@ const MAX_MENU_ELEMENTS: usize = 40;
 const MAX_ELEMENT_LISTS: usize = 64;
 /// The largest thumbnail decoded, in pixels.
 const MAX_THUMB_PIXELS: u64 = 512 * 2048;
+/// Items whose height over width is kept once drawn; past this they are measured again.
+const MAX_ASPECTS: usize = 20_000;
 /// The grid's least height, when the pane is barely in view.
 const MIN_GRID_HEIGHT: f32 = 120.0;
 /// The widest thumbnail that follows the pointer while an item is dragged, in points.
@@ -363,6 +368,10 @@ pub struct State {
     /// Thumbnails by file, then by item and width, and the order they were drawn in.
     thumbs: HashMap<String, HashMap<(usize, u32), Thumb>>,
     thumb_order: VecDeque<ThumbKey>,
+    /// Each item's height over its width, by file, once its thumbnail is drawn: kept when the
+    /// texture goes, so the grid's rows keep their heights. How many are kept.
+    aspects: HashMap<String, HashMap<usize, f32>>,
+    aspect_count: usize,
     /// An item's top-level shape names and how many shapes carry each, for Insert Element.
     elements: HashMap<(String, usize), Vec<(String, usize)>>,
 }
@@ -374,8 +383,16 @@ impl State {
         self.listed_for = None;
         self.reread = true;
         self.search = None;
+        self.forget_drawn();
+    }
+
+    /// Forget what was asked for each item (its thumbnail, its height over width and its element
+    /// names), which is asked for again when it is next drawn.
+    fn forget_drawn(&mut self) {
         self.thumbs.clear();
         self.thumb_order.clear();
+        self.aspects.clear();
+        self.aspect_count = 0;
         self.elements.clear();
     }
 
@@ -582,6 +599,12 @@ fn read_some(st: &mut State, host: &mut dyn Host, nouns: Nouns, start: web_time:
         }
         st.read_items += st.files.get(i).and_then(|f| f.items.as_ref()).map_or(0, |s| s.len());
     }
+    if !st.reading() {
+        // Only the files read are laid out: the others let go of the items they were listed with.
+        for f in st.files.iter_mut().take(MAX_SHOWN_FILES).skip(st.read) {
+            f.items = None;
+        }
+    }
 }
 
 /// Search the next listed files with `library.search`, one at a time, until this frame's budget
@@ -591,8 +614,8 @@ fn search_some(s: &mut Search, files: &[FileRow], host: &mut dyn Host, nouns: No
     while !s.done(files.len()) && start.elapsed().as_secs_f64() < READ_BUDGET {
         let i = s.next;
         s.next += 1;
-        // A file listed with an error has nothing to find.
-        let Some(f) = files.get(i).filter(|f| f.error.is_none()) else { continue };
+        // A file that couldn't be read is searched too: the Library reads it again if it changed.
+        let Some(f) = files.get(i) else { continue };
         let answer = match host.ask("library.search", json!({"query": s.query, "file": f.file, "limit": MAX_HITS})) {
             Ok(a) => a,
             Err(e) => {
@@ -651,22 +674,34 @@ fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
     folder_controls(ui, st, host, labels);
     let folders = host.folders();
     if folders.is_empty() {
-        // Listed again when folders come back, even the same ones: what they hold may differ.
+        // Listed and drawn again when folders come back, even the same ones: what they hold may
+        // differ.
         st.listed_for = None;
         st.files.clear();
         st.search = None;
+        st.forget_drawn();
         ui.add_space(6.0);
         ui.label(dim(pal, tr(host, labels.empty)));
         return;
     }
     ui.add_space(4.0);
+    // The Library searches for at most MAX_QUERY characters: no more can be typed, and a query
+    // the app set longer is cut to them.
+    if st.query.chars().count() > craft_library::MAX_QUERY {
+        st.query = st.query.chars().take(craft_library::MAX_QUERY).collect();
+    }
     let hint = tr(host, labels.search_hint);
-    let field = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text(hint).desired_width(f32::INFINITY));
+    let field = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text(hint).char_limit(craft_library::MAX_QUERY).desired_width(f32::INFINITY));
     if field.changed() {
         st.typed_at = ui.input(|i| i.time);
     }
     let key = (folders, st.folder.clone());
     if st.listed_for.as_ref() != Some(&key) {
+        // Folders added or removed (not another one chosen): what is drawn from their files is
+        // asked for again, as a folder that comes back may hold other files at the same paths.
+        if st.listed_for.as_ref().is_none_or(|(listed, _)| *listed != key.0) {
+            st.forget_drawn();
+        }
         list_files(st, host, labels.nouns, key);
     }
     let start = web_time::Instant::now();
@@ -678,10 +713,11 @@ fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
             ui.label(dim(pal, trf(host, words::READING, &[("read", &read), ("total", &total)])));
             ui.ctx().request_repaint();
         }
+        // The files read, in order: one past them listed with its items (from its name) waits.
         let groups: Vec<Group> = st
             .files
             .iter()
-            .take(MAX_SHOWN_FILES)
+            .take(st.read)
             .filter_map(|f| Some(Group { file: f.file.clone(), title: f.title.clone(), error: f.error.clone(), items: f.items.clone()? }))
             .collect();
         if !st.reading() {
@@ -744,15 +780,9 @@ fn thumb_px(ui: &Ui, w: f32) -> u32 {
     px.clamp(*craft_library::THUMB_WIDTHS.start(), *craft_library::THUMB_WIDTHS.end())
 }
 
-/// An item's height over its width: its thumbnail's, once drawn.
-fn aspect(st: &State, labels: &Labels, file: &str, item: usize, px: u32) -> f32 {
-    match st.thumb(file, item, px) {
-        Some(Thumb::Ready(tex)) => {
-            let size = tex.size_vec2();
-            if size.x > 0.0 { (size.y / size.x).clamp(0.1, 4.0) } else { labels.aspect }
-        }
-        _ => labels.aspect,
-    }
+/// An item's height over its width: its thumbnail's, once drawn, even after its texture goes.
+fn aspect(st: &State, labels: &Labels, file: &str, item: usize) -> f32 {
+    st.aspects.get(file).and_then(|a| a.get(&item)).copied().unwrap_or(labels.aspect)
 }
 
 /// One row of cells `w` points wide: drawn when it is in view, else only its space taken, so a
@@ -769,8 +799,8 @@ fn grid_row(
     size: (f32, u32, bool),
     budget: &mut usize,
 ) {
-    let (w, px, named) = size;
-    let tallest = cells.iter().map(|(file, it, _)| w * aspect(st, labels, file, it.index, px)).fold(0.0, f32::max);
+    let (w, _, named) = size;
+    let tallest = cells.iter().map(|(file, it, _)| w * aspect(st, labels, file, it.index)).fold(0.0, f32::max);
     let h = (tallest + LABEL_H).max(ui.spacing().interact_size.y);
     let row = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), h));
     if !ui.is_rect_visible(row) {
@@ -861,7 +891,7 @@ fn cell(
 ) {
     let (w, px, named) = size;
     let key: ThumbKey = (file.to_string(), row.index, px);
-    let h = w * aspect(st, labels, file, row.index, px);
+    let h = w * aspect(st, labels, file, row.index);
     let drag_hint = host.drag_hint();
     let sense = if drag_hint.is_some() { Sense::click_and_drag() } else { Sense::click() };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, h + LABEL_H), sense);
@@ -1085,6 +1115,18 @@ fn load_thumb(st: &mut State, host: &mut dyn Host, ctx: &egui::Context, nouns: N
         .and_then(|png| decode(&png))
         .map(|image| Thumb::Ready(ctx.load_texture(format!("library {} {} {}", key.0, key.1, key.2), image, TextureOptions::LINEAR)))
         .unwrap_or(Thumb::Failed);
+    if let Thumb::Ready(tex) = &thumb {
+        let size = tex.size_vec2();
+        if size.x > 0.0 {
+            if st.aspect_count >= MAX_ASPECTS {
+                st.aspects.clear();
+                st.aspect_count = 0;
+            }
+            if st.aspects.entry(key.0.clone()).or_default().insert(key.1, (size.y / size.x).clamp(0.1, 4.0)).is_none() {
+                st.aspect_count += 1;
+            }
+        }
+    }
     st.thumbs.entry(key.0.clone()).or_default().insert((key.1, key.2), thumb);
     st.thumb_order.push_back(key.clone());
     while st.thumb_order.len() > MAX_TEXTURES {

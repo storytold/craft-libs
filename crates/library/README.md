@@ -73,4 +73,5 @@ not panic.
 Indexes, opened documents and thumbnails are cached within fixed budgets. A file whose size or time
 changes is read again. A file that couldn't be read keeps its error until then, or until
 `Library::forget_failed` (`library.list` with `refresh`, which the pane's Refresh sends): a lock
-can go away without the file changing.
+can go away without the file changing. That also lets go of what was opened or drawn from those
+files, so each is opened again.

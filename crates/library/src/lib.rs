@@ -589,17 +589,33 @@ impl<K: Kind> Library<K> {
 
     /// Forget the files that couldn't be read, so each is read again when it is next listed or
     /// searched. A file is otherwise read again only when its size or time changes, which a file
-    /// that was locked, or on a drive that was away, may not do.
+    /// that was locked, or on a drive that was away, may not do. What was opened or drawn from
+    /// them goes too, so a file that opened but whose items couldn't be read is opened again.
     pub fn forget_failed(&mut self) {
         let mut freed = 0;
-        self.index.retain(|_, f| {
+        let mut failed = HashSet::new();
+        self.index.retain(|path, f| {
             let keep = f.error.is_none();
             if !keep {
                 freed += f.bytes;
+                failed.insert(path.clone());
             }
             keep
         });
         self.index_bytes = self.index_bytes.saturating_sub(freed);
+        if failed.is_empty() {
+            return;
+        }
+        self.docs.retain(|d| !failed.contains(&d.path));
+        let mut drawn = 0;
+        self.thumbs.retain(|k, t| {
+            let keep = !failed.contains(&k.path);
+            if !keep {
+                drawn += t.thumb.png.len();
+            }
+            keep
+        });
+        self.thumb_bytes = self.thumb_bytes.saturating_sub(drawn);
     }
 
     /// Drop the least recently used indexes until they fit the budget, never `keep`.

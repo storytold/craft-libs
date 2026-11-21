@@ -52,8 +52,13 @@ craft_library_egui::show(ui, &mut app.library_state, &mut MyHost(app), &LABELS, 
 ```
 
 The pane holds no document and reads no file. It reads a few files per frame and draws only the
-thumbnails in view, so a large Library fills in without stalling the window. It reads and lays out
-at most 300 files, and stops reading once they hold 10,000 items; the other files are listed but
-not read, and the pane asks to choose a folder or search to see them. A search also runs a few
-files per frame (`library.search` with `file`), showing what it has found so far. Refresh lists the
-folders again and has the Library read again the files that couldn't be read.
+thumbnails in view, so a large Library fills in while the window keeps drawing. A frame starts no
+other file once its 12 ms are spent, but it waits for each call to the app it makes: one slow file,
+or listing the folders, holds that frame. It reads and lays out at most 300 files, and stops
+reading once they hold 10,000 items; the other files are listed but not read or laid out, and the
+pane asks to choose a folder or search to see them. A search also runs a few files per frame
+(`library.search` with `file`), files that couldn't be read included, showing what it has found so
+far. A query is at most 256 characters, as `library.search` takes. Each row of the grid keeps the
+height its thumbnails gave it, even when their textures are let go. Refresh lists the folders
+again, draws the thumbnails again and has the Library read again the files that couldn't be read;
+adding or removing a folder also draws the thumbnails again.
