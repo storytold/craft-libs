@@ -1,7 +1,10 @@
 //! Numeric properties of the filtering: constants stay constant, GGX is normalized, energy is
 //! kept, and the SH projection matches analytic irradiance.
 
-use craft_pbr::{EnvImage, Environment, Limits, PrefilterOptions, dir_of, ggx_distribution, irradiance, try_prefilter, try_sh9};
+use craft_pbr::{
+    EnvImage, Environment, Limits, PbrError, PrefilterOptions, dir_of, ggx_distribution, ggx_distribution_between, irradiance, try_prefilter,
+    try_sh9,
+};
 
 use crate::{energy, env_from, max_rel_diff, opts};
 
@@ -58,6 +61,43 @@ fn ggx_projected_area_integrates_to_one() {
         let peak = 1.0 / (std::f64::consts::PI * alpha * alpha);
         let d = f64::from(ggx_distribution(1.0, roughness));
         assert!((d / peak - 1.0).abs() < 1e-3, "roughness {roughness}: {d} for {peak}");
+    }
+}
+
+/// `v` normalized in `f32`, divided by its largest component and then multiplied by the
+/// reciprocal of its length, as the crate normalizes directions.
+fn unit_f32(v: [f32; 3]) -> [f32; 3] {
+    let big = v[0].abs().max(v[1].abs()).max(v[2].abs());
+    let v = v.map(|c| c / big);
+    let inv = 1.0 / (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    v.map(|c| c * inv)
+}
+
+#[test]
+fn ggx_between_vectors_keeps_its_peak_off_axis() {
+    // With n, v and l all along (0.6, 0.6, 0.6), h equals n; their f32 dot product rounds below
+    // 1, which with α at its floor of 0.001 put D about 20% under the head-on peak.
+    let n = unit_f32([0.6; 3]);
+    let h = unit_f32([n[0] + n[0], n[1] + n[1], n[2] + n[2]]);
+    let peak = 1.0 / (std::f64::consts::PI * 1e-6);
+    for (n, h) in [([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]), (n, h), ([0.6; 3], [0.6; 3]), ([0.0, 2.0, 0.0], [0.0, 0.5, 0.0])] {
+        let d = f64::from(ggx_distribution_between(n, h, 0.0).unwrap());
+        assert!((d / peak - 1.0).abs() < 1e-5, "{n:?} {h:?}: {d} for {peak}");
+    }
+    // Away from the peak it is the scalar form at the same angle.
+    for (roughness, angle) in [(0.0f32, 0.05f32), (0.3, 0.4), (1.0, 1.2), (0.5, std::f32::consts::FRAC_PI_2)] {
+        let h = [angle.sin(), 0.0, angle.cos()];
+        let d = ggx_distribution_between([0.0, 0.0, 1.0], h, roughness).unwrap();
+        let want = ggx_distribution(angle.cos(), roughness);
+        assert!((d / want - 1.0).abs() < 1e-3, "roughness {roughness} at {angle}: {d} for {want}");
+    }
+    for bad in [[0.0; 3], [f32::NAN, 0.0, 1.0], [f32::INFINITY, 0.0, 0.0]] {
+        assert_eq!(ggx_distribution_between(bad, [0.0, 0.0, 1.0], 0.5), Err(PbrError::BadDirection));
+        assert_eq!(ggx_distribution_between([0.0, 0.0, 1.0], bad, 0.5), Err(PbrError::BadDirection));
+    }
+    for bad in [f32::NAN, f32::INFINITY, -0.1, 1.5, 1e30] {
+        let got = ggx_distribution_between([0.0, 0.0, 1.0], [0.0, 0.0, 1.0], bad);
+        assert!(matches!(got, Err(PbrError::BadOption(_))), "roughness {bad}: {got:?}");
     }
 }
 

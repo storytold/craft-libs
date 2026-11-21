@@ -48,7 +48,7 @@ mod vec3;
 use rayon::prelude::*;
 
 pub use environment::{ColorEncoding, ENVIRONMENTS, EnvImage, Environment, MAX_RADIANCE, dir_of, uv_of};
-pub use prefilter::{PrefilterOptions, ggx_distribution, hammersley, try_prefilter};
+pub use prefilter::{PrefilterOptions, ggx_distribution, ggx_distribution_between, hammersley, try_prefilter};
 pub use sh::{irradiance, sh_basis, try_sh9};
 
 /// Why an environment could not be made, filtered or read.

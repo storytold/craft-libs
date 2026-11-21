@@ -30,8 +30,10 @@ file or network I/O and has no `unsafe` code.
   `α = roughness²`, as glTF 2.0 section B.2.3 defines it
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#microfacet-surfaces>), and
   `ggx_distribution` evaluates the distribution as section B.3.2 writes it
-  (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specular-brdf>). Samples read a box-filtered pyramid of the source at a level chosen from each
-  sample's density plus `lod_bias` (default 1). `firefly_cap` caps source radiance before
+  (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specular-brdf>).
+  `ggx_distribution_between` evaluates it between a normal and a half vector, taking `(n·h)²` and
+  `|n × h|²` from the vectors in `f64`, so it stays exact where `n·h` is close to 1.
+  Samples read a box-filtered pyramid of the source at a level chosen from each sample's density plus `lod_bias` (default 1). `firefly_cap` caps source radiance before
   filtering when set (default off); level 0 is never capped. The environment BRDF term of the
   split sum is not in this crate.
 - **Diffuse.** `try_sh9` projects every pixel of the source onto the nine real SH basis functions
