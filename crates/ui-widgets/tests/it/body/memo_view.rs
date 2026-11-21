@@ -1687,7 +1687,7 @@ fn line(props: &mut Line, ui: &mut Ui) -> Rect {
 
 /// A memoized view is one unit of the shrinking row around it: with room it is as wide as its content, and when a
 /// sibling after it grows it narrows so the row fits, though the region it is offered stays the same. It replays while
-/// the row's width for it is unchanged and runs once when that width changes.
+/// the row's width for it is unchanged, in the row's measuring sweeps too, and runs once when that width changes.
 #[trial]
 fn a_view_in_a_row_narrows_with_it_and_runs_only_when_its_width_changes() {
     const ROOM: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(310.0, 50.0) };
@@ -1710,7 +1710,7 @@ fn a_view_in_a_row_narrows_with_it_and_runs_only_when_its_width_changes() {
     }
     let (wide, _) = frame(&mut frames, "B");
     assert_eq!(runs_of(&frames, "Line"), [MemoRun::Replayed], "an idle frame replays the view");
-    assert!(measuring_runs_of(&frames, "Line") <= SWEEPS, "an idle frame runs the view at most once per measuring sweep of the row");
+    assert_eq!(measuring_runs_of(&frames, "Line"), 0, "an idle frame replays the view in the row's measuring sweeps too");
     let (narrow, after) = frame(&mut frames, "A much longer button label");
     assert_eq!(runs_of(&frames, "Line"), [MemoRun::Ran], "a new width runs the view");
     assert!(narrow.width() < wide.width(), "the view narrows: {narrow:?} from {wide:?}");
@@ -1719,13 +1719,8 @@ fn a_view_in_a_row_narrows_with_it_and_runs_only_when_its_width_changes() {
         frame(&mut frames, "A much longer button label");
     }
     assert_eq!(runs_of(&frames, "Line"), [MemoRun::Replayed], "at the same width it replays again");
-    assert!(measuring_runs_of(&frames, "Line") <= SWEEPS, "at the same width the view runs at most once per measuring sweep of the row");
+    assert_eq!(measuring_runs_of(&frames, "Line"), 0, "at the same width the view replays in the row's measuring sweeps too");
 }
-
-/// The sweeps of a shrinking row's measuring run that show its units: the counting sweep and, for a short row, the
-/// sweep that asks its body units for their least. Until FW-310 moves `unbounded` out of the scope key, the counting
-/// sweep's call keys apart from the real call's and a memoized unit runs in each sweep; FW-310 tightens this to none.
-const SWEEPS: usize = 2;
 
 /// How many times the views named `name` ran in the last frame outside the real run of its last pass: in sizing and
 /// measuring runs.
