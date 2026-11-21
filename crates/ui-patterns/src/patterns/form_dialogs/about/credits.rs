@@ -12,12 +12,21 @@ pub struct AboutLink {
     pub label: Label,
     /// The target URL, reported in the output for the app to open.
     pub url: String,
+    /// An icon to show in place of link text, with the label retained for accessibility.
+    pub icon: Option<craft_behavior::IconId>,
 }
 
 impl AboutLink {
     /// A link showing `label` to `url`.
     pub fn new(label: impl Into<Label>, url: impl Into<String>) -> Self {
-        AboutLink { label: label.into(), url: url.into() }
+        AboutLink { label: label.into(), url: url.into(), icon: None }
+    }
+
+    /// Shows this link as an icon button.
+    #[must_use]
+    pub fn icon(mut self, icon: craft_behavior::IconId) -> Self {
+        self.icon = Some(icon);
+        self
     }
 }
 

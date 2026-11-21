@@ -331,10 +331,15 @@ impl Shown<'_> {
             });
             Row::new().align(RowAlign::Center).show(ui, |ui, _| {
                 for (at, item) in info.links.iter().enumerate() {
-                    if at > 0 {
+                    if at > 0 && item.icon.is_none() && info.links.get(at - 1).is_some_and(|previous| previous.icon.is_none()) {
                         Text::new("·").shade(Shade::Faint).show(ui);
                     }
-                    if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
+                    let activated = if let Some(icon) = &item.icon {
+                        clicked(&IconButton::new(icon.clone()).label(item.label.clone()).tooltip(item.label.clone()).id_salt(("link", at)).show(ui))
+                    } else {
+                        clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui))
+                    };
+                    if activated {
                         *link.borrow_mut() = Some(item.url.clone());
                     }
                 }
