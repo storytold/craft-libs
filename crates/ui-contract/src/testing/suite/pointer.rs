@@ -109,8 +109,10 @@ fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String
                 parts.push(part);
             }
         }
+        // A skipped part only reads the settled fixture. Each press gets a fresh fixture.
+        let mut unpressed = None;
         for part in parts {
-            let mut fixture = input_fixture(story);
+            let fixture = unpressed.get_or_insert_with(|| input_fixture(story));
             // A press lands on the part's visible piece: one past the window's edge cannot be seen, so not pressed.
             let Some(target) = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|target| fixture.visible(&target)) else {
                 continue;
@@ -118,7 +120,7 @@ fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String
             if fixture.tree().data_of(target.node).is_none_or(|node| node.is_disabled()) || target.rect.area() <= 0.0 {
                 continue;
             }
-            let point = probe_point(target.rect, root_target(&fixture).rect);
+            let point = probe_point(target.rect, root_target(fixture).rect);
             fixture.press(&at(&target, point));
             if !pointer::press_captured(fixture.ctx()) {
                 return Err(format!(
@@ -126,6 +128,7 @@ fn parts_take_presses_in_their_hit_areas(subject: &Subject) -> Result<(), String
                     story.name, target.rect
                 ));
             }
+            unpressed = None;
         }
         if let (Plan::Drag(Grip { part, .. }), true) = (plan, probe.carries_value()) {
             let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)).and_then(|grip| fixture.visible(&grip)) else { continue };

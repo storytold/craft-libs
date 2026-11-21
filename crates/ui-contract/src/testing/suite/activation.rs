@@ -110,12 +110,10 @@ fn each_part_activates_once(subject: &Subject) -> Result<(), String> {
 /// What a node tree says about values and states, by node: any change of it is an effect, a node that appears or
 /// goes (a closed tab) included. The order the tree reports its nodes in is not part of it.
 fn signature(tree: &AccessTree) -> HashMap<NodeKey, String> {
-    tree.keys()
-        .into_iter()
-        .map(|key| {
-            let state = tree.data_of(key).map_or_else(String::new, |node| {
-                format!("{:?}|{:?}|{:?}|{:?}|{:?}", node.toggled(), node.is_expanded(), node.is_selected(), node.numeric_value(), node.value())
-            });
+    tree.reported_nodes()
+        .map(|(key, node)| {
+            let state =
+                format!("{:?}|{:?}|{:?}|{:?}|{:?}", node.toggled(), node.is_expanded(), node.is_selected(), node.numeric_value(), node.value());
             (key, state)
         })
         .collect()
