@@ -1358,9 +1358,7 @@ impl AffixDict {
         let (mut stems, stem_keys) = AffixDict::read_stem_flags(&rules, stems, entry_cap, max_flags)?;
         // This strict cache is separate from the stem reader's lenient alias ranges.
         let mut aliases: FxMap<usize, Rc<[FlagKey]>> = FxMap::default();
-        let mut conts = |rs: &[RawRule]| {
-            rs.iter().map(|r| ContinuationFlags::read(&rules, &r.4, &mut aliases)).collect::<Result<Vec<_>, _>>()
-        };
+        let mut conts = |rs: &[RawRule]| rs.iter().map(|r| ContinuationFlags::read(&rules, &r.4, &mut aliases)).collect::<Result<Vec<_>, _>>();
         let pfx_cont = conts(&rules.prefixes)?;
         let sfx_cont = conts(&rules.suffixes)?;
         // Flags: every one a rule, a stem or a directive uses gets an id, in key order.
