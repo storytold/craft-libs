@@ -16,6 +16,19 @@ use crate::style::TypeRole;
 use craft_behavior::{CanvasTransform, PixelSize};
 use egui::{Pos2, Rect, Ui, Vec2};
 
+/// Whether the zoom row has Preview in Browser.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum BrowserPreview {
+    /// No button.
+    #[default]
+    Hidden,
+    /// The button works.
+    Available,
+    /// The button is disabled and the label is its reason.
+    Unavailable(Label),
+}
+
 /// A pane of the dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]

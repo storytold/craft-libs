@@ -1,22 +1,43 @@
 //! `PropertiesDialog`: an object's properties as tabs of label and value rows, with text, number and check rows to
 //! edit and read-only rows to read.
 
-use super::{DialogFields, FormDialog, Param, ParamRows, ParamRowsOutput, open_fields};
+use super::{DialogFields, FormDialog, HostRequests, Param, ParamRows, ParamRowsOutput, open_fields};
 use crate::contract::{Bind, CollectionEvent, NoValue, Outcome, Remember as _, Show as _, ShowCollection as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use crate::display::Text;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
+use crate::runtime::requests::{ColorRequest, HostAnswer};
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::tabs::{Tab, TabKind, TabStrip};
 use craft_behavior::{DisplayOrder, ItemSource, SelectionChange};
-use egui::{Response, Ui};
+use craft_theme::Srgba;
+use egui::{Context, Response, Ui};
+use serde_json::Value;
 use std::borrow::Cow;
 use std::cell::RefCell;
 
 #[cfg(feature = "testing")]
 mod stories;
+
+craft_ui::words! {
+    /// The words of the properties dialog beside the common OK and Cancel.
+    pub struct PropertiesWords {
+        reset_tab: "properties.resetTab" = "Reset Panel";
+    }
+}
+
+/// How a properties dialog arranges its tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TabLayout {
+    /// A tab strip above the rows.
+    #[default]
+    Strip,
+    /// The tabs as a list of sections at the start edge.
+    List,
+}
 
 /// One row of a properties tab.
 #[derive(Clone, Debug, PartialEq)]
@@ -68,12 +89,31 @@ pub struct PropertiesTab {
     pub title: Label,
     /// The rows under it.
     pub rows: Vec<PropertyRow>,
+    /// The tab's id for automation (the `tab` field) and for the host.
+    pub key: Option<String>,
+    /// The footer's Reset Panel button is enabled while this tab shows.
+    pub resettable: bool,
 }
 
 impl PropertiesTab {
     /// A tab titled `title` with `rows`.
     pub fn new(title: impl Into<Label>, rows: Vec<PropertyRow>) -> Self {
-        PropertiesTab { title: title.into(), rows }
+        PropertiesTab { title: title.into(), rows, key: None, resettable: false }
+    }
+
+    /// Names the tab for automation and for the host.
+    #[must_use]
+    pub fn key(self, key: impl Into<String>) -> Self {
+        let _ = (self, key);
+        todo!("ty.X75")
+    }
+
+    /// Enables the footer's Reset Panel button while this tab shows; a press puts the tab's keys back to their rows'
+    /// defaults.
+    #[must_use]
+    pub fn resettable(self) -> Self {
+        let _ = self;
+        todo!("ty.X76")
     }
 
     /// The parameters the rows are: a value is a read-only text row, a heading is a section.
@@ -130,6 +170,8 @@ pub struct PropertiesOutput {
     pub result: Option<DialogFields>,
     /// The rows' output of this pass; `None` when the dialog is closed.
     pub rows: Option<ParamRowsOutput>,
+    /// Reset Panel was pressed this pass.
+    pub tab_reset: bool,
 }
 
 impl Outcome for PropertiesOutput {
@@ -161,17 +203,39 @@ pub struct PropertiesDialog<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
+    /// How the tabs are arranged.
+    #[prop]
+    tab_layout: TabLayout,
+    /// The shown tab's position when the host keeps it; without it the dialog keeps it while open.
+    #[prop]
+    tab: Option<Bind<'a, usize>>,
+    /// The host's answers to the requests of earlier passes; the dialog writes them into the shown tab's values first.
+    #[prop]
+    answers: Vec<HostAnswer>,
+    /// The Preview check box; the host previews while it is on.
+    #[prop]
+    preview: Option<Bind<'a, bool>>,
 }
 
 impl<'a> PropertiesDialog<'a> {
     /// A dialog titled `title` over `tabs`, editing `values`.
     pub fn new(title: impl Into<Label>, tabs: impl Into<Cow<'a, [PropertiesTab]>>, values: Bind<'a, DialogFields>) -> Self {
-        PropertiesDialog { title: title.into(), tabs: tabs.into(), values, read_only: false, open: None }
+        PropertiesDialog {
+            title: title.into(),
+            tabs: tabs.into(),
+            values,
+            read_only: false,
+            open: None,
+            tab_layout: TabLayout::default(),
+            tab: None,
+            answers: Vec::new(),
+            preview: None,
+        }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> PropertiesOutput {
-        let PropertiesDialog { title, tabs, values, read_only, open } = self;
+        let PropertiesDialog { title, tabs, values, read_only, open, tab_layout: _, tab: _, answers: _, preview: _ } = self;
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let per_tab: Vec<Vec<Param>> = tabs.iter().enumerate().map(|(at, tab)| tab.params(at)).collect();
@@ -214,7 +278,14 @@ impl<'a> PropertiesDialog<'a> {
             Some(_) if read_only => Some(DialogFields::new()),
             _ => shown.accepted,
         };
-        PropertiesOutput { response: shown.response, closed: shown.closed, result, rows: rows.into_inner() }
+        PropertiesOutput { response: shown.response, closed: shown.closed, result, rows: rows.into_inner(), tab_reset: false }
+    }
+
+    /// Puts the keys of `tab` (the tab at position `at`) back to their rows' defaults, as the Reset Panel button does;
+    /// a key whose row has no default is removed.
+    pub fn reset_tab(tab: &PropertiesTab, at: usize, fields: &mut DialogFields) {
+        let _ = (tab, at, fields);
+        todo!("ty.X78")
     }
 }
 
@@ -234,6 +305,12 @@ pub struct HostedPropertiesDialog {
     key: String,
     fields: DialogFields,
     build: Box<Build>,
+    /// The colour requests the rows made, and the host's answers to them.
+    #[allow(dead_code)] // P3(type-w6): fl.F36
+    requests: HostRequests,
+    /// The tab the host shows, bound to the dialog's `tab` prop.
+    #[allow(dead_code)] // P3(type-w6): fl.F36
+    tab: usize,
 }
 
 impl HostedPropertiesDialog {
@@ -244,12 +321,61 @@ impl HostedPropertiesDialog {
         build: impl for<'b> Fn(Bind<'b, DialogFields>) -> PropertiesDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
-        HostedPropertiesDialog { id: dialog_id(key.as_str()), key, fields, build: Box::new(build) }
+        HostedPropertiesDialog { id: dialog_id(key.as_str()), key, fields, build: Box::new(build), requests: HostRequests::new(), tab: 0 }
     }
 
     /// The values the dialog shows.
     pub fn fields(&self) -> &DialogFields {
         &self.fields
+    }
+
+    /// The colour row whose button was pressed, once.
+    pub fn pick_color(&mut self) -> Option<ColorRequest> {
+        let _ = self;
+        todo!("fl.F36")
+    }
+
+    /// Answers the colour request `key`: the dialog writes the colour into its values in its next pass.
+    pub fn answer_color(&mut self, key: impl Into<String>, color: Srgba) {
+        let _ = (self, key, color);
+        todo!("fl.F36")
+    }
+
+    /// Drops the pending colour request.
+    pub fn cancel_color(&mut self) {
+        let _ = self;
+        todo!("fl.F36")
+    }
+
+    /// The dialog has the Preview check box, starting on.
+    #[must_use]
+    pub fn previews(self) -> Self {
+        let _ = self;
+        todo!("ty.X79")
+    }
+
+    /// Whether the dialog previews and its Preview check box is on.
+    pub fn is_previewing(&self) -> bool {
+        let _ = self;
+        todo!("ty.X80")
+    }
+
+    /// The position of the shown tab, which the host binds.
+    pub fn tab(&self) -> usize {
+        let _ = self;
+        todo!("ty.X81")
+    }
+
+    /// Whether Reset Panel is enabled: the shown tab is resettable.
+    pub fn can_reset_tab(&self) -> bool {
+        let _ = self;
+        todo!("ty.X81")
+    }
+
+    /// Runs Reset Panel on the shown tab, as the button does; whether it changed a value.
+    pub fn reset_tab(&mut self) -> bool {
+        let _ = self;
+        todo!("ty.X81")
     }
 }
 
@@ -271,5 +397,29 @@ impl StackDialog for HostedPropertiesDialog {
 
     fn key(&self) -> Option<&str> {
         Some(&self.key)
+    }
+
+    /// The values as [`DialogFields`] serializes them, plus `"tab"` (the shown tab's key) and `"preview"`.
+    fn json_fields(&self) -> Option<Value> {
+        todo!("ty.X82")
+    }
+
+    /// Takes `tab` (a key), `preview` (a bool), else a param field over every tab's params; inactive and unknown fields
+    /// are refused.
+    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
+        let _ = (ctx, field, value);
+        todo!("ty.X82")
+    }
+
+    /// The values, as OK answers them (empty values when read-only).
+    fn confirm(&mut self, ctx: &Context) -> Option<DialogFields> {
+        let _ = ctx;
+        todo!("ty.X82")
+    }
+
+    /// Drops the pending colour requests.
+    fn cancelled(&mut self, ctx: &Context) {
+        let _ = ctx;
+        todo!("ty.X82")
     }
 }

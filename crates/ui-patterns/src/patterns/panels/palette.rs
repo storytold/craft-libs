@@ -8,7 +8,7 @@ use crate::contract::{
 use crate::display::{Shade, Text};
 use crate::layout_components::Stack;
 use crate::list::{List, ListRow};
-use crate::menu::search::{HelpEntry, search_order};
+use crate::menu::search::{HelpEntry, SearchIndex, search_order};
 use crate::popover::Popover;
 use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::env::{Env, Label};
@@ -22,6 +22,7 @@ use egui::{Response, Ui};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+mod callout;
 #[cfg(feature = "testing")]
 mod stories;
 
@@ -29,6 +30,12 @@ mod stories;
 const FIRST_ROWS: usize = 12;
 /// The commands remembered for the empty query.
 pub const RECENT: usize = 8;
+/// The commands `CommandPalette::remember` keeps.
+#[allow(dead_code)] // P3(menus-w3): mn.M29
+pub const RECENT_KEPT: usize = 20;
+/// The most results a query lists.
+#[allow(dead_code)] // P3(menus-w3): mn.M31
+pub const RESULTS: usize = 50;
 /// The box's widest share of the window; its height is capped at the same share of the window's height.
 const SHARE: ViewportShare = ViewportShare::new(0.6, 0.7);
 
@@ -85,9 +92,18 @@ pub struct CommandPalette<'a> {
 }
 
 impl<'a> CommandPalette<'a> {
-    /// A palette named `label` over `entries`, open while `open` is true.
-    pub fn new(label: impl Into<Label>, entries: &'a [HelpEntry], open: Bind<'a, bool>) -> Self {
+    /// A palette named `label` over `entries`, ranked through `index` (which the app builds when its entries change),
+    /// open while `open` is true.
+    pub fn new(label: impl Into<Label>, entries: &'a [HelpEntry], index: &'a SearchIndex, open: Bind<'a, bool>) -> Self {
+        let _ = index; // P3(menus-w3): mn.M28
         CommandPalette { label: label.into(), entries, open, recents: Bind::kept() }
+    }
+
+    /// The pick counts that rank the results, 0 for a command never picked.
+    #[must_use]
+    pub fn uses(self, uses: &'a dyn Fn(&CommandRef) -> u32) -> Self {
+        let _ = (self, uses);
+        todo!("mn.M27")
     }
 
     /// Puts `command` first in `recents`, once, keeping the newest `RECENT`.

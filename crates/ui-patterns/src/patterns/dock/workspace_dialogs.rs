@@ -253,6 +253,13 @@ impl<P: Clone> HostedNewWorkspace<P> {
         self.offered = keeps;
         self
     }
+
+    /// The name and captures the dialog opens with; without it, `NewWorkspace::default()`.
+    #[must_use]
+    pub fn value(self, value: NewWorkspace) -> Self {
+        let _ = (self, value);
+        todo!("ch.K26")
+    }
 }
 
 /// The command id of `WorkspaceCommands::New`, which the dialog answers for.

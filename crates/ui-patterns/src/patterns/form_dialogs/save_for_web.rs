@@ -37,15 +37,16 @@ mod panes;
 #[cfg(feature = "testing")]
 mod stories;
 
-pub use panes::WebPane;
+pub use panes::{BrowserPreview, WebPane};
 
 mod hosted;
 mod model;
 
 pub use hosted::HostedSaveForWeb;
 pub use model::{
-    Animation, ColorTable, Dither, SaveForWebOptions, SaveForWebResult, WantedVariant, WebFormat, WebMetadata, WebPreset, WebSlice, WebSlices,
-    WebVariant, WebView,
+    Animation, ColorTable, ColorTableEdit, ColorTableEvent, Dither, OptimizeAnswer, OptimizeRequest, OptimizeScope, OptimizeStart, SaveForWebOptions,
+    SaveForWebResult, TableMarks, TableOrder, WEB_SPEEDS, WantedVariant, WebAntiAlias, WebDocument, WebFormat, WebMetadata, WebPreset,
+    WebPresetEvent, WebSlice, WebSlices, WebVariant, WebView,
 };
 
 /// The key of the matte colour request the dialog files.
@@ -259,6 +260,8 @@ pub struct SaveForWebOutput {
     pub frame: u32,
     /// The pane last clicked.
     pub selected: WebPane,
+    /// This pass's colour table edits.
+    pub table: Vec<ColorTableEvent>,
 }
 
 impl Outcome for SaveForWebOutput {
@@ -356,6 +359,21 @@ pub struct SaveForWebDialog<'a> {
     /// moves to, so the host and the dialog share one value.
     #[prop]
     frame: Option<Bind<'a, u32>>,
+    /// Picks the variant: a raster or a vector document.
+    #[prop]
+    document: WebDocument,
+    /// The formats the host encodes, in list order.
+    #[prop]
+    formats: &'a [WebFormat],
+    /// The Color Table list the host offers.
+    #[prop]
+    color_tables: &'a [ColorTable],
+    /// What the host's colour table says, for the cell marks.
+    #[prop]
+    marks: Option<&'a TableMarks>,
+    /// Shows "Optimize to File Size…" under the Preset row.
+    #[prop(flag)]
+    optimize: bool,
 }
 
 impl<'a> SaveForWebDialog<'a> {
@@ -375,12 +393,44 @@ impl<'a> SaveForWebDialog<'a> {
             slices: &[],
             view: None,
             frame: None,
+            document: WebDocument::default(),
+            formats: &WebFormat::ALL,
+            color_tables: &[
+                ColorTable::Perceptual,
+                ColorTable::Selective,
+                ColorTable::Adaptive,
+                ColorTable::Restrictive,
+                ColorTable::Exact,
+                ColorTable::BlackWhite,
+                ColorTable::Grayscale,
+            ],
+            marks: None,
+            optimize: false,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> SaveForWebOutput {
-        let SaveForWebDialog { name, size, pictures, options, open, presets, animation, remember, saving, answers, slices, view, frame } = self;
+        let SaveForWebDialog {
+            name,
+            size,
+            pictures,
+            options,
+            open,
+            presets,
+            animation,
+            remember,
+            saving,
+            answers,
+            slices,
+            view,
+            frame,
+            document: _,
+            formats: _,
+            color_tables: _,
+            marks: _,
+            optimize: _,
+        } = self;
         let mut view_held = view.map(Held::new);
         let mut frame_held = frame.map(Held::new);
         let env = Env::of(ui);
@@ -536,6 +586,7 @@ impl<'a> SaveForWebDialog<'a> {
             size: pixels,
             frame: live.frame,
             selected: live.selected,
+            table: Vec::new(),
         }
     }
 }
@@ -545,7 +596,7 @@ impl<'a> SaveForWebDialog<'a> {
 fn result_of(options: SaveForWebOptions, path: PathBuf, size: PixelSize, view: WebView, remember: Option<SaveKey>) -> SaveForWebResult {
     SaveForWebResult {
         options: options.clone(),
-        path,
+        path: Some(path), // P3(export-w2): ex.W5
         width: size.width,
         height: size.height,
         remember: remember.map(|key| (key, Last { view, options: options.without_document_fields() })),

@@ -4,6 +4,7 @@
 mod cards;
 mod details;
 mod presets;
+mod settings;
 #[cfg(feature = "testing")]
 mod stories;
 
@@ -35,6 +36,7 @@ pub use presets::{
     BackgroundContents, BitDepth, ColorMode, ColorProfiles, DocumentOptions, DocumentPreset, NewDocumentPresetWords, Orientation, PIXEL_ASPECTS,
     PresetCategory, SQUARE_PIXELS,
 };
+pub use settings::{CardCx, CardSource, DetailsCx, DocumentCard, DocumentSettings, RasterSetup};
 
 /// The key of the colour request Custom makes.
 pub const BACKGROUND_COLOR_KEY: &str = "newDocument.backgroundColor";
@@ -331,13 +333,14 @@ fn background_rgb(background: BackgroundContents, app_background: [f32; 3]) -> O
 /// The settings a Create answers with, and the recent list to keep once the document exists.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct NewDocumentResult {
+pub struct NewDocumentResult<S = DocumentOptions> {
     /// The settings to create the document from, under the name trimmed.
-    pub options: DocumentOptions,
-    remember: Option<(SaveKey, Vec<DocumentOptions>)>,
+    pub options: S,
+    remember: Option<(SaveKey, Vec<S>)>,
 }
 
-impl NewDocumentResult {
+// P3(files-w3): fl.F29 -- `remember` stays on the raster result until the writer generalises it.
+impl NewDocumentResult<DocumentOptions> {
     /// Stores the recent list of a dialog built with [`NewDocumentDialog::remember_recent`], with these settings first,
     /// for the next open. The app calls it after its create command succeeds, so a failed command leaves the list as
     /// it was; without a key it does nothing.
@@ -351,14 +354,14 @@ impl NewDocumentResult {
 /// What the dialog reports.
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct NewDocumentOutput {
+pub struct NewDocumentOutput<S = DocumentOptions> {
     /// The dialog's response.
     pub response: Response,
     /// How the dialog closed in this pass; `None` while it stays open.
     pub closed: Option<CloseReason>,
     /// The settings to create the document from, the pass the dialog closed as Create. The app keeps `options` as the
     /// settings the next dialog opens on and calls [`NewDocumentResult::remember`] after its create command succeeds.
-    pub result: Option<NewDocumentResult>,
+    pub result: Option<NewDocumentResult<S>>,
     /// What the body asked of the host in this pass: the background colour the app's picker is asked for (Custom was
     /// chosen or the colour button pressed), keyed `BACKGROUND_COLOR_KEY`. The app answers with
     /// [`NewDocumentDialog::answers`].
@@ -366,9 +369,11 @@ pub struct NewDocumentOutput {
     /// The saved-preset edits the user made this pass (create, delete), for the app to store, keyed by the preset's
     /// name before the event.
     pub presets: Vec<NamedPresetEvent<String>>,
+    /// This pass's `request_action` ids of the details rows.
+    pub actions: Vec<String>,
 }
 
-impl Outcome for NewDocumentOutput {
+impl<S: DocumentSettings> Outcome for NewDocumentOutput<S> {
     type Value = NoValue;
 
     fn response(&self) -> &Response {
@@ -513,14 +518,15 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
 /// - Memory: the saved presets are kept across runs. The recent documents are kept under `remember_recent`; the last created settings are the app's.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
-pub struct NewDocumentDialog<'a> {
-    bound: Bind<'a, DocumentOptions>,
+#[pattern(probe(NewDocumentDialog<'static, DocumentOptions>))]
+pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
+    bound: Bind<'a, S>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
     /// The categories in tab order, in place of `PresetCategory::standard()`.
     #[prop]
-    categories: Vec<PresetCategory>,
+    categories: Vec<PresetCategory<S::Preset>>,
     /// The cards Recent shows after the recent documents, in place of `PresetCategory::default_recent()`. A card with
     /// the id `"default"` is named "Default {app} Size".
     #[prop]
@@ -551,11 +557,11 @@ pub struct NewDocumentDialog<'a> {
     /// Binds the saved presets of the Saved tab to `saved`, in place of the list the dialog keeps across runs. Each
     /// save and delete is also reported in [`NewDocumentOutput::presets`] for the app to store.
     #[prop]
-    saved: Option<Bind<'a, PresetLibrary<DocumentOptions>>>,
+    saved: Option<Bind<'a, PresetLibrary<S>>>,
     /// Binds the recent documents of the Recent tab to `recent`, in place of the list of `remember_recent`. The dialog
     /// only reads it: the app adds the created document itself.
     #[prop]
-    recent: Option<Bind<'a, Vec<DocumentOptions>>>,
+    recent: Option<Bind<'a, Vec<S>>>,
     /// Binds the shown tab's id (`recent`, `saved` or a category's id) to `tab`.
     #[prop]
     tab: Option<Bind<'a, String>>,
@@ -572,10 +578,22 @@ pub struct NewDocumentDialog<'a> {
     /// `HostedNewDocument` does when it is made): the first pass keeps the bound settings as they are, and Reset
     /// restores these (a field edited before the dialog was first shown is not the Reset target).
     #[prop]
-    opening: Option<DocumentOptions>,
+    opening: Option<S>,
+    /// What the dialog is set up with besides the cards.
+    #[prop]
+    setup: S::Setup,
 }
 
-impl<'a> NewDocumentDialog<'a> {
+impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
+    /// The dialog over any settings type: no categories and the default setup.
+    pub fn over(options: Bind<'a, S>) -> Self {
+        let _ = options;
+        todo!("fl.F27")
+    }
+}
+
+// P3(files-w3): fl.F27 -- `new` and `show` keep their raster bodies until the writer generalises `show` over `S`.
+impl<'a> NewDocumentDialog<'a, DocumentOptions> {
     /// The dialog over the settings in `options`, with `PresetCategory::standard()`, print resolution 300 and screen
     /// resolution 72.
     pub fn new(options: Bind<'a, DocumentOptions>) -> Self {
@@ -598,11 +616,12 @@ impl<'a> NewDocumentDialog<'a> {
             remember: None,
             answers: Vec::new(),
             opening: None,
+            setup: RasterSetup::default(),
         }
     }
 
     /// Shows the dialog.
-    pub fn show(self, ui: &mut Ui) -> NewDocumentOutput {
+    pub fn show(self, ui: &mut Ui) -> NewDocumentOutput<DocumentOptions> {
         let NewDocumentDialog {
             bound,
             open,
@@ -622,6 +641,7 @@ impl<'a> NewDocumentDialog<'a> {
             remember,
             answers,
             opening,
+            setup: _,
         } = self;
         let recent_is_bound = recent_bound.is_some();
         let recent: Vec<DocumentOptions> = match recent_bound.as_mut() {
@@ -703,11 +723,12 @@ impl<'a> NewDocumentDialog<'a> {
             }),
             requests: shown.requests,
             presets: events,
+            actions: Vec::new(),
         }
     }
 }
 
-type Build = dyn for<'b> Fn(&'b mut DocumentOptions) -> NewDocumentDialog<'b> + Send;
+type Build<S> = dyn for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send;
 
 /// A [`NewDocumentDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: the host keeps the settings and the colour request, and `build` makes the dialog over the settings each pass.
 ///
@@ -720,27 +741,55 @@ type Build = dyn for<'b> Fn(&'b mut DocumentOptions) -> NewDocumentDialog<'b> + 
 ///     if let Some(request) = dialog.pick_color() { /* open the colour picker, then */ dialog.set_color(&request.key, color); }
 /// }
 /// ```
-pub struct HostedNewDocument {
+pub struct HostedNewDocument<S: DocumentSettings = DocumentOptions> {
     id: DialogId,
-    options: DocumentOptions,
-    build: Box<Build>,
+    options: S,
+    build: Box<Build<S>>,
     requests: HostRequests,
     /// Whether the dialog is open: bound to the dialog's `opened` prop.
     open: bool,
     /// The saved presets the app gave, as the user left them.
-    saved: PresetLibrary<DocumentOptions>,
+    saved: PresetLibrary<S>,
     /// The recent documents the app gave; the app adds the created one itself.
-    recent: Vec<DocumentOptions>,
+    recent: Vec<S>,
     /// The shown tab's id.
     tab: String,
     /// The saved-preset edits the app has not taken yet.
     events: Vec<NamedPresetEvent<String>>,
     /// The settings the dialog opened on, the clipboard's size and the default name filled in: what Reset restores,
     /// whatever automation sets before the first show.
-    opening: DocumentOptions,
+    opening: S,
 }
 
-impl HostedNewDocument {
+impl<S: DocumentSettings> HostedNewDocument<S> {
+    /// Names the tab the dialog opens on.
+    #[must_use]
+    pub fn tab(self, key: impl Into<String>) -> Self {
+        let _ = (self, key);
+        todo!("fl.F30")
+    }
+
+    /// The `request_action` ids of the details rows since the last call.
+    pub fn take_actions(&mut self) -> Vec<String> {
+        let _ = self;
+        todo!("fl.F30")
+    }
+
+    /// Sets what the dialog is set up with, from the next pass on.
+    pub fn set_setup(&mut self, setup: S::Setup) {
+        let _ = (self, setup);
+        todo!("fl.F30")
+    }
+
+    /// Replaces the settings the dialog shows.
+    pub fn set_options(&mut self, options: S) {
+        let _ = (self, options);
+        todo!("fl.F30")
+    }
+}
+
+// P3(files-w3): fl.F30 -- the rest keeps its raster bodies until the writer generalises them over `S`.
+impl HostedNewDocument<DocumentOptions> {
     /// A hosted dialog opening on `options`; `build` makes the dialog over them (the clipboard, the profiles, the
     /// app's name). The settings open at once (the clipboard's size, the default name from the root's words), so
     /// automation lists and sets them before the first pass.
@@ -814,8 +863,8 @@ impl HostedNewDocument {
     }
 }
 
-impl StackDialog for HostedNewDocument {
-    type Result = NewDocumentResult;
+impl StackDialog for HostedNewDocument<DocumentOptions> {
+    type Result = NewDocumentResult<DocumentOptions>;
 
     /// Answers what Create answers. The recent list is bound, so the app adds the document itself (`remember` is
     /// empty, as in a pass).
@@ -872,7 +921,7 @@ impl StackDialog for HostedNewDocument {
         self.id
     }
 
-    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<NewDocumentResult>> {
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<NewDocumentResult<DocumentOptions>>> {
         let shown = (self.build)(&mut self.options)
             .opened(Bind::bound(&mut self.open))
             .saved(Bind::bound(&mut self.saved))

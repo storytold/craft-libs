@@ -58,6 +58,7 @@ impl ShownRow {
                 Kind::Float { value: *value, range: range.clone(), decimals: *decimals, step: row.step, unit: *unit }
             }
             RowKind::Text(text) => Kind::Text((*text).to_owned()),
+            RowKind::Length { .. } => todo!("sh.K31"),
             RowKind::Custom => Kind::Custom,
         };
         Self {

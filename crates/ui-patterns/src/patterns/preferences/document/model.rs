@@ -6,7 +6,7 @@ use super::texts::OPEN_RANGE;
 use super::{CustomSettings, SettingsDocument, table_of};
 use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesModel};
 use craft_theme::Rgba;
-use egui::{Context, Ui};
+use egui::Ui;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeSet;
@@ -160,8 +160,8 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         self.custom.reset_page(page);
     }
 
-    fn nested(&mut self, ctx: &Context) {
-        self.custom.nested(ctx, &mut self.draft);
+    fn nested(&mut self, ui: &mut Ui) {
+        self.custom.nested(ui, &mut self.draft); // P3(shell-w5): sh.K30
     }
 
     fn nested_open(&self) -> bool {

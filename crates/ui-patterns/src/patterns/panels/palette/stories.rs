@@ -2,7 +2,7 @@
 
 use super::CommandPalette;
 use crate::contract::Bind;
-use crate::menu::search::HelpEntry;
+use crate::menu::search::{HelpEntry, SearchIndex, Synonyms};
 use crate::runtime::commands::{CommandRef, CommandState, CommandStates, EditCommands};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -54,7 +54,10 @@ static ENTRIES: LazyLock<Vec<HelpEntry>> = LazyLock::new(|| {
 fn palette(ui: &mut Ui, data: &mut StoryData, recents: Vec<CommandRef>) -> StoryOutput {
     // The palette binds two story values; it edits a copy of `open`, which goes back after the pass.
     let mut open = *data.value("open", true);
-    let out = CommandPalette::new("Command palette", ENTRIES.as_slice(), Bind::bound(&mut open))
+    // P3(menus-w3): mn.M28
+    let env = crate::runtime::env::Env::of(ui);
+    let index = SearchIndex::new(&env.folder(), ENTRIES.as_slice(), &Synonyms::of(&env));
+    let out = CommandPalette::new("Command palette", ENTRIES.as_slice(), &index, Bind::bound(&mut open))
         .recents(Bind::bound(data.value("recents", recents)))
         .show(ui);
     *data.value("open", true) = open;

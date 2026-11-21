@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::browser::{BrowserTools, PresetBrowser, ThumbPainter};
 use super::event::{PresetEvent, PresetOutput};
 use super::footer::PresetFooterOptions;
-use super::model::{CellShape, PresetRow, PreviewPaint, ThumbInfo};
+use super::model::{CellShape, PresetRow, PresetRowMenu, PreviewPaint, ThumbInfo};
 use super::state::{DefaultOpen, PresetState, PresetView};
 use super::words::PresetWords;
 use crate::contract::{
@@ -31,6 +31,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook, UiTokens};
 use crate::tile_grid::TileZoom;
 use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PressPhase, Sense, Value};
+use craft_keymap::Mods;
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
 
@@ -108,6 +109,8 @@ pub struct PresetPickerOutput<K> {
     pub create: bool,
     /// The row `PresetPicker::detach_row` added was chosen in this pass; the popover has closed.
     pub detach: bool,
+    /// The modifiers the pick carried; `Mods::NONE` when nothing was picked.
+    pub mods: Mods,
 }
 
 impl<K: Value> Outcome for PresetPickerOutput<K> {
@@ -183,7 +186,7 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     can_move: Option<RowTest<'a, K>>,
     /// Whether a secondary click or the context-menu key opens the browser's row menu.
     #[prop]
-    row_menu: bool,
+    row_menu: PresetRowMenu,
     /// Shown, muted, while the value is no preset of the rows.
     #[prop(into)]
     placeholder: Option<Label>,
@@ -242,6 +245,13 @@ struct Session {
 }
 
 impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
+    /// Paints the tip that shows on hover over a tile or row of the picker's browser.
+    #[must_use]
+    pub fn tip(self, f: impl Fn(&mut Ui, &K) + 'a) -> Self {
+        let _ = (self, f);
+        todo!("ap.AP3")
+    }
+
     /// A picker of patterns, built as [`new`](PresetPicker::new) is: the face shows the picked pattern's tile.
     pub fn pattern(label: impl Into<Label>, value: Bind<'a, Option<K>>, rows: &'a [PresetRow<K>], state: Bind<'a, PresetState<K>>) -> Self {
         Self::new(label, value, rows, state).field(PickerField::Thumbnail).cell_shape(CellShape::Square)
@@ -266,7 +276,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             can_rename: None,
             can_delete: None,
             can_move: None,
-            row_menu: true,
+            row_menu: PresetRowMenu::Standard,
             placeholder: None,
             display_name: None,
             caption: None,
@@ -468,6 +478,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
                 edit_requested,
                 create: false,
                 detach: false,
+                mods: Mods::NONE,
             };
             let mut pick: Option<(K, bool)> = None;
             if let Some(browsed) = browsed {
@@ -514,6 +525,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
                 edit_requested: false,
                 create: false,
                 detach: false,
+                mods: Mods::NONE,
             },
         }
     }

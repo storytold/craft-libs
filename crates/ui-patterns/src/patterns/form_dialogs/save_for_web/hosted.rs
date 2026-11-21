@@ -2,11 +2,15 @@
 
 #[cfg(doc)]
 use super::MATTE_COLOR_KEY;
-use super::model::{Animation, SaveForWebOptions, SaveForWebResult, WantedVariant, WebPreset, WebVariant};
-use super::{SaveForWebDialog, WebPictures, WebSlice, WebView, result_of, save_request};
+use super::model::{
+    Animation, ColorTable, ColorTableEvent, OptimizeAnswer, OptimizeRequest, SaveForWebOptions, SaveForWebResult, TableMarks, WantedVariant,
+    WebDocument, WebFormat, WebPreset, WebPresetEvent, WebVariant,
+};
+use super::{BrowserPreview, SaveForWebDialog, WebPictures, WebSlice, WebView, result_of, save_request};
 use crate::contract::Bind;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::host_requests::HostRequests;
+use crate::runtime::env::Label;
 use crate::runtime::memory::SaveKey;
 use crate::runtime::requests::{ColorRequest, PathRequest};
 use craft_behavior::PixelSize;
@@ -56,6 +60,97 @@ impl HostedSaveForWeb {
     pub fn slices(mut self, slices: Vec<WebSlice>) -> Self {
         self.slices = slices;
         self
+    }
+
+    /// Picks the variant: a raster or a vector document.
+    #[must_use]
+    pub fn document(self, document: WebDocument) -> Self {
+        let _ = (self, document);
+        todo!("ex.W1")
+    }
+
+    /// The formats the host encodes, in list order.
+    #[must_use]
+    pub fn formats(self, formats: Vec<WebFormat>) -> Self {
+        let _ = (self, formats);
+        todo!("ex.W1")
+    }
+
+    /// The Color Table list the host offers.
+    #[must_use]
+    pub fn color_tables(self, tables: Vec<ColorTable>) -> Self {
+        let _ = (self, tables);
+        todo!("ex.W1")
+    }
+
+    /// Whether the zoom row has Preview in Browser.
+    #[must_use]
+    pub fn browser_preview(self, preview: BrowserPreview) -> Self {
+        let _ = (self, preview);
+        todo!("ex.W4")
+    }
+
+    /// Shows "Optimize to File Size…" under the Preset row.
+    #[must_use]
+    pub fn optimize(self) -> Self {
+        let _ = self;
+        todo!("ex.W8")
+    }
+
+    /// Preview in Browser was pressed since the last call, once; the host previews `current()`.
+    pub fn take_browser_preview(&mut self) -> bool {
+        let _ = self;
+        todo!("ex.W4")
+    }
+
+    /// What the user did to the presets since the last call; the host stores them and gives the new list with
+    /// `set_presets`.
+    pub fn take_preset_events(&mut self) -> Vec<WebPresetEvent> {
+        let _ = self;
+        todo!("ex.W7")
+    }
+
+    /// Replaces the Preset list on an open dialog.
+    pub fn set_presets(&mut self, presets: Vec<WebPreset>) {
+        let _ = (self, presets);
+        todo!("ex.W7")
+    }
+
+    /// What the host's colour table says, for the cell marks.
+    pub fn set_marks(&mut self, marks: TableMarks) {
+        let _ = (self, marks);
+        todo!("ex.W10")
+    }
+
+    /// The colour table edits since the last call.
+    pub fn take_table_events(&mut self) -> Vec<ColorTableEvent> {
+        let _ = self;
+        todo!("ex.W10")
+    }
+
+    /// The Optimize rows opened since the last call; the host answers the opening size.
+    pub fn take_optimize_open(&mut self) -> bool {
+        let _ = self;
+        todo!("ex.W8")
+    }
+
+    /// The Desired File Size the rows open at, in bytes (32 K for `None`).
+    pub fn answer_optimize_start(&mut self, bytes: Option<u64>) {
+        let _ = (self, bytes);
+        todo!("ex.W8")
+    }
+
+    /// The search to run, once.
+    pub fn take_optimize_request(&mut self) -> Option<OptimizeRequest> {
+        let _ = self;
+        todo!("ex.W8")
+    }
+
+    /// The host's answer to the search: `Ok` closes the rows and shows the result line; `Err` keeps them open with the
+    /// reason.
+    pub fn answer_optimize(&mut self, answer: Result<OptimizeAnswer, Label>) {
+        let _ = (self, answer);
+        todo!("ex.W8")
     }
 
     /// The options as the user left them.
@@ -177,6 +272,14 @@ impl StackDialog for HostedSaveForWeb {
             return None;
         };
         Some(result_of(self.options.clone(), path, self.pixels, self.view, self.remember.clone()))
+    }
+
+    fn take_color_request(&mut self) -> Option<ColorRequest> {
+        self.requests.take_color()
+    }
+
+    fn answer_color(&mut self, key: &str, color: Srgba) {
+        self.requests.answer_color(key, color);
     }
 
     /// Waiting while the file dialog Save… asked for is open.

@@ -186,6 +186,17 @@ pub struct ListManagerChoice {
     pub name: String,
 }
 
+impl ListManagerChoice {
+    /// The action id of an in-place rename ([`ListManager::renames`]).
+    pub const RENAME: &'static str = "rename";
+
+    /// Whether the choice is an in-place rename.
+    pub fn is_rename(&self) -> bool {
+        let _ = self;
+        todo!("ch.K25")
+    }
+}
+
 /// What a list manager reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -306,6 +317,14 @@ impl<'a> ListManager<'a> {
             name: None,
             open: None,
         }
+    }
+
+    /// Entries of `kind` rename in place: a commit reports a [`ListManagerChoice`] with the `RENAME` action, the
+    /// entry's id and the trimmed name, and the dialog stays open.
+    #[must_use]
+    pub fn renames(self, kind: u32) -> Self {
+        let _ = (self, kind);
+        todo!("ch.K25")
     }
 
     /// Shows the dialog.

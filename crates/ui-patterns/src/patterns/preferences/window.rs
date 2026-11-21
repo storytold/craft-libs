@@ -214,7 +214,7 @@ impl<'a> PreferencesWindow<'a> {
                 {
                     session.host.reset_page(&page.id);
                 }
-                session.host.nested(ui.ctx());
+                session.host.nested(ui); // P3(shell-w5): sh.K29
                 session.page = snap.shown.map(|page| page.id);
                 session.commit(cx);
             });

@@ -207,7 +207,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         let space = float_space(bounds, &sizes, self.config, self.specs);
         let spec = |panel: &P| spec_in(self.specs, panel);
         let protected = |panel: &P| (self.permissions)(panel).is_protected();
-        let (hide, _) = hide::resolved(self.hide, shell.as_ref());
+        let (hide, _) = hide::resolved(self.hide, shell.as_ref(), None); // P3(chrome-w2): ch.K7
         let mut target = DockDropTarget::new(&ctx, self.dock, self.layout, self.permissions);
         target.rtl = self.rtl;
         target.space = Some(&space);

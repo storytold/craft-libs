@@ -6,7 +6,7 @@ use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, RowKin
 use crate::runtime::env::UnitKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
-use egui::{Context, Ui};
+use egui::Ui;
 
 /// The settings the stories edit.
 #[derive(Clone, Debug, PartialEq)]
@@ -102,7 +102,7 @@ impl PreferencesModel for Demo {
         }
     }
 
-    fn nested(&mut self, _: &Context) {}
+    fn nested(&mut self, _: &mut Ui) {} // P3(shell-w5): sh.K29
 }
 
 fn window(ui: &mut Ui, data: &mut StoryData, state: PreferencesState, demo: Demo) -> StoryOutput {

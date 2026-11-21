@@ -2,7 +2,7 @@
 //! reopens with its last-used values, and Reset restores the opening ones.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +84,10 @@ pub struct DialogFields {
     values: BTreeMap<String, FieldValue>,
     #[serde(skip)]
     opening: BTreeMap<String, FieldValue>,
+    /// The keys marked mixed ([`DialogFields::set_mixed`]).
+    #[serde(skip)]
+    #[allow(dead_code)] // P3(forms-w1): ty.X64
+    mixed: BTreeSet<String>,
 }
 
 /// Equal when the values are; the opening snapshot is bookkeeping, not content.
@@ -101,12 +105,25 @@ impl DialogFields {
 
     /// Builds from `(key, value)` pairs.
     pub fn from_pairs(pairs: impl IntoIterator<Item = (impl Into<String>, impl Into<FieldValue>)>) -> Self {
-        Self { values: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(), opening: BTreeMap::new() }
+        Self { values: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect(), opening: BTreeMap::new(), mixed: BTreeSet::new() }
     }
 
     /// Sets `key` to `value`, replacing any earlier value.
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<FieldValue>) {
         self.values.insert(key.into(), value.into());
+    }
+
+    /// Marks `key` as differing over what the dialog or panel edits: its value is removed and its row shows blank. The
+    /// marks are not serialized, so a mixed key is absent from `json_fields` and every answer.
+    pub fn set_mixed(&mut self, key: impl Into<String>) {
+        let _ = (self, key);
+        todo!("ty.X64")
+    }
+
+    /// Whether `key` is marked mixed.
+    pub fn is_mixed(&self, key: &str) -> bool {
+        let _ = (self, key);
+        todo!("ty.X65")
     }
 
     /// The value under `key`, if any.

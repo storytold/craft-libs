@@ -35,7 +35,8 @@ impl TabId {
         match self {
             TabId::Recent => RECENT_KEY.to_owned(),
             TabId::Saved => SAVED_KEY.to_owned(),
-            TabId::Category(at) => categories.get(at).map_or_else(|| RECENT_KEY.to_owned(), |category| category.id.to_owned()),
+            // P3(files-w3): fl.F26
+            TabId::Category(at) => categories.get(at).map_or_else(|| RECENT_KEY.to_owned(), |category| category.id.to_string()),
         }
     }
 
@@ -224,14 +225,15 @@ fn tab_title(tab: TabId, setup: &Setup, words: &NewDocumentWords) -> Label {
     match tab {
         TabId::Recent => words.recent.clone(),
         TabId::Saved => words.saved.clone(),
-        TabId::Category(at) => setup.categories.get(at).map_or_else(Label::default, |category| match category.id {
+        // P3(files-w3): fl.F26
+        TabId::Category(at) => setup.categories.get(at).map_or_else(Label::default, |category| match category.id.as_ref() {
             "photo" => words.photo.clone(),
             "print" => words.print.clone(),
             "art" => words.art.clone(),
             "web" => words.web.clone(),
             "mobile" => words.mobile.clone(),
             "film" => words.film.clone(),
-            _ => Label::from(category.title.to_owned()),
+            _ => category.title.clone(),
         }),
     }
 }

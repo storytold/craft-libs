@@ -133,6 +133,21 @@ pub struct PresetRow<K> {
     pub tooltip: Option<String>,
     /// The name a screen reader reads, instead of the label (and caption): the label stays what a rename starts from.
     pub accessible_name: Option<String>,
+    /// List view: icons after the label at the row's end; the grid ignores them.
+    pub trailing: Vec<IconId>,
+}
+
+/// What the row menu of a browser or picker shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PresetRowMenu {
+    /// Rename, Move to, Delete, a divider, then the host's `row_items`.
+    #[default]
+    Standard,
+    /// Only the host's `row_items`.
+    Host,
+    /// No row menu.
+    Off,
 }
 
 impl<K> PresetRow<K> {
@@ -149,6 +164,7 @@ impl<K> PresetRow<K> {
             dimmed: false,
             tooltip: None,
             accessible_name: None,
+            trailing: Vec::new(),
         }
     }
 

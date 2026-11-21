@@ -5,6 +5,7 @@ use crate::patterns::form_dialogs::{LinkedSize, MAX_DOCUMENT_SIDE};
 use crate::runtime::env::{Label, UnitKind, Units};
 use craft_behavior::PixelSize;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 use super::NewDocumentWords;
 
@@ -322,21 +323,23 @@ impl DocumentPreset {
 /// A category tab and its cards.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
-pub struct PresetCategory {
+pub struct PresetCategory<P = DocumentPreset> {
     /// Stable id: `"photo"`.
-    pub id: &'static str,
-    /// The English title, shown when no word names the id.
-    pub title: &'static str,
+    pub id: Cow<'static, str>,
+    /// The title, shown when no word names the id.
+    pub title: Label,
     /// The category's cards in display order.
-    pub presets: Vec<DocumentPreset>,
+    pub presets: Vec<P>,
 }
 
-impl PresetCategory {
-    /// The category `id` titled `title` in English, with its `presets`.
-    pub fn new(id: &'static str, title: &'static str, presets: Vec<DocumentPreset>) -> Self {
-        Self { id, title, presets }
+impl<P> PresetCategory<P> {
+    /// The category `id` titled `title`, with its `presets`.
+    pub fn new(id: impl Into<Cow<'static, str>>, title: impl Into<Label>, presets: Vec<P>) -> Self {
+        Self { id: id.into(), title: title.into(), presets }
     }
+}
 
+impl PresetCategory<DocumentPreset> {
     /// PhotoCraft's categories in tab order: Photo, Print, Art & Illustration, Web, Mobile, Film & Video, with their
     /// presets. Recent and Saved are not in this list: the dialog adds them first and last.
     pub fn standard() -> Vec<PresetCategory> {

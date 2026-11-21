@@ -639,7 +639,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> PaneArea<'a, P> {
 
         let shown_root = root.show(ui, |ui, cx| {
             let Some(sizes) = cx.style::<DockRoot<'_, Vec<PaneRequest<P>>>>().map(|style| *style.sizes()) else { return };
-            let (docks, floats) = cx.shell().as_ref().map_or((true, true), |shell| (shell.dock_visible(), shell.floating_visible()));
+            let (docks, floats) = cx.shell().as_ref().map_or((true, true), |shell| (shell.dock_visible(PaneEdge::Center), shell.floating_visible())); // P3(chrome-w2): ch.K1
             let bounds = cx.shell().map_or(cx.rect, |shell| shell.float_bounds());
             let mut order = [PaneEdge::Bottom, PaneEdge::Top, PaneEdge::Start, PaneEdge::End];
             if rtl {

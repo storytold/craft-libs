@@ -31,6 +31,7 @@ craft_ui::words! {
         success: "reportDialog.success" = "Success";
         note: "reportDialog.note" = "Note";
         line: template "reportDialog.line" = "{tone}: {text}";
+        line_detail: template "reportDialog.lineDetail" = "{tone}: {text} ({detail})";
     }
 }
 
@@ -42,12 +43,47 @@ pub struct ReportNote {
     pub tone: Tone,
     /// The note's text.
     pub text: Label,
+    /// A muted second part after the text (a place such as "line 3", a count).
+    pub detail: Option<Label>,
+    /// The text is shown in the mono type role.
+    pub code: bool,
 }
 
 impl ReportNote {
     /// A note of weight `tone` with `text`.
     pub fn new(tone: Tone, text: impl Into<Label>) -> Self {
-        ReportNote { tone, text: text.into() }
+        ReportNote { tone, text: text.into(), detail: None, code: false }
+    }
+
+    /// A muted second part after the text.
+    #[must_use]
+    pub fn detail(self, detail: impl Into<Label>) -> Self {
+        let _ = (self, detail);
+        todo!("mn.M53")
+    }
+
+    /// Shows the text in the mono type role.
+    #[must_use]
+    pub fn code(self) -> Self {
+        let _ = self;
+        todo!("mn.M54")
+    }
+}
+
+/// A heading over its notes.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ReportGroup {
+    /// The group's heading.
+    pub heading: Label,
+    /// The notes under it.
+    pub notes: Vec<ReportNote>,
+}
+
+impl ReportGroup {
+    /// A group under `heading` with `notes`.
+    pub fn new(heading: impl Into<Label>, notes: Vec<ReportNote>) -> Self {
+        ReportGroup { heading: heading.into(), notes }
     }
 }
 
@@ -83,6 +119,9 @@ pub struct ReportDialog<'a> {
     /// and Copy hands them back as they are.
     #[prop]
     lines: Vec<Label>,
+    /// Groups of notes shown after the flat notes: each heading, then its notes. The note count counts every note.
+    #[prop]
+    groups: Vec<ReportGroup>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
@@ -91,7 +130,7 @@ pub struct ReportDialog<'a> {
 impl<'a> ReportDialog<'a> {
     /// A report titled `title` with one `summary` line and the `notes`.
     pub fn new(title: impl Into<Label>, summary: impl Into<Label>, notes: Vec<ReportNote>) -> Self {
-        ReportDialog { title: title.into(), summary: summary.into(), notes, lines: Vec::new(), open: None }
+        ReportDialog { title: title.into(), summary: summary.into(), notes, lines: Vec::new(), groups: Vec::new(), open: None }
     }
 
     /// The notes as the Copy button hands them back, one per line with the tone's word first; plain
@@ -124,7 +163,7 @@ impl<'a> ReportDialog<'a> {
         let words = env.words::<ReportWords>();
         let common = env.words::<CommonWords>();
         let text = self.as_text(&env);
-        let ReportDialog { title, summary, notes, lines, open } = self;
+        let ReportDialog { title, summary, notes, lines, groups: _, open } = self;
         let accept = FooterButton::new(common.ok.clone(), DialogRole::Accept);
         let copy = FooterButton::new(words.copy.clone(), DialogRole::Other).stays_open(true);
         let mut dialog = Dialog::new(title).buttons([accept, copy]);
@@ -176,6 +215,13 @@ impl HostedReport {
         HostedReport { id: crate::dialog::dialog_id("report"), title: title.into(), summary: summary.into(), lines, open: true, copied: None }
     }
 
+    /// Shows and copies `groups` after the lines; `json_fields` lists their headings and note texts.
+    #[must_use]
+    pub fn groups(self, groups: Vec<ReportGroup>) -> Self {
+        let _ = (self, groups);
+        todo!("mn.M58")
+    }
+
     /// The text the Copy button copied since the last call, once. The app puts it on the clipboard.
     pub fn take_copied(&mut self) -> Option<String> {
         self.copied.take()
@@ -196,6 +242,7 @@ impl crate::dialog::StackDialog for HostedReport {
             summary: self.summary.clone(),
             notes: Vec::new(),
             lines,
+            groups: Vec::new(),
             open: Some(Bind::bound(&mut self.open)),
         }
         .show(ui);

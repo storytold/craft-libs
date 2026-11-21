@@ -19,6 +19,13 @@ enum Shown {
     },
 }
 
+/// The Summary's lines for `settings` against `base`, then the `warnings`, with LF line breaks (CR and CRLF in values
+/// become LF) and a final LF: what the Summary section shows and Save Summary… writes.
+pub fn summary_text(words: &PdfExportWords, settings: &PdfSettings, base: &PdfSettings, warnings: &[String]) -> String {
+    let _ = (words, settings, base, warnings);
+    todo!("ex.P14")
+}
+
 fn choice<T: Choice + PartialEq>(kind: &'static str, value: T) -> Shown {
     let at = T::ALL.iter().position(|candidate| *candidate == value).unwrap_or_default();
     Shown::Choice { kind, id: T::IDS.get(at).copied().unwrap_or_default(), label: T::LABELS.get(at).copied().unwrap_or_default() }
@@ -100,7 +107,7 @@ fn leaves(settings: &PdfSettings) -> Vec<(&'static str, Shown)> {
     out.extend([
         ("output.conversion", choice("colorConversion", output.conversion)),
         ("output.destination", Shown::Text(output.destination.clone())),
-        ("output.profiles", choice("profileInclusion", output.profiles)),
+        ("output.profiles", choice("profileInclusion", output.profiles.unwrap_or_default())), // P3(export-w5): ex.P2
         ("output.outputIntent", Shown::Text(output.output_intent.clone())),
         ("output.outputCondition", Shown::Text(output.output_condition.clone())),
         ("output.outputConditionId", Shown::Text(output.output_condition_id.clone())),

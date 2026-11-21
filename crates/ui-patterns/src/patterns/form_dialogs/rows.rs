@@ -28,7 +28,7 @@ use crate::text::{NumberField, RangeAlert, SelectableText, TextField};
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
 
-use craft_behavior::{EditEvent, IconId, Mixed, NumberCodec};
+use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec};
 use craft_host::PickRequest;
 
 use craft_theme::Srgba;
@@ -74,6 +74,13 @@ pub struct ParamRowsOutput {
     pub listing: Option<ListingRequest>,
     /// A typed value a row clamped to its range, in the pass it committed: the host shows the range alert.
     pub out_of_range: Option<RangeAlert>,
+    /// The pass's edits of the whole values, lifted from the rows' controls: a gesture as begin, update, commit or
+    /// cancel with the control's gesture id, a one-step change as a set; empty when nothing changed.
+    pub events: EditEvents<DialogFields>,
+    /// A row's text does not parse: OK and Enter wait while it stays so.
+    pub unparsed: bool,
+    /// The help link a row's button (`Param::help_link`) reported in this pass.
+    pub help_link: Option<String>,
 }
 
 impl Outcome for ParamRowsOutput {
@@ -217,7 +224,19 @@ impl<'a> ParamRows<'a> {
         let shown = if read_only { with_env(ui, |scope| scope.read_only = Some(true), group) } else { group(ui) };
         let (pick_color, path, eyedropper, listing, out_of_range) =
             if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range) };
-        ParamRowsOutput { response: shown.output, changed, values, pick_color, path, eyedropper, listing, out_of_range }
+        ParamRowsOutput {
+            response: shown.output,
+            changed,
+            values,
+            pick_color,
+            path,
+            eyedropper,
+            listing,
+            out_of_range,
+            events: EditEvents::default(),
+            unparsed: false,
+            help_link: None,
+        }
     }
 }
 

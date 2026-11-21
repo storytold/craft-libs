@@ -7,7 +7,7 @@ mod stories;
 use super::browser::PresetBrowser;
 use super::event::PresetEvent;
 use super::footer::PresetFooterOptions;
-use super::model::PresetRow;
+use super::model::{PresetRow, PresetRowMenu};
 use super::state::{PresetState, PresetView};
 use super::words::PresetWords;
 use crate::contract::{Bind, Entry, NoValue, Outcome, Pattern, Props, Show as _, ShowContainer as _};
@@ -152,7 +152,7 @@ impl<'a, G: Value, K: Clone + Eq + Hash + Send + Sync + 'static> PresetManager<'
                     PresetBrowser::new(title.clone(), Bind::<PresetState<K>>::kept(), rows)
                         .view_lock(PresetView::List)
                         .toolbar(false)
-                        .row_menu(true)
+                        .row_menu(PresetRowMenu::Standard) // P3(appearance-w5): ap.AP5
                         .can_rename(|key| can_rename.as_ref().is_none_or(|test| test.passes(key)))
                         .can_delete(|key| can_delete.as_ref().is_none_or(|test| test.passes(key)))
                         .empty(empty.clone())

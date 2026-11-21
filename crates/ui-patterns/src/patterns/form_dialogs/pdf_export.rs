@@ -1,5 +1,6 @@
 //! `PdfExportDialog`: File > Save as PDF over [`craft_pdf::settings`].
 
+mod hosted;
 mod sections;
 mod summary;
 mod words;
@@ -7,8 +8,9 @@ mod words;
 #[cfg(feature = "testing")]
 mod stories;
 
+pub use self::hosted::{HostedPdfExport, PdfExportAnswer};
 use self::sections::{ArtboardChoice, PasswordSwitches, Sections};
-pub use self::summary::RangeError;
+pub use self::summary::{RangeError, summary_text};
 pub(crate) use self::summary::{check_range, differences};
 pub use self::words::PdfExportWords;
 use super::form::FormDialog;
@@ -21,7 +23,7 @@ use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow};
 use crate::notices::{Notice, NoticeLayout};
-use crate::patterns::presets::{NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetPicker, PresetRow, PresetState};
+use crate::patterns::presets::{NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetPicker, PresetRow, PresetState};
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, UnitKind};
 use crate::runtime::overlay::CloseReason;
@@ -41,6 +43,29 @@ pub enum PdfArtboards {
     All,
     /// A 1-based range such as `"1-3, 5"`, which the app reads.
     Range(String),
+    /// One page of the art's bounds. General has no Artboards group.
+    ArtBounds,
+}
+
+/// What the dialog is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PdfExportMode {
+    /// Save a PDF: OK answers with the settings and the artboards.
+    #[default]
+    Save,
+    /// Edit a preset: a name field with its refusal, a Description box in place of Artboards, no Custom…, the OK
+    /// label "Save Preset", and a Summary that compares with the default preset.
+    PresetEditor,
+}
+
+/// The name and description a preset editor edits.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PresetDraft {
+    /// The preset's name.
+    pub name: String,
+    /// The preset's description.
+    pub description: String,
 }
 
 /// What Save PDF answers with at OK: the settings and the artboards. The app asks for the file.
@@ -148,6 +173,12 @@ pub struct PdfExportOutput {
     pub settings: Option<PdfSettings>,
     /// What the user did to the app's presets, in order.
     pub presets: Vec<PdfPresetEvent>,
+    /// Custom… beside the flattener select was pressed this pass.
+    pub custom_flattener: bool,
+    /// Save Summary… under the Summary groups was pressed this pass, with the summary text.
+    pub save_summary: Option<String>,
+    /// The preset editor's name and description, when they changed this pass.
+    pub draft: Option<PresetDraft>,
 }
 
 impl Outcome for PdfExportOutput {
@@ -253,6 +284,24 @@ pub struct PdfExportDialog<'a> {
     /// The number of artboards of the document, which a typed range is checked against.
     #[prop]
     artboard_count: Option<usize>,
+    /// What the dialog is for.
+    #[prop]
+    mode: PdfExportMode,
+    /// Binds the preset editor's name and description.
+    #[prop]
+    preset_draft: Option<Bind<'a, PresetDraft>>,
+    /// Whether a typed preset name may be used, in the preset editor.
+    #[prop(func = "Fn(&str) -> Option<PresetError>")]
+    check_name: Option<NameCheck<'a>>,
+    /// Binds the shown section.
+    #[prop]
+    section: Option<Bind<'a, PdfSection>>,
+    /// While on, the flattener select shows `[Custom]`.
+    #[prop]
+    custom_flattener: bool,
+    /// Warnings of the host, shown after the settings' own.
+    #[prop]
+    host_warnings: &'a [String],
 }
 
 impl<'a> PdfExportDialog<'a> {
@@ -273,6 +322,12 @@ impl<'a> PdfExportDialog<'a> {
             document_bleed: [0.0; 4],
             artboards: PdfArtboards::All,
             artboard_count: None,
+            mode: PdfExportMode::default(),
+            preset_draft: None,
+            check_name: None,
+            section: None,
+            custom_flattener: false,
+            host_warnings: &[],
         }
     }
 
@@ -292,6 +347,12 @@ impl<'a> PdfExportDialog<'a> {
             document_bleed,
             artboards,
             artboard_count,
+            mode: _,
+            preset_draft: _,
+            check_name: _,
+            section: _,
+            custom_flattener: _,
+            host_warnings: _,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<PdfExportWords>();
@@ -321,6 +382,7 @@ impl<'a> PdfExportDialog<'a> {
                     match &artboards {
                         PdfArtboards::All => ArtboardChoice::default(),
                         PdfArtboards::Range(range) => ArtboardChoice { range_only: true, range: range.clone() },
+                        PdfArtboards::ArtBounds => todo!("ex.P7"),
                     },
                     Some(preset.clone().unwrap_or_else(|| default_preset_name(&app))),
                 ));
@@ -492,6 +554,15 @@ impl<'a> PdfExportDialog<'a> {
         });
 
         let result = shown.accepted.map(|options| PdfExportResult { options, artboards: chosen });
-        PdfExportOutput { response: shown.response, closed: shown.closed, result, settings: shown.value, presets: events }
+        PdfExportOutput {
+            response: shown.response,
+            closed: shown.closed,
+            result,
+            settings: shown.value,
+            presets: events,
+            custom_flattener: false,
+            save_summary: None,
+            draft: None,
+        }
     }
 }

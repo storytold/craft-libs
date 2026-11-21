@@ -18,7 +18,8 @@ mod path_row;
 mod preview;
 
 pub use dialog::{
-    BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ResetFooter, ResetPick, set_param_field,
+    BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamPresets, ParamResult, ResetFooter, ResetPick,
+    set_param_field,
 };
 pub use form::{FormCx, FormDialog, FormDialogWords, FormOutput};
 pub use host_requests::{HostRequests, PreviewRequest};
@@ -37,7 +38,7 @@ mod report;
 
 pub use list_manager::{ActionEnabled, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerOutput, ListManagerWords};
 pub use password::{PasswordAnswer, PasswordDialog, PasswordOutput, PasswordPurpose, PasswordStrength, PasswordWords, Secret};
-pub use report::{HostedReport, ReportDialog, ReportNote, ReportOutput, ReportWords};
+pub use report::{HostedReport, ReportDialog, ReportGroup, ReportNote, ReportOutput, ReportWords};
 
 mod file_list;
 
@@ -53,9 +54,9 @@ pub use sizing::{
 mod new_document;
 
 pub use new_document::{
-    BACKGROUND_COLOR_KEY, BackgroundContents, BitDepth, ColorMode, ColorProfiles, DocumentOptions, DocumentPreset, HostedNewDocument,
-    NewDocumentDialog, NewDocumentOutput, NewDocumentPresetWords, NewDocumentResult, NewDocumentWords, Orientation, PIXEL_ASPECTS, PresetCategory,
-    SQUARE_PIXELS,
+    BACKGROUND_COLOR_KEY, BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, ColorProfiles, DetailsCx, DocumentCard, DocumentOptions,
+    DocumentPreset, DocumentSettings, HostedNewDocument, NewDocumentDialog, NewDocumentOutput, NewDocumentPresetWords, NewDocumentResult,
+    NewDocumentWords, Orientation, PIXEL_ASPECTS, PresetCategory, RasterSetup, SQUARE_PIXELS,
 };
 
 mod about;
@@ -74,7 +75,7 @@ pub use guides::{
     GuideLayoutPreset, GuideLayoutResult, GuideLayoutValues, GuideLength, GuideRect, GuideTarget, GuideUnits, HostedGuideLayoutDialog,
     HostedNewGuideDialog, NEW_GUIDE_COLOR_KEY, NewGuideDialog, NewGuideOutput, NewGuideValues,
 };
-pub use properties::{HostedPropertiesDialog, PropertiesDialog, PropertiesOutput, PropertiesTab, PropertyRow};
+pub use properties::{HostedPropertiesDialog, PropertiesDialog, PropertiesOutput, PropertiesTab, PropertiesWords, PropertyRow, TabLayout};
 
 // canvas-navigator-a
 mod navigator_options;
@@ -94,14 +95,20 @@ pub use export::{
 // Save PDF.
 mod pdf_export;
 
-pub use pdf_export::{PdfArtboards, PdfExportDialog, PdfExportOutput, PdfExportResult, PdfExportWords, PdfPresetEvent, PdfSection, RangeError};
+pub use pdf_export::{
+    HostedPdfExport, PdfArtboards, PdfExportAnswer, PdfExportDialog, PdfExportMode, PdfExportOutput, PdfExportResult, PdfExportWords, PdfPresetEvent,
+    PdfSection, PresetDraft, RangeError, summary_text,
+};
 
 mod save_for_web;
+mod section_list;
 mod watermark;
 
 pub use save_for_web::{
-    Animation, ColorTable, Dither, HostedSaveForWeb, MATTE_COLOR_KEY, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions,
-    SaveForWebOutput, SaveForWebResult, SaveForWebWords, WantedVariant, WebFormat, WebMetadata, WebPane, WebPictures, WebPreset, WebSlice, WebSlices,
-    WebVariant, WebView,
+    Animation, BrowserPreview, ColorTable, ColorTableEdit, ColorTableEvent, Dither, HostedSaveForWeb, MATTE_COLOR_KEY, OptimizeAnswer,
+    OptimizeRequest, OptimizeScope, OptimizeStart, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions, SaveForWebOutput,
+    SaveForWebResult, SaveForWebWords, TableMarks, TableOrder, WEB_SPEEDS, WantedVariant, WebAntiAlias, WebDocument, WebFormat, WebMetadata, WebPane,
+    WebPictures, WebPreset, WebPresetEvent, WebSlice, WebSlices, WebVariant, WebView,
 };
+pub use section_list::SectionList;
 pub use watermark::{ROTATIONS, WATERMARK_IMAGE_KEY, Watermark, WatermarkOutput, WatermarkSettings, WatermarkStyle, WatermarkWords};

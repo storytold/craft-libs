@@ -67,6 +67,15 @@ craft_ui::words! {
         destination: "pdfExportDialog.destination" = "Destination";
         document_profile: "pdfExportDialog.documentProfile" = "Document profile";
         profile_inclusion: "pdfExportDialog.profileInclusion" = "Profile inclusion";
+        profile_default: "pdfExportDialog.profileDefault" = "Default";
+        long_pages: "pdfExportDialog.longPages" = "Write long pages in points";
+        custom: "pdfExportDialog.custom" = "Custom…";
+        custom_flattener: "pdfExportDialog.customFlattener" = "[Custom]";
+        save_summary: "pdfExportDialog.saveSummary" = "Save Summary…";
+        preset_name: "pdfExportDialog.presetName" = "Preset name";
+        description: "pdfExportDialog.description" = "Description";
+        save_preset: "pdfExportDialog.savePreset" = "Save Preset";
+        note_device_cmyk: "pdfExportDialog.noteDeviceCmyk" = "Colours are written as device CMYK, without profiles.";
         note_cmyk_only: "pdfExportDialog.noteCmykOnly" = "PDF/X-1a files are CMYK: every colour is converted to the destination (blank: the output intent's CMYK profile), untagged.";
         note_tagged: "pdfExportDialog.noteTagged" = "Files of this standard tag their colours with ICC profiles.";
         output_intent: "pdfExportDialog.outputIntent" = "Output Intent";
@@ -219,6 +228,7 @@ impl PdfExportWords {
             ("colorConversion", "none") => &self.no_conversion,
             ("colorConversion", "destination") => &self.convert_destination,
             ("colorConversion", "preserveNumbers") => &self.convert_preserve,
+            ("profileInclusion", craft_pdf::settings::UNSET_CHOICE) => &self.profile_default,
             ("profileInclusion", "none") => &self.no_profiles,
             ("profileInclusion", "all") => &self.all_profiles,
             ("profileInclusion", "destination") => &self.destination_profile,

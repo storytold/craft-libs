@@ -5,10 +5,13 @@
 mod parse;
 
 use super::fields::{DialogFields, FieldValue};
+use crate::contract::Tooltip;
 use crate::patterns::blend_keys::BlendKeyEntry;
-use crate::runtime::env::{Label, UnitKind};
+use crate::runtime::env::{Label, LengthUnits, UnitKind};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, ListingRequest, PathKind};
+use crate::text::StepArrows;
 use crate::value_drag::SliderScale;
+use craft_behavior::{EditEvents, NumberCodec};
 use craft_host::PickRequest;
 use craft_theme::Srgba;
 use egui::{Response, Ui};
@@ -81,6 +84,8 @@ pub enum ParamKind {
         options: Vec<(String, Label)>,
         /// The id selected when nothing is remembered; `None` selects the first option.
         default: Option<String>,
+        /// The detail line under each option, in option order; empty for a group without details.
+        details: Vec<Label>,
     },
     /// An angle dial with its field, in degrees.
     #[non_exhaustive]
@@ -209,7 +214,13 @@ impl ParamKind {
 
     /// A group of radio buttons over `(id, label)` options, in a section of its own titled by the parameter's label.
     pub fn radio(options: Vec<(String, Label)>, default: Option<String>) -> Self {
-        ParamKind::Radio { options, default }
+        ParamKind::Radio { options, default, details: Vec::new() }
+    }
+
+    /// A group of radio buttons whose options each carry a detail line: `(id, label, detail)`.
+    pub fn radio_with_details(options: Vec<(String, Label, Label)>, default: Option<String>) -> Self {
+        let _ = (options, default);
+        todo!("co.K27")
     }
 
     /// An angle dial with its field: one turn, -180 to 180, to a tenth of a degree.
@@ -275,7 +286,8 @@ impl ParamKind {
             ParamKind::Int { default, .. } => FieldValue::Int(*default),
             ParamKind::Number { default, .. } => FieldValue::Number(*default),
             ParamKind::Bool { default } => FieldValue::Bool(*default),
-            ParamKind::Choice { options, default } | ParamKind::Radio { options, default } => {
+            // P3(forms-w1): co.K27
+            ParamKind::Choice { options, default } | ParamKind::Radio { options, default, .. } => {
                 let initial = default.as_deref().or_else(|| options.first().map(|(id, _)| id.as_str()));
                 FieldValue::Text(initial.unwrap_or_default().to_owned())
             }
@@ -404,9 +416,22 @@ impl CustomContext {
         self.eyedropper = Some(request);
     }
 
+    /// Whether an Escape ended the row's sampling in the previous pass (the dialog claims Escape while a row samples).
+    pub fn sampling_ended(&self) -> bool {
+        let _ = self;
+        todo!("ap.AP11")
+    }
+
     /// Whether the row's dropper samples now: `true` while the row wants canvas presses to pick colours.
     pub fn sampling(&mut self, on: bool) {
         self.sampling = on;
+    }
+
+    /// Hands a custom row's control events to the rows, which lift them as a value row's: each event's gesture id,
+    /// phase and cancel reason, type-erased.
+    pub fn gesture<T>(&mut self, events: &EditEvents<T>) {
+        let _ = (self, events);
+        todo!("ef.F6")
     }
 
     /// The canvas the dialog's rows work on (`ParamDialog::canvas`), when it has one.
@@ -467,6 +492,9 @@ pub(crate) struct RowOptions {
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    /// The row or section stands beside the one before it ([`Param::beside`]).
+    #[allow(dead_code)] // P3(forms-w1): od.OD5
+    beside: bool,
     not_remembered: bool,
     /// The lines a multi-line text row shows.
     lines: Option<usize>,
@@ -477,6 +505,15 @@ pub(crate) struct RowOptions {
     searchable: bool,
     /// The keys a change of the row's value removes ([`Param::resets`]).
     resets: Vec<String>,
+}
+
+impl RowOptions {
+    /// Whether the row or section stands beside the one before it.
+    #[allow(dead_code)] // P3(forms-w1): od.OD5
+    pub(crate) fn beside(&self) -> bool {
+        let _ = self;
+        todo!("od.OD5")
+    }
 }
 
 /// The units of a number row ([`Param::number_with_units`]).
@@ -508,7 +545,7 @@ fn is_path_list(value: &FieldValue) -> bool {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct RowTexts {
     hint: Option<Label>,
-    tooltip: Option<Label>,
+    tooltip: Option<Tooltip>,
 }
 
 /// One row of a parameter form.
@@ -527,7 +564,7 @@ pub struct Param {
     pub enabled_when: Option<(String, Vec<FieldValue>)>,
     /// The row is shown only while `fields[key]` equals the value ([`Param::visible_when`]). A hidden row takes no
     /// space; its value stays in the fields and in the result.
-    pub visible_when: Option<(String, FieldValue)>,
+    pub visible_when: Option<(String, Vec<FieldValue>)>,
     /// A Browse button after a [`ParamKind::Text`] field.
     pub browse: Option<PathKind>,
     /// The hint and tooltip, boxed so rows without them stay small.
@@ -683,6 +720,85 @@ impl Param {
         Self::new(format!("section:{}", label.as_str()), label, ParamKind::Section)
     }
 
+    /// A section head that is a check box: it holds a `Bool` under `key`, and its rows take input only while it is
+    /// checked.
+    pub fn section_check(key: impl Into<String>, label: impl Into<Label>, default: bool) -> Self {
+        let _ = (key, label, default);
+        todo!("od.OD6")
+    }
+
+    /// A section head whose title is a disclosure, open by default: its rows hide while it is closed and keep their
+    /// values.
+    pub fn group(label: impl Into<Label>) -> Self {
+        let _ = label;
+        todo!("wg.W24")
+    }
+
+    /// Binds the row's control to the value's reset (`Bind::given(value).reset(default)`) and shows the label's reset
+    /// dot while the value differs from the default.
+    #[must_use]
+    pub fn resettable(self) -> Self {
+        let _ = self;
+        todo!("ef.F2")
+    }
+
+    /// On a [`Param::group`]: whether its disclosure starts open (the default is open).
+    #[must_use]
+    pub fn initially_open(self, on: bool) -> Self {
+        let _ = (self, on);
+        todo!("ef.F3")
+    }
+
+    /// Draws a `Bool` row as a footer button that shows the row's label while off and `on_label` while on; a press
+    /// flips the value and the dialog stays open.
+    #[must_use]
+    pub fn in_footer(self, on_label: impl Into<Label>) -> Self {
+        let _ = (self, on_label);
+        todo!("ex.E1")
+    }
+
+    /// The row or section stands beside the one before it; the pair falls under when the form lacks room.
+    #[must_use]
+    pub fn beside(self) -> Self {
+        let _ = self;
+        todo!("od.OD5")
+    }
+
+    /// Draws a `Number` row as a length: the stored unit in the binding, the shown unit in the field.
+    #[must_use]
+    pub fn length(self, lengths: LengthUnits) -> Self {
+        let _ = (self, lengths);
+        todo!("wg.W21")
+    }
+
+    /// Sets the `Number` row's codec.
+    #[must_use]
+    pub fn codec(self, codec: NumberCodec) -> Self {
+        let _ = (self, codec);
+        todo!("wg.W21")
+    }
+
+    /// Passes `arrows` to the `Number` row's field.
+    #[must_use]
+    pub fn step_arrows(self, arrows: StepArrows) -> Self {
+        let _ = (self, arrows);
+        todo!("wg.W22")
+    }
+
+    /// Passes labelled `marks` to the `Range` row's slider.
+    #[must_use]
+    pub fn marks_labelled<L: Into<Label>>(self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
+        let _ = (self, marks);
+        todo!("wg.W22")
+    }
+
+    /// Adds an icon button after the row's control that reports `link` as the help link; a press opens nothing.
+    #[must_use]
+    pub fn help_link(self, link: impl Into<String>) -> Self {
+        let _ = (self, link);
+        todo!("wg.W23")
+    }
+
     /// A number row with a unit menu after the field. `base` is the value in base units; the field shows
     /// `base / factor` of the chosen unit, and an edit stores `shown * factor`. The first of `units` is chosen at
     /// first (see [`Param::default_unit`]).
@@ -735,8 +851,16 @@ impl Param {
     /// otherwise it takes no space. Its value stays in the fields and in the result.
     #[must_use]
     pub fn visible_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
-        self.visible_when = Some((key.into(), value.into()));
+        self.visible_when = Some((key.into(), vec![value.into()]));
         self
+    }
+
+    /// The row is shown only while `fields[key]` is one of `values`; the one-value case is
+    /// [`visible_when`](Param::visible_when).
+    #[must_use]
+    pub fn visible_when_in(self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
+        let _ = (self, key, values);
+        todo!("od.OD4")
     }
 
     /// The row takes input only while `fields[key]` equals `value`; otherwise it is shown disabled. The one-value case
@@ -764,7 +888,7 @@ impl Param {
 
     /// Hover text for the whole row, label and control, of any kind.
     #[must_use]
-    pub fn tooltip(mut self, text: impl Into<Label>) -> Self {
+    pub fn tooltip(mut self, text: impl Into<Tooltip>) -> Self {
         self.texts.get_or_insert_default().tooltip = Some(text.into());
         self
     }
@@ -868,7 +992,7 @@ impl Param {
     }
 
     /// The row's tooltip text.
-    pub(crate) fn tooltip_text(&self) -> Option<&Label> {
+    pub(crate) fn tooltip_text(&self) -> Option<&Tooltip> {
         self.texts.as_deref()?.tooltip.as_ref()
     }
 
@@ -934,7 +1058,8 @@ impl Param {
 
     /// Whether the row is shown with `fields`.
     pub fn visible(&self, fields: &DialogFields) -> bool {
-        self.visible_when.as_ref().is_none_or(|(key, value)| fields.get(key) == Some(value))
+        // P3(forms-w1): od.OD4
+        self.visible_when.as_ref().is_none_or(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
     /// Whether the row takes input with `fields`.

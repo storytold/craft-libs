@@ -204,7 +204,13 @@ impl Sections<'_> {
             destinations.extend(profiles.iter().map(|name| (name.clone(), Label::from(name.clone()))));
             name_row(ui, "destination", &words.destination, &mut output.destination, destinations, converting);
             // A standard decides whether colours are tagged.
-            pick(ui, "profiles", "profileInclusion", &words.profile_inclusion, words, &mut output.profiles, standard == Standard::None);
+            // P3(export-w5): ex.P2 -- an unset `profiles` shows the default choice and stays unset until picked.
+            let before = output.profiles.unwrap_or_default();
+            let mut profile_choice = before;
+            pick(ui, "profiles", "profileInclusion", &words.profile_inclusion, words, &mut profile_choice, standard == Standard::None);
+            if profile_choice != before {
+                output.profiles = Some(profile_choice);
+            }
             if cmyk_only {
                 note(ui, &words.note_cmyk_only);
             } else if standard != Standard::None {
@@ -413,6 +419,22 @@ fn pick<T: Choice + PartialEq + Send + Sync>(
             *value = next;
         }
     });
+}
+
+/// A list of the choices of `T` with a first entry `unset` that stands for `None`.
+#[allow(dead_code, clippy::too_many_arguments)] // P3(export-w5): ex.P13
+fn pick_or_unset<T: Choice + PartialEq + Send + Sync>(
+    ui: &mut Ui,
+    id: &'static str,
+    kind: &str,
+    label: &Label,
+    words: &PdfExportWords,
+    value: &mut Option<T>,
+    unset: &Label,
+    enabled: bool,
+) {
+    let _ = (ui, id, kind, label, words, value, unset, enabled);
+    todo!("ex.P13")
 }
 
 /// A list of names (`value`, `label`); a current value that is not among them is added.

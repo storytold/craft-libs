@@ -14,14 +14,14 @@ pub use reorder::PresetReorder;
 
 use super::event::{PresetEvent, PresetOutput};
 use super::footer::{PresetFooter, PresetFooterEvent, PresetFooterOptions};
-use super::model::{CellShape, PresetRow, PresetTiles, ThumbInfo, children_end, has_captions};
+use super::model::{CellShape, PresetRow, PresetRowMenu, PresetTiles, ThumbInfo, children_end, has_captions};
 use super::state::{DefaultOpen, PresetState, PresetView};
 use super::words::PresetWords;
 use crate::bars::{Bar, BarKind};
 use crate::choice::Segmented;
 use crate::contract::{
-    Bind, BodyCx, CollectionEvent, DropMark, DropTarget, DropZone, Entry, ListDrag, OpenChange, Pattern, Props, Rename, ReorderMove, ReorderRule,
-    RowHeight, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
+    Bind, BodyCx, CollectionEvent, DropAt, DropMark, DropPlace, DropTarget, DropZone, Entry, ListDrag, OpenChange, Pattern, Props, Rename,
+    ReorderMove, ReorderRule, RowHeight, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
 };
 use crate::display::Divider;
 use crate::layout_components::Stack;
@@ -143,6 +143,21 @@ impl<'a, K> ThumbPainter<'a, K> {
     }
 }
 
+type RowItems<'a, K> = Box<dyn Fn(&K) -> Vec<Entry<String>> + 'a>;
+
+/// A drop target on the presets: a host payload of type `P` dropped onto a preset or between presets.
+pub struct PresetDrop<'a, K> {
+    _marker: std::marker::PhantomData<(&'a (), K)>,
+}
+
+impl<'a, K> PresetDrop<'a, K> {
+    /// Takes payloads of type `P` at `place` where `accepts` agrees; the drop comes back as `PresetEvent::Dropped`.
+    pub fn new<P: 'static>(place: DropPlace, accepts: impl Fn(&P, &DropAt<K>) -> bool + 'a) -> Self {
+        let _ = (place, accepts);
+        todo!("ap.AP2")
+    }
+}
+
 type BrowserToolsFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 /// The host's controls at the reading end of the toolbar, after the search field: a picker's buttons and menus.
@@ -194,6 +209,16 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The selected preset, which the host keeps.
     #[prop]
     selected: Option<K>,
+    /// The host's selection. With `Bind::given`, every change comes out as `PresetEvent::Selection`; with
+    /// `Bind::bound`, the browser writes the binding.
+    #[prop]
+    selection: Option<Bind<'a, Selection<K>>>,
+    /// How picks select: `Single` by default; `Multi` gives the collection rules in both views.
+    #[prop]
+    select: SelectMode,
+    /// Scrolls this preset into view once.
+    #[prop]
+    reveal: Option<K>,
     /// The shape of a grid tile's picture.
     #[prop]
     cell_shape: CellShape,
@@ -219,7 +244,10 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Whether a secondary click or the context-menu key opens the row menu: Rename, Move to, Delete and the host's
     /// `extra_items`.
     #[prop]
-    row_menu: bool,
+    row_menu: PresetRowMenu,
+    /// The host's rows of the row menu for a target, after the standard ones (or alone with `PresetRowMenu::Host`).
+    #[prop(boxed = "Fn(&K) -> Vec<Entry<String>> + 'a")]
+    row_items: Option<RowItems<'a, K>>,
     /// Fixes the view, whatever the state says; the toolbar then has no view buttons.
     #[prop]
     view_lock: Option<PresetView>,
@@ -276,6 +304,9 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             state,
             rows,
             selected: None,
+            selection: None,
+            select: SelectMode::Single,
+            reveal: None,
             cell_shape: CellShape::Square,
             tiles: PresetTiles::Thumbnails,
             thumb_range: TileZoom::Ladder,
@@ -283,7 +314,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             toolbar: false,
             search: true,
             tools: None,
-            row_menu: true,
+            row_menu: PresetRowMenu::Standard,
+            row_items: None,
             view_lock: None,
             can_rename: None,
             can_delete: None,
@@ -299,6 +331,26 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             columns: 0,
             empty: None,
         }
+    }
+
+    /// Takes host payloads dropped onto a preset or between presets; each drop comes back as `PresetEvent::Dropped`.
+    #[must_use]
+    pub fn takes_drop(self, drop: PresetDrop<'a, K>) -> Self {
+        let _ = (self, drop);
+        todo!("ap.AP2")
+    }
+
+    /// Paints the tip that shows on hover over a tile or row.
+    #[must_use]
+    pub fn tip(self, f: impl Fn(&mut Ui, &K) + 'a) -> Self {
+        let _ = (self, f);
+        todo!("ap.AP3")
+    }
+
+    /// The id of the browser's list, the `ListDrag::list` of its drags: a footer action accepts only drags from its own
+    /// browser.
+    pub fn list_id(browser: Id) -> Id {
+        rows_id(browser)
     }
 
     /// Rows after the presets, below a divider, as a preset menu lists its commands ("Create preset", "Detach"). They
@@ -560,6 +612,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             state,
             rows,
             selected,
+            selection: _,
+            select: _,
+            reveal: _,
             cell_shape,
             tiles: tile_size,
             thumb_range,
@@ -568,6 +623,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             search,
             mut tools,
             row_menu,
+            row_items: _,
             view_lock,
             can_rename,
             can_delete,
@@ -930,7 +986,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 }
             }
 
-            if row_menu && let Some(target) = menu_target.clone().or_else(|| selected.clone()).filter(|key| row_of(key).is_some()) {
+            if row_menu != PresetRowMenu::Off // P3(appearance-w5): ap.AP5
+                && let Some(target) = menu_target.clone().or_else(|| selected.clone()).filter(|key| row_of(key).is_some())
+            {
                 let at = row_of(&target).unwrap_or_default();
                 let group = rows[at].is_group();
                 let deletable = can_delete.as_ref().is_none_or(|test| test.passes(&target));
