@@ -548,7 +548,7 @@ impl FilePanels {
             PickKind::Save => Kind::Save,
         });
         dialog.title = request.title.clone();
-        dialog.accept_label = request.accept_label.clone();
+        dialog.accept_label = request.accept_label.clone().filter(|label| !label.trim().is_empty());
         dialog.filters = request.filters.iter().map(|f| Filter { name: f.name.clone(), extensions: f.extensions.clone() }).collect();
         dialog.directory = start_folder(request, last_folder);
         if request.kind == PickKind::Save {

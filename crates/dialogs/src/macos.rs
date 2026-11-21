@@ -84,7 +84,7 @@ pub(crate) fn show_panel(d: &FileDialog, reply: Reply) -> Option<Panel> {
         // Panels have no title bar on current macOS; the message line shows above the files.
         panel.setMessage(Some(&NSString::from_str(title)));
     }
-    if let Some(label) = &d.accept_label {
+    if let Some(label) = d.accept_label.as_deref().filter(|label| !label.trim().is_empty()) {
         // The panel's default button ("Open" until set).
         panel.setPrompt(Some(&NSString::from_str(label)));
     }

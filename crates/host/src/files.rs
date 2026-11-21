@@ -53,8 +53,9 @@ pub struct PickRequest {
     pub purpose: String,
     /// The picker's title, when the platform shows one.
     pub title: Option<String>,
-    /// The label of the picker's default button (`"Place"` instead of `"Open"`), where the
-    /// platform lets an app set it. A picker that can't keeps the button as the system draws it.
+    /// The label of the picker's default button (`"Place"` instead of `"Open"`). An in-app
+    /// chooser always shows it; a system picker shows it where the platform lets an app set it,
+    /// and otherwise keeps the button as the system draws it.
     pub accept_label: Option<String>,
     /// The file types to offer.
     pub filters: Vec<FileFilter>,
@@ -119,8 +120,9 @@ impl PickRequest {
     }
 
     /// Sets the label of the picker's default button; see [`accept_label`](PickRequest::accept_label).
+    /// An empty or blank label is no label: the button keeps its own.
     pub fn accept_label(mut self, label: impl Into<String>) -> Self {
-        self.accept_label = Some(label.into());
+        self.accept_label = Some(label.into()).filter(|label| !label.trim().is_empty());
         self
     }
 
