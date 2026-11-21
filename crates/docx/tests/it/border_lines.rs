@@ -74,3 +74,16 @@ fn compound_cell_and_page_borders_are_written_back_as_read() {
         assert_eq!(xml.matches(&format!(r#"w:val="{val}""#)).count(), 1, "{val}: {xml}");
     }
 }
+
+/// The cell's diagonal borders (`w:tl2br`, `w:tr2bl`) round trip with their style, size and
+/// colour; a no-edit save used to drop both (#7122).
+#[test]
+fn diagonal_cell_borders_are_written_back_as_read() {
+    let body = format!(
+        r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcBorders>{}{}</w:tcBorders></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#,
+        r#"<w:tl2br w:val="single" w:sz="12" w:space="0" w:color="770088"/>"#, r#"<w:tr2bl w:val="dashed" w:sz="24" w:space="0" w:color="009933"/>"#
+    );
+    let xml = document_xml(&craft_docx::write(&craft_docx::read(&docx(&body)).unwrap()).unwrap());
+    assert!(xml.contains(r#"<w:tl2br w:val="single" w:sz="12" w:space="0" w:color="770088"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:tr2bl w:val="dashed" w:sz="24" w:space="0" w:color="009933"/>"#), "{xml}");
+}
