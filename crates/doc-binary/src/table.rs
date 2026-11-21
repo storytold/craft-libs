@@ -271,8 +271,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     }
     // The table indent is the row origin minus half the cell gap.
     if let Some(l) = dxa_left {
-        let gap = gap_half.unwrap_or(0) as f32 / 20.0;
-        r.indent = Some(((l as f32 / 20.0) - gap).clamp(-1584.0, 1584.0));
+        let indent_twips = i32::from(l) - i32::from(gap_half.unwrap_or(0));
+        r.indent = Some((indent_twips as f32 / 20.0).clamp(-1584.0, 1584.0));
     }
     r
 }
@@ -395,7 +395,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         let Some(info) = p.row else {
             if open {
                 if cells.is_empty() && cell.is_empty() {
-                    apply_row_edges(&mut rows, &row_edges, &mut grid);
+                    apply_row_edges(&mut rows, &row_edges, &mut grid, &mut props);
                 }
                 row_edges.clear();
                 flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
@@ -464,7 +464,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     }
     if open {
         if cells.is_empty() && cell.is_empty() {
-            apply_row_edges(&mut rows, &row_edges, &mut grid);
+            apply_row_edges(&mut rows, &row_edges, &mut grid, &mut props);
         }
         flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
     }
@@ -474,7 +474,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
 /// Binary DOC defines cell edges per row; the model uses one grid with column spans.
 /// Keep the original grid and rows if the boundaries do not match the source cells,
 /// are not strictly increasing, or would require more than `MAX_COLS` columns.
-fn apply_row_edges(rows: &mut [Row], row_edges: &[Vec<f32>], grid: &mut Vec<f32>) {
+fn apply_row_edges(rows: &mut [Row], row_edges: &[Vec<f32>], grid: &mut Vec<f32>, props: &mut TableProps) {
     let mut edges = Vec::new();
     for (row, boundaries) in rows.iter().zip(row_edges) {
         let columns: usize = row.cells.iter().map(|cell| cell.span()).sum();
@@ -499,12 +499,21 @@ fn apply_row_edges(rows: &mut [Row], row_edges: &[Vec<f32>], grid: &mut Vec<f32>
     if edges.is_empty() || rows.len() != row_edges.len() {
         return;
     }
+    // The table indent refers to the first source row. Leading grid columns
+    // now account for part of that offset when a later row starts further left.
+    let shift = edges[0] - row_edges[0][0];
+    if shift != 0.0 {
+        props.indent = Some(props.indent.unwrap_or_default() + shift);
+    }
     for (row, boundaries) in rows.iter_mut().zip(row_edges) {
         let index = |edge: f32| edges.partition_point(|&x| x < edge);
         let mut col = 0;
         row.props.grid_before = index(boundaries[0]) as u32;
         for cell in &mut row.cells {
             let end = col + cell.span();
+            if cell.props.width.is_none() && cell.props.width_pct.is_none() {
+                cell.props.width = Some(boundaries[end] - boundaries[col]);
+            }
             cell.props.span = (index(boundaries[end]) - index(boundaries[col])) as u32;
             col = end;
         }

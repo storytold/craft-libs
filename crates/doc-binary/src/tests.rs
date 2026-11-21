@@ -3155,7 +3155,7 @@ fn doc_cell_borders_survive_import_and_range_overrides() {
     // Opcode, cb, cell count, six boundaries, then the first TC80's flags and width.
     row[21..25].copy_from_slice(&[16, 1, 1, 0]); // top: single 2 pt
     row.extend(sprm_cb(0xD620, &[0, 2, 4, 8, 1, 1, 0])); // bottom: single 1 pt
-    row.extend(sprm_cb(0xD62F, &[1, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0])); // second cell: clear bottom
+    row.extend(sprm_cb(0xD62F, &[1, 2, 4, 0, 0, 0, 0, 255, 255, 255, 255])); // second cell: clear bottom
     let doc = word_table_doc(row, vec![], vec![]);
     let cells = &doc.body[0].as_table().expect("table").rows[0].cells;
     let first = cells[0].props.borders.expect("first cell borders");
@@ -3261,4 +3261,21 @@ fn doc_table_autofit_is_preserved() {
     let row = [t_def_edges(&[0, 100, 200, 300, 400, 500]), grpprl(&[(0x3615, &[1])])].concat();
     let doc = word_table_doc(row, vec![], vec![]);
     assert!(!doc.body[0].as_table().expect("table").props.fixed);
+    let reopened = read(&crate::write(&doc).expect("write DOC")).expect("reopen DOC");
+    assert!(!reopened.body[0].as_table().expect("table").props.fixed);
+}
+
+#[test]
+fn doc_preserves_offset_rows_and_edge_widths_through_save() {
+    let row = [t_def_edges(&[100, 200, 300, 400, 500, 600]), grpprl(&[(0x9601, &100i16.to_le_bytes()), (0x9602, &0i16.to_le_bytes())])].concat();
+    let doc = word_table_doc(row, t_def_edges(&[0, 100, 200, 300, 400, 500]), t_def_edges(&[0, 600]));
+    let check = |doc: &craft_wordmodel::Document| {
+        let table = doc.body[0].as_table().expect("table");
+        assert_eq!(table.props.indent.unwrap_or_default(), 0.0);
+        assert_eq!(table.rows[0].props.grid_before, 1);
+        assert_eq!(table.rows[0].cells[0].props.width, Some(5.0));
+        assert_eq!(table.rows[2].cells[0].props.width, Some(30.0));
+    };
+    check(&doc);
+    check(&read(&crate::write(&doc).expect("write DOC")).expect("reopen DOC"));
 }

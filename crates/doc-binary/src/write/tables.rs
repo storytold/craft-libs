@@ -15,6 +15,7 @@ const T_CANT_SPLIT90: u16 = 0x3403;
 const T_TABLE_HEADER: u16 = 0x3404;
 const T_CANT_SPLIT: u16 = 0x3466;
 const T_TABLE_BORDERS80: u16 = 0xD605;
+const T_AUTOFIT: u16 = 0x3615;
 const T_ROW_HEIGHT: u16 = 0x9407;
 const T_DEF_TABLE: u16 = 0xD608;
 const T_DEF_TABLE_SHD: [u16; 3] = [0xD612, 0xD616, 0xD60C];
@@ -51,7 +52,11 @@ pub(crate) fn row_end(t: &Table, ri: usize, rows: usize, style_borders: Option<B
     }
     let gap = tp.cell_margins.map_or(DEFAULT_GAP, |m| m[1]).clamp(0.0, 100.0);
     g.i16(T_DXA_GAP_HALF, twips(gap));
-    let indent = tp.indent.unwrap_or(0.0);
+    if !tp.fixed {
+        g.u8(T_AUTOFIT, 1);
+    }
+    let skipped_width: f32 = t.grid.iter().take((row.props.grid_before as usize).min(MAX_CELLS)).sum();
+    let indent = tp.indent.unwrap_or(0.0) + skipped_width;
     g.i16(T_DXA_LEFT, twips(indent + gap));
     if let Some(m) = tp.cell_margins {
         // CSSAOperand: itcFirst, itcLim, grfbrc (top 1, left 2, bottom 4, right 8), ftsWidth
@@ -100,7 +105,7 @@ pub(crate) fn row_end(t: &Table, ri: usize, rows: usize, style_borders: Option<B
     g.var(T_TABLE_BORDERS, &b);
 
     // Cell edges: each cell spans its grid columns (from the row's `grid_before`), else its own
-    // preferred width; the edges start at the table's indent.
+    // preferred width; the edges start at the row's first occupied column.
     let widths = cell_widths(t, ri);
     let mut edges: Vec<i16> = Vec::with_capacity(n + 1);
     let mut x = twips(indent);
