@@ -325,3 +325,28 @@ fn templates_and_shows_differ_in_the_main_content_type() {
         assert_eq!(craft_pptx::import(&bytes, &Plain).unwrap().slides.len(), 1);
     }
 }
+
+#[test]
+fn font_embedding_settings_survive_writing_and_reading() {
+    let root = |bytes: &[u8]| {
+        let xml = part(bytes, "ppt/presentation.xml");
+        xml[xml.find("<p:presentation ").unwrap()..].split('>').next().unwrap().to_string()
+    };
+    let mut p = deck();
+    let bytes = craft_pptx::export(&p, &Plain).unwrap();
+    let (tag, q) = (root(&bytes), craft_pptx::import(&bytes, &Plain).unwrap());
+    assert!(tag.contains(r#"saveSubsetFonts="1""#) && !tag.contains("embedTrueTypeFonts"), "{tag}");
+    assert!(!q.embed_fonts && !q.embed_all_characters);
+
+    p.embed_fonts = true;
+    let bytes = craft_pptx::export(&p, &Plain).unwrap();
+    let (tag, q) = (root(&bytes), craft_pptx::import(&bytes, &Plain).unwrap());
+    assert!(tag.contains(r#"saveSubsetFonts="1""#) && tag.contains(r#"embedTrueTypeFonts="1""#), "{tag}");
+    assert!(q.embed_fonts && !q.embed_all_characters);
+
+    p.embed_all_characters = true;
+    let bytes = craft_pptx::export(&p, &Plain).unwrap();
+    let (tag, q) = (root(&bytes), craft_pptx::import(&bytes, &Plain).unwrap());
+    assert!(!tag.contains("saveSubsetFonts") && tag.contains(r#"embedTrueTypeFonts="1""#), "{tag}");
+    assert!(q.embed_fonts && q.embed_all_characters);
+}

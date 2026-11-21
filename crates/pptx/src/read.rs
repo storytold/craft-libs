@@ -562,7 +562,7 @@ fn read_custom_show_names(imp: &mut Imp, pres_el: &El) {
     }
 }
 
-/// Slide and notes size, first slide number, default text style and table styles.
+/// Slide and notes size, first slide number, font embedding, default text style and table styles.
 fn read_presentation_settings(imp: &mut Imp, p: &mut Presentation, pres_part: &Part, pres_el: &El) {
     if let Some(sz) = pres_el.child(Local("sldSz")) {
         let w = sz.attr_local("cx").and_then(value::to_i64_lossy).map(emu_to_pt).unwrap_or(960.0);
@@ -575,6 +575,8 @@ fn read_presentation_settings(imp: &mut Imp, p: &mut Presentation, pres_part: &P
         p.notes_size = Size::new(sane_len(w, 540.0), sane_len(h, 720.0));
     }
     p.first_slide_number = pres_el.attr_local("firstSlideNum").and_then(value::to_u32_lossy).unwrap_or(1).min(9999);
+    p.embed_fonts = pres_el.attr_local("embedTrueTypeFonts").and_then(value::to_bool).unwrap_or(false);
+    p.embed_all_characters = !pres_el.attr_local("saveSubsetFonts").and_then(value::to_bool).unwrap_or(false);
     if let Some(dts) = pres_el.child(Local("defaultTextStyle")) {
         p.default_text_style = dml::list_style(&mut Src(imp, pres_part), dts);
     }
