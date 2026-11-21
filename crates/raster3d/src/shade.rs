@@ -140,6 +140,9 @@ fn wrap(i: i64, n: i64, mode: u32) -> i64 {
     }
 }
 
+/// The smallest `f32` magnitude from which every value is a whole number (2^24).
+const WHOLE: f32 = 16_777_216.0;
+
 /// Bilinear texture sample at (u, v): 0..1 across the texture, texel centers at +0.5, wrapped
 /// by the texture's modes. A texture with a zero side samples as white, and a texel past the
 /// end of `texels` as transparent black.
@@ -148,11 +151,22 @@ pub fn sample(t: &TexInfo, texels: &[[f32; 4]], u: f32, v: f32) -> [f32; 4] {
     if w == 0 || h == 0 {
         return [1.0; 4];
     }
+    // From 2^24 up every f32 is a whole number: a repeated axis is reduced by its period of 1 and a
+    // mirrored axis by its period of 2 before scaling, so the texel index does not saturate.
+    let reduce = |c: f32, mode: u32| {
+        if !c.is_finite() || c.abs() < WHOLE || mode == 1 {
+            c
+        } else if mode == 2 {
+            c.rem_euclid(2.0)
+        } else {
+            c.rem_euclid(1.0)
+        }
+    };
     // A finite coordinate that overflows on scaling is taken as the largest finite one, so the
     // weights below stay finite.
     let big = |c: f32| if c.is_finite() { c } else { f32::MAX.copysign(c) };
-    let x = big(u * w as f32 - 0.5);
-    let y = big(v * h as f32 - 0.5);
+    let x = big(reduce(u, t.wrap_u) * w as f32 - 0.5);
+    let y = big(reduce(v, t.wrap_v) * h as f32 - 0.5);
     let (x0, y0) = (x.floor(), y.floor());
     let (fx, fy) = (x - x0, y - y0);
     let (x0, y0) = (x0 as i64, y0 as i64);
@@ -541,9 +555,9 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
 }
 
 /// A material that draws only the shadows it receives: black at the strongest shadow any light
-/// casts on the fragment, nothing where it is unshadowed or takes no lights.
+/// casts on the fragment, nothing where it is unshadowed, takes no lights or receives no shadows.
 fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
-    if m.unlit || !m.accepts_lights {
+    if m.unlit || !m.accepts_lights || !m.receives_shadows {
         return [0.0; 4];
     }
     let n = if f.front { norm(f.normal) } else { scale(norm(f.normal), -1.0) };

@@ -82,9 +82,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   exist (`try_render`; a mark of −1 means no shadow), an index list that is not whole triangles, an index, material
   or texture that does not exist, an environment light with no radiance level or with a level or
   irradiance map that does not exist, a texture or shadow-map span past its array, a value that is
-  not finite, a material or texel alpha or a material opacity outside 0 to 1, a parallel or spot
-  light direction or an environment light direction (other than zero) whose length differs from 1
-  by more than 0.001, a light kind
+  not finite, a material or texel alpha, a material opacity, a shadow darkness or an environment
+  light's key outside 0 to 1, a parallel or spot light direction or an environment light direction
+  (other than zero) whose length differs from 1 by more than 0.001, a light kind
   or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` returns
   `BadPixel` when a rendered color or depth overflows `f32` (finite inputs near the top of its
   range). `try_shadow_maps` also returns an error when a map's view or a caster's
@@ -103,9 +103,11 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
 The renderer comes from EffectCraft's `crates/render/src/three_d/adv.rs` (`resolve`, `encode`,
 `render_cpu`), `adv/raster.rs`, `adv/shade.rs` and the scene types of `adv/scene.rs`, at
 `2f16feb12f`. For valid scenes whose triangles stay inside the guard band and off the far plane,
-whose masked and blended casters have a base texture and a cutoff of 0.5, and whose casters do not
-reach within 1 unit of light-space depth of a spot or point light, every shadow texel,
-raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit for bit;
+whose depth-range crossings lie more than 1/4096 of an edge from its inside corner, whose texture
+coordinates on repeated and mirrored axes stay below 2^24, whose shadows-only materials receive
+shadows, whose fragments under discarded opaque pixels stay inside the depth range, whose masked
+and blended casters have a base texture and a cutoff of 0.5, and whose casters do not reach within
+1 unit of light-space depth of a spot or point light, every shadow texel, raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit for bit;
 `tests/it/differential.rs` runs a copy of EffectCraft's code on the same scenes. Changes from those
 files:
 
@@ -118,15 +120,26 @@ files:
 - Triangles are clipped against the guard band, and clipped in `f64` when the depth clip in `f32`
   overflows. EffectCraft clipped only the depth range, so a triangle with corners far past the
   viewport that crossed the depth range could be dropped. Triangles leaving the band can shade
-  differently at their edges.
+  differently at their edges. A guard-band crossing is interpolated from the corner nearer the
+  plane, and a depth-range or spot-map near-plane crossing within 1/4096 of an edge from its
+  inside corner is interpolated from that corner. EffectCraft interpolated from the edge's first
+  corner, which put the crossing on the inside corner when the other corner was far away, and
+  dropped part of the triangle or the shadow caster.
 - `try_shadow_maps` replaces the scene's maps and shadow texels, and reads any `shadow` of 0 or
   more as a request, so the indices one call writes request the same maps from the next.
   EffectCraft appended texels to those of an earlier call, which shifted every map's offset, and
   read only 0 as a request, so a second call kept maps only for the light whose first map was
   map 0.
 - The search for a surviving fragment under a discarded opaque pixel visits the triangles in the
-  same order over their bounding boxes, with the same result. EffectCraft searched every triangle
-  of the pixel's band of 16 rows for each such pixel, which the work limit could not bound.
+  same order over their bounding boxes. EffectCraft searched every triangle of the pixel's band of
+  16 rows for each such pixel, which the work limit could not bound. The search takes only
+  fragments inside the depth range, as the visibility pass does; EffectCraft also took a fragment
+  whose interpolated depth rounded past 1.
+- A shadows-only material that does not receive shadows draws nothing. EffectCraft drew the
+  shadows on it.
+- A repeated or mirrored texture axis reduces a coordinate of 2^24 or more by its period before
+  scaling it to texels. EffectCraft saturated the texel index, which picked a texel off the wrap
+  period.
 - A clipped corner whose `1/w` overflows `f32` (a clip transform scaled near `f32`'s smallest
   values) is projected in `f64` instead of dropping its triangle, and a drawn pixel whose camera
   depth overflows is an error.

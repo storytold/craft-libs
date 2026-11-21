@@ -87,9 +87,11 @@ pub enum RenderError {
     #[error("texel {0} is not finite or has an alpha outside 0 to 1")]
     BadTexel(usize),
     /// A light has a kind other than 0 to 2, a value that is not finite, a cone cosine outside −1
-    /// to 1, or (a parallel or spot light) a direction whose length differs from 1 by more than
-    /// 0.001.
-    #[error("light {0} has an unknown kind, a value that is not finite, a cone cosine outside -1 to 1 or a direction that is not unit length")]
+    /// to 1, a shadow darkness outside 0 to 1, or (a parallel or spot light) a direction whose
+    /// length differs from 1 by more than 0.001.
+    #[error(
+        "light {0} has an unknown kind, a value that is not finite, a cone cosine outside -1 to 1, a shadow darkness outside 0 to 1 or a direction that is not unit length"
+    )]
     BadLight(usize),
     /// The light count is over [`Limits::max_lights`].
     #[error("the scene holds {count} lights, over the limit of {limit}")]
@@ -100,9 +102,11 @@ pub enum RenderError {
     #[error("a light refers to a shadow map that does not exist")]
     MissingShadowMap(Option<usize>),
     /// The environment light has a value that is not finite, a dominant direction that is neither
-    /// zero nor unit length (within 0.001), no radiance level, or a radiance level or irradiance
-    /// map that is not in [`Scene::textures`].
-    #[error("the environment light has a value that is not finite, a direction that is not unit length or names a texture that does not exist")]
+    /// zero nor unit length (within 0.001), a key or shadow darkness outside 0 to 1, no radiance
+    /// level, or a radiance level or irradiance map that is not in [`Scene::textures`].
+    #[error(
+        "the environment light has a value that is not finite or out of range, a direction that is not unit length or names a texture that does not exist"
+    )]
     BadEnvironment,
     /// A shadow map has a zero size, a scale or transform that is not finite, or a span that
     /// runs past [`Scene::shadow_texels`].
@@ -121,8 +125,9 @@ pub enum RenderError {
     #[error("the shadow texels do not fit 32-bit offsets")]
     TooManyShadowTexels,
     /// Rasterizing or rendering shadow maps would take more coverage or depth tests than
-    /// [`Limits::max_work`]. The count stops at the first triangle past the limit, so `needed`
-    /// is at least `limit + 1` and may be below the scene's total.
+    /// [`Limits::max_work`]. The count stops at the first triangle past the limit (for shadow
+    /// maps, counted on several threads, within one triangle per thread), so `needed` is at least
+    /// `limit + 1` and may be below the scene's total.
     #[error("the render needs at least {needed} tests, over the limit of {limit}")]
     TooMuchWork { needed: u64, limit: u64 },
     /// A resolve factor is zero or does not divide both sides of the target.

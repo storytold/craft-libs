@@ -87,7 +87,20 @@ fn clip_guard(poly: Vec<Corner>) -> Vec<Corner> {
     clip_f64(&poly, &GUARD_PLANES)
 }
 
-/// Clip a polygon against `planes` (see [`plane_distance`]), interpolating in `f64`.
+/// The share of an edge's length within which an `f32` crossing is interpolated from the inside
+/// corner instead of from the edge's first corner.
+const NEAR_CORNER: f32 = 1.0 / 4096.0;
+
+/// Where the edge from a corner at plane distance `da` to one at `db` crosses the plane, for an
+/// `f32` clip: `(false, t)` for `a + (b − a) × t`, or `(true, t)` for `b + (a − b) × t` when the
+/// crossing lies within [`NEAR_CORNER`] of the edge's length from `b` and `da` is finite. A
+/// distance that overflowed keeps the first form, whose corner is then not finite.
+pub(crate) fn f32_crossing(da: f32, db: f32) -> (bool, f32) {
+    if da.is_finite() && db.abs() < da.abs() * NEAR_CORNER { (true, db / (db - da)) } else { (false, da / (da - db)) }
+}
+
+/// Clip a polygon against `planes` (see [`plane_distance`]), interpolating in `f64` from the
+/// corner nearer the plane.
 fn clip_f64(poly: &[Corner], planes: &[usize]) -> Vec<Corner> {
     let mut p: Vec<([f64; 4], [f64; 3])> = poly.iter().map(|(c, w)| (c.map(f64::from), w.map(f64::from))).collect();
     for &plane in planes {
@@ -103,9 +116,9 @@ fn clip_f64(poly: &[Corner], planes: &[usize]) -> Vec<Corner> {
                 out.push(a);
             }
             if (da >= 0.0) != (db >= 0.0) {
-                let t = da / (da - db);
-                let c: [f64; 4] = std::array::from_fn(|k| a.0[k] + (b.0[k] - a.0[k]) * t);
-                let w: [f64; 3] = std::array::from_fn(|k| a.1[k] + (b.1[k] - a.1[k]) * t);
+                let (p, q, t) = if da.abs() <= db.abs() { (a, b, da / (da - db)) } else { (b, a, db / (db - da)) };
+                let c: [f64; 4] = std::array::from_fn(|k| p.0[k] + (q.0[k] - p.0[k]) * t);
+                let w: [f64; 3] = std::array::from_fn(|k| p.1[k] + (q.1[k] - p.1[k]) * t);
                 out.push((c, w));
             }
         }
@@ -130,14 +143,15 @@ fn clip_poly(poly: Vec<Corner>) -> Vec<Corner> {
                 out.push(a);
             }
             if (da >= 0.0) != (db >= 0.0) {
-                let t = da / (da - db);
+                let (from_b, t) = f32_crossing(da, db);
+                let (p, q) = if from_b { (b, a) } else { (a, b) };
                 let mut c = [0.0; 4];
                 let mut w = [0.0; 3];
                 for k in 0..4 {
-                    c[k] = a.0[k] + (b.0[k] - a.0[k]) * t;
+                    c[k] = p.0[k] + (q.0[k] - p.0[k]) * t;
                 }
                 for k in 0..3 {
-                    w[k] = a.1[k] + (b.1[k] - a.1[k]) * t;
+                    w[k] = p.1[k] + (q.1[k] - p.1[k]) * t;
                 }
                 out.push((c, w));
             }
@@ -444,7 +458,8 @@ impl Band<'_> {
     }
 
     /// For each discarded pixel of the band, the nearest surviving opaque fragment of a screen
-    /// triangle other than the pixel's visible one: (ndc z, color, camera depth). Triangles are
+    /// triangle other than the pixel's visible one, inside the depth range as in
+    /// [`Band::visibility`]: (ndc z, color, camera depth). Triangles are
     /// visited in index order over their bounding boxes, so this pass tests no more pixels than
     /// [`Band::visibility`], and among fragments at equal depth the first triangle's is kept.
     #[allow(clippy::type_complexity)]
@@ -461,7 +476,7 @@ impl Band<'_> {
                         continue;
                     }
                     if let Some((z, l2)) = cover(t2, x as f64 + 0.5, y as f64 + 0.5)
-                        && best[i].is_none_or(|b| z > b.0)
+                        && nearer(z, best[i].map_or(EMPTY, |b| b.0))
                     {
                         let f2 = frag(s, t2, l2);
                         if let Some(c) = shade(s, &f2) {

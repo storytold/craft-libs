@@ -123,6 +123,7 @@ pub struct Light {
     /// First shadow map (point lights use six), −1 = none. [`crate::try_shadow_maps`] reads any
     /// value of 0 or more as a request for maps.
     pub shadow: i32,
+    /// Fraction of the light a full shadow removes, 0 to 1.
     pub shadow_darkness: f32,
     /// Penumbra widening in output pixels.
     pub shadow_diffusion: f32,
@@ -166,12 +167,13 @@ pub struct EnvInfo {
     /// direction its shadow is cast from. `[0; 3]` when the image has no dominant direction: no
     /// shadow. Any other length that differs from 1 by more than 0.001 is an error.
     pub sun: [f32; 3],
-    /// The image's directional fraction, 0 for a uniform image and near 1 for a single bright
-    /// spot. The shadow occludes only this fraction of the environment light.
+    /// The image's directional fraction, 0 to 1: 0 for a uniform image and near 1 for a single
+    /// bright spot. The shadow occludes only this fraction of the environment light.
     pub key: f32,
     /// Shadow map index into [`Scene::shadows`]: [`crate::try_shadow_maps`] reads any value of 0
     /// or more as a request for a map; −1 casts no shadow.
     pub shadow: i32,
+    /// Fraction of the occluded light a full shadow removes, 0 to 1.
     pub shadow_darkness: f32,
     /// Penumbra widening in output pixels.
     pub shadow_diffusion: f32,
@@ -317,6 +319,7 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
             && finite(&[l.cos_inner, l.cos_outer, l.radius, l.falloff_distance, l.shadow_darkness, l.shadow_diffusion])
             && (-1.0..=1.0).contains(&l.cos_inner)
             && (-1.0..=1.0).contains(&l.cos_outer)
+            && (0.0..=1.0).contains(&l.shadow_darkness)
             && (l.kind == 2 || unit(&l.dir))
     };
     if let Some(i) = s.lights.iter().position(|l| !ok(l)) {
@@ -326,6 +329,8 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
         let ok = finite(&e.sun)
             && (e.sun == [0.0; 3] || unit(&e.sun))
             && finite(&[e.intensity, e.rotation, e.key, e.shadow_darkness, e.shadow_diffusion])
+            && (0.0..=1.0).contains(&e.key)
+            && (0.0..=1.0).contains(&e.shadow_darkness)
             && e.mips > 0
             && e.radiance.checked_add(e.mips).is_some_and(|end| end as usize <= s.textures.len())
             && (e.irradiance as usize) < s.textures.len();

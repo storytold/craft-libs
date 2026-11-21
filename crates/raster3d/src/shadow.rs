@@ -3,9 +3,11 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rayon::prelude::*;
 
+use crate::raster::f32_crossing;
 use crate::scene::{EnvInfo, Scene, ShadowMap, TexInfo, unit, validate};
 use crate::shade::sample;
 use crate::{Limits, RenderError};
@@ -99,11 +101,12 @@ fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
                 out.push(a);
             }
             if (da >= 0.0) != (db >= 0.0) {
-                let k = da / (da - db);
+                let (from_b, k) = f32_crossing(da, db);
+                let (p, q) = if from_b { (b, a) } else { (a, b) };
                 let lerp = |x: f32, y: f32| x + (y - x) * k;
                 // The crossing lies on the near plane; its depth is set to it, since the lerp of
                 // far-apart depths can round to 0 or below.
-                out.push(([lerp(a.0[0], b.0[0]), lerp(a.0[1], b.0[1]), NEAR], [lerp(a.1[0], b.1[0]), lerp(a.1[1], b.1[1])]));
+                out.push(([lerp(p.0[0], q.0[0]), lerp(p.0[1], q.0[1]), NEAR], [lerp(p.1[0], q.1[0]), lerp(p.1[1], q.1[1])]));
             }
         }
         poly = out;
@@ -143,18 +146,27 @@ impl AlphaTest<'_> {
     }
 }
 
-/// Rasterize one map triangle's nearest depth into `d` (`n × n` texels).
-fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<&AlphaTest>, d: &mut [f32]) {
+/// A map triangle's signed area and the texels of `m` inside its bounding box (`x0..x1`,
+/// `y0..y1`), or `None` when its area is too small to rasterize.
+fn texel_bounds(m: &ShadowMap, tri: &[MapCorner; 3]) -> Option<(f64, [usize; 4])> {
     let n = m.size as usize;
     let (a, b, cc) = (tri[0].0, tri[1].0, tri[2].0);
     let area = (b[0] - a[0]) * (cc[1] - a[1]) - (b[1] - a[1]) * (cc[0] - a[0]);
     if area.abs() < 1e-12 {
-        return;
+        return None;
     }
     let x0 = a[0].min(b[0]).min(cc[0]).floor().max(0.0) as usize;
     let x1 = (a[0].max(b[0]).max(cc[0]).ceil().max(0.0) as usize).min(n);
     let y0 = a[1].min(b[1]).min(cc[1]).floor().max(0.0) as usize;
     let y1 = (a[1].max(b[1]).max(cc[1]).ceil().max(0.0) as usize).min(n);
+    Some((area, [x0, x1, y0, y1]))
+}
+
+/// Rasterize one map triangle's nearest depth into `d` (`n × n` texels).
+fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<&AlphaTest>, d: &mut [f32]) {
+    let n = m.size as usize;
+    let (a, b, cc) = (tri[0].0, tri[1].0, tri[2].0);
+    let Some((area, [x0, x1, y0, y1])) = texel_bounds(m, &tri) else { return };
     for y in y0..y1 {
         for x in x0..x1 {
             let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
@@ -188,44 +200,48 @@ fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<
 
 /// The texels of `m` inside a map triangle's bounding box, as [`raster_triangle`] visits them.
 fn triangle_texels(m: &ShadowMap, tri: [MapCorner; 3]) -> u64 {
-    let n = m.size as usize;
-    let (a, b, cc) = (tri[0].0, tri[1].0, tri[2].0);
-    let area = (b[0] - a[0]) * (cc[1] - a[1]) - (b[1] - a[1]) * (cc[0] - a[0]);
-    if area.abs() < 1e-12 {
-        return 0;
-    }
-    let x0 = a[0].min(b[0]).min(cc[0]).floor().max(0.0) as usize;
-    let x1 = (a[0].max(b[0]).max(cc[0]).ceil().max(0.0) as usize).min(n);
-    let y0 = a[1].min(b[1]).min(cc[1]).floor().max(0.0) as usize;
-    let y1 = (a[1].max(b[1]).max(cc[1]).ceil().max(0.0) as usize).min(n);
+    let Some((_, [x0, x1, y0, y1])) = texel_bounds(m, &tri) else { return 0 };
     (x1.saturating_sub(x0) as u64).saturating_mul(y1.saturating_sub(y0) as u64)
 }
 
 /// The depth tests rendering `maps` takes: one per caster and map, plus each map triangle's
 /// bounding-box texels. When the casters times the maps already exceed `limit`, that product.
-/// Returns [`RenderError::BadShadowInputs`] when a caster's corners in a map are not finite,
-/// since the rasterizer would skip that caster.
+/// The maps are counted on several threads into one total, and each stops at the first caster
+/// after the total passes `limit`. Returns [`RenderError::BadShadowInputs`] when the total stays
+/// within `limit` and a caster's corners in a map are not finite, since the rasterizer would skip
+/// that caster.
 fn shadow_work(s: &Scene, maps: &[ShadowMap], casters: &[usize], limit: u64) -> Result<u64, RenderError> {
     let pairs = (maps.len() as u64).saturating_mul(casters.len() as u64);
     if pairs > limit {
         return Ok(pairs);
     }
     let finite = |c: &MapCorner| c.0.iter().all(|v| v.is_finite()) && c.1.is_finite() && c.2.is_finite();
-    let per_map = |m: &ShadowMap| -> Option<u64> {
-        casters.iter().try_fold(0, |acc: u64, &t| {
+    let total = AtomicU64::new(0);
+    let not_finite = AtomicBool::new(false);
+    maps.par_iter().for_each(|m| {
+        for &t in casters {
+            if total.load(Ordering::Relaxed) > limit {
+                return;
+            }
             let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
             let poly = light_poly(s, m, ids);
-            if poly.len() < 3 {
-                return Some(acc.saturating_add(1));
+            let mut cost = 1u64;
+            if poly.len() >= 3 {
+                let scr = map_corners(m, &poly);
+                if scr.iter().all(finite) {
+                    cost = (1..scr.len() - 1).fold(cost, |acc, k| acc.saturating_add(triangle_texels(m, [scr[0], scr[k], scr[k + 1]])));
+                } else {
+                    not_finite.store(true, Ordering::Relaxed);
+                }
             }
-            let scr = map_corners(m, &poly);
-            if !scr.iter().all(finite) {
-                return None;
+            let mut seen = total.load(Ordering::Relaxed);
+            while let Err(now) = total.compare_exchange_weak(seen, seen.saturating_add(cost), Ordering::Relaxed, Ordering::Relaxed) {
+                seen = now;
             }
-            Some((1..scr.len() - 1).fold(acc.saturating_add(1), |acc, k| acc.saturating_add(triangle_texels(m, [scr[0], scr[k], scr[k + 1]]))))
-        })
-    };
-    maps.par_iter().map(per_map).try_reduce(|| 0, |a, b| Some(a.saturating_add(b))).ok_or(RenderError::BadShadowInputs)
+        }
+    });
+    let total = total.into_inner();
+    if total <= limit && not_finite.into_inner() { Err(RenderError::BadShadowInputs) } else { Ok(total) }
 }
 
 /// Rasterize the shadow-casting triangles' light-space depth into `m`'s texels.

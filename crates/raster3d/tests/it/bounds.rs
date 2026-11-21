@@ -2,7 +2,7 @@
 //! allocates the target or indexes past an array, and never panics.
 
 use craft_raster3d::{
-    EnvInfo, Image, Limits, Material, RenderError, Scene, Target, TexInfo, Vertex, linear_to_srgb, sample, try_encode, try_env_shadow_map,
+    EnvInfo, Image, Light, Limits, Material, RenderError, Scene, Target, TexInfo, Vertex, linear_to_srgb, sample, try_encode, try_env_shadow_map,
     try_render, try_render_cpu, try_resolve, try_shadow_maps,
 };
 
@@ -698,4 +698,209 @@ fn environment_shadow_map_inputs_are_checked() {
     // Finite inputs whose map does not fit f32: the focal length and the eye position.
     assert_eq!(try_env_shadow_map(e, [0.0; 3], 1e-300, 512), Err(RenderError::BadShadowInputs));
     assert_eq!(try_env_shadow_map(e, [0.0, 1e300, 0.0], 100.0, 512), Err(RenderError::BadShadowInputs));
+}
+
+/// An unlit, double-sided triangle with corners `c` in that order on an 8 × 8 raster, whose clip
+/// coordinates are its world coordinates with w = 1.
+fn clip_space_triangle(c: [[f32; 3]; 3]) -> Scene {
+    let id = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+    let mut s = Scene { width: 8, height: 8, ssaa: 1, ortho: true, cam_fwd: [0.0, 0.0, 1.0], clip: id, view: id, ..Scene::default() };
+    s.materials = vec![Material { unlit: true, double_sided: true, ..Material::default() }];
+    s.vertices = c.iter().map(|&pos| Vertex { pos, normal: [0.0, 0.0, -1.0], tangent: [1.0, 0.0, 0.0, 1.0], ..Vertex::default() }).collect();
+    s.indices = vec![0, 1, 2];
+    s.opaque_count = 3;
+    s
+}
+
+#[test]
+fn guard_band_crossings_next_to_a_corner_stay_on_the_band() {
+    // Corner a lies 1e30 to the left, so both edges at a cross the band's left side, x = -1024,
+    // next to b and c. The lower edge runs at y = 5.5004 on the screen at b and changes by less
+    // than 1e-29 across the raster, so the center of pixel (0, 5) is inside.
+    let (a, b, c) = ([-1e30, 0.0, 0.5], [0.0, -0.3751, 0.5], [0.0, 0.625, 0.5]);
+    // a → b leaves the band and b → a enters it.
+    for corners in [[a, b, c], [c, b, a]] {
+        let t = try_render(&clip_space_triangle(corners), &Limits::default()).unwrap();
+        assert_eq!(t.color[5 * 8], WHITE, "{corners:?}");
+    }
+}
+
+#[test]
+fn depth_range_crossings_next_to_a_corner_stay_on_the_plane() {
+    // Corner a lies 1e10 past the far end of the depth range and 1e10 to the left, so both edges
+    // at a cross z = 0 at x = -0.5, half a viewport left of b and c. Pixel (2, 5) has its center
+    // at x = -0.375 and just above the lower edge.
+    let (a, b, c) = ([-1e10, 0.0, -1e10], [0.0, -0.3751, 0.5], [0.0, 0.625, 0.5]);
+    for corners in [[a, b, c], [c, b, a]] {
+        let t = try_render(&clip_space_triangle(corners), &Limits::default()).unwrap();
+        assert_eq!(t.color[5 * 8 + 2], WHITE, "{corners:?}");
+    }
+}
+
+#[test]
+fn a_depth_distance_that_overflows_is_clipped_in_f64() {
+    // w = 1 − 2z: corner a has w = −f32::MAX and z = f32::MAX / 2, so its distance to the far
+    // plane, w − z, overflows f32. In f64 the edges at a cross that plane at x = −0.147,
+    // w = 0.333, and the triangle covers screen x from 2.24 to 4.
+    let mut s = clip_space_triangle([[-3e38, 0.0, f32::MAX / 2.0], [0.0, -0.3751, 0.25], [0.0, 0.3, 0.25]]);
+    s.clip[3] = [0.0, 0.0, -2.0, 1.0];
+    let t = try_render(&s, &Limits::default()).unwrap();
+    assert_eq!(t.color[4 * 8 + 3], WHITE);
+}
+
+#[test]
+fn a_discarded_pixel_gives_way_only_to_fragments_inside_the_depth_range() {
+    // A white triangle on the near plane (ndc z 1) over a blue background. At pixel (6, 5) the
+    // white triangle's interpolated depth rounds to 1 + 2^-23, outside the depth range, and the
+    // pixel shows the background. A masked, fully transparent triangle at z 0.9 is visible there
+    // and discarded, and the pixel still shows the background.
+    let mut plain = clip_space_triangle([[0.795, -0.932, 1.0], [0.436, 0.251, 1.0], [-0.323, 0.723, 1.0]]);
+    let blue = Material { base: [0.0, 0.0, 1.0, 1.0], unlit: true, double_sided: true, ..Material::default() };
+    let hole = Material { alpha_mode: 1, base: [1.0, 1.0, 1.0, 0.0], double_sided: true, ..Material::default() };
+    plain.materials.extend([blue, hole]);
+    let cover_all = |z: f32, material: u32| {
+        [[-1.0, -1.0, z], [3.0, -1.0, z], [-1.0, 3.0, z]].map(|pos| Vertex {
+            pos,
+            normal: [0.0, 0.0, -1.0],
+            tangent: [1.0, 0.0, 0.0, 1.0],
+            material,
+            ..Vertex::default()
+        })
+    };
+    plain.vertices.extend(cover_all(0.5, 1));
+    plain.indices.extend([3, 4, 5]);
+    let mut covered = plain.clone();
+    covered.vertices.extend(cover_all(0.9, 2));
+    covered.indices.extend([6, 7, 8]);
+    for s in [&mut plain, &mut covered] {
+        s.opaque_count = s.indices.len() as u32;
+    }
+    let (a, b) = (try_render(&plain, &Limits::default()).unwrap(), try_render(&covered, &Limits::default()).unwrap());
+    assert_eq!(a.color[5 * 8 + 6], [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(bits4(&b.color), bits4(&a.color));
+}
+
+#[test]
+fn shadow_darkness_and_environment_key_outside_0_to_1_are_rejected() {
+    for v in [1.5, -0.25] {
+        let mut s = lit_scene((16, 12), 1, false);
+        s.lights[1].shadow_darkness = v;
+        assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(1)), "{v}");
+        let mut s = lit_scene((16, 12), 1, false);
+        s.env.as_mut().unwrap().shadow_darkness = v;
+        assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadEnvironment), "{v}");
+        let mut s = lit_scene((16, 12), 1, false);
+        s.env.as_mut().unwrap().key = v;
+        assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadEnvironment), "{v}");
+    }
+    // At the top of the range, the shadows-only card's alpha stays within 0 to 1 and encodes.
+    let mut s = lit_scene((16, 12), 1, false);
+    for l in &mut s.lights {
+        l.shadow_darkness = 1.0;
+    }
+    let e = s.env.as_mut().unwrap();
+    (e.shadow_darkness, e.key) = (1.0, 1.0);
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    let (mut img, _) = try_render_cpu(&s, &Limits::default()).unwrap();
+    assert!(try_encode(&mut img).is_ok());
+}
+
+#[test]
+fn coordinates_from_two_to_the_twenty_fourth_keep_the_wrap_period() {
+    let texels = [[0.0, 0.0, 0.0, 1.0], [0.25, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
+    // Whole, even coordinates: a repeated or a mirrored axis samples as at 0.
+    for wrap in [0, 2] {
+        let across = TexInfo { offset: 0, width: 3, height: 1, wrap_u: wrap, wrap_v: wrap };
+        let down = TexInfo { offset: 0, width: 1, height: 3, wrap_u: wrap, wrap_v: wrap };
+        for c in [2f32.powi(24), 2f32.powi(64), -(2f32.powi(64)), 3e38] {
+            assert_eq!(sample(&across, &texels, c, 0.5), sample(&across, &texels, 0.0, 0.5), "wrap {wrap}, u {c}");
+            assert_eq!(sample(&down, &texels, 0.5, c), sample(&down, &texels, 0.5, 0.0), "wrap {wrap}, v {c}");
+        }
+    }
+}
+
+#[test]
+fn a_shadows_only_material_that_receives_no_shadows_draws_nothing() {
+    // A parallel light along the view direction, a hidden caster in front and a shadows-only
+    // surface behind it that fills the raster.
+    let mut s = quad_scene(16, 16, &[([4.0, 4.0, 12.0, 12.0], 100.0, WHITE), ([0.0, 0.0, 16.0, 16.0], 500.0, WHITE)]);
+    s.materials[0] = Material { casts_shadows: true, visible: false, ..Material::default() };
+    s.materials[1] = Material { shadows_only: true, double_sided: true, ..Material::default() };
+    s.opaque_count = 0;
+    s.lights = vec![shadow_light(0)];
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    let m = 1;
+    let render = |f: fn(&mut Material)| {
+        let mut s = s.clone();
+        f(&mut s.materials[m]);
+        bits4(&try_render(&s, &Limits::default()).unwrap().color)
+    };
+    let hidden = render(|mat| mat.visible = false);
+    assert_ne!(render(|_| {}), hidden, "the surface draws the shadow it receives");
+    assert_eq!(render(|mat| mat.receives_shadows = false), hidden);
+}
+
+/// A light of `kind` at the origin along +z that asks for a shadow map.
+fn shadow_light(kind: u32) -> Light {
+    Light {
+        kind,
+        pos: [0.0; 3],
+        dir: [0.0, 0.0, 1.0],
+        color: [1.0; 3],
+        cos_inner: 0.6,
+        cos_outer: 0.5,
+        falloff: 0,
+        radius: 0.0,
+        falloff_distance: 0.0,
+        shadow: 0,
+        shadow_darkness: 1.0,
+        shadow_diffusion: 0.0,
+    }
+}
+
+#[test]
+fn shadow_map_work_stops_counting_once_past_the_limit() {
+    // 64 small casters in one parallel light's map: each triangle's box holds about 600 texels,
+    // and the whole scene about 74,000.
+    let quads: Vec<_> = (0..64)
+        .map(|i| {
+            let (x, y) = ((i % 8) as f32 * 10.0, (i / 8) as f32 * 10.0);
+            ([x, y, x + 5.0, y + 5.0], 100.0, WHITE)
+        })
+        .collect();
+    let mut s = quad_scene(16, 16, &quads);
+    for m in &mut s.materials {
+        m.casts_shadows = true;
+    }
+    s.lights = vec![shadow_light(0)];
+    let needed = |limit: u64| match try_shadow_maps(&mut s.clone(), true, &limits(|l| l.max_work = limit)) {
+        Err(RenderError::TooMuchWork { needed, .. }) => needed,
+        r => panic!("limit {limit}: {r:?}"),
+    };
+    let (low, high) = (needed(500), needed(20_000));
+    assert!(low < 2_000 && (20_000..22_000).contains(&high), "{low} {high}");
+    assert!(try_shadow_maps(&mut s, true, &Limits::default()).is_ok());
+}
+
+#[test]
+fn spot_map_near_plane_crossings_next_to_a_corner_stay_on_the_plane() {
+    // A spot light at the origin along +z (light space is world space) and a caster with corner a
+    // 1e10 behind the light and to its left: both edges at a cross the near plane, z = 0.001, two
+    // units left of b and c. On the map the caster's edges run from b and c at a slope of ±0.1 to
+    // the left edge, about 12,800 texels.
+    let covered = |c: [[f32; 3]; 3]| {
+        let mut s = Scene { width: 16, height: 16, ssaa: 1, ..Scene::default() };
+        s.materials = vec![Material { casts_shadows: true, ..Material::default() }];
+        s.vertices = c.iter().map(|&pos| Vertex { pos, ..Vertex::default() }).collect();
+        s.indices = vec![0, 1, 2];
+        s.opaque_count = 3;
+        s.lights = vec![shadow_light(1)];
+        try_shadow_maps(&mut s, true, &Limits::default()).unwrap();
+        s.shadow_texels.iter().filter(|t| t.is_finite()).count()
+    };
+    let (a, b, c) = ([-1e10, 0.0, -1e10], [0.0, -0.2, 2.0], [0.0, 0.2, 2.0]);
+    for corners in [[a, b, c], [a, c, b]] {
+        let n = covered(corners);
+        assert!((12_000..13_500).contains(&n), "{corners:?}: {n}");
+    }
 }
