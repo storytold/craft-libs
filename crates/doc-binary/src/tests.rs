@@ -1848,6 +1848,28 @@ fn bookmarks_become_objects() {
 }
 
 #[test]
+fn a_bookmark_starting_at_the_end_of_the_main_text_is_not_in_the_body() {
+    // The start CP is ccpText, the first character of the next story, so its end isn't in the body
+    // either: no start is left open in the body.
+    let text = "Hello\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        extra_pairs: vec![(21, sttbf_bkmk(&["bm1"])), (22, plc(&[ccp, ccp + 3], &[0, 0, 0, 0])), (23, plc(&[ccp + 2, ccp + 3], &[0, 0]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let starts = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| &p.objects)
+        .filter(|o| matches!(o, craft_wordmodel::para::InlineObject::BookmarkStart { .. }))
+        .count();
+    assert_eq!(starts, 0, "body: {:?}", doc.body);
+}
+
+#[test]
 fn inline_png_picture() {
     let text = "Pic\u{1}!\r";
     let ccp = text.chars().count() as u32;

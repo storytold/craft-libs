@@ -1061,7 +1061,19 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         }
         cp = cp.saturating_add(units);
     }
-    close_marks(marks.take_while(|&&(mcp, _)| mcp <= cp_end), &mut out, &mut pb);
+    // A boundary at `cp_end` is still this story's if it ends a range, but a start there opens
+    // one in the next story: kept only with its end.
+    let rest: Vec<&(u32, notes::Mark)> = marks.take_while(|&&(mcp, _)| mcp <= cp_end).collect();
+    let ended = |m: &notes::Mark| {
+        rest.iter().any(|(_, e)| match (m, e) {
+            (notes::Mark::Start(a), notes::Mark::End(b)) => a == b,
+            (notes::Mark::CommentStart(a), notes::Mark::CommentEnd(b)) => a == b,
+            _ => false,
+        })
+    };
+    let kept =
+        rest.iter().copied().filter(|(mcp, m)| *mcp < cp_end || !matches!(m, notes::Mark::Start(_) | notes::Mark::CommentStart(_)) || ended(m));
+    close_marks(kept, &mut out, &mut pb);
     if !pb.text.is_empty() {
         let done = pb;
         out.push(ParaOut {
