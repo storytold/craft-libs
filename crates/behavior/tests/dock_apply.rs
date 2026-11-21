@@ -414,12 +414,12 @@ fn recorded(layout: &Layout<u32>, anchor: u32) -> craft_behavior::dock::Location
 
 /// Every place of `workspace` that holds the panel `id`: the layout, the keys of the records and their locations.
 fn mentions(workspace: &Workspace<u32>, id: u32) -> bool {
-    let records = workspace.hidden.iter().chain(&workspace.floated);
+    let records = workspace.hidden().iter().chain(workspace.floated());
     let named = records.clone().any(|(panel, location)| {
         let before = matches!(&location.placement, DockPlacement::Tab { before: Some(p) } if *p == id);
         *panel == id || location.anchor == Some(id) || location.sibling.contains(&id) || before
     });
-    named || workspace.layout.contains(&id)
+    named || workspace.layout().contains(&id)
 }
 
 /// A rename keeps the panel's place wherever the id sits (tab group, dock column, floating window, records and the
@@ -429,19 +429,21 @@ fn a_renamed_panel_keeps_its_place_and_a_taken_name_changes_nothing() {
     for from in [11, 3, 7, 50, 51] {
         let layout = docked();
         let mut base = Workspace::default();
-        base.replace(Workspace::new(layout.clone()));
-        base.hidden = vec![(50, recorded(&layout, from)), (52, recorded(&layout, 5))];
-        base.floated = vec![(51, recorded(&layout, from))];
+        base.replace(Workspace::from_parts(
+            layout.clone(),
+            vec![(50, recorded(&layout, from)), (52, recorded(&layout, 5))],
+            vec![(51, recorded(&layout, from))],
+        ));
         base.validate().unwrap();
         let swap = |panel: u32| if panel == from { 99 } else { panel };
 
         let mut renamed = base.clone();
         renamed.rename(&from, 99).unwrap_or_else(|e| panic!("{from}: {e:?}"));
-        let panels = |workspace: &Workspace<u32>| workspace.layout.panels().into_iter().copied().collect::<Vec<_>>();
+        let panels = |workspace: &Workspace<u32>| workspace.layout().panels().into_iter().copied().collect::<Vec<_>>();
         assert_eq!(panels(&renamed), panels(&base).into_iter().map(swap).collect::<Vec<_>>(), "{from}: the panel keeps its position");
         let keys = |records: &[(u32, _)]| records.iter().map(|(panel, _)| *panel).collect::<Vec<_>>();
-        assert_eq!(keys(&renamed.hidden), keys(&base.hidden).into_iter().map(swap).collect::<Vec<_>>(), "{from}: hidden keys");
-        assert_eq!(keys(&renamed.floated), keys(&base.floated).into_iter().map(swap).collect::<Vec<_>>(), "{from}: floated keys");
+        assert_eq!(keys(renamed.hidden()), keys(base.hidden()).into_iter().map(swap).collect::<Vec<_>>(), "{from}: hidden keys");
+        assert_eq!(keys(renamed.floated()), keys(base.floated()).into_iter().map(swap).collect::<Vec<_>>(), "{from}: floated keys");
         assert!(!mentions(&renamed, from) && mentions(&renamed, 99), "{from}: no field holds the old id");
         renamed.validate().unwrap();
         assert_eq!(renamed.revision(), base.revision(), "{from}: a rename is an edit");

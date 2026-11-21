@@ -119,6 +119,10 @@ impl HitShape {
             HitShape::Polyline { points: line, closed, reach } => HitShape::Polyline { points: points(line), closed: *closed, reach: *reach },
             HitShape::Polygon(polygon) => HitShape::Polygon(points(polygon)),
             HitShape::OutsidePolygon { within, polygon } => HitShape::OutsidePolygon { within: within.translate(by), polygon: points(polygon) },
+            HitShape::Excluding { shape, holes } => HitShape::Excluding {
+                shape: Box::new(shape.translated(by)),
+                holes: holes.iter().map(|(center, radius)| (*center + by, *radius)).collect(),
+            },
         }
     }
 
@@ -144,6 +148,18 @@ impl HitShape {
             (HitShape::Polygon(polygon), HitShape::Polygon(to_polygon)) => HitShape::Polygon(points(polygon, to_polygon)),
             (HitShape::OutsidePolygon { within: area, polygon }, HitShape::OutsidePolygon { within: to_area, polygon: to_polygon }) => {
                 HitShape::OutsidePolygon { within: rect(*area, *to_area), polygon: points(polygon, to_polygon) }
+            }
+            (HitShape::Excluding { shape, holes }, HitShape::Excluding { shape: to_shape, holes: to_holes }) => {
+                let holes = if holes.len() == to_holes.len() {
+                    holes
+                        .iter()
+                        .zip(to_holes)
+                        .map(|((center, radius), (to_center, to_radius))| (pos(*center, *to_center), near(*radius, *to_radius)))
+                        .collect()
+                } else {
+                    holes.clone()
+                };
+                HitShape::Excluding { shape: Box::new(shape.snapped(to_shape, within)), holes }
             }
             _ => self.clone(),
         }
