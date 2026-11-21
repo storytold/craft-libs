@@ -45,6 +45,17 @@ fn a_declared_charset_decodes_the_page() {
     assert_eq!(decode_as("é".as_bytes(), Some("utf-16")), "é");
 }
 
+#[test]
+fn charset_declarations_preserve_visible_imported_text() {
+    let utf8 = "<!-- charset=windows-1251 --><meta charset=utf-8><p>Café naïve résumé.</p>";
+    let flow = parse(&decode_as(utf8.as_bytes(), None));
+    assert_eq!(paras(&flow)[0].text(), "Café naïve résumé.");
+
+    let gbk = b"<meta charset=gbk><p>\xc4\xe3\xba\xc3 \xca\xc0\xbd\xe7\xa1\xa3</p>";
+    let flow = parse(&decode_as(gbk, None));
+    assert_eq!(paras(&flow)[0].text(), "你好 世界。");
+}
+
 fn texts(f: &Flow) -> Vec<String> {
     f.blocks
         .iter()
