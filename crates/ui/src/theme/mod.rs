@@ -5,6 +5,12 @@
 
 use egui::{Color32, CornerRadius, Stroke, style::Widgets};
 
+pub mod palette;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use palette::PaletteWatcher;
+pub use palette::{LoadedPalette, Palette, PaletteSource};
+
 /// Background colors for egui's five widget interaction states.
 ///
 /// These are rendering inputs, not a theme schema: applications construct them from their own
