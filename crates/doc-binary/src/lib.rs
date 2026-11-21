@@ -833,6 +833,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                             crop: p.crop,
                             fx: Default::default(),
                             ole: None,
+                            lock_aspect: false,
                         });
                     }
                     None => pics.dropped(cp),

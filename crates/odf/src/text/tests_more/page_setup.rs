@@ -273,6 +273,7 @@ fn background_plus_small_header_logo_keeps_background() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     });
     hp.runs = vec![
         craft_wordmodel::para::Run { len: 8, props: Default::default() },
@@ -327,6 +328,7 @@ fn full_page_header_picture_with_background_round_trips() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     });
     hp.runs = vec![craft_wordmodel::para::Run { len: hp.text.len(), props: Default::default() }];
     d.parts.insert(
@@ -458,6 +460,7 @@ fn no_unreferenced_images_left_in_package() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     });
     hp.runs = vec![craft_wordmodel::para::Run { len: hp.text.len(), props: Default::default() }];
     d.parts.insert(
@@ -520,6 +523,7 @@ fn inactive_header_picture_does_not_suppress_page_background() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     });
     hp.runs = vec![craft_wordmodel::para::Run { len: hp.text.len(), props: Default::default() }];
     d.parts.insert(
@@ -571,6 +575,7 @@ fn continuous_section_header_picture_does_not_suppress_page_background() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     });
     hp.runs = vec![craft_wordmodel::para::Run { len: hp.text.len(), props: Default::default() }];
     d.parts.insert(
@@ -624,6 +629,7 @@ fn trailing_empty_last_section_header_picture_does_not_suppress_page_background(
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        lock_aspect: false,
     });
     hp.runs = vec![craft_wordmodel::para::Run { len: hp.text.len(), props: Default::default() }];
     d.parts.insert(

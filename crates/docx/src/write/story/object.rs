@@ -259,7 +259,7 @@ impl Writer<'_> {
     }
 
     fn write_image(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, _depth: usize) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, float, ole, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, float, ole, lock_aspect, .. } = o else { return };
         // An OLE object read from a file: the object itself, at its current size.
         if let Some(src) = ole.as_deref().filter(|e| !e.is_odf_object())
             && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float, alt.as_str())))
@@ -281,7 +281,16 @@ impl Writer<'_> {
         let link = Self::drawing_link(props, rels);
         let name = format!("Picture {docpr}");
         self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt, link: link.as_deref() });
-        w.empty("wp:cNvGraphicFramePr", &[]);
+        // The frame lock (ECMA-376 Part 1 §20.4.2.4 / §20.1.2.2.19), only when this picture was
+        // read with one. A picture without it keeps the empty element. `a:picLocks` in `pic` is
+        // a different element.
+        if *lock_aspect {
+            w.open("wp:cNvGraphicFramePr", &[]);
+            w.empty("a:graphicFrameLocks", &[("noChangeAspect", "1")]);
+            w.close("wp:cNvGraphicFramePr");
+        } else {
+            w.empty("wp:cNvGraphicFramePr", &[]);
+        }
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")]);
         self.pic(w, o, &file, (0.0, 0.0), rels);
