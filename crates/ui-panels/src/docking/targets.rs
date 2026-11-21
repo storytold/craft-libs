@@ -143,7 +143,7 @@ impl DockSizes {
     /// The height of a column whose every group is minimized: their tab strips, as the column stacks them. `None`
     /// while a group is open.
     pub fn minimized_height<P>(&self, column: &Column<P>) -> Option<f32> {
-        column.groups.iter().all(|group| group.minimized).then(|| self.strip * column.groups.len() as f32)
+        column.groups.iter().all(|group| group.minimized).then_some(self.strip * column.groups.len() as f32)
     }
 
     /// The width bounds of an expanded column from the limits of its panels.
