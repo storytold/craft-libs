@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 /// The mouse buttons the OS reports down, with no egui types.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct HeldButtons(#[allow(dead_code)] u8); // P3(shell-w1): sh.K5
+pub struct HeldButtons(u8);
 
 impl HeldButtons {
     /// No button.
@@ -25,14 +25,12 @@ impl HeldButtons {
 
     /// Whether every button of `b` is down.
     pub fn contains(self, b: HeldButtons) -> bool {
-        let _ = b;
-        todo!("sh.K5")
+        self.0 & b.0 == b.0
     }
 
     /// Adds the buttons of `b`.
     pub fn insert(&mut self, b: HeldButtons) {
-        let _ = b;
-        todo!("sh.K5")
+        self.0 |= b.0;
     }
 }
 
@@ -41,11 +39,8 @@ pub trait WindowSystem: Send + Sync {
     /// The system pointer in desktop points, or `None` where the platform does not tell (Wayland, the web).
     fn desktop_pointer(&self) -> Option<[f32; 2]>;
 
-    /// Whether the primary mouse button is down now, or `None` where the platform does not tell. Read while the OS
-    /// moves a window for a drag and sends the app no pointer events.
-    fn primary_held(&self) -> Option<bool>;
-
-    /// Every mouse button down now, or `None` where the platform does not tell.
+    /// Every mouse button down now, or `None` where the platform does not tell. Read while the OS moves a window for a
+    /// drag and sends the app no pointer events, and to find a release the window never received.
     fn buttons_held(&self) -> Option<HeldButtons>;
 
     /// Asks the input method to drop its marked text. Returns whether it did.
@@ -79,9 +74,6 @@ impl WindowSystem for NoWindows {
         false
     }
 
-    fn primary_held(&self) -> Option<bool> {
-        None
-    }
 
     fn command_held(&self) -> Option<bool> {
         None
@@ -121,22 +113,36 @@ impl WindowSystem for SystemWindows {
         }
     }
 
+    /// AppKit's `pressedMouseButtons` has one bit per button in the order of [`HeldButtons`]'s constants.
     fn buttons_held(&self) -> Option<HeldButtons> {
-        todo!("sh.K6")
-    }
-
-    fn discard_marked_text(&self) -> bool {
-        todo!("ty.X3")
-    }
-
-    fn primary_held(&self) -> Option<bool> {
         #[cfg(all(feature = "appkit", target_os = "macos"))]
         {
-            Some(objc2_app_kit::NSEvent::pressedMouseButtons() & 1 != 0)
+            Some(HeldButtons((objc2_app_kit::NSEvent::pressedMouseButtons() & 0x1f) as u8))
         }
         #[cfg(not(all(feature = "appkit", target_os = "macos")))]
         {
             None
+        }
+    }
+
+    /// Not while the key window has a sheet attached: a file dialog's name field would lose its composition.
+    fn discard_marked_text(&self) -> bool {
+        #[cfg(all(feature = "appkit", target_os = "macos"))]
+        {
+            use objc2_app_kit::{NSApplication, NSTextInputContext};
+            let discarded = || -> Option<()> {
+                let mtm = objc2::MainThreadMarker::new()?;
+                if NSApplication::sharedApplication(mtm).keyWindow().is_some_and(|window| window.attachedSheet().is_some()) {
+                    return None;
+                }
+                NSTextInputContext::currentInputContext(mtm)?.discardMarkedText();
+                Some(())
+            };
+            discarded().is_some()
+        }
+        #[cfg(not(all(feature = "appkit", target_os = "macos")))]
+        {
+            false
         }
     }
 
@@ -171,7 +177,8 @@ pub struct FakeSystem {
 #[derive(Debug, Default)]
 struct FakeState {
     pointer: Option<[f32; 2]>,
-    primary: Option<bool>,
+    buttons: Option<HeldButtons>,
+    discards: usize,
     command: Option<bool>,
     monitors: Vec<Monitor>,
     warps: Vec<[f32; 2]>,
@@ -188,20 +195,14 @@ impl FakeSystem {
         self.with(|state| state.pointer = pointer);
     }
 
-    /// Sets whether the primary button is down; `None` where the platform does not tell.
-    pub fn set_primary_held(&self, held: Option<bool>) {
-        self.with(|state| state.primary = held);
-    }
-
     /// Sets the buttons the test system reports down; `None` where the platform does not tell.
     pub fn set_buttons_held(&self, held: Option<HeldButtons>) {
-        let _ = held;
-        todo!("sh.K7")
+        self.with(|state| state.buttons = held);
     }
 
     /// The count of asked discards of marked text.
     pub fn discards(&self) -> usize {
-        todo!("ty.X4")
+        self.with(|state| state.discards)
     }
 
     /// Sets whether the command modifier is down; `None` where the platform does not tell.
@@ -232,15 +233,12 @@ impl WindowSystem for FakeSystem {
     }
 
     fn buttons_held(&self) -> Option<HeldButtons> {
-        todo!("sh.K6")
+        self.with(|state| state.buttons)
     }
 
     fn discard_marked_text(&self) -> bool {
-        todo!("ty.X3")
-    }
-
-    fn primary_held(&self) -> Option<bool> {
-        self.with(|state| state.primary)
+        self.with(|state| state.discards += 1);
+        true
     }
 
     fn command_held(&self) -> Option<bool> {

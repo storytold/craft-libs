@@ -14,7 +14,8 @@ use craft_ui::runtime::drag;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
-use craft_ui::testing::windows::FakeSystem;
+// PLAN: `HeldButtons` needs a re-export beside `FakeSystem` in crates/ui-contract/src/testing/windows.rs (not this set's file).
+use craft_ui::testing::windows::{FakeSystem, HeldButtons};
 use craft_ui_test_kit::windows::Windows;
 use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
@@ -404,17 +405,17 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_window
     let mut dock = NativeDock::on(Os::Mac, system.clone());
     let pressed_at = FLOAT_AT.min + ROW_AT.to_vec2();
     system.set_pointer(Some([pressed_at.x, pressed_at.y]));
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     dock.frame(vec![moved(ROW_AT)]);
     let (_, commands) = dock.frame(vec![press(ROW_AT)]);
     assert!(commands.contains(&ViewportCommand::StartDrag), "the press hands the move to the OS: {commands:?}");
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     let mut clicked = false;
     for _ in 0..3 {
         clicked |= docks_window(&dock.frame(vec![]).0);
     }
     assert!(!clicked && drag::mark(&dock.windows.ctx).is_none(), "a click on the row docks nothing");
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     dock.frame(vec![press(ROW_AT)]);
     dock.frame(vec![]);
     system.set_pointer(Some([OVER_GROUP.x, OVER_GROUP.y]));
@@ -433,7 +434,7 @@ fn dragging_a_native_palette_by_its_title_row_docks_it_where_the_os_moves_window
         docked |= docks_window(&dock.frame(vec![]).0);
     }
     assert!(!docked, "nothing docks while the system holds the button");
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     for _ in 0..3 {
         docked |= docks_window(&dock.frame(vec![]).0);
     }
@@ -454,7 +455,7 @@ fn a_palette_drag_resolves_the_main_windows_drops_at_the_system_pointer_not_wher
     dock.frame_with(vec![moved(STALE)], vec![]);
     let pressed_at = FLOAT_AT.min + ROW_AT.to_vec2();
     system.set_pointer(Some([pressed_at.x, pressed_at.y]));
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     dock.frame(vec![moved(ROW_AT)]);
     dock.frame(vec![press(ROW_AT)]);
     dock.frame(vec![]);
@@ -470,7 +471,7 @@ fn a_palette_drag_resolves_the_main_windows_drops_at_the_system_pointer_not_wher
         matches!(mark, Some(DropMark::Region { area, .. }) if area == group),
         "the middle of the group under the system pointer is marked, the whole group: {mark:?}"
     );
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     for _ in 0..3 {
         docked |= docks_window(&dock.frame(vec![]).0);
     }

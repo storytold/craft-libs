@@ -92,9 +92,9 @@ pub(crate) fn text_frames(text: &str) -> Vec<Frame> {
     vec![vec![text_event(text)]]
 }
 
-/// A wheel turn of `delta` points with `modifiers`, as a mouse wheel reports it.
-pub(crate) fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
-    Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, modifiers, source: egui::MouseWheelSource::Wheel }
+/// A wheel turn of `delta` in `unit` with `modifiers`, as a mouse wheel reports it.
+pub(crate) fn wheel(unit: egui::MouseWheelUnit, delta: Vec2, modifiers: Modifiers) -> Event {
+    Event::MouseWheel { unit, delta, phase: egui::TouchPhase::Move, modifiers, source: egui::MouseWheelSource::Wheel }
 }
 
 /// What injected input holds down in a viewport: the modifiers, buttons and keys, where the pointer is, and the keys
@@ -472,15 +472,21 @@ pub(crate) fn inject_key(ctx: &Context, viewport: ViewportId, key: Key, mods: Mo
     });
 }
 
-/// Queues a move to `at`, then a wheel turn of `delta` points, with `mods` held; the modifiers stay held after it. A
+/// Queues a move to `at`, then a wheel turn of `delta` in `unit`, with `mods` held; the modifiers stay held after it. A
 /// non-finite `at` or `delta` queues nothing.
-pub(crate) fn inject_wheel(ctx: &Context, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
+pub(crate) fn inject_wheel(ctx: &Context, viewport: ViewportId, at: Pos2, delta: Vec2, unit: egui::MouseWheelUnit, mods: Mods) {
     let Some(at) = finite(at).filter(|_| delta.is_finite()) else { return };
     let mods = platform_modifiers(ctx, mods);
     queue(ctx, viewport, |request| {
         request.move_to(at, mods, None);
-        request.step(mods, [wheel(delta, mods)]);
+        request.step(mods, [wheel(unit, delta, mods)]);
     });
+}
+
+/// Whether injected input holds `button` down in `viewport`, from the step that pressed it to the one that releases it
+/// (between steps no event carries the hold).
+pub(crate) fn held_button(ctx: &Context, viewport: ViewportId, button: egui::PointerButton) -> bool {
+    Service::<Injected>::run(ctx, |injected| injected.held.get(&viewport).is_some_and(|held| held.buttons.contains(&button)))
 }
 
 /// Queues the release of what `released` names, at `at` (a move there first) or where the pointer is. Releasing
