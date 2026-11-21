@@ -302,3 +302,39 @@ fn our_decoder_reads_ffmpegs_files() {
         }
     }
 }
+
+#[test]
+fn track_reports_configured_alpha_before_decoding() {
+    use craft_media::{CodecId, CodecParams};
+    use craft_video::TrackDecoder;
+
+    for (color, planes, alpha) in [
+        (Colorspace::YCbCr, 1, false),
+        (Colorspace::YCbCr, 2, true),
+        (Colorspace::YCbCr, 3, false),
+        (Colorspace::YCbCr, 4, true),
+        (Colorspace::Rgb, 3, false),
+        (Colorspace::Rgb, 4, true),
+    ] {
+        let source = frame(11, 9, color, 8, (0, 0), planes);
+        let encoder = Encoder::new(&source, EncoderConfig::default()).expect("encoder");
+        let params = CodecParams::new(CodecId::Ffv1).with_size(source.width, source.height).with_extradata(encoder.config_record());
+        let mut track = TrackDecoder::new(&params).expect("track");
+        assert_eq!(track.configured_alpha(), Some(alpha), "{color:?} with {planes} planes");
+        track.reset().expect("track reset");
+        assert_eq!(track.configured_alpha(), Some(alpha));
+
+        let packet = encoder.encode(&source).expect("coded picture");
+        let pictures = track.decode(&packet, 43).expect("decoded picture");
+        assert_eq!(pictures.len(), 1);
+        assert_eq!(pictures[0].alpha().is_some(), alpha);
+    }
+}
+
+#[cfg(feature = "prores")]
+#[test]
+fn configured_alpha_is_unknown_for_prores_without_a_picture() {
+    let params = craft_media::CodecParams::new(craft_media::CodecId::ProRes);
+    let track = craft_video::TrackDecoder::new(&params).expect("track");
+    assert_eq!(track.configured_alpha(), None);
+}

@@ -26,6 +26,10 @@ use craft_media::ByteSource;
 use craft_time::{FrameRate, Tick};
 use serde::{Deserialize, Serialize};
 
+pub mod cancel;
+#[cfg(feature = "y4m")]
+pub mod y4m;
+
 /// Errors from opening or reading a media source.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum MediaError {

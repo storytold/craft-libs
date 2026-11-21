@@ -125,6 +125,26 @@ pub enum Segment {
     Arc { rx: f64, ry: f64, rot: f64, large: bool, sweep: bool, end: Point },
 }
 
+/// One `M …` run of a `d` attribute, preserving quadratic (`Q`/`T`) segments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuadSubpath {
+    /// Start point.
+    pub start: Point,
+    /// Segments in drawing order.
+    pub segs: Vec<QuadSegment>,
+    /// Whether a close-path command closed this subpath.
+    pub closed: bool,
+}
+
+/// A path segment that preserves quadratic Bézier curves alongside lines, cubics, and arcs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum QuadSegment {
+    Line(Point),
+    Quad(Point, Point),
+    Cubic(Point, Point, Point),
+    Arc { rx: f64, ry: f64, rot: f64, large: bool, sweep: bool, end: Point },
+}
+
 /// Tokens of a `d` attribute: command letters and numbers, in order.
 enum Tok {
     Cmd(u8),
@@ -156,31 +176,69 @@ impl<'a> Tokenizer<'a> {
         Some(v)
     }
 
-    fn next_tok(&mut self) -> Option<Tok> {
+    fn next_tok(&mut self) -> Result<Option<Tok>> {
         let mut nums = Numbers { s: self.s, i: self.i };
         nums.skip_seps();
         self.i = nums.i;
         self.tok_start = self.i;
-        let c = self.s.get(self.i).copied()?;
+        let Some(c) = self.s.get(self.i).copied() else { return Ok(None) };
         if c.is_ascii_alphabetic() {
             self.i += 1;
-            return Some(Tok::Cmd(c));
+            return Ok(Some(Tok::Cmd(c)));
         }
         let tok = nums.next_num().map(Tok::Num);
         self.i = nums.i;
-        tok
+        // Invalid bytes and malformed/non-finite numbers are not EOF: returning a
+        // successful prefix here would silently discard the rest of the shape.
+        tok.map(Some).ok_or_else(|| Error("SVG: invalid path token".into()))
     }
 }
 
-/// Split `d` into subpaths, resolving relative commands and the S/T control reflections.
+/// Split `d` into subpaths, resolving relative commands and S/T control reflections while
+/// raising quadratic (`Q`/`T`) segments to cubics.
 pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
+    Ok(parse_path_with_quads(d)?
+        .into_iter()
+        .map(|sub| {
+            let mut cur = sub.start;
+            let segs = sub
+                .segs
+                .into_iter()
+                .map(|seg| match seg {
+                    QuadSegment::Line(p) => {
+                        cur = p;
+                        Segment::Line(p)
+                    }
+                    QuadSegment::Quad(q, p) => {
+                        let out = Segment::Cubic(cur + (q - cur) * (2.0 / 3.0), p + (q - p) * (2.0 / 3.0), p);
+                        cur = p;
+                        out
+                    }
+                    QuadSegment::Cubic(c1, c2, p) => {
+                        cur = p;
+                        Segment::Cubic(c1, c2, p)
+                    }
+                    QuadSegment::Arc { rx, ry, rot, large, sweep, end } => {
+                        cur = end;
+                        Segment::Arc { rx, ry, rot, large, sweep, end }
+                    }
+                })
+                .collect();
+            Subpath { start: sub.start, segs, closed: sub.closed }
+        })
+        .collect())
+}
+
+/// Split `d` into subpaths, resolving relative commands and S/T control reflections while
+/// preserving quadratic (`Q`/`T`) segments.
+pub fn parse_path_with_quads(d: &str) -> Result<Vec<QuadSubpath>> {
     let mut tk = Tokenizer::new(d);
     let mut lookahead: Option<Tok> = None;
     let mut cmd = 0u8;
     let mut cur = Point::ZERO;
     let mut start = Point::ZERO;
-    let mut segs: Vec<Segment> = Vec::new();
-    let mut out: Vec<Subpath> = Vec::new();
+    let mut segs: Vec<QuadSegment> = Vec::new();
+    let mut out: Vec<QuadSubpath> = Vec::new();
     let closed = false;
     let mut prev_cubic: Option<Point> = None;
     let mut prev_quad: Option<Point> = None;
@@ -193,7 +251,7 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
                 *look = Some(other);
                 Err(Error("SVG: path command is missing coordinates".into()))
             }
-            None => match tk.next_tok() {
+            None => match tk.next_tok()? {
                 Some(Tok::Num(v)) => Ok(v),
                 Some(other @ Tok::Cmd(_)) => {
                     *look = Some(other);
@@ -204,12 +262,15 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
         }
     };
 
-    while let Some(tok) = lookahead.take().or_else(|| tk.next_tok()) {
+    while let Some(tok) = match lookahead.take() {
+        Some(tok) => Some(tok),
+        None => tk.next_tok()?,
+    } {
         let rel = match tok {
             Tok::Cmd(c) => {
                 if c.eq_ignore_ascii_case(&b'z') {
                     if !segs.is_empty() {
-                        out.push(Subpath { start, segs, closed: true });
+                        out.push(QuadSubpath { start, segs, closed: true });
                         segs = Vec::new();
                     }
                     cur = start;
@@ -259,7 +320,7 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
         match abs {
             b'M' => {
                 if !segs.is_empty() {
-                    out.push(Subpath { start, segs, closed: false });
+                    out.push(QuadSubpath { start, segs, closed: false });
                     segs = Vec::new();
                 }
                 cur = point(args[0], args[1]);
@@ -270,25 +331,25 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
             }
             b'L' => {
                 cur = point(args[0], args[1]);
-                segs.push(Segment::Line(cur));
+                segs.push(QuadSegment::Line(cur));
                 prev_cubic = None;
                 prev_quad = None;
             }
             b'H' => {
                 cur = Point::new(if rel { cur.x + args[0] } else { args[0] }, cur.y);
-                segs.push(Segment::Line(cur));
+                segs.push(QuadSegment::Line(cur));
                 prev_cubic = None;
                 prev_quad = None;
             }
             b'V' => {
                 cur = Point::new(cur.x, if rel { cur.y + args[0] } else { args[0] });
-                segs.push(Segment::Line(cur));
+                segs.push(QuadSegment::Line(cur));
                 prev_cubic = None;
                 prev_quad = None;
             }
             b'C' => {
                 let (c1, c2, p) = (point(args[0], args[1]), point(args[2], args[3]), point(args[4], args[5]));
-                segs.push(Segment::Cubic(c1, c2, p));
+                segs.push(QuadSegment::Cubic(c1, c2, p));
                 prev_cubic = Some(c2);
                 prev_quad = None;
                 cur = p;
@@ -296,14 +357,14 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
             b'S' => {
                 let c1 = prev_cubic.map_or(cur, |c2| cur * 2.0 - c2);
                 let (c2, p) = (point(args[0], args[1]), point(args[2], args[3]));
-                segs.push(Segment::Cubic(c1, c2, p));
+                segs.push(QuadSegment::Cubic(c1, c2, p));
                 prev_cubic = Some(c2);
                 prev_quad = None;
                 cur = p;
             }
             b'Q' => {
                 let (q, p) = (point(args[0], args[1]), point(args[2], args[3]));
-                segs.push(Segment::Cubic(cur + (q - cur) * (2.0 / 3.0), p + (q - p) * (2.0 / 3.0), p));
+                segs.push(QuadSegment::Quad(q, p));
                 prev_quad = Some(q);
                 prev_cubic = None;
                 cur = p;
@@ -311,14 +372,14 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
             b'T' => {
                 let reflect = prev_quad.map_or(cur, |q| cur * 2.0 - q);
                 let p = point(args[0], args[1]);
-                segs.push(Segment::Cubic(cur + (reflect - cur) * (2.0 / 3.0), p + (reflect - p) * (2.0 / 3.0), p));
+                segs.push(QuadSegment::Quad(reflect, p));
                 prev_quad = Some(reflect);
                 prev_cubic = None;
                 cur = p;
             }
             b'A' => {
                 let end = point(args[5], args[6]);
-                segs.push(Segment::Arc { rx: args[0].abs(), ry: args[1].abs(), rot: args[2], large: args[3] != 0.0, sweep: args[4] != 0.0, end });
+                segs.push(QuadSegment::Arc { rx: args[0].abs(), ry: args[1].abs(), rot: args[2], large: args[3] != 0.0, sweep: args[4] != 0.0, end });
                 cur = end;
                 prev_cubic = None;
                 prev_quad = None;
@@ -334,7 +395,7 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
         }
     }
     if !segs.is_empty() {
-        out.push(Subpath { start, segs, closed });
+        out.push(QuadSubpath { start, segs, closed });
     }
     Ok(out)
 }
@@ -439,6 +500,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_path_with_quads_preserves_quadratic_control_points() {
+        let paths = parse_path_with_quads("M0 10 Q5 20 10 10 T20 10 Z").unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].closed);
+        assert_eq!(
+            paths[0].segs,
+            vec![QuadSegment::Quad(Point::new(5.0, 20.0), Point::new(10.0, 10.0)), QuadSegment::Quad(Point::new(15.0, 0.0), Point::new(20.0, 10.0)),]
+        );
+    }
+
+    #[test]
     fn close_resets_smooth_control_history() {
         // After Z, S must not reflect the preceding C's control (20,20) → (0,0).
         let paths = parse_path("M10 10 C10 20 20 20 20 10 Z S30 0 30 10").unwrap();
@@ -457,6 +529,25 @@ mod tests {
         assert!((center.x - 5.0).abs() < 1e-10);
         assert!(center.y.abs() < 1e-10 && start.is_finite());
         assert!((sweep - std::f64::consts::PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rejects_invalid_tokens_instead_of_returning_a_partial_path() {
+        for input in ["@", "M0 0 L1 1@ L2 2", "M0 0 L1 1@", "M0 0 Z@", "M0 0 L1 1é", "M0 0 L1 1 +", "M0 0 L1 1 .", "M0 0 L1 1 2e+", "M0 0 L1 1 1e999"]
+        {
+            assert!(parse_path(input).is_err(), "accepted malformed path: {input}");
+        }
+    }
+
+    #[test]
+    fn token_errors_do_not_change_clean_eof_or_compact_numbers() {
+        assert!(parse_path(" \t\r\n,").unwrap().is_empty());
+        let paths = parse_path("M.5-.5 L1e1-2e0 A6 7 30 0110 12 z ,\n").unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].closed);
+        assert_eq!(paths[0].start, Point::new(0.5, -0.5));
+        assert_eq!(paths[0].segs[0], Segment::Line(Point::new(10.0, -2.0)));
+        assert_eq!(paths[0].segs[1], Segment::Arc { rx: 6.0, ry: 7.0, rot: 30.0, large: false, sweep: true, end: Point::new(10.0, 12.0) });
     }
 
     #[test]

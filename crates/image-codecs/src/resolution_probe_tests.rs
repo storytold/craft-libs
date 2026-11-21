@@ -124,7 +124,15 @@ fn jpeg_exif_wins_over_jfif_and_non_exif_app1_is_skipped() {
     assert_eq!(file_resolution(&jpeg(&[jfif(1, 72, 72), xmp.clone(), exif])), Some((600.0, 600.0)));
     // An unusable EXIF value falls back to JFIF.
     let zero = exif_app1(&tiff(true, 0, 0, None));
-    assert_eq!(file_resolution(&jpeg(&[jfif(1, 96, 96), xmp, zero])), Some((96.0, 96.0)));
+    assert_eq!(file_resolution(&jpeg(&[jfif(1, 96, 96), xmp.clone(), zero])), Some((96.0, 96.0)));
+    let huge = exif_app1(&tiff(true, 1_000_000, 1_000_000, None));
+    assert_eq!(file_resolution(&jpeg(&[jfif(1, 96, 96), huge])), Some((96.0, 96.0)));
+    // Sub-1.0 EXIF rational also falls back to JFIF.
+    let mut sub = tiff(true, 1, 1, None);
+    let len = sub.len();
+    sub[len - 12..len - 8].copy_from_slice(&4u32.to_le_bytes());
+    sub[len - 4..len].copy_from_slice(&4u32.to_le_bytes());
+    assert_eq!(file_resolution(&jpeg(&[jfif(1, 96, 96), xmp, exif_app1(&sub)])), Some((96.0, 96.0)));
 }
 
 #[test]
@@ -164,6 +172,35 @@ fn webp_without_exif_has_none() {
     assert_eq!(file_resolution(&bytes), None);
     // A RIFF/WEBP container the decoder's probe refuses gives nothing either.
     assert_eq!(file_resolution(b"RIFF\x04\0\0\0WEBP"), None);
+}
+
+#[test]
+fn webp_exif_after_many_frames_and_riff_bounds() {
+    let chunk = |out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]| {
+        out.extend_from_slice(kind);
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            out.push(0);
+        }
+    };
+    let mut body = b"WEBP".to_vec();
+    chunk(&mut body, b"VP8X", &[0; 10]);
+    chunk(&mut body, b"ANIM", &[0; 6]);
+    for _ in 0..100 {
+        chunk(&mut body, b"ANMF", &[0; 17]);
+    }
+    chunk(&mut body, b"EXIF", &tiff(true, 300, 300, Some(2)));
+    let riff = |size: usize, trailing: usize| {
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&u32::try_from(size).unwrap().to_le_bytes());
+        webp.extend_from_slice(&body);
+        webp.extend_from_slice(&vec![0xAA; trailing]);
+        webp
+    };
+    assert_eq!(file_resolution(&riff(body.len(), 0)), Some((300.0, 300.0)));
+    assert_eq!(file_resolution(&riff(body.len(), 4)), Some((300.0, 300.0)));
+    assert_eq!(file_resolution(&riff(body.len() - 4, 4)), None);
 }
 
 #[test]
@@ -263,4 +300,22 @@ fn png_zero_phys_leaves_the_exif_resolution() {
     assert_eq!(file_resolution(&png(std::slice::from_ref(&exif))), Some((600.0, 600.0)));
     assert_eq!(file_resolution(&png(&[zero(0, 0), exif.clone()])), Some((600.0, 600.0)));
     assert_eq!(file_resolution(&png(&[zero(11_811, 0), exif])), Some((600.0, 600.0)));
+}
+
+#[test]
+fn png_pixels_per_meter_preserves_raw_values_and_shared_chunk_limit() {
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[phys(1181, 2362, 1)])), Some((1181, 2362)));
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[phys(1181, 1181, 0)])), None);
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[phys(0, 1181, 1)])), None);
+    assert_eq!(crate::png_probe::pixels_per_meter(b"not a png"), None);
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[png_chunk(b"IDAT", &[]), phys(1181, 1181, 1)])), None);
+
+    let text = png_chunk(b"tEXt", b"k\x00v");
+    let mut at_limit = vec![text.clone(); super::MAX_CHUNKS - 2];
+    at_limit.push(phys(1181, 1181, 1));
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&at_limit)), Some((1181, 1181)));
+
+    let mut past_limit = vec![text; super::MAX_CHUNKS - 1];
+    past_limit.push(phys(1181, 1181, 1));
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&past_limit)), None);
 }

@@ -108,6 +108,14 @@ Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors. The format imp
 clean-room work based on their public specifications; dependency licences and X.Org's `rgb.txt`
 attribution are listed in ATTRIBUTION.md.
 
+crates/develop (craft-develop) is moved from LightCraft, module by module:
+- src/inpaint.rs and src/inpaint/ from crates/inpaint (lightcraft-inpaint), with its tests, revision a75497d6.
+  https://github.com/storytold/lightcraft
+  Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
+  That crate ports the inpainting (PatchMatch completion) and Poisson membrane fill code of PhotoCraft
+  (https://github.com/storytold/photocraft, crates/algo/src/inpaint.rs and poisson.rs), Copyright the PhotoCraft
+  contributors, MIT OR Apache-2.0; the port was modified by the LightCraft contributors (2026).
+
 crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two other readers:
 - LightCraft, crates/raw (src/lib.rs, dng.rs, dngwrite.rs, tiffraw.rs, unpack.rs, ljpeg.rs, jxl.rs,
   opcodes.rs, profile.rs, gaintable.rs, semantic.rs, preview.rs, vendor/crw.rs, vendor/hasselblad.rs,
@@ -418,3 +426,14 @@ Original src/avx2/fdct.rs opening notice
  * Based on the x86 SIMD extension for IJG JPEG library
  * Copyright (C) 1999-2006, MIYASAKA Masaru.
  */
+
+The .cdr reader (crates/cdr, moved from VectorCraft crates/cdr) reads the record layouts that the
+Kaitai Struct specification coreldraw_cdr.ksy (https://github.com/kaitai-io/coreldraw_cdr.ksy,
+MIT License) and its fork by Zach Wolfe (https://github.com/filestar/coreldraw_cdr.ksy, branch
+new_stuff, MIT License) describe. No part of either specification is copied into the crate; the
+license text is in crates/cdr/LICENSE-kaitai.txt.
+
+The Y4M range-backed source in crates/media-source/src/y4m.rs adapts FilmCraft's
+original implementation (3f137a7ed420cac79b32145f5243b7f98b31f71c), licensed
+MIT OR Apache-2.0. Source notice retained:
+Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
