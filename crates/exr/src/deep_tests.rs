@@ -131,7 +131,7 @@ fn compress(kind: u8, raw: &[u8]) -> Vec<u8> {
             let c = rle_bytes(&b);
             if c.len() < raw.len() { c } else { raw.to_vec() }
         }
-        2 => {
+        2 | 3 => {
             let mut b = raw.to_vec();
             separate_bytes_fragments(&mut b);
             samples_to_differences(&mut b);
@@ -221,14 +221,23 @@ fn gen_deep_tables(
     attr(&mut out, "version", "int", &1i32.to_le_bytes());
     out.push(0); // end of the header
 
-    // The blocks: scan lines (one line each) or the level-0 tiles.
+    // The blocks: scan lines (ZIP uses 16 rows) or the level-0 tiles.
     struct Block {
         pixels: Vec<usize>,
         /// Pixels per row: the count table restarts and the sample data is grouped per row.
         row_w: usize,
     }
     let blocks: Vec<Block> = match tile {
-        None => (0..h).map(|y| Block { pixels: (y * w..y * w + w).collect(), row_w: w }).collect(),
+        None => {
+            let block_height = if compression == 3 { 16 } else { 1 };
+            (0..h.div_ceil(block_height))
+                .map(|by| {
+                    let start_y = by * block_height;
+                    let end_y = (start_y + block_height).min(h);
+                    Block { pixels: (start_y * w..end_y * w).collect(), row_w: w }
+                })
+                .collect()
+        }
         Some((tw, th)) => {
             let tx = w.div_ceil(tw);
             let ty = h.div_ceil(th);
@@ -260,7 +269,7 @@ fn gen_deep_tables(
         let mut c = Vec::new();
         match tile {
             None => {
-                let y = (bi % h) as i32;
+                let y = (bi * if compression == 3 { 16 } else { 1 }) as i32;
                 c.extend_from_slice(&y.to_le_bytes());
             }
             Some((tw, _)) => {
@@ -497,6 +506,22 @@ fn rle_and_zips_match_uncompressed() {
             assert_eq!(a.samples, b.samples, "channel {}", a.name);
         }
     }
+}
+
+/// Deep ZIP uses 16 scan lines per block; the final partial block is clipped to the data window.
+#[test]
+fn zip16_scanline_blocks_match_uncompressed() {
+    let counts: Vec<u32> = (0..4 * 19).map(|p| if p % 5 == 0 { 2 } else { 1 }).collect();
+    let sample = |p: usize, ci: usize| -> Vec<f32> {
+        if counts[p] == 2 { vec![sample_rgba(p, ci)[0], sample_rgba(p, ci)[0] * 0.5] } else { sample_rgba(p, ci) }
+    };
+    let base = gen_deep(4, 19, &RGBAZ, 0, None, &counts, &sample);
+    let expected = decode_deep_exr(&base, &Limits::none()).expect("uncompressed deep image");
+    let zip16 = gen_deep(4, 19, &RGBAZ, 3, None, &counts, &sample);
+    let actual = decode_deep_exr(&zip16, &Limits::none()).expect("ZIP deep image");
+    assert_eq!(actual.counts, expected.counts);
+    assert_eq!(actual.channels, expected.channels);
+    assert_eq!(rgba_flat(&zip16), rgba_flat(&base));
 }
 
 /// Deep tiles decode to the same pixels as deep scanlines of the same data.
