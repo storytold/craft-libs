@@ -179,6 +179,8 @@ fn deflate_roundtrips_integer_and_float() {
     raw.white = vec![1.0];
     for half in [false, true] {
         let bytes = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Deflate { tile: 32, half }, ..Default::default() }).unwrap();
+        let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
+        assert_eq!(tiff.ifds[0].value(t::WHITE_LEVEL), Some(&Value::Long(vec![1, 1, 1])));
         let back = decode(&bytes).unwrap();
         let RawData::F32(b) = &back.data else { panic!("float data expected") };
         for (a, b) in vals.iter().zip(b) {
@@ -586,7 +588,7 @@ fn non_finite_float_samples_decode_as_levels() {
     }
     raw.data = RawData::F32(vals.clone());
     raw.black = BlackLevel::uniform(0.0);
-    raw.white = vec![0.75];
+    raw.white = vec![1.0];
     for compression in [DngCompression::Uncompressed, DngCompression::Deflate { tile: 16, half: false }] {
         let bytes = write_dng(&raw, &DngWriteOptions { compression, ..Default::default() }).unwrap();
         let img = decode(&bytes).unwrap();
@@ -594,7 +596,7 @@ fn non_finite_float_samples_decode_as_levels() {
         let RawData::F32(got) = &img.data else { panic!("float data expected") };
         for (a, b) in vals.iter().zip(got) {
             let want = match *a {
-                f32::INFINITY => 0.75,
+                f32::INFINITY => 1.0,
                 v if v.is_finite() => v,
                 _ => 0.0,
             };
@@ -602,6 +604,32 @@ fn non_finite_float_samples_decode_as_levels() {
         }
         assert!(got.iter().all(|v| v.is_finite()));
     }
+}
+
+#[test]
+fn fractional_white_level_is_rejected() {
+    let mut raw = synthetic(16, 12, None, 1);
+    raw.data = RawData::F32(vec![0.5; 16 * 12]);
+    for bad in [0.75, 1.0 / 32768.0, 1.5, 0.0, -1.0, 1e-5] {
+        raw.white = vec![bad];
+        let err = write_dng(&raw, &DngWriteOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, craft_raw::RawError::Unsupported(ref msg) if msg.contains("fractional white level")),
+            "failed to reject bad white: {bad}"
+        );
+    }
+}
+
+#[test]
+fn float_white_level_above_long_range_is_rejected() {
+    let mut raw = synthetic(16, 12, None, 1);
+    raw.data = RawData::F32(vec![0.5; 16 * 12]);
+    raw.white = vec![u32::MAX as f32];
+    let err = write_dng(&raw, &DngWriteOptions::default()).unwrap_err();
+    assert!(matches!(err, craft_raw::RawError::Unsupported(ref msg) if msg.contains("white level above LONG range")));
+    raw.white = vec![u32::MAX as f32 + 1000.0];
+    let err = write_dng(&raw, &DngWriteOptions::default()).unwrap_err();
+    assert!(matches!(err, craft_raw::RawError::Unsupported(ref msg) if msg.contains("white level above LONG range")));
 }
 
 #[test]
