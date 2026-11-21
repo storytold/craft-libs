@@ -1,4 +1,5 @@
 //! Header-only PNG inspection without inflating image data.
+pub use crate::resolution_probe::png_pixels_per_meter as pixels_per_meter;
 use crate::{CodecError, Format};
 fn err(message: &str) -> CodecError {
     CodecError::malformed(Format::Png, message)
