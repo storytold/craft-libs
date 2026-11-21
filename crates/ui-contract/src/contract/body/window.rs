@@ -778,12 +778,10 @@ impl BodyHooks<'_> {
         let band = move_band(props, regions, rect);
         if props.header.is_some() && movable && band.is_positive() {
             // The band lies under the line's own parts and children, like the reorder band, so they keep their presses.
-            // On a window the OS frames (macOS `Inset`) it keeps the arrow, as an OS title bar does: the OS's resize
-            // areas cover its ends and top edge, and a cursor set over them fights the OS's.
-            let moved = os.or(moves_window.then(|| pass::current_viewport(&ctx)));
-            let os_bar = moved.is_some_and(|viewport| windows::shell_of(&ctx, viewport).window.chrome == WindowChrome::Inset);
+            // A band that moves an OS window keeps the arrow, as an OS title bar does; a layer's band shows the hand.
+            let moves_os_window = os.is_some() || moves_window;
             let mut part = pcx.part(MOVE_BAND, band).sense(craft_behavior::Sense::DRAG).pointer_only(reason);
-            if !os_bar {
+            if !moves_os_window {
                 part = part.cursor(CursorIcon::Grab).drag_cursor(CursorIcon::Grabbing);
             }
             if let Some(hit) = exclusive(WindowHit::Move).or(moves_window.then_some(WindowHit::Move)) {
