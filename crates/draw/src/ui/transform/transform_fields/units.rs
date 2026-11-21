@@ -4,7 +4,7 @@ use super::{TransformField, TransformRow};
 use craft_behavior::geometry::quad::{BoxState, SKEW_LIMIT};
 use craft_behavior::kurbo::{Rect, Size, Vec2};
 use craft_behavior::{NumberCodec, RulerUnits};
-use craft_ui::canvas::RulerText;
+use craft_ui::canvas::{CanvasRulers, RulerText};
 use craft_ui::runtime::env::{UnitKind, Units};
 
 /// The largest position of the box's reference point, in document units.
@@ -65,8 +65,8 @@ impl Default for SizeUnit {
 #[derive(Clone, Debug)]
 pub(super) struct Conversion {
     pub(super) rect: Rect,
-    pub(super) x: RulerText,
-    pub(super) y: RulerText,
+    /// The rulers X and Y are measured in, from their zero.
+    pub(super) rulers: CanvasRulers,
     pub(super) size: SizeUnit,
     pub(super) linked: bool,
     /// The document's size; without it X and Y read a typed percentage against the box's side.
@@ -88,7 +88,7 @@ impl Conversion {
             let origin = state.origin_of_pivot(self.rect);
             (state.pivot, origin)
         } else {
-            (state.pivot, craft_behavior::kurbo::Point::ORIGIN)
+            (state.pivot, self.rulers.zero)
         };
         if axis == 0 { pivot.x - origin.x } else { pivot.y - origin.y }
     }
@@ -110,8 +110,8 @@ impl Conversion {
     /// The largest value a field shows or takes.
     pub(super) fn bound(&self, field: TransformField) -> f64 {
         match field {
-            TransformField::X => POSITION_LIMIT * self.x.units.per_doc,
-            TransformField::Y => POSITION_LIMIT * self.y.units.per_doc,
+            TransformField::X => POSITION_LIMIT * self.rulers.x.units.per_doc,
+            TransformField::Y => POSITION_LIMIT * self.rulers.y.units.per_doc,
             TransformField::W => self.limit(0) * self.per_factor(0),
             TransformField::H => self.limit(1) * self.per_factor(1),
             TransformField::Angle => ANGLE_LIMIT,
@@ -123,8 +123,8 @@ impl Conversion {
     pub(super) fn format(&self, field: TransformField) -> (UnitKind, usize) {
         let end = |kind: UnitKind| *kind.decimals().end();
         match (field, &self.size) {
-            (TransformField::X, _) => (self.x.kind, end(self.x.kind)),
-            (TransformField::Y, _) => (self.y.kind, end(self.y.kind)),
+            (TransformField::X, _) => (self.rulers.x.kind, end(self.rulers.x.kind)),
+            (TransformField::Y, _) => (self.rulers.y.kind, end(self.rulers.y.kind)),
             (TransformField::W, SizeUnit::Length { x, .. }) => (x.kind, end(x.kind)),
             (TransformField::H, SizeUnit::Length { y, .. }) => (y.kind, end(y.kind)),
             (TransformField::W | TransformField::H, SizeUnit::Percent { decimals }) => (UnitKind::Percent, *decimals),
@@ -136,8 +136,8 @@ impl Conversion {
     pub(super) fn shown(&self, state: &BoxState, skew_v: f64, field: TransformField) -> f64 {
         let parts = state.parts(self.rect, skew_v);
         match field {
-            TransformField::X => self.position(state, 0) * self.x.units.per_doc,
-            TransformField::Y => self.position(state, 1) * self.y.units.per_doc,
+            TransformField::X => self.position(state, 0) * self.rulers.x.units.per_doc,
+            TransformField::Y => self.position(state, 1) * self.rulers.y.units.per_doc,
             TransformField::W => parts.w * self.per_factor(0),
             TransformField::H => parts.h * self.per_factor(1),
             TransformField::Angle => parts.angle,
@@ -153,8 +153,8 @@ impl Conversion {
         let now = state.parts(self.rect, skew_v);
         let mut to = now;
         match field {
-            TransformField::X => return (state.moved(Vec2::new(value / self.x.units.per_doc - self.position(state, 0), 0.0)), skew_v),
-            TransformField::Y => return (state.moved(Vec2::new(0.0, value / self.y.units.per_doc - self.position(state, 1))), skew_v),
+            TransformField::X => return (state.moved(Vec2::new(value / self.rulers.x.units.per_doc - self.position(state, 0), 0.0)), skew_v),
+            TransformField::Y => return (state.moved(Vec2::new(0.0, value / self.rulers.y.units.per_doc - self.position(state, 1))), skew_v),
             TransformField::W | TransformField::H => {
                 let axis = usize::from(field == TransformField::H);
                 let factor = value / self.per_factor(axis);
@@ -198,7 +198,7 @@ impl Conversion {
                     _ => self.side(axis),
                 }
                 .max(NO_SIDE);
-                units.document_reader(kind, side, pixels_per_inch(self.x, points), points)
+                units.document_reader(kind, side, pixels_per_inch(self.rulers.x, points), points)
             }
         };
         NumberCodec::new(reader, decimals)

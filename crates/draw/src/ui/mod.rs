@@ -119,7 +119,9 @@ pub use slice::{
 };
 pub use stroke::{DashAlign, DashUnit, LineCap, LineJoin, LineStyle, StrokeAlign, StrokeButton, StrokeEditor, StrokePreview, StrokeStyle};
 pub use symmetry::{Symmetry, SymmetryChoice, SymmetryCommand, SymmetryEvent, SymmetryMenu, SymmetryMode, SymmetryOverlay, SymmetryTransform};
-pub use transform::{ApplyBy, RotateZone, SizeUnit, TransformBox, TransformField, TransformFields, TransformGroups, TransformRow};
+pub use transform::{
+    ApplyBy, FieldArrangement, RotateZone, SizeUnit, TransformBox, TransformField, TransformFields, TransformGroups, TransformRow, TransformSource,
+};
 pub use transform::{
     Interpolation, TransformBar, TransformBarOutput, TransformChoice, TransformEdit, TransformOverlay, TransformPhase, TransformPreset,
     TransformRequest, TransformResult, TransformSession, TransformSettings, TransformWarp,

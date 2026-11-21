@@ -478,7 +478,6 @@ fn paint_placeholder(cx: &ContentPainterCx<'_>, rect: Rect, paper: Option<DataCo
 fn paint_failure(cx: &ContentPainterCx<'_>, rect: Rect) {
     let side = cx.tokens.size.icon.sm.min(rect.width().min(rect.height()));
     let icon = Rect::from_center_size(rect.center(), vec2(side, side));
-    // P3(object-panels-w1): op.F3
     crate::primitives::icon::paint_icon(&cx.painter, cx.tokens, cx.direction, icon, &IconSpec::svg(IconId::new("warning")));
 }
 

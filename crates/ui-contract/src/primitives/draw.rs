@@ -370,7 +370,6 @@ impl<'a> Draw<'a> {
                 self.initial(rect, letter, StyleColor(color));
                 return;
             }
-            // P3(object-panels-w1): op.F3
             _ => super::icon::paint_icon(self.painter, self.env.tokens, self.env.direction, rect, icon),
         }
         if let Some(badge) = icon.badge {
