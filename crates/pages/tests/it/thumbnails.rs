@@ -84,7 +84,7 @@ fn organize_keeps_room_above_and_below_each_page() {
     let pages = Landscape(DemoPages::new(1));
     let mut picked = Selection::default();
     let mut fixture = Fixture::new(move |ui| {
-        PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).arrangement(ThumbnailArrangement::Organize).show(ui);
+        let _ = PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).arrangement(ThumbnailArrangement::Organize).show(ui);
     });
     fixture.room(vec2(600.0, 600.0)).settle();
     let page = fixture.by_label("Page 1").expect("page tile").rect;
