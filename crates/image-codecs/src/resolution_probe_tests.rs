@@ -301,3 +301,21 @@ fn png_zero_phys_leaves_the_exif_resolution() {
     assert_eq!(file_resolution(&png(&[zero(0, 0), exif.clone()])), Some((600.0, 600.0)));
     assert_eq!(file_resolution(&png(&[zero(11_811, 0), exif])), Some((600.0, 600.0)));
 }
+
+#[test]
+fn png_pixels_per_meter_preserves_raw_values_and_shared_chunk_limit() {
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[phys(1181, 2362, 1)])), Some((1181, 2362)));
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[phys(1181, 1181, 0)])), None);
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[phys(0, 1181, 1)])), None);
+    assert_eq!(crate::png_probe::pixels_per_meter(b"not a png"), None);
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&[png_chunk(b"IDAT", &[]), phys(1181, 1181, 1)])), None);
+
+    let text = png_chunk(b"tEXt", b"k\x00v");
+    let mut at_limit = vec![text.clone(); super::MAX_CHUNKS - 2];
+    at_limit.push(phys(1181, 1181, 1));
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&at_limit)), Some((1181, 1181)));
+
+    let mut past_limit = vec![text; super::MAX_CHUNKS - 1];
+    past_limit.push(phys(1181, 1181, 1));
+    assert_eq!(crate::png_probe::pixels_per_meter(&png(&past_limit)), None);
+}
