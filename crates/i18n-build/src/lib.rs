@@ -115,8 +115,9 @@ impl Catalogs {
     /// in its repository. A locale here is offered even when the checkout lacks it. When the
     /// checkout has the same locale's app catalog too, the two are merged into one file under
     /// `OUT_DIR`: the rows here, then the checkout's rows whose context and source text are not
-    /// defined here by a row craft-i18n accepts; comments and blank lines are left out. A relative `dir` is under the package
-    /// directory. Unlike the checkout, a catalog here that can't be read is always an [`Error`].
+    /// defined here by a row craft-i18n accepts; comments and blank lines are left out. A relative
+    /// `dir` is under the package directory. Unlike the checkout, a catalog here that can't be
+    /// read is always an [`Error`].
     pub fn app_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.app_dir = Some(dir.into());
         self
@@ -258,11 +259,12 @@ fn region_parent(code: &str) -> Option<&str> {
     is_region.then_some(parent)
 }
 
-/// The rows of `ours`, then every row of `theirs` whose context and source text `ours` defines
-/// with a row craft-i18n accepts. Comments and blank lines are left out. The columns are compared
-/// as written: each text has one spelling in the catalog format, whose only escapes are `\n`, `\t`
-/// and `\\`. A row of `ours` that craft-i18n's parser (`crates/i18n/src/catalog.rs`) skips defines
-/// nothing, so the checkout's row stays and the app's row is skipped and reported at run time.
+/// The rows of `ours`, then every row of `theirs` whose context and source text `ours` doesn't
+/// define with a row craft-i18n accepts. Comments and blank lines are left out. The columns are
+/// compared as written: each text has one spelling in the catalog format, whose only escapes are
+/// `\n`, `\t` and `\\`. A row of `ours` that craft-i18n's parser (`crates/i18n/src/catalog.rs`)
+/// skips defines nothing, so the checkout's row stays and the app's row is skipped and reported at
+/// run time.
 fn merge(ours: &str, theirs: &str) -> String {
     fn rows(text: &str) -> impl Iterator<Item = &str> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);

@@ -76,9 +76,9 @@ name, lowercase letters, digits and `-`. The builder takes:
   the rows here, then the checkout's rows whose context and source text are not defined here by
   a row that craft-i18n accepts. A row here that craft-i18n skips (a trailing `…` or placeholders
   that differ from the source text, an `@plural` row with another number of forms than the
-  checkout's) leaves the checkout's row in place. Comments and blank lines are left out of the merged file, so a problem `check_all` reports in
-  it gives that file's line numbers. A relative path is under the package directory. A catalog
-  here that can't be read is always an error.
+  checkout's) leaves the checkout's row in place. Comments and blank lines are left out of the
+  merged file, so a problem `check_all` reports in it gives that file's line numbers. A relative
+  path is under the package directory. A catalog here that can't be read is always an error.
 - `dir(path)` and `required(bool)` override the two environment variables.
 
 `write` returns the embedded `Locale`s (`code`, `shared`, `app`, `offered()`, `files()`).
