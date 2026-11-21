@@ -400,8 +400,7 @@ pub(crate) fn note_removed_gesture(ctx: &Context, id: GestureId) {
 
 /// Adds a component whose live preview ended to the next `FrameOutput`.
 pub(crate) fn note_ended_preview(ctx: &Context, id: Id) {
-    let _ = (ctx, id);
-    todo!("ty.X1")
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.ended_previews.push(id));
 }
 
 /// Adds a step of an outer gesture to the next `FrameOutput`.
@@ -556,7 +555,7 @@ pub(crate) fn facts(ctx: &Context) -> PassFacts {
     })
 }
 
-/// The running pass's time in seconds, read once by the begin hook: what an app waits on.
+/// The running pass's time in seconds, the same on every pass of a frame: for app code that times a wait.
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {
         Some(facts) => facts.now,

@@ -207,13 +207,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         let space = float_space(bounds, &sizes, self.config, self.specs);
         let spec = |panel: &P| spec_in(self.specs, panel);
         let protected = |panel: &P| (self.permissions)(panel).is_protected();
-        let (hide, _) = hide::resolved(self.hide, shell.as_ref(), None); // P3(chrome-w2): ch.K7
+        let prune = hide::Prune::new(self.layout, self.hide, shell.as_ref());
         let mut target = DockDropTarget::new(&ctx, self.dock, self.layout, self.permissions);
         target.rtl = self.rtl;
         target.space = Some(&space);
         target.float_on_empty = self.config.float_on_empty_drop;
         target.title_bar_docks = self.config.title_bar_docks;
-        target.placing = Some(Placing::new(sizes, &spec, &protected).shown(hide, self.maximized));
+        target.placing = Some(Placing::new(sizes, &spec, &protected).shown(prune.hide(), self.maximized));
         cx.drop_target::<GroupDrag<P>, _>(&target).or_else(|| cx.drop_target::<PanelDrag, _>(&target))
     }
 }

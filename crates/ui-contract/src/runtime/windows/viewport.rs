@@ -3,7 +3,7 @@
 use super::native::{WindowAction, act, route_hit_test};
 use super::placement::{record_placement, saved_placement};
 use super::shell::{app_id, os_of, refresh};
-use super::spec::{WindowSpec, frame_of_spec};
+use super::spec::{WindowLevel, WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
 use crate::runtime::egui::viewports;
 use crate::runtime::frame::PerViewport;
@@ -77,6 +77,8 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         record.level.get_or_insert(spec.level).for_egui(active, os)
     });
     let app = app_id(ctx);
+    // PLAN: `Shared::palettes_yield` is written by shell-w1 (ch.K8); a palette built while it holds opens hidden.
+    let yielding = shared(ctx, |shared| shared.palettes_yield);
     let opens = viewports::Spec {
         title: open.title,
         // The builder carries the place only until the window opens: egui would send each change of it as a command.
@@ -92,7 +94,9 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         level,
         resizable: open.resizable,
         taskbar: spec.taskbar,
-        hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint),
+        hidden: PerViewport::<Record>::with(ctx, viewport, |record| {
+            record.awaiting_first_paint || (yielding && record.level == Some(WindowLevel::Palette))
+        }),
         app_id: &app,
     };
     viewports::show_immediate(ctx, viewport, &opens, |ui| {
