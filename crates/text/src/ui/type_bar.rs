@@ -14,6 +14,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::HostRequests;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::Env;
+use craft_ui::text::RangeAlert;
 use egui::{Response, Ui};
 
 use crate::ui::character::paragraph::{align_toggles, direction_toggles};
@@ -21,7 +22,7 @@ use crate::ui::character::rows::{
     LengthRow, Lengths, family_field, hidden_side, mark, mixed, number_change, select_row, size_menu, string_entries, toggle_row,
 };
 use crate::ui::character::{
-    COLOR_KEY, CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords, SIZE_RANGE,
+    BAR_SIZE_RANGE, COLOR_KEY, CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords,
 };
 use crate::ui::length::DocUnit;
 use crate::ui::type_options::{TextAntiAlias, TextOrientation, TypeOptionWords};
@@ -74,6 +75,10 @@ pub struct TypeBarOutput {
     pub rested_family: Option<String>,
     /// The colour well was clicked.
     pub requests: HostRequests,
+    /// A value typed into the size field outside its range was clamped to the nearest limit, in the pass it
+    /// committed; never for an arrow, wheel or scrub step. The bar shows nothing itself: the host words this
+    /// report as the out-of-range alert (PhotoCraft #12053).
+    pub size_out_of_range: Option<RangeAlert>,
     /// The Warp Text button was pressed.
     pub warp: bool,
     /// The Character and Paragraph panels button was pressed.
@@ -167,6 +172,7 @@ impl<'a> TypeBar<'a> {
         let mut rested_family = None;
         let mut requests = HostRequests::new();
         let (mut warp, mut panels) = (false, false);
+        let mut size_out_of_range = None;
 
         let row = Row::new().gap(Gap::Item).show(ui, |ui, _| {
             let shown_vertical = orientation.map(|o| o == TextOrientation::Vertical);
@@ -190,8 +196,9 @@ impl<'a> TypeBar<'a> {
 
             // The size glyph the Character panel's size row shows.
             let side = mark(GlyphLabel::text("tT"), None, FieldLayout::Inside);
-            let size = LengthRow { label: bar_words.size.clone(), side, value: character.size, range: SIZE_RANGE, presets: &size_presets };
-            let (event, _) = lengths.row(ui, size);
+            let size = LengthRow { label: bar_words.size.clone(), side, value: character.size, range: BAR_SIZE_RANGE, presets: &size_presets };
+            let (event, _, alert) = lengths.row_with_alert(ui, size);
+            size_out_of_range = alert;
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));
 
             let method = Field::new(option_words.anti_alias.clone()).side(hidden_side()).show(ui, |ui, _| {
@@ -219,6 +226,6 @@ impl<'a> TypeBar<'a> {
             let button = IconButton::new(IconId::new("panels_top_left")).label(bar_words.panels.clone()).show(ui);
             panels = clicked(&button);
         });
-        TypeBarOutput { response: row.output.response().clone(), edits, preview_family, rested_family, requests, warp, panels }
+        TypeBarOutput { response: row.output.response().clone(), edits, preview_family, rested_family, requests, size_out_of_range, warp, panels }
     }
 }
