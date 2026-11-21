@@ -564,6 +564,16 @@ impl TrackDecoder {
         }
     }
 
+    /// Whether a Vorbis packet's first byte names a mode of the stream, so that its block size
+    /// does not depend on the packet before it; `false` for other codecs.
+    #[cfg(feature = "decode-native")]
+    pub(crate) fn vorbis_mode_readable(&self, packet: &[u8]) -> bool {
+        match &self.inner {
+            Inner::Vorbis { dec, .. } => dec.block_size(packet).is_some(),
+            _ => false,
+        }
+    }
+
     /// How many frames a packet holds, read from the packet alone, for codecs whose packets
     /// say: ALAC's headers (given the frame length).
     #[cfg(feature = "decode-native")]

@@ -8,6 +8,8 @@ use craft_media::ogg::PageWriter;
 
 /// Vorbis order (§4.3.9) to WAV order for six channels: output channel → stream channel.
 const WAV_ORDER_6: [usize; 6] = [0, 2, 1, 5, 3, 4];
+/// The same for eight channels (7.1).
+const WAV_ORDER_8: [usize; 8] = [0, 2, 1, 7, 5, 6, 3, 4];
 
 fn signal(rate: u32, channels: usize, frames: usize) -> Vec<Vec<f32>> {
     (0..channels)
@@ -82,19 +84,24 @@ fn remux(p: &Parts, packets: &[Vec<u8>], per_page: usize, shift: i64, last: i64)
 
 #[test]
 fn ogg_vorbis_streams_packet_by_packet_to_the_whole_file_decode() {
-    for (rate, channels, quality) in [(44_100u32, 2usize, 5.0f32), (48_000, 1, 2.0), (32_000, 6, 4.0)] {
+    for (rate, channels, quality) in [(44_100u32, 2usize, 5.0f32), (48_000, 1, 2.0), (32_000, 6, 4.0), (32_000, 8, 3.0)] {
         let ogg = encode(rate, channels, 40_000, quality);
         let whole = decode_ogg(&ogg).expect("decode_ogg");
         // the native decoder's output, in WAV order
-        let expected: Vec<Vec<f32>> =
-            if channels == 6 { WAV_ORDER_6.iter().map(|&c| whole.channels[c].clone()).collect() } else { whole.channels.clone() };
+        let expected: Vec<Vec<f32>> = match channels {
+            6 => WAV_ORDER_6.iter().map(|&c| whole.channels[c].clone()).collect(),
+            8 => WAV_ORDER_8.iter().map(|&c| whole.channels[c].clone()).collect(),
+            _ => whole.channels.clone(),
+        };
         let mut dec = Decoder::from_bytes(&ogg, None, &DecodeOptions::default()).expect("open");
         let info = dec.info().clone();
         assert_eq!((info.container, info.codec, info.sample_rate, usize::from(info.channels)), (Container::Ogg, CodecId::Vorbis, rate, channels));
         assert!(dec.length_known());
         assert_eq!(info.frames, 40_000);
-        if channels == 6 {
-            assert_eq!(info.layout, ChannelLayout::SURROUND_5_1);
+        match channels {
+            6 => assert_eq!(info.layout, ChannelLayout::SURROUND_5_1),
+            8 => assert_eq!(info.layout, ChannelLayout::SURROUND_7_1),
+            _ => {}
         }
         assert_eq!(drain(&mut dec), expected, "{rate} Hz, {channels} ch");
         let (decoded_info, buf) = decode(&ogg, Some("ogg")).expect("decode");
@@ -189,6 +196,32 @@ fn a_damaged_packet_keeps_the_audio_after_it_in_place() {
     let mut dec = Decoder::from_bytes(&first_damaged, None, &DecodeOptions::default()).expect("open");
     dec.seek(20_000).expect("seek");
     assert_eq!(drain(&mut dec), buf.channels.iter().map(|c| c[20_000..].to_vec()).collect::<Vec<_>>());
+}
+
+/// A seek into the packet after one or two damaged packets lands where asked: the damaged packets
+/// are concealed at the long block size of the packet before them, in the timing as after the
+/// seek, so the audio after the seek is the whole decode's.
+#[test]
+fn a_seek_past_damaged_packets_keeps_the_audio_in_place() {
+    let ogg = encode(44_100, 2, 60_000, 5.0);
+    let p = parts(&ogg);
+    let longest = *p.frames.iter().max().expect("packets");
+    // packets k - 2 to k + 1 all long blocks
+    let k = (3..p.frames.len() - 3).find(|&k| (k - 1..=k + 1).all(|j| p.frames[j] == longest)).expect("a run of long blocks");
+    for damage in [&[k][..], &[k - 1, k]] {
+        let mut packets = p.packets.clone();
+        for &d in damage {
+            packets[d][0] |= 1; // not an audio packet any more
+        }
+        let damaged = remux(&p, &packets, 8, 0, p.last_granule);
+        let (info, buf) = decode(&damaged, None).expect("decode");
+        assert_eq!(info.damaged, damage.len() as u64);
+        // a frame inside packet k + 1
+        let target = p.frames[..=k].iter().sum::<usize>() + 10;
+        let mut dec = Decoder::from_bytes(&damaged, None, &DecodeOptions::default()).expect("open");
+        assert_eq!(dec.seek(target as u64).expect("seek"), target as u64);
+        assert_eq!(drain(&mut dec), buf.channels.iter().map(|c| c[target..].to_vec()).collect::<Vec<_>>(), "damaged packets {damage:?}");
+    }
 }
 
 #[test]

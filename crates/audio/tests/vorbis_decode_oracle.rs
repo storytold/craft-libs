@@ -59,6 +59,17 @@ fn assert_same(name: &str, ours: &[Vec<f32>], theirs: &[Vec<f32>]) {
     assert_prefix(name, ours, theirs, true);
 }
 
+/// Each of our channels matches ffmpeg's channel of the same index, to within float rounding.
+fn assert_same_order(name: &str, ours: &[Vec<f32>], theirs: &[Vec<f32>]) {
+    assert_eq!(ours.len(), theirs.len(), "{name}: channel count");
+    assert!(ours.iter().chain(theirs).flatten().all(|v| v.is_finite()), "{name}: non-finite oracle input or output");
+    for (c, (o, t)) in ours.iter().zip(theirs).enumerate() {
+        assert_eq!(o.len(), t.len(), "{name}: channel {c} length {} vs ffmpeg {}", o.len(), t.len());
+        let worst = o.iter().zip(t).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 2e-4, "{name}: channel {c} differs from ffmpeg's channel {c} by up to {worst}");
+    }
+}
+
 /// As [`assert_same`], but with `exact` unset ffmpeg may return more samples than we do (it does
 /// not always trim a stream to its last granule position); the common part must agree.
 fn assert_prefix(name: &str, ours: &[Vec<f32>], theirs: &[Vec<f32>], exact: bool) {
@@ -103,10 +114,11 @@ fn ffmpeg_decodes_our_encoders_streams_to_the_same_samples() {
         assert_eq!(decoded.sample_rate, rate);
         let theirs = ffmpeg_decode(&ffmpeg, &file, channels);
         assert_same(&format!("our stream {rate} Hz {channels} ch q{quality}"), &decoded.channels, &theirs);
-        // The file decoder streams the same stream packet by packet, in WAV order.
+        // The file decoder streams the same stream packet by packet, in WAV order, which is the
+        // order ffmpeg returns Vorbis channels in for 1 to 8 channels.
         let (info, streamed) = craft_audio::decode(&ogg, Some("ogg")).expect("file decode");
         assert_eq!((info.codec, info.damaged), (craft_audio::CodecId::Vorbis, 0));
-        assert_same(&format!("our stream {rate} Hz {channels} ch q{quality} through decode"), &streamed.channels, &theirs);
+        assert_same_order(&format!("our stream {rate} Hz {channels} ch q{quality} through decode"), &streamed.channels, &theirs);
     }
 }
 

@@ -71,9 +71,11 @@ enum Packets<'a> {
         next: usize,
         /// Output frame of each packet's first decoded sample (the pre-skip negative).
         starts: Vec<i64>,
-        /// The first packet after a seek decodes to nothing (Vorbis, whose blocks overlap), so a
-        /// seek starts one packet earlier.
-        primes: bool,
+        /// Vorbis, whose first packet after a seek decodes to nothing (its blocks overlap): whether
+        /// each packet can prime the decoder, which a packet whose mode can be read does. A seek
+        /// starts at the latest such packet before the target's, so the packets between are
+        /// concealed at the block sizes the timeline gave them. `None` for Opus.
+        primers: Option<Vec<bool>>,
     },
     /// Frames of a raw stream: `(offset, length, decoded frames)`.
     Raw { frames: Vec<(u64, u32, u32)>, src: Src<'a>, next: usize },
@@ -152,12 +154,21 @@ impl Packets<'_> {
                 *next = i;
                 Ok(s)
             }
-            Packets::Ogg { next, starts, primes, .. } => {
+            Packets::Ogg { next, starts, primers, .. } => {
                 let base = starts.first().copied().unwrap_or(0);
-                let (i, s) = at_or_before(starts.iter().map(|&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0)), frame);
-                // The packet before primes the decoder; the packet at `i` then decodes from `s`.
-                *next = if *primes { i.saturating_sub(1) } else { i };
-                Ok(s)
+                let start = |k: usize| starts.get(k).map_or(0, |&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0));
+                let (i, s) = at_or_before((0..starts.len()).map(start), frame);
+                let Some(primers) = primers.as_ref().filter(|_| i > 0) else {
+                    *next = i;
+                    return Ok(s);
+                };
+                // The packet before primes the decoder. A packet whose mode cannot be read is
+                // concealed at the previous block's size, which a reset forgets, so the seek backs
+                // up to a packet whose mode can be read, or to the first packet (which has no block
+                // before it, as after a reset). Decoding then resumes at the packet after it.
+                let p = (0..i).rev().find(|&k| primers.get(k).copied().unwrap_or(false)).unwrap_or(0);
+                *next = p;
+                Ok(start(p + 1))
             }
             Packets::Raw { frames, next, .. } => {
                 let mut acc = 0u64;
@@ -1062,7 +1073,7 @@ fn open_ogg<'a>(src: &Src<'a>, track: Option<usize>) -> Option<Result<Native<'a>
     let limit = u64::try_from(timing.total).ok();
     let skip = u64::from(timing.pre_skip);
     let starts = timing.starts.clone();
-    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primes: false };
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primers: None };
     native(Container::Ogg, packets, &params, &[], skip, limit, limit).map(Ok)
 }
 
@@ -1079,10 +1090,11 @@ fn open_ogg_vorbis<'a>(src: &Src<'a>, file: ogg::OggFile, stream: usize) -> Opti
         Err(e) => return Some(Err(e)),
     };
     let (starts, total) = granule_starts(s, &vorbis_durations(&dec, &s.packets));
+    let primers = s.packets.iter().map(|p| dec.vorbis_mode_readable(vorbis_head(p))).collect();
     // Decoded frames before the first page's granule position are not presented.
     let skip = u64::try_from(starts.first().copied().unwrap_or(0).saturating_neg()).unwrap_or(0);
     let limit = u64::try_from(total).ok();
-    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primes: true };
+    let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primers: Some(primers) };
     Some(Ok(with_decoder(Container::Ogg, packets, dec, skip, limit, limit)))
 }
 
@@ -1094,8 +1106,7 @@ fn vorbis_durations(dec: &TrackDecoder, packets: &[ogg::Packet]) -> Vec<u64> {
     packets
         .iter()
         .map(|p| {
-            let head = p.prefix.get(..(p.size as usize).min(p.prefix.len())).unwrap_or_default();
-            let n = dec.vorbis_block_size(head, prev);
+            let n = dec.vorbis_block_size(vorbis_head(p), prev);
             let frames = match (prev, n) {
                 (Some(a), Some(b)) => (a / 4 + b / 4) as u64,
                 _ => 0,
@@ -1104,6 +1115,11 @@ fn vorbis_durations(dec: &TrackDecoder, packets: &[ogg::Packet]) -> Vec<u64> {
             frames
         })
         .collect()
+}
+
+/// The first bytes of a Vorbis packet, which hold its mode number.
+fn vorbis_head(p: &ogg::Packet) -> &[u8] {
+    p.prefix.get(..(p.size as usize).min(p.prefix.len())).unwrap_or_default()
 }
 
 /// Largest granule position [`granule_starts`] trusts, as for Opus.
