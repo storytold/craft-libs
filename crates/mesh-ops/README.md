@@ -212,7 +212,7 @@ For both apps:
 | `Mesh::append` with a mismatched attribute | the missing normals, UVs or tangents are filled in; `try_append` returns an error on overflow or a bad index |
 | `Mesh::append` with submeshes and no material list on either side | that side gets one unnamed material |
 | `Mesh::uv_tiles` with a UV centroid whose tile is outside the `i32` range | `Invalid`, not a saturated tile |
-| `UvGBuffer::try_new` with a trailing index, or a corner of the material's triangles without a vertex, a finite UV, a normal or a tangent | `Invalid`, not a buffer without those triangles; `UvGBuffer::new` returns the 1 × 1 uncovered buffer |
+| `UvGBuffer::try_new` with a trailing index, or a corner of the material's triangles without a vertex, a finite UV, a normal or a tangent, or with a non-finite position, normal or tangent | `Invalid`, not a buffer without those triangles; `UvGBuffer::new` returns the 1 × 1 uncovered buffer |
 | `Mesh::append` with a trailing index, a submesh that does not start and end on a triangle, or a submesh whose material is not listed | `try_append` returns `Invalid`, and `append` leaves the mesh unchanged |
 | `Mesh::validate` | also rejects a submesh that does not start and end on a triangle, and a non-finite normal, UV, tangent or color |
 | `Mesh::subdivided` with an invalid mesh | returns a copy; `try_subdivided` returns the error |

@@ -113,8 +113,9 @@ impl UvGBuffer {
     /// lists are checked before the texel buffers are reserved. An index count that is not a
     /// multiple of 3, a submesh of the material that does not start and end on a triangle
     /// boundary inside the index buffer, and a corner of the material's triangles without a
-    /// vertex, a finite UV, a normal or a tangent are `Invalid`, so every covered texel has a
-    /// [`UvGBuffer::surface`]. [`UvGBuffer::from_slices`] needs only the UVs.
+    /// vertex, a finite UV, a normal or a tangent, or with a non-finite position, normal or
+    /// tangent, are `Invalid`, so every covered texel has a [`UvGBuffer::surface`].
+    /// [`UvGBuffer::from_slices`] needs only the UVs.
     pub fn try_new(mesh: &Mesh, material: usize, width: u32, height: u32, limits: &Limits) -> Result<UvGBuffer> {
         let n = texels(width, height, limits)?;
         check_limit("vertex count", mesh.positions.len(), limits.max_vertices)?;
@@ -139,8 +140,11 @@ impl UvGBuffer {
                 if !mesh.uvs.get(v).is_some_and(|uv| uv.is_finite()) {
                     return Err(MeshOpsError::Invalid(format!("vertex {v} has no finite UV")));
                 }
-                if v >= mesh.normals.len() || v >= mesh.tangents.len() {
+                let (Some(n), Some(t)) = (mesh.normals.get(v), mesh.tangents.get(v)) else {
                     return Err(MeshOpsError::Invalid(format!("vertex {v} has no normal or no tangent")));
+                };
+                if !(mesh.positions.get(v).is_some_and(|p| p.is_finite()) && n.is_finite() && t.is_finite()) {
+                    return Err(MeshOpsError::Invalid(format!("vertex {v} has a non-finite position, normal or tangent")));
                 }
             }
         }
@@ -744,6 +748,9 @@ mod tests {
             ("missing normal", broken(&|b| b.normals.truncate(3))),
             ("no normals", broken(&|b| b.normals.clear())),
             ("missing tangent", broken(&|b| b.tangents.truncate(3))),
+            ("NaN position", broken(&|b| b.positions[3].y = f32::NAN)),
+            ("infinite normal", broken(&|b| b.normals[3].z = f32::INFINITY)),
+            ("NaN tangent", broken(&|b| b.tangents[3].w = f32::NAN)),
             ("index past the vertices", broken(&|b| b.indices[4] = 9)),
             ("trailing index", broken(&|b| b.indices.push(0))),
         ] {

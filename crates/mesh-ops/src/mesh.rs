@@ -937,6 +937,10 @@ impl Mesh {
     /// the mesh's vertices and the copies of its shared ones over [`Limits::max_vertices`]. A triangle that a submesh of
     /// another material also lists is `Invalid`, and a reservation that fails is `OutOfMemory`.
     /// Every error leaves the mesh unchanged and does not call `f`.
+    ///
+    /// Tangents are copied with their vertices and not recomputed. After a map that rotates,
+    /// mirrors or skews the UVs, call [`Mesh::try_compute_tangents`] for tangent frames that
+    /// follow the new UVs.
     pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2, limits: &Limits) -> Result<()> {
         let listed = self.listed_of(m, limits)?;
         let n = self.positions.len();
