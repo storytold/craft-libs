@@ -9,6 +9,7 @@
   "upstream_directory": "",
   "local_patches": [
     "In `src/sweep/sweep_line.rs`, the doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out.",
+    "In `src/curve/transverse.rs`, `transversal_after` (and `transversal_before`, which calls it) returns `false` when either dy/dt bound is not positive, instead of cross-multiplying the slope bounds, which reverses the comparison for a negative bound.",
     "In `src/curve/mod.rs`, when the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope, so a curve near x = 1e305 with heights near 1e4 no longer gives a NaN coefficient. In `src/curve/line.rs`, `line_at_ys` scales the x coordinates by 2^600 before the weighted sum and back after it when both have a magnitude below 2^-500, so a subnormal x coordinate no longer rounds to 0. Both files add tests for it.",
     "In `docs/sweep.typ`, the intersection scan to the left compares each segment with `alpha^(i+1)`, the segment the lemma after it is stated for, instead of `alpha^i`.",
     "In `docs/sweep.typ`, the typo \"condi0.2tions\" reads \"conditions\", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false.",
@@ -41,7 +42,7 @@
     { "path": "src/curve/line.rs", "source_sha256": "07aebead4b0050410a3f9f28b66062b6016c115df58e2b2669470263cd352f3e", "source_git_blob": null, "sha256": "4cdcb0493a5772eaf64af3ee50b48ddf01e655e3ea0776c5c801cca146671a42" },
     { "path": "src/curve/mod.rs", "source_sha256": "36a8dbe96ac1d3bec307dc63b504206ec7fdfc11d10799fbb1a8990c29b8c5f2", "source_git_blob": null, "sha256": "33b506d2d1d869ac384787825e19779fe40603effb33b40970e4ea6785ae2f84" },
     { "path": "src/curve/split_quad.rs", "source_sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f", "source_git_blob": null, "sha256": "b8aae4ce7c16fa623724f667e1058130a9c7eed693b5b01e8b9e16632b8ec45f" },
-    { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e" },
+    { "path": "src/curve/transverse.rs", "source_sha256": "be9c695531f4cb0fe73af13e78040b51b9476c193d84562e701aadd07b3fd06e", "source_git_blob": null, "sha256": "e1b8658f2b6e0e502bc81d16c393a16a426b6cc1572477ca809ca861fc005de9" },
     { "path": "src/generators.rs", "source_sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef", "source_git_blob": null, "sha256": "cc9f2441546db9204219294c354449809dda77dffad06fec8a30f45df01e6fef" },
     { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
