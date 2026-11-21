@@ -16,7 +16,8 @@ must validate any additional requirements they depend on.
 
 `roots::Roots` confines the file paths in tool arguments to read and write roots.
 `Roots::check` resolves a path, following links, and returns it only when it lies
-inside a root of the requested kind. On Windows it also refuses device names,
+inside a root of the requested kind. On Windows it also refuses, in the path as
+given and in the path its links lead to, device names,
 alternate data streams, names that end in a dot or a space, `\\.\` paths, and `\\?\`
 paths other than plain drive and UNC paths such as those `check` returns.
 `Roots::required` refuses to build roots without both kinds. A path is checked

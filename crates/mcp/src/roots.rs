@@ -14,11 +14,11 @@
 //! - The result must be a root or lie inside one, compared folder name by folder name, so `/work2`
 //!   is not inside `/work`. Following the links gives existing names as the file system stores
 //!   them, so a path typed in another case still matches on a file system that ignores case.
-//! - On Windows these are refused: device names (`CON`, `NUL`, `COM1`, `LPT¹` and the like, also
-//!   with an extension), a `:` after the drive, a file or folder name that ends in a dot or a
-//!   space, a path that starts with `\\.\`, and one that starts with `\\?\` unless it is a drive
-//!   or UNC path with no `/` and no empty, `.` or `..` name, such as a path [`Roots::check`]
-//!   returned. The names follow
+//! - On Windows these are refused, in the path as given and again in the path its links lead to:
+//!   device names (`CON`, `NUL`, `COM1`, `LPT¹` and the like, also with an extension), a `:`
+//!   after the drive, a file or folder name that ends in a dot or a space, a path that starts
+//!   with `\\.\`, and one that starts with `\\?\` unless it is a drive or UNC path with no `/`
+//!   and no empty, `.` or `..` name, such as a path [`Roots::check`] returned. The names follow
 //!   <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>.
 //!
 //! A path is checked and then opened. Another program that swaps a folder for a link between the
@@ -105,7 +105,8 @@ pub struct Roots {
 
 impl Roots {
     /// Roots from the folders given, which must exist. A folder given twice counts once. Either
-    /// list may be empty; that kind of access is then not granted.
+    /// list may be empty; that kind of access is then not granted. On Windows a folder whose path,
+    /// with its links followed, breaks the name rules in the module documentation is refused.
     pub fn new(read: &[PathBuf], write: &[PathBuf]) -> Result<Roots, AccessError> {
         Ok(Roots { read: open_all(read, Access::Read)?, write: open_all(write, Access::Write)? })
     }
@@ -174,6 +175,9 @@ fn open_all(paths: &[PathBuf], access: Access) -> Result<Vec<PathBuf>, AccessErr
         if !resolved.is_dir() {
             return Err(bad("it is not a folder".into()));
         }
+        if cfg!(windows) {
+            check_resolved_names(&resolved).map_err(|e| bad(e.to_string()))?;
+        }
         if !out.iter().any(|r| same_path(r, &resolved)) {
             out.push(resolved);
         }
@@ -230,6 +234,9 @@ fn resolve(path: &Path) -> Result<PathBuf, AccessError> {
         match std::fs::canonicalize(at) {
             Ok(mut found) => {
                 found.extend(missing.iter().rev());
+                if cfg!(windows) {
+                    check_resolved_names(&found)?;
+                }
                 return Ok(found);
             }
             Err(e) => match std::fs::symlink_metadata(at) {
@@ -290,6 +297,12 @@ fn without_verbatim_prefix(path: &Path) -> Result<PathBuf, AccessError> {
         }
     }
     Ok(plain)
+}
+
+/// The Windows name rules applied to a path with its links followed, so a link or junction to a
+/// folder whose name the rules refuse is refused too.
+fn check_resolved_names(found: &Path) -> Result<(), AccessError> {
+    check_windows_names(&without_verbatim_prefix(found)?)
 }
 
 /// The Windows name rules from the module documentation.
@@ -495,6 +508,34 @@ mod tests {
         assert!(matches!(dotted.check(&base.join("i\u{307}").join("x.json"), Access::Read), Err(AccessError::Outside { .. })));
         assert!(!display_path(&roots.read()[0]).to_string_lossy().starts_with(r"\\?\"));
         assert!(roots.check(&inside, Access::Read).is_ok());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A link or junction can lead to a folder whose name the Windows rules refuse; `canonicalize`
+    /// then returns that name. Making such a link needs rights the test may not have, so the check
+    /// runs on paths in the form `canonicalize` returns.
+    #[cfg(windows)]
+    #[test]
+    fn resolved_names_follow_the_windows_name_rules() {
+        for ok in [r"\\?\C:\work\actual\x.txt", r"\\?\UNC\server\share\work\x.txt", r"\\?\UNC\server\share"] {
+            assert_eq!(check_resolved_names(Path::new(ok)), Ok(()), "{ok}");
+        }
+        let refused = |p: &str| check_resolved_names(Path::new(p)).unwrap_err();
+        assert!(matches!(refused(r"\\?\C:\work\actual.\x.txt"), AccessError::TrailingDotOrSpace { .. }));
+        assert!(matches!(refused(r"\\?\C:\work\actual \x.txt"), AccessError::TrailingDotOrSpace { .. }));
+        assert!(matches!(refused(r"\\?\C:\work\CON\x.txt"), AccessError::Device { .. }));
+        assert!(matches!(refused(r"\\?\UNC\server\share\nul.txt"), AccessError::Device { .. }));
+        assert!(matches!(refused(r"\\?\Volume{00000000-0000-0000-0000-000000000000}\x.txt"), AccessError::Verbatim { .. }));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_root_whose_resolved_name_the_windows_rules_refuse_is_bad() {
+        let (base, _) = folders("resolved-root");
+        let trailing = PathBuf::from(format!(r"\\?\{}\trailing.", std::path::absolute(&base).unwrap().display()));
+        std::fs::create_dir_all(&trailing).unwrap();
+        let e = Roots::new(&[trailing], &[]).unwrap_err();
+        assert!(matches!(e, AccessError::BadRoot { access: Access::Read, .. }), "{e}");
         let _ = std::fs::remove_dir_all(base);
     }
 }
