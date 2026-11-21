@@ -195,7 +195,10 @@ fn read_traits(catalog: &Catalog, face: &FaceInfo) -> Option<Traits> {
     }
     let weight = os2.as_ref().map_or(400, |t| t.us_weight_class()).clamp(1, 1000);
     let fixed_pitch = font.post().ok().is_some_and(|p| p.is_fixed_pitch() != 0);
-    Some(Traits { class: classify(&face.family, family_class, panose, fixed_pitch), panose, weight })
+    let class = classify(&face.family, family_class, panose, fixed_pitch).or_else(|| {
+        face.localized_families.iter().find_map(|n| classify(&n.name, family_class, panose, fixed_pitch))
+    });
+    Some(Traits { class, panose, weight })
 }
 
 /// The class of a family from its regular face, `None` when the face can't be read.

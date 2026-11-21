@@ -61,11 +61,11 @@ pub(crate) fn keymap_platform(target: Target, os: Platform) -> Platform {
 /// A replay at another place moves the titles' rect with the bar.
 impl craft_ui::runtime::Shift for MenuBarOutput {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
-        MenuBarOutput { titles: by.rect(self.titles), titles_width: self.titles_width }
+        MenuBarOutput { titles: by.rect(self.titles) }
     }
 
     fn snapped(&self, to: &Self, within: f32) -> Self {
-        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within), titles_width: self.titles_width }
+        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within) }
     }
 }
 
@@ -76,9 +76,6 @@ pub struct MenuBarOutput {
     /// The menu titles alone, without the room the bar leaves after them
     /// ([`craft_ui::menu::MenuBarOutput::titles`]).
     pub titles: Rect,
-    /// The width every title takes side by side, before the fit ([`craft_ui::menu::MenuBarOutput::titles_width`]):
-    /// what a title bar declares for its leading region (`TitleBar::leading_width`).
-    pub titles_width: f32,
 }
 
 /// The English-label hook a bar takes by default: none is set, so this type only names the slot.
@@ -99,8 +96,6 @@ pub struct MenuBarUi<'a, E = EnglishFn> {
     preferred: &'a [(&'a str, char)],
     keyboard: Option<bool>,
     help_search: bool,
-    /// The width the bar takes instead of the titles' own, from the title bar's leading region.
-    width: Option<f32>,
 }
 
 /// Every input of the bar's view.
@@ -113,13 +108,12 @@ struct BarProps<'a, #[memo_props(stateless)] E> {
     keyboard: bool,
     help: Option<usize>,
     label: Label,
-    width: Option<f32>,
 }
 
 impl<'a> MenuBarUi<'a> {
     /// The bar for `bar`, already laid out ([`crate::layout`]), on the shell's platform ([`Target::of_shell`]).
     pub fn new(bar: &'a Tracked<MenuBar>) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: None, english: None, preferred: &[], keyboard: None, help_search: false, width: None }
+        MenuBarUi { bar, target: None, english: None, preferred: &[], keyboard: None, help_search: false }
     }
 }
 
@@ -145,8 +139,8 @@ impl<'a, E: Fn(Labeled<'_>) -> Option<String> + Copy + 'static> MenuBarUi<'a, E>
     /// mnemonic. The Help menu's search also matches the English labels, on every target. The hook is a fn item or a
     /// closure that captures nothing ([`Stateless`]): the bar's key follows its type.
     pub fn english<F: Fn(Labeled<'_>) -> Option<String> + Copy + 'static>(self, english: F) -> MenuBarUi<'a, F> {
-        let MenuBarUi { bar, target, english: _, preferred, keyboard, help_search, width } = self;
-        MenuBarUi { bar, target, english: Some(Stateless::new(english)), preferred, keyboard, help_search, width }
+        let MenuBarUi { bar, target, english: _, preferred, keyboard, help_search } = self;
+        MenuBarUi { bar, target, english: Some(Stateless::new(english)), preferred, keyboard, help_search }
     }
 
     /// Preferred mnemonics, each for a menu or submenu by its title as shown or for an item by its command id:
@@ -161,13 +155,6 @@ impl<'a, E: Fn(Labeled<'_>) -> Option<String> + Copy + 'static> MenuBarUi<'a, E>
     /// ([`MenuBar::help_entries`]). A bar with no Help menu has no field.
     pub fn help_search(mut self, on: bool) -> MenuBarUi<'a, E> {
         self.help_search = on;
-        self
-    }
-
-    /// The width the bar takes instead of the titles' own: the title bar's leading region declares it
-    /// (`TitleBar::leading_width`, `HeaderRegion::inline_width`).
-    pub fn width(mut self, width: Option<f32>) -> MenuBarUi<'a, E> {
-        self.width = width;
         self
     }
 
@@ -186,11 +173,8 @@ impl<'a, E: Fn(Labeled<'_>) -> Option<String> + Copy + 'static> MenuBarUi<'a, E>
             keyboard: self.keyboard.unwrap_or(target != Target::Mac),
             help,
             label: env.words::<BarWords>().label.clone(),
-            width: self.width,
         };
-        MemoView::new("menu-bar", props, show_bar::<E>)
-            .show(ui)
-            .unwrap_or(MenuBarOutput { titles: Rect::NOTHING, titles_width: 0.0 })
+        MemoView::new("menu-bar", props, show_bar::<E>).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING })
     }
 }
 
@@ -229,12 +213,11 @@ fn show_bar<E: Fn(Labeled<'_>) -> Option<String> + Copy + 'static>(props: &mut B
     // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
     let bar_model: &MenuBar = props.bar;
     let entries = move || entries_of(bar_model, english);
-    let mut bar = Bar::new(props.label.clone(), titles).keyboard(props.keyboard).own_width(props.width);
+    let mut bar = Bar::new(props.label.clone(), titles).keyboard(props.keyboard);
     if let Some(menu) = props.help {
         bar = bar.help(MenuHelp::new(menu, &entries));
     }
-    let shown = bar.show(ui);
-    MenuBarOutput { titles: shown.titles, titles_width: shown.titles_width }
+    MenuBarOutput { titles: bar.show(ui).titles }
 }
 
 /// What the kept text of a bar is made of: the model, the platform that names its shortcuts, the mnemonic and English

@@ -123,19 +123,11 @@ pub struct ToolRail<'a, T: Value + MemoProps + PlainData + 'static> {
     #[prop(into)]
     hidden: Option<&'a Tracked<Vec<T>>>,
     footer: Option<FooterFn<'a>>,
-    /// Names the slots' rows, tooltips and accessible names in the caller's language (`FlyoutButton::labels`).
-    labels: Option<super::flyout::RailLabels<'a>>,
     /// The columns the rail lays out in this pass.
     columns: usize,
 }
 
 impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
-    /// Names the slots' rows, tooltips and accessible names in the caller's language: `labels` maps a command's own
-    /// label to the one to show, so the rail follows the language of the window it draws in.
-    pub fn labels(mut self, labels: super::flyout::RailLabels<'a>) -> Self {
-        self.labels = Some(labels);
-        self
-    }
     /// A one-column rail named `label` over `slots`, with `current` the host's tool and `last_used` what the slots
     /// showed last.
     pub fn new(label: impl Into<Label>, slots: &'a Tracked<Vec<ToolSlot<T>>>, current: &'a T, last_used: &'a Tracked<LastUsed<T>>) -> Self {
@@ -159,7 +151,6 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             editing: false,
             hidden: None,
             footer: None,
-            labels: None,
             columns: 1,
         }
         .label(label)
@@ -187,7 +178,6 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             edit_label: self.edit_toolbar.clone(),
             opens: self.opens,
             columns: self.columns,
-            labels: self.labels.clone(),
         }
     }
 }
@@ -198,8 +188,8 @@ fn hidden_in<T: PlainData>(hidden: Option<&Tracked<Vec<T>>>) -> &[T] {
 }
 
 /// What the grid's memoized view reads: the slots and the tool state they show, and an outbox for what the buttons
-/// What the grid's memoized view reads: the slots and the tool state they show, and an outbox for what the buttons
 /// report. The host's footer is not in it: it runs every pass, outside the view.
+#[derive(MemoProps)]
 struct GridProps<'a, T: PlainData> {
     slots: &'a Tracked<Vec<ToolSlot<T>>>,
     current: &'a T,
@@ -209,25 +199,8 @@ struct GridProps<'a, T: PlainData> {
     edit_label: Option<Label>,
     opens: Side,
     columns: usize,
-    labels: Option<super::flyout::RailLabels<'a>>,
     sent: Outbox<'a, RailEvent<T>>,
 }
-
-impl<'a, T: MemoProps + PlainData> MemoProps for GridProps<'a, T> {
-    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
-        MemoProps::key(self.slots, key);
-        MemoProps::key(self.current, key);
-        MemoProps::key(self.last_used, key);
-        MemoProps::key(&self.hidden, key);
-        MemoProps::key(&self.editing, key);
-        MemoProps::key(&self.edit_label, key);
-        MemoProps::key(&self.opens, key);
-        MemoProps::key(&self.columns, key);
-        key.feed_hash(&self.labels.is_some());
-        MemoProps::key(&self.sent, key);
-    }
-}
-
 
 /// What the body of one pass draws from.
 struct Draw<'a, T: PlainData> {
@@ -239,7 +212,6 @@ struct Draw<'a, T: PlainData> {
     edit_label: Option<Label>,
     opens: Side,
     columns: usize,
-    labels: Option<super::flyout::RailLabels<'a>>,
 }
 
 impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
@@ -255,7 +227,6 @@ impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
             edit_label: self.edit_label.clone(),
             opens: self.opens,
             columns: self.columns,
-            labels: self.labels.clone(),
             sent: Outbox::new(events),
         };
         MemoView::new("slots", props, grid::<T>).show(ui).flatten()
@@ -289,7 +260,6 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                         let selected = tools.iter().any(|tool| tool.id == *current);
                                         let mut button = FlyoutButton::new(&owned, &shown.id)
                                             .id_salt(("slot", slot.id))
-                                            .labels(props.labels.clone())
                                             .selected(selected)
                                             .enabled(tools.iter().any(|tool| enabled(tool)))
                                             .opens(opens);
