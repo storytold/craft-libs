@@ -2153,6 +2153,25 @@ fn the_fragment_spaces_only_top_level_paragraphs_and_headings() {
     assert!(fragment.contains("<ul><li>Item</li></ul>"), "{fragment}");
 }
 
+/// storytold/wordcraft#7133: two adjacent decimal lists with distinct numbering identities are
+/// separate lists; the export must not merge them into one `<ol>` (which would continue numbering).
+#[test]
+fn adjacent_independent_ordered_lists_stay_separate() {
+    let chr = craft_wordmodel::CharProps::default();
+    let mut d = Document::new();
+    let first = std::sync::Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::ListKind::Numbered);
+    let second = std::sync::Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::ListKind::Numbered);
+    let item = |text: &str, num: u32| {
+        let mut p = craft_wordmodel::Paragraph::with_text(text, chr.clone()).styled("ListParagraph");
+        p.props.numbering = Some(craft_wordmodel::props::NumRef { num, level: 0 });
+        craft_wordmodel::para_block(p)
+    };
+    d.body = vec![item("one", first), item("two", first), item("three", second), item("four", second)];
+
+    let out = export(&d);
+    assert_eq!(out.matches("<ol>").count(), 2, "two independent ordered lists must export as two <ol>: {out}");
+}
+
 /// Code blocks and the paragraphs of a table cell keep the fragment's plain markup, whatever their
 /// spacing.
 #[test]
