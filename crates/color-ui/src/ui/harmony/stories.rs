@@ -29,8 +29,8 @@ const SPOT: Srgba = Srgba::rgb(0.95, 0.65, 0.1);
 
 #[story(HarmonyPanel<'static>, covers = [], drive = Drive::Never, title = "Host cell colors")]
 fn harmony_panel_host_cells(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (state, picked) = data.value("guide", (triad(), HarmonyPicked::default()));
-    HarmonyPanel::new(Bind::bound(&mut *state), Bind::bound(&mut *picked), BASE)
+    let ((state, state_at), (picked, picked_at)) = data.pair_at(("guide", triad()), ("picked", HarmonyPicked::default()));
+    HarmonyPanel::new(state_at.bind(state), picked_at.bind(picked), BASE)
         .cell_color(|cell| match cell.at {
             GuideCellAt::Strip(_) => SPOT,
             GuideCellAt::Grid { .. } => cell.color,

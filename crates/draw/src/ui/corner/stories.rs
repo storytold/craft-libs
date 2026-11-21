@@ -193,8 +193,8 @@ fn cycling_kinds_and_a_wide_angle_limit(ui: &mut Ui, data: &mut StoryData) -> St
 #[story(CornerWidgets<'static>, covers = [], drive = Drive::Never)]
 fn display_only_in_a_layer_colour(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let color = DataColor::new(accent(ui, 1.0));
-    let targets = data.value("targets", targets());
+    let (targets, targets_at) = data.value_at("targets", targets());
     on_canvas(ui, targets, |ui, at, targets| {
-        CornerWidgets::new("Corner radius", Bind::bound(targets)).reach(TransformReach::Shown).color(color).show_at(ui, at)
+        CornerWidgets::new("Corner radius", targets_at.bind(targets)).reach(TransformReach::Shown).color(color).show_at(ui, at)
     })
 }

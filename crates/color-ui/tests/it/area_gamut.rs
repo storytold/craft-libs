@@ -10,8 +10,8 @@ use egui::{Color32, Pos2, Rect, Shape, Ui, Vec2};
 const GRID: f32 = 16.0;
 
 fn area(ui: &mut Ui, data: &mut StoryData, gamut: Gamut<'static>) -> StoryOutput {
-    let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
-    ColorArea::new("Saturation and brightness", AreaMode::Hue, Bind::bound(values)).shape(AreaShape::Square).gamut(gamut).show(ui).into()
+    let values = data.bind("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
+    ColorArea::new("Saturation and brightness", AreaMode::Hue, values).shape(AreaShape::Square).gamut(gamut).show(ui).into()
 }
 
 /// Moves the pale colours of the top-left quarter (saturation under a half, brightness over a half) to black.

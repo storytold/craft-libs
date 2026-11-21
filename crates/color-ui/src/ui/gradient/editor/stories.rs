@@ -71,9 +71,8 @@ fn gradient_editor_combined(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// An Alt-drag of a colour stop onto another swaps their colours.
 #[story(GradientEditor<'static, u8>, covers = [], drive = Drive::Never, title = "Alt-drop swaps")]
 fn gradient_editor_alt_drop_swap(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let stops = data.value("stops", combined());
     let rules = StopRules::new(StopRows::Combined).alt_drop(AltDrop::Swap);
-    let output = GradientEditor::new("Gradient", Bind::bound(stops)).rules(rules).show(ui);
+    let output = GradientEditor::new("Gradient", data.bind("stops", combined())).rules(rules).show(ui);
     hinted(ui, data, output)
 }
 

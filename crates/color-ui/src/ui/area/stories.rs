@@ -49,10 +49,10 @@ fn color_area_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// and edged.
 #[story(ColorArea<'static>, covers = [], drive = Drive::Never)]
 fn color_area_gamut(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
+    let values = data.bind("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
     let pale_to_black = Gamut::new(|color: Srgba| {
         let (high, low) = (color.r.max(color.g).max(color.b), color.r.min(color.g).min(color.b));
         if high > 0.5 && low > high / 2.0 { Srgba::rgb(0.0, 0.0, 0.0) } else { color }
     });
-    ColorArea::new("Saturation and brightness", AreaMode::Hue, Bind::bound(values)).shape(AreaShape::Square).gamut(pale_to_black).show(ui).into()
+    ColorArea::new("Saturation and brightness", AreaMode::Hue, values).shape(AreaShape::Square).gamut(pale_to_black).show(ui).into()
 }

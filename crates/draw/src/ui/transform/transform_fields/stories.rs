@@ -42,8 +42,8 @@ fn panel_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The panel form with X and W on the first row and Y and H on the second.
 #[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
 fn panel_form_position_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let state = data.value("state", sample());
-    TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1))
+    let (state, state_at) = data.value_at("state", sample());
+    TransformFields::new("Transform", state_at.bind(&mut state.0), START, state_at.bind(&mut state.1))
         .arrangement(FieldArrangement::PositionFirst)
         .show(ui)
         .into()
