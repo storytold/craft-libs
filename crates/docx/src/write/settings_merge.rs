@@ -20,6 +20,8 @@ const OWNED: &[&str] = &[
     "w:displayBackgroundShape",
     "w:mirrorMargins",
     "w:gutterAtTop",
+    "w:hideSpellingErrors",
+    "w:hideGrammaticalErrors",
     "w:attachedTemplate",
     "w:linkStyles",
     "w:mailMerge",
