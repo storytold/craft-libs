@@ -126,13 +126,12 @@ pub struct PreviewWatch {
 impl PreviewWatch {
     /// Arms the watch for the component `owner`.
     pub fn arm(&mut self, ctx: &Context, owner: Id) {
-        let _ = (ctx, owner);
-        todo!("ty.X2")
+        self.armed = Some((ctx.clone(), owner));
     }
 
     /// Disarms the watch: its drop notes nothing.
     pub fn disarm(&mut self) {
-        todo!("ty.X2")
+        self.armed = None;
     }
 }
 

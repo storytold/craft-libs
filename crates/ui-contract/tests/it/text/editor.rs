@@ -2,16 +2,20 @@
 //! receives only inputs that change no text, and its visible lines become AccessKit run nodes.
 
 use craft_behavior::{EditorInput, PartKey, Sense, TextPos};
+use craft_host::target::ShellInfo;
 use craft_ui::contract::{Common, Component, Cx, PaintUi, PartsCx, Props as _, Role, Show as _};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState};
+use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{click, moved, press, release};
+use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::contract::PlainStyle;
 use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Response};
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 const AT: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(210.0, 90.0) };
 const TEXT: &str = "fn main";
@@ -222,4 +226,66 @@ fn a_reset_the_integration_retires_is_asked_again() {
         matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "y"),
         "the new request's completion gives the new editor its IME: {inputs:?}"
     );
+}
+
+/// Focus moving from a composing editor to another ends the old one's input: it receives nothing after the move, and
+/// the new editor receives nothing of the old composition's late preedit until the reset's own completion arrives.
+#[trial]
+fn an_owner_change_mid_composition_interrupts_it_and_drops_its_late_input() {
+    const OTHER: Rect = Rect { min: Pos2::new(10.0, 110.0), max: Pos2::new(210.0, 190.0) };
+    let (first, second) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
+    let mut ui = |ui: &mut egui::Ui| {
+        Probe { common: Common::new(), log: &first, report: true }.label("First").id_salt("first").show_at(ui, AT);
+        Probe { common: Common::new(), log: &second, report: true }.label("Second").id_salt("second").show_at(ui, OTHER);
+    };
+    let mut frames = Frames::new();
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert!(matches!(first.take().as_slice(), [EditorInput::Preedit { .. }]), "the first editor composes");
+
+    let mut request = None;
+    for events in [vec![moved(OTHER.center())], vec![press(OTHER.center())], vec![release(OTHER.center())]] {
+        frames.frame(events, &mut ui);
+        request = request.or(frames.ime().and_then(|ime| ime.reset));
+    }
+    let Some(request) = request else { panic!("the owner change asks for a reset") };
+    first.take();
+    second.take();
+
+    frames.frame(vec![preedit("late")], &mut ui);
+    assert!(first.take().is_empty(), "the old editor gets no input after the owner change");
+    assert!(second.take().is_empty(), "the old composition's late preedit reaches no editor before the reset completes");
+
+    frames.frame(vec![Event::ImeResetCompleted { request_id: request }, preedit("y")], &mut ui);
+    assert!(first.take().is_empty(), "the old editor still gets nothing");
+    let inputs = second.take();
+    assert!(
+        matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "y"),
+        "after the completion the new editor receives its own preedit: {inputs:?}"
+    );
+}
+
+/// An editor losing focus while it composes asks the system once to discard the marked text: later frames and a retired
+/// request asked again add no discard.
+#[trial]
+fn an_interrupted_composition_asks_the_system_to_discard_its_marked_text_once() {
+    let system = Arc::new(FakeSystem::new());
+    let mut frames = Frames::uninstalled();
+    let installed = craft_ui::install(&frames.ctx, InstallSpec::new(ShellInfo::default(), system.clone()));
+    assert!(installed.is_ok(), "the context takes the runtime once");
+    let (log, id) = (RefCell::new(Vec::new()), Cell::new(Id::NULL));
+    let mut ui = |ui: &mut egui::Ui| show(ui, &log, &id, false);
+    frames.idle(3, &mut ui);
+    click(&mut frames, AT.center(), &mut ui);
+    frames.frame(vec![preedit("k")], &mut ui);
+    assert_eq!(system.discards(), 0, "a composition under way is not discarded");
+
+    let outside = Pos2::new(400.0, 300.0);
+    for events in [vec![moved(outside)], vec![press(outside)], vec![release(outside)]] {
+        frames.frame(events, &mut ui);
+    }
+    frames.idle(3, &mut ui);
+    assert_eq!(system.discards(), 1, "focus leaving the composition asks for one discard");
+    frames.idle(6, &mut ui);
+    assert_eq!(system.discards(), 1, "idle frames and the end hook's re-ask add none");
 }
