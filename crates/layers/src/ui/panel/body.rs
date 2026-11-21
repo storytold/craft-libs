@@ -76,9 +76,7 @@ pub(super) fn show_body<T: LayerTree>(
         .columns(columns)
         .selection(Bind::bound(&mut selection))
         .can_rename(|key| matches!(key, LayerRowKey::Layer(id) if tree.info(id).renamable))
-        .accepts(|drag: &ListDrag<LayerRowKey<T::Id>>, _over, insert| {
-            accepts_drop(tree, drag, &order, insert, craft_ui::runtime::pointer::frame(&ctx).mods)
-        })
+        .accepts(|drag: &ListDrag<LayerRowKey<T::Id>>, _over, insert| accepts_drop(tree, drag, order, insert, craft_ui::runtime::pointer::mods(&ctx)))
         .drag_payload({
             let document = cx.document;
             move |drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag, document))
@@ -98,7 +96,7 @@ pub(super) fn show_body<T: LayerTree>(
             hovered = Some(id.clone());
         }
         let row = build_row(cx, key).cells(item.cells()).state(item.row.clone());
-        match rows.rows.get(item.at) {
+        match rows.rows().get(item.at) {
             Some(shown) if shown.has_children => row.depth(shown.paint_depth).group(shown.open),
             Some(shown) => row.depth(shown.paint_depth),
             None => row,
@@ -107,7 +105,7 @@ pub(super) fn show_body<T: LayerTree>(
 
     let mut events: Vec<LayersEvent<T::Id>> = reveal.opens.iter().cloned().map(LayersEvent::Open).collect();
     let drop_preview = match &out.pending_drop {
-        Some(PendingDrop::Reorder(mv)) if cx.options.preview_on_canvas_when_reordering => match layer_drop(mv, &order, &parent_of, filtered) {
+        Some(PendingDrop::Reorder(mv)) if cx.options.preview_on_canvas_when_reordering => match layer_drop(mv, order, &parent_of, filtered) {
             Some(LayerDrop::Layers(layers)) => Some(layers),
             _ => None,
         },
@@ -115,7 +113,7 @@ pub(super) fn show_body<T: LayerTree>(
     };
     let selection_changed = out.events.iter().any(|event| matches!(event, CollectionEvent::Selection(_)));
     let list_events = out.events;
-    map_events(cx, &order, &parent_of, filtered, lock_name, session, list_events, &mut events);
+    map_events(cx, order, &parent_of, filtered, lock_name, session, list_events, &mut events);
     if selection_changed {
         let mut layers: Vec<T::Id> = Vec::new();
         for key in &selection.items {

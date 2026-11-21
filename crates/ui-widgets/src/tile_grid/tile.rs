@@ -8,14 +8,14 @@
 
 use super::layout::Around;
 use super::words::TileWords;
-use super::{BadgeKind, BadgeSlot, BadgeVisibility, CaptionPlace, TileBadge, TileFlag, TileMark, TileStatus};
+use super::{BadgeKind, BadgeSlot, BadgeVisibility, CaptionPlace, CardText, TileBadge, TileFlag, TileMark, TileStatus};
 use crate::buttons::IconButton;
 use crate::choice::{Checkbox, ChoiceWords, Rating};
 use crate::contract::{
     Access, Bind, Common, Component, Cx, DisabledLook, Focus as _, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Role, Styled as _, WordSetCx as _,
 };
-use crate::display::Badge;
+use crate::display::{Badge, Picture};
 use crate::list::{RowThumb, ThumbAspect, ThumbPaint, ToggleState};
 use crate::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
@@ -96,6 +96,7 @@ const RATING_REASON: &str = "In a tile grid with rating keys, the digits rate th
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Sizes {
     card: bool,
+    text: CardText,
     inset: f32,
     tight: f32,
     bar: f32,
@@ -121,8 +122,8 @@ pub(super) struct AroundPicture {
 }
 
 impl AroundPicture {
-    fn of(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
-        let around = |place: CaptionPlace, detail: bool| Sizes::of(cx, card, place).around(place, detail);
+    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool) -> AroundPicture {
+        let around = |place: CaptionPlace, detail: bool| Sizes::of(cx, card, text, place, regular_card_padding).around(place, detail);
         AroundPicture {
             below: around(CaptionPlace::Below, false),
             below_detail: around(CaptionPlace::Below, true),
@@ -145,17 +146,19 @@ impl AroundPicture {
 impl Sizes {
     /// The sizes of a tile with its caption in `place`. A bare tile keeps only the room its selection ring draws in, so
     /// a grid packs bare tiles close.
-    fn of(cx: &StyleCx<'_>, card: bool, place: CaptionPlace) -> Sizes {
+    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, place: CaptionPlace, regular_card_padding: bool) -> Sizes {
         let (tokens, control) = (cx.tokens, cx.control());
         let line = tokens.typography.get(TypeRole::Caption).line_height;
-        let name_line = if card { tokens.typography.get(TypeRole::BodyStrong).line_height } else { line };
+        let name_line = if card { tokens.typography.get(text.name_role()).line_height } else { line };
         let inset = match (card, place) {
+            (true, _) if regular_card_padding => tokens.space.pad.regular,
             (true, _) => tokens.space.pad.control,
             (false, CaptionPlace::None) => tokens.space.gap.tight,
             (false, _) => tokens.space.gap.inline,
         };
         Sizes {
             card,
+            text,
             inset,
             tight: tokens.space.gap.tight,
             bar: control.height,
@@ -297,14 +300,26 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop]
     caption: CaptionPlace,
+    /// The grid asked for the theme's regular padding around a framed card.
+    #[style_key]
+    #[prop]
+    regular_card_padding: bool,
     /// The card has a line for the detail, whether this tile has one or not: the grid's, applied to its tiles.
     #[prop]
     detail_line: bool,
-    /// The tile is a framed card: the picture inset in a raised surface, the name strong and the detail under it, both
-    /// at the reading start. The grid's, applied to its tiles.
+    /// The tile is a framed card: the picture inset in a raised surface, with the name and detail under it as
+    /// `card_text` sets them. The grid's, applied to its tiles.
     #[style_key]
     #[prop(flag)]
     card: bool,
+    /// How a card sets its name and detail; the grid's, applied to its tiles.
+    #[style_key]
+    #[prop]
+    card_text: CardText,
+    /// Draws the preview directly on the tile so a small symbol has no separate background or selection frame.
+    #[style_key]
+    #[prop(flag)]
+    flat_thumbnail: bool,
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
@@ -359,6 +374,8 @@ pub struct Tile<'a> {
     check: Option<ToggleState>,
     aspect: ThumbAspect,
     first: Option<ThumbPaint<'a>>,
+    /// A picture component shown as the tile's picture, for a face that is more than a painter.
+    picture: Option<Picture<'a>>,
     icon: Option<IconSpec<'static>>,
     badges: Vec<TileBadge>,
     marks: Vec<TileMark>,
@@ -375,8 +392,11 @@ impl<'a> Tile<'a> {
         Tile {
             common: Common::new(),
             caption: CaptionPlace::Below,
+            regular_card_padding: false,
             detail_line: false,
             card: false,
+            card_text: CardText::File,
+            flat_thumbnail: false,
             detail: None,
             accessible_name: None,
             rating: None,
@@ -397,6 +417,7 @@ impl<'a> Tile<'a> {
             check: None,
             aspect: ThumbAspect::SQUARE,
             first: None,
+            picture: None,
             badges: Vec::new(),
             marks: Vec::new(),
             pills: Vec::new(),
@@ -414,6 +435,18 @@ impl<'a> Tile<'a> {
     pub fn thumb(mut self, aspect: ThumbAspect, paint: impl FnOnce(&ContentPainterCx, Rect) + 'a) -> Self {
         self.aspect = aspect;
         self.first = Some(Box::new(paint));
+        self.picture = None;
+        self.icon = None;
+        self
+    }
+
+    /// The tile's picture is `picture`, `aspect` times as wide as high, shown in the picture's rect as its own
+    /// component (a stored or off-frame image). The last of `thumb`, `picture` and `icon` called wins.
+    #[must_use]
+    pub fn picture(mut self, aspect: ThumbAspect, picture: Picture<'a>) -> Self {
+        self.aspect = aspect;
+        self.picture = Some(picture);
+        self.first = None;
         self.icon = None;
         self
     }
@@ -424,6 +457,7 @@ impl<'a> Tile<'a> {
     pub fn icon(mut self, icon: impl Into<IconSpec<'static>>) -> Self {
         self.icon = Some(icon.into());
         self.first = None;
+        self.picture = None;
         self
     }
 
@@ -454,12 +488,12 @@ impl<'a> Tile<'a> {
     /// What a tile adds around its picture: its padding, the caption band under the picture or the column at its
     /// reading start. A tile grid sizes a tile as the picture plus this.
     pub fn around_picture(cx: &StyleCx<'_>, place: CaptionPlace, detail: bool) -> Around {
-        Sizes::of(cx, false, place).around(place, detail)
+        Sizes::of(cx, false, CardText::File, place, false).around(place, detail)
     }
 
     /// What a tile adds around its picture for every caption arrangement.
-    pub(super) fn around(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
-        AroundPicture::of(cx, card)
+    pub(super) fn around(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool) -> AroundPicture {
+        AroundPicture::of(cx, card, text, regular_card_padding)
     }
 
     /// Whether the caption band holds a detail line.
@@ -627,12 +661,19 @@ impl Component for Tile<'_> {
         let (state, text) = (&colors.state, &colors.text);
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
-        let sizes = Sizes::of(cx, key.card, key.caption);
+        let sizes = Sizes::of(cx, key.card, key.card_text, key.caption, key.regular_card_padding);
         // Selection and hover are rings around the picture; only a card has a fill of its own.
         let fill = if key.card {
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
-            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(States::new(rest, hover, pressed, rest))
+            let on = if key.flat_thumbnail {
+                let selected = c(over(state.selected, raised));
+                let selected_hover = c(over(state.selected_hover, raised));
+                States::new(selected, selected_hover, pressed, selected)
+            } else {
+                States::new(rest, hover, pressed, rest)
+            };
+            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(on)
         } else {
             Stateful::new(c(clear))
         };
@@ -659,11 +700,11 @@ impl Component for Tile<'_> {
             surface,
             metrics: Metrics::new().padding(Insets::new(sizes.inset, sizes.inset, sizes.inset, sizes.inset)).gap(sizes.tight),
             name: if key.card {
-                TextLook::new(TypeRole::BodyStrong, ink(c(text.normal)))
+                TextLook::new(key.card_text.name_role(), ink(c(text.normal)))
             } else {
                 TextLook::new(TypeRole::Caption, ink(c(text.muted)))
             },
-            name_failed: TextLook::new(if key.card { TypeRole::BodyStrong } else { TypeRole::Caption }, ink(cx.tone(Tone::Bad))),
+            name_failed: TextLook::new(if key.card { key.card_text.name_role() } else { TypeRole::Caption }, ink(cx.tone(Tone::Bad))),
             detail: TextLook::new(TypeRole::Caption, ink(c(if key.card { text.muted } else { text.faint }))),
             band_text: TextLook::new(TypeRole::Caption, fixed(text.on_status)).on(fixed(colors.status.bad.solid)),
             band_icon: IconLook::new(sizes.glyph, fixed(text.on_status)).on(fixed(colors.status.bad.solid)),
@@ -811,7 +852,7 @@ impl Component for Tile<'_> {
         let style = cx.style;
         let picture = placed.picture;
         let flat = CornerRadius::ZERO;
-        {
+        if !self.flat_thumbnail {
             // Filled from the outside in, under the picture, so the rings sit outside its edge.
             let (ring, halo) = (cx.resolve(&style.ring_width), cx.resolve(&style.halo_width));
             let draw = ui.draw();
@@ -821,15 +862,26 @@ impl Component for Tile<'_> {
             if ring > 0.0 {
                 draw.fill(&PaintShape::Rect(picture.expand(ring), flat), cx.resolve(&style.ring));
             }
+            if style.sizes.card {
+                ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
+            } else {
+                let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
+                ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+            }
         }
-        if style.sizes.card {
-            ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
-        } else {
-            let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
-            ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
-        }
+        // Only over the sunken well: a flat thumbnail (a page outline on the card, as the New Document presets draw)
+        // has no well and takes no frame.
+        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some());
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
+        }
+        if let Some(shown) = self.picture.take() {
+            let _ = ui.child("picture", picture, shown);
+        }
+        if framed {
+            // A picture covers the sunken well under it, which would leave only its top and bottom edge showing: the
+            // frame goes over the picture so all four sides show.
+            ui.draw().surface(picture, SurfaceKind::Frame, Corners::All);
         }
         {
             let draw = ui.draw();
@@ -984,9 +1036,10 @@ impl Tile<'_> {
         }
     }
 
-    /// Where a caption line of `width` starts in `rect`: centred, or at the reading start in a card.
-    fn text_x(&self, rect: Rect, width: f32, cx: &Cx<'_, Self>) -> f32 {
-        match (cx.style.sizes.card, cx.flow.is_rtl()) {
+    /// Where a caption line of `width` starts in `rect`: centred, or at the reading start in a card of files.
+    fn text_x(rect: Rect, width: f32, cx: &Cx<'_, Self>) -> f32 {
+        let sizes = &cx.style.sizes;
+        match (sizes.card && !sizes.text.centred(), cx.flow.is_rtl()) {
             (false, _) => rect.center().x - width / 2.0,
             (true, false) => rect.left(),
             (true, true) => rect.right() - width,
@@ -1006,7 +1059,7 @@ impl Tile<'_> {
         if !self.renaming {
             let run = TextRun::new(cx.resolved.label).role(look.role).color(ink).wrap(Wrap::ElideMiddle);
             let layout = draw.layout(&run, placed.name.width());
-            let at = Pos2::new(self.text_x(placed.name, layout.size().x, cx), placed.name.top());
+            let at = Pos2::new(Self::text_x(placed.name, layout.size().x, cx), placed.name.top());
             draw.galley(at, &layout);
             if self.hidden && self.caption == CaptionPlace::Start {
                 let name = Rect::from_min_size(at, layout.size());
@@ -1016,7 +1069,7 @@ impl Tile<'_> {
         if let (Some(detail), Some(rect)) = (&self.detail, placed.detail) {
             let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::ElideMiddle);
             let layout = draw.layout(&run, rect.width());
-            draw.galley(Pos2::new(self.text_x(rect, layout.size().x, cx), rect.top()), &layout);
+            draw.galley(Pos2::new(Self::text_x(rect, layout.size().x, cx), rect.top()), &layout);
         }
         for (mark, rect) in self.marks.iter().zip(&placed.marks) {
             draw.icon(*rect, &IconSpec::svg(mark.icon.clone()).color(cx.resolve(&style.mark.color)));

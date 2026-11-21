@@ -159,3 +159,8 @@ pub fn register_node(ctx: &Context, node: Id, owner: Id, part: Option<PartRef>, 
 pub fn context_request(ctx: &Context, id: Id) -> Option<Rect> {
     keys::context_request(ctx, id)
 }
+
+/// The stops the running pass registered so far, in order: each stop's component and the roving group it is in.
+pub fn pass_stop_groups(ctx: &Context) -> Vec<(Id, Option<Id>)> {
+    focus::with(ctx, |state| state.stops.iter().map(|rec| (rec.stop.id, rec.stop.group)).collect())
+}

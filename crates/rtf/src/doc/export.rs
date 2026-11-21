@@ -290,8 +290,10 @@ impl Writer {
     fn cell_borders(&mut self, borders: Option<&craft_wordmodel::props::Borders>, borderless: bool, out: &mut String) {
         if let Some(b) = borders {
             for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
-                if let Some(border) = opt.filter(|x| x.is_visible()) {
-                    self.write_border("clbrdr", side, border, out);
+                // A drawn line of width 0 (a DOCX table border without `w:sz`) at the thinnest
+                // line: RTF has no border that is drawn and takes no room.
+                if let Some(border) = opt.filter(|x| x.is_drawn()) {
+                    self.write_border("clbrdr", side, border.as_drawn(), out);
                 }
             }
         } else if !borderless {
@@ -600,7 +602,7 @@ impl Writer {
         out.push_str(&ctl);
         if let Some(c) = &p.fmt_change {
             // RTF 1.9.1: the paragraph formatting before the change, then who changed it and when.
-            let old = self.para_ctl(&c.old, intbl);
+            let old = self.old_para_ctl(&c.old, intbl);
             // The old list is the same list instance (only its level may differ).
             let list = match (c.old.list, &ls) {
                 (Some(li), Some((n, _))) => format!("\\ls{n}\\ilvl{}", li.level.min(8)),
@@ -610,15 +612,7 @@ impl Writer {
             let words = self.rev_words("\\prauth", "\\prdate", &c.mark);
             out.push_str(&words);
         }
-        if p.kind != Kind::Rule
-            && let Some(b) = &p.borders
-        {
-            for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
-                if let Some(border) = opt.filter(|x| x.is_visible()) {
-                    self.write_border("brdr", side, border, out);
-                }
-            }
-        }
+        self.paragraph_borders(p, out);
         if let (Some(li), Some((n, label))) = (p.list, &ls) {
             let lv = li.level.min(8);
             out.push_str(&format!("\\ls{n}\\ilvl{lv}\\fi-360\\li{}", 720 * (u32::from(lv) + 1)));
@@ -638,6 +632,44 @@ impl Writer {
             out.push_str(end);
         }
         out.push('\n');
+    }
+
+    /// Previous direct layout values belong inside oldpprops, after the style defaults.
+    fn old_para_ctl(&mut self, p: &Para, intbl: bool) -> String {
+        use craft_wordmodel::props::LineSpacing;
+
+        let mut out = self.para_ctl(p, intbl);
+        for (word, value) in
+            [("sb", p.spacing.before), ("sa", p.spacing.after), ("li", p.spacing.left), ("ri", p.spacing.right), ("fi", p.spacing.first)]
+        {
+            if let Some(value) = value {
+                let twips = (f64::from(value) * 20.0).round() as i32;
+                out.push_str(&format!("\\{word}{twips}"));
+            }
+        }
+        if let Some(line) = p.spacing.line {
+            let (value, multiple) = match line {
+                LineSpacing::Multiple(value) => (f64::from(value) * 240.0, 1),
+                LineSpacing::Exactly(value) => (-f64::from(value).abs().max(0.7) * 20.0, 0),
+                LineSpacing::AtLeast(value) => (f64::from(value).abs() * 20.0, 0),
+            };
+            let value = value.round() as i32;
+            out.push_str(&format!("\\sl{value}\\slmult{multiple}"));
+        }
+        self.paragraph_borders(p, &mut out);
+        out
+    }
+
+    fn paragraph_borders(&mut self, p: &Para, out: &mut String) {
+        if p.kind != Kind::Rule
+            && let Some(b) = &p.borders
+        {
+            for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
+                if let Some(border) = opt.filter(|x| x.is_visible()) {
+                    self.write_border("brdr", side, border, out);
+                }
+            }
+        }
     }
 
     /// The paragraph formatting control words of `p`, from `\pard\plain` (its list left out).

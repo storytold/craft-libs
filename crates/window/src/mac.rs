@@ -21,6 +21,27 @@
 
 use crate::policy::MacInset;
 
+/// How far AppKit's corner resize area reaches into a titled, resizable window along each edge: AppKit takes a press
+/// there before the content sees it and shows its resize cursor. Measured on macOS 26 as a 19 pt square at each
+/// corner, about 15 pt of it inside a square-cornered window
+/// (<https://noheger.at/blog/2026/01/11/the-struggle-of-resizing-windows-on-macos-tahoe/>); there is no published
+/// measurement for earlier releases.
+pub const RESIZE_CORNER: f32 = 15.0;
+
+/// How far AppKit's edge resize area reaches into the content between the corners: a few points; most of it lies
+/// outside the window.
+pub const RESIZE_EDGE: f32 = 4.0;
+
+/// Whether `at`, in the coordinates of a window's content of `size` (points from its top-left corner), lies in
+/// AppKit's resize areas: a [`RESIZE_CORNER`] square at each corner and a [`RESIZE_EDGE`] strip along each edge.
+pub fn in_resize_area(size: [f32; 2], at: [f32; 2]) -> bool {
+    let [w, h] = size;
+    let [x, y] = at;
+    let inside = (0.0..=w).contains(&x) && (0.0..=h).contains(&y);
+    let near = |pos: f32, len: f32, reach: f32| pos <= reach || pos >= len - reach;
+    inside && ((near(x, w, RESIZE_CORNER) && near(y, h, RESIZE_CORNER)) || near(x, w, RESIZE_EDGE) || near(y, h, RESIZE_EDGE))
+}
+
 /// The three buttons as AppKit laid them out, in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lights {

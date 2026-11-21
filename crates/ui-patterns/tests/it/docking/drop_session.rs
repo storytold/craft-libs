@@ -6,7 +6,7 @@ use craft_behavior::dock::{Layout, Node, Permissions, SplitSize};
 use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, Pointer as _, Role, Show as _, ShowContainer as _};
 use craft_ui::docking::tree::{self, FrameRules};
-use craft_ui::docking::{DockDropTarget, DockDropped, DockGroup, DockSizes, GroupDrag, PanelDrag, PanelKey, PanelTitle, SplitArea};
+use craft_ui::docking::{DockDropTarget, DockDropped, DockGroup, DockSizes, GroupDrag, PanelDrag, PanelKey, PanelTitle, SplitArea, Titles};
 use craft_ui::runtime::drag;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::pointer::{moved, press, release};
@@ -130,7 +130,7 @@ fn bed(layout: Layout<String>) -> Bed {
             for (anchor, panels, rect) in &placed {
                 let titles: Vec<PanelTitle> = panels.iter().map(|panel| PanelTitle::new(PanelKey::of(panel), panel.clone())).collect();
                 let active = titles.first().map_or(PanelKey::new(0), |title| title.key);
-                DockGroup::new(anchor.clone(), &titles, active).dock(dock_id()).show_at(ui, *rect, |_, _| ());
+                DockGroup::new(anchor.clone(), Titles::from_content(titles.clone()), active).dock(dock_id()).show_at(ui, *rect, |_, _| ());
             }
         });
         for dropped in shared_taken.borrow_mut().drain(..) {

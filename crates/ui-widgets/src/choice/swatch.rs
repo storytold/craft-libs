@@ -12,10 +12,10 @@ use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
 use craft_behavior::{Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
-use egui::{Color32, CornerRadius, Rect, Response, Vec2};
+use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Opacity of the black or white ring that stands out from a well's colour.
 const INNER_EDGE_ALPHA: u8 = 0x80;
@@ -54,7 +54,8 @@ pub struct SwatchStyle {
     radius: CornerRadius,
     /// The ring on the well's outline, which separates the well from the panel.
     edge: Stateful<StyleColor>,
-    /// The ring inside the outline of a selected or checked well; clear while it is off.
+    /// The ring on the well's outline: the accent for a selected or checked well, the focus colour on the lead cell of
+    /// a table (a member runs no focus step of its own, so its outline carries the ring); clear while it is off.
     ring: Stateful<StyleColor>,
     /// The thin edge just inside the outline of a marked well.
     mark: StyleColor,
@@ -77,6 +78,17 @@ impl SwatchStyle {
         let [r, g, b, a] = ring(base).0;
         DataColor::new(Color32::from_rgba_unmultiplied(r, g, b, a))
     }
+}
+
+/// The shape of a swatch's well.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SwatchShape {
+    /// A square well.
+    #[default]
+    Square,
+    /// A hexagon well, for a honeycomb of touching cells.
+    Hexagon,
 }
 
 /// What a swatch reports.
@@ -143,6 +155,9 @@ pub struct Swatch<T: Value + 'static = ()> {
     /// A thin edge in the text colour just inside the outline.
     #[prop(flag)]
     marked: bool,
+    /// The shape of the well.
+    #[prop]
+    shape: SwatchShape,
     /// The key of the `ColorRequest` a click files.
     #[prop(into)]
     picker: Option<String>,
@@ -160,6 +175,7 @@ impl Swatch<()> {
             cell: false,
             well: false,
             marked: false,
+            shape: SwatchShape::default(),
             picker: None,
             checked: false,
             activation: None,
@@ -178,6 +194,7 @@ impl<T: Value + 'static> Swatch<T> {
             cell: self.cell,
             well: self.well,
             marked: self.marked,
+            shape: self.shape,
             picker: self.picker,
             checked: false,
             activation: None,
@@ -206,7 +223,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
             side: if key.cell && !key.well { metrics.cell } else { metrics.side },
             radius: if key.cell && !key.well { CornerRadius::ZERO } else { metrics.radius },
             edge: Stateful::new(rest),
-            ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)),
+            ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)).when(Flags::LEAD, cx.color(colors.line.focus)),
             mark: cx.color(colors.text.normal),
             checker: [colors.overlay.checker_light, colors.overlay.checker_dark],
             mixed_rgba: colors.surface.sunken,
@@ -262,7 +279,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked);
+        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked, self.shape);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
@@ -274,18 +291,40 @@ impl<T: Value + 'static> Component for Swatch<T> {
 
 /// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
 /// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool) {
-    let shape = PaintShape::Rect(well, style.radius);
-    draw.swatch_well(well, style.radius, color.same().copied());
-    draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge));
+fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool, shape: SwatchShape) {
+    let outline = |rect: Rect| match shape {
+        SwatchShape::Square => PaintShape::Rect(rect, style.radius),
+        SwatchShape::Hexagon => PaintShape::Polygon(hexagon(rect)),
+    };
+    let edge = outline(well);
+    match shape {
+        SwatchShape::Square => draw.swatch_well(well, style.radius, color.same().copied()),
+        SwatchShape::Hexagon => draw.swatch_polygon_well(&hexagon(well), color.same().copied()),
+    }
+    draw.stroke(&edge, StrokeWidth::Thin, state.resolve(&style.edge));
     if marked {
-        let inside = PaintShape::Rect(well.shrink(draw.width(StrokeWidth::Thin)), style.radius);
+        let inside = outline(well.shrink(draw.width(StrokeWidth::Thin)));
         draw.stroke(&inside, StrokeWidth::Thin, style.mark);
     }
-    draw.stroke(&shape, StrokeWidth::Thick, state.resolve(&style.ring));
+    draw.stroke(&edge, StrokeWidth::Thick, state.resolve(&style.ring));
 }
 
-/// The face of a swatch outside a `Swatch`: a preset thumbnail of a colour (`PresetBrowser::thumb`). It paints
+/// The corners of the pointy-top hexagon inscribed in `rect`: the vertices at the middle of the top and bottom edges,
+/// the vertical sides spanning the middle half of the height. The honeycomb layout hit-tests against the same points.
+pub(super) fn hexagon(rect: Rect) -> Vec<Pos2> {
+    let quarter = rect.height() / 4.0;
+    let middle = rect.center().x;
+    vec![
+        pos2(middle, rect.top()),
+        pos2(rect.right(), rect.top() + quarter),
+        pos2(rect.right(), rect.bottom() - quarter),
+        pos2(middle, rect.bottom()),
+        pos2(rect.left(), rect.bottom() - quarter),
+        pos2(rect.left(), rect.top() + quarter),
+    ]
+}
+
+/// The face of a swatch outside a `Swatch`: a preset thumbnail of a colour (`PresetFns::thumb`). It paints
 /// what a non-cell `Swatch` of the same colour paints, from the style that `Swatch` resolves, with the selected
 /// ring when `selected`.
 #[derive(Clone, Copy, Debug)]
@@ -314,6 +353,6 @@ impl SwatchFace {
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false));
+        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false, SwatchShape::Square));
     }
 }

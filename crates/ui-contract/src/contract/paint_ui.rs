@@ -52,6 +52,8 @@ pub struct PaintUi<'a> {
     /// The fade `steps::fade` began (`DisabledLook::Faded`): the faces paint their enabled look, and the children
     /// shown from here lie under the component's veil.
     pub(crate) fade: Option<super::steps::Fade>,
+    /// The composite has a node (`CxCore::node`): its step 16 fills its parts' sub-nodes from the faces' records.
+    pub(crate) node: bool,
     /// The children's `Ui`, built on the first child under `sub(id, "children")`.
     pub(crate) kids: Option<Ui>,
 }
@@ -210,16 +212,30 @@ impl PaintUi<'_> {
     /// colour through `StyleCx::host_ink` and its muted colour through `StyleCx::host_muted_ink`. It registers no id, senses nothing, opens no memory stage and
     /// fires nothing.
     pub fn face<C: Show>(&mut self, part: impl Into<PartRef>, face: C) {
-        self.face_with(part.into(), face, self.text);
+        self.face_with(part.into(), face, self.text, true);
     }
 
     /// `face`, for a face on a fill the composite draws for that part alone (a plate over a picture): the face reads
     /// `ink` through `StyleCx::host_ink` instead of the composite's text colour.
     pub fn face_in<C: Show>(&mut self, part: impl Into<PartRef>, face: C, ink: &Stateful<StyleColor>) {
-        self.face_with(part.into(), face, Some(ink));
+        self.face_with(part.into(), face, Some(ink), true);
     }
 
-    fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>) {
+    /// [`face`](Self::face) painted `share` as opaque as it would be (1 paints as `face` does, 0 paints nothing): a
+    /// component fading in or out as the one component that draws it. A share outside 0 to 1 is clamped and a
+    /// non-finite one leaves the opacity as it was; fades stack with the opacity already in force. A faded face is a
+    /// look only: it reports no sub-node, so a component fading out has no node while it fades.
+    pub fn face_faded<C: Show>(&mut self, part: impl Into<PartRef>, face: C, share: f32) {
+        let kept = self.ui.opacity();
+        if share.is_finite() {
+            self.ui.set_opacity(kept * share.clamp(0.0, 1.0));
+        }
+        self.face_with(part.into(), face, self.text, false);
+        self.ui.set_opacity(kept);
+    }
+
+    /// Paints `face` for `part`; a `reported` face gives the part's sub-node its facts (`steps::report_parts`).
+    fn face_with<C: Show>(&mut self, part: PartRef, face: C, ink: Option<&Stateful<StyleColor>>, reported: bool) {
         let Some(result) = self.results.get(&(part.key, part.index)) else {
             debug_assert!(false, "face for a part `parts` did not declare");
             return;
@@ -235,13 +251,14 @@ impl PaintUi<'_> {
             flags: self.flags,
             enabled: self.enabled,
             faded: self.fade.is_some(),
+            reported: reported && self.node,
         };
-        let record = run::paint_face(self.ui, self.env, &source, part, face);
+        let (baseline, record) = run::paint_face(self.ui, self.env, &source, part, face);
         let mut own = self.record.borrow_mut();
-        if let Some(baseline) = record.baseline {
+        if let Some(baseline) = baseline {
             own.baseline.get_or_insert(baseline);
         }
-        own.faces.push(record);
+        own.faces.extend(record);
     }
 
     /// Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code

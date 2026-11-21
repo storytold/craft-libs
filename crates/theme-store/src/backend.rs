@@ -38,8 +38,8 @@ pub struct LibraryFile {
 // Only the disk backend fails these ways; web builds have none.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) enum WriteError {
-    /// `selection.json` changed between the read under the lock and the rename: another
-    /// writer ignored the lock (network file systems).
+    /// The file changed between the read under the lock and the rename: another writer ignored
+    /// the lock (network file systems). For a theme, also a file that isn't the expected one.
     Raced,
     Io(io::Error),
 }
@@ -206,6 +206,23 @@ impl Backend {
             }
             #[cfg(not(target_arch = "wasm32"))]
             Backend::Disk(d) => d.create_theme(stem, bytes),
+        }
+    }
+
+    /// Replaces a theme file whose stamp is `expected` and returns the new file's stamp;
+    /// [`WriteError::Raced`] when the file is missing or has another stamp.
+    pub fn replace_theme(&mut self, stem: &str, bytes: &[u8], expected: FileStamp) -> Result<FileStamp, WriteError> {
+        match self {
+            Backend::Memory(m) => {
+                if m.library.get(stem).is_none_or(|(b, s)| mem_stamp(b, *s) != expected) {
+                    return Err(WriteError::Raced);
+                }
+                let serial = m.next();
+                m.library.insert(stem.to_owned(), (Arc::from(bytes), serial));
+                Ok(mem_stamp(bytes, serial))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Backend::Disk(d) => d.replace_theme(stem, bytes, expected),
         }
     }
 

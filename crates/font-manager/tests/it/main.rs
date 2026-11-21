@@ -1,11 +1,15 @@
 //! The integration binary of craft-font-manager: every test is a registered trial.
 
-mod missing;
-mod panel;
-mod picker;
+pub(crate) mod missing;
+pub(crate) mod panel;
+pub(crate) mod picker;
 
-use craft_font_manager::testing::registered;
+craft_ui::registry!();
 
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &registered());
+    craft_ui::testing::run(
+        module_path!(),
+        env!("CARGO_PKG_NAME"),
+        &craft_ui::testing::Registry::of(&[register, craft_font_manager::testing::register]),
+    );
 }

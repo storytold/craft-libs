@@ -4,7 +4,7 @@
 use craft_behavior::{SelectionChange, keyed};
 use craft_ui::contract::{CollectionEvent, Role, ShowCollection as _};
 use craft_ui::runtime::egui::access::AccessTree;
-use craft_ui::tabs::{Tab, TabKind, TabStrip};
+use craft_ui::tabs::{Tab, TabKind, TabRole, TabStrip};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, Frames, trial};
@@ -363,4 +363,335 @@ fn panel_tabs_keep_the_shown_tab_whole_and_overflow_from_the_end() {
         }
     }
     assert!(fewer < PANELS.len(), "the narrowest room overflows");
+}
+
+/// A strip places its tabs by their measure in its first frame: a panel strip too narrow for its tabs fits them by
+/// their measured widths and takes their measured height, in a frame that runs once and measures each tab's height
+/// at most twice (at its ideal width, and at the width the fit shrinks it to), and the strip and every tab have the
+/// rects they have once the strip settles.
+#[trial]
+fn a_tab_strip_takes_its_measured_extents_in_its_first_frame() {
+    let mut fixture = Fixture::new(|ui| {
+        ui.set_max_width(300.0);
+        let keys = [0_usize, 1, 2, 3, 4, 5];
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Panels").kind(TabKind::Panel).natural_height(true).shown(1);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(PANELS[*key]));
+    });
+    let rects = |fixture: &Fixture| {
+        let strip = fixture.by_label("Panels").expect("the strip's node").rect;
+        (strip, PANELS.map(|name| tab_rects(fixture.tree(), name).first().copied()))
+    };
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1, "the first frame runs once");
+    let measures = craft_ui::testing::row_measures(fixture.ctx());
+    assert!(measures.len() == PANELS.len() && measures.iter().all(|(_, count)| *count <= 2), "each tab is measured at most twice: {measures:?}");
+    let first = rects(&fixture);
+    fixture.idle(3);
+    assert_eq!(first, rects(&fixture), "the first frame places the strip and its tabs as the settled strip does");
+}
+
+/// A strip reports the rects of the tabs it places (`tab_rects`, where a dock registers its insertion spots) as it
+/// places them, in the frame a tab's title changes.
+#[trial]
+fn a_strip_reports_its_tab_rects_in_the_frame_a_title_changes() {
+    let titles = Rc::new(RefCell::new(TITLES.map(str::to_owned)));
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let (now, seen) = (titles.clone(), reported.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let names = now.borrow().clone();
+        let out = TabStrip::new("Documents").shown(0).show_items(ui, &source, &mut |key, _| Tab::new(names[*key].clone()));
+        *seen.borrow_mut() = out.tab_rects;
+    });
+    fixture.settle();
+    titles.borrow_mut()[0] = "A much longer first title".to_owned();
+    fixture.idle(1);
+    let placed: Vec<(usize, Rect)> = titles.borrow().iter().enumerate().map(|(key, name)| (key, tab_rect(fixture.tree(), name))).collect();
+    assert_eq!(*reported.borrow(), placed, "the strip reports the tabs where it places them");
+}
+
+/// The ribbon's tab names; the last is the contextual tab.
+const RIBBON: [&str; 6] = ["File", "Home", "Insert", "Layout", "Review", "Table Design"];
+
+/// The key of the contextual tab.
+const TABLE: usize = 5;
+
+/// The role of a ribbon trial's tab: the last one is contextual.
+fn ribbon_role(key: &usize) -> TabRole {
+    if *key == TABLE { TabRole::Contextual } else { TabRole::Standard }
+}
+
+/// The sliding underline a frame painted in the tab row `row`: the horizontal two-point line in its band, as its left
+/// and right x. Ribbon tabs paint no line of their own.
+fn underline(shapes: &[egui::Shape], row: Rect) -> Option<(f32, f32)> {
+    shapes.iter().find_map(|shape| match shape {
+        egui::Shape::Path(path) if !path.closed && path.points.len() == 2 => {
+            let (a, b) = (path.points[0], path.points[1]);
+            let flat = (a.y - b.y).abs() < 0.01;
+            (flat && a.y >= row.top() && a.y <= row.bottom()).then(|| (a.x.min(b.x), a.x.max(b.x)))
+        }
+        _ => None,
+    })
+}
+
+/// A ribbon strip's one underline runs to a newly shown tab, and a tab shown while it runs turns it where it is: at the
+/// reversal it lies between the two tabs, and it comes back to rest under the first tab without a jump. The wheel
+/// shows the tabs, one frame per change.
+#[trial]
+fn the_ribbon_underline_retargets_from_its_shown_position_mid_motion() {
+    use craft_ui::testing::pointer;
+    let shown = Rc::new(Cell::new(0_usize));
+    let now = shown.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).wheel_selects().shown(now.get());
+        let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]));
+        for event in &out.response.events {
+            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                && let Some(key) = keys.last()
+            {
+                now.set(*key);
+            }
+        }
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let (first, third) = (tab_rect(fixture.tree(), RIBBON[0]), tab_rect(fixture.tree(), RIBBON[2]));
+    let row = first.union(third);
+    let rest = underline(&fixture.frame_shapes(), row).expect("the shown tab's underline");
+    // It runs under the first tab label, inset from both sides of the tab by the same amount (the tab padding less
+    // half the stroke), as the old ribbon drew it.
+    let inset = rest.0 - first.left();
+    assert!(inset > 0.5 && (first.right() - rest.1 - inset).abs() < 0.5, "at rest it lies under the first tab label: {rest:?} {first:?}");
+
+    fixture.frame(vec![pointer::moved(row.center())]).idle(1);
+    fixture.frame(vec![pointer::wheel_lines(-2.0)]);
+    assert_eq!(shown.get(), 2, "two notches down show the third tab");
+    let going: Vec<f32> = (0..2).filter_map(|_| underline(&fixture.frame_shapes(), row)).map(|line| line.0).collect();
+    assert!(
+        going.len() == 2 && going[1] > first.left() + 0.5 && going[1] < third.left() - 0.5,
+        "the underline is on its way to the third tab: {going:?} {first:?} {third:?}"
+    );
+
+    fixture.frame(vec![pointer::wheel_lines(2.0)]);
+    assert_eq!(shown.get(), 0, "two notches up show the first tab again");
+    let distance = third.left() - first.left();
+    let turned = underline(&fixture.frame_shapes(), row).expect("the underline at the reversal").0;
+    assert!(
+        turned > first.left() + 0.5 && turned < third.left() - 0.5,
+        "at the reversal the underline lies between the two tabs, not at either target: {turned} {first:?} {third:?}"
+    );
+    assert!((turned - going[1]).abs() < distance / 2.0, "the reversal starts where the underline was: {going:?} then {turned}");
+    let mut last = turned;
+    for _ in 0..30 {
+        let at = underline(&fixture.frame_shapes(), row).expect("the underline while it returns").0;
+        assert!(at <= last + 0.5, "the underline only moves back toward the first tab: {last} then {at}");
+        assert!((last - at).abs() < distance / 2.0, "the underline does not jump: {last} then {at}");
+        last = at;
+    }
+    assert!((last - rest.0).abs() < 0.5, "the underline comes to rest under the first tab: {last} {rest:?}");
+}
+
+/// What a ribbon strip of the six tabs with two end items shows in a room `room` wide: the tabs on the strip with their
+/// widths, whether each end item paints its label, each end item's width, and whether the overflow button is there.
+struct EndView {
+    tabs: Vec<(&'static str, f32)>,
+    share_label: bool,
+    comments_label: bool,
+    share: f32,
+    comments: f32,
+    overflow: bool,
+}
+
+impl EndView {
+    fn shows(&self, name: &str) -> bool {
+        self.tabs.iter().any(|(shown, _)| *shown == name)
+    }
+}
+
+fn end_view(room: f32) -> EndView {
+    use craft_behavior::IconId;
+    use craft_ui::contract::Entry;
+    use craft_ui::runtime::commands::{CommandRef, EditCommands};
+    use craft_ui::tabs::StripEnd;
+    let rows: [Entry<CommandRef>; 1] = [Entry::new(EditCommands::Paste.into(), "Show comments")];
+    let items =
+        [StripEnd::command("Share", IconId::new("link").into(), EditCommands::Copy), StripEnd::menu("Comments", IconId::new("list").into(), &rows)];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        ui.set_max_width(room);
+        let keys: Vec<usize> = (0..RIBBON.len()).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(1).roles(ribbon_role).trailing(&items);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
+    };
+    frames.idle(3, &mut show);
+    let tree = frames.tree();
+    let painted = |name: &str| frames.texts().iter().any(|text| text.text == name);
+    let buttons = tree.with_role(Role::BUTTON);
+    let width = |name: &str| {
+        buttons.iter().find(|key| tree.name_of(**key) == Some(name)).and_then(|key| tree.bounds_of(*key)).map_or(0.0, |rect| rect.width())
+    };
+    EndView {
+        tabs: RIBBON.iter().filter_map(|name| tab_rects(&tree, name).first().map(|rect| (*name, rect.width()))).collect(),
+        share_label: painted("Share"),
+        comments_label: painted("Comments"),
+        share: width("Share"),
+        comments: width("Comments"),
+        overflow: buttons.iter().any(|key| !matches!(tree.name_of(*key), Some("Share" | "Comments"))),
+    }
+}
+
+/// As the room narrows, the end items drop their labels, the last one first, before any tab overflows; then the tabs
+/// overflow while the items keep their icons. The shown tab and the contextual tab stay on the strip while a plain tab
+/// overflows, and the contextual tab gives way only to plain tabs narrower than itself.
+#[trial]
+fn end_items_drop_their_labels_before_a_tab_overflows() {
+    let wide = end_view(2000.0);
+    assert_eq!(wide.tabs.len(), RIBBON.len(), "every tab fits a wide room");
+    assert!(wide.share_label && wide.comments_label && !wide.overflow, "a wide room shows both labels and no overflow");
+    let table = wide.tabs.iter().find(|(name, _)| *name == RIBBON[TABLE]).map_or(0.0, |&(_, width)| width);
+    let (mut comments_only, mut all_short, mut kept) = (false, false, false);
+    // A coarse sweep from the width that holds every tab and both labels down to a room that overflows most tabs;
+    // each stage of the order lasts for several steps.
+    const STEP: f32 = 16.0;
+    const FLOOR: f32 = 200.0;
+    let top = wide.tabs.iter().map(|&(_, width)| width).sum::<f32>() + wide.share + wide.comments;
+    for step in 0..=((top + STEP - FLOOR) / STEP) as usize {
+        let room = top + STEP - step as f32 * STEP;
+        let view = end_view(room);
+        assert!(view.share_label || !view.comments_label, "Comments drops its label before Share in {room}");
+        assert!(view.share > 0.0 && view.comments > 0.0, "the end items stay in {room}");
+        if !view.comments_label {
+            assert!(view.comments < wide.comments - 0.5, "an item without its label is narrower in {room}");
+        }
+        let all_tabs = view.tabs.len() == RIBBON.len();
+        assert_eq!(view.overflow, !all_tabs, "the overflow button is there only while a tab overflows in {room}");
+        if all_tabs {
+            comments_only |= view.share_label && !view.comments_label;
+            all_short |= !view.share_label && !view.comments_label;
+            continue;
+        }
+        assert!(!view.share_label && !view.comments_label, "both items are icon only before a tab overflows in {room}");
+        assert!(view.shows(RIBBON[1]), "the shown tab stays in {room}");
+        if view.shows(RIBBON[TABLE]) {
+            kept = true;
+        } else {
+            let wider = view.tabs.iter().filter(|(name, _)| *name != RIBBON[1]).find(|&&(_, width)| width >= table);
+            assert!(wider.is_none(), "the contextual tab gives way only to narrower plain tabs in {room}: {:?}", view.tabs);
+        }
+    }
+    assert!(comments_only, "a room shows Share whole and Comments icon only with every tab");
+    assert!(all_short, "a room shows both items icon only with every tab");
+    assert!(kept, "a room keeps the contextual tab while a plain tab overflows");
+}
+
+/// The width of the one end item, named "Comments", of a ribbon strip in a wide room: a menu item when `menu`, else a
+/// command item with the same label and icon.
+fn comments_width(menu: bool) -> f32 {
+    use craft_behavior::IconId;
+    use craft_ui::contract::Entry;
+    use craft_ui::runtime::commands::{CommandRef, EditCommands};
+    use craft_ui::tabs::StripEnd;
+    let rows: [Entry<CommandRef>; 1] = [Entry::new(EditCommands::Paste.into(), "Show comments")];
+    let item = if menu {
+        StripEnd::menu("Comments", IconId::new("list").into(), &rows)
+    } else {
+        StripEnd::command("Comments", IconId::new("list").into(), EditCommands::Copy)
+    };
+    let items = [item];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        ui.set_max_width(2000.0);
+        let keys: Vec<usize> = (0..RIBBON.len()).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(1).roles(ribbon_role).trailing(&items);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
+    };
+    frames.idle(3, &mut show);
+    let tree = frames.tree();
+    let buttons = tree.with_role(Role::BUTTON);
+    buttons.iter().find(|key| tree.name_of(**key) == Some("Comments")).and_then(|key| tree.bounds_of(*key)).map_or(0.0, |rect| rect.width())
+}
+
+/// An end item that opens a menu shows the chevron of a menu button after its label, as every button that opens a
+/// menu does; an item that runs a command shows none, so the menu item is wider by the chevron.
+#[trial]
+fn a_menu_end_item_shows_the_menu_chevron() {
+    let (menu, command) = (comments_width(true), comments_width(false));
+    assert!(command > 0.0, "the command item shows");
+    assert!(menu > command + 4.0, "the menu item is wider by its chevron: {menu} against {command}");
+}
+
+/// A contextual tab the source drops fades out at its slot: while it fades it has no node, a click on its slot
+/// selects nothing and the overflow menu does not list it; once the fade ends it is not painted. A frame of two
+/// passes paints the fade as one does. A contextual tab that comes back is hit from its first frame.
+#[trial]
+fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
+    let (listed, discard) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(false)));
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let shown = Rc::new(Cell::new(1_usize));
+    let (lists, asks, seen, now) = (listed.clone(), discard.clone(), picked.clone(), shown.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..RIBBON.len()).filter(|&key| key != TABLE || lists.get()).collect();
+        // The strip names its overflow entries and its fading tabs by the source's text.
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(RIBBON[*key]));
+        let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(now.get()).roles(ribbon_role);
+        let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
+        for event in &out.response.events {
+            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                && let Some(key) = keys.last()
+            {
+                seen.borrow_mut().push(*key);
+                now.set(*key);
+            }
+        }
+        if asks.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the trial runs the frame twice");
+        }
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let home = fixture.by_label(RIBBON[1]).expect("the shown tab's node").rect;
+    let table = fixture.by_label(RIBBON[TABLE]).expect("the contextual tab's node").rect;
+    // A room for the shown tab, the contextual tab and the overflow button: plain tabs overflow.
+    let room = home.width() + table.width() + 2.0 * home.height();
+    fixture.room(egui::Vec2::new(room, 120.0)).settle();
+    let hidden: Vec<&str> = RIBBON.iter().copied().filter(|name| tab_rects(fixture.tree(), name).is_empty()).collect();
+    assert!(!hidden.is_empty(), "a plain tab overflows in {room}");
+    let table = tab_rect(fixture.tree(), RIBBON[TABLE]);
+    fixture.key(Key::Tab, Modifiers::NONE);
+
+    listed.set(false);
+    discard.set(true);
+    fixture.frame(Vec::new());
+    discard.set(false);
+    assert_eq!(fixture.passes(), 2, "the frame the tab leaves in runs two passes");
+    let painted = |fixture: &Fixture| fixture.texts().iter().any(|text| text.text == RIBBON[TABLE]);
+    // Checked only in frames that paint the fade: the fade is the Open motion, so the clicks below may outlast it.
+    let still = |fixture: &Fixture| hidden.iter().all(|name| tab_rects(fixture.tree(), name).is_empty());
+    assert!(painted(&fixture), "the departed tab fades at its slot after a frame of two passes");
+    assert!(fixture.by_label(RIBBON[TABLE]).is_none(), "the departed tab has no node");
+    assert!(still(&fixture), "no plain tab moves into the slot while the departed tab fades: {hidden:?}");
+
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    assert!(hidden.iter().all(|name| fixture.by_label(name).is_some()), "the overflow menu is open and lists the plain tabs: {hidden:?}");
+    assert!(fixture.by_label(RIBBON[TABLE]).is_none(), "the overflow menu does not list the departed tab");
+    assert!(painted(&fixture), "the departed tab is still fading");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    assert!(painted(&fixture) && still(&fixture), "no plain tab moves into the slot while the departed tab fades: {hidden:?}");
+
+    picked.borrow_mut().clear();
+    fixture.click_at(table.center());
+    assert!(picked.borrow().is_empty(), "a click on the departed tab's slot selects nothing: {:?}", picked.borrow());
+    fixture.idle(30);
+    assert!(!painted(&fixture), "the departed tab is gone once the fade ends");
+    assert!(hidden.iter().any(|name| !tab_rects(fixture.tree(), name).is_empty()), "the strip refits once the exit ends: {hidden:?}");
+
+    listed.set(true);
+    fixture.frame(Vec::new());
+    let back = fixture.by_label(RIBBON[TABLE]).expect("a contextual tab that enters has a node once listed");
+    fixture.click(&back);
+    assert_eq!(shown.get(), TABLE, "a click on the entering tab shows it");
 }

@@ -344,6 +344,26 @@ impl ErrorBars {
     }
 }
 
+/// A chart's data table (`c:dTable`), independent of the chart legend.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChartDataTable {
+    pub show_keys: bool,
+    pub horizontal_border: bool,
+    pub vertical_border: bool,
+    pub outline: bool,
+}
+
+impl Default for ChartDataTable {
+    fn default() -> Self {
+        Self { show_keys: true, horizontal_border: true, vertical_border: true, outline: true }
+    }
+}
+
+fn is_zero_u16(v: &u16) -> bool {
+    *v == 0
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Chart {
@@ -399,6 +419,16 @@ pub struct Chart {
     pub y2_major: Option<f64>,
     pub y2_format: Option<String>,
     pub y2_hidden: bool,
+    /// The number format of the category labels when the categories are numbers or dates
+    /// (`c:cat/c:numRef`): the category axis' own format (`c:numFmt`), or, when it is linked to the
+    /// source, the format of the category cells (`c:formatCode`). `None`: the file gives none or the
+    /// categories are text; the labels are the raw `categories`. See [`Chart::category_label`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_format: Option<String>,
+    /// Serial dates count from 1 January 1904 (`c:date1904`, a workbook saved with the 1904 date
+    /// system) instead of 1900.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub date_1904: bool,
     /// The chart's language (`c:lang`, e.g. `ru-RU`): digit grouping and decimal mark.
     pub lang: Option<String>,
     /// A waterfall's total points (`cx:subtotals`): bars that stand on the axis and restart
@@ -423,6 +453,15 @@ pub struct Chart {
     /// A histogram's bin width (`cx:binSize`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bin_size: Option<f64>,
+    /// A chart's data table (`c:dTable`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_table: Option<ChartDataTable>,
+    /// Pie/doughnut first slice angle in degrees clockwise from 12 o'clock (0–359).
+    #[serde(skip_serializing_if = "is_zero_u16")]
+    pub first_slice_angle: u16,
+    /// A PivotChart's PivotTable reference (`c:pivotSource/c:name`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot_source: Option<String>,
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
@@ -530,6 +569,8 @@ impl Default for Chart {
             y2_major: None,
             y2_format: None,
             y2_hidden: false,
+            category_format: None,
+            date_1904: false,
             lang: None,
             subtotals: vec![],
             category_levels: vec![],
@@ -537,6 +578,9 @@ impl Default for Chart {
             up_down_bars: false,
             bin_count: None,
             bin_size: None,
+            data_table: None,
+            first_slice_angle: 0,
+            pivot_source: None,
             raw: None,
             verbatim: false,
             kept: ChartKept::default(),
@@ -785,14 +829,26 @@ impl Chart {
             None | Some("General") if !secondary && self.kind.percent() => "0%",
             c => c.unwrap_or("General"),
         };
-        crate::numfmt::format(code, v, self.lang.as_deref())
+        crate::numfmt::format_dated(code, v, self.lang.as_deref(), self.date_1904)
+    }
+
+    /// The label of category `i`: its number or date in the category format (`45292` with `mmm-yy`
+    /// is "Jan-24"), else the category text as it is. `categories` keeps the cached text in memory.
+    /// Rebuilding a mixed number/text cache writes the formatted labels as strings; a reload
+    /// preserves those labels but cannot recover the original numeric serials.
+    pub fn category_label(&self, i: usize) -> String {
+        let raw = self.categories.get(i).map_or("", String::as_str);
+        match (&self.category_format, raw.trim().parse::<f64>()) {
+            (Some(code), Ok(v)) if v.is_finite() => crate::numfmt::format_dated(code, v, self.lang.as_deref(), self.date_1904),
+            _ => raw.to_string(),
+        }
     }
 
     /// A data label of series `s`: its number format, else its axis', in the chart's language.
     pub fn data_label(&self, s: &Series, v: f64) -> String {
         let axis = if self.on_secondary(s) { &self.y2_format } else { &self.y_format };
         let code = s.number_format.as_ref().or(axis.as_ref());
-        crate::numfmt::format(code.map_or("General", String::as_str), v, self.lang.as_deref())
+        crate::numfmt::format_dated(code.map_or("General", String::as_str), v, self.lang.as_deref(), self.date_1904)
     }
 
     /// Does series `s` show its data labels? The series' own `c:dLbls/c:showVal` wins — an
@@ -1211,7 +1267,8 @@ mod tests {
         c.y_format = Some(r#"_-* #\ ##0\ "₽"_-;\-* #\ ##0\ "₽"_-;_-* "-"??\ "₽"_-;_-@_-"#.into());
         c.lang = Some("ru-RU".into());
         assert_eq!(c.axis_label(false, 800_000.0), "800\u{a0}000 ₽");
-        assert_eq!(c.axis_label(false, 0.0), "- ₽");
+        // Excel shows the two `??` of the zero section as spaces.
+        assert_eq!(c.axis_label(false, 0.0), "-   ₽");
         // No format: General.
         assert_eq!(c.axis_label(true, 2.5), "2,5");
         c.lang = None;
@@ -1220,7 +1277,26 @@ mod tests {
         c.lang = Some("ru-RU".into());
         c.series[0].number_format = Some(r#"#,##0\ "₽""#.into());
         assert_eq!(c.data_label(&c.series[0], 516_600_000.0), "516\u{a0}600\u{a0}000 ₽");
-        assert_eq!(c.data_label(&c.series[1], 0.0), "- ₽");
+        assert_eq!(c.data_label(&c.series[1], 0.0), "-   ₽");
+    }
+
+    #[test]
+    fn date_categories_show_in_their_format() {
+        let mut c = Chart::sample(ChartType::Line);
+        c.categories = vec!["45292".into(), "45323".into(), "text".into(), String::new()];
+        // No format: the categories as they are.
+        assert_eq!(c.category_label(0), "45292");
+        c.category_format = Some("mmm-yy".into());
+        // Excel shows
+        assert_eq!([0, 1, 2, 3, 4].map(|i| c.category_label(i)), ["Jan-24", "Feb-24", "text", "", ""]);
+        // Value-axis and data labels follow the chart's date system too.
+        c.y_format = Some("m/d/yyyy".into());
+        assert_eq!(c.axis_label(false, 43_830.0), "12/31/2019");
+        c.date_1904 = true;
+        assert_eq!(c.axis_label(false, 43_830.0), "1/1/2024");
+        assert_eq!(c.category_label(0), "Jan-28");
+        c.series[0].number_format = Some("d-mmm".into());
+        assert_eq!(c.data_label(&c.series[0], 43_830.0), "1-Jan");
     }
 
     #[test]
@@ -1367,6 +1443,7 @@ impl Chart {
             raw: None,
             verbatim: false,
             subtotals: vec![],
+            category_format: None,
             ..self.clone()
         };
         let name = self.series.first().map(|s| s.name.clone()).unwrap_or_default();

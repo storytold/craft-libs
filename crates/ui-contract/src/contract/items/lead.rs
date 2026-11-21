@@ -1,7 +1,7 @@
 //! The lead and the selection: picks, ranges, and where the lead starts and follows.
 
 use super::{ItemsHooks, Placement};
-use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, ListDrag, SelectMode};
+use crate::contract::collection::{CollectionEvent, HoverLead, LeadOnOpen, LeadSource, ListDrag, SelectMode};
 use crate::contract::{Collection, Cx};
 use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel};
 use egui::{Pos2, Rect, Vec2};
@@ -115,7 +115,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// The pointer's position, in screen space, while it is over the collection.
     fn hovered_pos(cx: &Cx<'_, C>) -> Option<Pos2> {
-        crate::runtime::pointer::frame(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
+        crate::runtime::pointer::frame_raw(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
     }
 
     /// The row under `pos` (screen space) in the rows' placement `at`: the pointer-to-row mapping of `hover_lead`,
@@ -135,20 +135,21 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         layout.hit(local, offset).filter(|&row| self.source.enabled(row) && !self.source.is_section(row) && layout.shown(row))
     }
 
-    /// The lead follows a moving pointer over the rows, and the selection follows the lead the way it does for the
-    /// arrow keys. A pass moves the pointer when it holds a move event: the pointer entering over a row moves the lead
+    /// The lead follows a moving pointer over the rows; with `HoverLead::LeadAndSelection` the selection follows the
+    /// lead the way it does for the arrow keys. A pass moves the pointer when it holds a move event: the pointer entering over a row moves the lead
     /// with no movement to measure, and a modifier change under a resting pointer leaves the lead where the keys put it.
-    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
-        let moved = crate::runtime::pointer::with_pass_pointer(&cx.core.ctx, |pass| {
-            pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. }))
-        });
+    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement, hover: HoverLead) {
+        let moved =
+            crate::runtime::pointer::with_pass_raw(&cx.core.ctx, |pass| pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. })));
         if !moved {
             return;
         }
         let Some(row) = Self::hovered_pos(cx).and_then(|pos| self.row_under(layout, at, pos)) else { return };
         if self.lead.key.as_ref() != Some(&self.source.key(row)) {
             self.move_lead(row, LeadSource::Pointer);
-            self.pick(comp, row, false, false);
+            if hover == HoverLead::LeadAndSelection {
+                self.pick(comp, row, false, false);
+            }
         }
     }
 
@@ -177,7 +178,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         {
             return;
         }
-        let Some(row) = crate::runtime::pointer::frame(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
+        let Some(row) = crate::runtime::pointer::frame_raw(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
         if self.holds(row) {
             return;
         }

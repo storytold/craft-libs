@@ -78,6 +78,17 @@ pub(crate) fn write_merge_patch(ctx: &Context, patch: &MergePatch) {
     });
 }
 
+/// Writes the place in its set of the node `id`, which the node's own report left to its roving group.
+pub(crate) fn write_set_position(ctx: &Context, id: Id, index: usize, size: Option<usize>) {
+    ctx.accesskit_node_builder(id, |node| {
+        node.set_position_in_set(index);
+        match size {
+            Some(size) => node.set_size_of_set(size),
+            None => node.clear_size_of_set(),
+        }
+    });
+}
+
 /// The status node `id`: one live node holding `text`, none while there is nothing to say.
 pub(crate) fn write_status(ctx: &Context, id: Id, text: &str, assertive: bool) {
     crate::runtime::egui::widgets::note_node(ctx, id);

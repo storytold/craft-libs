@@ -6,23 +6,23 @@ use crate::runtime::env::Label;
 use craft_theme::Srgba;
 
 /// The label of a separator, which has none.
-static NO_LABEL: Label = Label::Empty;
+const NO_LABEL: Label = Label::Empty;
 
 /// A row of entries: an item that reports its value when picked, a heading over a group of items, or a separator
 /// between groups of items.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct Entry<T> {
     row: Row<T>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 enum Row<T> {
     Item(Item<T>),
     Heading(Label),
     Separator,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 struct Item<T> {
     value: T,
     label: Label,

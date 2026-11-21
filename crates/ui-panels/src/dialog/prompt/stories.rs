@@ -26,7 +26,7 @@ const AGES: [(&str, Duration); 4] = [
 fn answers() -> [FooterButton; 3] {
     [
         FooterButton::new("Save", DialogRole::Accept).letter('S'),
-        FooterButton::new("Don't Save", DialogRole::Other).letter('D'),
+        FooterButton::new("Don't Save", DialogRole::Alternate).letter('D'),
         FooterButton::new("Cancel", DialogRole::Cancel).letter('C'),
     ]
 }
@@ -35,7 +35,7 @@ fn answers() -> [FooterButton; 3] {
 fn prompt(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Prompt::new("Unsaved changes", "Do you want to save the changes you made to “poster.psd”?")
         .answers(answers())
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into()
 }
@@ -51,7 +51,7 @@ fn prompt_with_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .extras(|ui| {
             Checkbox::new(Bind::bound(&mut apply_to_all)).label("Apply to All").show(ui);
         })
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into();
     *data.value("apply", false) = apply_to_all;
@@ -102,7 +102,11 @@ fn standard_prompt_without_apply(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
 #[story(UnsavedChangesDialog, covers = [], drive = Drive::Never)]
 fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let remaining = if *data.value("several_documents", true) { 3 } else { 1 };
-    UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").remaining(remaining).show(ui).into()
+    let mut dialog = UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").remaining(remaining);
+    if *data.value("save_failed", false) {
+        dialog = dialog.reason("Couldn't save “poster.psd”: the disk is full.");
+    }
+    dialog.show(ui).into()
 }
 
 #[story(RecoveryDialog, covers = [], drive = Drive::Never)]

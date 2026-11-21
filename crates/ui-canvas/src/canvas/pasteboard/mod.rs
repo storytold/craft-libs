@@ -3,8 +3,8 @@
 //! preferences; the default colour is the canvas surround. Artboards show their names above them, and a click on a
 //! name selects the artboard.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};

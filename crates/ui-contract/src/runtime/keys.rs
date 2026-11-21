@@ -24,15 +24,16 @@ pub use claims::claim;
 pub(crate) use claims::hold_escape;
 #[doc(hidden)]
 pub use claims::take_claimed;
+pub(crate) use claims::take_first_claimed;
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
+pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, take_menu_keys, take_nav};
 #[doc(hidden)]
 pub use input::{down, keyed};
-pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use intents::lent_taken;
 #[doc(hidden)]
 pub use intents::settle;
@@ -40,8 +41,8 @@ pub use intents::settle;
 pub use intents::take_submit;
 pub use intents::with_window_intents;
 pub(crate) use intents::{
-    Lent, context_part, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_every_escape,
-    take_window_cancel,
+    Lent, context_part, context_request, context_requests, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel,
+    take_every_escape, take_window_cancel,
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
@@ -80,6 +81,8 @@ struct Press {
     /// The Space of the canvas a dialog keeps open (`runtime::sampler`): the canvas's press, which no component's
     /// routing reads, no focused stop holds and no field types.
     canvas: bool,
+    /// The press's place among the frame's events ([`Batch::place`]).
+    place: usize,
 }
 
 /// A key press, release or clipboard chord that the shortcut dispatcher may match, with the press that the
@@ -149,6 +152,10 @@ struct Batch {
     tabs: Vec<TabPress>,
     /// A lone Alt in a field that holds drafts was refused: the input hook calls `frame::refuse`.
     refused: bool,
+    /// The place of the event the strip reads now among the events the IME engine left in the frame's input: the
+    /// engine places its edits by the same count (`ime::take_placed`), so an editor part reads the two in the order
+    /// they arrived.
+    place: usize,
 }
 
 /// One text event of the pass.
@@ -158,6 +165,8 @@ struct Typed {
     claimed: bool,
     /// The text's place among the text events the strip left in egui's input, `None` when the strip took it.
     in_egui: Option<usize>,
+    /// The text's place among the frame's events ([`Batch::place`]).
+    place: usize,
 }
 
 /// A key press a following text event may belong to.
@@ -181,6 +190,9 @@ struct Item {
     intent: Intent,
     /// A physical left or right arrow: under right-to-left text it reads as the opposite logical move.
     horizontal: bool,
+    /// The place among the frame's events of the press or text it came from ([`Batch::place`]); `None` for an intent
+    /// of no one event.
+    place: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -230,6 +242,8 @@ pub(crate) struct Stage {
     down: Vec<Key>,
     /// The input hook read a key press, typed text or a clipboard event in this pass, withheld ones included.
     keyed: bool,
+    /// How many inputs of the viewport held an event sent to the focus (`count_sent`).
+    sent: u64,
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,

@@ -5,8 +5,8 @@ use crate::style::{ComponentStyle, RuleWidth, StyleCx};
 use craft_behavior::{Metrics, Sense};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a divider.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -76,11 +76,12 @@ impl Component for Divider {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let width = cx.style.width.points(cx.ui.ctx().pixels_per_point());
+        let length = cx.style.length;
         match self.axis {
-            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(cx.style.length, width + 2.0 * cx.style.separator_pad),
-            Axis::Horizontal => Vec2::new(cx.style.length, width),
-            Axis::Vertical if cx.env.get::<InBar>().0 => Vec2::new(cx.style.slot.max(width), cx.style.length),
-            Axis::Vertical => Vec2::new(width, cx.style.length),
+            Axis::Horizontal if cx.env.get::<InMenu>().0 => Vec2::new(length, width + 2.0 * cx.style.separator_pad),
+            Axis::Horizontal => Vec2::new(length, width),
+            Axis::Vertical if cx.env.get::<InBar>().0 => Vec2::new(cx.style.slot.max(width), length),
+            Axis::Vertical => Vec2::new(width, length),
         }
     }
 

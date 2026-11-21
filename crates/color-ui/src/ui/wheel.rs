@@ -15,8 +15,8 @@ use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx
 use egui::{Mesh, Pos2, Rect, Vec2, vec2};
 use std::f32::consts::TAU;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The hue ring: a press on it sets the hue to the pointer's angle.
 const RING: PartKey = PartKey::new("ring");
@@ -307,7 +307,8 @@ impl Component for ColorWheel<'_> {
 
     /// A band across the width it is given, as tall as the square that fits it: the picture is centred in it.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.picture_width(cx.style.least, f32::INFINITY), cx.picture_width(cx.style.least, cx.style.most))
+        let most = cx.style.most.max(cx.style.least);
+        cx.picture_size(cx.style.least, f32::INFINITY, |width| width.min(most))
     }
 
     fn sense(&self) -> Sense {

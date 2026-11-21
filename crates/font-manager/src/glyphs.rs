@@ -2,8 +2,8 @@
 //! Currency, ...), a grid of glyph cells drawn by the app's text engine, a zoom slider, and the recently used
 //! glyphs in a row at the top. Double-click or Enter inserts the glyph where the app can insert.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

@@ -1,7 +1,7 @@
 //! `PathTextMarkers`: the start, end and overflow marks of text laid on a path, a canvas control.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::kurbo::{Point, Vec2 as PathVec};
 use craft_behavior::{

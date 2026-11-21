@@ -1,11 +1,11 @@
 //! `LayersPanel`: the order of the rows, a filter over them and where a Smart Filter drop lands.
 
 use craft_behavior::EditEvent;
-use craft_layers::ui::filter::{FilterKind, LayerFilter};
+use craft_layers::ui::filter::LayerFilter;
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerDrop, LayerPosition, LayersEvent, LayersPanel};
-use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerRowKey, LayerTree, SubRowGroup};
-use craft_ui::contract::Bind;
+use craft_layers::ui::tree::{LayerRowKey, LayerTree, SubRowGroup};
+use craft_ui::contract::{Bind, PlainData, Tracked};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Pos2, Vec2};
 use std::cell::RefCell;
@@ -22,17 +22,16 @@ const ONE_PANEL: Vec2 = by(400.0, 560.0);
 type Seen = Rc<RefCell<Vec<LayersEvent<u32>>>>;
 type Shared<T> = Rc<RefCell<T>>;
 
-/// What a rig holds: the fixture, the events its panel reported, the tree and the filter it shows.
-struct Rig<T> {
+/// What a rig holds: the fixture, the events its panel reported, and the tracked tree it shows.
+struct Rig<T: PlainData> {
     fixture: Fixture,
     seen: Seen,
-    tree: Shared<T>,
-    filter: Shared<LayerFilter>,
+    tree: Shared<Tracked<T>>,
 }
 
 fn rig_of<T: LayerTree<Id = u32> + 'static>(tree: T) -> Rig<T> {
     let seen: Seen = Rc::default();
-    let tree = Rc::new(RefCell::new(tree));
+    let tree = Rc::new(RefCell::new(Tracked::new(tree)));
     let filter: Shared<LayerFilter> = Rc::default();
     let (sink, shown, by) = (Rc::clone(&seen), Rc::clone(&tree), Rc::clone(&filter));
     let mut fixture = Fixture::new(move |ui| {
@@ -43,14 +42,14 @@ fn rig_of<T: LayerTree<Id = u32> + 'static>(tree: T) -> Rig<T> {
     });
     fixture.room(ONE_PANEL);
     fixture.settle();
-    Rig { fixture, seen, tree, filter }
+    Rig { fixture, seen, tree }
 }
 
 fn rig() -> Rig<FakeLayers> {
     rig_of(FakeLayers::sample())
 }
 
-impl<T> Rig<T> {
+impl<T: PlainData> Rig<T> {
     fn row(&self, label: &str) -> Target {
         self.fixture.by_label(label).unwrap_or_else(|| panic!("no row named {label}"))
     }
@@ -138,19 +137,6 @@ fn rows_are_listed_top_first_and_closed_groups_hide_their_layers() {
     rig.fixture.idle(3);
     let all = ["Smart Object", "Gaussian Blur", "Sharpen", "Styled", "Effects", "Drop Shadow", "Stroke", "Hidden"];
     assert_eq!(rig.order(&all), all);
-}
-
-/// A filter reads fields the tree revision does not cover, so it applies even while the revision stands.
-#[trial]
-fn a_filter_applies_even_while_the_tree_revision_stands() {
-    let mut rig = rig();
-    rig.tree.borrow_mut().revision = Some(1);
-    rig.filter.borrow_mut().kinds = vec![FilterKind::Pixel];
-    rig.fixture.idle(3);
-    assert!(rig.fixture.by_label("Clipped").is_some());
-    rig.tree.borrow_mut().layers[1].info = LayerInfo::new("Clipped", LayerKind::Text);
-    rig.fixture.idle(3);
-    assert!(rig.fixture.by_label("Clipped").is_none(), "a kind change shows at the same revision");
 }
 
 /// A Smart Filter moves within its own object, with the slot counted after taking it out; effects keep their order.
