@@ -186,6 +186,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             cells,
             grid: None,
             tip: None,
+            detail: None,
             openers: Vec::new(),
             item: item_id,
             memory,

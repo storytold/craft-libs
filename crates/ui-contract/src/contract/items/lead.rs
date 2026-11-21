@@ -5,7 +5,7 @@ use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, ListD
 use crate::contract::{Collection, Cx};
 use crate::runtime::memory::sub;
 use crate::runtime::{drag, pointer};
-use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel};
+use craft_behavior::{Flow, ItemLayout, PointerEvent, Sense, SelectionChange, SelectionModel};
 use craft_keymap::Mods;
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::any::TypeId;

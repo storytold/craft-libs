@@ -143,6 +143,7 @@ pass_state! {
         pass_pointer: Arc<crate::runtime::pointer::PassPointer>,
         overlay_pass: crate::runtime::overlay::Pass,
         shown_ids: IdSet,
+        edge_step_taken: crate::contract::reorder::EdgeStepTaken,
     }
 }
 

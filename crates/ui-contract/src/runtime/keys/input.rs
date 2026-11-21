@@ -486,7 +486,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let mut later = Vec::new();
         stage.keyed = false;
         events.retain(|arrived| {
-            let read = raw_input::key_event(&arrived.event, os, latin);
+            let read = raw_input::key_event(&arrived.event, os, latin, stage.alt.last.unwrap_or(Mods::NONE));
             if !later.is_empty() || strip.ends_pass(&batch, &read) {
                 later.push(arrived.clone());
                 return false;

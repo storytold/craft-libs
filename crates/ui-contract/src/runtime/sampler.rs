@@ -335,6 +335,7 @@ pub(crate) fn hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arrived>) -
     let before = events.len();
     let os = crate::runtime::windows::os_of(ctx);
     let latin = &input.latin_layout_chars;
+    let held = craft_keymap::Mods::from_egui(&input.modifiers, os);
     let is_space = |key: &KeyInput| key.physical.or(key.typed) == Some(craft_keymap::Key::Space);
     events.retain(|Arrived { event, .. }| {
         match event {
@@ -343,7 +344,7 @@ pub(crate) fn hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arrived>) -
             Event::PointerButton { pos, .. } if here => over = hole.answers(*pos),
             _ => {}
         }
-        match raw_input::key_event(event, os, latin) {
+        match raw_input::key_event(event, os, latin, held) {
             KeyEvent::Press { input: key, .. } if is_space(&key) && (space || over) => {
                 space = true;
                 hole.space = true;

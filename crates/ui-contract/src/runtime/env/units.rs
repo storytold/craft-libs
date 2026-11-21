@@ -56,6 +56,8 @@ craft_ui::words! {
         metres_name: "units.metresName" = "Metres";
         q_name: "units.qName" = "Q";
         ha_name: "units.haName" = "Ha";
+        letters_name: "units.lettersName" = "Letters";
+        hyphens_name: "units.hyphensName" = "Hyphens";
     }
 }
 

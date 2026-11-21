@@ -224,15 +224,17 @@ pub(crate) fn set_input(ctx: &Context) {
     let pointer = system.as_ref().and_then(|system| system.desktop_pointer()).map(|[x, y]| Pos2::new(x, y) / zoom);
     let buttons = system.as_ref().and_then(|system| system.buttons_held());
     let command = system.as_ref().and_then(|system| system.command_held());
+    let mut discard = false;
     for (viewport, facts) in viewports::reported(ctx) {
         refresh(ctx, viewport, facts);
+        discard |= ime::take_discard(ctx, viewport);
     }
     shared(ctx, |shared| {
         shared.system_pointer = pointer;
         shared.system_buttons = buttons;
         shared.system_command = command;
     });
-    if ime::take_discard(ctx)
+    if discard
         && let Some(system) = &system
     {
         system.discard_marked_text();
