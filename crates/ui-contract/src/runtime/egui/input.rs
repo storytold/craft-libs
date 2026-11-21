@@ -692,7 +692,7 @@ impl WindowsAlt {
             let event = &mut input.events[at];
             match event {
                 Event::WindowFocused(false) => *self = Self::Unfocused,
-                Event::WindowFocused(true) if *self == Self::Unfocused => *self = Self::AwaitingPress,
+                Event::WindowFocused(true) => *self = Self::AwaitingPress,
                 Event::ModifiersChanged(modifiers) if *self == Self::AwaitingPress && !modifiers.alt => {
                     *self = Self::Live;
                 }
@@ -702,8 +702,12 @@ impl WindowsAlt {
                     *self = Self::Live;
                     // The modifier report may have arrived just before this press and been suppressed.
                     let held = egui::Modifiers { alt: true, ..*modifiers };
-                    input.events.insert(at, Event::ModifiersChanged(held));
                     at += 1;
+                    input.events.insert(at, Event::ModifiersChanged(held));
+                }
+                Event::Key { key: Key::AltLeft | Key::AltRight, pressed: true, .. } if *self != Self::Live => {
+                    input.events.remove(at);
+                    continue;
                 }
                 Event::ModifiersChanged(modifiers)
                 | Event::Key { modifiers, .. }
@@ -738,6 +742,14 @@ pub(crate) struct RawState {
     alt_code_ended: bool,
 }
 
+/// Repairs the Windows host's modifier report before the framework joins any synthetic input.
+pub(super) fn repair_windows_alt(ctx: &Context, input: &mut RawInput) {
+    if (!input.events.is_empty() || input.modifiers.alt) && crate::runtime::windows::os_of(ctx) == Os::Windows {
+        PerViewport::<RawState>::with(ctx, input.viewport_id, |state| state.windows_alt.normalize(input));
+    }
+}
+
+
 /// The input hook's raw-input step for every viewport, after the injected step joined the input and before the key
 /// stage and the one-press rule: folds a legacy pinch, scales the wheel by the user's speed, folds Alt+numpad codes
 /// into text, caps the text events, then turns a macOS Control-click into a secondary click. Injected input passes it
@@ -746,11 +758,8 @@ pub(crate) struct RawState {
 /// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel delta is scaled
 /// once and each digit folded once, with nothing to replay or remember between passes.
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
-    let os = crate::runtime::windows::os_of(ctx);
-    if os == Os::Windows {
-        PerViewport::<RawState>::with(ctx, input.viewport_id, |state| state.windows_alt.normalize(input));
-    }
     fold_legacy_pinch(ctx, input);
+    let os = crate::runtime::windows::os_of(ctx);
     // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
     // PLAN: assumed `pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages)` in `runtime/frame.rs` (platform-w3).
     let (wheel, pages) = crate::runtime::frame::root_input(ctx);
