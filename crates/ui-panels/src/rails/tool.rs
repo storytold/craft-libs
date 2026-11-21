@@ -8,8 +8,8 @@ use crate::contract::{
     Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, NoValue, Outcome, Pad, Props as _, Role, Scroll, Show as _,
     ShowContainer as _, Sizing, WordSetCx as _,
 };
-use crate::contract::{BodyCx, BodyLayout, MemoProps, MemoView, Outbox};
-use crate::docking::DockGrid;
+use crate::contract::{BodyCx, BodyLayout, MemoProps, MemoView, Outbox, PlainData, Tracked};
+use crate::docking::{DockGrid, DockSizes};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
 use crate::runtime::access::Name;
@@ -92,7 +92,7 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// The rail of tool slots, laid out in a grid of columns: one `FlyoutButton` per visible slot showing the slot's shown
 /// tool, the slot with the current tool toggled on. A click selects the shown tool, a row of the flyout selects that
 /// tool. The rail takes as many columns as the width it gets holds, the most whole columns that fit
-/// ([`dock_grid`](ToolRail::dock_grid)): it is `first` wide at one column and `step` wider for each further column,
+/// ([`DockGrid::rail`] in the scope's style): it is a button and the control padding wide at one column and a button and the tight gap wider for each further column,
 /// and the slots fill the rows in reading order. The control padding surrounds the buttons; a slot that ends a group
 /// leaves `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The Edit Toolbar button
 /// follows the last slot; the host's footer stays in view under the slots, which scroll when the room is short under
@@ -102,14 +102,14 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// grid. While the toolbar is edited the buttons are dragged and take drops, and report the drop in the output.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, probe(ToolRail<'static, u8>))]
-pub struct ToolRail<'a, T: Value + MemoProps + 'static> {
+pub struct ToolRail<'a, T: Value + MemoProps + PlainData + 'static> {
     #[common]
     common: Common,
     #[container]
     props: ContainerProps,
-    slots: &'a [ToolSlot<T>],
+    slots: &'a Tracked<Vec<ToolSlot<T>>>,
     current: &'a T,
-    last_used: &'a LastUsed<T>,
+    last_used: &'a Tracked<LastUsed<T>>,
     /// The side of the rail its flyouts and drawer open on: the side of the canvas.
     #[prop]
     opens: Side,
@@ -120,17 +120,17 @@ pub struct ToolRail<'a, T: Value + MemoProps + 'static> {
     #[prop(flag)]
     editing: bool,
     /// The tools the user's toolbar settings hide.
-    #[prop]
-    hidden: &'a [T],
+    #[prop(into)]
+    hidden: Option<&'a Tracked<Vec<T>>>,
     footer: Option<FooterFn<'a>>,
     /// The columns the rail lays out in this pass.
     columns: usize,
 }
 
-impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
+impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
     /// A one-column rail named `label` over `slots`, with `current` the host's tool and `last_used` what the slots
     /// showed last.
-    pub fn new(label: impl Into<Label>, slots: &'a [ToolSlot<T>], current: &'a T, last_used: &'a LastUsed<T>) -> Self {
+    pub fn new(label: impl Into<Label>, slots: &'a Tracked<Vec<ToolSlot<T>>>, current: &'a T, last_used: &'a Tracked<LastUsed<T>>) -> Self {
         let props = ContainerProps::new()
             .surface(SurfaceKind::Chrome)
             .pad(Pad::Control)
@@ -149,33 +149,24 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
             opens: Side::End,
             edit_toolbar: None,
             editing: false,
-            hidden: &[],
+            hidden: None,
             footer: None,
             columns: 1,
         }
         .label(label)
     }
 
-    /// The grid of a rail of `cells` cells (its visible slots and the Edit Toolbar button) as its dock column sizes
-    /// it ([`PanelSpec::grid`](crate::docking::PanelSpec::grid)): `first` is a button and the control padding on both
-    /// sides, `step` a button and the tight gap before it, and `most` the cells.
-    pub fn dock_grid(ctx: &egui::Context, cells: usize) -> DockGrid {
-        StyleCx::with_root(ctx, |cx| {
-            let button = cx.tokens.size.rail.button;
-            let most = u16::try_from(cells).unwrap_or(u16::MAX).max(1);
-            DockGrid::new(button + 2.0 * cx.tokens.space.pad.control, button + cx.tokens.space.gap.tight, most)
-        })
-    }
-
     /// The cells the rail lays out: its visible slots and the Edit Toolbar button.
     fn cells(&self) -> usize {
-        visible_slots(self.slots, self.hidden).len() + usize::from(self.edit_toolbar.is_some())
+        visible_slots(self.slots, hidden_in(self.hidden)).len() + usize::from(self.edit_toolbar.is_some())
     }
 
     /// Sets up the pass for a rail `width` wide: its columns, its roving grid and its footer. Returns what the body
     /// draws from.
-    fn prepare(&mut self, ctx: &egui::Context, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Draw<'a, T> {
-        self.columns = usize::from(Self::dock_grid(ctx, self.cells()).steps_within(width));
+    fn prepare(&mut self, ui: &Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Draw<'a, T> {
+        // The grid in the scope's style, as the dock column around the rail sizes it.
+        let grid = DockGrid::rail(self.cells()).resolved(&DockSizes::of_scope(ui));
+        self.columns = usize::from(grid.steps_within(width));
         self.props = std::mem::take(&mut self.props).roving(Roving::new(NavShape::wrapped_grid(self.columns)));
         self.footer = Some(Box::new(footer));
         Draw {
@@ -191,14 +182,19 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
     }
 }
 
+/// The tools a rail hides: the host's, or none.
+fn hidden_in<T: PlainData>(hidden: Option<&Tracked<Vec<T>>>) -> &[T] {
+    hidden.map_or(&[], |hidden| hidden.as_slice())
+}
+
 /// What the grid's memoized view reads: the slots and the tool state they show, and an outbox for what the buttons
 /// report. The host's footer is not in it: it runs every pass, outside the view.
 #[derive(MemoProps)]
-struct GridProps<'a, T> {
-    slots: &'a [ToolSlot<T>],
+struct GridProps<'a, T: PlainData> {
+    slots: &'a Tracked<Vec<ToolSlot<T>>>,
     current: &'a T,
-    last_used: &'a LastUsed<T>,
-    hidden: &'a [T],
+    last_used: &'a Tracked<LastUsed<T>>,
+    hidden: Option<&'a Tracked<Vec<T>>>,
     editing: bool,
     edit_label: Option<Label>,
     opens: Side,
@@ -207,18 +203,18 @@ struct GridProps<'a, T> {
 }
 
 /// What the body of one pass draws from.
-struct Draw<'a, T> {
-    slots: &'a [ToolSlot<T>],
+struct Draw<'a, T: PlainData> {
+    slots: &'a Tracked<Vec<ToolSlot<T>>>,
     current: &'a T,
-    last_used: &'a LastUsed<T>,
-    hidden: &'a [T],
+    last_used: &'a Tracked<LastUsed<T>>,
+    hidden: Option<&'a Tracked<Vec<T>>>,
     editing: bool,
     edit_label: Option<Label>,
     opens: Side,
     columns: usize,
 }
 
-impl<T: Value + MemoProps> Draw<'_, T> {
+impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
     /// Shows the grid as a memoized view; what the buttons report goes into `events` (nothing on a replay). Returns the
     /// Edit Toolbar button's id while the rail shows it.
     fn run(&self, ui: &mut Ui, events: &mut Vec<RailEvent<T>>) -> Option<Id> {
@@ -239,9 +235,9 @@ impl<T: Value + MemoProps> Draw<'_, T> {
 
 /// The grid of buttons in rows of `columns`. The result is the Edit Toolbar button's id, which the rail's output
 /// turns into its response.
-fn grid<T: Value + MemoProps>(props: &mut GridProps<'_, T>, ui: &mut Ui) -> Option<Id> {
+fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut Ui) -> Option<Id> {
     let GridProps { slots, current, last_used, hidden, editing, columns, opens, .. } = *props;
-    let visible = visible_slots(slots, hidden);
+    let visible = visible_slots(slots, hidden_in(hidden));
     let cells = visible.len() + usize::from(props.edit_label.is_some());
     let resolve = resolver_in(ui);
     let enabled = |tool: &RailTool<T>| resolve(tool.command.clone()).is_some_and(|resolved| resolved.enabled);
@@ -300,7 +296,7 @@ fn grid<T: Value + MemoProps>(props: &mut GridProps<'_, T>, ui: &mut Ui) -> Opti
     edit_toolbar
 }
 
-impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
+impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
     /// Shows the rail in the width `ui` has left. `footer` draws under the last slot (colour chips, Quick Mask,
     /// Screen Mode); it stays in view when the room is short.
     pub fn show_rail(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
@@ -311,14 +307,19 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
     /// Shows the rail one column wide, for a host that lays it at the start of a row (the full-window workspaces'
     /// tool strips): the width `ui` has left belongs to what follows it in the row.
     pub fn show_column(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
-        let one = Self::dock_grid(ui.ctx(), 1).first;
+        let one = DockGrid::rail(1).resolved(&DockSizes::of_scope(ui)).width(1);
         self.show_within(ui, one, footer)
     }
 
     /// Shows the rail laid out `width` wide.
     fn show_within(mut self, ui: &mut Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
-        let draw = self.prepare(ui.ctx(), width, footer);
-        let last = remembered(draw.slots, draw.current, draw.last_used);
+        let draw = self.prepare(ui, width, footer);
+        // The last-used tools after this pass: derived while the slots, the remembered and hidden tools and the current tool are as they were.
+        let key = (draw.slots.revision(), draw.last_used.revision(), draw.hidden.map(Tracked::revision), draw.current);
+        let last = crate::runtime::derived::derived(ui.ctx(), ui.scope_id().with("remembered"), &key, || {
+            remembered(draw.slots, draw.current, draw.last_used)
+        });
+        let last = last.as_ref().clone();
         let (mut events, mut edit_toolbar) = (Vec::new(), None);
         let shown = self.show(ui, |ui, _| edit_toolbar = draw.run(ui, &mut events));
         let (mut select, mut double_clicked, mut flyout, mut dropped) = (None, None, None, None);
@@ -344,14 +345,14 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
     /// The size of the rail laid out `width` wide, with `footer` under its rows: as many columns as `width` holds,
     /// as tall as its rows and footer (at most the room along the axis it scrolls on).
     pub fn measure_rail(mut self, ui: &Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Vec2 {
-        let draw = self.prepare(ui.ctx(), width, footer);
+        let draw = self.prepare(ui, width, footer);
         self.measure_in(ui, Proposal::Width(width), |ui, _| {
             draw.run(ui, &mut Vec::new());
         })
     }
 }
 
-impl<T: Value + MemoProps + 'static> Component for ToolRail<'_, T> {
+impl<T: Value + MemoProps + PlainData + 'static> Component for ToolRail<'_, T> {
     const ROLE: Role = Role::TOOLBAR;
     const PARTS: bool = false;
     const STOPS: bool = false;
@@ -387,7 +388,7 @@ impl<T: Value + MemoProps + 'static> Component for ToolRail<'_, T> {
     }
 }
 
-impl<T: Value + MemoProps + 'static> Container for ToolRail<'_, T> {
+impl<T: Value + MemoProps + PlainData + 'static> Container for ToolRail<'_, T> {
     /// The host's footer.
     fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
         let columns = self.columns;

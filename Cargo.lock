@@ -2488,6 +2488,7 @@ dependencies = [
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-xml",
  "kurbo",
  "log",
@@ -3117,6 +3118,8 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-settings",
+ "craft-tracked",
+ "craft-ui-macros",
  "craft-xml",
  "egui",
  "serde",
@@ -3659,6 +3662,7 @@ name = "craft-ppt-binary"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-codepage",
  "craft-drawingml",
  "craft-pptx",
  "image",
@@ -4172,6 +4176,8 @@ name = "craft-theme"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "craft-tracked",
+ "craft-ui-macros",
  "ecolor",
  "log",
  "proptest",

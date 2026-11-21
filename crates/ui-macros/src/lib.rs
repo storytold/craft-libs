@@ -266,7 +266,10 @@ pub fn story(attr: TokenStream, item: TokenStream) -> TokenStream {
         #func
 
         #gate
-        pub(crate) fn #helper() -> #k::testing::StoryRegistration { #registration }
+        #k::__register_contract! {
+            @suite
+            pub(crate) fn #helper() -> #k::testing::StoryRegistration { #registration }
+        }
 
     }
     .into()

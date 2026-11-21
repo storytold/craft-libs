@@ -157,6 +157,8 @@ pub(crate) struct Facts {
     pub(crate) owners: Vec<egui::Id>,
     /// The layout memory entries the run kept (`note_layout_keep`): a replay keeps them (`layout_memory::keep`).
     pub(crate) layout_keeps: Vec<egui::Id>,
+    /// The derived values the run asked for (`note_derived_keep`): a replay keeps them, since it asks for none.
+    pub(crate) derived_keeps: Vec<egui::Id>,
     /// The framework inputs the run read outside its props (`runtime::inputs`).
     pub(crate) inputs: Inputs,
     /// The command scope instances that registered in the run (`commands::register_instance`): a command queued for one
@@ -234,6 +236,7 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.discards |= open.facts.discards;
             outer.facts.owners.extend(open.facts.owners.iter().copied());
             outer.facts.layout_keeps.extend(open.facts.layout_keeps.iter().copied());
+            outer.facts.derived_keeps.extend(open.facts.derived_keeps.iter().copied());
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
             let kept = outer.kept;
             outer.facts.reads.extend(open.facts.reads.iter().copied().filter(|key| !kept || !matches!(key, BindKey::Place(..))));
@@ -249,6 +252,8 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     // Every measure of an entry keeps it again: the record keeps each one once.
     facts.layout_keeps.sort_unstable_by_key(|id| id.value());
     facts.layout_keeps.dedup();
+    facts.derived_keeps.sort_unstable_by_key(|id| id.value());
+    facts.derived_keeps.dedup();
     // A paint callback's output depends on what its closure holds, which neither a view's key nor a comparison sees:
     // its run is never replayed.
     facts.blocked |= egui.layers().any(|on| on != layer) || egui.paints_callback();
@@ -361,11 +366,13 @@ pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
         pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying = false);
     }
     crate::runtime::layout_memory::keep(ctx, &record.facts.layout_keeps);
+    crate::runtime::derived::keep(ctx, &record.facts.derived_keeps);
     if let Some(at) = record.facts.wake {
         crate::runtime::egui::repaint::request_after(ctx, crate::runtime::egui::pass::current_viewport(ctx), at - frame::clock(ctx));
     }
     with_open(ctx, |facts| {
         facts.layout_keeps.extend(record.facts.layout_keeps.iter().copied());
+        facts.derived_keeps.extend(record.facts.derived_keeps.iter().copied());
         facts.reads.extend(record.facts.reads.iter().copied());
         facts.inputs.extend(record.facts.inputs);
         facts.wake = min_wake(facts.wake, record.facts.wake);
@@ -479,6 +486,12 @@ pub(crate) fn note_discard(ctx: &Context) {
 /// around it keeps them too, as the replay reaches neither.
 pub(crate) fn note_layout_keep(ctx: &Context, id: egui::Id) {
     with_open(ctx, |facts| facts.layout_keeps.push(id));
+}
+
+/// Notes that the running code asked for the derived value kept under `slot`: a replay of the records open around it
+/// keeps it too, as the replay asks for nothing and an entry no pass asked for in a frame is dropped.
+pub(crate) fn note_derived_keep(ctx: &Context, slot: egui::Id) {
+    with_open(ctx, |facts| facts.derived_keeps.push(slot));
 }
 
 /// Notes that the memory owner `owner` registered in the running code.

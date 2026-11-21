@@ -20,7 +20,7 @@ use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, WindowKey};
 use craft_ui::shell::AppShell;
 use craft_ui::style::SurfaceKind;
-use craft_ui::testing::StoryRegistration;
+use craft_ui::testing::{StoryRegistration, least_stage_width};
 use egui::Ui;
 
 /// A card's story row before it ran, in standard control heights (120 at a 24 control).
@@ -28,7 +28,7 @@ const STORY_ROW_IN_CONTROLS: f32 = 5.0;
 
 /// The narrowest a card may be before the cards go to one column: a story at its least width inside the card's padding.
 fn card_min_width(tokens: &Tokens) -> f32 {
-    tokens.size.story.width_min + 2.0 * tokens.space.pad.regular
+    least_stage_width(tokens) + 2.0 * tokens.space.pad.regular
 }
 
 const ONE: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];

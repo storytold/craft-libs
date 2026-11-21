@@ -3,6 +3,7 @@
 //! it is neither maximized nor full screen; a `Window` mount puts its grips on the window's edges; a double click on the
 //! move band is reported once.
 
+use craft_behavior::{Cursor, CursorIcon};
 use craft_host::target::{ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_ui::contract::overlay::Resize;
 use craft_ui::contract::{
@@ -165,4 +166,22 @@ fn a_window_mounts_edges_resize_the_window_and_the_childs_press_keeps_its_click(
     sent.extend(rig.frame(&windows, vec![], vec![]));
     assert_eq!(rig.seen.borrow().activations, 1, "the child under the edge keeps its click");
     assert!(resizes(&sent).is_empty(), "and the click starts no resize: {sent:?}");
+}
+
+/// Where the OS draws a resizable window's frame (macOS `Inset`), AppKit resizes the window from its edges: the app
+/// registers no grips there, so a drag on an edge starts no resize of the app's, and over AppKit's resize areas the
+/// cursor is the default, as the OS shows its own there.
+#[trial]
+fn where_appkit_resizes_a_window_the_app_registers_no_grips_and_leaves_the_cursor_to_it() {
+    let edge = pos2(1.0, ROOT.y / 2.0);
+    let (sent, _) = root_drag(WindowChrome::Inset, edge, vec2(20.0, 0.0));
+    assert!(resizes(&sent).is_empty(), "AppKit resizes the window, the app's grips stand down: {sent:?}");
+    let windows = root(WindowChrome::Inset);
+    let rig = Rig::new(Mount::window(Resize::GRIPS));
+    for _ in 0..4 {
+        rig.frame(&windows, vec![], vec![]);
+    }
+    rig.frame(&windows, vec![moved(edge)], vec![]);
+    let cursor = craft_ui::runtime::cursor::current(&windows.ctx);
+    assert!(matches!(cursor, None | Some(Cursor::System(CursorIcon::Default))), "over AppKit's edge the cursor is left to the OS: {cursor:?}");
 }

@@ -425,11 +425,6 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
     Vec2::new(text.x + fixed, text.y.max(icon))
 }
 
-/// The ideal and least face sizes from one paired component measure.
-pub(crate) fn measure_pair<C: Component>(ideal: &MeasureCx<'_, C>, least: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) -> (Vec2, Vec2) {
-    (measure(ideal, spec), measure(least, spec))
-}
-
 /// `icon` in `color`, unless the spec names a colour of its own.
 pub(super) fn tinted<'a>(icon: &IconSpec<'a>, color: StyleColor) -> IconSpec<'a> {
     let icon = icon.clone();
