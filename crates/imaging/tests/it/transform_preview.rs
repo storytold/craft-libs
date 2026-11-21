@@ -15,6 +15,7 @@ use craft_imaging::ui::transform_preview::{
 use craft_imaging::ui::warp::WarpMesh;
 use craft_ui::canvas::{Canvas, PixelRect};
 use craft_ui::contract::{MemoProps, MemoView, PlainData, Show as _, ShowContainer as _, Tracked};
+use craft_ui::primitives::Serials;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Color32, ColorImage, Shape};
 
@@ -31,7 +32,7 @@ fn shown(map: fn() -> PreviewMap<'static>, opacity: f32, clip: Option<[u32; 2]>,
     let meshes = Rc::new(RefCell::new(Vec::new()));
     let seen_view = Rc::new(Cell::new(None));
     let (sink, view_sink) = (Rc::clone(&meshes), Rc::clone(&seen_view));
-    let textures = PreviewTextures::new("t", PreviewPixels::new(solid([2, 2], Color32::from_gray(u8::MAX)), [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut Serials::default(), "t", PreviewPixels::new(solid([2, 2], Color32::from_gray(u8::MAX)), [1.0, 1.0]));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let view = CanvasView::new(room, pt(100.0, 100.0), 1.0).rotation(rotation);
@@ -224,7 +225,7 @@ fn a_style_plan_stays_within_its_budget_at_screen_size_and_refuses_hostile_boxes
 fn a_monitor_conversion_changes_only_the_shown_upload() {
     let ctx = egui::Context::default();
     let raw = solid([2, 2], Color32::from_rgb(140, 89, 51));
-    let textures = PreviewTextures::new("monitor", PreviewPixels::new(raw.clone(), [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut Serials::default(), "monitor", PreviewPixels::new(raw.clone(), [1.0, 1.0]));
     // The trial stands in for the renderer: it takes the texture deltas it reads and applies none.
     let uploaded = |id: egui::TextureId| {
         let mut delta = ctx.tex_manager().write().take_delta();
@@ -316,7 +317,7 @@ fn frame(textures: &PreviewTextures, quad: [Point; 4], zoom: f32) -> StyledFrame
 }
 
 fn styled_textures() -> PreviewTextures {
-    PreviewTextures::new("styled", PreviewPixels::new(solid([4, 4], Color32::from_rgb(200, 100, 50)), [1.0, 1.0]))
+    PreviewTextures::new(&mut Serials::default(), "styled", PreviewPixels::new(solid([4, 4], Color32::from_rgb(200, 100, 50)), [1.0, 1.0]))
 }
 
 fn context() -> (Fixture, egui::Context) {
@@ -424,7 +425,7 @@ struct Mips {
 }
 
 fn white(name: &str) -> Rc<PreviewTextures> {
-    Rc::new(PreviewTextures::new(name, PreviewPixels::new(solid([5, 3], Color32::WHITE), [1.0, 1.0])))
+    Rc::new(PreviewTextures::new(&mut Serials::default(), name, PreviewPixels::new(solid([5, 3], Color32::WHITE), [1.0, 1.0])))
 }
 
 impl Mips {
@@ -597,11 +598,12 @@ fn a_new_preview_under_the_same_name_shows_its_own_pixels() {
         delta.clear();
         texel
     };
-    let first = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::WHITE), [1.0, 1.0]));
+    let mut serials = Serials::default();
+    let first = PreviewTextures::new(&mut serials, "same", PreviewPixels::new(solid([2, 2], Color32::WHITE), [1.0, 1.0]));
     let (id, _) = first.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::WHITE));
     drop(first);
-    let second = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::BLACK), [1.0, 1.0]));
+    let second = PreviewTextures::new(&mut serials, "same", PreviewPixels::new(solid([2, 2], Color32::BLACK), [1.0, 1.0]));
     let (id, _) = second.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::BLACK), "the new pixels go up");
 }

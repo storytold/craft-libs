@@ -299,13 +299,13 @@ fn stroke_run(painter: &ContentPainterCx<'_>, run: Vec<Pos2>, closed: bool, colo
     }
 }
 
-fn paint_mask(painter: &ContentPainterCx<'_>, view: &CanvasView, mask: &HoverMask, color: Color32, look: &MaskLook) {
+fn paint_mask(painter: &ContentPainterCx<'_>, id: egui::Id, view: &CanvasView, mask: &HoverMask, color: Color32, look: &MaskLook) {
     let ctx = painter.painter.ctx();
-    let store = TextureStore::<u64>::in_context(ctx, "canvas_controls.hover_mask", TextureStoreOptions::frames());
+    let store = TextureStore::<(egui::Id, u64)>::in_context(ctx, "canvas_controls.hover_mask", TextureStoreOptions::frames());
     // The look is part of the key: the same mask tinted at another opacity or with another edge is a
     // different image, and `get_or_put` would otherwise keep the first one.
     let key = (color.to_array(), look.fill.to_bits(), look.band);
-    let texture = store.get_or_put(ctx, mask.generation(), Revision::of(&key), || tint(mask, color, look));
+    let texture = store.get_or_put(ctx, (id, mask.generation()), Revision::of(&key), || tint(mask, color, look));
     let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
     let mut mesh = Mesh::with_texture(texture.sized().id);
     for (pos, uv) in view.quad(mask.bounds()).into_iter().zip(uvs) {
@@ -383,7 +383,7 @@ impl Component for HoverOutline {
             }
             HoverShape::Mask(mask) => {
                 let look = MaskLook::of(mask, self.tint_opacity, self.edge_width);
-                paint_mask(&painter, &view, mask, self.color.map_or(style.line.egui(), |color| color.0), &look);
+                paint_mask(&painter, cx.id, &view, mask, self.color.map_or(style.line.egui(), |color| color.0), &look);
             }
         }
     }
