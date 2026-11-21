@@ -862,11 +862,19 @@ impl Component for Tile<'_> {
                 ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
             }
         }
+        // Only over the sunken well: a flat thumbnail (a page outline on the card, as the New Document presets draw)
+        // has no well and takes no frame.
+        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some());
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
         }
         if let Some(shown) = self.picture.take() {
             let _ = ui.child("picture", picture, shown);
+        }
+        if framed {
+            // A picture covers the sunken well under it, which would leave only its top and bottom edge showing: the
+            // frame goes over the picture so all four sides show.
+            ui.draw().surface(picture, SurfaceKind::Frame, Corners::All);
         }
         {
             let draw = ui.draw();
