@@ -120,7 +120,7 @@ const RECENT_COLUMNS: usize = 4;
 
 /// The picture size of Recent's cards with `recent_items`, against a preset card's: four of them take about the room
 /// three preset cards do.
-const RECENT_ZOOM: f32 = 0.7;
+const RECENT_ZOOM: f32 = 0.75;
 
 /// Shows the full-width category strip above the two columns.
 pub(super) fn tabs(ui: &mut Ui, session: &Session, read: &Read<'_>, left: &mut Left) {

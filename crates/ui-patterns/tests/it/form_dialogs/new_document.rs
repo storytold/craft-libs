@@ -284,11 +284,11 @@ fn recent_items_heads_recent_and_lays_four_cards_to_a_row() {
         let first_row = rects.iter().take_while(|rect| (rect.top() - rects[0].top()).abs() < 1.0).count();
         spans.push(rects[first_row - 1].right() - rects[0].left());
         if items {
-            assert!(shows(&fixture, "Your Recent Items (6)"), "the heading counts the six recent documents");
+            assert!(shows(&fixture, "YOUR RECENT ITEMS (6)"), "the heading counts the six recent documents");
             assert_eq!(first_row, 4, "four cards to a row: {rects:?}");
             assert!(!shows(&fixture, "HDTV 1080p"), "no default card next to recent documents");
         } else {
-            assert!(shows(&fixture, "Blank Document Presets (8)"), "six recent documents and the two defaults");
+            assert!(shows(&fixture, "BLANK DOCUMENT PRESETS (8)"), "six recent documents and the two defaults");
             assert_eq!(first_row, 3, "three cards to a row without the option");
         }
     }
@@ -308,7 +308,7 @@ fn recent_items_lists_the_defaults_until_there_is_a_recent_document() {
             .show(ui);
     });
     fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
-    assert!(shows(&fixture, "Your Recent Items (1)"), "the default card alone");
+    assert!(shows(&fixture, "YOUR RECENT ITEMS (1)"), "the default card alone");
     assert!(shows(&fixture, "Default Size"));
 }
 
