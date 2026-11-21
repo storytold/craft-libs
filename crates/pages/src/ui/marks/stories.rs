@@ -30,6 +30,11 @@ fn hidden_characters_and_extras(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         PlacedMark::new(HiddenMark::LineBreak, Point::new(60.0, 30.0), MarkAnchor::Start, ASCENT),
         PlacedMark::new(HiddenMark::ParagraphEnd, Point::new(80.0, 30.0), MarkAnchor::Start, ASCENT),
         PlacedMark::new(HiddenMark::StoryEnd, Point::new(100.0, 30.0), MarkAnchor::Start, ASCENT),
+        PlacedMark::new(HiddenMark::NarrowNoBreakSpace, Point::new(20.0, 50.0), MarkAnchor::Centre, ASCENT),
+        PlacedMark::new(HiddenMark::FixedSpace, Point::new(40.0, 50.0), MarkAnchor::Centre, ASCENT),
+        PlacedMark::new(HiddenMark::DiscretionaryHyphen, Point::new(60.0, 50.0), MarkAnchor::Start, ASCENT),
+        PlacedMark::new(HiddenMark::LineBreak, Point::new(100.0, 50.0), MarkAnchor::End, ASCENT),
+        PlacedMark::new(HiddenMark::ParagraphEnd, Point::new(110.0, 55.0), MarkAnchor::Top, ASCENT),
     ];
     Canvas::new("Frames")
         .view(view)

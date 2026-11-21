@@ -1,6 +1,7 @@
 //! `TextFrameMarks`: InDesign's View > Show Hidden Characters and Extras over text frames, a canvas control that only
 //! paints (it has no parts, so a press never lands on it). Hidden characters: · spaces, » tabs, ¬ forced line breaks,
-//! ° no-break spaces, ¶ paragraph ends, # the end of a story. Extras: the overset mark (a red + in the out port) on a
+//! ° no-break spaces, ˚ narrow no-break spaces, ˈ spaces of a set width, ¬ discretionary hyphens, ¶ paragraph ends, #
+//! the end of a story. Extras: the overset mark (a red + in the out port) on a
 //! frame whose story does not fit, and frame outlines with their in and out ports.
 
 #[cfg(feature = "screen-testing")]
@@ -60,7 +61,9 @@ impl HiddenMark {
             HiddenMark::NoBreakSpace => "°",
             HiddenMark::ParagraphEnd => "¶",
             HiddenMark::StoryEnd => "#",
-            HiddenMark::NarrowNoBreakSpace | HiddenMark::FixedSpace | HiddenMark::DiscretionaryHyphen => todo!("cv.F43"),
+            HiddenMark::NarrowNoBreakSpace => "˚",
+            HiddenMark::FixedSpace => "ˈ",
+            HiddenMark::DiscretionaryHyphen => "¬",
         }
     }
 
@@ -71,6 +74,9 @@ impl HiddenMark {
             '\t' => Some(HiddenMark::Tab),
             '\u{2028}' => Some(HiddenMark::LineBreak),
             '\u{A0}' => Some(HiddenMark::NoBreakSpace),
+            '\u{202F}' => Some(HiddenMark::NarrowNoBreakSpace),
+            '\u{2000}'..='\u{200A}' | '\u{205F}' | '\u{3000}' => Some(HiddenMark::FixedSpace),
+            '\u{00AD}' => Some(HiddenMark::DiscretionaryHyphen),
             _ => None,
         }
     }
@@ -236,8 +242,13 @@ impl Component for TextFrameMarks<'_> {
             let size = (placed.ascent as f32 * MARK_SHARE * zoom).clamp(*MARK_SIZES.start(), *MARK_SIZES.end());
             let run = [DocRun::new(placed.mark.glyph(), FontRef::proportional(), size, self.color)];
             let at = self.view.to_screen(placed.at);
-            let left = if placed.anchor == MarkAnchor::Centre { at.x - size / 2.0 } else { at.x }; // P3(canvas-w34): cv.F43
-            let room = egui::Rect::from_min_size(Pos2::new(left, at.y - size), Vec2::splat(size));
+            let (left, top) = match placed.anchor {
+                MarkAnchor::Centre => (at.x - size / 2.0, at.y - size),
+                MarkAnchor::End => (at.x - size, at.y - size),
+                MarkAnchor::Top => (at.x, at.y),
+                _ => (at.x, at.y - size),
+            };
+            let room = egui::Rect::from_min_size(Pos2::new(left, top), Vec2::splat(size));
             draw.doc(room, &DocText::new(&run));
         }
         for frame in self.frames {
