@@ -1,11 +1,10 @@
-//! The command search of the Help menu: [`HelpEntry`], a command found by its label, its English label or its menu
-//! path, and [`search_order`], which ranks the entries for a query.
+//! The command search of the Help menu and the palette: [`HelpEntry`], a command found by its label, its English label,
+//! its menu path, its ids or its description words, and [`SearchIndex`] with [`rank`], which index the entries and
+//! order them for a query.
 
 use crate::primitives::IconSpec;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
-use craft_i18n::Folder;
-use craft_i18n::matcher::Matcher;
 
 mod index;
 mod synonyms;
@@ -24,13 +23,9 @@ pub struct HelpEntry {
     label: Label,
     english: Option<Label>,
     path: Vec<Label>,
-    #[allow(dead_code)] // P3(menus-w2): mn.M17
     home: Option<Label>,
-    #[allow(dead_code)] // P3(menus-w2): mn.M18
     words: Option<String>,
-    #[allow(dead_code)] // P3(menus-w2): mn.M17
     icon: Option<IconSpec<'static>>,
-    #[allow(dead_code)] // P3(menus-w2): mn.M18
     ids: Vec<String>,
 }
 
@@ -65,54 +60,54 @@ impl HelpEntry {
 
     /// The label shown in place of the path. It is not searched.
     #[must_use]
-    pub fn with_home(self, home: impl Into<Label>) -> Self {
-        let _ = home;
-        todo!("mn.M17")
+    pub fn with_home(mut self, home: impl Into<Label>) -> Self {
+        self.home = Some(home.into());
+        self
     }
 
     /// The label shown in place of the path, if any.
     #[must_use]
     pub fn home(&self) -> Option<&Label> {
-        todo!("mn.M17")
+        self.home.as_ref()
     }
 
     /// The icon the palette row shows. It is not searched.
     #[must_use]
-    pub fn with_icon(self, icon: IconSpec<'static>) -> Self {
-        let _ = icon;
-        todo!("mn.M17")
+    pub fn with_icon(mut self, icon: IconSpec<'static>) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     /// The icon the palette row shows, if any.
     #[must_use]
     pub fn icon(&self) -> Option<&IconSpec<'static>> {
-        todo!("mn.M17")
+        self.icon.as_ref()
     }
 
-    /// The command id and description words: searched (word index, description tier), never shown.
+    /// The description words: searched (word index, description tier), never shown.
     #[must_use]
-    pub fn with_words(self, words: impl Into<String>) -> Self {
-        let _ = words;
-        todo!("mn.M18")
+    pub fn with_words(mut self, words: impl Into<String>) -> Self {
+        self.words = Some(words.into());
+        self
     }
 
     /// The ids searched in the ID and exact-id tiers; with none given, the command's own id.
     #[must_use]
-    pub fn with_ids(self, ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        let _ = ids;
-        todo!("mn.M18")
+    pub fn with_ids(mut self, ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.ids = ids.into_iter().map(Into::into).collect();
+        self
     }
 
     /// The ids searched in the ID and exact-id tiers.
     #[must_use]
     pub fn ids(&self) -> &[String] {
-        todo!("mn.M18")
+        &self.ids
     }
 
     /// The searched words, if any.
     #[must_use]
     pub fn words(&self) -> Option<&str> {
-        todo!("mn.M18")
+        self.words.as_deref()
     }
 
     /// The command the entry runs.
@@ -138,28 +133,4 @@ impl HelpEntry {
     pub fn path(&self) -> &[Label] {
         &self.path
     }
-}
-
-/// The entries matching `query`, best first and in menu order within a rank, at most `MAX_RESULTS`. Each entry is
-/// its `[label, english label, menu path]` texts, matched by `folder` (case and accents folded). A label or English
-/// label that matches ranks before an entry found only through its path; within each, the matcher's rank decides.
-pub fn search_order(folder: &Folder, query: &str, texts: &[[&str; 3]]) -> Vec<usize> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let matcher = Matcher::new(folder, query);
-    let mut ranked: Vec<_> = texts
-        .iter()
-        .enumerate()
-        .filter_map(|(at, [label, english, path])| {
-            let named = [label, english].into_iter().filter_map(|text| matcher.score(text)).map(|found| found.rank).min();
-            match named {
-                Some(found) => Some((0_u8, found, at)),
-                None => matcher.score(path).map(|found| (1, found.rank, at)),
-            }
-        })
-        .collect();
-    ranked.sort();
-    ranked.into_iter().take(MAX_RESULTS).map(|(_, _, at)| at).collect()
 }

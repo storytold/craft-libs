@@ -14,6 +14,8 @@ mod pick_focus;
 
 mod rows;
 
+mod search;
+
 mod submenus;
 
 use craft_behavior::IconId;

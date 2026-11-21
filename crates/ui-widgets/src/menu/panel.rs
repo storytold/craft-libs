@@ -85,7 +85,13 @@ impl PanelMenu {
                 PanelRow::Submenu(label, rows) => {
                     Menu::submenu_row(ui, label.clone(), |ui, _| Self::rows(ui, rows, picked));
                 }
-                PanelRow::Alternated(..) => todo!("mn.B10"),
+                PanelRow::Alternated(command, alternate) => {
+                    // The alternate swaps the command only; the salt is the row's own command, so hover and focus stay
+                    // on the row through the swap.
+                    let held = crate::runtime::pointer::frame(ui.ctx()).mods;
+                    let shown = if alternate.selected_by(held) { &alternate.command } else { command };
+                    MenuItem::command(shown.clone()).id_salt(command.key()).show(ui);
+                }
                 PanelRow::Separator => {
                     Divider::horizontal().show(ui);
                 }

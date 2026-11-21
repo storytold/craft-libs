@@ -264,3 +264,57 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
 }
+
+/// `MenuBarOutput::opened` is true in the one pass where a menu opened while none was open: a held menu, a switch from
+/// one title to another and the passes a frame reruns report false.
+#[trial]
+fn a_bar_menu_opening_is_reported_once() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let passes: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let seen = passes.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![
+            MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            }),
+            MenuTitle::new("&Edit", |ui| {
+                MenuItem::new("&Undo").show(ui);
+            }),
+        ];
+        let out = MenuBar::new("Main menu", titles).show(ui);
+        seen.borrow_mut().push(out.opened);
+    });
+    fixture.os(Os::Linux);
+    let reports = || {
+        let count = passes.borrow().iter().filter(|opened| **opened).count();
+        passes.borrow_mut().clear();
+        count
+    };
+    fixture.settle();
+    assert_eq!(reports(), 0, "a closed bar reports no opening");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("New").is_some(), "File is open");
+    assert_eq!(reports(), 1, "the click that opened File reports once across every pass it ran");
+
+    fixture.settle().idle(2);
+    assert_eq!(reports(), 0, "a menu held open reports nothing");
+
+    fixture.key(Key::E, Modifiers::ALT);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_some() && fixture.by_label("New").is_none(), "Alt+E switches to Edit");
+    assert_eq!(reports(), 0, "a switch from one open title to another reports nothing");
+
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Undo").is_none(), "Edit is closed");
+    assert_eq!(reports(), 0, "closing reports nothing");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert_eq!(reports(), 1, "opening again reports once more");
+}
