@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::cell::Cell;
 
 use crate::ui::length::{DocUnit, length_field, shown};
-use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec, SelectionChange, keyed};
+use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec, Reader, SelectionChange, keyed};
 use craft_theme::variant::Tone;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
@@ -31,7 +31,7 @@ use craft_ui::form::{Field, FieldGroup, Help};
 use craft_ui::layout_components::Stack;
 use craft_ui::pickers::Select;
 use craft_ui::primitives::TextRun;
-use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
+use craft_ui::runtime::env::{Env, Label, LengthUnits, UnitKind, Units};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton, GroupBox};
 use craft_ui::style::{ComponentStyle, Corners, StyleColor, StyleCx, SurfaceKind, TypeRole};
@@ -135,6 +135,18 @@ pub enum SpecialIndent {
     Hanging,
 }
 
+/// What an indent field counts: a length kept in points (shown in the dialog's unit), or characters (`2 ch`, Word's
+/// East Asian indents, where one character is the paragraph's font size).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum IndentKind {
+    /// A length kept in points and shown in the dialog's unit.
+    #[default]
+    Length,
+    /// Characters (`2 ch`).
+    Characters,
+}
+
 /// What a paragraph's spacing before or after counts, as DeckCraft keeps it (`spaceBeforeKind`
 /// and `spaceAfterKind`, `pts` or `pct`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -189,16 +201,29 @@ mod shown_or_hidden {
 pub struct ParagraphFormat {
     /// The align.
     pub align: Option<ParagraphAlign>,
-    /// Points.
+    /// Points, or characters when [`before_text_kind`](Self::before_text_kind) says so.
     pub before_text: Option<f32>,
-    /// Word's right indent ("After text"). The outer `None` hides the field (PowerPoint has
-    /// none); `Some(None)` shows it empty, for paragraphs that differ.
+    /// Word's right indent ("After text"): points, or characters when [`after_text_kind`](Self::after_text_kind) says
+    /// so. The outer `None` hides the field (PowerPoint has none); `Some(None)` shows it empty, for paragraphs that
+    /// differ.
     #[serde(default, skip_serializing_if = "Option::is_none", with = "shown_or_hidden")]
     pub after_text: Option<Option<f32>>,
     /// The special first-line indent: none, first line or hanging.
     pub special: Option<SpecialIndent>,
-    /// Size of the special indent, in points.
+    /// Size of the special indent, in points, or characters when [`by_kind`](Self::by_kind) says so.
     pub by: Option<f32>,
+    /// What `before_text` counts: a length in points, or characters (`2 ch`).
+    #[serde(default)]
+    pub before_text_kind: IndentKind,
+    /// What `after_text` counts, as `before_text_kind`.
+    #[serde(default)]
+    pub after_text_kind: IndentKind,
+    /// What `by` counts, as `before_text_kind`.
+    #[serde(default)]
+    pub by_kind: IndentKind,
+    /// Font size of one character in points, for previewing character indents (`12 pt` when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_size: Option<f32>,
     /// Points, or lines when [`space_before_kind`](Self::space_before_kind) says so.
     pub space_before: Option<f32>,
     /// Points, or lines when [`space_after_kind`](Self::space_after_kind) says so.
@@ -358,6 +383,10 @@ impl ParagraphDialog {
 
 /// The largest length Word takes, points.
 const MAX_POINTS: f32 = 1584.0;
+/// The largest character indent Word takes (`w:firstLineChars` is kept in hundredths in signed 16-bit integer).
+const MAX_CHARS: f32 = 327.67;
+/// Font size assumed when previewing character indents without `char_size`, points.
+const DEFAULT_CHAR_SIZE: f32 = 12.0;
 /// PowerPoint's switch between a multiple and a distance in At.
 const MULTIPLE_LIMIT: f32 = 9.99;
 /// The distance Exactly and At least start at, points.
@@ -466,10 +495,45 @@ enum Row {
     At,
 }
 
-/// What a number field counts: a length shown in a unit, or a plain number of lines.
+impl Row {
+    fn is_indent(self) -> bool {
+        matches!(self, Row::BeforeText | Row::AfterText | Row::By)
+    }
+}
+
+/// The bounds of an indent row in points or characters.
+fn indent_bounds(row: Row, kind: IndentKind) -> (f32, f32) {
+    let max = match kind {
+        IndentKind::Length => MAX_POINTS,
+        IndentKind::Characters => MAX_CHARS,
+    };
+    match row {
+        Row::By => (0.0, max),
+        _ => (-max, max),
+    }
+}
+
+/// Extends `reader` with character-indent spellings (`2 ch`, `2 ic`, `2 chars` and the locale's symbol) tagged as
+/// [`UnitKind::Characters`].
+fn with_char_units(mut reader: Reader, units: &Units) -> Reader {
+    let tag = UnitKind::Characters.tag();
+    let local = units.symbol(UnitKind::Characters);
+    if !local.is_empty() {
+        reader = reader.unit_tagged(&local, 1.0, tag);
+    }
+    for spelling in ["ch", "ic", "char", "chars", "character", "characters"] {
+        if !local.eq_ignore_ascii_case(spelling) {
+            reader = reader.unit_tagged(spelling, 1.0, tag);
+        }
+    }
+    reader
+}
+
+/// What a number field counts: a length shown in a unit, characters, or a plain number of lines.
 #[derive(Clone, Copy)]
 enum Count {
     Length(DocUnit),
+    Characters,
     Lines,
 }
 
@@ -484,11 +548,20 @@ impl ParagraphDialog {
     fn count(&self, row: Row) -> Count {
         let f = &self.format;
         match row {
-            Row::BeforeText | Row::AfterText | Row::By => Count::Length(self.unit),
+            Row::BeforeText => self.indent_count(f.before_text_kind),
+            Row::AfterText => self.indent_count(f.after_text_kind),
+            Row::By => self.indent_count(f.by_kind),
             Row::SpaceBefore => Self::spacing_count(f.space_before_kind),
             Row::SpaceAfter => Self::spacing_count(f.space_after_kind),
             Row::At if matches!(f.line_spacing, Some(LineSpacing::Multiple(_))) => Count::Lines,
             Row::At => Count::Length(DocUnit::points()),
+        }
+    }
+
+    fn indent_count(&self, kind: IndentKind) -> Count {
+        match kind {
+            IndentKind::Length => Count::Length(self.unit),
+            IndentKind::Characters => Count::Characters,
         }
     }
 
@@ -499,12 +572,13 @@ impl ParagraphDialog {
         }
     }
 
-    /// The values `row` can take, in points or lines.
+    /// The values `row` can take, in points, characters or lines.
     fn bounds(&self, row: Row) -> (f32, f32) {
         let f = &self.format;
         match row {
-            Row::BeforeText | Row::AfterText => (-MAX_POINTS, MAX_POINTS),
-            Row::By => (0.0, MAX_POINTS),
+            Row::BeforeText => indent_bounds(row, f.before_text_kind),
+            Row::AfterText => indent_bounds(row, f.after_text_kind),
+            Row::By => indent_bounds(row, f.by_kind),
             Row::SpaceBefore => spacing_bounds(f.space_before_kind),
             Row::SpaceAfter => spacing_bounds(f.space_after_kind),
             Row::At => f.line_spacing.map_or((0.0, MAX_POINTS), at_bounds),
@@ -562,8 +636,27 @@ impl ParagraphDialog {
         }
     }
 
-    /// Applies a field's event, in points or lines, to the row's value: every `Update` shows in the dialog, and
-    /// Escape (`Cancel`) restores the value from before the gesture.
+    fn set_indent(&mut self, row: Row, value: Option<f32>, kind: IndentKind) {
+        let f = &mut self.format;
+        match row {
+            Row::BeforeText => {
+                f.before_text = value;
+                f.before_text_kind = kind;
+            }
+            Row::AfterText => {
+                f.after_text = Some(value);
+                f.after_text_kind = kind;
+            }
+            Row::By => {
+                f.by = value;
+                f.by_kind = kind;
+            }
+            _ => {}
+        }
+    }
+
+    /// Applies a field's event, in points, characters or lines, to the row's value: every `Update` shows in the dialog,
+    /// and Escape (`Cancel`) restores the value from before the gesture.
     fn apply(&mut self, row: Row, event: &EditEvent<Option<f32>>) {
         let mut value = self.value(row).map_or(Mixed::Mixed, |value| Mixed::Same(Some(value)));
         event.apply_mixed(&mut value);
@@ -575,6 +668,7 @@ impl ParagraphDialog {
         let (low, high) = self.bounds(row);
         let show = |bound: f32| match self.count(row) {
             Count::Length(unit) => scope.units.show(unit.kind, shown(scope.units, unit, f64::from(bound))),
+            Count::Characters => scope.units.show(UnitKind::Characters, f64::from(bound)),
             Count::Lines => scope.units.number(f64::from(bound), 0..=AT_DECIMALS),
         };
         scope.words.out_of_range.fill(&[("field", caption), ("min", &show(low)), ("max", &show(high))])
@@ -594,23 +688,60 @@ impl ParagraphDialog {
         let units = scope.units;
         let shown_field = field.show(ui, |ui, _| {
             let out = match count {
+                Count::Length(unit) if row.is_indent() => {
+                    let reader = with_char_units(units.length_reader(unit.lengths()), units);
+                    let codec = NumberCodec::new(reader, *unit.kind.decimals().end());
+                    length_field(unit, caption.clone(), shown, f64::from(low)..=f64::from(high)).codec(codec).enabled(enabled).show(ui)
+                }
                 Count::Length(unit) => length_field(unit, caption.clone(), shown, f64::from(low)..=f64::from(high)).enabled(enabled).show(ui),
+                Count::Characters => {
+                    let lengths = LengthUnits::new(UnitKind::Points, UnitKind::Points, self.unit.pixels_per_inch);
+                    let reader = with_char_units(units.length_reader(lengths), units);
+                    let codec = NumberCodec::new(reader, *UnitKind::Characters.decimals().end());
+                    NumberField::new(caption.clone(), Bind::given(shown))
+                        .unit_kind(UnitKind::Characters)
+                        .step(UnitKind::Characters.step())
+                        .range(f64::from(low)..=f64::from(high))
+                        .codec(codec)
+                        .enabled(enabled)
+                        .show(ui)
+                }
                 Count::Lines => {
                     // No range: a number typed here replaces the lines with points, whatever it is.
                     let codec = NumberCodec::new(units.reader(None), AT_DECIMALS);
                     NumberField::new(caption.clone(), Bind::given(shown)).codec(codec).enabled(enabled).show(ui)
                 }
             };
-            (out.edit.events, out.edit.unparsed)
+            (out.edit.events, out.edit.unparsed, out.typed_unit, out.out_of_range)
         });
-        let Some((events, unparsed)) = shown_field.inner else { return };
+        let Some((events, unparsed, typed_unit, out_of_range)) = shown_field.inner else { return };
         if unparsed {
             valid.set(false);
         }
         for event in events {
-            let event = match count {
-                Count::Length(_) | Count::Lines => event,
-            };
+            if row.is_indent()
+                && let (EditEvent::Commit { after: Some(committed), .. } | EditEvent::Set { after: Some(committed), .. }, Some(unit)) =
+                    (&event, typed_unit)
+            {
+                let switched = match (count, unit == UnitKind::Characters) {
+                    (Count::Length(doc_unit), true) => {
+                        let scale = units.length_scale(doc_unit.lengths()).unwrap_or(1.0);
+                        let raw = out_of_range.as_ref().map_or(committed * scale, |alert| alert.typed) as f32;
+                        let (min, max) = indent_bounds(row, IndentKind::Characters);
+                        Some((raw.clamp(min, max), IndentKind::Characters))
+                    }
+                    (Count::Characters, false) => {
+                        let raw = out_of_range.as_ref().map_or(*committed, |alert| alert.typed) as f32;
+                        let (min, max) = indent_bounds(row, IndentKind::Length);
+                        Some((raw.clamp(min, max), IndentKind::Length))
+                    }
+                    _ => None,
+                };
+                if let Some((value, kind)) = switched {
+                    self.set_indent(row, Some(value), kind);
+                    continue;
+                }
+            }
             self.apply(row, &event.map(|value| value.map(|value| value as f32)));
         }
     }
@@ -782,6 +913,7 @@ impl ParagraphDialog {
             self.format.special = Some(special);
             if matches!(special, SpecialIndent::FirstLine | SpecialIndent::Hanging) && self.format.by.is_none_or(|by| by == 0.0) {
                 self.format.by = Some(DEFAULT_BY);
+                self.format.by_kind = IndentKind::Length;
             }
         }
         self.field(ui, scope, Row::By, &words.by, valid);
@@ -1080,6 +1212,14 @@ struct SamplePlan {
     height: f32,
 }
 
+fn indent_points(value: Option<f32>, kind: IndentKind, char_size: f32) -> f32 {
+    match (value, kind) {
+        (Some(value), IndentKind::Length) => value,
+        (Some(value), IndentKind::Characters) => value * char_size,
+        (None, _) => 0.0,
+    }
+}
+
 /// The preview's lines for `format` in a box `width` wide, `row_height` being one line of text: a paragraph before
 /// and after in the default format, and the edited one between. Fields that differ among the paragraphs (`None`) take
 /// the default.
@@ -1090,9 +1230,10 @@ fn sample_plan(format: &ParagraphFormat, width: f32, row_height: f32) -> SampleP
     let mut y = 0.0_f32;
     for (index, f) in [&plain, format, &plain].into_iter().enumerate() {
         let align = f.align.unwrap_or_default();
-        let left = f.before_text.unwrap_or(0.0);
-        let right = f.after_text.flatten().unwrap_or(0.0);
-        let by = f.by.unwrap_or(0.0);
+        let char_size = f.char_size.filter(|size| size.is_finite() && *size > 0.0).unwrap_or(DEFAULT_CHAR_SIZE);
+        let left = indent_points(f.before_text, f.before_text_kind, char_size);
+        let right = indent_points(f.after_text.flatten(), f.after_text_kind, char_size);
+        let by = indent_points(f.by, f.by_kind, char_size);
         let (first, rest) = match f.special.unwrap_or_default() {
             SpecialIndent::None => (0.0, 0.0),
             SpecialIndent::FirstLine => (by, 0.0),
