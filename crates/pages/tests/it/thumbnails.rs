@@ -66,6 +66,18 @@ fn a_wide_thumbnail_strip_keeps_pages_in_one_column() {
     assert!(second.top() >= first.bottom(), "the strip stays in page order vertically: {first:?}, {second:?}");
 }
 
+#[trial]
+fn organize_keeps_room_above_and_below_each_page() {
+    let pages = DemoPages::new(1);
+    let mut picked = Selection::default();
+    let mut fixture = Fixture::new(move |ui| {
+        PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).arrangement(ThumbnailArrangement::Organize).show(ui);
+    });
+    fixture.room(vec2(600.0, 600.0)).settle();
+    let page = fixture.by_label("Page 1").expect("page tile").rect;
+    assert!(page.height() > page.width(), "the tile reserves room for its check and actions: {page:?}");
+}
+
 /// A click on the New Slide row asks for a new page and goes to no page.
 #[trial]
 fn the_new_slide_row_asks_for_a_new_page() {
