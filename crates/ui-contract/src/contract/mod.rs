@@ -60,8 +60,8 @@ pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
     ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest,
-    ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState,
-    SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed,
+    RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
