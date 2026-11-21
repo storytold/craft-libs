@@ -347,8 +347,7 @@ pub fn started(ctx: &Context) -> u64 {
     board(ctx, |board| board.started)
 }
 
-/// The mark of the target that would take a drop now.
-#[doc(hidden)]
+/// The mark of the target that would take a drop now, in screen space: `None` while no target accepts the payload.
 pub fn mark(ctx: &Context) -> Option<DropMark> {
     board(ctx, |board| board.session.as_ref().and_then(|session| session.mark.as_ref().map(|shown| shown.mark)))
 }
@@ -456,10 +455,10 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
 
 /// The pointer of the running session in screen space, whatever its payload: the pointer `dragging_of` pairs with a
 /// payload. `None` without a session or a pointer.
-#[allow(dead_code)] // P3(canvas-w2): widgets-w7 request
 pub(crate) fn session_pointer(ctx: &Context) -> Option<Pos2> {
-    let _ = ctx;
-    todo!("widgets-w7 request")
+    let os = board(ctx, |board| board.session.as_ref().map(|session| session.os))?;
+    let host = WindowHost::of(ctx);
+    if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { pointer::frame(ctx).pos }
 }
 
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the
@@ -467,11 +466,7 @@ pub(crate) fn session_pointer(ctx: &Context) -> Option<Pos2> {
 /// pointer), else the frame's: the OS sends the window no pointer events while it drags files over it (winit 0.30).
 pub(crate) fn dragging_of(ctx: &Context, payload: TypeId) -> Option<(Arc<dyn Any + Send + Sync>, Pos2)> {
     let payload = active_of(ctx, payload)?;
-    let os = board(ctx, |board| board.session.as_ref().is_some_and(|session| session.os));
-    let frame = pointer::frame(ctx).pos;
-    let host = WindowHost::of(ctx);
-    let pointer = if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { frame };
-    Some((payload, pointer?))
+    Some((payload, session_pointer(ctx)?))
 }
 
 /// The layer the running session's source moves with the pointer, which hit tests for drop targets look through.
@@ -543,9 +538,10 @@ pub fn next_ordinal(ctx: &Context, owner: Id) -> u32 {
     })
 }
 
-/// The operation the held modifiers pick now.
+/// The operation the pass's pick modifiers pick now: the release's in the drop pass, so a drop's operation and its
+/// modifiers agree.
 pub(crate) fn current_operation(ctx: &Context) -> DropOperation {
-    operation(ctx, pointer::frame(ctx).mods)
+    operation(ctx, pointer::frame(ctx).pick_mods)
 }
 
 /// Whether the session's button was released in this pass.

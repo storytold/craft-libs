@@ -501,3 +501,29 @@ fn a_held_press_keeps_hover_off_other_roots() {
     frames.idle(1, &mut show_frame);
     assert!(log.borrow().last_root(1).root.hovered, "b hovers once the press ends");
 }
+
+/// A pick's modifiers are the ones its release carried: Shift that came after the button went down and is let go in
+/// the release's pass belongs to the pick in that pass only; every other pass reads the held modifiers.
+#[trial]
+fn a_click_carries_the_modifiers_its_release_carried() {
+    let seen: Rc<RefCell<Vec<(bool, bool, bool)>>> = Rc::default();
+    let sink = seen.clone();
+    let mut show = move |ui: &mut Ui| {
+        let frame = craft_ui::runtime::pointer::frame(ui.ctx());
+        sink.borrow_mut().push((frame.release.is_some(), frame.pick_mods.shift, frame.mods.shift));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    let at = Pos2::new(150.0, 120.0);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    seen.borrow_mut().clear();
+    let release = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::SHIFT };
+    frames.frame(vec![release], &mut show);
+    frames.idle(1, &mut show);
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|(released, ..)| *released), "the release pass ran: {seen:?}");
+    for (released, pick, held) in seen.iter() {
+        assert!(!held, "no Shift is held: {seen:?}");
+        assert_eq!(pick, released, "Shift is the pick's in the release pass only: {seen:?}");
+    }
+}

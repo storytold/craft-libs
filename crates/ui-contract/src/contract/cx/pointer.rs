@@ -111,7 +111,11 @@ impl Pointer for CxCore<'_> {
     }
 
     fn take_multi_tap(&mut self) -> Option<MultiTap> {
-        todo!("cv.F19")
+        let map = areas::layer_map(&self.ctx, self.response.layer_id);
+        let to_layer = |at: Pos2| map.as_ref().map_or(at, |map| map.to_layer(at));
+        let rect = self.response.rect;
+        let tap = pointer::take_multi_tap(&self.ctx, self.id, |at| rect.contains(to_layer(at)))?;
+        Some(MultiTap::new(tap.fingers, to_layer(tap.at)))
     }
 
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority) {

@@ -6,14 +6,16 @@
 use crate::runtime::drag;
 use crate::runtime::egui::areas::{self, Layer};
 use crate::runtime::egui::{input, pass};
+use crate::runtime::sampler;
 use crate::runtime::frame::{PerViewport, Stamped};
 use craft_behavior::{
-    Buttons, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape, Winner,
+    Buttons, MultiTap, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape, Winner,
     count_clicks, resolve,
 };
 use craft_keymap::Mods;
 use craft_theme::HitSizes;
-use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, Vec2, ViewportId};
+use craft_behavior::press::MULTI_TAP_TIME;
+use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, TouchId, TouchPhase, Vec2, ViewportId};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -91,6 +93,8 @@ pub struct PassPointer {
     pub focus_lost: bool,
     /// Whether the real pointer moved or entered, or a held modifier or key changed, in the pass.
     pub stirred: bool,
+    /// A finger landed in the pass while another was down: a press open now is a gesture's.
+    pub gesture: bool,
 }
 
 #[derive(Default)]
@@ -104,6 +108,76 @@ pub(crate) struct Memory {
     press_probe: Option<fn(&Context) -> bool>,
     /// The arena roots whose members the next pass resolves without (`withhold_members`), with the pass that asked.
     withheld: IdMap<u64>,
+    /// The touch under way, for the multi-finger tap.
+    taps: Taps,
+}
+
+/// What one pass's finger events made of the touch.
+struct Touched {
+    /// A finger landed while another was down.
+    landed: bool,
+    /// The tap whose last finger lifted in the pass.
+    tap: Option<MultiTap>,
+    /// The centre of the fingers' landing points while a finger is still down.
+    tracked: Option<Pos2>,
+}
+
+/// The recognizer of the multi-finger tap: the fingers of one touch, where each landed, the most down at once, when
+/// the first landed and whether the touch is spoiled (a finger moved past the slop, stayed past [`MULTI_TAP_TIME`] or
+/// was cancelled).
+#[derive(Default)]
+struct Taps {
+    down: Vec<TouchId>,
+    landed: Vec<(TouchId, Pos2)>,
+    most: usize,
+    start: f64,
+    spoiled: bool,
+}
+
+impl Taps {
+    /// Follows the pass's finger events at time `now`; a finger moves `slop` at most in a tap.
+    fn feed(&mut self, fingers: &[input::Finger], now: f64, slop: f32) -> Touched {
+        let mut touched = Touched { landed: false, tap: None, tracked: None };
+        for finger in fingers {
+            match finger.phase {
+                TouchPhase::Start => {
+                    if self.down.is_empty() {
+                        *self = Taps { start: now, ..Taps::default() };
+                    }
+                    if !self.down.contains(&finger.id) {
+                        touched.landed |= !self.down.is_empty();
+                        self.down.push(finger.id);
+                        self.landed.push((finger.id, finger.pos));
+                    }
+                    self.most = self.most.max(self.down.len());
+                }
+                TouchPhase::Move => {
+                    let moved = self.landed.iter().rev().find(|(id, _)| *id == finger.id).is_some_and(|(_, at)| at.distance(finger.pos) > slop);
+                    self.spoiled |= moved && self.down.contains(&finger.id);
+                }
+                TouchPhase::End | TouchPhase::Cancel => {
+                    let known = self.down.len();
+                    self.down.retain(|id| *id != finger.id);
+                    if self.down.len() == known {
+                        continue;
+                    }
+                    self.spoiled |= finger.phase == TouchPhase::Cancel || now - self.start > MULTI_TAP_TIME;
+                    if self.down.is_empty() && !self.spoiled && self.most >= 2 {
+                        let fingers = u8::try_from(self.most).unwrap_or(u8::MAX);
+                        touched.tap = Some(MultiTap::new(fingers, self.centre()));
+                    }
+                }
+            }
+        }
+        touched.tracked = (!self.down.is_empty()).then(|| self.centre());
+        touched
+    }
+
+    /// The centre of the landing points.
+    fn centre(&self) -> Pos2 {
+        let sum = self.landed.iter().fold(Vec2::ZERO, |sum, (_, at)| sum + at.to_vec2());
+        (sum / self.landed.len().max(1) as f32).to_pos2()
+    }
 }
 
 /// What one root registered on one layer: its shapes and its egui widgets.
@@ -152,6 +226,8 @@ pub(crate) struct Shapes {
     hover: Option<(Pos2, PressTargets, Under)>,
     /// A press was open when the pass began: only its target hovers.
     captured: bool,
+    /// The pass's tap went to a component.
+    tap_taken: bool,
     /// What lies under another point a press asked for in the pass, with its targets: every root asks for the same
     /// press.
     winner: Option<(Pos2, PressTargets, Under)>,
@@ -177,7 +253,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     let hits = input::hit_targets(ctx);
     let other_pressed =
         read.events.iter().any(|event| matches!(event, PointerEvent::Pressed { button: PointerButton::Middle | PointerButton::Secondary, .. }));
-    let (events, targets) = PerViewport::<Memory>::with(ctx, viewport, |memory| {
+    let (events, targets, touched) = PerViewport::<Memory>::with(ctx, viewport, |memory| {
         let mut events = read.events.clone();
         for event in &mut events {
             if let PointerEvent::Pressed { button: PointerButton::Primary, pos, time, clicks, .. } = event {
@@ -188,8 +264,14 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         if read.primary_pressed || other_pressed {
             memory.press_targets = PressTargets { click: hits.0, drag: hits.1 };
         }
-        (events, memory.press_targets)
+        (events, memory.press_targets, memory.taps.feed(&read.touches, read.time, hit.slop))
     });
+    // Where a modal holds the wheel off the canvas, a tap is not reported and a touch under way is dropped, by the
+    // wheel's own rule.
+    let tap = touched.tap.filter(|tap| sampler::wheel_allowed(ctx, tap.at));
+    if touched.tracked.is_some_and(|at| !sampler::wheel_allowed(ctx, at)) {
+        PerViewport::<Memory>::with(ctx, viewport, |memory| memory.taps = Taps::default());
+    }
     let press = events.iter().rev().find_map(|event| match event {
         PointerEvent::Pressed { button, pos, time, clicks, .. } => Some(PressStart::new(*pos, *button, *time, *clicks)),
         _ => None,
@@ -203,8 +285,8 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         press,
         release: read.release,
         mods,
-        pick_mods: mods, // P3(canvas-w2): ap.AP8
-        multi_tap: None, // P3(canvas-w2): cv.F16
+        pick_mods: read.release_mods.map_or(mods, |released| with_latched(released, latched)),
+        multi_tap: tap,
         time: read.time,
         kind: read.kind,
         sample: read.sample,
@@ -223,6 +305,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         press_targets: targets,
         focus_lost: read.focus_lost,
         stirred: read.stirred,
+        gesture: touched.landed,
     };
     let hover_at = pass_pointer.hover;
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
@@ -234,6 +317,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         shapes.next = 0;
         shapes.hover = None;
         shapes.winner = None;
+        shapes.tap_taken = false;
         #[cfg(feature = "testing")]
         {
             shapes.resolutions = 0;
@@ -360,12 +444,29 @@ pub(crate) fn press_captured(ctx: &Context) -> bool {
     probe.is_some_and(|probe| probe(ctx))
 }
 
-/// Why captured presses end in the running pass: a cancel a service requested, else the window losing focus.
+/// Why captured presses end in the running pass: a cancel a service requested, else the window losing focus, else a
+/// second finger landing.
 pub(crate) fn cancel_of_pass(ctx: &Context) -> Option<PressCancel> {
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     let requested = PerViewport::<Memory>::with(ctx, viewport, |memory| memory.requested.filter(|(nr, _)| *nr == pass_nr).map(|(_, reason)| reason));
-    requested.or_else(|| with_pass_pointer(ctx, |pointer| pointer.focus_lost).then_some(PressCancel::FocusLost))
+    requested
+        .or_else(|| with_pass_pointer(ctx, |pointer| pointer.focus_lost).then_some(PressCancel::FocusLost))
+        .or_else(|| with_pass_pointer(ctx, |pointer| pointer.gesture).then_some(PressCancel::Gesture))
+}
+
+/// The running pass's tap, once, for the component `id` when `accepts` takes its centre (the component's rect check, in
+/// its own space) and `id` or one of its members wins a press there.
+pub(crate) fn take_multi_tap(ctx: &Context, id: Id, accepts: impl FnOnce(Pos2) -> bool) -> Option<MultiTap> {
+    let tap = with_frame(ctx, |frame, _| frame.and_then(|frame| frame.multi_tap))?;
+    let viewport = pass::current_viewport(ctx);
+    if PerViewport::<Shapes>::with(ctx, viewport, |shapes| shapes.tap_taken) || !accepts(tap.at) {
+        return None;
+    }
+    let targets = with_pass_pointer(ctx, |pointer| pointer.press_targets);
+    press_winner(ctx, tap.at, targets).filter(|(winner, root)| *root == id || winner.owner == id)?;
+    PerViewport::<Shapes>::with(ctx, viewport, |shapes| shapes.tap_taken = true);
+    Some(tap)
 }
 
 /// Writes `shapes` of the arena rooted at `root`, shown through `clip` (layer space), into the running pass's shape

@@ -174,6 +174,13 @@ pub struct MultiTap {
     pub at: Pos2,
 }
 
+impl MultiTap {
+    /// A tap of `fingers` around `at`.
+    pub const fn new(fingers: u8, at: Pos2) -> Self {
+        MultiTap { fingers, at }
+    }
+}
+
 /// One part's press state in one pass.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -346,6 +353,9 @@ impl Default for PressState {
 
 /// The longest gap between presses that still count as one multi-click, in seconds.
 pub const MULTI_CLICK_TIME: f64 = 0.3;
+
+/// The longest the fingers of a multi-finger tap may stay down, in seconds.
+pub const MULTI_TAP_TIME: f64 = 0.5;
 
 /// The click count of a press at `pos` and `time` with `mods` held, given the previous press `(pos, time, clicks,
 /// mods)`: one more when it follows within [`MULTI_CLICK_TIME`] and `slop` of the previous one with the same

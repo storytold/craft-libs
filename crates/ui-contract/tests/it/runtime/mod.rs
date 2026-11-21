@@ -2,6 +2,7 @@ mod control_click;
 mod cursor;
 mod elapsed;
 mod env;
+mod fingers;
 mod frame;
 mod latch;
 mod memory;

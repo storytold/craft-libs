@@ -157,7 +157,6 @@ pub(crate) enum KeyEvent {
     Clip {
         command: craft_behavior::EditCommand,
         text: Option<String>,
-        #[allow(dead_code)] // P3(canvas-w2): kb.C10a
         mods: craft_keymap::Mods,
     },
     /// A pointer press, which ends keyboard modality.
@@ -172,8 +171,9 @@ pub(crate) enum KeyEvent {
     Other,
 }
 
-/// The key stage's reading of `event`. `latin` is the raw input's Latin-layout characters.
-pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> KeyEvent {
+/// The key stage's reading of `event`. `latin` is the raw input's Latin-layout characters; `held` are the modifiers
+/// held at the event, which a clipboard event carries.
+pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)], held: Mods) -> KeyEvent {
     let read = |event: &Event| {
         let mut input = KeyInput::from_egui(event, os)?;
         if let Event::Key { physical_key: Some(physical), .. } = event {
@@ -191,10 +191,10 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> K
         Event::Key { pressed: false, .. } => read(event).map_or(KeyEvent::Other, |input| KeyEvent::Release { input }),
         Event::Text(text) => KeyEvent::Text(text.clone()),
         Event::ModifiersChanged(modifiers) => KeyEvent::Modifiers(Mods::from_egui(modifiers, os)),
-        // P3(canvas-w2): kb.C10a
-        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None, mods: Mods::NONE },
-        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None, mods: Mods::NONE },
-        Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()), mods: Mods::NONE },
+        // PLAN: kb.C10c maps `Event::PasteImage` here; this egui has no such event that I could verify.
+        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None, mods: held },
+        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None, mods: held },
+        Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()), mods: held },
         Event::PointerButton { pressed: true, .. } => KeyEvent::PointerPress,
         Event::AccessKitActionRequest(request) => KeyEvent::Access(Action(request.clone())),
         _ => KeyEvent::Other,
@@ -249,6 +249,13 @@ impl Action {
     }
 }
 
+/// One finger event of the pass: which finger, its phase and where it was.
+pub(crate) struct Finger {
+    pub id: egui::TouchId,
+    pub phase: TouchPhase,
+    pub pos: Pos2,
+}
+
 /// What the running pass's pointer input says, converted once.
 pub(crate) struct PointerRead {
     /// The primary, middle and secondary button events in arrival order. `clicks` of each press is 1: the caller counts.
@@ -266,7 +273,6 @@ pub(crate) struct PointerRead {
     /// The button that went up last in the pass, any button.
     pub release: Option<PointerButton>,
     /// The modifiers of the pass's last button release.
-    #[allow(dead_code)] // P3(canvas-w2): ap.AP8
     pub release_mods: Option<Mods>,
     /// The last press of a button other than the primary one: the button and where it went down.
     pub other_press: Option<(PointerButton, Pos2)>,
@@ -280,8 +286,10 @@ pub(crate) struct PointerRead {
     pub sample: Option<PointerSample>,
     /// The window lost focus in this pass.
     pub focus_lost: bool,
-    /// Whether the real pointer moved or entered in this pass.
+    /// Whether the real pointer moved or entered, or a held modifier or key changed, in this pass.
     pub stirred: bool,
+    /// The pass's finger events, in arrival order.
+    pub touches: Vec<Finger>,
     /// The zoom factor of the pass: pinch and Ctrl or Cmd with the wheel.
     pub zoom: f32,
     /// The pass's summed `Event::Rotate` radians.
@@ -333,13 +341,15 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         let mut touched = false;
         let mut touch_sample = None;
         let mut release = None;
+        let mut release_mods = None;
+        let mut touches = Vec::new();
         let mut other_press = None;
         let mut rotation = 0.0;
         let mut barrel_press = tablet.as_ref().is_some_and(|tablet| tablet.barrel_press);
         let mut barrel_pressed = false;
         for event in &input.raw.events {
             match event {
-                Event::PointerButton { pos, button, pressed, .. } if *button != egui::PointerButton::Primary => {
+                Event::PointerButton { pos, button, pressed, modifiers } if *button != egui::PointerButton::Primary => {
                     let button = button_of(*button);
                     if matches!(button, PointerButton::Middle | PointerButton::Secondary) {
                         events.push(if *pressed {
@@ -354,6 +364,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                         }
                     } else {
                         release = Some(button);
+                        release_mods = Some(Mods::from_egui(modifiers, os));
                     }
                 }
                 Event::PointerMoved(pos) => {
@@ -372,7 +383,8 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                         events.push(PointerEvent::pressed(*pos, input.time, 1));
                     }
                 }
-                Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => {
+                Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers } => {
+                    release_mods = Some(Mods::from_egui(modifiers, os));
                     if barrel_press {
                         barrel_press = false;
                         release = Some(PointerButton::Secondary);
@@ -384,12 +396,14 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                 }
                 Event::PointerGone => events.push(PointerEvent::Gone),
                 Event::WindowFocused(false) => focus_lost = true,
-                Event::Touch { phase, force, .. } => {
+                Event::Touch { id, phase, pos, force, .. } => {
                     touched = true;
+                    touches.push(Finger { id: *id, phase: *phase, pos: *pos });
                     if *phase != TouchPhase::End {
                         touch_sample = force.map(PointerSample::new);
                     }
                 }
+                Event::ModifiersChanged(_) | Event::Key { repeat: false, .. } => stirred = true,
                 Event::Rotate(radians) if radians.is_finite() => rotation += *radians,
                 _ => {}
             }
@@ -425,7 +439,8 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             primary_down: input.pointer.primary_down() && !barrel_press,
             buttons,
             release,
-            release_mods: None, // P3(canvas-w2): ap.AP8
+            release_mods,
+            touches,
             other_press,
             primary_pressed: input.pointer.primary_pressed() && !barrel_pressed,
             mods: Mods::from_egui(&input.modifiers, os),
@@ -544,18 +559,21 @@ pub(crate) fn drop_under_modal(events: &mut Vec<Arrived>, keep: Option<&crate::r
     (events.len() != before, press)
 }
 
-/// Adds a release of the primary button at `pos` after the events of `input`.
-pub(crate) fn push_primary_release(input: &mut RawInput, pos: Pos2) {
-    input.events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+/// Adds a release of `button` at `pos` after the events of `input`; it carries no modifiers.
+pub(crate) fn push_release(input: &mut RawInput, button: egui::PointerButton, pos: Pos2) {
+    input.events.push(Event::PointerButton { pos, button, pressed: false, modifiers: egui::Modifiers::NONE });
 }
 
-/// Follows the primary button and the pointer through `events`: `down` ends as the button's last state and `last`
-/// as the last position any pointer event named.
-pub(crate) fn follow_primary(events: &[Event], down: &mut bool, last: &mut Option<Pos2>) {
+/// Follows the buttons and the pointer through `events`: `down` ends as the buttons held and `last` as the last
+/// position any pointer event named.
+pub(crate) fn follow_buttons(events: &[Event], down: &mut Vec<egui::PointerButton>, last: &mut Option<Pos2>) {
     for event in events {
         match event {
-            Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } => {
-                *down = *pressed;
+            Event::PointerButton { pos, button, pressed, .. } => {
+                down.retain(|held| held != button);
+                if *pressed {
+                    down.push(*button);
+                }
                 *last = Some(*pos);
             }
             Event::PointerMoved(pos) => *last = Some(*pos),

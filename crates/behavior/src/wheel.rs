@@ -136,9 +136,9 @@ impl Wheel {
 
     /// The same gesture with the two-finger touch movement `pan`, in points.
     #[must_use]
-    pub fn touch_pan(self, pan: Vec2) -> Self {
-        let _ = pan;
-        todo!("cv.F15")
+    pub const fn touch_pan(mut self, pan: Vec2) -> Self {
+        self.touch_pan = pan;
+        self
     }
 
     /// The same gesture from `source`.
@@ -432,15 +432,15 @@ fn for_field(wheel: &Wheel) -> bool {
     !(mods.alt || mods.cmd || mods.ctrl) && (wheel.scroll.y != 0.0 || (mods.shift && wheel.scroll.x != 0.0))
 }
 
-/// Whether `wheel` carries a pinch, a touch zoom or a rotation: the zoom share's values.
+/// Whether `wheel` carries a pinch, a touch zoom, a rotation or a two-finger pan: the zoom share's values.
 fn pinches(wheel: &Wheel) -> bool {
-    wheel.zoom != 1.0 || wheel.touch_zoom != 1.0 || wheel.rotation != 0.0 || wheel.touch_rotation != 0.0
+    wheel.zoom != 1.0 || wheel.touch_zoom != 1.0 || wheel.rotation != 0.0 || wheel.touch_rotation != 0.0 || wheel.touch_pan != Vec2::ZERO
 }
 
 /// `wheel` without the zoom share's values: a scroll share carries no pinch or rotation, so a field or a scroll region
 /// never reads one.
 const fn scroll_only(wheel: Wheel) -> Wheel {
-    Wheel { zoom: 1.0, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0, zooms: false, ..wheel }
+    Wheel { zoom: 1.0, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0, touch_pan: Vec2::ZERO, zooms: false, ..wheel }
 }
 
 /// The split rule. A focused field (a `WheelTaker::field` taker that holds `focus`, or an app's own text field) takes
@@ -589,6 +589,7 @@ fn split_at<O: Copy + PartialEq>(
                 share.touch_zoom *= part.touch_zoom;
                 share.rotation += part.rotation;
                 share.touch_rotation += part.touch_rotation;
+                share.touch_pan += part.touch_pan;
                 share.zooms |= part.zooms;
             }
             None => shares.push((owner, part)),
