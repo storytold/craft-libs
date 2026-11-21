@@ -68,6 +68,7 @@ pub struct TransformOverlay<'a, W> {
     menu_rows: &'a [Entry<String>],
     reach: TransformReach,
     rotate_zone: RotateZone,
+    crossed: bool,
     id: IdSource,
 }
 
@@ -83,6 +84,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             menu_rows: &[],
             reach: TransformReach::Box,
             rotate_zone: RotateZone::Outside,
+            crossed: false,
             id: IdSource::Auto,
         }
     }
@@ -135,6 +137,14 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         self
     }
 
+    /// Whether the box is crossed corner to corner ([`TransformBox::crossed`]): a placed object's box. Nothing is
+    /// drawn in the Warp phase, so the cross shows in the box modes only.
+    #[must_use]
+    pub fn crossed(mut self, crossed: bool) -> Self {
+        self.crossed = crossed;
+        self
+    }
+
     /// The modifiers every test reads in place of the pointer's (a touch host's sticky modifiers).
     #[must_use]
     pub fn mods(mut self, mods: Option<Mods>) -> Self {
@@ -159,6 +169,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             .reference_point(session.reference_point())
             .reach(self.reach)
             .rotate_zone(self.rotate_zone)
+            .crossed(self.crossed)
             .id_source(self.id);
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);

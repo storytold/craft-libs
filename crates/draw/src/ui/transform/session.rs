@@ -93,7 +93,7 @@ pub enum TransformEdit<W> {
     /// The bar's X, Y, W, H, angle and skew fields: the box and the V skew it reads with
     /// (`TransformFields`). Each report is built from the box at the run's start.
     Fields(EditEvent<TransformRow>),
-    /// The right-click menu's or Edit › Transform's mode. Scale picks [`TransformMode::Free`].
+    /// The right-click menu's or Edit › Transform's mode.
     Mode(TransformMode),
     /// Rotate 180°, Rotate 90° Clockwise or Counter Clockwise, Flip Horizontal or Vertical: turns
     /// the open box about the reference point without committing it (Photoshop; PhotoCraft
@@ -526,7 +526,7 @@ impl<W: TransformWarp> TransformSession<W> {
         let preset = |label: &Label, preset: TransformPreset| Entry::new(TransformChoice::Preset(preset), label.clone()).enabled(!warping);
         vec![
             mode(&words.free_transform, TransformMode::Free, true, free),
-            mode(&words.scale, TransformMode::Free, true, false),
+            mode(&words.scale, TransformMode::Scale, true, self.mode == TransformMode::Scale),
             mode(&words.rotate, TransformMode::Rotate, allow.rotate, self.mode == TransformMode::Rotate),
             mode(&words.skew, TransformMode::Skew, allow.skew, self.mode == TransformMode::Skew),
             mode(&words.distort, TransformMode::Distort, allow.distort, self.mode == TransformMode::Distort),

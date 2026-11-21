@@ -53,6 +53,7 @@ struct Config {
     /// The host keeps the box in f32, as a text layer keeps its box, and gives it back with its centre as the pivot.
     f32_host: bool,
     centre_mark: bool,
+    crossed: bool,
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
@@ -104,6 +105,7 @@ fn defaults() -> Config {
         rulers: None,
         f32_host: false,
         centre_mark: false,
+        crossed: false,
         line: None,
         targets: Vec::new(),
         suspend: SnapSuspend::Control,
@@ -185,6 +187,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .inside_moves(config.inside_moves)
                     .reference_point(config.reference_point)
                     .centre_mark(config.centre_mark)
+                    .crossed(config.crossed)
             };
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
@@ -354,16 +357,53 @@ fn drag(h: &mut Harness, from: Point, to: Point) {
 fn an_edge_takes_a_press_along_its_side_and_a_corner_wins_where_both_reach() {
     let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
     // The right edge runs from (300, 80) to (300, 220); its middle is (300, 150).
-    hover(&mut h, Point::new(300.0, 110.0));
+    hover(&mut h, Point::new(301.0, 110.0));
     assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "a press along the side, away from its middle and from the corners");
-    hover(&mut h, Point::new(300.0, 84.0));
+    hover(&mut h, Point::new(301.0, 84.0));
     assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(1)), "where a corner and the side both reach, the corner");
     hover(&mut h, Point::new(300.0, 150.0));
     assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "the middle still takes the edge");
-    drag(&mut h, Point::new(300.0, 110.0), Point::new(320.0, 110.0));
+    drag(&mut h, Point::new(301.0, 110.0), Point::new(321.0, 110.0));
     let quad = h.state().quad;
-    assert!((quad[1].x - 320.0).abs() < 1e-6 && (quad[2].x - 320.0).abs() < 1e-6, "the dragged side moved: {quad:?}");
+    // A pressed handle moves by the drag and keeps the press's offset from the side, as measured on the reference
+    // application (a corner pressed 4 px inside or 3 px outside its handle): pressed 1 px outside, the side lands 1 px
+    // inside the pointer.
+    assert!((quad[1].x - 320.0).abs() < 1e-6 && (quad[2].x - 320.0).abs() < 1e-6, "the dragged side moved by the drag: {quad:?}");
     assert!((quad[0].x - RECT.x0).abs() < 1e-6 && (quad[3].x - RECT.x0).abs() < 1e-6, "the far side stayed: {quad:?}");
+}
+
+/// A side's reach on a box whose inside moves, as measured on the reference application at 100 %: its midpoint handle
+/// reaches 11 points every way, inside the box too; away from it the side's band runs from half a point outside its
+/// line to 13 outside, and a press on the line or inside it moves the box.
+#[trial]
+fn a_sides_midpoint_reaches_into_the_box_and_its_band_starts_outside_the_line() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    // The right edge runs from (300, 80) to (300, 220); its middle is (300, 150).
+    let cases = [
+        (Point::new(290.0, 150.0), Some(BoxPart::Edge(1)), "10 inside at the middle"),
+        (Point::new(296.0, 160.0), Some(BoxPart::Edge(1)), "4 inside, 10 along from the middle"),
+        (Point::new(300.0, 160.0), Some(BoxPart::Edge(1)), "on the line, 10 along from the middle"),
+        (Point::new(288.0, 150.0), Some(BoxPart::Inside), "12 inside at the middle"),
+        (Point::new(296.0, 164.0), Some(BoxPart::Inside), "4 inside, 14 along from the middle"),
+        (Point::new(300.0, 110.0), Some(BoxPart::Inside), "on the line, away from the middle"),
+        (Point::new(298.0, 110.0), Some(BoxPart::Inside), "2 inside, away from the middle"),
+        (Point::new(301.0, 110.0), Some(BoxPart::Edge(1)), "a point outside, away from the middle"),
+        (Point::new(312.0, 110.0), Some(BoxPart::Edge(1)), "12 outside, away from the middle"),
+    ];
+    for (at, part, what) in cases {
+        hover(&mut h, at);
+        assert_eq!(h.host.borrow().hovered, part, "{what}");
+    }
+    hover(&mut h, Point::new(314.0, 110.0));
+    assert_ne!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "14 outside is past the band");
+}
+
+/// On a box whose inside is the tool's (a text frame), the side's line itself still takes the side.
+#[trial]
+fn a_text_frames_side_takes_a_press_on_its_line() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.text_frame = true);
+    hover(&mut h, Point::new(300.0, 110.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "on the line, away from the middle");
 }
 
 #[trial]
@@ -387,7 +427,8 @@ fn a_hidden_reference_point_still_follows_alt_and_the_centre_moves_a_small_box()
     });
     drag(&mut h, Point::new(150.0, 120.0), Point::new(170.0, 130.0));
     let pivot = h.state().pivot;
-    assert!((pivot.x - 170.0).abs() < 0.5 && (pivot.y - 130.0).abs() < 0.5, "the pivot follows the Alt drag: {pivot:?}");
+    // Half a unit up and left of the pointer, where the reference application puts it.
+    assert!(pivot.distance(Point::new(169.5, 129.5)) < 1e-6, "the pivot follows the Alt drag: {pivot:?}");
     assert_eq!(h.state().quad, BoxState::from_rect(RECT).quad, "the box itself did not move");
 
     // A box smaller than two handle reaches: its middle is the whole box's.
@@ -614,7 +655,8 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
 }
 
 /// The snap lines of a session box drag reach the tool host through `TransformTool`, as the crop frame's do: the host
-/// reports them while a snapped corner drag runs and none once it ends.
+/// reports them while a snapped edge drag runs and none once it ends. The edge stretches freely (the link off): one
+/// that keeps the box's proportions does not snap.
 #[trial]
 fn the_session_boxs_snap_lines_reach_the_tool_host() {
     use craft_draw::ui::transform::TransformTool;
@@ -628,7 +670,7 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
         targets.add(SnapTarget::new(craft_behavior::Axis::Y, x, SnapKind::Guide));
     }
     let snap = Snap::new(Arc::new(targets), SnapOptions::default());
-    let settings = TransformSettings::default();
+    let settings = TransformSettings { aspect_linked: false, ..TransformSettings::default() };
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
@@ -651,7 +693,7 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
         }
     });
     fixture.settle();
-    let from = view.borrow().to_screen(Point::new(300.0, 220.0));
+    let from = view.borrow().to_screen(Point::new(300.0, 150.0));
     let mut step = |events: Vec<egui::Event>| {
         lines.borrow_mut().clear();
         fixture.frame(events);
@@ -660,7 +702,7 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
     step(vec![pointer::moved(from)]);
     step(vec![pointer::press(from)]);
     step(vec![pointer::moved(from + by(4.0, 0.0))]);
-    assert!(step(vec![pointer::moved(from + by(7.0, 0.0))]) > 0, "the corner snapped to x 310: the host reports the line");
+    assert!(step(vec![pointer::moved(from + by(7.0, 0.0))]) > 0, "the right edge snapped to x 310: the host reports the line");
     step(vec![pointer::release(from + by(7.0, 0.0))]);
     assert_eq!(step(Vec::new()), 0, "the lines end with the drag");
 }
@@ -682,6 +724,52 @@ fn the_centre_mark_takes_no_press() {
             hovered.push(h.host.borrow().hovered);
         }
         assert_eq!(hovered[0], hovered[1], "inside moves {inside_moves}: the mark changes nothing a press there takes");
+    }
+}
+
+/// Every two-point stroke among `shapes`, nested ones included, as its ends.
+fn segments(shapes: &[egui::Shape], out: &mut Vec<(egui::Pos2, egui::Pos2)>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => segments(inner, out),
+            egui::Shape::LineSegment { points: [a, b], .. } => out.push((*a, *b)),
+            egui::Shape::Path(path) if path.points.len() == 2 => out.push((path.points[0], path.points[1])),
+            _ => {}
+        }
+    }
+}
+
+/// A crossed box draws both diagonals, corner to corner, as a rotated one does along its turned corners; a plain box
+/// draws none. The diagonals take no press: the middle of the box is the inside's either way.
+#[trial]
+fn a_crossed_box_draws_its_diagonals_and_a_plain_one_none() {
+    let turned = {
+        let mut state = BoxState::from_rect(RECT);
+        let centre = Point::new((RECT.x0 + RECT.x1) / 2.0, (RECT.y0 + RECT.y1) / 2.0);
+        let turn = craft_behavior::kurbo::Affine::rotate_about(0.3, centre);
+        state.quad = state.quad.map(|corner| turn * corner);
+        state
+    };
+    for state in [BoxState::from_rect(RECT), turned] {
+        let mut hovered = Vec::new();
+        for crossed in [false, true] {
+            let mut h = harness(state, |config| {
+                config.reference_point = false;
+                config.crossed = crossed;
+            });
+            let mut found = Vec::new();
+            segments(&h.fixture.frame_shapes(), &mut found);
+            let corner = |i: usize| h.screen(state.quad[i]);
+            let joins = |a: egui::Pos2, b: egui::Pos2| {
+                found.iter().any(|&(p, q)| ((p - a).length() < 0.5 && (q - b).length() < 0.5) || ((p - b).length() < 0.5 && (q - a).length() < 0.5))
+            };
+            for (a, b) in [(0, 2), (1, 3)] {
+                assert_eq!(joins(corner(a), corner(b)), crossed, "crossed {crossed}: the diagonal from corner {a} to corner {b}");
+            }
+            hover(&mut h, state.quad[0].midpoint(state.quad[2]));
+            hovered.push(h.host.borrow().hovered);
+        }
+        assert_eq!(hovered[0], hovered[1], "the cross changes nothing a press at the middle takes");
     }
 }
 
@@ -834,38 +922,43 @@ fn moved_by(h: &Harness) -> Vec2 {
 }
 
 #[trial]
-fn the_box_moves_from_the_first_pointer_move_after_the_press_and_keeps_up_with_no_jump() {
+fn a_drag_moves_the_box_once_the_pointer_has_gone_four_points_along_an_axis_and_then_by_its_whole_travel() {
     let mut h = upright();
-    let slop = craft_ui::testing::input::slop(h.fixture.ctx());
     // Inside, away from the reference point at the box's centre.
     let from = h.screen(Point::new(150.0, 120.0));
     frame(&mut h, vec![pointer::moved(from)]);
     frame(&mut h, vec![pointer::press(from)]);
     frame(&mut h, Vec::new());
     assert!(h.host.borrow().events.is_empty(), "a press alone moves nothing: {:?}", h.host.borrow().events);
-    // One step per frame, a third of the slop each, through the slop and past it.
-    for step in 1..=9 {
-        let offset = by(slop / 3.0 * step as f32, slop / 6.0 * step as f32);
+    // Under four points on both axes, straight or diagonal, the box stays.
+    for offset in [by(3.0, 0.0), by(0.0, 3.0), by(3.0, 3.0), by(-3.5, 2.0)] {
         frame(&mut h, vec![pointer::moved(from + offset)]);
-        assert!((moved_by(&h) - offset).length() < 1e-3, "step {step}: the box keeps the pointer's offset {offset:?}, moved {:?}", moved_by(&h));
+        assert_eq!(moved_by(&h), Vec2::ZERO, "{offset:?} moves nothing");
     }
-    let end = from + by(slop * 3.0, slop * 1.5);
-    frame(&mut h, vec![pointer::release(end)]);
+    assert!(h.host.borrow().events.is_empty(), "no gesture yet: {:?}", h.host.borrow().events);
+    // Four points along one axis applies the whole travel at once, and the box keeps up from there.
+    for offset in [by(4.0, 1.0), by(2.0, 1.0), by(30.0, 12.0)] {
+        frame(&mut h, vec![pointer::moved(from + offset)]);
+        assert!((moved_by(&h) - offset).length() < 1e-3, "the box keeps the pointer's offset {offset:?}, moved {:?}", moved_by(&h));
+    }
+    frame(&mut h, vec![pointer::release(from + by(30.0, 12.0))]);
     frame(&mut h, Vec::new());
     let events = h.host.borrow().events.clone();
     assert_eq!(events.iter().filter(|seen| **seen == Seen::Begin).count(), 1, "one gesture: {events:?}");
     assert_eq!(events.iter().filter(|seen| **seen == Seen::Commit).count(), 1, "one commit: {events:?}");
 
-    // A move inside the slop and a release there still commit the move the user saw.
-    let mut h = upright();
-    let from = h.screen(Point::new(150.0, 120.0));
-    frame(&mut h, vec![pointer::moved(from)]);
-    frame(&mut h, vec![pointer::press(from)]);
-    frame(&mut h, vec![pointer::moved(from + by(slop / 2.0, 0.0))]);
-    frame(&mut h, vec![pointer::release(from + by(slop / 2.0, 0.0))]);
-    frame(&mut h, Vec::new());
-    assert!((moved_by(&h) - by(slop / 2.0, 0.0)).length() < 1e-3, "the box stays where it followed to: {:?}", moved_by(&h));
-    assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit), "{:?}", h.host.borrow().events);
+    // A drag released under four points does nothing, on a handle as inside.
+    for at in [Point::new(150.0, 120.0), Point::new(RECT.x1, (RECT.y0 + RECT.y1) / 2.0)] {
+        let mut h = upright();
+        let from = h.screen(at);
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(3.0, 3.0))]);
+        frame(&mut h, vec![pointer::release(from + by(3.0, 3.0))]);
+        frame(&mut h, Vec::new());
+        assert_eq!(h.state(), BoxState::from_rect(RECT), "a 3 + 3 point drag at {at:?} leaves the box");
+        assert!(h.host.borrow().events.is_empty(), "no gesture at {at:?}: {:?}", h.host.borrow().events);
+    }
 }
 
 #[trial]
@@ -891,8 +984,8 @@ fn a_click_on_the_box_moves_nothing_and_a_jittery_click_outside_applies_the_box_
     assert_eq!(h.host.borrow().applied, 1, "the click outside applies");
 }
 
-// A double click inside whose presses wobble within the slop and come back applies the box as it was: the wobble the
-// box followed is cancelled, never committed as a move before the apply.
+// A double click inside whose presses wobble within the slop and come back applies the box as it was: no move is
+// committed before the apply.
 #[trial]
 fn a_jittery_double_click_inside_applies_with_no_move_committed() {
     let mut h = upright();
@@ -907,7 +1000,6 @@ fn a_jittery_double_click_inside_applies_with_no_move_committed() {
     }
     frame(&mut h, Vec::new());
     let events = h.host.borrow().events.clone();
-    assert!(events.contains(&Seen::Begin), "the box followed the wobble: {events:?}");
     assert!(!events.contains(&Seen::Commit), "no move is committed: {events:?}");
     assert_eq!(h.state(), BoxState::from_rect(RECT), "the box stays as it was");
     assert_eq!(h.host.borrow().applied, 1, "the double click applies");
@@ -1214,5 +1306,89 @@ fn the_reference_point_snaps_to_the_turned_boxs_points_only() {
         let pivot = h.state().pivot;
         assert!(pivot.distance(corner) < 1e-6, "snap {snap}: onto the corner: {pivot:?} vs {corner:?}");
         assert_eq!(h.state().quad, turned.quad, "the box never moved");
+    }
+}
+
+/// An edge handle snaps only along its drag (measured on the reference): a ⇧ side drag on a box in perspective, whose
+/// handle starts 1 px off a snap line along the side, lands where it would with snapping off. Without that, the line
+/// would pull the handle along the side, and on a box in perspective that turns the dragged side.
+#[trial]
+fn an_edge_handle_snaps_only_along_its_drag() {
+    let quad = [Point::new(130.0, 80.0), Point::new(270.0, 80.0), Point::new(300.0, 220.0), Point::new(100.0, 220.0)];
+    let shift = Mods { shift: true, ..Mods::NONE };
+    let run = |snap: bool| {
+        let mut h = harness(BoxState::new(quad, Point::new(200.0, 150.0)), |config| {
+            config.snap = snap;
+            config.mods = Some(shift);
+            config.targets = vec![SnapTarget::new(craft_behavior::Axis::X, 149.0, SnapKind::Guide)];
+        });
+        let from = h.screen(Point::new(285.0, 150.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(50.0, 0.0))]);
+        frame(&mut h, vec![pointer::release(from + by(50.0, 0.0))]);
+        h.state().quad
+    };
+    let (off, on) = (run(false), run(true));
+    assert!(off.iter().zip(on).all(|(a, b)| a.distance(b) < 1e-6), "snapping off {off:?}, on {on:?}");
+}
+
+/// An ⌥ click inside the box puts the reference point half a unit up and left of the click (measured on the
+/// reference: a click at (250, 200) puts it at (249.5, 199.5), where its ⌥ drags then scale about).
+#[trial]
+fn an_alt_click_puts_the_reference_point_half_a_unit_up_and_left() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.mods = Some(Mods::ALT));
+    let at = h.screen(Point::new(150.0, 120.0));
+    frame(&mut h, vec![pointer::moved(at)]);
+    frame(&mut h, vec![pointer::press(at)]);
+    frame(&mut h, vec![pointer::release(at)]);
+    let pivot = h.state().pivot;
+    assert!(pivot.distance(Point::new(149.5, 119.5)) < 1e-6, "{pivot:?}");
+}
+
+/// A corner that keeps the box's proportions stops where the drag puts it, as in the reference application (a corner
+/// dragged to 2 px from the document's centre, or 3 px from its edge, is not drawn to them); one that stretches
+/// freely still snaps.
+#[trial]
+fn a_proportional_corner_does_not_snap_and_a_free_one_does() {
+    for linked in [true, false] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.rules = BoxRules::default().with_aspect_linked(linked);
+        });
+        let from = h.screen(Point::new(300.0, 220.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+        frame(&mut h, vec![pointer::release(from + by(7.0, 0.0))]);
+        let x = h.state().quad[2].x;
+        // Linked, the corner follows the drag's projection on the diagonal: 200 × 140 scaled by 1 + 1400/59600. Free,
+        // it snaps to the guide at 310.
+        let expected = if linked { 100.0 + 200.0 * (1.0 + 7.0 * 200.0 / (200.0 * 200.0 + 140.0 * 140.0)) } else { 310.0 };
+        assert!((x - expected).abs() < 1e-6, "linked {linked}: the corner at x {x}, not {expected}");
+    }
+}
+
+/// An edge that keeps the box's proportions stops where the drag puts it too, as in the reference application (an
+/// edge dragged to 2 px from the document's centre column, or 6 px from its edge, is not drawn to them); a free (⇧)
+/// one still snaps.
+#[trial]
+fn a_proportional_edge_does_not_snap_and_a_free_one_does() {
+    for free in [false, true] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.mods = free.then_some(Mods::SHIFT);
+        });
+        let from = h.screen(Point::new(300.0, 150.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+        frame(&mut h, vec![pointer::release(from + by(7.0, 0.0))]);
+        let x = h.state().quad[1].x;
+        let expected = if free { 310.0 } else { 307.0 };
+        assert!((x - expected).abs() < 1e-6, "free {free}: the edge at x {x}, not {expected}");
     }
 }

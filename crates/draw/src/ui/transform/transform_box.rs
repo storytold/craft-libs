@@ -92,14 +92,19 @@ struct KeyPicked(Option<BoxPart>);
 const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
 
-/// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a handle reaches 8 from its
-/// point, inside the box as outside, each side's band reaches 11 outside it and none inside, and the band's first
-/// quarter of the side from each corner, at most 11 along it, is that corner's; the reference point and the centre
-/// reach 12, the rotate pointer shows within 36 of a corner, the rotate band runs from 5 to 18 outside it). The handle
-/// reach, the side bands and the corners' share of them are PhotoCraft's: inside the box only a handle's own reach is the box's, so a
-/// press there off the handles reaches what lies under the box (a text editor under a paragraph frame).
+/// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a corner handle reaches 8 from
+/// its point and a side's midpoint handle 11, inside the box as outside; each side's band runs from half a point
+/// outside it (inside it, on a box whose inside is the tool's) to 13 outside, and the band's first quarter of the side from each corner, at most 13 along it, is that
+/// corner's; the reference point and the centre reach 12, the rotate pointer shows within 36 of a corner, the rotate
+/// band runs from 5 to 18 outside it). The midpoint reach and the side band are measured on the reference application
+/// at 100 %: a press 10 points inside at a side's midpoint, or 10 along the side from it, takes the side, one 12 inside
+/// moves the box; away from the midpoint a press on the side's line or inside it moves the box, one a point outside
+/// takes the side, and so does one 12 outside but not one 14 outside. The corner reach and the corners' share of the
+/// bands are PhotoCraft's: inside the box only a handle's own reach is the box's, so a press there off the handles
+/// reaches what lies under the box (a text editor under a paragraph frame).
 const HANDLE_REACH_IN_HANDLES: f32 = 1.0;
-const SIDE_BAND_IN_HANDLES: f32 = 1.375;
+const EDGE_REACH_IN_HANDLES: f32 = 1.375;
+const SIDE_BAND_IN_HANDLES: f32 = 1.625;
 const HIT_IN_HANDLES: f32 = 1.5;
 const ROTATE_REACH_IN_HANDLES: f32 = 4.5;
 const BAND_INNER_IN_HANDLES: f32 = 0.625;
@@ -306,8 +311,10 @@ pub struct TransformBoxStyle {
     handle: HandleLook,
     line: StyleColor,
     halo: StyleColor,
-    /// The hit radius of a corner or side handle.
+    /// The hit radius of a corner handle.
     handle_reach: f32,
+    /// The hit radius of a side's midpoint handle.
+    edge_reach: f32,
     /// How far a side's band reaches outside the box.
     side_band: f32,
     /// The hit radius of the reference point and of the centre.
@@ -363,8 +370,6 @@ struct Grip {
     /// The press in document space.
     from: Point,
     began: bool,
-    /// The pressed part follows the pointer inside the slop ([`follows_in_slop`]).
-    follows: bool,
     /// An Alt press away from the handles: a click there moves the reference point.
     moves_pivot: bool,
     /// The box at the press.
@@ -376,7 +381,7 @@ struct Grip {
 impl Default for Grip {
     fn default() -> Self {
         let none = BoxState::from_rect(DocRect::ZERO);
-        Grip { part: BoxPart::Inside, start: none, from: Point::ZERO, began: false, follows: false, moves_pivot: false, pressed: none, last: none }
+        Grip { part: BoxPart::Inside, start: none, from: Point::ZERO, began: false, moves_pivot: false, pressed: none, last: none }
     }
 }
 
@@ -395,23 +400,22 @@ impl Default for EndGrip {
     }
 }
 
-/// Whether a press on `part` moves the box from the first pointer move inside the slop, so the box does not jump when
-/// the drag is recognised: every part but the outside, where a click applies the box. The parts' declared sense
-/// ([`slop_sense`]) and the grip both read it.
-fn follows_in_slop(part: BoxPart) -> bool {
-    part != BoxPart::Outside
-}
+/// How far the pointer must move from the press, in screen points along either axis, before a drag moves the box: a
+/// move under this on both axes does nothing, and the first move that reaches it applies the pointer's whole travel at
+/// once, as the reference application does. The press slop (3 points in the shipped sizes) is below it.
+const DRAG_START: f32 = 4.0;
 
-/// [`Sense::FOLLOWS_IN_SLOP`] for a part that [`follows_in_slop`].
-fn slop_sense(part: BoxPart) -> Sense {
-    if follows_in_slop(part) { Sense::FOLLOWS_IN_SLOP } else { Sense::empty() }
+/// Whether the pointer at `pos` has gone [`DRAG_START`] from the press at `start` along either axis.
+fn past_drag_start(start: Pos2, pos: Pos2) -> bool {
+    let travel = pos - start;
+    travel.x.abs() >= DRAG_START || travel.y.abs() >= DRAG_START
 }
 
 /// The box of Free Transform: eight handles and a reference point over the host's content, dragged through
 /// [`quad::drag`]'s rules, moved and picked from the keyboard.
 ///
-/// - The value is the box in document units. A drag is one gesture (`Begin` on the first move, also inside the slop
-///   on every part but the outside, `Commit` on the release); Escape cancels it, as does a click that ends with the
+/// - The value is the box in document units. A drag is one gesture (`Begin` once the pointer has gone [`DRAG_START`]
+///   from the press, `Commit` on the release); Escape cancels it, as does a click that ends with the
 ///   box as it was at the press. The host applies the box on [`TransformBoxOutput::apply`] (Enter, a click outside,
 ///   a double click inside) and closes it on [`discard`](TransformBoxOutput::discard).
 /// - The pointer takes the nearest handle or the reference point, else a side (the whole side along its length, a
@@ -422,7 +426,8 @@ fn slop_sense(part: BoxPart) -> Sense {
 /// - Snapping is the canvas's ([`canvas_snap`]): a dragged handle snaps through [`Snap::point`] and a box moved from
 ///   inside snaps its bounds through [`Snap::rect_of`]; the lines the result reaches are
 ///   [`TransformBoxOutput::snapped`] for the host's one drawing site. Without a canvas snap nothing snaps but the
-///   reference point, which snaps to the box's nine points only. In Distort only the corners snap, to guides. A pass
+///   reference point, which snaps to the box's nine points only. A corner or an edge that keeps the box's proportions
+///   does not snap. In Distort only the corners snap, to guides. A pass
 ///   reports the lines of its own drag events only.
 /// - The box is one Tab stop with one part group, whose arrival is the picked part. Page Down and Page Up pick the
 ///   next and previous part (the whole box, the corners and edges clockwise from the top left, the reference
@@ -432,6 +437,7 @@ fn slop_sense(part: BoxPart) -> Sense {
 /// - The box holds the canvas's session (`KeyUse::session`): with the canvas focused or nothing focused, Enter, Escape
 ///   and the arrows reach it before the canvas's tool, and the arrows move the whole box. With
 ///   [`session_arrows`](Self::session_arrows) off the arrows stay the tool's (the Move tool nudges the layer).
+/// - A [crossed](Self::crossed) box draws its diagonals under the handles; they take no press of their own.
 /// - A [centre mark](Self::centre_mark) draws the reference point's glyph at the middle of the box and takes no press.
 ///   A [live line's look](Self::line) declares only the line's two ends, each standing for the box handle it points
 ///   to, and draws the line's controls in place of the frame. With [free ends](LineEnds::Free) each end is a point of
@@ -475,6 +481,10 @@ pub struct TransformBox<'a> {
     /// Ellipse tool's. It takes no press: a press there is the inside's, or the tool's.
     #[prop]
     centre_mark: bool,
+    /// Whether the frame is crossed corner to corner, under the handles: the box of a placed object that keeps its
+    /// own contents (PhotoCraft's smart object), told apart from a box over pixels.
+    #[prop]
+    crossed: bool,
     /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
     /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
@@ -508,6 +518,7 @@ impl<'a> TransformBox<'a> {
             overflow: false,
             session_arrows: true,
             centre_mark: false,
+            crossed: false,
             line: None,
             reach: TransformReach::Box,
             pivot_held: false,
@@ -585,6 +596,7 @@ impl<'a> TransformBox<'a> {
 
     /// The box the pointer at screen position `pos` gives a drag, snapped and rounded, with the lines it snapped to.
     ///
+    /// - A corner or an edge that keeps the box's proportions does not snap.
     /// - A corner or an edge snaps the grabbed handle through the canvas's `snap`, not the pointer: a press a few
     ///   pixels off the handle still lands the handle on the line. A distorting corner reports only the lines it
     ///   reaches once the box's folding rule has placed it: a corner stopped short of a line claims no alignment.
@@ -607,14 +619,26 @@ impl<'a> TransformBox<'a> {
         let (to, mut lines) = match (grip.part, snap, grabbed) {
             (BoxPart::Pivot, _, Some(grabbed)) if !distort_mode => {
                 let off = grip.from - grabbed;
-                (box_point_pull(&grip.start, to - off, space.view.doc_len(SNAP_PX as f32)) + off, Vec::new())
+                let pulled = box_point_pull(&grip.start, to - off, space.view.doc_len(SNAP_PX as f32));
+                // An ⌥ press keeps the point half a unit up and left of the pointer through its drag.
+                (if grip.moves_pivot { pulled } else { pulled + off }, Vec::new())
             }
+            // A corner or an edge that keeps the box's proportions does not snap: in the reference application it stops
+            // where the drag puts it, 2 px from the document's centre or 3 px from its edge (an edge 2 px from the
+            // centre column and 6 px from the right edge alike).
             (BoxPart::Corner(_), Some(snap), Some(grabbed)) | (BoxPart::Edge(_), Some(snap), Some(grabbed))
-                if !distort_mode || matches!(grip.part, BoxPart::Corner(_)) =>
+                if (!distort_mode || matches!(grip.part, BoxPart::Corner(_))) && !self.rules.keeps_proportions(grip.part, mods) =>
             {
                 let off = grip.from - grabbed;
                 let (at, lines) = snap.point(to - off, mods, gesture);
-                (at + off, lines)
+                // An edge handle snaps only along its drag (the reference's): across the box's top edge for a side, along
+                // it for the top or bottom edge. A pull along the edge would turn a dragged side on a box in perspective.
+                let pull = at - (to - off);
+                let pull = match (grip.part, drag_axis(&grip.start.quad, grip.part)) {
+                    (BoxPart::Edge(_), Some(axis)) => axis * pull.dot(axis),
+                    _ => pull,
+                };
+                (to + pull, lines)
             }
             (BoxPart::Inside, Some(snap), _) if !distort_mode => {
                 let moved = bounds_of(&grip.start.quad) + (to - grip.from);
@@ -623,7 +647,14 @@ impl<'a> TransformBox<'a> {
             }
             _ => (to, Vec::new()),
         };
-        let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, acting, &self.rules);
+        // A turn from outside the box reads the pointer half a pixel up and left, as measured on the reference
+        // application's; the rotate handle is a control of its own and turns with the pointer as it is.
+        let (from, to) = if grip.part == BoxPart::Outside && self.rotate_zone == RotateZone::Handle {
+            (grip.from + HANDLE_TURN_UNDO, to + HANDLE_TURN_UNDO)
+        } else {
+            (grip.from, to)
+        };
+        let dragged = quad::drag(&grip.start, &grip.last, grip.part, from, to, acting, &self.rules);
         // The canvas's pixel grid rounds an upright box and its corners to whole document units; keys are not rounded.
         let dragged = if snap.is_some_and(Snap::rounds_to_pixels) { on_pixel_grid(dragged) } else { dragged };
         if kind == Some(BoxDrag::Distort)
@@ -784,30 +815,18 @@ impl<'a> TransformBox<'a> {
                     // an Alt press on it rotates.
                     let away_from_handles = part == BoxPart::Inside || (part == BoxPart::Outside && self.rotate_zone != RotateZone::Handle);
                     let moves_pivot = acting.alt && self.move_only().is_none() && away_from_handles;
-                    let follows = follows_in_slop(part);
-                    let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
-                    held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, pressed: *shown, last: *shown });
+                    // The reference application puts the point half a document pixel up and left of the press.
+                    let (part, begin) =
+                        if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from + ALT_PRESS_PIVOT)) } else { (part, *shown) };
+                    held = Some(Grip { part, start: begin, from, began: false, moves_pivot, pressed: *shown, last: *shown });
                 }
-                // Inside the slop a part that follows there moves the box from the first move; the outside starts at
-                // the drag.
-                PressPhase::Held { start, pos, .. } => {
-                    let Some(mut grip) = held else { continue };
-                    if !self.rules.allows(grip.part) || !grip.follows || (!grip.began && pos == start.origin) {
-                        continue;
-                    }
-                    if !grip.began {
-                        cx.begin();
-                        grip.began = true;
-                    }
-                    self.follow(cx, space, snap.as_ref(), &mut grip, pos, mods);
-                    held = Some(grip);
-                }
-                PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => {
+                PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
                     let Some(mut grip) = held else { continue };
                     if !self.rules.allows(grip.part) {
                         continue;
                     }
-                    if matches!(press.phase, PressPhase::DragStart { .. }) && !grip.began {
+                    // Past the slop the drag still waits for the drag start.
+                    if !grip.began && past_drag_start(start.origin, pos) {
                         cx.begin();
                         grip.began = true;
                     }
@@ -1020,6 +1039,15 @@ fn paint_frame(draw: &Draw<'_>, style: &TransformBoxStyle, corners: [Pos2; 4]) {
     draw.stroke(&outline, StrokeWidth::Medium, style.line);
 }
 
+/// The two diagonals of a box whose corners are `corners` on the screen, drawn as its outline is.
+fn paint_cross(draw: &Draw<'_>, style: &TransformBoxStyle, corners: [Pos2; 4]) {
+    for (from, to) in [(corners[0], corners[2]), (corners[1], corners[3])] {
+        let diagonal = PaintShape::Path(vec![from, to]);
+        draw.stroke(&diagonal, StrokeWidth::Thick, style.halo);
+        draw.stroke(&diagonal, StrokeWidth::Medium, style.line);
+    }
+}
+
 /// The move reach outside the box whose corners are `quad` on the screen: every point within `points` of its border,
 /// as a strip along each side and a round sector outside each corner (PhotoCraft's type move reach measures the
 /// distance to the nearest side, pc-prod-e76 type_transform.rs:156-196).
@@ -1027,7 +1055,7 @@ fn declare_ring(cx: &mut PartsCx<'_, TransformBox<'_>>, quad: &[Pos2; 4], points
     let outward = outward_normals(quad);
     let mut declare = |part: usize, shape: Vec<Pos2>| {
         cx.part(MOVE_RING.at(part as u64), HitShape::Polygon(shape))
-            .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
+            .sense(Sense::DRAG | Sense::CLICK)
             .priority(HitPriority::new(HitLevel::Body, RING_SUB))
             .pointer_only(MOVE_BY_KEY);
     };
@@ -1059,6 +1087,18 @@ fn outward_normals(quad: &[Pos2; 4]) -> [Vec2; 4] {
         let (a, b) = (quad[side], quad[(side + 1) % 4]);
         let along = b - a;
         if along.length() > 1e-3 { Vec2::new(along.y, -along.x).normalized() * turn } else { (a.to_vec2() - centre).normalized() }
+    })
+}
+
+/// The box `quad` grown by `by` screen points: each side moved out along its outward normal, each corner where its
+/// two moved sides meet (along the corner's bisector on a corner too sharp or a side with no length).
+fn grown(quad: &[Pos2; 4], by: f32) -> [Pos2; 4] {
+    let normals = outward_normals(quad);
+    std::array::from_fn(|corner| {
+        let (before, after) = (normals[(corner + 3) % 4], normals[corner]);
+        let sum = before + after;
+        let cos = before.dot(after);
+        if cos > -0.9 { quad[corner] + sum * (by / (1.0 + cos)) } else { quad[corner] + sum.normalized() * by }
     })
 }
 
@@ -1113,6 +1153,7 @@ impl Component for TransformBox<'_> {
             line: cx.color(overlay.line),
             halo: cx.color(overlay.halo),
             handle_reach: handle.md * HANDLE_REACH_IN_HANDLES,
+            edge_reach: handle.md * EDGE_REACH_IN_HANDLES,
             side_band: handle.md * SIDE_BAND_IN_HANDLES,
             hit: handle.md * HIT_IN_HANDLES,
             rotate_reach: handle.md * ROTATE_REACH_IN_HANDLES,
@@ -1170,7 +1211,8 @@ impl Component for TransformBox<'_> {
             let (shape, sense, priority, focus) = match part {
                 BoxPart::Inside => {
                     let sense = Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS;
-                    (HitShape::Polygon(quad.to_vec()), sense, HitPriority::new(HitLevel::Body, 0), FocusShape::Rect)
+                    // Out to where the side bands start, so a press on a side's line moves the box.
+                    (HitShape::Polygon(grown(&quad, SIDE_LINE_OUTSIDE).to_vec()), sense, HitPriority::new(HitLevel::Body, 0), FocusShape::Rect)
                 }
                 BoxPart::Pivot => (
                     HitShape::circle(pos(screen.pivot), style.hit),
@@ -1181,14 +1223,14 @@ impl Component for TransformBox<'_> {
                 handle => {
                     let at = self.part_point(&state, handle).map_or(Pos2::ZERO, |at| space.view.to_screen(at));
                     (
-                        HitShape::circle(at, style.handle_reach),
+                        HitShape::circle(at, if matches!(handle, BoxPart::Edge(_)) { style.edge_reach } else { style.handle_reach }),
                         Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS,
                         HitPriority::new(HitLevel::Handle, HANDLE_SUB),
                         FocusShape::Circle,
                     )
                 }
             };
-            cx.part(BOX.at(part.index()), shape).sense(sense | slop_sense(part)).priority(priority).focus_shape(focus).focusable();
+            cx.part(BOX.at(part.index()), shape).sense(sense).priority(priority).focus_shape(focus).focusable();
             any = true;
         }
         if let Some(line) = self.line {
@@ -1203,10 +1245,13 @@ impl Component for TransformBox<'_> {
             }
             return;
         }
+        // Where the bands start: on a box whose inside moves, half a point outside the line, so a press on the line
+        // moves the box; on one whose inside is the tool's, half a point inside it, so the line takes the side.
+        let line = if self.inside_moves { SIDE_LINE_OUTSIDE } else { -SIDE_LINE_INSIDE };
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
-            cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, style.side_band))
-                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)))
+            cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, line, style.side_band))
+                .sense(Sense::DRAG | Sense::CLICK)
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
         }
@@ -1214,9 +1259,9 @@ impl Component for TransformBox<'_> {
             let corner = usize::from(k);
             // The side that starts at the corner, then the one that ends there.
             for (end, side) in [(0u64, corner), (1, (corner + 3) % 4)] {
-                let Some(reach) = corner_reach(&quad, side, corner, style.side_band) else { continue };
+                let Some(reach) = corner_reach(&quad, side, corner, line, style.side_band) else { continue };
                 cx.part(CORNER_REACH.at(2 * u64::from(k) + end), reach)
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Corner(k)))
+                    .sense(Sense::DRAG | Sense::CLICK)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(CORNER_BY_KEY);
             }
@@ -1224,7 +1269,7 @@ impl Component for TransformBox<'_> {
         if self.declares_centre() {
             let centre = quad.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
             cx.part(CENTRE.at(0), HitShape::circle(centre.to_pos2(), style.hit))
-                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
+                .sense(Sense::DRAG | Sense::CLICK)
                 .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                 .pointer_only(MOVE_BY_KEY);
         }
@@ -1235,7 +1280,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Outside | RotateZone::Border { .. } => {
                 for (corner, region) in outside_regions(&quad, rect).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(region))
-                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .sense(Sense::DRAG | Sense::CLICK)
                         .priority(HitPriority::new(HitLevel::Background, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1243,7 +1288,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Band if self.rules.allows(BoxPart::Outside) => {
                 for (corner, ring) in band_rings(&screen, style).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(ring))
-                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .sense(Sense::DRAG | Sense::CLICK)
                         .priority(HitPriority::new(HitLevel::Body, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1252,7 +1297,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Handle if self.rules.allows(BoxPart::Outside) => {
                 let (_, knob) = rotate_handle(&quad, style.rotate_stem);
                 cx.part(ROTATE_HANDLE.at(0), HitShape::circle(knob, style.handle_reach))
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                    .sense(Sense::DRAG | Sense::CLICK)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(ROTATE_BY_KEY);
             }
@@ -1291,6 +1336,9 @@ impl Component for TransformBox<'_> {
             Some(line) => self.paint_line(&draw, cx, &space.view, &line),
             None => {
                 paint_frame(&draw, style, screen.quad.map(pos));
+                if self.crossed {
+                    paint_cross(&draw, style, screen.quad.map(pos));
+                }
                 if self.rotate_zone == RotateZone::Handle && self.rules.allows(BoxPart::Outside) {
                     paint_rotate_handle(&draw, cx, &screen.quad.map(pos));
                 }
@@ -1402,6 +1450,26 @@ fn handle_point(state: &BoxState, part: BoxPart) -> Option<Point> {
     }
 }
 
+/// Where an ⌥ press puts the reference point, from the press: half a document pixel up and left, as the reference
+/// application does (an ⌥ click at (250, 200) puts it at (249.5, 199.5)).
+const ALT_PRESS_PIVOT: DocVec = DocVec::new(-0.5, -0.5);
+
+/// Undoes [`quad::drag`]'s half-pixel turn offset for the rotate handle ([`RotateZone::Handle`]).
+const HANDLE_TURN_UNDO: DocVec = DocVec::new(0.5, 0.5);
+
+/// The direction an edge of `quad` is dragged along: the top edge's direction for a side, its normal for the top or
+/// bottom edge; `None` for another part or a collapsed top edge.
+fn drag_axis(quad: &[Point; 4], part: BoxPart) -> Option<DocVec> {
+    let BoxPart::Edge(i) = part else { return None };
+    let top = quad[1] - quad[0];
+    let len = top.hypot();
+    if !(len.is_finite() && len > 1e-9) {
+        return None;
+    }
+    let uh = top / len;
+    Some(if i % 2 == 1 { uh } else { DocVec::new(-uh.y, uh.x) })
+}
+
 /// The bounds of `quad`.
 fn bounds_of(quad: &[Point; 4]) -> DocRect {
     quad[1..].iter().fold(DocRect::from_points(quad[0], quad[0]), |r, p| r.union_pt(*p))
@@ -1472,26 +1540,25 @@ fn outside_regions(quad: &[Pos2; 4], within: Rect) -> [Vec<Pos2>; 4] {
     })
 }
 
-/// The band outside side `side` of the box `quad` (from corner `side` to the next), `width` wide, with the side's
-/// line itself: a press on the line or outside it within `width` takes the side; inside the box it does not. A side
-/// with no length is its line.
-fn side_band(quad: &[Pos2; 4], side: usize, width: f32) -> HitShape {
+/// The band outside side `side` of the box `quad` (from corner `side` to the next), from `line` outside the side's line
+/// (negative: inside it) out to `width`. A side with no length is its line.
+fn side_band(quad: &[Pos2; 4], side: usize, line: f32, width: f32) -> HitShape {
     let (a, b) = (quad[side], quad[(side + 1) % 4]);
     match outward(quad, side) {
-        Some(out) => band_along(a, b, out, width),
+        Some(out) => band_along(a, b, out, line, width),
         None => HitShape::segment(a, b),
     }
 }
 
 /// The stretch of side `side`'s band next to its end `corner`: a quarter of the side, at most `width` along it, as far
 /// out as the band. `None` for a side with no length.
-fn corner_reach(quad: &[Pos2; 4], side: usize, corner: usize, width: f32) -> Option<HitShape> {
+fn corner_reach(quad: &[Pos2; 4], side: usize, corner: usize, line: f32, width: f32) -> Option<HitShape> {
     let out = outward(quad, side)?;
     let other = if corner == side { quad[(side + 1) % 4] } else { quad[side] };
     let from = quad[corner];
     let along = other - from;
     let reach = (along.length() * 0.25).min(width);
-    Some(band_along(from, from + along.normalized() * reach, out, width))
+    Some(band_along(from, from + along.normalized() * reach, out, line, width))
 }
 
 /// The unit normal pointing out of the box `quad` from side `side`, `None` for a side with no length.
@@ -1506,14 +1573,16 @@ fn outward(quad: &[Pos2; 4], side: usize) -> Option<Vec2> {
     Some(Vec2::new(d.y, -d.x) * if area >= 0.0 { 1.0 } else { -1.0 })
 }
 
-/// The band from `a` to `b` reaching `width` out along `out`, with the line itself: half a point inside the line
-/// still counts as on it.
-fn band_along(a: Pos2, b: Pos2, out: Vec2, width: f32) -> HitShape {
-    let (inner, outer) = (out * -SIDE_LINE_INSIDE, out * width);
+/// The band from `a` to `b` from `line` out along `out` (negative: inside) to `width` out.
+fn band_along(a: Pos2, b: Pos2, out: Vec2, line: f32, width: f32) -> HitShape {
+    let (inner, outer) = (out * line, out * width);
     HitShape::Polygon(vec![a + inner, b + inner, b + outer, a + outer])
 }
 
-/// How far inside the box a press still lies on a side's line, in screen points.
+/// How far outside a side's line its band starts on a box whose inside moves, in screen points: a press on the line
+/// moves the box, as in the reference application.
+const SIDE_LINE_OUTSIDE: f32 = 0.5;
+/// How far inside the box a press still lies on a side's line on a box whose inside is the tool's, in screen points.
 const SIDE_LINE_INSIDE: f32 = 0.5;
 
 /// `polygon` clipped to `rect` (Sutherland-Hodgman, one rect side at a time).
