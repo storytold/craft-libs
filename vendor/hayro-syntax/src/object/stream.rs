@@ -221,7 +221,7 @@ impl<'a> Stream<'a> {
         &self,
         image_params: &ImageDecodeParams,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
-        self.decode_within(image_params, usize::MAX)
+        self.decode_within(image_params, usize::MAX).map(|(r, _)| r)
     }
 
     /// PdfCraft patch: the decoded data of the stream, for callers that budget what a page
@@ -231,14 +231,26 @@ impl<'a> Stream<'a> {
     /// expand, and the other image codecs stop at their own pixel limits.
     pub fn decoded_within(&self, max: usize) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decode_within(&ImageDecodeParams::default(), max)
-            .map(|r| r.data)
+            .map(|(r, _)| r.data)
+    }
+
+    /// PdfCraft patch (55): [`Self::decoded_within`], and whether the data may be cut short:
+    /// whether some filter of the chain stopped at its limit (`max`, or the document's
+    /// [`DecodeLimits`](crate::DecodeLimits)), the last or one before it. An output exactly at a
+    /// limit counts as cut. For callers that must not read part of a stream as the whole of it.
+    pub fn decoded_within_or_cut(
+        &self,
+        max: usize,
+    ) -> Result<(Cow<'a, [u8]>, bool), DecodeFailure> {
+        self.decode_within(&ImageDecodeParams::default(), max)
+            .map(|(r, cut)| (r.data, cut))
     }
 
     fn decode_within(
         &self,
         image_params: &ImageDecodeParams,
         max: usize,
-    ) -> Result<FilterResult<'a>, DecodeFailure> {
+    ) -> Result<(FilterResult<'a>, bool), DecodeFailure> {
         crate::cancel::check(self.dict.ctx().control()).ok_or(DecodeFailure::StreamDecode)?;
         self.decode_raw_within(self.raw_data(), image_params, max)
     }
@@ -250,7 +262,7 @@ impl<'a> Stream<'a> {
         max: usize,
     ) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decode_raw_within(data, &ImageDecodeParams::default(), max)
-            .map(|r| r.data)
+            .map(|(r, _)| r.data)
     }
 
     fn decode_raw_within(
@@ -258,7 +270,7 @@ impl<'a> Stream<'a> {
         data: Cow<'a, [u8]>,
         image_params: &ImageDecodeParams,
         max: usize,
-    ) -> Result<FilterResult<'a>, DecodeFailure> {
+    ) -> Result<(FilterResult<'a>, bool), DecodeFailure> {
         let control = self.dict.ctx().control();
         crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let filters_and_params = self.filters_and_params();
@@ -266,6 +278,8 @@ impl<'a> Stream<'a> {
         let count = filters_and_params.filters.len();
 
         let mut current: Option<FilterResult<'a>> = None;
+        // PdfCraft patch (55): whether a filter's output reached its limit.
+        let mut cut = false;
 
         for (i, (filter, params)) in filters_and_params
             .filters
@@ -292,14 +306,21 @@ impl<'a> Stream<'a> {
                 self.dict.ctx().control(),
                 rows,
             )?;
+            // A filter that undoes a predictor after stopping at the limit (Flate, LZW) returns
+            // fewer bytes than the limit, so it says so itself.
+            let (new, stopped) = new;
+            cut |= stopped || new.data.len() >= limit;
             current = Some(new);
         }
 
         crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
-        Ok(current.unwrap_or(FilterResult {
-            data,
-            image_data: None,
-        }))
+        Ok((
+            current.unwrap_or(FilterResult {
+                data,
+                image_data: None,
+            }),
+            cut,
+        ))
     }
 }
 

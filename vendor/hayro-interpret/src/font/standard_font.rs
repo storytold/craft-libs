@@ -59,7 +59,11 @@ impl StandardFont {
         }
     }
 
-    pub(crate) fn get_width(&self, mut name: &str) -> Option<f32> {
+    /// The width the font's metrics give the glyph named `name` (1000 units per em).
+    ///
+    /// PdfCraft patch (107): public, for readers that compare a font's `/Widths` with the
+    /// standard font whose widths it shares (ISO 32000-2 §9.6.2.2).
+    pub fn get_width(&self, mut name: &str) -> Option<f32> {
         // <https://github.com/apache/pdfbox/blob/129aafe26548c1ff935af9c55cb40a996186c35f/pdfbox/src/main/java/org/apache/pdfbox/pdmodel/font/PDSimpleFont.java#L340>
         if name == ".notdef" {
             return Some(250.0);

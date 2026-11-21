@@ -654,18 +654,29 @@ impl<'a> Context<'a> {
         self.nesting_depth = self.nesting_depth.saturating_sub(1);
     }
     pub(crate) fn resolve_font(&mut self, font_dict: &Dict<'a>) -> Option<TextStateFont<'a>> {
-        let cache_key = font_dict.cache_key();
+        // PdfCraft patch (107): with `font_per_object`, each font object is a font of its own,
+        // even beside another object with the same dictionary, and knows its object's key
+        // (`Glyph::font_key`).
+        let object_key = self
+            .settings
+            .font_per_object
+            .then(|| crate::font::font_object_key(font_dict));
+        let cache_key = object_key.unwrap_or_else(|| font_dict.cache_key());
 
         let resolved = {
             let mut font_cache = self.interpreter_cache.font_cache.borrow_mut();
             font_cache
                 .entry(cache_key)
                 .or_insert_with(|| {
-                    Font::new(
+                    let font = Font::new(
                         font_dict,
                         &self.settings.font_resolver,
                         &self.settings.cmap_resolver,
-                    )
+                    );
+                    if let (Some(font), Some(key)) = (&font, object_key) {
+                        font.set_object_key(key);
+                    }
+                    font
                 })
                 .clone()
         };

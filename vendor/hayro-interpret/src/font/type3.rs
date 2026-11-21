@@ -4,6 +4,7 @@ use crate::context::{
 };
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
+use crate::font::facts::{DictFacts, FontFacts, FontKind, GlyphFacts};
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
     Encoding, Glyph, Type3Glyph, UNITS_PER_EM, numbered_glyph_name_at_its_code,
@@ -53,6 +54,13 @@ pub(crate) struct Type3<'a> {
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     own_code_names: OnceLock<bool>,
+    /// PdfCraft patch (107): what the font's facts read from its dictionary.
+    dict_facts: DictFacts,
+    /// PdfCraft patch (107): the font's cache key, its dictionary's hash, worked out once: a
+    /// reader may ask for it with every glyph ([`crate::font::Glyph::font_cache_key`]), and
+    /// hashing the dictionary each time cost a page of Type 3 glyphs a quarter of its text
+    /// extraction.
+    key: u128,
 }
 
 /// PdfCraft patch (87): the largest decoded glyph procedure [`Type3`] keeps.
@@ -104,6 +112,8 @@ impl<'a> Type3<'a> {
             to_unicode,
             decoded_procs: RefCell::new(HashMap::new()),
             own_code_names: OnceLock::new(),
+            dict_facts: DictFacts::new(dict, None),
+            key: dict_key(dict),
         })
     }
 
@@ -241,6 +251,54 @@ impl<'a> Type3<'a> {
             })
     }
 
+    /// PdfCraft patch (107): `f` called with the font's facts and those of `code`
+    /// ([`crate::font::Glyph::with_facts`]). The ids a standard order reads are the codes with a
+    /// glyph procedure; their widths are the font's `/Widths`.
+    pub(crate) fn with_facts<R>(
+        &self,
+        code: u32,
+        f: impl FnOnce(&FontFacts<'_>, &GlyphFacts<'_>) -> R,
+    ) -> R {
+        let names = |c: u8| self.code_to_name(c);
+        let ids = || {
+            (0..=u8::MAX)
+                .filter(|&c| {
+                    self.code_to_name(c)
+                        .is_some_and(|name| self.char_procs.contains_key(name))
+                })
+                .map(u32::from)
+                .collect::<Vec<u32>>()
+        };
+        let id_width = |id: u32| match self.widths.get(usize::try_from(id).ok()?) {
+            Some(Width::Value(w)) => Some(*w),
+            _ => None,
+        };
+        let font = FontFacts {
+            has_to_unicode: self.to_unicode.is_some(),
+            names: Some(&names),
+            ids: Some(&ids),
+            id_width: Some(&id_width),
+            ..self.dict_facts.facts(FontKind::Type3)
+        };
+        let glyph = GlyphFacts {
+            gid: GlyphId::NOTDEF,
+            name: u8::try_from(code).ok().and_then(names),
+            id: Some(code),
+            code: None,
+        };
+        f(&font, &glyph)
+    }
+
+    /// PdfCraft patch (107): what the font's facts read from its dictionary.
+    pub(crate) fn dict_facts(&self) -> &DictFacts {
+        &self.dict_facts
+    }
+
+    /// PdfCraft patch (107): the font's key ([`crate::font::Glyph::font_key`]).
+    pub(crate) fn font_key(&self) -> u128 {
+        self.dict_facts.object_key.get().copied().unwrap_or(self.key)
+    }
+
     /// PdfCraft patch: the glyph name `/Encoding` gives a code, as `map_code` reads it.
     fn code_to_name(&self, code: u8) -> Option<&str> {
         self.encodings
@@ -329,8 +387,15 @@ impl<'a> Type3<'a> {
 
 impl CacheKey for Type3<'_> {
     fn cache_key(&self) -> u128 {
-        self.dict.cache_key()
+        self.key
     }
+}
+
+/// PdfCraft patch (107): a Type 3 font's cache key, its dictionary's hash (counted for tests).
+fn dict_key(dict: &Dict<'_>) -> u128 {
+    #[cfg(test)]
+    tests::KEY_HASHES.with(|c| c.set(c.get() + 1));
+    dict.cache_key()
 }
 
 struct Type3ShapeGlyphDevice<'a, 'b, T: Device<'a>> {
@@ -396,4 +461,35 @@ impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
     }
 
     fn set_blend_mode(&mut self, _: BlendMode) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hayro_syntax::object::FromBytes;
+
+    thread_local! {
+        /// Type 3 font dictionaries hashed for a cache key on this thread.
+        pub(super) static KEY_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// PdfCraft patch (107): a Type 3 font hashes its dictionary for its cache key once, when
+    /// it is built: a reader asks for the key with every glyph, and hashing the dictionary
+    /// each time cost a page of Type 3 glyphs a quarter of its text extraction.
+    #[test]
+    fn a_type3_font_hashes_its_dictionary_once() {
+        let dict = Dict::from_bytes(
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000]               /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << >> /FirstChar 65 /LastChar 65               /Widths [500] >>",
+        )
+        .unwrap();
+        let before = KEY_HASHES.with(std::cell::Cell::get);
+        let font = Type3::new(&dict, &crate::InterpreterSettings::default().cmap_resolver).unwrap();
+        let key = font.cache_key();
+        for _ in 0..100 {
+            assert_eq!(font.cache_key(), key);
+            assert_eq!(font.font_key(), key);
+        }
+        assert_eq!(KEY_HASHES.with(std::cell::Cell::get) - before, 1);
+        assert_eq!(key, dict.cache_key());
+    }
 }
