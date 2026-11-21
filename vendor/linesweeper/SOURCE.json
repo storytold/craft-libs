@@ -13,6 +13,7 @@
     "In `docs/sweep.typ`, the intersection scan to the left compares each segment with `alpha^(i+1)`, the segment the lemma after it is stated for, instead of `alpha^i`.",
     "In `docs/sweep.typ`, the typo \"condi0.2tions\" reads \"conditions\", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false.",
     "In `docs/sweep.typ`, the lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, as the bidirectional lemma uses it, and the argument for the order invariant cites the crossing invariant instead of a \"third invariant\".",
+    "`ComparisonCache::compare_segments` in `src/order.rs` panics with the message \"compare_segments does not take horizontal segments\" when either segment is horizontal, in every build profile, and its doc comment states it. Before, a horizontal line and a cubic stopped at a `debug_assert` in `Segments::horiz_decomp` in a debug build, and a release build skipped that check.",
     "In `src/sweep/sweep_line.rs` and `src/topology.rs`, two changes make clippy 1.100.0 with `-D warnings` and every feature pass on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check passes `self.line` to `assert!` without a `&`, and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them. The behavior does not change."
   ],
   "files": [
@@ -46,7 +47,7 @@
     { "path": "src/geom.rs", "source_sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08", "source_git_blob": null, "sha256": "9878ffa6d4a13fa2c9149741c137205ca01acb626a5b9f86a3db75cf91b63a08" },
     { "path": "src/lib.rs", "source_sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6", "source_git_blob": null, "sha256": "761c153c3b5c449569ff85c571344b9252ea64f7f0b0424fb4819041b03d13c6" },
     { "path": "src/num.rs", "source_sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a", "source_git_blob": null, "sha256": "39ff85da50c500ce91cf6dea81aedc0dcca1db5e7d0506696dde2da118e93a2a" },
-    { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596" },
+    { "path": "src/order.rs", "source_sha256": "7e5b04eae8af134abb032e995f1d3c2ac473822923dfee8d463d9ade6ffeb596", "source_git_blob": null, "sha256": "2cce12b9110a5812ce0da81088122d4d64e8852d41bad9139bd29ff9d4363a0f" },
     { "path": "src/perturbation.rs", "source_sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5", "source_git_blob": null, "sha256": "fa274a822bbdf65f8e53e403eef78034dd87964b3f1d3134a064df4ec8cef9c5" },
     { "path": "src/position.rs", "source_sha256": "dfa70840805ecccf5b7eb6122921e46ca60c24cb7b3c17f3b55ffc2549368ab0", "source_git_blob": null, "sha256": "dfa70840805ecccf5b7eb6122921e46ca60c24cb7b3c17f3b55ffc2549368ab0" },
     { "path": "src/segments.rs", "source_sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc", "source_git_blob": null, "sha256": "379f9455120492d237cb5a62b3fc06da018a72e2eb75bbfcd61b4cce501d9bbc" },
