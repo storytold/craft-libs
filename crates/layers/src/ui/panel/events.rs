@@ -210,14 +210,12 @@ impl<K> LayersEvent<K> {
 
     /// A host payload released `position` of the layer `target`; `copy` when the operation is Copy.
     pub fn host_drop(payload: DropPayload, target: K, position: LayerPosition, copy: bool) -> Self {
-        let _ = (payload, target, position, copy);
-        todo!("dp.L3")
+        Self::HostDrop { payload, target, position, copy }
     }
 
     /// A claimed press on `column` of `row`, with the modifiers held.
     pub fn cell_click(row: LayerRowKey<K>, column: LayerColumn, mods: Mods) -> Self {
-        let _ = (row, column, mods);
-        todo!("dp.L2")
+        Self::CellClick { row, column, mods }
     }
 }
 

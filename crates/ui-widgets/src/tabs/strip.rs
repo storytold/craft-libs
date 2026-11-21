@@ -538,7 +538,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             change: SelectionChange::Set(vec![key]),
             by: crate::contract::LeadSource::Pointer,
             mods: craft_keymap::Mods::NONE,
-        })); // P3(document-panels-w2): dp.C12
+        }));
         response.events = kept;
         TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
     }

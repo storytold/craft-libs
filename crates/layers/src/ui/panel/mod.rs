@@ -36,7 +36,7 @@ use craft_ui::runtime::memory::Remember as _;
 use egui::{Response, Ui};
 
 use body::{LayerRows, ToggleSweeps, reveal_plan, show_body, start_rename};
-use context::{HostCell, PanelContext, ThumbHost, TrailingCell};
+use context::{HostCell, HostDrop, HostDrops, PanelContext, ThumbHost, TrailingCell};
 use footer::show_footer;
 use menu::{OpenMenu, RowMenu, show_row_menus};
 use std::marker::PhantomData;
@@ -114,15 +114,25 @@ pub(super) struct Session<Id> {
     produced: Vec<Id>,
     /// The menu the last context request chose.
     menu: Option<OpenMenu<Id>>,
-    /// The eye or lock sweep in progress.
-    sweeps: ToggleSweeps,
+    /// The eye or lock sweep in progress, with the look its claims were made for.
+    sweeps: Option<(LayerRowLook, ToggleSweeps)>,
     /// The filter the panel keeps when the app gives none.
     filter: LayerFilter,
 }
 
 impl<Id> Default for Session<Id> {
     fn default() -> Self {
-        Session { anchor: None, produced: Vec::new(), menu: None, sweeps: ToggleSweeps::default(), filter: LayerFilter::default() }
+        Session { anchor: None, produced: Vec::new(), menu: None, sweeps: None, filter: LayerFilter::default() }
+    }
+}
+
+impl<Id> Session<Id> {
+    /// The sweep readers for `look`. A look's claims are added when its readers are made, so a new look starts new ones.
+    fn sweeps_for(&mut self, look: LayerRowLook) -> &mut ToggleSweeps {
+        if self.sweeps.as_ref().is_some_and(|(held, _)| *held != look) {
+            self.sweeps = None;
+        }
+        &mut self.sweeps.get_or_insert_with(|| (look, ToggleSweeps::for_look(look))).1
     }
 }
 
@@ -134,7 +144,7 @@ impl<Id> Default for Session<Id> {
 ///     .settings(&prefs.layers)
 ///     .thumbnails(&app.layer_thumbs, &DocLayerThumbs::new(&doc))
 ///     .filter(Bind::bound(&mut ui_state.layer_filter))
-///     .row_menu(|target| layer_menu_entries(&doc, target))
+///     .row_menu(|target| layer_menu_rows(&doc, target))
 ///     .show(ui);
 /// for event in out.events { app.apply(event) }
 /// ```
@@ -179,6 +189,10 @@ pub struct LayersPanel<'a, T: LayerTree> {
     reveal: Option<(T::Id, Groups)>,
     rename: Option<T::Id>,
     document: Option<u64>,
+    look: LayerRowLook,
+    drops: Option<Box<dyn HostDrops<T::Id> + 'a>>,
+    footer: Option<Box<dyn FnMut(&mut Ui) + 'a>>,
+    deletable: bool,
 }
 
 /// How a layer row is drawn.
@@ -249,6 +263,10 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             reveal: None,
             rename: None,
             document: None,
+            look: LayerRowLook::default(),
+            drops: None,
+            footer: None,
+            deletable: false,
         }
     }
 
@@ -317,31 +335,31 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
 
     /// How the rows are drawn; the base's eye and label by default.
     #[must_use]
-    pub fn row_look(self, look: LayerRowLook) -> Self {
-        let _ = look;
-        todo!("dp.L1")
+    pub fn row_look(mut self, look: LayerRowLook) -> Self {
+        self.look = look;
+        self
     }
 
     /// The rows take a `P` dragged from outside the list, before, after or into a layer, wherever `accepts` passes.
     #[must_use]
-    pub fn takes_drop<P: Send + Sync + 'static>(self, accepts: impl Fn(&P, &T::Id, LayerPosition) -> bool + 'a) -> Self {
-        let _ = accepts;
-        todo!("dp.L3")
+    pub fn takes_drop<P: Send + Sync + 'static>(mut self, accepts: impl Fn(&P, &T::Id, LayerPosition) -> bool + 'a) -> Self {
+        self.drops = Some(Box::new(HostDrop { accepts, payload: PhantomData::<fn() -> P> }));
+        self
     }
 
     /// The host's footer, in the panel's footer slot in place of the panel's own buttons: the panel then reports no
     /// `Footer` or `FooterDrop` and never calls `LayerTree::footer`.
     #[must_use]
-    pub fn footer(self, footer: impl FnMut(&mut Ui) + 'a) -> Self {
-        let _ = footer;
-        todo!("dp.L4")
+    pub fn footer(mut self, footer: impl FnMut(&mut Ui) + 'a) -> Self {
+        self.footer = Some(Box::new(footer));
+        self
     }
 
     /// Delete or Backspace in the rows reports [`LayersEvent::Delete`]; off by default.
     #[must_use]
-    pub fn deletable(self, on: bool) -> Self {
-        let _ = on;
-        todo!("dp.L5")
+    pub fn deletable(mut self, on: bool) -> Self {
+        self.deletable = on;
+        self
     }
 
     /// The host's row menu: called with where it was opened (a layer row, an effects row) each pass
@@ -401,6 +419,10 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             reveal,
             rename,
             document,
+            look,
+            drops,
+            footer: mut host_footer,
+            deletable,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<LayersPanelWords>();
@@ -424,6 +446,9 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             visibility_key,
             trailing: trailing.as_deref(),
             held: craft_ui::runtime::pointer::frame(ui.ctx()).mods,
+            look,
+            deletable,
+            drops: drops.as_deref(),
         };
         let events = RefCell::new(Vec::new());
         let current = RefCell::new(LayerFilter::default());
@@ -481,9 +506,12 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                     events.borrow_mut().extend(out.events.into_iter().map(LayersEvent::Properties));
                 }
             })
-            .footer(|ui, _| {
-                let out = show_footer(ui, &cx, &words);
-                events.borrow_mut().extend(out);
+            .footer(|ui, _| match host_footer.as_mut() {
+                Some(footer) => footer(ui),
+                None => {
+                    let out = show_footer(ui, &cx, &words);
+                    events.borrow_mut().extend(out);
+                }
             })
             .show(ui, |ui, stack| {
                 let filter = current.borrow().clone();
@@ -495,17 +523,18 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                 }
                 let body = show_body(ui, &cx, &rows, session, &plan, rows.filtered, &unlock_label);
                 let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), session);
+                let focused = body.response.has_focus();
                 let mut reported = body.events;
                 reported.extend(menus);
                 while let Some((key, _)) = stack.take_command::<LayersPanelKeys>() {
                     reported.extend(key.event(tree));
                 }
-                (reported, body.drop_preview, body.hovered)
+                (reported, body.drop_preview, body.hovered, focused)
             });
         // Only the real run's result comes back, so the reveal's opens and the list's events are reported once.
         let mut events = events.into_inner();
-        let (body, drop_preview, hovered) = shown.inner.unwrap_or_default();
+        let (body, drop_preview, hovered, focused) = shown.inner.unwrap_or_default();
         events.extend(body);
-        LayersOutput { events, drop_preview, hovered, focused: false, response: shown.output }
+        LayersOutput { events, drop_preview, hovered, focused, response: shown.output }
     }
 }

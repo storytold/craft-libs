@@ -3,17 +3,17 @@
 use super::{ItemsHooks, Placement, members};
 use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, ListDrag, SelectMode};
 use crate::contract::{Collection, Cx};
-use crate::runtime::memory::sub;
-use crate::runtime::{drag, pointer};
-use craft_behavior::{Flow, ItemLayout, PointerEvent, Sense, SelectionChange, SelectionModel};
-use egui::{Context, Id, Pos2, Rect, Vec2};
+use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel};
+use craft_keymap::Mods;
+use egui::{Pos2, Rect, Vec2};
 use std::any::TypeId;
 
-/// What the rest timer of `drag_select` last saw: the drag's pointer and the row it is timing.
-#[derive(Clone, Copy, Default)]
-struct DragRest {
-    pointer: Option<Pos2>,
-    row: Option<usize>,
+/// What made a selection change, reported with it (`CollectionEvent::Selection`): a key, or a pointer pick with the
+/// modifiers it was made with.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PickBy {
+    Keys,
+    Pointer(Mods),
 }
 
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
@@ -21,13 +21,23 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         comp.items().select
     }
 
-    /// Applies a selection change and reports it when it changes the selection: a press on the row a hover already
-    /// selected reports nothing.
+    /// [`change_by`](Self::change_by) for a pointer change with no modifiers.
+    // PLAN: rows.rs (`select_rows`, `cell_move`, `cell_press`), marquee.rs and access.rs report through this without their source; their owner passes a `PickBy` (cell_move's is `PickBy::Keys`).
     pub(super) fn change(&mut self, change: SelectionChange<C::Key>) {
+        self.change_by(change, PickBy::Pointer(Mods::NONE));
+    }
+
+    /// Applies a selection change `by` a key or a pick and reports it when it changes the selection: a press on the
+    /// row a hover already selected reports nothing. A key's change carries no modifiers.
+    pub(super) fn change_by(&mut self, change: SelectionChange<C::Key>, by: PickBy) {
         let before = self.selection.clone();
         self.selection.apply(change.clone());
         if self.selection != before {
-            self.events.push(CollectionEvent::Selection { change, by: LeadSource::Pointer, mods: craft_keymap::Mods::NONE }); // P3(document-panels-w2): dp.C12
+            let (by, mods) = match by {
+                PickBy::Keys => (LeadSource::Keys, Mods::NONE),
+                PickBy::Pointer(mods) => (LeadSource::Pointer, mods),
+            };
+            self.events.push(CollectionEvent::Selection { change, by, mods });
         }
     }
 
@@ -81,15 +91,20 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         clicks > 1 && self.holds(at)
     }
 
-    /// A press or key that selects row `at` the way the modifiers say.
+    /// [`pick_by`](Self::pick_by) for a pointer pick with no modifiers.
     pub(super) fn pick(&mut self, comp: &C, at: usize, extend: bool, toggle: bool) {
+        self.pick_by(comp, at, extend, toggle, PickBy::Pointer(Mods::NONE));
+    }
+
+    /// A press or key `by` that selects row `at` the way the modifiers say.
+    pub(super) fn pick_by(&mut self, comp: &C, at: usize, extend: bool, toggle: bool, by: PickBy) {
         if self.source.section_stop(at) {
             return;
         }
         let key = self.source.key(at);
         match Self::select_mode(comp) {
             SelectMode::None => {}
-            SelectMode::Single => self.change(SelectionChange::Set(vec![key])),
+            SelectMode::Single => self.change_by(SelectionChange::Set(vec![key]), by),
             SelectMode::Multi | SelectMode::Cells if (extend || !toggle) && self.selection.cells().is_some() => {
                 let anchor = if extend { self.anchor_at(self.lead.at) } else { at };
                 self.select_rows(comp, anchor, at);
@@ -99,11 +114,11 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                     self.add_range(at);
                 } else if extend {
                     let anchor = self.anchor_at(self.lead.at);
-                    self.change(SelectionChange::Set(self.range(anchor, at)));
+                    self.change_by(SelectionChange::Set(self.range(anchor, at)), by);
                 } else if toggle {
-                    self.change(SelectionChange::Toggle(key));
+                    self.change_by(SelectionChange::Toggle(key), by);
                 } else {
-                    self.change(SelectionChange::Set(vec![key]));
+                    self.change_by(SelectionChange::Set(vec![key]), by);
                 }
             }
         }

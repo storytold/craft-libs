@@ -1,6 +1,7 @@
 //! Presses on rows: select, activate, ask for a row's menu, and the parts an item opens menus from.
 
 use super::drag::SlowClick;
+use super::lead::PickBy;
 use super::{ItemsHooks, Placement, RowPress, SECTION};
 use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, RowPressed, SelectMode};
 use crate::contract::{Collection, Cx, ItemOpener};
@@ -134,7 +135,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         None if again => {}
                         None if hold => self.drags.collapse = Some(key.clone()),
                         None if keep => {}
-                        None => self.pick(comp, at, mods.shift, mods.cmd),
+                        None => self.pick_by(comp, at, mods.shift, mods.cmd, PickBy::Pointer(mods)),
                     }
                     self.move_lead(at, LeadSource::Pointer);
                     // A secondary press takes focus the way a primary press does: egui and the press classification only move it for the primary button.
@@ -160,7 +161,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && !matches!(Self::select_mode(comp), SelectMode::None)
                     && self.selection != C::Selection::default()
                 {
-                    self.change(SelectionChange::Clear);
+                    self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
                 }
             }
         }
@@ -209,7 +210,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let mods = crate::runtime::pointer::frame(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 if !self.keeps_pick(at, start.clicks) {
-                    self.pick(comp, at, false, false);
+                    self.pick_by(comp, at, false, false, PickBy::Pointer(mods));
                 }
             } else if props.command_click && mods.cmd {
                 self.events.push(CollectionEvent::CommandClick { key: self.source.key(at), mods });
@@ -257,9 +258,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     && let Some(at) = self.index_of(&key)
                 {
                     if Self::select_mode(comp) == SelectMode::Single {
-                        self.change(SelectionChange::Clear);
+                        self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
                     } else {
-                        self.pick(comp, at, false, false);
+                        self.pick_by(comp, at, false, false, PickBy::Pointer(mods_now));
                     }
                 }
             }
@@ -299,7 +300,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 let column = if Self::selects_cells(comp) { layout.column_at(local(pos), offset) } else { None };
                 match column {
                     Some(column) => self.cell_press(comp, layout, at, column, false, false),
-                    None => self.pick(comp, at, false, false),
+                    None => self.pick_by(comp, at, false, false, PickBy::Pointer(released.mods)),
                 }
             }
             self.move_lead(at, LeadSource::Pointer);

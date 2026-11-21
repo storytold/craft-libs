@@ -5,20 +5,20 @@ use craft_behavior::{ColumnKey, Cursor, CursorBadge, CursorIcon, IconId, Painted
 use craft_keymap::Mods;
 use craft_theme::{LabelColor, Rgba, Srgba};
 use craft_ui::contract::Props as _;
-use craft_ui::list::{ListRow, RowDragSpot, RowInk, ThumbSize, ThumbTarget, ToggleCell, TrailingFace, TrailingPart};
+use craft_ui::list::{ListRow, RowDragSpot, RowInk, ThumbSize, ThumbTarget, ToggleCell, ToggleFace, ToggleState, TrailingFace, TrailingPart};
 use craft_ui::primitives::textures::{Priority, ThumbPaint as PicturePaint, ThumbRequest};
-use craft_ui::primitives::{ContentPainterCx, IconSpec};
+use craft_ui::primitives::{ContentPainterCx, IconSpec, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{Corners, DataColor, SurfaceKind};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, Rect, Stroke, StrokeKind, pos2, vec2};
 
-use super::LayersPanelWords;
 use super::body::thumb_click_replaces_select;
+use super::{LayerRowLook, LayersPanelWords};
 use super::context::{PanelContext, ThumbHost};
 use super::drag::LayersDrag;
 use crate::ui::thumbs::LayerThumb;
-use crate::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerTree, MaskInfo, SubRowGroup, ThumbBadge};
+use crate::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerTree, LayerView, MaskInfo, SubRowGroup, ThumbBadge};
 
 /// The eye column.
 pub(super) const EYE: ColumnKey = ColumnKey::new("eye");
@@ -88,7 +88,7 @@ pub(super) fn build_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, key: &Lay
 
 fn kind_icon(kind: LayerKind) -> Option<IconId> {
     Some(IconId::new(match kind {
-        LayerKind::Group => "folder",
+        LayerKind::Group | LayerKind::Layer => "folder",
         LayerKind::Adjustment => "adjustment_layer",
         LayerKind::Fill => "paint_bucket",
         LayerKind::Text => "text",
@@ -99,8 +99,9 @@ fn kind_icon(kind: LayerKind) -> Option<IconId> {
         LayerKind::Image => "image",
         LayerKind::Object => "square",
         LayerKind::Frame => "frame_placeholder",
+        LayerKind::Guide => "ruler",
+        LayerKind::Spine => "spline",
         LayerKind::Pixel => return None,
-        LayerKind::Layer | LayerKind::Guide | LayerKind::Spine => todo!("dp.L9"),
     }))
 }
 
@@ -119,7 +120,9 @@ pub(super) fn row_description(words: &LayersPanelWords, info: &LayerInfo, target
         LayerKind::Image => &words.kind_image,
         LayerKind::Object => &words.kind_object,
         LayerKind::Frame => &words.kind_frame,
-        LayerKind::Layer | LayerKind::Guide | LayerKind::Spine => todo!("dp.L9"),
+        LayerKind::Layer => &words.kind_layer,
+        LayerKind::Guide => &words.kind_guide,
+        LayerKind::Spine => &words.kind_spine,
     };
     let has = |part: LayerPart| info.masks.iter().any(|mask| mask.part == part);
     let flags = [
@@ -170,13 +173,13 @@ fn paint_picture<Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static>(
     host.thumbnails.paint(painter, rect, &state, paint)
 }
 
-/// The tile of a layer whose thumbnail has no picture: the sunken placeholder with the kind's glyph (a pixel layer has
-/// none), or for a type layer its glyph in ink on paper.
-fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind) {
+/// The tile of a layer whose thumbnail has no picture: the sunken placeholder with `glyph` (a pixel layer has none),
+/// or for a type layer its glyph in ink on paper.
+fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind, glyph: Option<IconId>) {
     let rect = rect.round_to_pixels(painter.pixels_per_point());
     let side = rect.width().min(rect.height()) * KIND_GLYPH_SHARE;
     let glyph = Rect::from_center_size(rect.center(), vec2(side, side));
-    let icon = kind_icon(kind).map(IconSpec::svg);
+    let icon = glyph.map(IconSpec::svg);
     if kind == LayerKind::Text {
         painter.painter.rect_filled(rect, 0.0, TYPE_PAPER);
         if let Some(icon) = icon {
@@ -251,15 +254,38 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
     let contents = cx.options.thumbnail_contents;
     let active = cx.selection.active.as_ref() == Some(id);
 
-    let mut eye = ToggleCell::eye(EYE, info.visible).name(named(&words.visibility, &info.name));
-    if let Some(color) = info.label {
-        eye = eye.fill(DataColor::new(paint_color(color.fill())));
+    let bar = cx.look == LayerRowLook::ColorBar;
+    // A spine is a blend's guide line, not a layer of its own: it has no eye or lock and starts no drag.
+    let spine = info.kind == LayerKind::Spine;
+
+    let mut row = ListRow::new(info.name.clone()).layer(true);
+    if !spine {
+        let on = match info.view {
+            LayerView::Preview => "eye",
+            LayerView::Outline => "eye_outline",
+            LayerView::Template => "layer_template",
+        };
+        let face = ToggleFace::icons(IconId::new(on), IconId::new("eye_off"));
+        let mut eye = ToggleCell::new(EYE, face, ToggleState::of(info.visible), named(&words.visibility, &info.name));
+        if !bar && let Some(color) = info.label {
+            eye = eye.fill(DataColor::new(paint_color(color.fill())));
+        }
+        row = row.toggle(eye);
+        if cx.lock_column {
+            row = row.toggle(ToggleCell::lock(LOCK, info.locks.any()).name(named(&words.lock_cell, &info.name)));
+        }
     }
-    let mut row = ListRow::new(info.name.clone()).layer(true).toggle(eye);
-    if cx.lock_column {
-        row = row.toggle(ToggleCell::lock(LOCK, info.locks.any()).name(named(&words.lock_cell, &info.name)));
+    row = row
+        .clipped(info.clipped)
+        .highlight(cx.tree.hovered().as_ref() == Some(id))
+        .italic(info.italic)
+        .underline(info.underline);
+    if bar {
+        if let Some(color) = info.color {
+            row = row.stripe(color, if info.kind == LayerKind::Layer { StrokeWidth::Heavy } else { StrokeWidth::Thick });
+        }
+        row = row.corner_mark(active);
     }
-    row = row.clipped(info.clipped).highlight(cx.tree.hovered().as_ref() == Some(id));
     if info.dimmed {
         row = row.ink(RowInk::Dimmed);
     }
@@ -270,12 +296,16 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
         row = row.heading();
     }
 
-    if size != ThumbSize::None && !compact {
+    let glyph = info.icon.clone().or_else(|| kind_icon(info.kind));
+    let tiled = size != ThumbSize::None && !compact;
+    // A guide or a spine shows its glyph where a thumbnail would be, like a row that asks for no thumbnail.
+    let glyph_only = !info.thumbnail || matches!(info.kind, LayerKind::Guide | LayerKind::Spine);
+    if tiled && !glyph_only {
         let host = cx.thumbs;
         let (layer, kind, badge) = (id.clone(), info.kind, info.thumb_badge);
         row = row.thumb(size, move |painter, rect| {
             if !paint_picture(host, &LayerThumb::pixels(layer, contents), painter, rect, &PicturePaint::default()) {
-                paint_kind_tile(painter, rect, kind);
+                paint_kind_tile(painter, rect, kind, glyph.clone());
             }
             if let Some(mark) = badge {
                 paint_thumb_badge(painter, rect, mark);
@@ -288,7 +318,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             let layer = id.clone();
             row = row.extra_thumb(move |painter, rect| {
                 if !paint_picture(host, &LayerThumb::frame_content(layer, contents), painter, rect, &PicturePaint::default()) {
-                    paint_kind_tile(painter, rect, LayerKind::Frame);
+                    paint_kind_tile(painter, rect, LayerKind::Frame, kind_icon(LayerKind::Frame));
                 }
             });
             row = with_load_cursor(row, cx.held, ThumbTarget::Extra(0), LayerPart::FrameContent, &info);
@@ -307,7 +337,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             row = row.part_drag(RowDragSpot::Thumb(target), LayersDrag::new(cx.list, cx.document, vec![LayerRowKey::Mask(id.clone(), part)]));
             row = with_load_cursor(row, cx.held, target, part, &info);
         }
-        if active {
+        if active && !bar {
             match cx.selection.target {
                 LayerPart::FilterMask => {}
                 // A frame as a whole: its shape and its content.
@@ -316,8 +346,13 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
                 part => row = row.thumb_target(info.thumb(part).unwrap_or(ThumbTarget::First)),
             }
         }
-    } else if let Some(icon) = kind_icon(info.kind) {
-        row = row.icon(IconSpec::svg(icon));
+    } else {
+        if tiled {
+            row = row.thumb_height(size);
+        }
+        if let Some(icon) = glyph {
+            row = row.icon(IconSpec::svg(icon));
+        }
     }
 
     // The first trailing item is the outermost: the lock closes the row, the effects disclosure sits inside it, and the
@@ -338,9 +373,10 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
     if info.has_effects {
         // The badge drags every effect of the layer (Photoshop); a click on it is a click on the row.
         let badge = TrailingPart::new(FX_BADGE);
-        row = row
-            .trailing_part(badge, TrailingFace::Icon(IconSpec::svg(IconId::new("fx"))), words.has_effects.clone())
-            .part_drag(RowDragSpot::Trailing(badge), LayersDrag::new(cx.list, cx.document, vec![LayerRowKey::Effects(id.clone(), None)]));
+        row = row.trailing_part(badge, TrailingFace::Icon(IconSpec::svg(IconId::new("fx"))), words.has_effects.clone());
+        if !spine {
+            row = row.part_drag(RowDragSpot::Trailing(badge), LayersDrag::new(cx.list, cx.document, vec![LayerRowKey::Effects(id.clone(), None)]));
+        }
     }
     if info.linked {
         row = row.trailing_icon(IconSpec::svg(IconId::new("link_layers")), words.linked.clone());
