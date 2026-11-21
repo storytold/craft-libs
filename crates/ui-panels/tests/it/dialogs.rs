@@ -229,7 +229,7 @@ fn a_pass_that_draws_nothing_keeps_the_window_size() {
     let ctx = frames.ctx.clone();
     frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
     frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
-    let window = egui::ViewportId::from_hash_of(("craft_windowed_dialog", id));
+    let window = egui::ViewportId::from_hash_of(("craft_windowed_dialog", egui::ViewportId::ROOT, id));
     let size = ctx.data(|m| m.get_temp::<egui::Vec2>(window.0));
     assert!(size.is_none_or(|s| s.x > 100.0 && s.y > 100.0), "the window kept a usable size, not {size:?}");
 }

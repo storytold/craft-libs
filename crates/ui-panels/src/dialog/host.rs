@@ -560,7 +560,9 @@ impl DialogHost {
                 continue;
             }
             let place = self.stack.ids().position(|open| open == id).unwrap_or_default();
-            let viewport = egui::ViewportId::from_hash_of(("craft_windowed_dialog", id));
+            // Each document window has its own host and opens the same dialog under the same key: its window's id
+            // takes the document window's, or two documents' panels would share one OS window.
+            let viewport = egui::ViewportId::from_hash_of(("craft_windowed_dialog", ctx.viewport_id(), id));
             let title = self.open[at].window_title();
             let size = ctx.data(|m| m.get_temp::<egui::Vec2>(viewport.0)).unwrap_or(egui::vec2(460.0, 480.0));
             let parent = ctx.input(|i| i.viewport().outer_rect);
