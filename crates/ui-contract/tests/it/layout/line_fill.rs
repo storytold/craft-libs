@@ -37,7 +37,7 @@ fn line_and_fill(filler: impl Fn(&mut egui::Ui, &RefCell<Seen>)) -> [(Rect, Rect
 #[trial]
 fn a_levelled_unit_stands_on_its_rows_line() {
     let seen = line_and_fill(|ui, fill| {
-        levelled_unit(ui, Id::new("unit"), 2, |ui, _| {
+        levelled_unit(ui, Id::unique("unit"), 2, |ui, _| {
             Probe::new(fill).sizing(Sizing::Fill).id_salt("fill").show(ui);
         });
     });
@@ -56,7 +56,7 @@ fn a_levelled_unit_stands_on_its_rows_line() {
 fn a_levelled_unit_of_two_controls_stays_one_line_high() {
     let second = RefCell::new(Seen::default());
     let seen = line_and_fill(|ui, top| {
-        levelled_unit(ui, Id::new("unit"), 1, |ui, _| {
+        levelled_unit(ui, Id::unique("unit"), 1, |ui, _| {
             Probe::new(top).id_salt("first").show(ui);
             Probe::new(&second).id_salt("second").show(ui);
         });
@@ -124,7 +124,7 @@ fn a_centred_row_in_a_unit_of_a_scrolling_row_centres_across_its_column() {
     frames.idle(5, |ui| {
         let row = ContainerProps::new().layout(BodyLayout::row()).scroll(Scroll::horizontal()).sizing(Sizing::FillWidth);
         Slab::new(row).id_salt("row").show(ui, |ui, _| {
-            levelled_unit(ui, Id::new("unit"), 1, |ui, _| {
+            levelled_unit(ui, Id::unique("unit"), 1, |ui, _| {
                 Panel::new().layout(BodyLayout::stack()).id_salt("column").show(ui, |ui, _| {
                     Probe::new(&wide).size(Vec2::new(200.0, 20.0)).id_salt("wide").show(ui);
                     let centred = ContainerProps::new().layout(BodyLayout::row().align(RowAlign::Center)).sizing(Sizing::FillWidth);
