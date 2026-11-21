@@ -29,6 +29,9 @@ const UNSUPPORTED: &str = crate::nef::HIGH_EFFICIENCY;
 /// patches registered one by one): within 1.5 % of the lossless levels from 25 above black to white.
 const SCALE: f64 = 24.24;
 const LUMA_OFFSET: f64 = -1032.7;
+/// Offsets of the Cr and Cb components, measured on block means of the CC0 Z 9 pair (1.6, 1.9) and a tripod
+/// Z f Lossless / HE★ pair (1.4, 3.0): without them the greens read 3-4 % bright between 25 and 100 above black.
+const CHROMA_OFFSETS: (f64, f64) = (1.5, 2.5);
 const COMPONENTS: usize = 4;
 const BANDS: usize = 25;
 /// Most bitplanes a code group may hold; more means the stream is not what we measured.
@@ -474,13 +477,18 @@ fn mosaic(planes: &[Vec<i32>], cw: usize, rows: usize, black: f64) -> Vec<u16> {
     if cw == 0 || cells_h == 0 {
         return out;
     }
+    let (luma, cr, delta, cb) = (0, 1, 2, 3);
     // a plane's value at a cell, the edge repeated outside the plane
     let at = |c: usize, y: isize, x: isize| -> f64 {
         let y = y.clamp(0, cells_h as isize - 1) as usize;
         let x = x.clamp(0, cw as isize - 1) as usize;
-        planes.get(c).and_then(|p| p.get(y * cw + x)).copied().unwrap_or(0) as f64
+        let offset = match c {
+            c if c == cr => CHROMA_OFFSETS.0,
+            c if c == cb => CHROMA_OFFSETS.1,
+            _ => 0.0,
+        };
+        planes.get(c).and_then(|p| p.get(y * cw + x)).copied().unwrap_or(0) as f64 + offset
     };
-    let (luma, cr, delta, cb) = (0, 1, 2, 3);
     let rows_c = rows.div_ceil(2).min(cells_h);
     // the G1 luma, G1 and G2 once for every cell the rows read (one row past them), then the samples
     let needed = (rows_c + 1).min(cells_h);
