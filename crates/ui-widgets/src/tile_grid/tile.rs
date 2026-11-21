@@ -1030,6 +1030,10 @@ impl Component for Tile<'_> {
         self.paint_band(ui, cx, &placed);
         self.paint_bar(ui, cx, &placed);
         self.paint_pills(ui, cx, &placed);
+        // The action icons use interface ink; a document picture can have any colour behind them.
+        if let Some(plate) = placed.actions.iter().copied().reduce(|all, rect| all.union(rect)) {
+            ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);
+        }
         for (at, ((icon, command, _), _)) in self.actions.iter().zip(&placed.actions).enumerate() {
             ui.face(ACTION.at(at as u64), IconButton::command(icon.clone(), command.clone()));
         }
