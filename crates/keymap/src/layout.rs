@@ -70,12 +70,14 @@ pub struct KeyInput {
     /// Shift counts as needed when `typed` differs from `physical`, and without `physical` when
     /// `typed` is a shifted symbol on a US layout (`:`, `?`, `+`). Only punctuation drops Shift.
     pub shift_needed: Option<bool>,
+    /// The bracket-fallback state when the press arrived, if the input stage captured it.
+    bracket_fallback_at_press: Option<bool>,
 }
 
 impl KeyInput {
     /// A press with `mods` and nothing else known about the key.
     pub const fn new(mods: Mods) -> KeyInput {
-        KeyInput { mods, typed: None, physical: None, latin: None, shift_needed: None }
+        KeyInput { mods, typed: None, physical: None, latin: None, shift_needed: None, bracket_fallback_at_press: None }
     }
 
     /// Sets [`typed`](Self::typed).
@@ -123,7 +125,7 @@ pub struct Layout {
     letters: BTreeMap<Key, char>,
     /// See [`Layout::with_position_fallback`].
     pub(crate) position_fallback: bool,
-    /// A real bracket was typed ([`Layout::adjust`]): the bracket fallback would only steal keys.
+    /// A real bracket was typed ([`Layout::observe_typed_bracket`]): the fallback would only steal keys.
     brackets: bool,
     /// A [`SYMBOL_TABLE`] layout's own symbol was seen: its keys are the brush keys, not the
     /// bracket fallback's.
@@ -207,11 +209,12 @@ impl Layout {
 
     /// Whether the layout is Latin, as the platform reports it; `None` when it cannot tell, so
     /// that typing decides. Call again when the user switches layouts. A report that differs
-    /// from the last one means another layout, so what letter positions typed is forgotten
-    /// ([`forget_letters`](Self::forget_letters)).
+    /// from the last one means another layout, so learned letters and bracket observations are
+    /// forgotten.
     pub fn set_latin(&mut self, latin: Option<bool>) {
         if latin != self.reported_latin {
             self.forget_letters();
+            self.brackets = false;
         }
         self.reported_latin = latin;
     }
@@ -268,6 +271,23 @@ impl Layout {
         } else if !mods.shift && !c.is_control() {
             self.set_char(physical, c);
         }
+    }
+
+    /// Learns that a key typed a literal bracket and returns whether it did. Cmd, Ctrl and Alt
+    /// presses teach nothing. The physical-bracket fallback stops once a bracket can be typed.
+    pub fn observe_typed_bracket(&mut self, mods: Mods, text: &str) -> bool {
+        let typed = !(mods.cmd || mods.ctrl || mods.alt) && matches!(text, "[" | "]" | "{" | "}");
+        self.brackets |= typed;
+        typed
+    }
+
+    /// Keeps the bracket-fallback state for this physical bracket press. Later text in the same
+    /// batch must not change its candidates. The reported logical and physical keys remain intact.
+    pub fn capture_bracket_fallback(&self, mut input: KeyInput) -> KeyInput {
+        if matches!(input.physical, Some(Key::OpenBracket | Key::CloseBracket)) {
+            input.bracket_fallback_at_press = Some(self.bracket_fallback());
+        }
+        input
     }
 
     /// The chord a press means, as the shortcut recorder records it and lookups try first.
@@ -340,7 +360,7 @@ impl Layout {
         }
         // Shift that typed the character (German ⇧ß is `?`) says nothing about the US key. Only
         // the bracket positions fall back, and not once brackets or a table layout were seen.
-        if self.bracket_fallback()
+        if input.bracket_fallback_at_press.unwrap_or_else(|| self.bracket_fallback())
             && first.mods.shift == input.mods.shift
             && let Some(position @ (Key::OpenBracket | Key::CloseBracket)) = input.physical
         {
@@ -381,8 +401,7 @@ impl Layout {
         if input.mods.cmd || input.mods.ctrl || input.mods.alt {
             return input;
         }
-        if matches!(text, "[" | "]" | "{" | "}") {
-            self.brackets = true;
+        if self.observe_typed_bracket(input.mods, text) {
             return input;
         }
         let mut chars = text.chars();

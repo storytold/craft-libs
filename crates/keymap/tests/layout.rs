@@ -50,3 +50,17 @@ fn reported_cases_match_only_the_chord_the_press_means() {
     assert_eq!(texts(&Layout::new().candidates(&at("Cmd+Shift++", Key::Equals))), ["Cmd++", "Cmd+Shift+=", "Cmd+="]);
     assert_eq!(texts(&Layout::new().candidates(&KeyInput::new(Mods::SHIFT).with_typed(Key::Equals))), ["Shift+=", "+"]);
 }
+
+#[test]
+fn a_changed_layout_report_restores_the_bracket_fallback() {
+    let mut layout = Layout::new().with_latin(true);
+    let press = at("=", Key::CloseBracket);
+    assert_eq!(texts(&layout.candidates(&press)), ["=", "]"]);
+
+    layout.observe_typed_bracket(Mods::NONE, "[");
+    layout.set_latin(Some(true));
+    assert_eq!(texts(&layout.candidates(&press)), ["="], "the same report keeps the bracket observation");
+
+    layout.set_latin(Some(false));
+    assert_eq!(texts(&layout.candidates(&press)), ["=", "]"], "a changed report forgets the bracket observation");
+}

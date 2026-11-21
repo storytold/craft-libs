@@ -193,6 +193,40 @@ fn a_press_without_a_physical_key_fires_its_command_once() {
     }
 }
 
+/// Two identical physical-bracket fallback presses share a frame with a literal bracket between them.
+/// The literal bracket changes what the later press means and leaves the earlier press as it was.
+#[trial]
+fn a_literal_bracket_turns_off_the_physical_bracket_fallback_in_event_order() {
+    let decrease = "trialCatalog.decrease";
+    let increase = "trialCatalog.increase";
+    let defs = vec![def(decrease, "Decrease", "[").with_kind(CommandKind::Momentary), def(increase, "Increase", "]")];
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(AppCatalog::new(defs, 1).expect("the trial's catalog is valid")));
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+    };
+    frames.idle(3, &mut show);
+
+    let tap = |key, physical, typed: &str| {
+        let event = |pressed| egui::Event::Key { key, physical_key: Some(physical), pressed, repeat: false, modifiers: Modifiers::NONE };
+        [event(true), text(typed), event(false)]
+    };
+    // On Dvorak, the US `]` position types `=` and `[` is on the US `-` position. The momentary
+    // command also ends when that physical `-` key is released.
+    let equals = || tap(Key::Equals, Key::CloseBracket, "=");
+    let events = [equals(), tap(Key::OpenBracket, Key::Minus, "["), equals()].into_iter().flatten().collect();
+    frames.frame(events, &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(
+        fired(&frames),
+        [hit(increase, FirePhase::Press), hit(decrease, FirePhase::Press), hit(decrease, FirePhase::Release)],
+        "only the physical bracket press before the literal bracket uses the fallback"
+    );
+
+    frames.frame(equals().to_vec(), &mut show);
+    assert!(fired(&frames).is_empty(), "the fallback stays off on the next frame");
+}
+
 /// An app catalog's def of a registry command adds its keys beside the registry's: F2 does what Cmd+X does (Photoshop's
 /// second keys for Cut, Copy and Paste).
 #[trial]
