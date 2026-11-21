@@ -23,7 +23,9 @@
 //! reference: hostile input returns errors instead of reading or writing out of bounds, integer
 //! arithmetic wraps where C would overflow, the 4- and 8-tap predictor loops are folded into the
 //! general one (same values), the sample-width variants of the matrix routines into one routine
-//! over `i32`, and the encoder fills in the cookie's average bit rate.
+//! over `i32`, the encoder fills in the cookie's average bit rate, and it shifts off fewer low
+//! bytes in packets whose samples fit a narrower width (silence and quiet passages at 24 and 32
+//! bits), where the reference always passes them through uncompressed.
 
 // The bit I/O, coder, predictor and matrix modules serve both halves; with only one of
 // `alac-decode` and `alac-encode` built, the other half's routines are unused.

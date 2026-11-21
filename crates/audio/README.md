@@ -573,7 +573,35 @@ Each codec module's rustdoc lists the coding tools it implements.
 | MP2 encoder (`mpa::encoder`) | ISO/IEC 11172-3 (§2.4, Annex B and C), 13818-3 | Layer II, constant bit rate, mono or stereo (no joint stereo), 32/44.1/48 kHz at the spec's rate/mode pairs and 16/22.05/24 kHz at 8–160 kbit/s; no CRC | our decoder and ffmpeg decode the frames; SNR of 20–37 dB on tone mixes, and the 481-sample filter delay matches |
 | MP3 decoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, MPEG-1/2/2.5, 8–48 kHz, every bit rate, CBR and VBR; mono, stereo, dual channel, joint stereo (mid/side and intensity); long, short and mixed blocks; bit reservoir; CRC read, not checked; Xing / Info / VBRI and LAME tags; no free format (read through symphonia) | ffmpeg's float decoder: 127–131 dB SNR on LAME streams of every sampling frequency (CBR, VBR, CRC, no reservoir, transients with short blocks) and on this crate's encoder's; intensity stereo and mixed blocks through LAME frames edited to use them (112–131 dB) |
 | MP3 encoder (`mp3`) | ISO/IEC 11172-3, 13818-3 | Layer III, constant bit rate: 32–320 kbit/s at 32/44.1/48 kHz, 8–160 kbit/s at 16/22.05/24 kHz; mono, stereo, joint stereo (mid/side); bit reservoir; long blocks only; no Xing/Info tag, VBR, CRC or free format | ffmpeg decodes every Huffman code as intended; full encodes at every sampling frequency checked with ffprobe and by SNR of ffmpeg's decode |
-| ALAC (`alac`) | Apple's reference implementation | decode and encode, 1–8 channels, 16/20/24/32 bits (decode: any depth 1–32), fast mode, magic cookie in MP4/Matroska and CAF form | Apple's reference: same packets from the encoder, same samples from both decoders on 766 configurations; ffmpeg: bit-exact both ways |
+| ALAC (`alac`) | Apple's reference implementation | decode and encode, 1–8 channels, 16/20/24/32 bits (decode: any depth 1–32), fast mode, magic cookie in MP4/Matroska and CAF form | Apple's reference: same packets from the encoder (except 24- and 32-bit packets quiet enough to shift off fewer low bytes, such as silence), same samples from both decoders on 766 configurations; ffmpeg: bit-exact both ways |
+
+### ALAC encoding
+
+Apple's reference encoder stores the low byte (24-bit) or low two bytes (32-bit) of every sample
+uncompressed. This encoder shifts off fewer bytes, per element and per packet, when the samples
+allow it: at 24 bits a packet that peaks below −54 dBFS keeps no uncompressed byte; at 32 bits one
+below −54 dBFS keeps one, and a mono or LFE element below −102 dBFS none (a 32-bit pair always keeps
+one). Other packets are the same as the reference's, and decoders need no change.
+
+Stream sizes in MB (10⁶ bytes) for 4 minutes at 48 kHz in 4096-frame packets. "Reference" is this
+encoder with the reference's fixed shift; Apple's `afconvert` gives the same sizes for the 24-bit stereo rows. The
+music is synthetic (decaying harmonic notes over a noise floor, peaking at −3 dBFS); a stem plays
+5 or 10 seconds in every 20.
+
+| Material | Depth / ch | PCM | Reference | This encoder | Saved |
+|---|---|---|---|---|---|
+| Music throughout | 24 / 2 | 69.1 | 45.5 | 45.5 | 0% |
+| Music, 2 s of digital silence at each end | 24 / 2 | 69.1 | 45.1 | 44.7 | 0.8% |
+| Stem playing half the time, digital silence between | 24 / 2 | 69.1 | 34.3 | 22.8 | 33% |
+| Stem playing a quarter of the time, digital silence between | 24 / 2 | 69.1 | 28.7 | 11.5 | 60% |
+| The same, noise at −110 dBFS in place of silence | 24 / 2 | 69.1 | 32.6 | 25.1 | 23% |
+| Quiet music, peaking at −60 dBFS | 24 / 2 | 69.1 | 27.7 | 20.1 | 27% |
+| Digital silence | 24 / 2 | 69.1 | 23.1 | 0.09 | 99.6% |
+| 5.1: music in front, surrounds a quarter of the time, silent LFE | 24 / 6 | 207.4 | 108.7 | 79.9 | 26% |
+| Stem playing a quarter of the time, digital silence between | 32 / 1 | 46.1 | 25.9 | 8.7 | 66% |
+| Stem playing a quarter of the time, digital silence between | 32 / 2 | 92.2 | 51.7 | 34.5 | 33% |
+| Quiet music, peaking at −60 dBFS | 32 / 2 | 92.2 | 50.7 | 43.2 | 15% |
+| Digital silence | 32 / 2 | 92.2 | 46.2 | 23.1 | 50% |
 
 ### MP3 encoding
 
