@@ -5,7 +5,8 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs` and `docs/sweep.typ`.
+The patched files are `src/order.rs`, `src/position.rs`, `src/sweep/sweep_line.rs`, `src/topology.rs`,
+`src/curve/mod.rs`, `src/curve/line.rs` and `docs/sweep.typ`.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -17,6 +18,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 
 | File | Change |
 |---|---|
+| `src/order.rs`, `src/sweep/sweep_line.rs`, `src/position.rs` | `ComparisonCache` stores one `CurveOrder` per pair of segments instead of one for each direction, and flips it when the pair is looked up in the other order. `ComparisonCache::evict_ended` drops the pairs in which a segment ends above a given height, once the cache has doubled since its last scan. `Sweeper` calls it on both of its caches each time the sweep line moves down, and `compute_positions` calls it each time it takes the next height from its queue. Both caches used to keep every pair the sweep compared until the sweep ended, so a sweep of a 2,001-point star polygon held 4,001,998 cached orders (1,463 MiB). Code comments label the changes `Craft patch (comparison cache size)`. The `one_order_per_pair` and `reversed_lookup_flips_the_stored_order` tests check the stored and flipped orders, `ended_pairs_leave_the_comparison_cache` checks that a sweep of a tall band keeps fewer than a tenth of the pairs, and `evicting_comparisons_keeps_the_sweep_lines` and `evicting_comparisons_keeps_the_correct_positions` check that the sweep lines, output events and positions do not change. |
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
 | `src/curve/mod.rs` | When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN. The `short_curve_chord_with_huge_x` test fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307. Code comments label the change `Craft patch (huge chord)`. |
 | `src/curve/line.rs` | `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height. The `subnormal_x` test checks that line and a line from x = -1.5e-323 to 1.5e-323. Code comments label the change `Craft patch (subnormal x)`. |
