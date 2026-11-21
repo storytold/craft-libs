@@ -111,7 +111,7 @@ fn windows_set() -> ForeignSet {
 
 fn windows_options() -> ImportOptions {
     let mut remembered = BTreeMap::new();
-    remembered.insert(ForeignEntry::new(Some("Scripts"), ["Frobnicate"]).remember_key(), CommandRef::new("scripts.run"));
+    remembered.insert(ForeignEntry::new(Some("Scripts"), ["Frobnicate"]).remember_key(), Some(CommandRef::new("scripts.run"))); // P3(shortcuts-w3): kb.C28
     ImportOptions {
         contexts: vec![("default".into(), ContextRule::Home), ("TEXT".into(), ContextRule::HomeWithoutHomeEntry)],
         remembered,

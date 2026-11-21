@@ -163,6 +163,13 @@ impl ForeignKey {
         };
         ForeignKey { context: context.map(str::to_string), text: text.to_string(), trigger, notes }
     }
+
+    /// A key whose key or modifier code the reader leaves undecided: `trigger` is
+    /// `Err(ForeignError::Undecided { key, mods })`, `text` is kept for reports.
+    pub fn code(context: Option<&str>, text: &str, key: Option<u32>, mods: Option<u32>) -> ForeignKey {
+        let _ = (context, text, key, mods);
+        todo!("kb.C19a")
+    }
 }
 
 /// What keys in a source context become.
@@ -210,8 +217,13 @@ pub struct ImportOptions {
     /// Source contexts by name, compared case-insensitively. Keys in other contexts are reported
     /// as [`UnmatchedReason::Context`].
     pub contexts: Vec<(String, ContextRule)>,
-    /// Earlier answers of the user, by [`ForeignEntry::remember_key`]. They are tried first.
-    pub remembered: BTreeMap<String, CommandRef>,
+    /// Earlier answers of the user, by [`ForeignEntry::remember_key`]. `Some(command)` is tried first;
+    /// `None` is the user's "No equivalent": the entry is matched to nothing and goes to the report's
+    /// skipped list.
+    pub remembered: BTreeMap<String, Option<CommandRef>>,
+    /// Remembered and answered codes, by `key:N` / `mods:N`: `Some(text)` is the chord text the code
+    /// stands for, `None` is "No equivalent" (the keys with that code are skipped).
+    pub codes: BTreeMap<String, Option<String>>,
     /// What the import starts from.
     pub start: Start,
     /// What an entry without keys does to its command.
@@ -507,6 +519,25 @@ pub struct ImportReport {
     /// Entries, keys, path segments, bindings and text fields cut at the caps, unmatched entries
     /// past [`MAX_SUGGESTIONS`] that got no suggestion, and [`ForeignSet::truncated`].
     pub truncated: usize,
+    /// Undecided key and modifier codes the plan decoded or was answered, with the first entries that
+    /// use each.
+    #[serde(default)]
+    pub codes: Vec<DecodedCode>,
+}
+
+/// An undecided key or modifier code of the source and what the plan made of it: decoded when at
+/// least 2 matched commands' defaults vote for one text and 4 in 5 agree, or answered by
+/// [`ImportOptions::codes`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct DecodedCode {
+    /// The code, as `key:N` or `mods:N`.
+    pub code: String,
+    /// The chord text the code stands for; `None` when answered "No equivalent".
+    pub text: Option<String>,
+    /// The first 3 entry names that use the code.
+    pub entries: Vec<String>,
 }
 
 /// The matching form of a label or menu name: lower case, no `…`, `...` or `&`, a colon read as
@@ -1109,8 +1140,8 @@ impl Index {
     /// on the names as written, then on toggle commands with the entry's label and theirs
     /// without a leading Show/Hide. A panel-menu entry's last segment alone matches only when
     /// its first segment, the panel, is a segment of some catalog path.
-    fn find(&self, entry: &ForeignEntry, tool: bool, remembered: &BTreeMap<String, CommandRef>) -> Found {
-        if let Some(c) = remembered.get(&entry.remember_key())
+    fn find(&self, entry: &ForeignEntry, tool: bool, remembered: &BTreeMap<String, Option<CommandRef>>) -> Found {
+        if let Some(c) = remembered.get(&entry.remember_key()).and_then(Option::as_ref) // P3(shortcuts-w3): kb.C28
             && let Some(&i) = self.keys.get(&c.key())
             && self.tool.get(i) == Some(&tool)
         {

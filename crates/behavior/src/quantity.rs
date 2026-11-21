@@ -41,11 +41,14 @@ pub struct Reader {
     decimal: char,
     group: Option<char>,
     units: Vec<Unit>,
+    /// The factor of a number with no unit ([`Reader::bare`]).
+    #[allow(dead_code)] // P3(widgets-w7): wg.W37
+    bare: f64,
 }
 
 impl Default for Reader {
     fn default() -> Self {
-        Reader { decimal: '.', group: None, units: Vec::new() }
+        Reader { decimal: '.', group: None, units: Vec::new(), bare: 1.0 }
     }
 }
 
@@ -53,6 +56,13 @@ impl Reader {
     /// A reader for plain numbers written with `.` as the decimal separator.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A number with no unit counts as `factor` of the reader's base unit.
+    #[must_use]
+    pub fn bare(self, factor: f64) -> Self {
+        let _ = factor;
+        todo!("wg.W37")
     }
 
     /// The decimal separator.

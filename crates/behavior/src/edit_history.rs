@@ -21,6 +21,9 @@ pub enum Step {
 struct Entry<T> {
     value: T,
     name: Arc<str>,
+    /// The step's weight under the history's budget ([`EditHistory::with_budget`]).
+    #[allow(dead_code)] // P3(color-w7): co.K40
+    weight: usize,
 }
 
 /// The gesture under way: its name, taken from its `Begin`.
@@ -39,12 +42,23 @@ pub struct EditHistory<T> {
     /// The value as of the latest step.
     settled: T,
     open: Option<Open>,
+    /// The most summed weight the undo steps keep, and how a value weighs.
+    #[allow(dead_code)] // P3(color-w7): co.K40
+    budget: Option<(usize, fn(&T) -> usize)>,
 }
 
 impl<T: Value> EditHistory<T> {
     /// A history that starts at `now`.
     pub fn new(now: &T) -> Self {
-        EditHistory { undo: Vec::new(), redo: Vec::new(), settled: now.clone(), open: None }
+        EditHistory { undo: Vec::new(), redo: Vec::new(), settled: now.clone(), open: None, budget: None }
+    }
+
+    /// The undo steps' summed weight stays at or under `max`: after each push the oldest go first, the newest always
+    /// stays; each weight is measured once at push. Without a budget nothing changes.
+    #[must_use]
+    pub fn with_budget(self, max: usize, weight: fn(&T) -> usize) -> Self {
+        let _ = (max, weight);
+        todo!("co.K40")
     }
 
     /// Takes in one event. Events of a gesture other than the open one are ignored.
@@ -81,7 +95,7 @@ impl<T: Value> EditHistory<T> {
         if self.undo.len() >= LIMIT {
             self.undo.remove(0);
         }
-        self.undo.push(Entry { value: std::mem::replace(&mut self.settled, after.clone()), name });
+        self.undo.push(Entry { value: std::mem::replace(&mut self.settled, after.clone()), name, weight: 0 }); // P3(color-w7): co.K40
         self.redo.clear();
     }
 
@@ -93,7 +107,7 @@ impl<T: Value> EditHistory<T> {
             Step::Redo => (&mut self.redo, &mut self.undo),
         };
         let Some(entry) = from.pop() else { return false };
-        to.push(Entry { value: std::mem::replace(now, entry.value.clone()), name: entry.name });
+        to.push(Entry { value: std::mem::replace(now, entry.value.clone()), name: entry.name, weight: entry.weight });
         self.settled = entry.value;
         true
     }

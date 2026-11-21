@@ -249,6 +249,17 @@ impl Options {
     }
 }
 
+/// Whether a menu is open. Safe from any thread; false where there is no application menu bar.
+pub fn menu_tracking() -> bool {
+    todo!("mn.M12")
+}
+
+/// Whether a menu began tracking since the last call, which clears it. Safe from any thread; false where there is
+/// no application menu bar.
+pub fn take_menu_began() -> bool {
+    todo!("mn.M12")
+}
+
 /// The installed menu bar.
 pub struct NativeBar(imp::Installed);
 
@@ -276,6 +287,11 @@ impl NativeBar {
     /// Whether one of the menus is open.
     pub fn tracking(&self) -> bool {
         self.0.tracking()
+    }
+
+    /// Whether a menu began tracking since the last call ([`take_menu_began`]).
+    pub fn take_began(&self) -> bool {
+        todo!("mn.M13")
     }
 
     /// Close the open menu, if there is one.

@@ -12,7 +12,7 @@ pub(crate) struct Entry {
 }
 
 /// The contexts with a meaning here. Any other context starting with `@` is skipped.
-const RESERVED: &[&str] = &["@plural", "@id", "@msg"];
+const RESERVED: &[&str] = &["@plural", "@id", "@msg", "@msgplural"];
 
 /// The rows of a catalog whose locale has `forms` plural forms, and one problem (`line N: …`) per
 /// row skipped. Of a row defined twice, the first is kept, as in craft-i18n's checker.

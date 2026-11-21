@@ -97,6 +97,10 @@ pub struct PlaceRequest {
     /// Beside the anchor, the overlay lines up with the anchor's other end when it runs past the bounds from the
     /// aligned end and fits from the other, instead of sliding: a submenu of a low row opens upward.
     pub flips_across: bool,
+    /// After side, alignment and the bounds clamp, the overlay shifts by this and clamps again.
+    pub offset: Vec2,
+    /// When the shifted overlay would cover this rect, the unshifted one wins.
+    pub clear: Option<Rect>,
 }
 
 impl PlaceRequest {
@@ -113,6 +117,8 @@ impl PlaceRequest {
             bounds,
             kept: None,
             flips_across: false,
+            offset: Vec2::ZERO,
+            clear: None,
         }
     }
 
@@ -155,6 +161,18 @@ impl PlaceRequest {
     /// Keeps `side` instead of flipping.
     pub const fn kept(mut self, side: Option<Side>) -> Self {
         self.kept = side;
+        self
+    }
+
+    /// Shifts the overlay by `by` after it is placed and clamped.
+    pub const fn offset(mut self, by: Vec2) -> Self {
+        self.offset = by;
+        self
+    }
+
+    /// Keeps the unshifted place when the shifted overlay would cover `rect`.
+    pub const fn clear(mut self, rect: Option<Rect>) -> Self {
+        self.clear = rect;
         self
     }
 

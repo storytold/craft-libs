@@ -7,7 +7,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::chord::{Chord, Key, Mods, ParseError, Platform, Trigger};
+use crate::chord::{Chord, Key, Mods, ParseError, Platform, Press, Trigger};
 use crate::command::{CommandRef, MAX_KEY};
 use crate::scope::{Active, Scope, ScopeKind, Scopes};
 
@@ -102,6 +102,8 @@ pub enum AssignError {
     UnknownScope(Scope),
     /// The change needs a new [`Overrides`] entry and it already holds [`MAX_COMMANDS`].
     Full,
+    /// A hold is a chord that types a character, alone or with Shift: never Space, Backtick, Cmd, Ctrl or Alt.
+    NotHoldable(Trigger),
 }
 
 impl fmt::Display for AssignError {
@@ -113,6 +115,7 @@ impl fmt::Display for AssignError {
             AssignError::Taken(h) => write!(f, "in use by {} other command(s)", h.len()),
             AssignError::UnknownScope(s) => write!(f, "unknown scope {s}"),
             AssignError::Full => write!(f, "more than {MAX_COMMANDS} changed commands"),
+            AssignError::NotHoldable(t) => write!(f, "{t} cannot be held"),
         }
     }
 }
@@ -261,6 +264,9 @@ pub struct Keymap {
     overrides: Overrides,
     /// Tools of different groups may share a chord ([`Keymap::with_shared_tool_keys`]).
     pub(crate) shared_tool_keys: bool,
+    /// Whether hold bindings count ([`Keymap::set_holds`]).
+    #[allow(dead_code)] // P3(shortcuts-w3): kb.C13c
+    holds: bool,
 }
 
 impl Keymap {
@@ -285,6 +291,7 @@ impl Keymap {
             reserved: Vec::new(),
             overrides: Overrides::new(),
             shared_tool_keys: false,
+            holds: false,
         };
         for b in catalog {
             let key = b.command.key();
@@ -383,6 +390,24 @@ impl Keymap {
         scope.is_app() || self.scopes.knows(scope) || self.catalog_scopes.contains(scope)
     }
 
+    /// Whether hold bindings count: off (the default) leaves them out of bindings, lookups, conflicts and
+    /// summaries, though they stay in the overrides.
+    pub fn set_holds(&mut self, on: bool) {
+        let _ = on;
+        todo!("kb.C13c")
+    }
+
+    /// Whether hold bindings count ([`Keymap::set_holds`]).
+    pub fn holds(&self) -> bool {
+        todo!("kb.C13c")
+    }
+
+    /// The command a hold of `chord` runs where it applies, ranked as the other lookups rank.
+    pub fn hold_of(&self, chord: &Chord, active: &Active<'_>) -> Option<CommandRef> {
+        let _ = (chord, active);
+        todo!("kb.C13e")
+    }
+
     /// The command `chord` (pressed twice when `double`) runs with `active` focus.
     pub fn lookup(&self, chord: &Chord, double: bool, active: &Active) -> Lookup {
         self.lookup_nested(chord, double, active, &[])
@@ -391,7 +416,12 @@ impl Keymap {
     /// [`lookup`](Self::lookup) with the panels around the focused one in `outer` ([`Scopes::rank_nested`]).
     pub fn lookup_nested(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str]) -> Lookup {
         let command = |i: usize| self.catalog[i].command.clone();
-        match self.winners(Trigger { chord: chord.effective(self.platform), double }, active, outer) {
+        // P3(shortcuts-w3): kb.C13b
+        match self.winners(
+            Trigger { chord: chord.effective(self.platform), press: if double { Press::Double } else { Press::Single } },
+            active,
+            outer,
+        ) {
             Winners::None => Lookup::None,
             Winners::Run(i) => Lookup::Run(command(i)),
             Winners::Cycle(cycle) => Lookup::Cycle(cycle.into_iter().map(command).collect()),
@@ -449,7 +479,7 @@ impl Keymap {
     /// [`shown_chord`](Self::shown_chord) of the command at catalog position `i`, from the bindings.
     fn shown_of(&self, i: usize) -> Option<Chord> {
         let home = &self.catalog[i].scope;
-        let single = || self.current[i].iter().filter(|(trigger, _)| !trigger.double);
+        let single = || self.current[i].iter().filter(|(trigger, _)| !trigger.is_double()); // P3(shortcuts-w3): kb.C13b
         let runs = |(trigger, scope): &&Bound| {
             let name = [scope.as_str()];
             let active = match self.scopes.kind(scope) {
@@ -457,7 +487,8 @@ impl Keymap {
                 ScopeKind::Panel => Active::panel(name[0]),
                 ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
             };
-            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), double: false }, &active, &[]) {
+            // P3(shortcuts-w3): kb.C13b
+            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), press: Press::Single }, &active, &[]) {
                 Winners::None => false,
                 Winners::Run(j) => j == i,
                 Winners::Cycle(cycle) => cycle.contains(&i),
@@ -481,7 +512,7 @@ impl Keymap {
             Lookup::Cycle(cycle) => return cycle.into_iter().next(),
             Lookup::None => {}
         }
-        let want = Trigger { chord: chord.effective(self.platform), double: false };
+        let want = Trigger { chord: chord.effective(self.platform), press: Press::Single }; // P3(shortcuts-w3): kb.C13b
         self.by_trigger.get(&want)?.iter().find(|&&(i, k)| self.at(i, k).is_some()).map(|&(i, _)| self.catalog[i].command.clone())
     }
 

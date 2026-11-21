@@ -25,6 +25,7 @@ pub mod flow;
 pub mod focus;
 pub mod grid;
 pub mod hit;
+pub mod hold_repeat;
 pub mod input;
 pub mod intent;
 pub mod item_layout;
@@ -64,7 +65,7 @@ pub use anchor::Anchor9;
 pub use arrangement::Arrangement;
 pub use canvas::CanvasTransform;
 
-pub use canvas::{CanvasView, RulerUnits, Ticks, ViewHistory, ViewPlace, ZoomLadder, resize_cursor};
+pub use canvas::{CanvasView, RulerUnits, Ticks, ViewHistory, ViewPlace, ZoomFloor, ZoomLadder, ZoomScheme, resize_cursor};
 /// The f64 geometry crate the canvas view and its callers share.
 pub use kurbo;
 
@@ -96,9 +97,10 @@ pub use part::{PartKey, PartRef};
 
 pub use pixel_size::PixelSize;
 
+pub use hold_repeat::HoldRepeat;
 pub use press::{
-    Buttons, MultiTouch, PassInput, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressMachine, PressPhase, PressStart,
-    PressState, PressStep, count_clicks,
+    Buttons, MultiTap, MultiTouch, PassInput, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressMachine, PressPhase,
+    PressStart, PressState, PressStep, count_clicks,
 };
 pub use quantity::Reader;
 pub use role_rule::{GridFacts, RoleRule, is_checkable, is_selectable, role_violations};

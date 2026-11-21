@@ -730,24 +730,51 @@ impl<'de> Deserialize<'de> for Chord {
     }
 }
 
-/// What starts a command: a chord, pressed once or twice in a row.
+/// How a chord starts a command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Press {
+    /// One press of the chord.
+    #[default]
+    Single,
+    /// Two presses of the chord in a row.
+    Double,
+    /// The chord held down.
+    Hold,
+}
+
+/// What starts a command: a chord, pressed once, twice in a row, or held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Trigger {
     /// The chord to press.
     pub chord: Chord,
-    /// The chord pressed twice.
-    pub double: bool,
+    /// How the chord is pressed.
+    pub press: Press,
 }
 
 impl Trigger {
     /// A trigger that fires on one press of `chord`.
     pub const fn single(chord: Chord) -> Trigger {
-        Trigger { chord, double: false }
+        Trigger { chord, press: Press::Single }
     }
 
     /// A trigger that fires on two presses of `chord` in a row.
     pub const fn double(chord: Chord) -> Trigger {
-        Trigger { chord, double: true }
+        Trigger { chord, press: Press::Double }
+    }
+
+    /// A trigger that fires while `chord` is held.
+    pub const fn hold(chord: Chord) -> Trigger {
+        Trigger { chord, press: Press::Hold }
+    }
+
+    /// Whether this is a double press.
+    pub const fn is_double(&self) -> bool {
+        matches!(self.press, Press::Double)
+    }
+
+    /// Whether this is a hold.
+    pub const fn is_hold(&self) -> bool {
+        matches!(self.press, Press::Hold)
     }
 
     /// Reads a chord as [`Chord::parse`] does, or the same chord twice separated by whitespace
@@ -777,19 +804,19 @@ impl Trigger {
 
     /// The trigger with its chord's modifiers as `platform` sees them ([`Mods::effective`]).
     pub const fn effective(self, platform: Platform) -> Trigger {
-        Trigger { chord: self.chord.effective(platform), double: self.double }
+        Trigger { chord: self.chord.effective(platform), press: self.press }
     }
 
     /// [`Chord::display`], twice with a space between for a double press.
     pub fn display(&self, platform: Platform) -> String {
         let one = self.chord.display(platform);
-        if self.double { format!("{one} {one}") } else { one }
+        if self.is_double() { format!("{one} {one}") } else { one } // P3(shortcuts-w3): kb.C13b
     }
 
     /// [`Chord::display_for`], twice with a space between for a double press.
     pub fn display_for(&self, platform: Platform, layout: &Layout) -> String {
         let one = self.chord.display_for(platform, layout);
-        if self.double { format!("{one} {one}") } else { one }
+        if self.is_double() { format!("{one} {one}") } else { one } // P3(shortcuts-w3): kb.C13b
     }
 }
 
@@ -801,7 +828,7 @@ impl From<Chord> for Trigger {
 
 impl fmt::Display for Trigger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.double { write!(f, "{0} {0}", self.chord) } else { write!(f, "{}", self.chord) }
+        if self.is_double() { write!(f, "{0} {0}", self.chord) } else { write!(f, "{}", self.chord) } // P3(shortcuts-w3): kb.C13b
     }
 }
 

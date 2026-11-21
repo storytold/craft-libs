@@ -19,6 +19,7 @@ mod date;
 mod fold;
 mod format;
 pub mod matcher;
+mod message;
 mod number;
 mod region;
 mod scripts;
@@ -34,6 +35,7 @@ use negotiation::posix_env_tags;
 use negotiation::{bare, candidates, is_region, marked, plural_rules};
 
 pub use bidi::{isolate, ltr, strip_isolates};
+pub use message::MessageMatch;
 
 /// The CLDR number, plural and date data for every CLDR locale, from `data/generate.sh`.
 mod data {
@@ -297,6 +299,27 @@ impl I18n {
             return self.mark(label);
         }
         self.find(lang, &[("@id", id), ("", label)]).unwrap_or(label)
+    }
+
+    /// Translates a filled-in English message. An exact `@msg` row wins; otherwise the first matching
+    /// template, by the order of the contract's template ranking, with the plural form from `{n}`.
+    pub fn message(&self, lang: Lang, s: &str) -> String {
+        let _ = (lang, s);
+        todo!("sh.K15")
+    }
+
+    /// As [`I18n::message`], with an app hook that sees each captured value (`key`, `value`) before
+    /// the default rule.
+    pub fn message_with(&self, lang: Lang, s: &str, values: &dyn Fn(&MessageMatch<'_>, &str, &str) -> Option<String>) -> String {
+        let _ = (lang, s, values);
+        todo!("sh.K16")
+    }
+
+    /// Translates a message around a kept span (placeholder U+FFFC). The message is shown in English
+    /// when the placeholder does not appear exactly once.
+    pub fn message_keeping(&self, lang: Lang, before: &str, kept: &str, after: &str) -> String {
+        let _ = (lang, before, kept, after);
+        todo!("sh.K18")
     }
 
     /// A count's wording in `lang`, `{n}` filled in as [`I18n::format`] writes numbers: grouped and

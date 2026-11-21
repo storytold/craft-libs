@@ -153,6 +153,14 @@ pub enum Picked {
     /// One or more paths. For [`PickKind::Save`] the extension policy has been applied, and the
     /// service has already asked about replacing an existing file the OS panel did not check.
     Paths(Vec<PathBuf>),
+    /// Every [`PickKind::Save`] answer. `file_type` is the index into the request's `filters` of the
+    /// type picked in the panel, when the panel reports one.
+    Saved {
+        /// The path chosen.
+        path: PathBuf,
+        /// The index of the picked type in the request's `filters`.
+        file_type: Option<usize>,
+    },
     /// Files read by the browser (wasm): name and contents.
     Contents(Vec<(String, Vec<u8>)>),
     /// No picker could be shown (no desktop portal or `zenity` on Linux, no window to attach to);
@@ -166,6 +174,7 @@ impl Picked {
     pub fn first_path(&self) -> Option<PathBuf> {
         match self {
             Picked::Paths(paths) => paths.first().cloned(),
+            Picked::Saved { path, .. } => Some(path.clone()),
             Picked::Contents(files) => files.first().map(|(name, _)| PathBuf::from(name)),
             Picked::Cancelled | Picked::Unavailable(_) => None,
         }
@@ -175,10 +184,20 @@ impl Picked {
     pub fn paths(&self) -> Vec<PathBuf> {
         match self {
             Picked::Paths(paths) => paths.clone(),
+            Picked::Saved { path, .. } => vec![path.clone()],
             Picked::Contents(files) => files.iter().map(|(name, _)| PathBuf::from(name)).collect(),
             Picked::Cancelled | Picked::Unavailable(_) => Vec::new(),
         }
     }
+}
+
+/// A pick that is on screen or waiting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingPick {
+    /// The request.
+    pub request: PickRequest,
+    /// Whether the panel is attached to the app window (macOS Save), so the window must not close.
+    pub sheet: bool,
 }
 
 /// One answered pick.
@@ -243,6 +262,9 @@ pub trait Files: Send + Sync {
     fn forget(&self, id: PickId);
     /// Whether a picker is on screen or waiting.
     fn pick_pending(&self) -> bool;
+    /// The oldest pick not yet answered (the one on screen), including one waiting on the service's
+    /// Replace question; `None` when none.
+    fn pending_pick(&self) -> Option<PendingPick>;
     /// Reads the whole file at `path`.
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError>;
     /// Writes atomically where the platform allows (temp file and rename).
@@ -280,6 +302,10 @@ impl Files for NoPickFiles {
 
     fn pick_pending(&self) -> bool {
         false
+    }
+
+    fn pending_pick(&self) -> Option<PendingPick> {
+        None
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -332,6 +358,9 @@ struct ScriptState {
     held: bool,
     /// A Save is answered with the suggested name in the suggested folder.
     save_suggested: bool,
+    /// Picks report `sheet: true` in [`PendingPick`].
+    #[allow(dead_code)] // P3(files-w1): fl.F4
+    sheets: bool,
     /// Picks the test has not answered yet, oldest first.
     open: Vec<(PickId, PickRequest)>,
     answered: Vec<PickAnswer>,
@@ -365,6 +394,12 @@ impl ScriptedFiles {
     pub fn saving_suggested(self) -> Self {
         self.state().save_suggested = true;
         self
+    }
+
+    /// Scripted picks report `sheet: on`.
+    pub fn sheets(self, on: bool) -> Self {
+        let _ = on;
+        todo!("fl.F4")
     }
 
     /// Puts a file in memory, for [`Files::read`].
@@ -451,6 +486,10 @@ impl Files for ScriptedFiles {
 
     fn pick_pending(&self) -> bool {
         !self.state().open.is_empty()
+    }
+
+    fn pending_pick(&self) -> Option<PendingPick> {
+        todo!("fl.F2")
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError> {

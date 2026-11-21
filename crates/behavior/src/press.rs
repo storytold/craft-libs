@@ -157,6 +157,18 @@ pub enum PressCancel {
     Removed,
     /// The host ended what the press acted on (`primitives::cancel_press_of`).
     Host,
+    /// A second finger landed while a press was open.
+    Gesture,
+}
+
+/// Two or more fingers came down and all lifted within the tap time without moving past the slop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MultiTap {
+    /// How many fingers tapped.
+    pub fingers: u8,
+    /// The centre of the fingers.
+    pub at: Pos2,
 }
 
 /// One part's press state in one pass.

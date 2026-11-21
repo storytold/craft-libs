@@ -62,6 +62,11 @@ pub trait Codec {
         true
     }
 
+    /// Whether a paste the codec reads whole replaces the field's text, wherever the caret is.
+    fn whole_paste(&self, _pasted: &str) -> bool {
+        false
+    }
+
     /// The text the field shows after committing `v`, which was parsed from `text`.
     fn normalise(&self, _text: &str, v: &Self::Value) -> String {
         self.format(v)
@@ -101,6 +106,10 @@ impl<C: Codec + ?Sized> Codec for &C {
 
     fn filter(&self, c: char) -> bool {
         (**self).filter(c)
+    }
+
+    fn whole_paste(&self, pasted: &str) -> bool {
+        (**self).whole_paste(pasted)
     }
 
     fn normalise(&self, text: &str, v: &Self::Value) -> String {

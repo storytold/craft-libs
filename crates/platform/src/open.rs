@@ -323,6 +323,22 @@ pub fn open_external(target: &str) -> Result<(), String> {
     command.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Opens `target` in the application at `app` (Edit Original's chosen application), never through a shell: on
+/// macOS `open -a app target`, waiting at most 2 s for Launch Services to refuse; elsewhere `app` runs with
+/// `target` as its only argument, without waiting. A path holding `"` is refused on Windows.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_with(app: &Path, target: &Path) -> Result<(), String> {
+    let _ = (app, target);
+    todo!("sh.B2a")
+}
+
+/// Whether `path` names an application the platform can launch: an `.app` folder on macOS, an `.exe` file on
+/// Windows, an executable file elsewhere; `false` on wasm.
+pub fn is_application(path: &Path) -> bool {
+    let _ = path;
+    todo!("sh.B2b")
+}
+
 /// The command that opens `target`; see [`open_external`].
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn open_command(target: &str) -> Command {

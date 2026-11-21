@@ -1,7 +1,7 @@
 //! The canvas view's mapping between document and screen.
 
 use craft_behavior::CanvasView;
-use craft_behavior::canvas::zoom;
+use craft_behavior::canvas::{ZoomScheme, zoom};
 use emath::{Rect as ScreenRect, pos2, vec2};
 use kurbo::{Point, Rect, Size};
 
@@ -55,21 +55,21 @@ fn fit_and_fill_measure_the_stretched_document() {
 
     // Fit keeps 20 points of margin per side: 1000 points across for a 1000 px wide document, 2000 shown at aspect 2.
     let (mut square, mut wide) = (stage(1.0, rect(1040.0, 800.0)), stage(2.0, rect(1040.0, 800.0)));
-    zoom::fit(&mut square, size, 1.0, 20.0);
-    zoom::fit(&mut wide, size, 1.0, 20.0);
+    zoom::fit(&mut square, size, 1.0, 20.0, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
+    zoom::fit(&mut wide, size, 1.0, 20.0, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
     assert!(near(square.zoom, 1.0), "{}", square.zoom);
     assert!(near(wide.zoom, 0.5), "{}", wide.zoom);
     assert!(near(wide.center.x, 500.0) && near(wide.center.y, 250.0), "{:?}", wide.center);
 
     // On a square rect the height limits fill at both aspects; the 1000 by 400 rect below is where the stretched width decides.
     let (mut square, mut wide) = (stage(1.0, rect(1000.0, 1000.0)), stage(2.0, rect(1000.0, 1000.0)));
-    zoom::fill(&mut square, size, 1.0);
-    zoom::fill(&mut wide, size, 1.0);
+    zoom::fill(&mut square, size, 1.0, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
+    zoom::fill(&mut wide, size, 1.0, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
     assert!(near(square.zoom, 2.0) && near(wide.zoom, 2.0), "{} {}", square.zoom, wide.zoom);
     // A wide rect: the unstretched document is limited by its width, the stretched one by its height.
     let (mut square, mut wide) = (stage(1.0, rect(1000.0, 400.0)), stage(2.0, rect(1000.0, 400.0)));
-    zoom::fill(&mut square, size, 1.0);
-    zoom::fill(&mut wide, size, 1.0);
+    zoom::fill(&mut square, size, 1.0, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
+    zoom::fill(&mut wide, size, 1.0, &ZoomScheme::PHOTOSHOP); // P3(canvas-w1): cv.F3
     assert!(near(square.zoom, 1.0), "{}", square.zoom);
     assert!(near(wide.zoom, 0.8), "{}", wide.zoom);
     assert!(near(wide.center.x, 500.0) && near(wide.center.y, 250.0), "{:?}", wide.center);

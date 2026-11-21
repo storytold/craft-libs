@@ -107,13 +107,109 @@ impl ZoomLadder {
     }
 }
 
+/// The least zoom: the document's shorter side that many device pixels, or a fixed zoom in scheme units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ZoomFloor {
+    /// The document's shorter side is this many device pixels.
+    ShorterSide(f64),
+    /// A fixed zoom in scheme units.
+    Fixed(f64),
+}
+
+/// A zoom range and its Zoom In and Out rungs in scheme units (1 = its 100 %); `hundred` is the device zoom of
+/// 100 %.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ZoomScheme {
+    /// The Zoom In and Out rungs, lowest first.
+    pub rungs: &'static [f64],
+    /// The greatest zoom.
+    pub max: f64,
+    /// The least zoom.
+    pub floor: ZoomFloor,
+    /// The device zoom of 100 %.
+    pub hundred: f64,
+}
+
+impl ZoomScheme {
+    /// Photoshop's: [`ZoomLadder::STEPS`], up to 12800 %, the shorter side 2 px at the least.
+    pub const PHOTOSHOP: ZoomScheme =
+        ZoomScheme { rungs: &ZoomLadder::STEPS, max: ZoomLadder::MAX, floor: ZoomFloor::ShorterSide(2.0), hundred: 1.0 };
+
+    /// Illustrator's: 26 stops from 3.13 % to 64000 %.
+    pub const ILLUSTRATOR: ZoomScheme = ZoomScheme {
+        rungs: &[
+            0.0313, 0.0417, 0.0625, 0.0833, 0.125, 0.1667, 0.25, 0.3333, 0.5, 0.6667, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0,
+            48.0, 64.0, 128.0, 256.0, 640.0,
+        ],
+        max: 640.0,
+        floor: ZoomFloor::Fixed(0.0313),
+        hundred: 1.0,
+    };
+
+    /// The scheme with `device` as the device zoom of 100 %.
+    pub const fn with_hundred(self, device: f64) -> Self {
+        ZoomScheme { hundred: device, ..self }
+    }
+
+    /// The least device zoom for a document of `size`.
+    pub fn min(&self, size: Size) -> f64 {
+        let _ = size;
+        todo!("cv.F1")
+    }
+
+    /// The greatest device zoom.
+    pub fn max_device(&self) -> f64 {
+        todo!("cv.F1")
+    }
+
+    /// `device` within the range for a document of `size`; a zoom that is not a finite number becomes 100 %.
+    pub fn clamp(&self, device: f64, size: Size) -> f64 {
+        let _ = (device, size);
+        todo!("cv.F1")
+    }
+
+    /// Zoom In (`dir` > 0) or Zoom Out (`dir` < 0) from `device`: the next rung past it, within the document's
+    /// range.
+    pub fn step(&self, device: f64, dir: i32, size: Size) -> f64 {
+        let _ = (device, dir, size);
+        todo!("cv.F1")
+    }
+
+    /// [`step`](Self::step) within an explicit range of device zoom.
+    pub fn step_in_range(&self, device: f64, dir: i32, range: RangeInclusive<f64>) -> f64 {
+        let _ = (device, dir, range);
+        todo!("cv.F1")
+    }
+
+    /// A zoom field's range in percent: the document's range widened to include `device` itself.
+    pub fn percent_range(&self, device: f64, size: Size) -> RangeInclusive<f64> {
+        let _ = (device, size);
+        todo!("cv.F1")
+    }
+
+    /// `device` zoom as percent of the scheme's 100 %.
+    pub fn percent(&self, device: f64) -> f64 {
+        let _ = device;
+        todo!("cv.F1")
+    }
+
+    /// The device zoom of `percent` of the scheme's 100 %.
+    pub fn device(&self, percent: f64) -> f64 {
+        let _ = percent;
+        todo!("cv.F1")
+    }
+}
+
 /// `view.zoom` as device zoom (1 = 100 %) at `pixels_per_point`.
 pub fn device(view: &CanvasView, pixels_per_point: f32) -> f64 {
     view.zoom * f64::from(pixels_per_point)
 }
 
 /// `view` at `device` zoom (1 = 100 %), clamped to the zoom range of a document of `size`, with its centre kept.
-pub fn with_device(view: &CanvasView, device: f64, size: Size, pixels_per_point: f32) -> CanvasView {
+pub fn with_device(view: &CanvasView, device: f64, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> CanvasView {
+    let _ = scheme; // P3(canvas-w1): cv.F3
     let mut next = *view;
     next.zoom = CanvasView::points_per_unit(ZoomLadder::clamp(device, size), pixels_per_point);
     next
@@ -132,13 +228,14 @@ fn shown_extent(view: &CanvasView, size: Size) -> (f64, f64, f64, f64) {
 /// each side, never past 100 % (one document pixel per device pixel, so a 150 % display does not open
 /// documents magnified). `size` is in document units; the view's [`aspect`](CanvasView::aspect) and rotation
 /// are taken into account.
-pub fn fit(view: &mut CanvasView, size: Size, pixels_per_point: f32, margin: f64) {
-    fit_up_to(view, size, pixels_per_point, 1.0, margin);
+pub fn fit(view: &mut CanvasView, size: Size, pixels_per_point: f32, margin: f64, scheme: &ZoomScheme) {
+    fit_up_to(view, size, pixels_per_point, 1.0, margin, scheme);
 }
 
 /// [`fit`] with the device zoom allowed up to `max_device` (1 = 100 %) instead of 100 %: a small document is
 /// magnified to fill the canvas, as Photoshop's Fit on Screen does.
-pub fn fit_up_to(view: &mut CanvasView, size: Size, pixels_per_point: f32, max_device: f64, margin: f64) {
+pub fn fit_up_to(view: &mut CanvasView, size: Size, pixels_per_point: f32, max_device: f64, margin: f64, scheme: &ZoomScheme) {
+    let _ = scheme; // P3(canvas-w1): cv.F3
     fit_rect_up_to(view, Rect::from_origin_size(Point::ORIGIN, size), size, pixels_per_point, max_device, Vec2::new(margin, margin));
 }
 
@@ -146,7 +243,8 @@ pub fn fit_up_to(view: &mut CanvasView, size: Size, pixels_per_point: f32, max_d
 /// units, and zoom so all of it shows inside `view.rect` less `margin.x` points at the left and right and `margin.y`
 /// at the top and bottom, up to the zoom ceiling.
 /// The zoom stays inside the range of a document of `size`; an empty `rect` zooms to that ceiling about its centre.
-pub fn fit_rect(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, margin: Vec2) {
+pub fn fit_rect(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_point: f32, margin: Vec2, scheme: &ZoomScheme) {
+    let _ = scheme; // P3(canvas-w1): cv.F3
     fit_rect_up_to(view, rect, size, pixels_per_point, ZoomLadder::MAX, margin);
 }
 
@@ -170,7 +268,8 @@ pub fn wrapped_canvas(view: &CanvasView, document: Size, canvas: ScreenRect) -> 
 
 /// Fill Screen: centre the document and zoom until it covers `view.rect`; one axis may extend
 /// past the canvas.
-pub fn fill(view: &mut CanvasView, size: Size, pixels_per_point: f32) {
+pub fn fill(view: &mut CanvasView, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) {
+    let _ = scheme; // P3(canvas-w1): cv.F3
     let (shown_w, shown_h, sin, cos) = shown_extent(view, size);
     let (rw, rh) = (f64::from(view.rect.width()), f64::from(view.rect.height()));
     // The canvas rectangle's extent along the document's axes, which the document must cover.
@@ -216,7 +315,8 @@ pub fn wheel_anchor(view: &CanvasView, screen: Pos2, size: Size) -> Pos2 {
 /// View › Zoom In (`dir` > 0) or Zoom Out (`dir` < 0): the next ladder rung
 /// ([`ZoomLadder::step`]), the view's centre unchanged. Returns whether the zoom changed (it does
 /// not at a limit).
-pub fn step(view: &mut CanvasView, dir: i32, size: Size, pixels_per_point: f32) -> bool {
+pub fn step(view: &mut CanvasView, dir: i32, size: Size, pixels_per_point: f32, scheme: &ZoomScheme) -> bool {
+    let _ = scheme; // P3(canvas-w1): cv.F3
     let current = device(view, pixels_per_point);
     let next = ZoomLadder::step(current, dir, size);
     let changed = next.is_finite() && (next / current - 1.0).abs() > 1e-9;

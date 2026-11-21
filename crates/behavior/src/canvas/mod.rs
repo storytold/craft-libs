@@ -10,7 +10,7 @@ pub mod zoom;
 pub use history::{ViewHistory, ViewPlace};
 pub use units::{RulerUnits, Ticks};
 pub use view::{CanvasView, resize_cursor};
-pub use zoom::ZoomLadder;
+pub use zoom::{ZoomFloor, ZoomLadder, ZoomScheme};
 
 /// A canvas body's mapping from canvas coordinates to its layer: `screen = canvas * scale + offset`.
 #[derive(Clone, Copy, Debug, PartialEq)]

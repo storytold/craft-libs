@@ -2,7 +2,7 @@
 //! Alt variant. It reads no toolkit's events; craft-ui's key stage runs it.
 
 use crate::DOUBLE_PRESS;
-use crate::chord::{Chord, Key, Mods, Trigger};
+use crate::chord::{Chord, Key, Mods, Press as PressKind, Trigger};
 use crate::command::CommandRef;
 use crate::keymap::{Keymap, Lookup};
 use crate::layout::{KeyInput, Layout};
@@ -130,9 +130,13 @@ impl Chords {
     /// The first chord with a binding, pressed twice when `double`.
     fn find(&self, keymap: &Keymap, double: bool, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
         let first = self.first();
-        self.0
-            .iter()
-            .find_map(|&chord| Hit::from_lookup(keymap.lookup_nested(&chord, double, active, outer), Trigger { chord, double }, chord == first))
+        self.0.iter().find_map(|&chord| {
+            Hit::from_lookup(
+                keymap.lookup_nested(&chord, double, active, outer),
+                Trigger { chord, press: if double { PressKind::Double } else { PressKind::Single } },
+                chord == first,
+            )
+        }) // P3(shortcuts-w3): kb.C13b
     }
 
     /// The single press's binding, else its Alt variant.
@@ -150,7 +154,14 @@ impl Chords {
             let plain = Chord::new(Mods { alt: false, ..chord.mods }, chord.key);
             match keymap.lookup_nested(&plain, false, &Active { typing: false, ..*active }, outer) {
                 Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => {
-                    Some(Hit { command, cycle: Vec::new(), trigger: Trigger { chord, double: false }, exact: chord == first, alt_variant: true })
+                    // P3(shortcuts-w3): kb.C13b
+                    Some(Hit {
+                        command,
+                        cycle: Vec::new(),
+                        trigger: Trigger { chord, press: PressKind::Single },
+                        exact: chord == first,
+                        alt_variant: true,
+                    })
                 }
                 _ => None,
             }

@@ -89,6 +89,14 @@ impl<P> Workspace<P> {
 }
 
 impl<P: Clone + Eq + Hash> Workspace<P> {
+    /// Renames a panel in `layout`, `hidden` and `floated` (keys and anchors), keeping its place; all or nothing,
+    /// and the revision stays. `MissingPanel` when `from` is in none of them, `DuplicatePanel` when `to` is
+    /// already there.
+    pub fn rename(&mut self, from: &P, to: P) -> Result<(), DockError> {
+        let _ = (from, to);
+        todo!("ch.K27")
+    }
+
     /// Check the version, the layout, that every hidden panel is hidden once and absent
     /// from the layout, and that the floated records are bounded and one per panel.
     pub fn validate(&self) -> Result<(), DockError> {

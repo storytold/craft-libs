@@ -86,6 +86,8 @@ pub struct Wheel {
     pub rotation: f32,
     /// Rotation of a two-finger touch, in radians.
     pub touch_rotation: f32,
+    /// Two fingers' movement this pass, in points.
+    pub touch_pan: Vec2,
 }
 
 impl Wheel {
@@ -104,6 +106,7 @@ impl Wheel {
             touch_zoom: 1.0,
             rotation: 0.0,
             touch_rotation: 0.0,
+            touch_pan: Vec2::ZERO,
         }
     }
 
@@ -129,6 +132,13 @@ impl Wheel {
     pub const fn touch_rotation(mut self, radians: f32) -> Self {
         self.touch_rotation = radians;
         self
+    }
+
+    /// The same gesture with the two-finger touch movement `pan`, in points.
+    #[must_use]
+    pub fn touch_pan(self, pan: Vec2) -> Self {
+        let _ = pan;
+        todo!("cv.F15")
     }
 
     /// The same gesture from `source`.
