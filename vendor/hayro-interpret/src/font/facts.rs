@@ -68,7 +68,10 @@ pub struct FontFacts<'a> {
     /// Simple fonts: whether `/Encoding` is present (a name or a dictionary); always `false`
     /// for a Type 0 font, whose `/Encoding` is its CMap.
     pub has_encoding: bool,
-    /// Simple fonts: the glyph name the encoding (with `/Differences`) gives a code.
+    /// Simple fonts: the glyph name the encoding (with `/Differences`) gives a code. A
+    /// symbolic TrueType font without an encoding, whose code reads as the `post` table name of
+    /// the glyph it selects, gives that name (`Asmall`, where the standard encoding's name for
+    /// the code is `A`).
     pub names: Option<&'a dyn Fn(u8) -> Option<&'a str>>,
     /// The embedded TrueType or OpenType program, when there is one (not a substitute's).
     pub program: Option<&'a FontRef<'a>>,

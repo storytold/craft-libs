@@ -30,6 +30,12 @@ fn be32(out: &mut Vec<u8>, n: u32) {
 /// A TrueType program with `num_glyphs` glyphs, each a small square, and a symbolic (3, 0)
 /// `cmap` mapping `0xF000 + code` to the glyph `pairs` gives it (none when `pairs` is empty).
 fn truetype(num_glyphs: u16, pairs: &[(u8, u16)]) -> Vec<u8> {
+    truetype_named(num_glyphs, pairs, &[])
+}
+
+/// [`truetype`] with a `post` table of format 2 naming the glyphs `names` gives a name (a
+/// glyph it leaves out is `.notdef`); no `post` table when `names` is empty.
+fn truetype_named(num_glyphs: u16, pairs: &[(u8, u16)], names: &[(u16, &str)]) -> Vec<u8> {
     let mut square = Vec::new();
     for n in [1i16, 0, 0, 500, 500] {
         square.extend_from_slice(&n.to_be_bytes());
@@ -106,6 +112,24 @@ fn truetype(num_glyphs: u16, pairs: &[(u8, u16)]) -> Vec<u8> {
     tables.push((*b"hmtx", hmtx));
     tables.push((*b"loca", loca));
     tables.push((*b"maxp", maxp));
+    if !names.is_empty() {
+        let mut post = vec![0, 2, 0, 0];
+        post.resize(32, 0);
+        be16(&mut post, num_glyphs);
+        let mut strings = Vec::new();
+        for gid in 0..num_glyphs {
+            match names.iter().position(|&(g, _)| g == gid) {
+                Some(k) => be16(&mut post, 258 + u16::try_from(k).unwrap()),
+                None => be16(&mut post, 0),
+            }
+        }
+        for (_, name) in names {
+            strings.push(u8::try_from(name.len()).unwrap());
+            strings.extend_from_slice(name.as_bytes());
+        }
+        post.extend(strings);
+        tables.push((*b"post", post));
+    }
     let count = u16::try_from(tables.len()).unwrap();
     let mut out = vec![0, 1, 0, 0];
     be16(&mut out, count);
@@ -538,6 +562,44 @@ fn a_truetype_fonts_facts_give_its_program_and_code_glyphs() {
     assert_eq!(
         (a.gid, seen[1].facts.gid),
         (GlyphId::new(3), GlyphId::new(4))
+    );
+}
+
+/// A symbolic TrueType font without an encoding selects its glyphs through its own `cmap`, and
+/// its strict text reads the `post` table name of the glyph a code selects: its facts give that
+/// name too, not the standard encoding's name for the code. A code whose glyph the `post` table
+/// names with no text, and a nonsymbolic font, keep the encoding's name.
+#[test]
+fn a_symbolic_truetype_fonts_facts_name_codes_by_their_post_names() {
+    let program = truetype_named(6, &[(65, 3), (66, 4), (67, 5)], &[(3, "Asmall"), (4, "Bsmall"), (5, "glyph5")]);
+    let font = |flags: u32| {
+        let dict = format!(
+            "<< /Type /Font /Subtype /TrueType /BaseFont /Expert /FirstChar 65 /LastChar 67 \
+             /Widths [600 600 600] /FontDescriptor 6 0 R >>"
+        );
+        document(
+            "/F1 5 0 R",
+            "BT /F1 10 Tf (ABC) Tj ET",
+            &[
+                dict.into_bytes(),
+                format!("<< /Type /FontDescriptor /Flags {flags} /FontFile2 7 0 R >>").into_bytes(),
+                stream(&program, ""),
+            ],
+        )
+    };
+    let seen = glyphs(&font(4));
+    assert_eq!(seen.len(), 3);
+    assert_eq!(seen[0].strict, Some(BfString::Char('\u{F761}')), "the strict text reads the post name");
+    let names = seen[0].facts.names.clone().unwrap();
+    assert_eq!(names, [Some("Asmall".to_owned()), Some("Bsmall".to_owned()), Some("C".to_owned())]);
+    assert_eq!(seen[1].facts.name.as_deref(), Some("Bsmall"), "the glyph's own name too");
+    assert_eq!(seen[2].facts.name.as_deref(), Some("C"), "a post name with no text");
+    let seen = glyphs(&font(32));
+    let names = seen.first().and_then(|s| s.facts.names.clone());
+    assert_eq!(
+        names,
+        Some(vec![Some("A".to_owned()), Some("B".to_owned()), Some("C".to_owned())]),
+        "a nonsymbolic font's codes are its encoding's"
     );
 }
 
