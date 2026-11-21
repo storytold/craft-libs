@@ -60,18 +60,19 @@ pub(crate) fn iter(grpprl: &[u8]) -> impl Iterator<Item = Prl<'_>> {
     })
 }
 
-/// A ToggleOperand value: 0 = off, 1 = on, 0x80 = leave unchanged, 0x81 = invert.
+/// A ToggleOperand value ([MS-DOC] ToggleOperand): 0 = off, 1 = on, 0x80 = the style's value,
+/// 0x81 = the opposite of the style's value.
 pub(crate) enum Toggle {
     Off,
     On,
-    Keep,
+    Style,
     Invert,
 }
 
 pub(crate) fn toggle(p: &Prl) -> Toggle {
     match p.operand.first().copied().unwrap_or(0) {
         0x81 => Toggle::Invert,
-        0x80 => Toggle::Keep,
+        0x80 => Toggle::Style,
         0x00 => Toggle::Off,
         _ => Toggle::On,
     }

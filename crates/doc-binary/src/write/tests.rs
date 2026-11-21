@@ -532,23 +532,39 @@ fn position_and_spacing_round_trip() {
     assert_eq!(q.props_at(12).spacing, Some(1.5));
 }
 
-/// Double strikethrough, emboss and the double-wave underline. The reader reads them once
-/// craft-libs#1969 is fixed.
+/// Double strikethrough, emboss, engrave and the double-wave underline (craft-libs#1969).
 #[test]
-#[ignore = "the reader reads sprmCFDStrike, sprmCFEmboss and Kul 0x2B once craft-libs#1969 is fixed"]
 fn character_effects_round_trip() {
-    let mut p = para("dbl emb");
+    let mut p = para("dbl emb eng");
     p.format(0, 3, &|c| c.double_strike = Some(true)).unwrap();
     p.format(4, 7, &|c| {
         c.emboss = Some(true);
         c.underline = Some(Underline::DoubleWave);
     })
     .unwrap();
+    p.format(8, 11, &|c| c.engrave = Some(true)).unwrap();
     let r = round(&doc_of(vec![p]));
     let q = r.body[0].as_para().unwrap();
     assert_eq!(q.props_at(1).double_strike, Some(true));
     assert_eq!(q.props_at(5).emboss, Some(true));
     assert_eq!(q.props_at(5).underline, Some(Underline::DoubleWave));
+    assert_eq!(q.props_at(9).engrave, Some(true));
+    // Text without them reads without them.
+    assert_ne!(q.props_at(5).double_strike, Some(true));
+    assert_ne!(q.props_at(1).emboss, Some(true));
+    assert_ne!(q.props_at(1).engrave, Some(true));
+}
+
+/// Contextual spacing (craft-libs#1969), on and off.
+#[test]
+fn contextual_spacing_round_trips() {
+    for on in [true, false] {
+        let mut p = para("Spaced");
+        p.props.contextual_spacing = Some(on);
+        let r = round(&doc_of(vec![p]));
+        let q = &r.body[0].as_para().unwrap().props;
+        assert_eq!(q.contextual_spacing.unwrap_or(false), on, "{on}");
+    }
 }
 
 #[test]
@@ -573,11 +589,11 @@ fn section_columns_round_trip() {
 }
 
 /// The page-number start and format, the column spacing, and the paragraph's shading, widow
-/// control and contextual spacing, as the writer writes them. Each needs a reader change that is
-/// still open: page numbers craft-libs#1354, column spacing and widow control craft-libs#1799,
-/// shading craft-libs#1808, contextual spacing craft-libs#1969.
+/// control and contextual spacing, as the writer writes them. Each but contextual spacing needs a
+/// reader change that is still open: page numbers craft-libs#1354, column spacing and widow
+/// control craft-libs#1799, shading craft-libs#1808.
 #[test]
-#[ignore = "needs the reader changes in craft-libs#1354, #1799 and #1808, and craft-libs#1969"]
+#[ignore = "needs the reader changes in craft-libs#1354, #1799 and #1808"]
 fn page_numbering_and_paragraph_shading_round_trip() {
     let mut d = Document::new();
     d.last_section.page_num_start = Some(5);
