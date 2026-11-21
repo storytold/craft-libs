@@ -43,7 +43,7 @@ enum Inner {
         scale: f64,
     },
     #[cfg(feature = "flac-decode")]
-    Flac(flac_packet::FlacTrack),
+    Flac(Box<flac_packet::FlacTrack>),
     /// The decoder, and what the packets read so far say of the track's packets.
     #[cfg(feature = "ac3-decode")]
     Ac3(Box<ac3::Decoder>, Ac3Packets),
@@ -223,7 +223,7 @@ impl TrackDecoder {
                     17..=24 => SampleFormat::Int24,
                     _ => SampleFormat::Int32,
                 };
-                (Inner::Flac(track), CodecId::Flac, rate, layout, sample_format)
+                (Inner::Flac(Box::new(track)), CodecId::Flac, rate, layout, sample_format)
             }
             #[cfg(feature = "ac3-decode")]
             CodecId::Ac3 | CodecId::Eac3 => match ac3::parse_header(first) {
