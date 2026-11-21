@@ -41,3 +41,9 @@ every cell after that point and sets `Workbook::text_truncated`, so the caller c
 of failing. Rows and cells after the cell that passes it are not read. The one-cell limit still
 applies to every cell read, that cell included; the cell and merged-range limits count the cells
 kept.
+
+## Features
+
+- `test-support` enables `testing`, which builds small `.ods` packages in code (`spreadsheet`,
+  `content`, `package`) for the tests of crates that read spreadsheets. It is not a general
+  spreadsheet writer.
