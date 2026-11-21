@@ -544,7 +544,7 @@ fn enter_reaches_footer(ctx: &Context) -> bool {
 
 /// The seconds the enclosing footer has been shown in the focused window, which its buttons read to know whether they
 /// are armed.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 struct ArmedFor(f64);
 
 impl EnvValue for ArmedFor {
