@@ -134,3 +134,52 @@ fn delete_and_backspace_on_a_selected_preset_report_delete() {
         }
     }
 }
+
+/// What a host's view of the browser reads: its rows and its state, which the host's revision stands for.
+#[derive(craft_ui::contract::MemoProps)]
+struct Host<'a> {
+    revision: u64,
+    #[memo_props(covered_by = "revision", reason = "the rows are fixed in this trial")]
+    rows: &'a PresetSource<'a, u32>,
+    #[memo_props(covered_by = "revision", reason = "nothing writes the state in this trial")]
+    state: &'a mut PresetState<u32>,
+    #[memo_props(hash = "a fieldless enum")]
+    view: PresetView,
+}
+
+fn host(props: &mut Host<'_>, ui: &mut egui::Ui) {
+    let _ = PresetBrowser::new("Patterns", Bind::bound(props.state), props.rows).view_lock(props.view).show(ui);
+}
+
+/// The browser reads the pointer and the modifiers only for its rows' own events, and its tile grid reads the
+/// modifiers, not the pointer frame: a pointer move beside it replays its view in both views (#2812). Before, every
+/// pointer move in the window ran it.
+#[trial]
+fn a_pointer_move_beside_the_browser_replays_it() {
+    use craft_ui::contract::MemoView;
+    use craft_ui::testing::{MemoRun, last_frame_memo_runs, pointer};
+    for view in [PresetView::List, PresetView::Grid] {
+        let rows = PresetSource::new(
+            (),
+            PresetFns::new(|_, _| vec![PresetRow::group(GROUP, "Group", 0), PresetRow::item(ALPHA, "Alpha", 1), PresetRow::item(2, "Beta", 1)]),
+        );
+        let mut state = PresetState::<u32>::new();
+        let mut fixture = Fixture::new(move |ui| {
+            ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                MemoView::new("browser", Host { revision: 0, rows: &rows, state: &mut state, view }, host).show(ui);
+            });
+        });
+        fixture.room(vec2(480.0, 320.0)).settle().idle(2);
+        let runs = |fixture: &Fixture| {
+            let runs = last_frame_memo_runs(fixture.ctx());
+            let count = |wanted: MemoRun| runs.iter().filter(|(name, _, run)| name.contains("Host") && *run == wanted).count();
+            (count(MemoRun::Ran), count(MemoRun::Replayed))
+        };
+        // The pointer enters the window beside the browser; in an app it is already there.
+        fixture.frame(vec![pointer::moved(pos2(360.0, 90.0))]);
+        for step in 0..3 {
+            fixture.frame(vec![pointer::moved(pos2(360.0, 100.0 + step as f32 * 10.0))]);
+            assert_eq!(runs(&fixture), (0, 1), "{view:?}: pointer move {step} beside the browser replays its view");
+        }
+    }
+}
