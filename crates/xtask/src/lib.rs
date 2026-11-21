@@ -15,6 +15,9 @@
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
+//! - [`icon`]: PNG images packed into a Windows `.ico` ([`icon::ico::pack`]) or a macOS `.icns`
+//!   ([`icon::icns::pack`]), with [`icon::png_size`] and readers for an app's test of its committed
+//!   icons.
 //!
 //! ```no_run
 //! use std::path::Path;
@@ -39,6 +42,7 @@
 //! ```
 
 pub mod assets;
+pub mod icon;
 #[cfg(feature = "lock")]
 pub mod lock;
 #[cfg(feature = "report")]

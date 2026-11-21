@@ -10,6 +10,7 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `assets` | always | `Policy`, `RowMode`, `check`, `run`, `list_files`, `read_document`, `is_asset`, `ASSET_EXT`: the asset attribution check against the document, folders and extensions the app supplies |
 | `lock` | `lock` | `LockConfig`, `try_acquire`, `acquire`, `holders`: 1 to 64 slots held across processes through file locks in a directory the app chooses |
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
+| `icon` | always | `ico::pack`, `icns::pack`, `png_size`, `png_info`, `read_pngs`, `Limits`, and `ico::read_file` and `icns::read_file` for an app's test of its committed icons |
 
 No feature is on by default. `report` adds `serde_json` and `craft-atomic`.
 
@@ -175,6 +176,49 @@ cancel while waiting) runs no step and writes no report. The report looks like t
 so a reader never sees a partial report, and a failed write leaves the previous report in place.
 Machine, GPU, corpus and skip details stay in the app's own report.
 
+## Icons
+
+```rust,no_run
+use std::path::Path;
+use craft_xtask::icon::{self, Limits, ico};
+
+fn cmd_ico(out: &Path, inputs: &[&Path]) -> Result<(), icon::Error> {
+    let limits = Limits::default();
+    let pngs = icon::read_pngs(inputs, &limits)?;
+    let file = ico::pack(&pngs, &limits)?;
+    std::fs::write(out, &file).map_err(|e| icon::Error::io(out, &e))?;
+    Ok(())
+}
+```
+
+The app renders the PNGs and chooses the sizes, the paths and the command name. Both formats store
+each PNG as is; no image is decoded.
+
+- Every PNG is checked whole: the signature, each chunk's length and CRC, a first `IHDR` of 13 bytes
+  with valid fields, at most one `PLTE` before the first `IDAT`, at least one `IDAT` with no other
+  chunk between two of them, no other critical chunk, and a final empty `IEND` with nothing after
+  it. Images must be square and at least 1 px.
+- `ico::pack` takes 1 to 256 px images in 8-bit RGBA, the form a PNG entry of an `.ico` holds
+  ([ICO format, part 4](https://devblogs.microsoft.com/oldnewthing/20101022-00/?p=12473/)). A 256 px
+  side is written as 0.
+- `icns::pack` takes 16, 32, 64, 128, 256, 512 and 1024 px images and writes each into every slot of
+  its size: 16 `icp4`; 32 `icp5`, `ic11`; 64 `icp6`, `ic12`; 128 `ic07`; 256 `ic08`, `ic13`; 512
+  `ic09`, `ic14`; 1024 `ic10` ([ICNS format](https://hexbase.dev/formats/icns/)).
+- Both write the images in increasing size, whatever the input order. Two images of one size are an
+  error.
+- `Limits` bounds the image count (default 16), each PNG (16 MiB) and the packed file (128 MiB). The
+  formats' 32-bit offsets and lengths also cap a file at 4 GiB - 1 byte. Sizes are checked and the
+  file's memory reserved before any byte is written. `read_pngs` stops reading a file one byte past
+  the smaller of the PNG limit and what the total limit has left.
+- `ico::read_file` and `icns::read_file` read a file within the same limits and check its structure.
+  `ico::read` accepts only the entries `ico::pack` writes. Both readers hold each image to the PNG
+  limit. `icns::read` returns at most four elements for each image `Limits` allows, and returns
+  elements that are not PNGs as stored. An app's `committed_icon_is_valid` test passes its own icon
+  path, for example `assets/app-icon/<app>.ico`.
+
+Errors are `icon::Error`: `Empty`, `TooManyImages`, `InvalidPng`, `NotSquare`, `UnsupportedSize`,
+`DuplicateSize`, `TooLarge`, `Allocation`, `InvalidIcon` or `Io`.
+
 ## Origin
 
 | Part | Source |
@@ -182,7 +226,11 @@ Machine, GPU, corpus and skip details stay in the app's own report.
 | `runner`: the step loop and summary, `root`, `cargo`, `run`, the nextest probe and fallback, doctests | DesignCraft `xtask/src/main.rs:68-82`, `:160-201`, `:204-249` at [8b169f8](https://github.com/storytold/designcraft/blob/8b169f8ee7832e60ed1ac4c9f5dd34f954d3a992/xtask/src/main.rs) |
 | `lock` and its tests `one_slot_is_exclusive_until_dropped`, `more_slots_admit_more_runs` | LightCraft `xtask/src/ci_lock.rs` at [25ffe3e](https://github.com/storytold/lightcraft/blob/25ffe3e5d4ac754829b99dd7368d94185adbf8d5/xtask/src/ci_lock.rs) |
 | `report`: the per-step fields | LightCraft `xtask/src/ci.rs:347-414` at [25ffe3e](https://github.com/storytold/lightcraft/blob/25ffe3e5d4ac754829b99dd7368d94185adbf8d5/xtask/src/ci.rs#L347-L414) |
+| `icon::ico`: `pack`, `png_size` and the tests `packs_directory_and_payloads`, `rejects_bad_input`, `committed_icon_is_valid` | DeckCraft `xtask/src/ico.rs` at [ae9d525](https://github.com/storytold/deckcraft/blob/ae9d525bce365083bb62b4754bdd346feb2a79b0/xtask/src/ico.rs); CADCraft's copy differs only in its icon path |
+| `icon::icns`: `pack`, the slot table and the tests `fills_every_slot_of_each_size`, `rejects_bad_input`, `committed_icon_is_valid`, `packs_icns_elements` | craft-launcher `xtask/src/icns.rs` at [019330f](https://github.com/storytold/craft-launcher/blob/019330f99aa90a3d6501e134fc48df8d719e15a2/xtask/src/icns.rs); MaterialCraft `xtask/src/ico.rs` at [6e952a9](https://github.com/storytold/materialcraft/blob/6e952a9a10f9bce77f330e430a828c066be6ad9b/xtask/src/ico.rs) |
+| `icon`: the test `rejects_non_png` | VectorCraft `xtask/src/ico.rs` at [4373205](https://github.com/storytold/vectorcraft/blob/437320509da102f5d9aca44d411ffb254f071932/xtask/src/ico.rs) |
 | The root and slot-count errors, the `--exclude` of the xtask package, cancellation, the bounded owner read and the atomic report | written here |
+| The whole-PNG check, the RGBA check for `.ico`, the size order and duplicate check, `Limits`, the checked lengths and offsets, `read_pngs` and the readers | written here |
 | `assets`: `is_asset`, the exact-row check, `run`, the three asset folders and the test `detects_unattributed_assets` | VectorCraft `xtask/src/assets.rs` at [bada8e1](https://github.com/storytold/vectorcraft/blob/bada8e17103db9917de44e40a1cead5a7fc71c3c/xtask/src/assets.rs) and DesignCraft `xtask/src/assets.rs` at [8b169f8](https://github.com/storytold/designcraft/blob/8b169f8ee7832e60ed1ac4c9f5dd34f954d3a992/xtask/src/assets.rs) |
 | `assets`: the CADCraft and WordCraft extension lists, the `-z` listing, the exit-status check and the tests in `assets::tests::wordcraft` | CADCraft `xtask/src/assets.rs` at [8e69890](https://github.com/storytold/cadcraft/blob/8e6989022398ff5f79adaab77d19fdd7137591f3/xtask/src/assets.rs), WordCraft `xtask/src/assets.rs` at [42a5df5](https://github.com/storytold/wordcraft/blob/42a5df5f94e03288037f731ffd86dee7c7cf1332/xtask/src/assets.rs) |
 | `assets`: the DeckCraft extension list, the pattern table and the tests in `assets::tests::deckcraft` | DeckCraft `xtask/src/assets.rs` at [b0c77eb](https://github.com/storytold/deckcraft/blob/b0c77ebd6a6fe6c9037cfbe1c8a7f397304b2205/xtask/src/assets.rs) |
@@ -198,6 +246,10 @@ No app uses this crate yet.
 |---|---|
 | DesignCraft | Planned: `cmd_ci`, `root`, `cargo`, `run`, `cmd_test` and `cmd_doctest` move to `runner`, with `TestMode::PreferNextest`. The step list, `TEST_TARGETS` and the i18n report stay in the app. |
 | LightCraft | Planned: `ci_lock.rs` moves to `lock`, with `LIGHTCRAFT_CI_LOCK` and `LIGHTCRAFT_CI_SLOTS` read by the app. The machine, GPU, corpus and skip report stays in the app. |
+| DeckCraft | Planned: `xtask/src/ico.rs` moves to `icon::ico`. The `ico` command and `packaging/icons.sh` stay in the app. |
+| CADCraft | Planned: `xtask/src/ico.rs` moves to `icon::ico`. The `ico` command and `packaging/icons.sh` stay in the app. |
+| craft-launcher | Planned: `xtask/src/ico.rs` and `icns.rs` move to `icon`. The `ico` and `icns` commands stay in the app. |
+| MaterialCraft | Planned: `pack_ico` and `pack_icns` move to `icon`. The `ico` and `icns` commands stay in the app. |
 | VectorCraft, DesignCraft, CADCraft, DeckCraft, WordCraft, GridCraft, LightCraft | Planned: `xtask/src/assets.rs` moves to `assets`, each with its own document, folders and row mode; LightCraft with `RowMode::Patterns`, its forbidden extensions and names, and `license_column: Some(4)`. The `cargo xtask assets` output stays in the app. |
 
 Maintainers: the craft-libs maintainers, until a responsible maintainer or team is agreed in the
