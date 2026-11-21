@@ -485,7 +485,7 @@ mod row_prediction {
         if row.png {
             Image::from_png(PNG16.to_vec().into(), false).unwrap()
         } else if row.rgba {
-            let rgba = row.samples.color.chunks_exact(3).flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255]).collect();
+            let rgba = row.samples.color.as_chunks::<3>().0.iter().flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255]).collect();
             Image::from_rgba8(rgba, row.samples.size.0, row.samples.size.1)
         } else {
             Image::from_custom(row.samples.clone(), false).unwrap()

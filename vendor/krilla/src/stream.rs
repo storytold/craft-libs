@@ -30,6 +30,8 @@ use std::ops::DerefMut;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use pdf_writer::{Array, Dict, Name};
+#[cfg(feature = "raster-images")]
+use pdf_writer::{Chunk, Ref, Settings};
 
 use crate::chunk_container::ChunkContainer;
 use crate::configure::ValidationError;
@@ -208,10 +210,39 @@ impl StreamFilters {
     }
 }
 
+/// Parameters for byte-wise PNG Up prediction of one sampled image plane.
+#[derive(Debug, Copy, Clone)]
+pub(crate) struct ImagePredictor {
+    columns: i32,
+    colors: i32,
+    bits_per_component: i32,
+}
+
+impl ImagePredictor {
+    #[cfg(feature = "raster-images")]
+    pub(crate) fn new(columns: u32, colors: usize, bits_per_component: u8) -> Option<Self> {
+        let columns = i32::try_from(columns).ok().filter(|&n| n > 0)?;
+        let colors = i32::try_from(colors).ok().filter(|&n| n > 0)?;
+        Some(Self {
+            columns,
+            colors,
+            bits_per_component: i32::from(bits_per_component),
+        })
+    }
+
+    fn write(self, mut dict: Dict<'_>) {
+        dict.pair(Name(b"Predictor"), 12);
+        dict.pair(Name(b"Columns"), self.columns);
+        dict.pair(Name(b"Colors"), self.colors);
+        dict.pair(Name(b"BitsPerComponent"), self.bits_per_component);
+    }
+}
+
 pub(crate) struct FilterStreamBuilder<'a> {
     content: Cow<'a, [u8]>,
     filters: StreamFilters,
     is_binary: bool,
+    predictor: Option<ImagePredictor>,
 }
 
 impl<'a> FilterStreamBuilder<'a> {
@@ -220,6 +251,7 @@ impl<'a> FilterStreamBuilder<'a> {
             content: Cow::Borrowed(content),
             filters: StreamFilters::None,
             is_binary: false,
+            predictor: None,
         }
     }
 
@@ -248,6 +280,53 @@ impl<'a> FilterStreamBuilder<'a> {
         filter_stream.add_unapplied_filter(StreamFilter::Flate);
 
         filter_stream
+    }
+
+    #[cfg(feature = "raster-images")]
+    pub(crate) fn new_from_deflated_image(
+        content: &'a [u8],
+        predictor: Option<ImagePredictor>,
+    ) -> Self {
+        let mut filter_stream = Self::new_from_deflated(content);
+        filter_stream.predictor = predictor;
+        filter_stream
+    }
+
+    /// Count the actual filter/parameter dictionary, payload and Length digits without copying
+    /// the encoded payload. All other image keys are identical between the two encodings.
+    #[cfg(feature = "raster-images")]
+    pub(crate) fn image_stream_size(
+        len: usize,
+        predictor: Option<ImagePredictor>,
+        ascii: bool,
+        settings: Settings,
+    ) -> Option<usize> {
+        let encoded_len = if ascii {
+            len.checked_mul(2)?.checked_add(len / 35)?
+        } else {
+            len
+        };
+        let filters = if ascii {
+            StreamFilters::Multiple(vec![StreamFilter::Flate, StreamFilter::AsciiHex])
+        } else {
+            StreamFilters::Single(StreamFilter::Flate)
+        };
+        let filter_stream = FilterStream {
+            content: Cow::Borrowed(&[]),
+            filters,
+            predictor,
+        };
+        // Use the caller's exact pdf-writer settings, not the default pretty-printing mode.
+        let mut chunk = Chunk::with_settings(settings);
+        {
+            let mut stream = chunk.stream(Ref::new(1), &[]);
+            filter_stream.write_filters(stream.deref_mut());
+        }
+        // The empty stream already includes the one digit in /Length 0 and all delimiters.
+        chunk
+            .len()
+            .checked_add(encoded_len)?
+            .checked_add(encoded_len.to_string().len() - 1)
     }
 
     pub(crate) fn new_from_binary_data(content: &'a [u8]) -> Self {
@@ -295,6 +374,7 @@ impl<'a> FilterStreamBuilder<'a> {
         FilterStream {
             content: self.content,
             filters: self.filters,
+            predictor: self.predictor,
         }
     }
 
@@ -311,6 +391,7 @@ impl<'a> FilterStreamBuilder<'a> {
 pub(crate) struct FilterStream<'a> {
     content: Cow<'a, [u8]>,
     filters: StreamFilters,
+    predictor: Option<ImagePredictor>,
 }
 
 impl FilterStream<'_> {
@@ -332,6 +413,25 @@ impl FilterStream<'_> {
                     .insert(Name(b"Filter"))
                     .start::<Array>()
                     .items(filters.iter().map(|f| f.to_name()).rev());
+            }
+        }
+        if let Some(predictor) = self.predictor {
+            match &self.filters {
+                StreamFilters::Single(StreamFilter::Flate) => {
+                    predictor.write(dict.deref_mut().insert(Name(b"DecodeParms")).dict());
+                }
+                StreamFilters::Multiple(filters) => {
+                    let mut parms = dict.deref_mut().insert(Name(b"DecodeParms")).array();
+                    for filter in filters.iter().rev() {
+                        match filter {
+                            StreamFilter::Flate => predictor.write(parms.push().dict()),
+                            _ => {
+                                parms.item(pdf_writer::Null);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }

@@ -10,7 +10,10 @@
 
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
-use std::io::Cursor;
+use std::io::{Cursor, Write};
+
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
@@ -27,7 +30,7 @@ use crate::graphics::color::DEVICE_GRAY;
 use crate::graphics::color::{cmyk, luma, rgb, ColorSpace as PdfColorSpace, SpecialColorSpace};
 use crate::graphics::icc::{GenericICCProfile, ICCBasedColorSpace, ICCProfile};
 use crate::serialize::SerializeContext;
-use crate::stream::{deflate_encode, FilterStreamBuilder};
+use crate::stream::{deflate_encode, FilterStream, FilterStreamBuilder, ImagePredictor};
 use crate::util::{set_colorspace, Deferred, NameExt, SipHashable};
 use crate::Data;
 
@@ -92,9 +95,116 @@ impl TryFrom<ColorSpace> for ImageColorspace {
     }
 }
 
+/// Keep raw deflate as a fallback until the ASCII/filter serialization settings are known.
+struct SampledPlane {
+    raw: Vec<u8>,
+    predicted: Option<(Vec<u8>, ImagePredictor)>,
+}
+
+impl SampledPlane {
+    fn new(data: &[u8], width: u32, components: usize, bits: BitsPerComponent) -> Self {
+        let raw = deflate_encode(data);
+        let predicted = ImagePredictor::new(width, components, bits.as_u8()).and_then(|params| {
+            png_up_encode(data, width, components, bits, raw.len().saturating_sub(1))
+                .map(|encoded| (encoded, params))
+        });
+        Self { raw, predicted }
+    }
+
+    fn stream<'a>(
+        &'a self,
+        settings: &crate::SerializeSettings,
+        writer_settings: pdf_writer::Settings,
+    ) -> FilterStream<'a> {
+        let predicted = self.predicted.as_ref().filter(|(data, params)| {
+            let size = |len, predictor| {
+                FilterStreamBuilder::image_stream_size(
+                    len,
+                    predictor,
+                    settings.ascii_compatible,
+                    writer_settings,
+                )
+            };
+            match (size(data.len(), Some(*params)), size(self.raw.len(), None)) {
+                (Some(predicted), Some(raw)) => predicted < raw,
+                _ => false,
+            }
+        });
+        let (data, predictor) = match predicted {
+            Some((data, params)) => (data.as_slice(), Some(*params)),
+            None => (self.raw.as_slice(), None),
+        };
+        FilterStreamBuilder::new_from_deflated_image(data, predictor).finish(settings)
+    }
+}
+
+/// Optional output never grows beyond the raw compressed size. Allocation/compression failure
+/// discards only this candidate, preserving the existing raw-deflate path and accepted inputs.
+struct PredictionBuffer {
+    data: Vec<u8>,
+    limit: usize,
+}
+
+impl Write for PredictionBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self
+            .data
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|len| len > self.limit)
+        {
+            return Err(std::io::Error::other("image prediction is not smaller"));
+        }
+        self.data
+            .try_reserve(bytes.len())
+            .map_err(|_| std::io::Error::other("image prediction allocation failed"))?;
+        self.data.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn png_up_encode(
+    data: &[u8],
+    width: u32,
+    components: usize,
+    bits: BitsPerComponent,
+    limit: usize,
+) -> Option<Vec<u8>> {
+    let row_len = usize::try_from(width)
+        .ok()?
+        .checked_mul(components)?
+        .checked_mul(usize::from(bits.as_u8() / 8))?;
+    if row_len == 0 || data.len() <= row_len || !data.len().is_multiple_of(row_len) {
+        return None;
+    }
+    let tagged_len = row_len.checked_add(1)?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(tagged_len).ok()?;
+    row.resize(tagged_len, 0);
+    row[0] = 2; // PNG Up, including a zero previous row for the first row (PDF Predictor 12).
+    let output = PredictionBuffer {
+        data: Vec::new(),
+        limit,
+    };
+    let mut encoder = ZlibEncoder::new(output, Compression::new(6));
+    let mut previous: Option<&[u8]> = None;
+    for current in data.chunks_exact(row_len) {
+        for (index, &sample) in current.iter().enumerate() {
+            row[index + 1] = sample.wrapping_sub(previous.map_or(0, |prior| prior[index]));
+        }
+        encoder.write_all(&row).ok()?;
+        previous = Some(current);
+    }
+    encoder.finish().ok().map(|output| output.data)
+}
+
 struct SampledRepr {
-    color_channel: Vec<u8>,
-    alpha_channel: Option<Vec<u8>>,
+    color_channel: SampledPlane,
+    alpha_channel: Option<SampledPlane>,
     bits_per_component: BitsPerComponent,
 }
 
@@ -333,13 +443,21 @@ impl Image {
             return Err("alpha channel length doesn't match the image dimensions".to_string());
         }
 
+        let components = metadata.num_components();
         Ok(Self(Arc::new(ImageRepr {
             inner: Deferred::new(move || {
                 let color_channel = image.color_channel();
 
                 Ok(Repr::Sampled(SampledRepr {
-                    color_channel: deflate_encode(color_channel),
-                    alpha_channel: image.alpha_channel().map(deflate_encode),
+                    color_channel: SampledPlane::new(
+                        color_channel,
+                        width,
+                        components,
+                        image.bits_per_component(),
+                    ),
+                    alpha_channel: image
+                        .alpha_channel()
+                        .map(|data| SampledPlane::new(data, width, 1, image.bits_per_component())),
                     bits_per_component: image.bits_per_component(),
                 }))
             }),
@@ -364,7 +482,7 @@ impl Image {
         Self(Arc::new(ImageRepr {
             inner: Deferred::new(move || {
                 let (color_channel, alpha_channel, bits_per_component) =
-                    handle_u8_image(&data, ColorSpace::RGBA)?;
+                    handle_u8_image(&data, ColorSpace::RGBA, width)?;
 
                 Ok(Repr::Sampled(SampledRepr {
                     color_channel,
@@ -470,6 +588,7 @@ impl Image {
             .supports_bit_depth(self.0.metadata.bits_per_component);
         let location = sc.location;
         let mut chunk = sc.new_chunk();
+        let writer_settings = sc.chunk_settings();
 
         let chunk = Deferred::new(move || {
             if !supports_bit_depth {
@@ -486,8 +605,7 @@ impl Image {
             let alpha_mask = match repr {
                 Repr::Sampled(sampled) => sampled.alpha_channel.as_ref().map(|mask_data| {
                     let soft_mask_id = soft_mask_id.unwrap();
-                    let mask_stream = FilterStreamBuilder::new_from_deflated(mask_data)
-                        .finish(&serialize_settings);
+                    let mask_stream = mask_data.stream(&serialize_settings, writer_settings);
                     let mut s_mask = chunk.image_xobject(soft_mask_id, mask_stream.encoded_data());
                     mask_stream.write_filters(s_mask.deref_mut().deref_mut());
                     s_mask.width(self.size().0 as i32);
@@ -509,8 +627,7 @@ impl Image {
             };
 
             let filter_stream = match repr {
-                Repr::Sampled(s) => FilterStreamBuilder::new_from_deflated(&s.color_channel)
-                    .finish(&serialize_settings),
+                Repr::Sampled(s) => s.color_channel.stream(&serialize_settings, writer_settings),
                 Repr::Jpeg(j) => FilterStreamBuilder::new_from_jpeg_data(j.data.as_ref())
                     .finish(&serialize_settings),
             };
@@ -639,8 +756,8 @@ fn decode_png(data: &[u8]) -> Result<Repr, String> {
     };
 
     let (color_channel, alpha_channel, bits_per_component) = match bit_depth {
-        BitDepth::Eight => handle_u8_image(&img_data, color_space)?,
-        BitDepth::Sixteen => handle_u16_image(&img_data, color_space)?,
+        BitDepth::Eight => handle_u8_image(&img_data, color_space, reader.info().width)?,
+        BitDepth::Sixteen => handle_u16_image(&img_data, color_space, reader.info().width)?,
         _ => return Err("image has an unsupported bit-depth".to_string()),
     };
 
@@ -720,13 +837,14 @@ fn decode_gif(data: Data) -> Result<Repr, String> {
     let mut decoder = decoder
         .read_info(data.as_ref())
         .map_err(|e| e.to_string().to_ascii_lowercase())?;
+    let width = u32::from(decoder.width());
     let first_frame = decoder
         .read_next_frame()
         .map_err(|e| e.to_string())?
         .ok_or("GIF image seems to be empty".to_string())?;
 
     let (color_channel, alpha_channel, bits_per_component) =
-        handle_u8_image(first_frame.buffer.as_ref(), ColorSpace::RGBA)?;
+        handle_u8_image(first_frame.buffer.as_ref(), ColorSpace::RGBA, width)?;
 
     Ok(Repr::Sampled(SampledRepr {
         color_channel,
@@ -784,7 +902,7 @@ fn decode_webp(data: Data) -> Result<Repr, String> {
     };
 
     let (color_channel, alpha_channel, bits_per_component) =
-        handle_u8_image(&first_frame, color_space)?;
+        handle_u8_image(&first_frame, color_space, decoder.dimensions().0)?;
 
     Ok(Repr::Sampled(SampledRepr {
         color_channel,
@@ -803,9 +921,9 @@ fn try_buffer(capacity: usize) -> Result<Vec<u8>, String> {
     Ok(v)
 }
 
-type SplitImage = (Vec<u8>, Option<Vec<u8>>, BitsPerComponent);
+type SplitImage = (SampledPlane, Option<SampledPlane>, BitsPerComponent);
 
-fn handle_u8_image(data: &[u8], cs: ColorSpace) -> Result<SplitImage, String> {
+fn handle_u8_image(data: &[u8], cs: ColorSpace, width: u32) -> Result<SplitImage, String> {
     let mut alphas = if cs.has_alpha() {
         try_buffer(data.len() / cs.num_components())?
     } else {
@@ -813,30 +931,35 @@ fn handle_u8_image(data: &[u8], cs: ColorSpace) -> Result<SplitImage, String> {
     };
 
     let color_channel = match cs {
-        ColorSpace::RGB => deflate_encode(data),
+        ColorSpace::RGB => SampledPlane::new(data, width, 3, BitsPerComponent::Eight),
         ColorSpace::RGBA => {
             let mut buf = try_buffer(data.len() * 3 / 4)?;
             data.chunks_exact(4).for_each(|data| {
                 buf.extend_from_slice(&data[0..3]);
                 alphas.push(data[3]);
             });
-            deflate_encode(&buf)
+            SampledPlane::new(&buf, width, 3, BitsPerComponent::Eight)
         }
-        ColorSpace::Luma => deflate_encode(data),
+        ColorSpace::Luma => SampledPlane::new(data, width, 1, BitsPerComponent::Eight),
         ColorSpace::LumaA => {
             let mut buf = try_buffer(data.len() / 2)?;
             data.chunks_exact(2).for_each(|data| {
                 buf.push(data[0]);
                 alphas.push(data[1]);
             });
-            deflate_encode(&buf)
+            SampledPlane::new(&buf, width, 1, BitsPerComponent::Eight)
         }
         // PNG/WEBP/GIF only support those three, so should be enough?
         _ => unimplemented!(),
     };
 
     let alpha_channel = if !alphas.is_empty() && alphas.iter().any(|v| *v != 255) {
-        Some(deflate_encode(&alphas))
+        Some(SampledPlane::new(
+            &alphas,
+            width,
+            1,
+            BitsPerComponent::Eight,
+        ))
     } else {
         None
     };
@@ -844,7 +967,7 @@ fn handle_u8_image(data: &[u8], cs: ColorSpace) -> Result<SplitImage, String> {
     Ok((color_channel, alpha_channel, BitsPerComponent::Eight))
 }
 
-fn handle_u16_image(data: &[u8], cs: ColorSpace) -> Result<SplitImage, String> {
+fn handle_u16_image(data: &[u8], cs: ColorSpace, width: u32) -> Result<SplitImage, String> {
     let mut alphas = if cs.has_alpha() {
         try_buffer(data.len() / cs.num_components())?
     } else {
@@ -852,30 +975,35 @@ fn handle_u16_image(data: &[u8], cs: ColorSpace) -> Result<SplitImage, String> {
     };
 
     let encoded_image = match cs {
-        ColorSpace::RGB => deflate_encode(data),
+        ColorSpace::RGB => SampledPlane::new(data, width, 3, BitsPerComponent::Sixteen),
         ColorSpace::RGBA => {
             let mut buf = try_buffer(data.len() * 3 / 4)?;
             data.chunks_exact(8).for_each(|data| {
                 buf.extend_from_slice(&data[0..6]);
                 alphas.extend_from_slice(&data[6..]);
             });
-            deflate_encode(&buf)
+            SampledPlane::new(&buf, width, 3, BitsPerComponent::Sixteen)
         }
-        ColorSpace::Luma => deflate_encode(data),
+        ColorSpace::Luma => SampledPlane::new(data, width, 1, BitsPerComponent::Sixteen),
         ColorSpace::LumaA => {
             let mut buf = try_buffer(data.len() / 2)?;
             data.chunks_exact(4).for_each(|data| {
                 buf.extend_from_slice(&data[0..2]);
                 alphas.extend_from_slice(&data[2..]);
             });
-            deflate_encode(&buf)
+            SampledPlane::new(&buf, width, 1, BitsPerComponent::Sixteen)
         }
         // PNG/WEBP/GIF only support those three, so should be enough?
         _ => unimplemented!(),
     };
 
     let encoded_mask = if !alphas.is_empty() {
-        Some(deflate_encode(&alphas))
+        Some(SampledPlane::new(
+            &alphas,
+            width,
+            1,
+            BitsPerComponent::Sixteen,
+        ))
     } else {
         None
     };
@@ -947,9 +1075,11 @@ mod tests {
     #[test]
     fn rgba_split_buffers_are_reserved_fallibly() {
         assert!(super::try_buffer(usize::MAX).is_err());
-        let (color, alpha, _) = super::handle_u8_image(&[1, 2, 3, 128, 4, 5, 6, 255], super::ColorSpace::RGBA).unwrap();
-        assert!(!color.is_empty() && alpha.is_some());
-        let (_, alpha, _) = super::handle_u16_image(&[0; 16], super::ColorSpace::RGBA).unwrap();
+        let (color, alpha, _) =
+            super::handle_u8_image(&[1, 2, 3, 128, 4, 5, 6, 255], super::ColorSpace::RGBA, 2)
+                .unwrap();
+        assert!(!color.raw.is_empty() && alpha.is_some());
+        let (_, alpha, _) = super::handle_u16_image(&[0; 16], super::ColorSpace::RGBA, 2).unwrap();
         assert!(alpha.is_some());
     }
 
