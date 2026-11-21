@@ -1,6 +1,6 @@
 //! The Shape tools and the Create Shape dialog. The view maps one document unit to one screen point.
 
-use craft_behavior::kurbo::{Point, Rect, Vec2};
+use craft_behavior::kurbo::{ParamCurve as _, Point, Rect, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::geometry::shape::ShapeGeometry;
 use craft_draw::ui::shape::VectorMode;
@@ -372,4 +372,124 @@ fn create_shape_alerts_once_for_a_size_typed_past_its_range() {
         assert_eq!(width_now(&host), Some(500.0));
         assert!(take(&host).is_none(), "{kind:?}: a width in range raises no alert");
     }
+}
+
+/// The ends of each piece of `shape`'s outline, in order: for a rounded triangle, where each arc meets an edge.
+fn anchors(shape: &ShapeGeometry) -> Vec<Point> {
+    shape.to_path(0.1).elements().iter().filter_map(|el| el.end_point()).collect()
+}
+
+fn near(a: Point, b: Point) -> bool {
+    (a - b).hypot() < 1e-3
+}
+
+/// A triangle's corner radius rounds each corner with an arc tangent to both edges (storytold/photocraft#13355): radius
+/// 20 in the box 400,300 to 600,400 meets the edges at the six points PhotoCraft's engine draws, and the arc at the
+/// right-angled apex has its middle 20 px from its centre.
+#[trial]
+fn a_triangle_corner_radius_rounds_each_corner_tangent_to_its_edges() {
+    let shape = ShapeGeometry::Triangle { rect: Rect::new(400.0, 300.0, 600.0, 400.0), corner_radius: 20.0 };
+    let want = [(485.858, 314.142), (514.142, 314.142), (565.858, 365.858), (551.716, 400.0), (448.284, 400.0), (434.142, 365.858)];
+    let got = anchors(&shape);
+    assert_eq!(got.len(), want.len(), "two points per rounded corner: {got:?}");
+    for (g, w) in got.iter().zip(want) {
+        assert!(near(*g, Point::new(w.0, w.1)), "{got:?}");
+    }
+    let apex = shape.to_path(0.1).segments().next().expect("the apex arc");
+    let middle = apex.eval(0.5);
+    // The apex's edges meet at 90°: the arc's centre lies 20·√2 below the apex, its middle 20 px above that.
+    let centre = Point::new(500.0, 300.0 + 20.0 * 2f64.sqrt());
+    assert!(((middle - centre).hypot() - 20.0).abs() < 0.01, "the arc is circular: its middle is {middle:?}");
+    assert_eq!(shape.bounds(), Rect::new(400.0, 300.0, 600.0, 400.0), "the bounds stay the box");
+}
+
+/// A radius larger than the triangle allows is capped by the shape: each arc ends at most halfway along an edge, the
+/// outline stays inside the box, and no number is lost. Radius 0 keeps the sharp corners.
+#[trial]
+fn a_triangle_radius_past_what_the_shape_holds_is_capped_and_zero_is_sharp() {
+    let rect = Rect::new(0.0, 0.0, 200.0, 100.0);
+    for radius in [1.0e6, f64::INFINITY, f64::NAN, -5.0, 0.0] {
+        let got = anchors(&ShapeGeometry::Triangle { rect, corner_radius: radius });
+        assert!(got.iter().all(|p| p.x.is_finite() && p.y.is_finite()), "{radius}: {got:?}");
+        assert!(got.iter().all(|p| rect.inflate(1e-9, 1e-9).contains(*p)), "{radius}: the outline stays in the box: {got:?}");
+        if radius.is_finite() && radius > 0.0 {
+            assert_eq!(got.len(), 6, "{radius}: still two points per corner");
+            // The slanted edges (about 141 px) are shorter than the 200 px base: the arcs at their two ends meet
+            // halfway along each of them.
+            for middle in [Point::new(50.0, 50.0), Point::new(150.0, 50.0)] {
+                assert_eq!(got.iter().filter(|p| near(**p, middle)).count(), 2, "{radius}: capped at half a slanted edge: {got:?}");
+            }
+        } else {
+            assert_eq!(got, vec![Point::new(100.0, 0.0), Point::new(200.0, 100.0), Point::new(0.0, 100.0)], "{radius}: sharp corners");
+        }
+    }
+}
+
+/// A Triangle drag takes the Triangle's own corner radius from the tool settings, not the Rectangle's, and a
+/// Rectangle drag keeps the Rectangle's.
+#[trial]
+#[allow(clippy::field_reassign_with_default, reason = "ShapeToolSettings is non_exhaustive: no struct literal outside its crate")]
+fn a_triangle_drag_takes_the_triangle_radius_from_the_settings() {
+    let mut settings = craft_draw::ui::shape::ShapeToolSettings::default();
+    settings.corner_radius = 7.0;
+    settings.triangle_corner_radius = 20.0;
+    let mut shapes = Shapes::new(settings.drag_options(ShapeKind::Triangle));
+    shapes.drag(PRESS, PRESS + Vec2::new(60.0, 40.0), Modifiers::NONE);
+    match shapes.committed() {
+        Some(ShapeGeometry::Triangle { corner_radius, .. }) => assert_eq!(corner_radius, 20.0),
+        other => panic!("a triangle: {other:?}"),
+    }
+    let mut shapes = Shapes::new(settings.drag_options(ShapeKind::Rectangle));
+    shapes.drag(PRESS, PRESS + Vec2::new(60.0, 40.0), Modifiers::NONE);
+    match shapes.committed() {
+        Some(ShapeGeometry::Rect { radii, .. }) => assert_eq!(radii, [7.0; 4], "the Rectangle keeps its own radius"),
+        other => panic!("a rectangle: {other:?}"),
+    }
+}
+
+/// Create Triangle starts from the tool's radius, shows it in one Radius field and answers it on OK; automation sets
+/// it as `cornerRadius`, kept to 0–150,000 px, and the field is inactive for another kind.
+#[trial]
+fn create_triangle_takes_one_corner_radius() {
+    let ctx = egui::Context::default();
+    let mut host = DialogHost::new();
+    let options = CreateShapeOptions::initial(ShapeKind::Triangle, Point::new(10.0, 20.0)).tool(15.0, 5, 1.0).recalled();
+    let id = host.open(CreateShapeDialog::new(options));
+    assert_eq!(fields(&host, id)["cornerRadius"], json!(15.0), "the dialog starts from the tool's radius");
+    let shape = confirm(&mut host, &ctx).expect("OK answers the triangle");
+    assert_eq!(shape.geometry, ShapeGeometry::Triangle { rect: Rect::new(10.0, 20.0, 110.0, 120.0), corner_radius: 15.0 });
+
+    let id = open_create(&mut host, ShapeKind::Triangle);
+    assert_eq!(host.set_json_field(&ctx, id, "cornerRadius", json!(200000)), Ok(()));
+    assert_eq!(fields(&host, id)["cornerRadius"], json!(150000.0), "a radius past the range keeps its end");
+    assert!(host.set_json_field(&ctx, id, "cornerRadius", json!("abc")).is_err(), "text that is not a number is refused");
+    assert_eq!(host.set_json_field(&ctx, id, "cornerRadius", json!(8)), Ok(()));
+    match confirm(&mut host, &ctx).map(|shape| shape.geometry) {
+        Some(ShapeGeometry::Triangle { corner_radius, .. }) => assert_eq!(corner_radius, 8.0),
+        other => panic!("a triangle: {other:?}"),
+    }
+
+    let id = open_create(&mut host, ShapeKind::Rectangle);
+    assert!(host.set_json_field(&ctx, id, "cornerRadius", json!(8)).is_err(), "a rectangle has no single corner radius");
+    assert!(host.cancel::<CreateShapeDialog>(&ctx));
+
+    // The field itself: one Radius field for the triangle, typed values taken.
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(egui::Vec2::new(1200.0, 900.0));
+    let options = CreateShapeOptions::initial(ShapeKind::Triangle, Point::new(10.0, 20.0)).tool(15.0, 5, 1.0).recalled();
+    host.borrow_mut().open(CreateShapeDialog::new(options));
+    fixture.settle();
+    let names: Vec<String> =
+        fixture.by_role(Role::SPIN_BUTTON).into_iter().filter_map(|field| fixture.tree().name_of(field.node).map(str::to_owned)).collect();
+    assert_eq!(names.iter().filter(|name| name.as_str() == "Radius").count(), 1, "one Radius field: {names:?}");
+    assert!(!names.iter().any(|name| name == "Top Left" || name == "Sides"), "no rectangle radii or sides: {names:?}");
+    let radius =
+        fixture.by_role(Role::SPIN_BUTTON).into_iter().find(|field| fixture.tree().name_of(field.node) == Some("Radius")).expect("the Radius field");
+    fixture.click(&radius).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("30");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let radii = host.borrow().get::<CreateShapeDialog>().map(|dialog| dialog.options().radii);
+    assert_eq!(radii, Some([30.0; 4]), "the typed radius is the triangle's");
 }
