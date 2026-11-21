@@ -57,6 +57,22 @@ pub struct Spec<'a> {
     /// When nonzero, a thumbnail that is a grid of `n` × `n` references to one tile, written
     /// after any `thumbnail` item (a hostile file, as with `alpha_tile_repeats`).
     pub thumbnail_tile_repeats: u8,
+    /// Auxiliary images of their own size, each with its properties and an XMP packet, as an iPhone Portrait photo
+    /// carries its depth map and mattes. Written after `alpha` and `ignored_aux`.
+    pub aux: Vec<Aux<'a>>,
+}
+
+/// An auxiliary image for [`Spec::aux`]: monochrome, full range.
+pub struct Aux<'a> {
+    /// Its `auxC` type.
+    pub urn: &'static str,
+    pub width: u32,
+    pub height: u32,
+    pub sample: &'a dyn Fn(u32, u32) -> u16,
+    /// Its own properties (`irot`, `imir`, `clap`), in association order.
+    pub props: Vec<Prop>,
+    /// An XMP packet tied to it by `cdsc`.
+    pub xmp: Option<String>,
 }
 
 impl<'a> Spec<'a> {
@@ -74,6 +90,7 @@ impl<'a> Spec<'a> {
             stereo: false,
             alpha_tile_repeats: 0,
             thumbnail_tile_repeats: 0,
+            aux: Vec::new(),
         }
     }
 }
@@ -394,6 +411,8 @@ struct Item {
     props: Vec<(u8, bool)>,
     /// Not an image of its own (a grid tile).
     hidden: bool,
+    /// A `mime` item's content type, written in its `infe`.
+    content_type: &'static str,
 }
 
 #[derive(Default)]
@@ -413,7 +432,7 @@ impl File {
 
     fn add(&mut self, kind: &'static [u8; 4], data: Vec<u8>, props: Vec<(u8, bool)>) -> u16 {
         let id = self.items.len() as u16 + 1;
-        self.items.push(Item { id, kind, data, props, hidden: false });
+        self.items.push(Item { id, kind, data, props, hidden: false, content_type: "" });
         id
     }
 
@@ -464,6 +483,10 @@ impl File {
             e.extend_from_slice(&[0, 0]);
             e.extend_from_slice(it.kind);
             e.push(0);
+            if !it.content_type.is_empty() {
+                e.extend_from_slice(it.content_type.as_bytes());
+                e.push(0);
+            }
             iinf.extend_from_slice(&bx(b"infe", &e));
         }
         let iinf = full_box(b"iinf", 0, &iinf);
@@ -516,33 +539,37 @@ impl File {
     }
 }
 
+/// A property's box.
+fn prop_box(p: &Prop) -> Vec<u8> {
+    match p {
+        Prop::Icc(icc) => bx(b"colr", &[b"prof".as_slice(), icc].concat()),
+        Prop::Nclx(pr, tc, mc, full) => {
+            let mut c = b"nclx".to_vec();
+            for v in [pr, tc, mc] {
+                c.extend_from_slice(&v.to_be_bytes());
+            }
+            c.push(if *full { 0x80 } else { 0 });
+            bx(b"colr", &c)
+        }
+        Prop::Irot(a) => bx(b"irot", &[a & 3]),
+        Prop::Imir(a) => bx(b"imir", &[a & 1]),
+        Prop::Clap(w, h, ho, vo) => {
+            let mut c = Vec::new();
+            for v in [*w as i32, 1, *h as i32, 1, *ho, 1, *vo, 1] {
+                c.extend_from_slice(&v.to_be_bytes());
+            }
+            bx(b"clap", &c)
+        }
+    }
+}
+
 /// Writes the HEIF file `spec` describes.
 pub fn build(spec: &Spec<'_>) -> Vec<u8> {
     let mut f = File::default();
     let primary = f.image(spec.width, spec.height, spec.bit_depth, false, spec.sample);
     let mut assoc = Vec::new();
     for p in &spec.props {
-        let b = match p {
-            Prop::Icc(icc) => bx(b"colr", &[b"prof".as_slice(), icc].concat()),
-            Prop::Nclx(pr, tc, mc, full) => {
-                let mut c = b"nclx".to_vec();
-                for v in [pr, tc, mc] {
-                    c.extend_from_slice(&v.to_be_bytes());
-                }
-                c.push(if *full { 0x80 } else { 0 });
-                bx(b"colr", &c)
-            }
-            Prop::Irot(a) => bx(b"irot", &[a & 3]),
-            Prop::Imir(a) => bx(b"imir", &[a & 1]),
-            Prop::Clap(w, h, ho, vo) => {
-                let mut c = Vec::new();
-                for v in [*w as i32, 1, *h as i32, 1, *ho, 1, *vo, 1] {
-                    c.extend_from_slice(&v.to_be_bytes());
-                }
-                bx(b"clap", &c)
-            }
-        };
-        assoc.push((f.prop(b), true, matches!(p, Prop::Clap(..))));
+        assoc.push((f.prop(prop_box(p)), true, matches!(p, Prop::Clap(..))));
     }
     if let Some(it) = f.items.iter_mut().find(|i| i.id == primary) {
         it.props.extend(assoc.iter().map(|&(i, e, _)| (i, e)));
@@ -578,6 +605,22 @@ pub fn build(spec: &Spec<'_>) -> Vec<u8> {
     }
     for urn in &spec.ignored_aux {
         aux(&mut f, urn, &|x, y| [((x + y) % 256) as u16, 0, 0]);
+    }
+    for a in &spec.aux {
+        let id = f.image(a.width, a.height, bd, true, &|x, y| [(a.sample)(x, y), 0, 0]);
+        let mut props = vec![(f.prop(full_box(b"auxC", 0, &[a.urn.as_bytes(), &[0]].concat())), true)];
+        props.extend(a.props.iter().map(|p| (f.prop(prop_box(p)), true)).collect::<Vec<_>>());
+        if let Some(it) = f.items.iter_mut().find(|i| i.id == id) {
+            it.props.extend(props);
+        }
+        f.refs.push((b"auxl", id, vec![primary]));
+        if let Some(xmp) = &a.xmp {
+            let x = f.add(b"mime", xmp.as_bytes().to_vec(), Vec::new());
+            if let Some(it) = f.items.iter_mut().find(|i| i.id == x) {
+                it.content_type = "application/rdf+xml";
+            }
+            f.refs.push((b"cdsc", x, vec![id]));
+        }
     }
     if let Some(sample) = spec.thumbnail {
         // Half the size, with the primary image's colour and orientation (not its crop).
