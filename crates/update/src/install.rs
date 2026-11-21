@@ -1590,6 +1590,42 @@ pub mod linux {
     }
 }
 
+/// Retries only the disk-image helper's known busy replies. The injected wait keeps the policy's
+/// tests independent of macOS and wall-clock delays; the real caller uses `thread::sleep`.
+#[cfg(any(target_os = "macos", test))]
+fn retry_busy_detach(detach: impl FnMut() -> Result<(), String>, wait: impl FnMut(std::time::Duration)) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    retry_busy_detach_with_elapsed(detach, wait, || started.elapsed())
+}
+
+/// Counts time spent in the helper as well as backoff, so a slow failure cannot multiply the
+/// ordinary/force helper timeouts. An already started detach keeps its original limits.
+#[cfg(any(target_os = "macos", test))]
+fn retry_busy_detach_with_elapsed(
+    mut detach: impl FnMut() -> Result<(), String>,
+    mut wait: impl FnMut(std::time::Duration),
+    mut elapsed: impl FnMut() -> std::time::Duration,
+) -> Result<(), String> {
+    let window = std::time::Duration::from_secs(8);
+    let mut result = detach();
+    for millis in [500, 1000, 2000, 4000] {
+        let Err(reason) = &result else { return result };
+        if !reason.contains("Resource busy") && !reason.contains("Resource temporarily unavailable") {
+            return result;
+        }
+        let delay = std::time::Duration::from_millis(millis);
+        if elapsed().saturating_add(delay) > window {
+            break;
+        }
+        wait(delay);
+        if elapsed() >= window {
+            break;
+        }
+        result = detach();
+    }
+    result
+}
+
 #[cfg(target_os = "macos")]
 pub mod macos {
     use std::time::Duration;
@@ -1947,9 +1983,82 @@ pub mod macos {
             return Ok(());
         }
         let m = mount.to_str().ok_or("unusual characters in the mount point's path")?;
-        process::run(HDIUTIL, &["detach", m, "-quiet"], Duration::from_secs(60))
-            .or_else(|_| process::run(HDIUTIL, &["detach", m, "-force", "-quiet"], Duration::from_secs(60)))
+        detach_with(m, process::run)
+    }
+
+    /// Keeps the helper's stderr: `-quiet` would hide the busy reply that cleanup retries.
+    fn detach_with(mount: &str, run: impl Fn(&str, &[&str], Duration) -> Result<String, String>) -> Result<(), String> {
+        run(HDIUTIL, &["detach", mount], Duration::from_secs(60))
+            .or_else(|_| run(HDIUTIL, &["detach", mount, "-force"], Duration::from_secs(60)))
             .map(drop)
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn detach_stderr_reaches_the_busy_retry_policy() {
+        // Model hdiutil's documented -quiet behavior, then use the real process reader and
+        // retry classifier instead of injecting an already classified error string.
+        let script = r#"
+state=$1
+scenario=$2
+shift 2
+count=0
+if [ -f "$state" ]; then read -r count < "$state"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$state"
+quiet=false
+for arg do
+    if [ "$arg" = -quiet ]; then quiet=true; fi
+done
+case "$scenario:$count" in
+    success:*|busy:3) exit 0 ;;
+    busy:*) reason='hdiutil: detach failed - Resource busy' ;;
+    permanent:*) reason='hdiutil: detach failed - Permission denied' ;;
+    *) exit 64 ;;
+esac
+if [ "$quiet" = false ]; then printf '%s\n' "$reason" >&2; fi
+exit 16
+"#;
+        for (scenario, expected_calls, expected_waits) in [("busy", 3, 1), ("success", 1, 0), ("permanent", 2, 0)] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = dir.path().join("attempts");
+            let calls = std::cell::RefCell::new(Vec::new());
+            let waits = std::cell::RefCell::new(Vec::new());
+            let mount = "/Volumes/PhotoCraft test";
+            let result = super::retry_busy_detach_with_elapsed(
+                || {
+                    detach_with(mount, |program, args, timeout| {
+                        assert_eq!(program, "/usr/bin/hdiutil");
+                        assert_eq!(timeout, std::time::Duration::from_secs(60));
+                        calls.borrow_mut().push(args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>());
+                        let mut cmd = process::command("/bin/sh");
+                        cmd.args(["-c", script, "hdiutil-fixture"]).arg(&state).arg(scenario).args(args);
+                        process::run_command(cmd, program, timeout)
+                    })
+                },
+                |delay| waits.borrow_mut().push(delay),
+                || std::time::Duration::ZERO,
+            );
+            if scenario == "permanent" {
+                assert_eq!(result, Err("hdiutil: detach failed - Permission denied".into()));
+            } else {
+                assert_eq!(result, Ok(()), "{scenario}");
+            }
+            let calls = calls.into_inner();
+            assert_eq!(calls.len(), expected_calls, "{scenario}");
+            assert_eq!(calls[0], ["detach", mount]);
+            if expected_calls > 1 {
+                assert_eq!(calls[1], ["detach", mount, "-force"]);
+            }
+            if scenario == "busy" {
+                assert_eq!(calls[2], ["detach", mount], "the preserved busy error must reach another ordinary attempt");
+            }
+            let waits = waits.into_inner();
+            assert_eq!(waits.len(), expected_waits, "{scenario}");
+            if scenario == "busy" {
+                assert_eq!(waits, [std::time::Duration::from_millis(500)]);
+            }
+        }
     }
 
     /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
@@ -2074,6 +2183,17 @@ pub mod macos {
     /// when `ended` says its process ended, or when it is this process's and no install here uses
     /// it. `detach` detaches an image. Failures are logged and the install goes on.
     pub(crate) fn clear_mounts(app: &App, cache: &Path, ended: impl Fn(u32) -> bool, detach: impl Fn(&Path) -> Result<(), String>) {
+        clear_mounts_with_wait(app, cache, ended, detach, std::thread::sleep);
+    }
+
+    /// [`clear_mounts`], with the busy-helper backoff supplied by the caller.
+    pub(crate) fn clear_mounts_with_wait(
+        app: &App,
+        cache: &Path,
+        ended: impl Fn(u32) -> bool,
+        detach: impl Fn(&Path) -> Result<(), String>,
+        mut wait: impl FnMut(Duration),
+    ) {
         let Ok(entries) = std::fs::read_dir(cache) else { return };
         let prefix = format!("mount-{}-", app.id);
         // Read before `ended` runs `ps`, which then lists every process that made one of them.
@@ -2087,7 +2207,7 @@ pub mod macos {
             if !gone {
                 continue;
             }
-            match detach(&mount).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
+            match super::retry_busy_detach(|| detach(&mount), &mut wait).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
                 Ok(()) => log::info!("removed {}, left by an install that ended partway", mount.display()),
                 Err(e) => log::warn!("couldn't clear {}, left by an install that ended partway ({e})", mount.display()),
             }
@@ -4250,6 +4370,78 @@ exit 0
         }
     }
 
+    #[test]
+    fn a_busy_detach_retries_and_stops_as_soon_as_it_succeeds() {
+        for reason in ["hdiutil: detach failed - Resource busy", "hdiutil: detach failed - Resource temporarily unavailable"] {
+            let mut attempts = 0;
+            let mut waits = Vec::new();
+            let result = retry_busy_detach(
+                || {
+                    attempts += 1;
+                    if attempts == 1 { Err(reason.to_string()) } else { Ok(()) }
+                },
+                |delay| waits.push(delay),
+            );
+            assert_eq!(result, Ok(()), "{reason}");
+            assert_eq!(attempts, 2, "the successful second detach must be the last");
+            assert_eq!(waits.len(), 1);
+            assert!(!waits[0].is_zero());
+        }
+    }
+
+    #[test]
+    fn a_detach_that_stays_busy_returns_its_last_error_after_bounded_retries() {
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        let result = retry_busy_detach(
+            || {
+                attempts += 1;
+                assert!(attempts <= 5, "a busy helper must not be retried indefinitely");
+                Err(format!("Resource busy, attempt {attempts}"))
+            },
+            |delay| waits.push(delay),
+        );
+        assert!((2..=5).contains(&attempts));
+        assert_eq!(waits.len(), attempts - 1);
+        assert!(waits.iter().all(|delay| !delay.is_zero()));
+        assert!(waits.iter().sum::<std::time::Duration>() <= std::time::Duration::from_secs(8));
+        assert_eq!(result, Err(format!("Resource busy, attempt {attempts}")));
+    }
+
+    #[test]
+    fn a_slow_busy_detach_spends_the_retry_window_without_another_attempt() {
+        let attempts = std::cell::Cell::new(0);
+        let elapsed = std::cell::Cell::new(std::time::Duration::ZERO);
+        let reason = "hdiutil: detach failed - Resource busy";
+        let result = retry_busy_detach_with_elapsed(
+            || {
+                attempts.set(attempts.get() + 1);
+                elapsed.set(std::time::Duration::from_secs(9));
+                Err(reason.to_string())
+            },
+            |_| panic!("a slow detach has already spent the retry window"),
+            || elapsed.get(),
+        );
+        assert_eq!(result, Err(reason.to_string()));
+        assert_eq!(attempts.get(), 1, "operation time counts against retries, not just sleep time");
+    }
+
+    #[test]
+    fn a_detach_success_or_nonbusy_failure_never_waits_or_retries() {
+        for answer in [Ok(()), Err("Permission denied".to_string()), Err("hdiutil didn't finish within 60 seconds".to_string())] {
+            let mut attempts = 0;
+            let result = retry_busy_detach(
+                || {
+                    attempts += 1;
+                    answer.clone()
+                },
+                |_| panic!("success and nonbusy failure must not wait"),
+            );
+            assert_eq!(result, answer);
+            assert_eq!(attempts, 1);
+        }
+    }
+
     /// Whether hdiutil's `stderr` says the disk-image helper turned the request away because it
     /// was busy.
     fn busy(stderr: &[u8]) -> bool {
@@ -4899,7 +5091,8 @@ exit 0
                 |pid| pid == ended,
                 |mount| {
                     asked.borrow_mut().push(mount.to_path_buf());
-                    if mount == busy { Err("Resource busy".into()) } else { Ok(()) }
+                    // This control pins a permanent refusal; busy retries have their own cases.
+                    if mount == busy { Err("Permission denied".into()) } else { Ok(()) }
                 },
             );
             let mut asked = asked.into_inner();
@@ -4911,6 +5104,56 @@ exit 0
             for path in kept.iter().chain([&busy, &own_in_use]) {
                 assert!(path.exists(), "{} was removed", path.display());
             }
+        }
+
+        #[test]
+        fn an_ended_mount_is_removed_after_a_busy_detach_succeeds() {
+            let dir = tempfile::tempdir().unwrap();
+            let mount = dir.path().join("mount-photocraft-4000001-1");
+            std::fs::create_dir(&mount).unwrap();
+            let attempts = std::cell::Cell::new(0);
+            let waits = std::cell::Cell::new(0);
+            macos::clear_mounts_with_wait(
+                photocraft(),
+                dir.path(),
+                |pid| pid == 4_000_001,
+                |path| {
+                    assert_eq!(path, mount.as_path());
+                    attempts.set(attempts.get() + 1);
+                    if attempts.get() == 1 { Err("Resource temporarily unavailable".into()) } else { Ok(()) }
+                },
+                |delay| {
+                    assert!(!delay.is_zero());
+                    waits.set(waits.get() + 1);
+                },
+            );
+            assert!(!mount.exists(), "a transiently busy leftover image must not block the next install");
+            assert_eq!(attempts.get(), 2);
+            assert_eq!(waits.get(), 1);
+        }
+
+        #[test]
+        fn a_mount_that_stays_busy_is_left_after_bounded_cleanup() {
+            let dir = tempfile::tempdir().unwrap();
+            let mount = dir.path().join("mount-photocraft-4000001-1");
+            std::fs::create_dir(&mount).unwrap();
+            let attempts = std::cell::Cell::new(0);
+            let waits = std::cell::Cell::new(0);
+            macos::clear_mounts_with_wait(
+                photocraft(),
+                dir.path(),
+                |pid| pid == 4_000_001,
+                |path| {
+                    assert_eq!(path, mount.as_path());
+                    attempts.set(attempts.get() + 1);
+                    assert!(attempts.get() <= 5, "cleanup must stop retrying");
+                    Err("Resource busy".into())
+                },
+                |_| waits.set(waits.get() + 1),
+            );
+            assert!(mount.exists(), "a mount whose detach failed must not be removed");
+            assert!((2..=5).contains(&attempts.get()));
+            assert_eq!(waits.get(), attempts.get() - 1);
         }
 
         #[test]
