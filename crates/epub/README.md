@@ -13,7 +13,8 @@ order in its spine, and (EPUB 3) a navigation document.
 | OPF 2.0.1 | EPUB 2 packages: `spine toc`, `<meta name="cover">`, `dc-metadata` |
 
 The crate packages content documents and finds them again. It does not turn a document model
-into XHTML or XHTML into a document model: that is the application's side.
+into XHTML: that is the application's side. Reading XHTML into a document model is the optional
+`doc` feature, through craft-html.
 
 ## Writing
 
@@ -103,6 +104,59 @@ for path in &spine {
 The ZIP layer is craft-zip: the declared entry count is checked before the archive is indexed, and
 sizes are checked against what an entry really expands to, not what the archive declares. The two
 XML documents are read with craft-xml's limits (depth 256, 2,000,000 nodes) and `max_entry_bytes`.
+
+## Content documents (feature `doc`)
+
+`craft_epub::doc::read_book` reads a whole book into the [craft-flow](../flow/README.md) model:
+each XHTML content document of the spine through craft-html's reader, one `Chapter` each, with the
+package's metadata, table of contents and cover.
+
+```rust
+# fn main() -> Result<(), craft_epub::Error> {
+# #[cfg(feature = "doc")] {
+# let bytes: Vec<u8> = Vec::new();
+# if bytes.is_empty() { return Ok(()); }
+use craft_epub::doc::{BookOptions, Boundary, read_book};
+
+let book = read_book(&bytes, &BookOptions::default())?;
+for chapter in &book.chapters {
+    let _ = (&chapter.title, chapter.linear, &chapter.flow);
+}
+let whole = book.join(Boundary::PageBreak);
+# }
+# Ok(()) }
+```
+
+- The spine is read in order, each document once. `linear="no"` items are kept in place and
+  flagged; `join` keeps them too, and an app that wants otherwise composes from `chapters`. In
+  `join`, a list that ends one chapter does not run on into one that starts the next.
+- Images resolve against the chapter that names them and are read once for the whole book, inside
+  the package's byte budgets. A navigation document that is also in the spine is read once too.
+- Each chapter has a key: `c` and its position among the content documents planned from the spine
+  (`c1`, `c2`, …), so one that turns out missing leaves a gap. Its bookmarks become `{key}-{id}`
+  and a bookmark `{key}` marks its start, so the chapters' ids stay distinct when joined. A link to
+  another chapter (`two.xhtml#n3`) or within one (`#n3`) is rewritten to that bookmark (its
+  fragment looked up as written, then percent-decoded), or to the chapter's start when it has no
+  such bookmark. Links out of the package, and links into documents that were not read (missing,
+  not XHTML, past `max_chapters`), are left as written. `BookFlow::bookmark(path, fragment)` gives
+  the same answer for a table of contents entry or any other reference.
+- A chapter's title is the label of the first table of contents entry that points into it.
+- `BookFlow::package` is the package document as read, `toc` the table of contents, `cover` the
+  cover image's bytes.
+- Refused: a package with anything encrypted other than fonts that the manifest lists as fonts
+  under a font obfuscation algorithm (`Error::Encrypted`), an `encryption.xml` with more records
+  than the crate reads of it (10,000; also `Error::Encrypted`, naming that file), a chapter
+  larger than `max_entry_bytes`, and parts past the total byte budget (`Error::TooLarge`).
+- Warnings, with the rest still read, grouped by kind rather than in spine order: a missing or
+  broken chapter or image, an image over `max_entry_bytes`, an image in a format the flow cannot
+  hold (an SVG; the cover's bytes are carried whatever their format), a spine item that is not
+  XHTML (its manifest `fallback` is not followed), a fixed-layout book (flagged when the package
+  declares it for the whole book; a spine item's own `rendition:layout` is not read), and
+  chapters past `BookOptions::max_chapters` (10,000).
+- craft-html keeps bookmarks only from `<a id>` and `<a name>`, does not read linked style
+  sheets, and reads notes as ordinary text.
+
+The feature brings in craft-html and craft-flow; a reader of the package alone leaves it off.
 
 ## Where it came from
 
