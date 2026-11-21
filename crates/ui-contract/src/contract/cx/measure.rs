@@ -140,7 +140,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// editor draws past its last letter, so the caret stays inside the control and the text never scrolls.
     pub fn field_text(&self, run: &TextRun<'_>) -> Vec2 {
         let text = self.layout(run).size();
-        Vec2::new(text.x + self.ui.visuals().text_cursor.stroke.width, text.y)
+        Vec2::new(text.x + crate::runtime::egui::style::caret_width(self.ui.ctx()), text.y)
     }
 
     /// Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content

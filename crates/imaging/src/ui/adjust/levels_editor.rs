@@ -13,7 +13,7 @@ use craft_ui::contract::{
 use craft_ui::display::{Shade, Text};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx, TypeRole};
-use craft_ui::text::NumberField;
+use craft_ui::text::{FieldStyle, NumberField};
 use craft_ui::value_drag::{Follow, Order, RowOp, RowRules, Thumb, ThumbOp, ThumbRow, TrackFace};
 use egui::{Color32, Rect, Response, Vec2, pos2};
 
@@ -431,8 +431,8 @@ impl Component for LevelsEditor<'_> {
             row: control.icon,
             bar_row: control.icon + cx.tokens.size.ramp.bar,
             fields: row,
-            field: cx.text_width(TypeRole::Body, "000") + 2.0 * control.pad_x,
-            gamma_field: cx.text_width(TypeRole::Body, "0.00") + 2.0 * control.pad_x,
+            field: FieldStyle::number_width(cx, "000"),
+            gamma_field: FieldStyle::number_width(cx, "0.00"),
             width: cx.tokens.size.plot.width,
             bar: key.channel.bar(cx),
         }

@@ -100,6 +100,13 @@ impl FieldStyle {
         f32::from(chars) * digit + 2.0 * cx.control().pad_x
     }
 
+    /// The width of a [`NumberField`] that shows `sample`: the text in the face a number field draws, the caret
+    /// past its last letter, and the field's padding on both sides. A parent that sizes a field by its sample text
+    /// (a column of fixed-width number fields) uses it, so the field holds the value whole.
+    pub fn number_width(cx: &StyleCx<'_>, sample: &str) -> f32 {
+        cx.text_width(crate::style::TypeRole::Mono, sample) + cx.caret_width() + 2.0 * cx.control().pad_x
+    }
+
     /// The field's padding, gap and minimum size.
     pub fn metrics(&self) -> Metrics {
         self.metrics
