@@ -121,7 +121,7 @@ jobs:
         # tests run (stubicc, h264_h264enc_bench); clippy in the lint leg covers the rest. The default-feature compile is the lint leg's
         # first clippy run; the last command runs the crates whose tests check behaviour with a
         # feature off, which an all-features build cannot reach.
-        # A partial selection of exact package terms can skip both examples when neither is selected.
+        # An exact partial selection skips each optional phase when neither package is selected.
         # The primary build is the whole workspace's, as on main; its filter narrows only the run. The
         # doctests run for the whole workspace: `cargo test -p <selected>` would resolve features
         # over the selected crates only and rebuild the dependencies whose features differ.
@@ -142,7 +142,11 @@ jobs:
           CRAFT_UI_AUDIT_REPLAY=1 cargo nextest run --workspace --all-features --locked --profile ci -E "($CRAFT_TEST_FILTER) & (package(craft-ui-contract) | package(craft-ui-widgets) | package(craft-ui-panels) | package(craft-ui-patterns) | package(craft-ui-shell) | package(craft-ui-gallery) | package(craft-menu))" --no-tests=warn --lib --bins --tests
         fi
         cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        if [[ "$CRAFT_TESTS" != some || ! "$CRAFT_TEST_FILTER" =~ $package_filter ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-image-codecs)"* ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-text)"* ]]; then
+          cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        fi
 
   # The macOS and Windows legs, when `platforms` says this run needs them, with the Linux leg's
   # inputs.
@@ -186,7 +190,11 @@ jobs:
           cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
         fi
         cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        if [[ "$CRAFT_TESTS" != some || ! "$CRAFT_TEST_FILTER" =~ $package_filter ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-image-codecs)"* ||
+            "$CRAFT_TEST_FILTER" == *"package(=craft-text)"* ]]; then
+          cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        fi
 
   # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
   # every run restores only the newest. This deletes the older ones as soon as the Linux leg is
