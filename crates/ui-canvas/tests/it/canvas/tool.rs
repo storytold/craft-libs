@@ -827,15 +827,17 @@ fn a_held_space_ends_when_the_injected_input_is_cancelled() {
     assert_eq!(rig.main.borrow().space_drags, [true, false], "Space is held for the first drag and not after the cancel");
 }
 
-/// A tool that records the pen pressure of its press and drags.
+/// A tool that records the pen pressure of its press and drags, and the click count of each press.
 #[derive(Default)]
 struct PenProbe {
     pressures: Vec<f32>,
     kinds: Vec<PointerKind>,
+    clicks: Vec<u32>,
 }
 
 impl CanvasTool for PenProbe {
     fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.clicks.push(pointer.clicks);
         self.pressures.push(pointer.sample.pressure);
         self.kinds.push(pointer.kind);
         ToolAction::Claimed
@@ -857,12 +859,9 @@ impl CanvasTool for PenProbe {
     }
 }
 
-/// An injected pen reading reaches the tool as a tablet's does: the press and the drag carry the pressure their steps
-/// were injected with, and the pointer kind of a pen.
-#[trial]
-fn an_injected_pen_reading_reaches_the_tool() {
-    let probe = Rc::new(RefCell::new(PenProbe::default()));
-    let (shown_probe, canvas) = (Rc::clone(&probe), Rc::new(Cell::new(Id::NULL)));
+/// A canvas showing `probe` as its tool; the canvas's id is in the returned cell after the first pass.
+fn probe_fixture(probe: &Rc<RefCell<PenProbe>>) -> (Fixture, Rc<Cell<Id>>) {
+    let (shown_probe, canvas) = (Rc::clone(probe), Rc::new(Cell::new(Id::NULL)));
     let shown_canvas = Rc::clone(&canvas);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
@@ -874,6 +873,28 @@ fn an_injected_pen_reading_reaches_the_tool() {
         shown_canvas.set(shown.output.response.id);
     });
     fixture.settle();
+    (fixture, canvas)
+}
+
+/// Injected clicks in a row reach the tool as one press each, counted as a double and then a triple click.
+#[trial]
+fn injected_clicks_reach_the_tool_as_a_multi_click() {
+    let probe = Rc::new(RefCell::new(PenProbe::default()));
+    let (mut fixture, canvas) = probe_fixture(&probe);
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    ToolHost::inject(&fixture.ctx().clone(), canvas.get(), ToolInput::clicks(PointerButton::Primary, at, 3));
+    fixture.run_injected();
+    let clicks = probe.borrow().clicks.clone();
+    assert!(clicks.len() == 3 && clicks.windows(2).all(|pair| pair[1] > pair[0]), "each press counts one more: {clicks:?}");
+    assert_eq!(clicks.last(), Some(&3), "the third press is a triple click");
+}
+
+/// An injected pen reading reaches the tool as a tablet's does: the press and the drag carry the pressure their steps
+/// were injected with, and the pointer kind of a pen.
+#[trial]
+fn an_injected_pen_reading_reaches_the_tool() {
+    let probe = Rc::new(RefCell::new(PenProbe::default()));
+    let (mut fixture, canvas) = probe_fixture(&probe);
     let at = fixture.by_role(Role::CANVAS)[0].rect.center();
     let ctx = fixture.ctx().clone();
     for input in [

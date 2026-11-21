@@ -158,6 +158,19 @@ pub enum ToolInput {
         /// The modifiers held.
         mods: Mods,
     },
+    /// `count` presses and releases of `button` at `pos`, one pass each, after a move there: two make a double click,
+    /// three a triple click, as the canvas's press counts presses close together in time and place.
+    #[non_exhaustive]
+    Click {
+        /// The button.
+        button: PointerButton,
+        /// The pointer.
+        pos: Pos2,
+        /// How many presses.
+        count: u32,
+        /// The modifiers held.
+        mods: Mods,
+    },
     /// A key goes down with no key event: the passes from this one on run with the key held
     /// ([`ToolContext::held`]) until its [`ToolInput::LetGo`].
     #[non_exhaustive]
@@ -189,6 +202,11 @@ impl ToolInput {
         ToolInput::Up { pos, mods: Mods::NONE }
     }
 
+    /// `count` mouse clicks of `button` at `pos` in a row, with no modifiers: 2 is a double click, 3 a triple click.
+    pub const fn clicks(button: PointerButton, pos: Pos2, count: u32) -> Self {
+        ToolInput::Click { button, pos, count, mods: Mods::NONE }
+    }
+
     /// `key` going down, held until its [`ToolInput::let_go`].
     pub const fn hold(key: Key) -> Self {
         ToolInput::Hold { key }
@@ -203,7 +221,7 @@ impl ToolInput {
     #[must_use]
     pub fn mods(mut self, held: Mods) -> Self {
         match &mut self {
-            ToolInput::Down { mods, .. } | ToolInput::Move { mods, .. } | ToolInput::Up { mods, .. } => *mods = held,
+            ToolInput::Down { mods, .. } | ToolInput::Move { mods, .. } | ToolInput::Up { mods, .. } | ToolInput::Click { mods, .. } => *mods = held,
             ToolInput::Hold { .. } | ToolInput::LetGo { .. } => {}
         }
         self
@@ -219,12 +237,12 @@ impl ToolInput {
         self
     }
 
-    /// The input as a pen's, with its reading `pen`; a button coming up and a held key have none.
+    /// The input as a pen's, with its reading `pen`; a button coming up, clicks and a held key have none.
     #[must_use]
     pub fn sample(mut self, pen: PointerSample) -> Self {
         match &mut self {
             ToolInput::Down { sample, .. } | ToolInput::Move { sample, .. } => *sample = Some(pen),
-            ToolInput::Up { .. } | ToolInput::Hold { .. } | ToolInput::LetGo { .. } => {}
+            ToolInput::Up { .. } | ToolInput::Click { .. } | ToolInput::Hold { .. } | ToolInput::LetGo { .. } => {}
         }
         self
     }
@@ -723,6 +741,7 @@ impl<'m> ToolHost<'m> {
             }
             ToolInput::Move { pos, sample, mods, rest } => host.inject_pointer(viewport, InjectedPointer::move_resting(pos, mods, sample, rest)),
             ToolInput::Up { pos, mods } => host.inject_pointer(viewport, InjectedPointer::up(pos, mods)),
+            ToolInput::Click { button, pos, count, mods } => host.inject_click(viewport, pos, button, count, mods, false),
             ToolInput::Hold { key } => host.inject_hold(viewport, key),
             ToolInput::LetGo { key } => host.inject_let_go(viewport, key),
         }
