@@ -745,6 +745,8 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     for prune in prunes {
         prune(&ctx, &live);
     }
+    #[cfg(feature = "testing")]
+    crate::runtime::egui::access::check_parents_acyclic(&ctx);
     RUNNING.with(|running| {
         let mut running = running.borrow_mut();
         if let Some(at) = running.iter().rposition(|pass| pass.ctx == ctx) {

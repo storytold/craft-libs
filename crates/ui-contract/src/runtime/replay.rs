@@ -314,10 +314,11 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     facts.discards |= discard_requests(ctx) > open.discards;
     let focus = focus::transcript(ctx, open.focus);
     let widgets = egui.widgets().iter().map(|widget| widget.id).collect();
-    // A run that ends holding focus reads what is sent to it: the next key, text, IME, clipboard or AccessKit event runs
-    // it, wherever the framework routes that event.
+    // A run that ends holding focus reads where the focus is and what is sent to it: a focus move, and the next key,
+    // text, IME, clipboard or AccessKit event wherever the framework routes it, run it.
     let held = Held::focused(ctx).within(&focus, &widgets);
     if held.any() {
+        facts.inputs.insert(Input::Focus);
         facts.inputs.insert(Input::Sent);
     }
     Record { focus, journal, widgets, held, egui, facts }

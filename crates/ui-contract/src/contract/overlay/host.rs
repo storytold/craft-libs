@@ -172,7 +172,12 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     };
     let parent = overlay::drawing_parent(ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting };
+    let mut spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting, root: None };
+    // A popup's or a modal's layer, and any layer while it fades out, has a root node, made before its `Area` shows so
+    // egui hangs the layer's content below it. A sizing pass of the `Area` reports nothing.
+    if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
+        spec.root = areas::content_rect(ctx, &spec).map(|rect| access::report_layer(ctx, layer.id, rect, overlay.rank.is_modal(), layer.exiting));
+    }
     // The opener of the layer's scope is the stop focused when the layer first appears: egui's modal gate takes focus
     // from the widgets below a modal layer by the first pass that shows the layer. A dropdown that keeps its anchor's key
     // focus belongs to the component that opened it: a press moves the key focus onto that component only at the end of
@@ -199,8 +204,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         // from the opener's inherited env with the layer-local fields fresh, and outside the opener's scopes.
         let installed = Env::install_for(ui, layer.env.capture().env());
         let real = !ui.is_sizing_pass();
-        if real && (layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. })) {
-            access::report_layer(ctx, layer.id, ui.unique_id(), ui.max_rect(), overlay.rank.is_modal(), layer.exiting);
+        if spec.root.is_some() && layer.exiting {
+            access::hide_exiting_content(ctx, ui.unique_id());
         }
         // Every layer is a focus scope, one without a policy (`FocusPolicy::NONE`) included: its stops are the layer's,
         // not those of the scope it was opened in, so a trap around it leaves them out (a menu's companion bar).
@@ -237,6 +242,10 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
     overlay::record(ctx, entry);
     let dismissed = if layer.exiting { None } else { dismissal(ctx, layer, shown.rect, anchor, scope, &mut memory) };
+    // The layer closes after its body ran: the run shows it open, so a record of the run is not replayed.
+    if dismissed.is_some() {
+        crate::runtime::replay::note_unsettled(ctx);
+    }
     if let Some(nudge) = &nudge {
         // `dismissal` above records the press beside the layer (`dismissal.rs`, `note_pressed_outside`), so the nudge
         // starts after it and moves the layer from the next pass on.

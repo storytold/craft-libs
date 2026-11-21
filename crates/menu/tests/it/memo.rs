@@ -112,10 +112,12 @@ fn an_idle_bar_and_an_open_menu_build_no_labels() {
     fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opened File");
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    assert!(counted(&fixture).0 > 0, "a key in the open menu runs the bar");
+    assert_eq!(label_builds(&fixture), 0, "and builds no labels");
     for _ in 0..3 {
         fixture.frame(vec![]);
-        assert!(counted(&fixture).0 > 0, "the bar runs each pass while a menu is open");
-        assert_eq!(label_builds(&fixture), 0, "and builds no labels");
+        assert_eq!(label_builds(&fixture), 0, "an idle open menu builds no labels");
     }
 }
 

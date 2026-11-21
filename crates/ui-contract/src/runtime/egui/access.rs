@@ -211,14 +211,35 @@ pub(crate) fn register_parent(ctx: &Context, id: Id, parent: Id) {
     emit(ctx, id);
 }
 
-/// `register_parent` for the content `Ui` of an overlay layer, which attaches to the layer's root node. The content is
-/// neither a widget nor a node, so egui's records of the run hold no parent for it: a replay of the run registers it
-/// again. A parent egui's records hold is never journaled: they hold its last value, which a replayed earlier call
-/// would overwrite.
-pub(crate) fn register_layer_parent(ctx: &Context, content: Id, root: Id) {
-    crate::runtime::replay::journal(ctx, || (content, root), |ctx, &(content, root)| register_layer_parent(ctx, content, root));
-    ctx.register_accesskit_parent(content, root);
-    with_emitted(ctx, |emitted| emitted.emit(content));
+/// The trials' pass-end check that egui's AccessKit parents of the pass hold no cycle; panics naming the ids of the
+/// first one found. egui places a node under the first ancestor that has a node by walking the parents, which a cycle
+/// sends into endless recursion when no node of the cycle exists yet: a replay adds a run's nodes in the order they
+/// were created, and a run only tolerates a cycle while some node of it already exists.
+#[cfg(feature = "testing")]
+pub(crate) fn check_parents_acyclic(ctx: &Context) {
+    let cycle = ctx.with_accesskit_parents(|parents| {
+        let mut acyclic = IdSet::default();
+        for &start in parents.keys() {
+            let mut path: Vec<Id> = Vec::new();
+            let mut on_path = IdSet::default();
+            let mut at = Some(start);
+            while let Some(id) = at.filter(|id| !acyclic.contains(id)) {
+                if !on_path.insert(id) {
+                    let from = path.iter().position(|on| *on == id).unwrap_or_default();
+                    return Some(path.split_off(from));
+                }
+                path.push(id);
+                at = parents.get(&id).copied();
+            }
+            acyclic.extend(path);
+        }
+        None
+    });
+    let cycle = cycle.flatten();
+    assert!(
+        cycle.is_none(),
+        "the AccessKit parents of the pass hold a cycle: {cycle:?}, each the parent of the one before and the first the parent of the last"
+    );
 }
 
 /// Notes that the runtime emitted the node of `id`.

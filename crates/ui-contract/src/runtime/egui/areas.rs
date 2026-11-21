@@ -212,6 +212,9 @@ pub(crate) struct LayerSpec {
     pub at: Pos2,
     /// Whether the layer takes input; a tooltip and the ghost layer never do.
     pub interactable: bool,
+    /// The accessibility node the layer's content hangs under, created before the layer shows: egui attaches the
+    /// layer's `Area`, and through it the content, below it.
+    pub root: Option<Id>,
 }
 
 /// What `show_layer` reports.
@@ -226,22 +229,31 @@ pub(crate) struct LayerShown {
 /// service fades a layer in (`motion::layer_presence`), so egui's own fade-in of a new `Area` is off.
 pub(crate) fn show_layer(ctx: &Context, spec: &LayerSpec, body: impl FnOnce(&mut egui::Ui)) -> LayerShown {
     let mut sizing = false;
-    let shown = egui::Area::new(spec.id)
+    let mut area = egui::Area::new(spec.id)
         .fade_in(false)
         .order(spec.tier.order())
         .pivot(egui::Align2::LEFT_TOP)
         .fixed_pos(spec.at)
         .constrain(false)
-        .interactable(spec.interactable)
-        .show(ctx, |ui| {
-            sizing = ui.is_sizing_pass();
-            body(ui);
-        });
+        .interactable(spec.interactable);
+    if let Some(root) = spec.root {
+        area = area.accessibility_parent(root);
+    }
+    let shown = area.show(ctx, |ui| {
+        sizing = ui.is_sizing_pass();
+        body(ui);
+    });
     register_area(ctx, shown.response.layer_id, sizing);
     // The `Area`'s own widget senses a click over the whole layer, beneath the layer's widgets: it stands for none of
     // the layer's components.
     crate::runtime::pointer::record_layer_widget(ctx, shown.response.id);
     LayerShown { rect: shown.response.rect, layer: shown.response.layer_id }
+}
+
+/// The rect the content of the layer `spec` shows takes in this pass, before the layer shows: its left-top and the size
+/// egui keeps for its `Area`. `None` when the layer shows in an egui sizing pass, which paints and reports nothing.
+pub(crate) fn content_rect(ctx: &Context, spec: &LayerSpec) -> Option<Rect> {
+    egui::AreaState::load(ctx, spec.id).and_then(|state| state.size).map(|size| Rect::from_min_size(spec.at, size))
 }
 
 /// What an overlay layer's `Area` keeps in egui's memory for a pass it shows in: its egui layer, its left-top in
@@ -278,7 +290,7 @@ fn register_area(ctx: &Context, layer: LayerId, sizing: bool) {
 }
 
 fn show_again(ctx: &Context, area: &AreaRecord) {
-    crate::runtime::replay::journal(ctx, || *area, |ctx, area| show_again(ctx, area));
+    crate::runtime::replay::journal(ctx, || *area, show_again);
     crate::runtime::replay::note_overlay(ctx, area.layer, Rect::from_min_size(area.at, area.size));
     let became = egui::AreaState::load(ctx, area.layer.id).and_then(|state| state.last_became_visible_at);
     let state = egui::AreaState {

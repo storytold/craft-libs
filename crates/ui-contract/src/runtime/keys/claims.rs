@@ -55,6 +55,8 @@ pub fn claim(ctx: &Context, owner: Id, chord: Chord) {
 #[doc(hidden)]
 pub fn capture(ctx: &Context, owner: Id, chord: Chord) {
     crate::runtime::replay::journal(ctx, || (owner, chord), |ctx, &(owner, chord)| capture(ctx, owner, chord));
+    // The captured chord reaches `owner` wherever the focus is: a run that captures reads what is sent.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Sent);
     current(ctx, |stage| {
         if !stage.captures.contains(&(owner, chord)) {
             stage.captures.push((owner, chord));

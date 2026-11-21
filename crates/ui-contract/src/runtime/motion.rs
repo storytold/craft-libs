@@ -395,6 +395,9 @@ impl Driver<'_> {
         let sizing = self.stage.is_peek();
         let now = frame::clock(ctx);
         let existing = if sizing { store::peek_clone::<Tween<T>>(ctx, id) } else { store::take::<Tween<T>>(ctx, id) };
+        // A tween that moves in this pass (a new target, also one it jumps to, or a step, also its last one) leaves the
+        // slot in another state than the run found it in, which the next run reads (`layer_fading` among others).
+        let moved = existing.as_ref().is_some_and(|tween| tween.target() != target || !tween.is_settled());
         let mut tween = match existing {
             Some(tween) => tween,
             None => {
@@ -407,7 +410,7 @@ impl Driver<'_> {
         self.advance(&mut tween, target, spec, now);
         let shown = tween.shown();
         if !sizing {
-            if !tween.is_settled() {
+            if moved || !tween.is_settled() {
                 note_unsettled(ctx);
             }
             store::put(ctx, id, tween);

@@ -15,6 +15,7 @@ use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::runtime::{frame, inspect};
+use craft_ui::testing::access::{NodeKey, layer_root};
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::{allocate, in_region, measured_block};
@@ -1272,6 +1273,13 @@ fn a_view_in_a_popover_fills_its_width_as_without_the_view() {
 const POPOVER_AT: Pos2 = Pos2::new(60.0, 60.0);
 const AWAY: Pos2 = Pos2::new(700.0, 500.0);
 
+/// Frames with motion off: a layer opens and closes in one frame, with no fade that runs its view.
+fn still_frames() -> Frames {
+    let mut frames = Frames::new();
+    frames.root(craft_ui::runtime::env::RootEnv::default().motion(craft_behavior::MotionMode::Off));
+    frames
+}
+
 /// A popover the view shows, holding a line of text and a button; the focus stays where it was, so nothing in it holds
 /// the focus.
 #[derive(MemoProps)]
@@ -1304,12 +1312,12 @@ impl HintScene {
         ran.map(|(name, _, _)| short_name(name)).collect()
     }
 
-    fn settled(frames: &mut Frames) -> HintScene {
-        let mut scene = HintScene { open: true, row: None };
+    /// An open popover after the frames that settle it. The scene stays where it is made: its binding's place is part
+    /// of the view's key.
+    fn settle(&mut self, frames: &mut Frames) {
         for _ in 0..SETTLE {
-            scene.frame(frames, vec![]);
+            self.frame(frames, vec![]);
         }
-        scene
     }
 }
 
@@ -1321,8 +1329,9 @@ fn any_open(frames: &Frames) -> bool {
 /// runs, the layer stays open and on top under its row, and its AccessKit node keeps its id and parent.
 #[trial]
 fn an_open_popover_without_focus_replays_with_its_layer() {
-    let mut frames = Frames::new();
-    let mut scene = HintScene::settled(&mut frames);
+    let mut frames = still_frames();
+    let mut scene = HintScene { open: true, row: None };
+    scene.settle(&mut frames);
     let row = scene.row.expect("the popover shows its row");
     let layer = frames.ctx.layer_id_at(row.center()).expect("the popover's layer is under its row");
     let dialog = |frames: &mut Frames| {
@@ -1344,32 +1353,36 @@ fn an_open_popover_without_focus_replays_with_its_layer() {
 /// The pointer onto the popover's row runs the view in that frame.
 #[trial]
 fn the_pointer_over_a_replayed_popover_runs_its_view() {
-    let mut frames = Frames::new();
-    let mut scene = HintScene::settled(&mut frames);
+    let mut frames = still_frames();
+    let mut scene = HintScene { open: true, row: None };
+    scene.settle(&mut frames);
     let row = scene.row.expect("the popover shows its row").center();
     assert_eq!(scene.frame(&mut frames, vec![moved(row)]), ["Hint"], "the pointer onto the row runs the view");
 }
 
-/// An outside press closes a replaying popover in the press frame; the view runs at most once more and then replays
+/// An outside press closes a replaying popover in the press frame; the view runs at most twice more and then replays
 /// with no layer open.
 #[trial]
 fn an_outside_press_closes_a_replaying_popover() {
-    let mut frames = Frames::new();
-    let mut scene = HintScene::settled(&mut frames);
+    let mut frames = still_frames();
+    let mut scene = HintScene { open: true, row: None };
+    scene.settle(&mut frames);
     scene.frame(&mut frames, vec![moved(AWAY)]);
     assert!(scene.frame(&mut frames, vec![]).is_empty(), "the view replays with the pointer away");
     assert_eq!(scene.frame(&mut frames, vec![press(AWAY), release(AWAY)]), ["Hint"], "the press runs the view");
     assert!(!scene.open, "the outside press closed the popover in its frame");
-    let after: Vec<Vec<&str>> = (0..WARM).map(|_| scene.frame(&mut frames, vec![])).collect();
-    assert!(after.iter().skip(1).all(Vec::is_empty), "the view runs at most once after the close: {after:?}");
+    // The first run after the close finds the layer's presence still open and settles it; the next one shows nothing.
+    let after: Vec<Vec<&str>> = (0..=WARM).map(|_| scene.frame(&mut frames, vec![])).collect();
+    assert!(after.iter().skip(2).all(Vec::is_empty), "the view runs at most twice after the close: {after:?}");
     assert!(!any_open(&frames), "no layer is open");
 }
 
 /// A close of every popup from outside the view (a command's) closes a replaying popover in the next frame.
 #[trial]
 fn closing_the_popups_closes_a_replaying_popover() {
-    let mut frames = Frames::new();
-    let mut scene = HintScene::settled(&mut frames);
+    let mut frames = still_frames();
+    let mut scene = HintScene { open: true, row: None };
+    scene.settle(&mut frames);
     craft_ui::runtime::overlay::close_popups(&frames.ctx);
     assert_eq!(scene.frame(&mut frames, vec![]), ["Hint"], "the queued close runs the view");
     assert!(!scene.open, "the close reached the popover");
@@ -1378,8 +1391,9 @@ fn closing_the_popups_closes_a_replaying_popover() {
 /// A window resize runs a view that shows a popover once, and the popover stays inside the new window; then it replays.
 #[trial]
 fn a_window_resize_runs_a_popover_view_once() {
-    let mut frames = Frames::new();
-    let mut scene = HintScene::settled(&mut frames);
+    let mut frames = still_frames();
+    let mut scene = HintScene { open: true, row: None };
+    scene.settle(&mut frames);
     frames.screen(Vec2::new(1000.0, 700.0));
     let resized: Vec<Vec<&str>> = (0..WARM).map(|_| scene.frame(&mut frames, vec![])).collect();
     assert_eq!(resized.iter().filter(|ran| !ran.is_empty()).count(), 1, "the resize runs the view once: {resized:?}");
@@ -1404,7 +1418,7 @@ fn typing(props: &mut Typing<'_>, ui: &mut Ui) {
 /// field in their frame, and an idle frame after each replays the view.
 #[trial]
 fn events_sent_to_a_replaying_focused_field_reach_it_in_their_frame() {
-    let mut frames = Frames::new();
+    let mut frames = still_frames();
     let mut text = String::new();
     let frame = |frames: &mut Frames, events: Vec<egui::Event>, text: &mut String| {
         frames.frame(events, |ui| {
@@ -1429,6 +1443,91 @@ fn events_sent_to_a_replaying_focused_field_reach_it_in_their_frame() {
         assert!(ran.contains(&"Typing"), "the event ran the view: {ran:?}");
         frame(&mut frames, vec![], &mut text);
         assert!(frame(&mut frames, vec![], &mut text).is_empty(), "an idle frame after it replays the view");
+    }
+}
+
+/// A popover the view shows, holding a line of text; returns the popover's id.
+fn rooted(props: &mut Hint<'_>, ui: &mut Ui) -> Option<Id> {
+    let popover = Popover::new("Rooted", props.open.reborrowed()).at_point(POPOVER_AT).initial_focus(Initial::KeepAnchor);
+    let shown = popover.show(ui, |ui, _| Text::new("Rooted").show(ui));
+    shown.output.open.then_some(shown.output.response.id)
+}
+
+/// The nodes above `key` in `tree`, nearest first.
+fn ancestors(tree: &craft_ui::testing::access::AccessTree, key: NodeKey) -> Vec<NodeKey> {
+    let keys = tree.keys();
+    let mut above = Vec::new();
+    let mut at = key;
+    while let Some(parent) = keys.iter().copied().find(|parent| tree.children_of(*parent).contains(&at)) {
+        above.push(parent);
+        at = parent;
+    }
+    above
+}
+
+/// A popover in a view hangs below its layer's root node, which has its own id, in the run and in each replay: the
+/// pass's AccessKit parents hold no cycle (every trial's pass-end check), and a replay adds the nodes where the run did.
+#[trial]
+fn a_popover_in_a_view_hangs_below_its_layer_root() {
+    let mut frames = still_frames();
+    let mut open = true;
+    let mut popover = None;
+    let mut frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| popover = MemoView::new("rooted", Hint { open: Bind::bound(&mut open) }, rooted).show(ui).flatten());
+        let ran = last_frame_memo_runs(&frames.ctx).into_iter().any(|(_, _, run)| run == MemoRun::Ran);
+        let id = popover.expect("the popover is open");
+        let tree = frames.tree();
+        (ran, ancestors(&tree, NodeKey::of(id)), NodeKey::of(layer_root(id)))
+    };
+    let (ran, above, root) = frame(&mut frames);
+    assert!(ran, "the first frame runs the view");
+    assert!(above.contains(&root), "the popover hangs below its layer's root: {above:?}, root {root:?}");
+    for _ in 0..SETTLE {
+        frame(&mut frames);
+    }
+    let (ran, replayed, _) = frame(&mut frames);
+    assert!(!ran, "an idle frame replays the view");
+    assert_eq!(replayed, above, "the replay adds the popover's node where the run did");
+}
+
+/// What the toast view shows: the main window's toasts, over the view's room.
+#[derive(MemoProps)]
+struct Notices {
+    corner: bool,
+}
+
+fn notices(_: &mut Notices, ui: &mut Ui) {
+    let body = ui.max_rect();
+    craft_ui::notices::ToastStack::show(ui, &WindowKey::main(), body);
+}
+
+/// A toast posted to a view that shows the toasts runs the view in the next frame, which opens the toast layer; then
+/// the view replays the layer, and the layer stack and egui's layer order hold.
+#[trial]
+fn a_toast_opening_runs_its_view_in_its_frame_then_replays() {
+    let mut frames = still_frames();
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            MemoView::new("notices", Notices { corner: true }, notices).show(ui);
+        });
+        last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).count()
+    };
+    for _ in 0..SETTLE {
+        frame(&mut frames);
+    }
+    assert_eq!(frame(&mut frames), 0, "an idle frame with no toast replays the view");
+    craft_ui::runtime::toast::post(&frames.ctx, &WindowKey::main(), craft_ui::runtime::toast::Toast::new("Saved").timeout(None));
+    let runs: Vec<usize> = (0..=WARM).map(|_| frame(&mut frames)).collect();
+    // The run that opens the toast asks for the discard pass that places the layer by its size, which runs it again.
+    assert!(runs[0] > 0, "the post runs the view in the next frame: {runs:?}");
+    assert!(runs[1..].iter().all(|ran| *ran == 0), "then the view replays: {runs:?}");
+    assert!(painted(&frames, "Saved"), "the replayed toast is painted");
+    let stack = |frames: &Frames| (craft_ui::runtime::overlay::top(&frames.ctx), frames.ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>()));
+    let held = stack(&frames);
+    assert!(held.0.is_some(), "the toast layer is open");
+    for _ in 0..WARM {
+        assert_eq!(frame(&mut frames), 0, "an idle frame replays the view");
+        assert_eq!(stack(&frames), held, "the layer stack and egui's layer order hold");
     }
 }
 
