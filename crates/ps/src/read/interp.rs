@@ -162,6 +162,10 @@ pub struct Interp {
     pub gstack: Vec<GState>,
     /// Graphics-state depths that `save` objects restore to.
     pub saves: Vec<usize>,
+    /// Journal lengths at each open `save`, so `restore` puts dictionary entries back.
+    pub journal_marks: Vec<usize>,
+    /// Dictionary entries changed while a `save` is open: (dict, key, previous entry).
+    pub journal: Vec<(PDict, crate::read::obj::Key, Option<(Obj, Obj)>)>,
     pub gstates: Vec<GState>,
     pub systemdict: PDict,
     pub globaldict: PDict,
@@ -216,6 +220,8 @@ impl Interp {
             gs: GState::default(),
             gstack: Vec::new(),
             saves: Vec::new(),
+            journal_marks: Vec::new(),
+            journal: Vec::new(),
             gstates: Vec::new(),
             systemdict,
             globaldict,
@@ -727,6 +733,26 @@ impl Interp {
         {
             self.gs = g;
         }
+    }
+
+    /// Put `key -> value` in `dict`, journaling the prior entry while a `save` is open.
+    pub fn dict_put(&mut self, dict: &PDict, key: Obj, value: Obj) -> R {
+        let (k, old) = dict.put_ret(key, value);
+        if !self.saves.is_empty() {
+            self.alloc(2 * std::mem::size_of::<Obj>())?;
+            self.journal.push((dict.clone(), k, old));
+        }
+        Ok(())
+    }
+
+    /// Remove `key` from `dict`, journaling the prior entry while a `save` is open.
+    pub fn dict_remove(&mut self, dict: &PDict, key: &crate::read::obj::Key) -> R {
+        let old = dict.remove_ret(key);
+        if !self.saves.is_empty() && old.is_some() {
+            self.alloc(2 * std::mem::size_of::<Obj>())?;
+            self.journal.push((dict.clone(), key.clone(), old));
+        }
+        Ok(())
     }
 }
 
