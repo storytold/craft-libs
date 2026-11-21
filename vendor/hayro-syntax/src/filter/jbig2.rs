@@ -7,7 +7,6 @@ use crate::object::stream::{FilterResult, ImageColorSpace, ImageData, ImageDecod
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
-const MAX_PIXELS: u64 = 1 << 28;
 use core::iter;
 
 /// PdfCraft patch (31): the steps of decoding a page's JBIG2 images may take between them, as many
@@ -138,6 +137,7 @@ pub fn page_jbig2_work_spent() -> bool {
 pub fn page_jbig2_work_spent() -> bool {
     false
 }
+
 /// Decode JBIG2 data from a PDF stream.
 ///
 /// The `params` dictionary may contain a `JBIG2Globals` entry pointing to
@@ -145,11 +145,18 @@ pub fn page_jbig2_work_spent() -> bool {
 ///
 /// PdfCraft patch: `limit` is the most bytes the page may decode to (see `filter::decode_limit`),
 /// checked against the page header's dimensions before any output is allocated.
+///
+/// PdfCraft patch: `max_pixels` is the most pixels the page may decode to (the document's
+/// [`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels), 2^28 by default),
+/// checked against the page header's own dimensions before any output is allocated: the image
+/// dictionary's smaller ones say nothing about them. `hayro_jbig2` decodes the page within the
+/// same pixel limit, and its other bounds follow it (`hayro_jbig2::Limits`).
 pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
     limit: usize,
+    max_pixels: u64,
 ) -> Option<FilterResult<'static>> {
     if page_jbig2_work_spent() {
         return None;
@@ -171,11 +178,12 @@ pub(crate) fn decode(
 
     charge_page_reading(data.len().saturating_add(globals.as_deref().map_or(0, <[u8]>::len)))?;
 
-    let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref())
+    let limits = hayro_jbig2::Limits::with_max_pixels(max_pixels);
+    let image = hayro_jbig2::Image::new_embedded_with_limits(data, globals.as_deref(), limits)
         .inspect_err(|e| note_limited(Some(e)))
         .ok()?;
 
-    if u64::from(image.width()) * u64::from(image.height()) > MAX_PIXELS {
+    if u64::from(image.width()) * u64::from(image.height()) > max_pixels {
         warn!("embedded JBIG2 page is too large");
 
         return None;
@@ -184,7 +192,7 @@ pub(crate) fn decode(
     // PdfCraft patch: the page's bit-packed size (also what `hayro_jbig2` holds for the page
     // bitmap) and the size of the output built below. An image of known size has a limit in its
     // dictionary's 1-bit pixels, so its packed size is checked, and the 8-bit output it is widened
-    // to stays within `MAX_PIXELS`. A stream decoded without image dimensions, such as an output
+    // to stays within `max_pixels`. A stream decoded without image dimensions, such as an output
     // intent's ICC profile, gets back every byte built, so the output itself must fit.
     let packed_len = (image.width() as usize).div_ceil(8).checked_mul(image.height() as usize)?;
     let luma_len = (image.width() as usize).checked_mul(image.height() as usize)?;
@@ -304,8 +312,24 @@ mod tests {
         let data = page_information(65_535, 65_535);
         for is_indexed in [false, true] {
             let params = ImageDecodeParams { is_indexed, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 1, height: 1 };
-            assert!(decode(&data, &Dict::empty(), &params, usize::MAX).is_none());
+            assert!(decode(&data, &Dict::empty(), &params, usize::MAX, DEFAULT_PIXELS).is_none());
         }
+    }
+
+    const DEFAULT_PIXELS: u64 = crate::filter::MAX_IMAGE_PIXELS;
+
+    /// The page's 4,096 pixels are decoded with a pixel limit of 4,096 and refused with one of
+    /// 4,095, and a page past the default opens with the limit raised.
+    #[test]
+    fn the_pixel_limit_given_is_the_one_applied() {
+        let data = page_information(64, 64);
+        let sized = ImageDecodeParams { is_indexed: true, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 64, height: 64 };
+        let decoded = |max_pixels| decode(&data, &Dict::empty(), &sized, 1 << 20, max_pixels).map(|r| r.data.len());
+        assert_eq!(decoded(4096), Some(64 / 8 * 64));
+        assert_eq!(decoded(4095), None);
+        let large = page_information(32_768, 16_384);
+        assert!(hayro_jbig2::Image::new_embedded_with_limits(&large, None, hayro_jbig2::Limits::with_max_pixels(DEFAULT_PIXELS)).is_err());
+        assert!(hayro_jbig2::Image::new_embedded_with_limits(&large, None, hayro_jbig2::Limits::with_max_pixels(1 << 29)).is_ok());
     }
 
     /// PdfCraft patch: a page within the pixel cap but past the caller's limit is refused before
@@ -315,19 +339,19 @@ mod tests {
     fn a_page_past_the_limit_is_refused() {
         let data = page_information(16_384, 16_384);
         let untyped = ImageDecodeParams::default();
-        assert!(decode(&data, &Dict::empty(), &untyped, 16 << 20).is_none());
+        assert!(decode(&data, &Dict::empty(), &untyped, 16 << 20, DEFAULT_PIXELS).is_none());
         let sized = ImageDecodeParams { is_indexed: false, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 16_384, height: 16_384 };
-        assert!(decode(&data, &Dict::empty(), &sized, (16_384 / 8 * 16_384) - 1).is_none());
+        assert!(decode(&data, &Dict::empty(), &sized, (16_384 / 8 * 16_384) - 1, DEFAULT_PIXELS).is_none());
     }
 
     #[test]
     fn a_page_within_the_limit_decodes() {
         let data = page_information(64, 64);
         let untyped = ImageDecodeParams::default();
-        let out = decode(&data, &Dict::empty(), &untyped, 64 * 64).expect("64 x 64 page");
+        let out = decode(&data, &Dict::empty(), &untyped, 64 * 64, DEFAULT_PIXELS).expect("64 x 64 page");
         assert_eq!(out.data.len(), 64 * 64);
-        assert!(decode(&data, &Dict::empty(), &untyped, 64 * 64 - 1).is_none());
+        assert!(decode(&data, &Dict::empty(), &untyped, 64 * 64 - 1, DEFAULT_PIXELS).is_none());
         let sized = ImageDecodeParams { is_indexed: false, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 64, height: 64 };
-        assert_eq!(decode(&data, &Dict::empty(), &sized, 2 * 64 / 8 * 64).expect("sized page").data.len(), 64 * 64);
+        assert_eq!(decode(&data, &Dict::empty(), &sized, 2 * 64 / 8 * 64, DEFAULT_PIXELS).expect("sized page").data.len(), 64 * 64);
     }
 }
