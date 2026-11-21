@@ -1067,8 +1067,9 @@ impl Mesh {
     }
 
     /// [`Mesh::append`], or an error when `other` has an index count that is not a multiple of 3,
-    /// an index out of range or a submesh that does not start and end on a triangle inside its
-    /// indices, or when a rebased index or submesh range would not fit in `u32`. When only one
+    /// an index out of range, a submesh that does not start and end on a triangle inside its
+    /// indices or a submesh whose material is not in its material list (material 0 when the list
+    /// is empty), or when a rebased index or submesh range would not fit in `u32`. When only one
     /// side has normals, UVs or
     /// tangents for every vertex, the other side gets them (computed normals and tangents, zero
     /// UVs), so the attribute arrays stay as long as the positions; computing tangents can split
@@ -1084,6 +1085,10 @@ impl Mesh {
         }
         if let Some(s) = other.submeshes.iter().find(|s| submesh_range(s, other.indices.len()).is_none()) {
             return Err(MeshOpsError::Invalid(format!("submesh {} is out of range", s.name)));
+        }
+        // The rule of `validate`: a mesh without a material list uses material 0.
+        if let Some(s) = other.submeshes.iter().find(|s| s.material >= other.materials.len().max(1)) {
+            return Err(MeshOpsError::Invalid(format!("submesh {} uses material {}, which is not listed", s.name, s.material)));
         }
         let too_large = |what| MeshOpsError::Invalid(format!("the appended {what} do not fit in u32"));
         u32::try_from(self.positions.len()).map_err(|_| too_large("vertices"))?;
@@ -2742,6 +2747,20 @@ mod tests {
         }
         assert!(matches!(m.try_append(&ragged), Err(MeshOpsError::Invalid(_))));
         assert_eq!(m, quad());
+    }
+
+    #[test]
+    fn append_rejects_a_submesh_whose_material_is_not_listed() {
+        // Material 2 of a mesh with two materials, and material 1 of a mesh without a list.
+        for (materials, material) in [(vec!["a".to_string(), "b".to_string()], 2), (Vec::new(), 1)] {
+            let mut other = quad();
+            other.materials = materials;
+            other.submeshes = vec![SubMesh { name: "s".into(), material, start: 0, count: 6 }];
+            assert!(other.validate().is_err());
+            let mut m = quad();
+            assert!(matches!(m.try_append(&other), Err(MeshOpsError::Invalid(_))));
+            assert_eq!(m, quad());
+        }
     }
 
     #[test]
