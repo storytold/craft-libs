@@ -167,7 +167,8 @@ pub(super) fn rgb_colors(groups: &[SwatchGroup]) -> (Vec<Vec<RgbSwatch>>, usize,
             g.entries
                 .iter()
                 .filter_map(|e| {
-                    match e.color {
+                    let color = e.color()?; // P3(color-w5): co.K28
+                    match color {
                         SwatchColor::Book { .. } => {
                             books += 1;
                             return None;
@@ -175,7 +176,7 @@ pub(super) fn rgb_colors(groups: &[SwatchGroup]) -> (Vec<Vec<RgbSwatch>>, usize,
                         SwatchColor::Cmyk(_) | SwatchColor::Lab(_) | SwatchColor::Gray(_) => converted += 1,
                         SwatchColor::Rgb(_) | SwatchColor::Hsb(_) => {}
                     }
-                    Some((e.name.clone(), rgb8(e.color.to_srgb(CmykConverter::coated()).to_rgb_array()), e.kind == SwatchKind::Spot))
+                    Some((e.name.clone(), rgb8(color.to_srgb(CmykConverter::coated()).to_rgb_array()), e.kind == SwatchKind::Spot))
                 })
                 .collect()
         })

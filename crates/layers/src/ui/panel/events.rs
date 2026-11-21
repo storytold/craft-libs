@@ -144,6 +144,21 @@ pub enum LayersEvent<K> {
         /// The host's command.
         command: String,
     },
+    /// A claimed press on a cell of the eye or lock column ([`LayersPanel::row_look`](super::LayersPanel::row_look)),
+    /// with no `Toggle`: the app applies its own rule on the modifiers (Cmd on an eye is Outline, Cmd+Alt Outline
+    /// Others, Alt on a lock Lock Others).
+    #[non_exhaustive]
+    CellClick {
+        /// The row.
+        row: LayerRowKey<K>,
+        /// The column.
+        column: LayerColumn,
+        /// The modifiers held.
+        mods: Mods,
+    },
+    /// Delete or Backspace in the rows of a [`deletable`](super::LayersPanel::deletable) panel: the selected rows when
+    /// the lead is selected, else the lead.
+    Delete(Vec<LayerRowKey<K>>),
 }
 
 // `#[non_exhaustive]` variants have no struct literal outside the crate: these constructors are what the
@@ -178,6 +193,12 @@ impl<K> LayersEvent<K> {
     pub fn menu(target: MenuTarget<K>, command: impl Into<String>) -> Self {
         Self::Menu { target, command: command.into() }
     }
+
+    /// A claimed press on `column` of `row`, with the modifiers held.
+    pub fn cell_click(row: LayerRowKey<K>, column: LayerColumn, mods: Mods) -> Self {
+        let _ = (row, column, mods);
+        todo!("dp.L2")
+    }
 }
 
 /// A selection change, in layers.
@@ -193,12 +214,14 @@ pub struct LayerSelect<Id> {
     /// The effects or Smart Filter row a click, a right-click or a selection key picked, which the app may select on
     /// its own ([`LayerSelection::sub_row`](crate::ui::tree::LayerSelection::sub_row)); `None` on a layer row.
     pub row: Option<LayerRowKey<Id>>,
+    /// The modifiers of the press that made the change; `Mods::NONE` from keys.
+    pub mods: Mods,
 }
 
 impl<Id> LayerSelect<Id> {
     /// A selection change with an optional thumbnail target, made on a layer row.
     pub fn new(change: SelectionChange<Id>, part: Option<LayerPart>) -> Self {
-        Self { change, part, row: None }
+        Self { change, part, row: None, mods: Mods::NONE }
     }
 
     /// The change made on `row`; a layer row leaves [`row`](Self::row) `None`.

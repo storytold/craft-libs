@@ -14,15 +14,16 @@ use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::Rect;
 use craft_behavior::{ColumnWidth, EditEvent, EditEvents, GestureId, IconId, Mixed, RulerUnits};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::canvas::RulerText;
+use craft_ui::canvas::{CanvasRulers, RulerText};
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, FieldLayout, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing,
+    Bind, BodyCx, Entry, FieldLayout, GlyphLabel, LabelKind, LabelPress, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel,
+    Sizing,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::menu::Menu;
-use craft_ui::pickers::{Anchor9, ReferencePoint, Select};
+use craft_ui::pickers::{Anchor9, ReferencePoint, ReferencePointLook, Select};
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::text::{NumberField, link_toggle};
@@ -117,6 +118,16 @@ impl TransformField {
     }
 }
 
+/// The part of the row an event came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TransformSource {
+    /// This field.
+    Field(TransformField),
+    /// The reference point.
+    Reference,
+}
+
 /// What the row edits and reports: the box and the V skew it reads with.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -162,6 +173,13 @@ pub struct TransformFieldsOutput {
     pub interpolation: Option<Interpolation>,
     /// The relative-position toggle was set to this state.
     pub relative: Option<bool>,
+    /// The part each entry of `events` came from, at the same index.
+    pub sources: Vec<TransformSource>,
+    /// The field an Enter committed this pass, with that Enter's modifiers; `None` for a commit by blur, Tab, scrub or
+    /// click.
+    pub submitted: Option<(TransformField, craft_keymap::Mods)>,
+    /// A press on a link caption (see `TransformFields::caption_press`): its field.
+    pub link: Option<TransformField>,
 }
 
 impl Outcome for TransformFieldsOutput {
@@ -238,11 +256,28 @@ impl<'a> TransformFields<'a> {
         }
     }
 
-    /// The units of X and Y (pixels by default).
-    pub fn units(mut self, x: RulerText, y: RulerText) -> Self {
-        self.x = x;
-        self.y = y;
+    /// The rulers X and Y read from: absolute X and Y are measured from the rulers' zero in their units (pixels from the
+    /// origin by default); relative X and Y ignore the zero.
+    #[must_use]
+    pub fn rulers(mut self, rulers: CanvasRulers) -> Self {
+        // P3(object-panels-w1): op.F7
+        self.x = rulers.x;
+        self.y = rulers.y;
         self
+    }
+
+    /// The look of the reference point the fields show.
+    #[must_use]
+    pub fn reference_look(self, look: ReferencePointLook) -> Self {
+        let _ = look;
+        todo!("wg.W39")
+    }
+
+    /// The press rule of the X, Y, W, H and angle captions; a press on a link caption reports its field.
+    #[must_use]
+    pub fn caption_press(self, press: LabelPress) -> Self {
+        let _ = press;
+        todo!("wg.W40")
     }
 
     /// The unit of W and H; percent by default.
@@ -323,7 +358,7 @@ impl<'a> TransformFields<'a> {
             FieldGroup::new(label).enabled(enabled).show(ui, |ui, cx| cells.rows(ui, cx)).output
         };
         let Out { events, unit_picked, linked, interpolation, relative } = cells.out;
-        TransformFieldsOutput { response, events, unit_picked, linked, interpolation, relative }
+        TransformFieldsOutput { response, events, unit_picked, linked, interpolation, relative, sources: Vec::new(), submitted: None, link: None }
     }
 }
 

@@ -6,7 +6,7 @@ use craft_ui::layout_components::Stack;
 use craft_ui::patterns::form_dialogs::ParamRows;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::Env;
-use craft_ui::runtime::requests::ColorRequest;
+use craft_ui::runtime::requests::{ColorRequest, PathRequest};
 use craft_ui::style::TypeRole;
 use egui::{Response, Ui};
 
@@ -25,6 +25,9 @@ pub struct EffectParametersOutput {
     /// A colour row's swatch pressed: the host opens its picker for the request and answers into the
     /// selected effect's fields.
     pub pick_color: Option<ColorRequest>,
+    /// A filter's Browse row pressed: the host opens its file picker for the request and answers into the selected
+    /// effect's fields.
+    pub path: Option<PathRequest>,
 }
 
 impl Outcome for EffectParametersOutput {
@@ -81,6 +84,6 @@ impl<'a> EffectParameters<'a> {
                 Text::new(words.uses_colors.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
             }
         });
-        EffectParametersOutput { response: stack.output, change, pick_color }
+        EffectParametersOutput { response: stack.output, change, pick_color, path: None }
     }
 }

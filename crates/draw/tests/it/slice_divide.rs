@@ -6,7 +6,8 @@ use craft_ui::testing::{Fixture, trial};
 
 #[trial]
 fn a_count_shows_no_unit_and_a_size_shows_pixels() {
-    let mut dialog = DivideSlicesDialog::new(DivideSlices::new(Some(DivideBy::Count(4)), Some(DivideBy::Size(64))));
+    // P3(object-dialogs-w2): od.OD12
+    let mut dialog = DivideSlicesDialog::new(DivideSlices::new(Some(DivideBy::Count(4)), Some(DivideBy::Size(64.0))));
     let mut fixture = Fixture::new(move |ui| {
         let _ = dialog.show(ui, &DialogStack::default());
     });

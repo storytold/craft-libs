@@ -2,17 +2,18 @@
 //! Color Wheel.
 
 use super::channels::{channel_step, finite, primary, settled, spoken};
+use super::ramp::Gamut;
 use craft_behavior::{HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
-use craft_theme::{ColorModel, HsbModel, ModelValues};
+use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, PaintUi,
-    PartsCx, Pointer as _, Props as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome,
+    PaintUi, PartsCx, Pointer as _, Props as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{Marker, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx};
-use egui::{Mesh, Pos2, Rect, Vec2, vec2};
+use egui::{Mesh, Pos2, Rect, Response, Vec2, vec2};
 use std::f32::consts::TAU;
 
 #[cfg(feature = "screen-testing")]
@@ -58,6 +59,42 @@ pub enum WheelPart {
     Triangle,
 }
 
+/// What a [`ColorWheel`] shows inside its ring.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WheelInner {
+    /// The saturation and brightness triangle.
+    #[default]
+    Triangle,
+    /// The largest square inside the ring, a `ColorArea` over the same values.
+    Square,
+}
+
+/// What a [`ColorWheel`] returns.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ColorWheelOutput {
+    /// The edit of the values, carrying the ring's and the adopted square's edits.
+    pub edit: EditResponse<ModelValues>,
+    /// The marker a click picked.
+    pub picked: Option<usize>,
+    /// The marker a press is holding.
+    pub held: Option<usize>,
+}
+
+impl Outcome for ColorWheelOutput {
+    type Value = ModelValues;
+
+    fn response(&self) -> &Response {
+        &self.edit.response
+    }
+
+    #[cfg(feature = "screen-testing")]
+    fn story_facts(&self) -> craft_ui::testing::StoryOutput {
+        self.edit.story_facts()
+    }
+}
+
 /// Where a wheel lies in its area: pure numbers, shared with the colour disc.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -81,6 +118,11 @@ impl WheelGeometry {
         let width = (outer * ratio).max(ring.0).min(ring.1).min(outer * 0.5);
         let inner = outer - width;
         Self { center: area.center(), inner, outer, triangle: (inner - triangle_inset).max(0.0) }
+    }
+
+    /// The largest square inside the ring, a `space.gap.tight` inside its inner edge: where `WheelInner::Square` lies.
+    pub fn square(&self) -> Rect {
+        todo!("wg.W45")
     }
 
     /// The part a press at `pos` takes: nothing beyond the ring's outer edge plus `grab_outer`,
@@ -199,12 +241,27 @@ pub struct ColorWheel<'a> {
     #[common]
     common: Common,
     values: Bind<'a, ModelValues>,
+    /// The host's gamut, passed to the square's `ColorArea`.
+    #[prop]
+    gamut: Option<Gamut<'a>>,
+    /// What the ring holds: the triangle, or a square `ColorArea`.
+    #[prop]
+    #[style_key]
+    inner: WheelInner,
+    /// Markers on the ring, one roving Tab stop after it; a click, Enter or Space picks one.
+    #[prop]
+    markers: &'a [Srgba],
+    /// The markers' accessible names, in order.
+    #[prop(into)]
+    marker_names: Vec<Label>,
 }
 
 impl<'a> ColorWheel<'a> {
     /// A wheel named `label` ("Color wheel") showing `values`, HSB values.
     pub fn new(label: impl Into<Label>, values: Bind<'a, ModelValues>) -> Self {
-        ColorWheel { common: Common::new(), values }.label(label).ltr_axis()
+        ColorWheel { common: Common::new(), values, gamut: None, inner: WheelInner::Triangle, markers: &[], marker_names: Vec::new() }
+            .label(label)
+            .ltr_axis()
     }
 
     /// Where the wheel lies in `area`.
@@ -286,7 +343,7 @@ impl Component for ColorWheel<'_> {
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
     const OVERLAYS: bool = false;
     type Style = ColorWheelStyle;
-    type Output = EditResponse<ModelValues>;
+    type Output = ColorWheelOutput;
 
     fn style(cx: &StyleCx<'_>, _: ColorWheelStyleKey) -> ColorWheelStyle {
         let tokens = cx.tokens;
@@ -402,8 +459,8 @@ impl Component for ColorWheel<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<ModelValues> {
-        cx.edit_response()
+    fn finish(self, cx: Cx<'_, Self>) -> ColorWheelOutput {
+        ColorWheelOutput { edit: cx.edit_response(), picked: None, held: None }
     }
 }
 

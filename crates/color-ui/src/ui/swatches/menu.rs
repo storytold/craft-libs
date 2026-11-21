@@ -171,7 +171,7 @@ fn new_swatch_edit(groups: &[SwatchGroup], st: &mut SwatchesState, foreground: S
     let key = SwatchKey::Swatch(name.clone());
     st.selected = Some(key.clone());
     st.rename = Some(key);
-    Some(SwatchEdit::Add { group, name, color })
+    Some(SwatchEdit::Add { group, name, paint: color.into() }) // P3(color-w5): co.K29
 }
 
 /// An empty group under a unique name, opened for renaming. `None` when the library holds the most groups.

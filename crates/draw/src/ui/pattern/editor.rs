@@ -11,7 +11,7 @@ use craft_ui::contract::{Bind, FieldLayout, Outcome, Props as _, Remember as _, 
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
-use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetPicker, PresetRow, PresetState, PresetView, ThumbInfo};
+use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetPicker, PresetRow, PresetRowMenu, PresetState, PresetView, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::NumberField;
@@ -113,7 +113,7 @@ impl<'a> PatternFillEditor<'a> {
                         .selected(current.pattern.clone())
                         .cell_shape(CellShape::Square)
                         .view_lock(PresetView::Grid)
-                        .row_menu(false);
+                        .row_menu(PresetRowMenu::Off); // P3(appearance-w5): ap.AP5
                     if let Some(thumbs) = thumbs {
                         browser = browser.thumb(move |cx: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, String>| {
                             if let Some(swatch) = swatches.iter().find(|swatch| swatch.id == *info.key) {

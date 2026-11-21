@@ -51,6 +51,24 @@ pub struct PathOptionsSettings {
     /// The path line's width in pixels, within [`THICKNESS_RANGE`](Self::THICKNESS_RANGE); `None` uses the theme's
     /// medium line.
     pub thickness: Option<f32>,
+    /// The anchor's size in points; `None` uses the theme's.
+    pub anchor_size: Option<f32>,
+    /// How the direction handles' ends are drawn.
+    pub handles: HandleStyle,
+}
+
+/// How the direction handles' ends are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum HandleStyle {
+    /// Filled ends.
+    #[default]
+    Solid,
+    /// Hollow ends.
+    Hollow,
+    /// Large ends.
+    Large,
 }
 
 impl PathOptionsSettings {

@@ -100,6 +100,7 @@ fn kind_icon(kind: LayerKind) -> Option<IconId> {
         LayerKind::Object => "square",
         LayerKind::Frame => "frame_placeholder",
         LayerKind::Pixel => return None,
+        LayerKind::Layer | LayerKind::Guide | LayerKind::Spine => todo!("dp.L9"),
     }))
 }
 
@@ -118,6 +119,7 @@ pub(super) fn row_description(words: &LayersPanelWords, info: &LayerInfo, target
         LayerKind::Image => &words.kind_image,
         LayerKind::Object => &words.kind_object,
         LayerKind::Frame => &words.kind_frame,
+        LayerKind::Layer | LayerKind::Guide | LayerKind::Spine => todo!("dp.L9"),
     };
     let has = |part: LayerPart| info.masks.iter().any(|mask| mask.part == part);
     let flags = [

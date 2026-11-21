@@ -12,7 +12,8 @@ fn color_wheel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
     let shown = ColorWheel::new("Color wheel", Bind::bound(values)).show(ui);
     let last = data.note("last", String::new());
-    if let Some(event) = shown.events.last() {
+    // P3(widgets-w5): wg.W46
+    if let Some(event) = shown.edit.events.last() {
         *last = format!("{event:?}");
     }
     let readout = format!("Last event: {last}");

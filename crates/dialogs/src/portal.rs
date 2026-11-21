@@ -239,7 +239,7 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
 /// name, so the portal asks before replacing it (it asked only about the typed name). Connects to
 /// the session bus; `Err` when the portal can't be reached, and the caller shows rfd's dialog.
 // pc: apps/photocraft/src/portal_save.rs:174 save_as, services.rs:244-280
-pub(crate) fn save_as(mut req: SaveRequest) -> Result<Option<PathBuf>, String> {
+pub(crate) fn save_as(mut req: SaveRequest) -> Result<Option<(PathBuf, Option<usize>)>, String> {
     let conn = zbus::blocking::connection::Builder::session().and_then(|b| b.build()).map_err(|e| e.to_string())?;
     loop {
         let Some(saved) = save_file(&conn, &req)? else { return Ok(None) };
@@ -251,7 +251,7 @@ pub(crate) fn save_as(mut req: SaveRequest) -> Result<Option<PathBuf>, String> {
         };
         let path = with_chosen_type(&saved.path, req.suggested.as_deref(), exts, &req.filters);
         if path == saved.path || !path.exists() {
-            return Ok(Some(path));
+            return Ok(Some((path, picked))); // P3(files-w1): fl.F8
         }
         req.name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         req.suggested = req.name.clone();

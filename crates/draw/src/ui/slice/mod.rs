@@ -44,7 +44,9 @@ mod tool;
 mod words;
 
 pub use bar::{SliceBar, SliceBarOutput};
-pub use dialogs::{DivideBy, DivideSlices, DivideSlicesDialog, SliceKind, SliceOptions, SliceOptionsDialog};
+pub use dialogs::{
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceBackground, SliceCellAlign, SliceCellVAlign, SliceKind, SliceOptions, SliceOptionsDialog,
+};
 pub use overlay::{SliceOverlay, SliceOverlayOutput};
 pub use tool::SliceTool;
 pub use words::{SliceToolWords, SliceWords};

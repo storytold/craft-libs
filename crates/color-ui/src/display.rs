@@ -135,6 +135,21 @@ impl DisplayTransform {
             }
         }
     }
+
+    /// Premultiplied RGBA8 pixels converted in place through a fixed scratch of whole pixels:
+    /// alpha 0 is skipped, partial alpha is divided out and multiplied back, a failed chunk is
+    /// left as it was; nothing happens for the identity.
+    pub fn apply_premultiplied_rgba8(&self, pixels: &mut [u8]) {
+        let _ = pixels;
+        todo!("cv.F42")
+    }
+}
+
+/// Whether `icc` is usable as a monitor profile: [`Profile::parse`] plus the monitor checks, a
+/// parse error giving [`MonitorProblem::Unreadable`].
+pub fn check_monitor(icc: &[u8]) -> Result<(), MonitorProblem> {
+    let _ = icc;
+    todo!("cv.F42")
 }
 
 /// Why the monitor profile is what it is.

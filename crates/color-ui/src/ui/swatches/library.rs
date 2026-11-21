@@ -6,7 +6,7 @@ use craft_ui::contract::ReorderMove;
 use craft_ui::patterns::presets::{PresetRow, PresetState};
 
 use super::{MAX_GROUPS, MAX_SWATCHES, SwatchesWords};
-use crate::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchReport};
+use crate::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchPaint, SwatchReport};
 use crate::ui::PickedColor;
 
 /// What the browser names its rows by. Swatch names are unique across the library and group names among groups, so
@@ -409,8 +409,8 @@ pub enum SwatchEdit {
         group: Option<String>,
         /// The new swatch's name.
         name: String,
-        /// The new swatch's colour.
-        color: SwatchColor,
+        /// What the new swatch holds.
+        paint: SwatchPaint,
     },
     /// Adds an empty group.
     #[non_exhaustive]
@@ -478,8 +478,8 @@ pub enum SwatchEdit {
 
 impl SwatchEdit {
     /// Adds `color` named `name` to `group`, or the first group.
-    pub fn add(group: Option<String>, name: String, color: SwatchColor) -> Self {
-        SwatchEdit::Add { group, name, color }
+    pub fn add(group: Option<String>, name: String, paint: impl Into<SwatchPaint>) -> Self {
+        SwatchEdit::Add { group, name, paint: paint.into() }
     }
 
     /// Deletes the swatch named `swatch`.
@@ -498,7 +498,9 @@ impl SwatchLibrary {
     /// library.
     pub fn apply(&mut self, edit: &SwatchEdit) -> bool {
         match edit {
-            SwatchEdit::Add { group, name, color } => {
+            SwatchEdit::Add { group, name, paint } => {
+                // P3(color-w5): co.K29
+                let SwatchPaint::Color(color) = paint else { return false };
                 let group = match group {
                     Some(g) => match self.groups.iter().position(|x| x.name == *g) {
                         Some(index) => Some(index),
@@ -561,7 +563,9 @@ pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetR
     for group in groups {
         rows.push(PresetRow::group(SwatchKey::Group(group.name.clone()), group.name.as_str(), 0).count(group.entries.len()));
         for entry in &group.entries {
-            let named = format!("{}, {}", entry.name, value_text(&entry.color, words.book_color.as_str()));
+            // P3(color-w5): co.K28
+            let Some(color) = entry.color() else { continue };
+            let named = format!("{}, {}", entry.name, value_text(color, words.book_color.as_str()));
             rows.push(PresetRow::item(SwatchKey::Swatch(entry.name.clone()), entry.name.as_str(), 1).tooltip(named.clone()).accessible_name(named));
         }
     }

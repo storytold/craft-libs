@@ -11,7 +11,7 @@ use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::{FormDialog, HostRequests};
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Env, UnitKind};
+use craft_ui::runtime::env::{Env, LengthUnits, UnitKind};
 use craft_ui::runtime::requests::{ColorRequest, HostAnswer};
 use craft_ui::text::{NumberField, TextField};
 use egui::Ui;
@@ -27,6 +27,51 @@ pub enum SliceKind {
     NoImage,
     /// Illustrator's HTML Text (Photoshop's Table).
     HtmlText,
+}
+
+/// The horizontal alignment of a No Image or HTML Text cell at export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SliceCellAlign {
+    /// The export's own alignment.
+    #[default]
+    Default,
+    /// Aligned to the left.
+    Left,
+    /// Centred.
+    Center,
+    /// Aligned to the right.
+    Right,
+}
+
+/// The vertical alignment of a No Image or HTML Text cell at export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SliceCellVAlign {
+    /// The export's own alignment.
+    #[default]
+    Default,
+    /// Aligned to the top.
+    Top,
+    /// Aligned to the middle.
+    Middle,
+    /// Aligned to the text's baseline.
+    Baseline,
+    /// Aligned to the bottom.
+    Bottom,
+}
+
+/// What a slice cell shows behind its content at export.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum SliceBackground {
+    /// No background.
+    #[default]
+    None,
+    /// The matte colour of the export.
+    Matte,
+    /// This colour.
+    Color(Srgba),
 }
 
 /// A slice's options.
@@ -49,8 +94,13 @@ pub struct SliceOptions {
     pub cell_text: String,
     /// Whether the Background row shows (PhotoCraft's; VectorCraft has none).
     pub background_row: bool,
-    /// The cell background; `None` for none.
-    pub background: Option<Srgba>,
+    /// The cell background.
+    pub background: SliceBackground,
+    /// The alignment of a No Image or HTML Text cell; JSON `hAlign` takes `default`, `left`, `center` or `right`.
+    pub h_align: SliceCellAlign,
+    /// The vertical alignment of a No Image or HTML Text cell; JSON `vAlign` takes `default`, `top`, `middle`,
+    /// `baseline` or `bottom`.
+    pub v_align: SliceCellVAlign,
 }
 
 /// The name of `kind` in the dialog's JSON fields.
@@ -72,6 +122,7 @@ const BACKGROUND_START: Srgba = Srgba::rgb(1.0, 1.0, 1.0);
 ///
 /// The Background swatch asks for a colour: the app takes [`pick_color`](Self::pick_color) after each pass, opens its
 /// picker and answers with [`set_color`](Self::set_color).
+#[derive(craft_ui::contract::Pattern)]
 pub struct SliceOptionsDialog {
     id: DialogId,
     options: SliceOptions,
@@ -136,8 +187,11 @@ impl StackDialog for SliceOptionsDialog {
         if options.background_row
             && let Some(map) = fields.as_object_mut()
         {
-            let background =
-                options.background.map_or(serde_json::Value::Null, |color| serde_json::Value::String(Srgba::rgb(color.r, color.g, color.b).to_hex()));
+            // P3(object-dialogs-w2): od.OD10
+            let background = match options.background {
+                SliceBackground::Color(color) => serde_json::Value::String(Srgba::rgb(color.r, color.g, color.b).to_hex()),
+                SliceBackground::None | SliceBackground::Matte => serde_json::Value::Null,
+            };
             map.insert("background".into(), background);
         }
         Some(fields)
@@ -167,14 +221,17 @@ impl StackDialog for SliceOptionsDialog {
                 if !self.options.background_row {
                     return Err("field `background` is not shown: the dialog has no Background row".into());
                 }
+                // P3(object-dialogs-w2): od.OD10
                 self.options.background = match &value {
-                    serde_json::Value::Null => None,
+                    serde_json::Value::Null => SliceBackground::None,
                     serde_json::Value::String(hex) => {
                         let digits = hex.strip_prefix('#').unwrap_or(hex);
                         if digits.len() != 6 {
                             return Err(format!("field `background` takes six hex digits or null, got `{hex}`"));
                         }
-                        Some(Srgba::from_hex(digits).ok_or_else(|| format!("field `background` takes six hex digits or null, got `{hex}`"))?)
+                        SliceBackground::Color(
+                            Srgba::from_hex(digits).ok_or_else(|| format!("field `background` takes six hex digits or null, got `{hex}`"))?,
+                        )
                     }
                     other => return Err(format!("field `background` takes six hex digits or null, got {other}")),
                 };
@@ -204,7 +261,7 @@ impl StackDialog for SliceOptionsDialog {
                 if let HostAnswer::Color { key, color, .. } = answer
                     && key == Self::BACKGROUND_KEY
                 {
-                    options.background = Some(color);
+                    options.background = SliceBackground::Color(color); // P3(object-dialogs-w2): od.OD10
                 }
             }
             FieldGroup::new(words.options_title.clone()).show(ui, |ui, _| {
@@ -227,12 +284,20 @@ impl StackDialog for SliceOptionsDialog {
                 if options.background_row {
                     Field::new(words.background.clone()).show(ui, |ui, _| {
                         Row::new().show(ui, |ui, _| {
-                            let colour = options.background.is_some();
+                            // P3(object-dialogs-w2): od.OD10
+                            let colour = matches!(options.background, SliceBackground::Color(_));
                             if let Some(on) = Select::new(words.background_kind.clone(), Bind::given(colour), &backgrounds).show(ui).value().copied()
                             {
-                                options.background = on.then(|| options.background.unwrap_or(BACKGROUND_START));
+                                options.background = if on {
+                                    SliceBackground::Color(match options.background {
+                                        SliceBackground::Color(color) => color,
+                                        _ => BACKGROUND_START,
+                                    })
+                                } else {
+                                    SliceBackground::None
+                                };
                             }
-                            if let Some(color) = options.background
+                            if let SliceBackground::Color(color) = options.background
                                 && let Some(request) =
                                     Swatch::new(words.background_color.clone(), color).picker(Self::BACKGROUND_KEY).show(ui).pick_color
                             {
@@ -270,8 +335,8 @@ impl StackDialog for SliceOptionsDialog {
 pub enum DivideBy {
     /// Into this many slices, evenly spaced.
     Count(u32),
-    /// Into slices this many pixels long (the last takes what is left).
-    Size(u32),
+    /// Into slices this long, a length in the dialog's stored unit above 0 (the last takes what is left).
+    Size(f64),
 }
 
 /// Divide Slice's answer: rows (divided horizontally) and columns (vertically); `None` leaves that axis.
@@ -316,13 +381,14 @@ impl AxisState {
     fn of(divide: Option<DivideBy>, off_value: u32) -> Self {
         match divide {
             Some(DivideBy::Count(n)) => AxisState { on: true, by_size: false, value: n.clamp(1, Self::MAX_COUNT) },
-            Some(DivideBy::Size(n)) => AxisState { on: true, by_size: true, value: n.clamp(1, Self::MAX_SIZE) },
+            // P3(object-dialogs-w2): od.OD12
+            Some(DivideBy::Size(n)) => AxisState { on: true, by_size: true, value: n.round().clamp(1.0, f64::from(Self::MAX_SIZE)) as u32 },
             None => AxisState { on: false, by_size: false, value: off_value },
         }
     }
 
     fn answer(self) -> Option<DivideBy> {
-        self.on.then_some(if self.by_size { DivideBy::Size(self.value) } else { DivideBy::Count(self.value) })
+        self.on.then_some(if self.by_size { DivideBy::Size(f64::from(self.value)) } else { DivideBy::Count(self.value) })
     }
 
     fn max(self) -> u32 {
@@ -358,6 +424,7 @@ impl Axes {
 /// Divide Slice: "Divide Horizontally Into" and "Divide Vertically Into", each a check box with a choice of a count
 /// ("slices, evenly spaced") or a size ("pixels per slice"), counts and sizes at least 1. OK answers
 /// [`DivideSlices`] and is off while neither axis is on; Cancel answers nothing. Enter is OK, Escape Cancel.
+#[derive(craft_ui::contract::Pattern)]
 pub struct DivideSlicesDialog {
     id: DialogId,
     axes: Axes,
@@ -367,6 +434,20 @@ impl DivideSlicesDialog {
     /// The dialog starting from `divide`.
     pub fn new(divide: DivideSlices) -> Self {
         DivideSlicesDialog { id: dialog_id("slice.divide"), axes: Axes::of(divide) }
+    }
+
+    /// The units the size field keeps and shows its length in; pixels in both, at 72 per inch, by default.
+    #[must_use]
+    pub fn lengths(self, lengths: LengthUnits) -> Self {
+        let _ = lengths;
+        todo!("od.OD12")
+    }
+
+    /// The size an axis that opened on a count switches to, for rows and columns.
+    #[must_use]
+    pub fn start_sizes(self, rows: f64, columns: f64) -> Self {
+        let _ = (rows, columns);
+        todo!("od.OD12")
     }
 }
 

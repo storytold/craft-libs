@@ -39,6 +39,7 @@ craft_ui::words! {
         discard: "profile.discard" = "Discard the embedded profile (don't color manage)";
         leave: "profile.leave" = "Leave as is (don't color manage)";
         assign_working: "profile.assignWorking" = "Assign working space";
+        assign_profile: "profile.assignProfile" = "Assign profile:";
         remember: "profile.remember" = "Remember this choice for future images";
         remember_tip: "profile.rememberTip" = "Turn the prompt back on with Ask On Mismatch in Edit \u{203a} Color Settings.";
         rgb: "profile.rgb" = "RGB";
@@ -181,15 +182,19 @@ pub enum ProfileAction {
     LeaveAsIs,
     /// Missing: tag it with the working space.
     AssignWorking,
+    /// Missing: tag it with the profile picked from the list the dialog was given.
+    AssignProfile,
 }
 
 /// The answer to a [`ProfileMismatchDialog`]: the action, and whether to remember it for this
 /// mode (the app sets its policy and turns Ask On Mismatch off).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ProfileAnswer {
     /// What the user chose.
     pub action: ProfileAction,
+    /// The profile's name for `AssignProfile`, else `None`.
+    pub profile: Option<String>,
     /// Whether to apply the choice to later files of the same mode without asking.
     pub remember: bool,
 }
@@ -245,6 +250,14 @@ impl ProfileMismatchDialog {
         self
     }
 
+    /// The profiles the Assign profile `Select` lists under its radio row, a Missing Profile prompt only; it starts on
+    /// the first name.
+    #[must_use]
+    pub fn profiles(self, names: Vec<String>) -> ProfileMismatchDialog {
+        let _ = names;
+        todo!("fl.F18")
+    }
+
     /// Offers "Remember this choice"; only for a mismatch (ignored for a missing profile).
     #[must_use]
     pub fn rememberable(mut self, on: bool) -> ProfileMismatchDialog {
@@ -274,6 +287,7 @@ fn action_name(action: ProfileAction) -> &'static str {
         ProfileAction::Discard => "discard",
         ProfileAction::LeaveAsIs => "leaveAsIs",
         ProfileAction::AssignWorking => "assignWorking",
+        ProfileAction::AssignProfile => "assignProfile",
     }
 }
 
@@ -286,7 +300,11 @@ impl StackDialog for ProfileMismatchDialog {
 
     /// The chosen action, as OK gives it; `None` for an action the question does not offer.
     fn confirm(&mut self, _: &Context) -> Option<ProfileAnswer> {
-        self.offered().contains(&self.action).then(|| ProfileAnswer { action: self.action, remember: self.remember && self.can_remember() })
+        self.offered().contains(&self.action).then(|| ProfileAnswer {
+            action: self.action,
+            profile: None,
+            remember: self.remember && self.can_remember(),
+        })
     }
 
     /// `action`, the chosen one of the question's actions, and `remember` while the box shows.
@@ -341,6 +359,7 @@ impl StackDialog for ProfileMismatchDialog {
                     ProfileAction::Discard => words.discard.clone(),
                     ProfileAction::LeaveAsIs => words.leave.clone(),
                     ProfileAction::AssignWorking => words.assign_working.clone(),
+                    ProfileAction::AssignProfile => words.assign_profile.clone(),
                 };
                 (choice, text)
             })
@@ -365,7 +384,7 @@ impl StackDialog for ProfileMismatchDialog {
             .opened(Bind::bound(open))
             .show(ui);
         match shown.picked {
-            Some(0) => Some(DialogResult::Ok(ProfileAnswer { action: *action, remember: *remember && can_remember })),
+            Some(0) => Some(DialogResult::Ok(ProfileAnswer { action: *action, profile: None, remember: *remember && can_remember })),
             Some(_) => Some(DialogResult::Cancel),
             None => None,
         }

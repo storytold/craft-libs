@@ -2,13 +2,14 @@
 
 use std::collections::HashMap;
 
+use craft_behavior::IconId;
 use craft_cms::convert::CmykConverter;
 use craft_i18n::Format;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
 use craft_ui::choice::SwatchFace;
-use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, ShowContainer as _, request_rename};
+use craft_ui::contract::{Bind, DropZone, Held, NoValue, Outcome, Pattern, ShowContainer as _, request_rename};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetWords, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
@@ -32,6 +33,9 @@ pub struct SwatchesPanelOutput {
     pub used: Option<(SwatchAt, Srgba, bool)>,
     /// The edits the user made this pass, in pass order, for the host to run; the panel never writes the library.
     pub edits: Vec<SwatchEdit>,
+    /// The browser events the panel does not turn into `used` or `edits`: `Activate`, `Menu`, `DropAt`, `Reorder` and
+    /// `Dropped`.
+    pub events: Vec<PresetEvent<SwatchKey>>,
 }
 
 impl Outcome for SwatchesPanelOutput {
@@ -85,6 +89,57 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
+    /// Paints each swatch's thumbnail with `painter` in place of the panel's own swatch face (the host's gradient and
+    /// pattern previews).
+    #[must_use]
+    pub fn thumb(self, painter: impl Fn(&ContentPainterCx<'_>, Rect, ThumbInfo<'_, SwatchKey>) + 'a) -> Self {
+        let _ = painter;
+        todo!("co.K31")
+    }
+
+    /// The host's tools, shown beside the browser's toolbar.
+    #[must_use]
+    pub fn tools(self, tools: impl FnMut(&mut Ui) + 'a) -> Self {
+        let _ = tools;
+        todo!("co.K31")
+    }
+
+    /// Where a drop onto the panel lands.
+    #[must_use]
+    pub fn drop_zone(self, zone: DropZone) -> Self {
+        let _ = zone;
+        todo!("co.K31")
+    }
+
+    /// The footer's options; `None` leaves the footer out. Without it the footer keeps Delete enabled while a swatch
+    /// is selected.
+    #[must_use]
+    pub fn footer(self, footer: Option<PresetFooterOptions<'a>>) -> Self {
+        let _ = footer;
+        todo!("co.K31")
+    }
+
+    /// The swatch to scroll into view.
+    #[must_use]
+    pub fn reveal(self, key: Option<SwatchKey>) -> Self {
+        let _ = key;
+        todo!("co.K31")
+    }
+
+    /// Whether the browser shows its search field.
+    #[must_use]
+    pub fn search(self, on: bool) -> Self {
+        let _ = on;
+        todo!("co.K31")
+    }
+
+    /// The icons trailing each swatch row, through `PresetRow::trailing`.
+    #[must_use]
+    pub fn row_icons(self, icons: impl Fn(&SwatchKey) -> Vec<IconId> + 'a) -> Self {
+        let _ = icons;
+        todo!("co.K31")
+    }
+
     /// Draws the panel and returns the user's actions this pass.
     pub fn show(self, ui: &mut Ui) -> SwatchesPanelOutput {
         let SwatchesPanel { groups, state, cmyk, foreground } = self;
@@ -101,7 +156,9 @@ impl<'a> SwatchesPanel<'a> {
             }
             let rows = swatch_rows(groups, &words);
             let out = {
-                let colors: HashMap<&str, &SwatchColor> = groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
+                // P3(color-w5): co.K28
+                let colors: HashMap<&str, &SwatchColor> =
+                    groups.iter().flat_map(|g| g.entries.iter().filter_map(|e| e.color().map(|c| (e.name.as_str(), c)))).collect();
                 let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &rows)
                     .toolbar(true)
                     .reorder(PresetReorder::items_and_groups())
@@ -124,8 +181,10 @@ impl<'a> SwatchesPanel<'a> {
                 if let PresetEvent::Select { key: SwatchKey::Swatch(name), mods, .. } = &event
                     && let Some(at) = find_swatch(groups, name)
                     && let Some(entry) = groups.get(at.group).and_then(|g| g.entries.get(at.index))
+                    && let Some(color) = entry.color()
+                // P3(color-w5): co.K28
                 {
-                    used = Some((at, entry.color.to_srgb(cmyk), mods.alt || mods.cmd || mods.ctrl));
+                    used = Some((at, color.to_srgb(cmyk), mods.alt || mods.cmd || mods.ctrl));
                 }
                 edits.extend(event_edits(groups, &mut st, event, foreground, &words));
             }
@@ -145,7 +204,7 @@ impl<'a> SwatchesPanel<'a> {
             })
             .flatten()
             .unwrap_or_default();
-        SwatchesPanelOutput { response: shown.output, used, edits }
+        SwatchesPanelOutput { response: shown.output, used, edits, events: Vec::new() }
     }
 
     /// Carries out the host's answer to a file request of the panel menu: Import and Replace read the file into an
@@ -202,6 +261,7 @@ impl<'a> SwatchesPanel<'a> {
                 SwatchNote::Truncated(n) => count(&words.truncated, n),
                 SwatchNote::NamesCut(n) => count(&words.names_cut, n),
                 SwatchNote::TransparentKept(n) => count(&words.transparent_kept, n),
+                SwatchNote::PaintsSkipped(_) => todo!("co.K30"),
             })
             .collect()
     }

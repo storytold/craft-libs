@@ -5,7 +5,7 @@ use craft_theme::LabelColor;
 use craft_ui::contract::{CommandSet, Entry, Show as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::list::{ListWords, label_color_label};
-use craft_ui::menu::{Menu, MenuItem, PanelRow, entry_rows};
+use craft_ui::menu::{Menu, MenuItem, MenuRow, PanelRow, entry_rows};
 use craft_ui::runtime::commands::CommandRef;
 use egui::{Response, Ui};
 use std::sync::Arc;
@@ -157,7 +157,7 @@ pub(super) enum OpenMenu<Id> {
 }
 
 /// The host's menu for a row: its entries for where it was opened.
-pub(super) type RowMenu<'a, Id> = dyn Fn(&MenuTarget<Id>) -> Vec<Entry<String>> + 'a;
+pub(super) type RowMenu<'a, Id> = dyn Fn(&MenuTarget<Id>) -> Vec<MenuRow<String>> + 'a;
 
 /// The colour `rows` share, `None` when they have none or differ: the check in the label colour menus.
 pub(super) fn shared_label<T: LayerTree>(tree: &T, rows: &[T::Id]) -> Option<LabelColor> {
@@ -212,7 +212,14 @@ pub(super) fn show_row_menus<T: LayerTree>(
     match session.menu.clone() {
         Some(OpenMenu::Row(target)) => {
             let Some(menu) = row_menu else { return Vec::new() };
-            let entries = menu(&target);
+            // P3(document-panels-w2): dp.L8
+            let entries: Vec<Entry<String>> = menu(&target)
+                .into_iter()
+                .filter_map(|row| match row {
+                    MenuRow::Entry(entry) => Some(entry),
+                    _ => None,
+                })
+                .collect();
             let colored = label_rows(cx.tree, &target, &cx.selection.layers);
             let current = colored.as_deref().and_then(|rows| shared_label(cx.tree, rows));
             let shown = Menu::context(words.row_menu.clone(), opener).show(ui, |ui, _| {

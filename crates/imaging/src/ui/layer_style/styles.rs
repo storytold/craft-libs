@@ -3,7 +3,7 @@
 use craft_theme::TypeRole;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::display::Text;
-use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetState, ThumbInfo};
+use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetRowMenu, PresetState, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
 use egui::{Rect, Ui};
 
@@ -46,7 +46,7 @@ pub(super) fn styles_page(ui: &mut Ui, presets: Option<&StylePresets<'_>>, words
     if let Some(StylePresets { rows, thumb }) = presets {
         let browser = PresetBrowser::new(words.styles.clone(), Bind::<PresetState<String>>::kept(), rows)
             .thumb(move |cx, rect, info| thumb(cx, rect, info))
-            .row_menu(false)
+            .row_menu(PresetRowMenu::Off) // P3(appearance-w5): ap.AP5
             .max_rows(STYLE_ROWS);
         for event in browser.show(ui).events {
             if let PresetEvent::Select { key, .. } | PresetEvent::Activate { key, .. } = event {

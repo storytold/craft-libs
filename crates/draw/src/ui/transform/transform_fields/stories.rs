@@ -88,7 +88,7 @@ fn bar_form_in_a_length_unit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .show(ui, |ui, _| {
             TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1))
                 .bar()
-                .units(inches(), inches())
+                .rulers(craft_ui::canvas::CanvasRulers::new(inches(), inches(), craft_behavior::kurbo::Point::ZERO)) // P3(object-panels-w1): op.F7
                 .size_unit(size_unit_of(UnitKind::Inches, inches(), UnitKind::POINTS_PER_INCH))
                 .size_units(&units)
                 .show(ui);

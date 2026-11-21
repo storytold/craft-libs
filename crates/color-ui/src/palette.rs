@@ -146,7 +146,7 @@ impl SwatchColor {
     }
 }
 
-/// How an `.ase` file marks a colour.
+/// How a swatch is marked: its `.ase` kind, or the built-in Registration swatch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SwatchKind {
@@ -157,6 +157,38 @@ pub enum SwatchKind {
     Global,
     #[allow(missing_docs)]
     Spot,
+    /// The built-in Registration swatch: the global CMYK colour that prints on every plate.
+    Registration,
+}
+
+/// What a swatch holds.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum SwatchPaint {
+    /// A colour.
+    Color(SwatchColor),
+    /// A tint of a named base swatch, with the colour it resolves to.
+    Tint {
+        /// The base swatch's name.
+        base: String,
+        /// The tint, 0–1.
+        tint: f32,
+        /// The resolved colour.
+        color: SwatchColor,
+    },
+    /// A gradient; its value is the host's, keyed by the entry's name.
+    Gradient,
+    /// A pattern; its value is the host's, keyed by the entry's name.
+    Pattern,
+    /// The None swatch.
+    None,
+}
+
+impl From<SwatchColor> for SwatchPaint {
+    /// The colour as a [`SwatchPaint::Color`].
+    fn from(color: SwatchColor) -> Self {
+        SwatchPaint::Color(color)
+    }
 }
 
 /// One named swatch.
@@ -164,8 +196,8 @@ pub enum SwatchKind {
 pub struct SwatchEntry {
     /// The swatch's label.
     pub name: String,
-    /// The swatch's colour.
-    pub color: SwatchColor,
+    /// What the swatch holds.
+    pub paint: SwatchPaint,
     #[serde(default)]
     /// How the file marks the colour; `Process` unless the file says otherwise.
     pub kind: SwatchKind,
@@ -174,7 +206,23 @@ pub struct SwatchEntry {
 impl SwatchEntry {
     /// A process swatch.
     pub fn new(name: impl Into<String>, color: SwatchColor) -> SwatchEntry {
-        SwatchEntry { name: name.into(), color, kind: SwatchKind::Process }
+        SwatchEntry { name: name.into(), paint: SwatchPaint::Color(color), kind: SwatchKind::Process }
+    }
+
+    /// A process swatch holding `paint`.
+    pub fn with_paint(name: impl Into<String>, paint: SwatchPaint) -> SwatchEntry {
+        let _ = (name, paint);
+        todo!("co.K28")
+    }
+
+    /// The swatch's colour: the colour of a `Color` or `Tint` paint, else `None`.
+    pub fn color(&self) -> Option<&SwatchColor> {
+        todo!("co.K28")
+    }
+
+    /// Whether the swatch is reserved: a `None` paint or the Registration kind.
+    pub fn is_reserved(&self) -> bool {
+        todo!("co.K28")
     }
 }
 
@@ -219,6 +267,9 @@ pub enum SwatchNote {
     /// An `.act` read whose trailer names a transparent index: the 1-based colour number, so a read reports what it
     /// could not keep.
     TransparentKept(usize),
+    /// The format holds colours only: gradient, pattern and None swatches were skipped, with their
+    /// count.
+    PaintsSkipped(usize),
 }
 
 /// Why a swatch file could not be read or written.
@@ -287,7 +338,8 @@ pub fn read_swatches(bytes: &[u8], file_name: &str) -> Result<(Vec<SwatchGroup>,
             let (mut n, mut skipped) = (0usize, 0usize);
             let mut convert = |s: &AseSwatch| {
                 n += 1;
-                let entry = from_ase(&s.color).map(|color| SwatchEntry { name: entry_name(n - 1, &s.name), color, kind: s.kind });
+                let entry =
+                    from_ase(&s.color).map(|color| SwatchEntry { name: entry_name(n - 1, &s.name), paint: SwatchPaint::Color(color), kind: s.kind });
                 skipped += usize::from(entry.is_none());
                 entry
             };
@@ -333,7 +385,7 @@ pub fn write_swatches(groups: &[SwatchGroup], format: SwatchFormat) -> Result<(V
             if count_swatches(groups) > ACO_MAX_SWATCHES {
                 return Err(malformed(format, "an .aco file holds at most 65535 swatches"));
             }
-            let entries: Vec<(String, AcoColor)> = all().map(|e| (e.name.clone(), to_aco(&e.color))).collect();
+            let entries: Vec<(String, AcoColor)> = all().filter_map(|e| e.color().map(|c| (e.name.clone(), to_aco(c)))).collect(); // P3(color-w5): co.K28
             if flattened {
                 report.notes.push(SwatchNote::GroupsFlattened);
             }
@@ -374,7 +426,8 @@ pub fn write_swatches(groups: &[SwatchGroup], format: SwatchFormat) -> Result<(V
                 put_ase_block(&mut body, ASE_GROUP_START, &name);
                 blocks += 2;
                 for e in &g.entries {
-                    match to_ase(&e.color) {
+                    match e.color().and_then(to_ase) {
+                        // P3(color-w5): co.K28
                         Some(color) => {
                             put_ase_color(&mut body, &e.name, &color, e.kind);
                             blocks += 1;

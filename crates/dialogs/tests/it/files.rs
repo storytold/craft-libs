@@ -51,6 +51,11 @@ impl Files for StubFiles {
         false
     }
 
+    // P3(files-w1): fl.F2
+    fn pending_pick(&self) -> Option<craft_host::PendingPick> {
+        None
+    }
+
     fn read(&self, _path: &Path) -> Result<Vec<u8>, FileError> {
         Err(FileError::Unsupported)
     }

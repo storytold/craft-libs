@@ -66,6 +66,7 @@ pub(super) fn shown_handles(paths: &[EditPath], sel: &PathSelection, handles: Ha
             for side in [HandleSide::In, HandleSide::Out] {
                 let wanted = match handles {
                     HandlesShown::All => true,
+                    HandlesShown::OneAnchor => todo!("cv.F32"),
                     HandlesShown::Selected => {
                         sel.has_anchor(path.key, knot_ref)
                             || next_to_selected_anchor(path, sel, knot_ref, side)

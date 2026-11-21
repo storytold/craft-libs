@@ -47,7 +47,7 @@ fn aco_round_trips_colours_in_their_own_model() {
     assert_eq!(groups[0].name, "Brand");
     for ((name, color), entry) in colors.iter().zip(&groups[0].entries) {
         assert_eq!(entry.name, *name);
-        assert_same(color, &entry.color);
+        assert_same(color, entry.color().unwrap()); // P3(color-w5): co.K28
     }
     // A version 1 section comes first, then version 2 with the names.
     assert_eq!(&bytes[..4], &[0, 1, 0, 6]);
@@ -68,8 +68,9 @@ fn ase_keeps_groups_and_aco_reports_flattening() {
     let (back, _) = read_swatches(&ase, "x.ase").unwrap();
     assert_eq!(back.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["Brand", "Greys"]);
     assert_eq!(back[0].entries[1].kind, SwatchKind::Spot);
-    assert_same(&back[0].entries[1].color, &groups[0].entries[1].color);
-    assert_same(&back[1].entries[0].color, &SwatchColor::Gray(0.5));
+    // P3(color-w5): co.K28
+    assert_same(back[0].entries[1].color().unwrap(), groups[0].entries[1].color().unwrap());
+    assert_same(back[1].entries[0].color().unwrap(), &SwatchColor::Gray(0.5));
 
     // A colour in a model this crate does not read is skipped and counted.
     let mut unknown = Vec::new();

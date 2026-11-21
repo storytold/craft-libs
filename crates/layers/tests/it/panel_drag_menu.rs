@@ -32,7 +32,8 @@ fn rig() -> (Fixture, Seen, Asked) {
         let out = LayersPanel::new(&tree)
             .row_menu(|target| {
                 menus.borrow_mut().push(target.row.clone());
-                vec![Entry::new(String::from("rename"), "Rename Layer…")]
+                // P3(document-panels-w2): dp.L8
+                vec![Entry::new(String::from("rename"), "Rename Layer…").into()]
             })
             .show(ui);
         sink.borrow_mut().extend(out.events);

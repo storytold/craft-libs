@@ -51,6 +51,11 @@ impl Files for ScriptedFiles {
         false
     }
 
+    // P3(files-w1): fl.F2
+    fn pending_pick(&self) -> Option<craft_host::PendingPick> {
+        None
+    }
+
     fn read(&self, _path: &Path) -> Result<Vec<u8>, FileError> {
         Err(FileError::Unsupported)
     }
@@ -73,6 +78,7 @@ fn document(path: Option<&Path>, name: &str) -> SaveDocument<u32> {
         filters: vec![FileFilter::new("PDF", &["pdf"])],
         purpose: "document".into(),
         saved: None,
+        directory: None, // P3(files-w1): fl.F11
     }
 }
 
@@ -100,11 +106,11 @@ fn a_file_changed_on_disk_is_asked_about_once() {
 
     assert_eq!(flow.start(&files, &watch, document(Some(&file), "a.pdf"), SaveTarget::InPlace), ask);
     assert!(flow.is_busy());
-    assert_eq!(flow.replace(), SaveStep::Write { key: 7, path: file.clone(), target: SaveTarget::InPlace });
+    assert_eq!(flow.replace(), SaveStep::Write { key: 7, path: file.clone(), target: SaveTarget::InPlace, file_type: None }); // P3(files-w1): fl.F10
     flow.written(&mut watch, 7, &file);
     assert_eq!(
         flow.start(&files, &watch, document(Some(&file), "a.pdf"), SaveTarget::InPlace),
-        SaveStep::Write { key: 7, path: file.clone(), target: SaveTarget::InPlace },
+        SaveStep::Write { key: 7, path: file.clone(), target: SaveTarget::InPlace, file_type: None }, // P3(files-w1): fl.F10
         "the app's own write is no change on disk"
     );
     flow.failed(&7);
@@ -116,7 +122,7 @@ fn a_file_changed_on_disk_is_asked_about_once() {
     assert_eq!(request.directory.as_deref(), Some(dir.as_path()));
     let elsewhere = dir.join("b.pdf");
     files.answer(files.last_ticket(), Picked::Paths(vec![elsewhere.clone()]));
-    assert_eq!(flow.take_pick(&files, &watch), Some(SaveStep::Write { key: 7, path: elsewhere, target: SaveTarget::As }));
+    assert_eq!(flow.take_pick(&files, &watch), Some(SaveStep::Write { key: 7, path: elsewhere, target: SaveTarget::As, file_type: None })); // P3(files-w1): fl.F10
     flow.failed(&7);
 
     assert_eq!(flow.start(&files, &watch, document(Some(&file), "a.pdf"), SaveTarget::InPlace), ask);
@@ -131,7 +137,7 @@ fn a_late_write_does_not_free_another_save() {
     let (files, mut watch, mut flow) = (ScriptedFiles::default(), watch(), SaveFlow::new());
     assert_eq!(
         flow.start(&files, &watch, document(Some(Path::new("/x/a.pdf")), "a.pdf"), SaveTarget::InPlace),
-        SaveStep::Write { key: 7, path: PathBuf::from("/x/a.pdf"), target: SaveTarget::InPlace }
+        SaveStep::Write { key: 7, path: PathBuf::from("/x/a.pdf"), target: SaveTarget::InPlace, file_type: None } // P3(files-w1): fl.F10
     );
     assert_eq!(flow.cancel(&files), Some(SaveStep::Cancelled { key: 7 }));
     let mut other = document(None, "B");
@@ -142,7 +148,10 @@ fn a_late_write_does_not_free_another_save() {
     flow.written(&mut watch, 7, Path::new("/x/a.pdf"));
     assert!(flow.is_busy(), "the pick of the other document is still open");
     files.answer(ticket, Picked::Paths(vec![PathBuf::from("/x/b.pdf")]));
-    assert_eq!(flow.take_pick(&files, &watch), Some(SaveStep::Write { key: 8, path: PathBuf::from("/x/b.pdf"), target: SaveTarget::As }));
+    assert_eq!(
+        flow.take_pick(&files, &watch),
+        Some(SaveStep::Write { key: 8, path: PathBuf::from("/x/b.pdf"), target: SaveTarget::As, file_type: None })
+    ); // P3(files-w1): fl.F10
     flow.written(&mut watch, 8, Path::new("/x/b.pdf"));
     assert!(!flow.is_busy());
 }

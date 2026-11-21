@@ -16,7 +16,7 @@ use egui::emath::GuiRounding as _;
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 
 use super::popover::compact_picker;
-use super::{ColorPicker, PickedColor, ScreenPickGesture};
+use super::{ColorPicker, Paint, PickedColor, ScreenPickGesture};
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -68,7 +68,7 @@ impl Well {
 #[non_exhaustive]
 pub struct PairWell {
     label: Label,
-    color: Mixed<Srgba>,
+    paint: Mixed<Paint>,
     ring: bool,
 }
 
@@ -76,7 +76,27 @@ impl PairWell {
     /// A well named `label` (its accessible name and tooltip, translated: "Foreground colour") of the host's `color`;
     /// `Mixed::Mixed` for a selection whose fills differ, shown as the mixed well.
     pub fn new(label: impl Into<Label>, color: impl Into<Mixed<Srgba>>) -> Self {
-        Self { label: label.into(), color: color.into(), ring: false }
+        let paint = match color.into() {
+            Mixed::Same(color) => Mixed::Same(Paint::Solid(color)),
+            Mixed::Mixed => Mixed::Mixed,
+        };
+        Self { label: label.into(), paint, ring: false }
+    }
+
+    /// A well named `label` showing any paint through `paint_well`; `Mixed::Mixed` for a selection whose paints differ.
+    /// A ring well clips the face to its band; the popover picker starts from the solid colour or the first stop.
+    pub fn paint(label: impl Into<Label>, paint: impl Into<Mixed<Paint>>) -> Self {
+        let _ = (label, paint);
+        todo!("wg.W48")
+    }
+
+    /// The well's solid colour; `Mixed` for a paint that is not solid.
+    // P3(widgets-w6): wg.W48
+    fn color(&self) -> Mixed<Srgba> {
+        match &self.paint {
+            Mixed::Same(Paint::Solid(color)) => Mixed::Same(*color),
+            _ => Mixed::Mixed,
+        }
     }
 
     /// Draws the well as a ring (a stroke, as DesignCraft's stroke well) instead of a filled square. The middle shows
@@ -120,6 +140,16 @@ pub struct SwatchPairStyle {
     swatch: SwatchStyle,
 }
 
+/// What a [`SwatchPair`]'s wells take of a dragged payload: `SwatchPair::accepts`.
+pub struct DropAccepts<'a, P>(#[allow(dead_code)] Box<dyn Fn(Well, &P) -> bool + 'a>); // P3(widgets-w6): wg.W49
+
+impl<'a, P> DropAccepts<'a, P> {
+    /// A test that runs `accepts` on the well and the payload.
+    pub fn new(accepts: impl Fn(Well, &P) -> bool + 'a) -> Self {
+        DropAccepts(Box::new(accepts))
+    }
+}
+
 /// A closure that sets up the picker of the popup.
 pub struct PickerSetup<'a>(Box<dyn Fn(ColorPicker<'a>) -> ColorPicker<'a> + 'a>);
 
@@ -137,7 +167,7 @@ struct Opened(Option<u64>);
 /// What a swatch pair reports.
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct SwatchPairOutput {
+pub struct SwatchPairOutput<P = ()> {
     /// The pair's response.
     pub response: Response,
     /// The active well after this pass: the host's, or the one the user chose.
@@ -163,9 +193,13 @@ pub struct SwatchPairOutput {
     pub open: Option<Well>,
     /// The edit of the active well: another well made active is one `Set`.
     pub choice: EditResponse<Well>,
+    /// A payload released on a well that accepts it: the well and the payload.
+    pub dropped: Option<(Well, P)>,
+    /// The well a dragged payload that it accepts is over.
+    pub over: Option<Well>,
 }
 
-impl Outcome for SwatchPairOutput {
+impl<P> Outcome for SwatchPairOutput<P> {
     type Value = Well;
 
     fn response(&self) -> &Response {
@@ -197,8 +231,8 @@ impl Outcome for SwatchPairOutput {
 /// - The wells are one roving group: Tab arrives at the active well; Left and Up go to the primary one, Right and
 ///   Down to the secondary one (mirrored right to left).
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
-#[component(overlay)]
-pub struct SwatchPair<'a> {
+#[component(overlay, probe(SwatchPair<'static, u8>))]
+pub struct SwatchPair<'a, P: Clone + Send + Sync + 'static = ()> {
     #[common]
     common: Common,
     wells: [PairWell; 2],
@@ -225,6 +259,12 @@ pub struct SwatchPair<'a> {
     /// Sets up the popup's picker.
     #[prop(func = "Fn(ColorPicker<'a>) -> ColorPicker<'a>")]
     picker: Option<PickerSetup<'a>>,
+    /// The payload each well drags past the slop (`None`: that well drags nothing).
+    #[prop]
+    drags: Option<[Option<P>; 2]>,
+    /// What each well accepts of a dragged payload: the well is a drop target for the payloads this allows.
+    #[prop(func = "Fn(Well, &P) -> bool")]
+    accepts: Option<DropAccepts<'a, P>>,
     clicked: Option<Well>,
     double_clicked: Option<Well>,
     activated: bool,
@@ -235,7 +275,7 @@ pub struct SwatchPair<'a> {
     screen_pick: Option<ScreenPickGesture>,
 }
 
-impl<'a> SwatchPair<'a> {
+impl<'a, P: Clone + Send + Sync + 'static> SwatchPair<'a, P> {
     /// A pair named `label` of `wells`, primary first; `active` is the well in front.
     pub fn new(label: impl Into<Label>, wells: [PairWell; 2], active: Bind<'a, Well>) -> Self {
         SwatchPair {
@@ -249,6 +289,8 @@ impl<'a> SwatchPair<'a> {
             frame_active: false,
             sampled: None,
             picker: None,
+            drags: None,
+            accepts: None,
             clicked: None,
             double_clicked: None,
             activated: false,
@@ -300,13 +342,13 @@ impl<'a> SwatchPair<'a> {
     }
 }
 
-impl Component for SwatchPair<'_> {
+impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
     const ROLE: Role = Role::GROUP;
 
     type Style = SwatchPairStyle;
-    type Output = SwatchPairOutput;
+    type Output = SwatchPairOutput<P>;
 
-    fn style(cx: &StyleCx<'_>, _: SwatchPairStyleKey) -> SwatchPairStyle {
+    fn style(cx: &StyleCx<'_>, _: SwatchPairStyleKey<P>) -> SwatchPairStyle {
         let colors = &cx.tokens.color;
         let well = cx.tokens.size.icon.lg;
         let round = cx.tokens.shape.wells == WellShape::Round;
@@ -352,7 +394,7 @@ impl Component for SwatchPair<'_> {
             let front = well == on_top;
             let at = flow.to_physical(logical.translate(rect.min.to_vec2()));
             let mut flags = Flags::empty();
-            flags.set(Flags::MIXED, self.wells[i].color.same().is_none());
+            flags.set(Flags::MIXED, self.wells[i].color().same().is_none());
             flags.set(Flags::CHECKED, well == active);
             let shape = if cx.style.round { HitShape::circle(at.center(), at.width() / 2.0) } else { HitShape::Rect(at) };
             let part = cx
@@ -440,7 +482,7 @@ impl Component for SwatchPair<'_> {
         let popup = cx.popup("picker");
         let opened = cx.memory::<Opened>().0.map_or(Well::Primary, Well::of);
         let well = &self.wells[opened.index() as usize];
-        let (color, name) = (*well.color.or(&Srgba::BLACK), well.label.clone());
+        let (color, name) = (*well.color().or(&Srgba::BLACK), well.label.clone());
         let setup = self.picker.as_ref();
         let sampled = self.sampled;
         let shown = ui.show(popup, Overlay::popover(), |ui, _| {
@@ -459,7 +501,7 @@ impl Component for SwatchPair<'_> {
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         for (i, well) in self.wells.iter().enumerate() {
-            let value = match well.color.same() {
+            let value = match well.color().same() {
                 Some(color) => color.to_hex(),
                 None => cx.words::<ChoiceWords>().swatch_mixed.as_str().to_owned(),
             };
@@ -493,7 +535,7 @@ impl Component for SwatchPair<'_> {
                 if well == front {
                     draw.surface_styled(at.expand(style.gap), &ground);
                 }
-                match shown.color.same() {
+                match shown.color().same() {
                     Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
                     color => {
                         draw.swatch_well(at, style.radius, color.copied());
@@ -515,7 +557,7 @@ impl Component for SwatchPair<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> SwatchPairOutput {
+    fn finish(self, cx: Cx<'_, Self>) -> SwatchPairOutput<P> {
         let open = cx.recall::<Opened>().0.map(Well::of).filter(|_| !self.edit.is_empty() || self.edited.is_some());
         let (response, active) = (cx.response.clone(), cx.value().copied().unwrap_or_default());
         SwatchPairOutput {
@@ -531,6 +573,8 @@ impl Component for SwatchPair<'_> {
             screen_pick: self.screen_pick,
             open,
             choice: cx.edit_response(),
+            dropped: None,
+            over: None,
         }
     }
 }

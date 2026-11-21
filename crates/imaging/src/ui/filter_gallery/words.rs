@@ -8,6 +8,8 @@ craft_ui::words! {
         name: "filterGallery.name" = "Filter Gallery";
         /// The folders column's accessible name.
         filters: "filterGallery.filters" = "Filters";
+        /// The categories list's name.
+        categories: "filterGallery.categories" = "Categories";
         /// The settings column's accessible name.
         settings: "filterGallery.settings" = "Settings";
         /// The Filter select's name.

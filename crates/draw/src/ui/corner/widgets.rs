@@ -5,6 +5,7 @@ use super::style::CornerStyle;
 use super::words::CornerWords;
 use super::{CornerEdit, CornerRef, CornerTarget};
 use crate::geometry::fillet::fillet;
+use crate::ui::transform::TransformReach;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{HitLevel, HitPriority, HitShape, NavShape, PartKey, PointerButton, PressPhase, Roving, Sense};
 use craft_ui::canvas::{NUDGE, NUDGE_FAR, canvas_space, readout};
@@ -16,7 +17,7 @@ use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
-use craft_ui::style::StyleCx;
+use craft_ui::style::{DataColor, StyleCx};
 use egui::{Pos2, Rect, Response, Vec2};
 
 /// The part of one widget: `WIDGET.at(i)`, `i` counted over the shown widgets in target order, then corner order.
@@ -70,13 +71,29 @@ pub struct CornerWidgets<'a> {
     /// The widest inner angle whose corner shows a widget.
     #[prop(quantity = "degrees")]
     hide_above: f64,
+    /// What of the widgets takes the pointer: `TransformReach::Shown` draws them and declares no part and takes no key,
+    /// so the press reaches the tool; `MoveOnly`, with no move reach in the widgets, takes no press either.
+    #[prop]
+    reach: TransformReach,
+    /// The widgets' outline and dot in the host's colour, else `overlay.line`.
+    #[prop]
+    color: Option<DataColor>,
     report: Report,
 }
 
 impl<'a> CornerWidgets<'a> {
     /// The widgets of the host's `targets`, topmost first, named `label`.
     pub fn new(label: impl Into<Label>, targets: Bind<'a, Vec<CornerTarget>>) -> Self {
-        CornerWidgets { common: Common::new(), targets, kinds: false, hide_above: Self::HIDE_ABOVE, report: Report::default() }.label(label)
+        CornerWidgets {
+            common: Common::new(),
+            targets,
+            kinds: false,
+            hide_above: Self::HIDE_ABOVE,
+            reach: TransformReach::Box,
+            color: None,
+            report: Report::default(),
+        }
+        .label(label)
     }
 
     /// The widest inner angle, in degrees, a widget shows at unless [`hide_above`](Self::hide_above) says otherwise.

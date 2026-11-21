@@ -16,7 +16,9 @@ fn clicks(theme: &str) -> [Option<Well>; 2] {
     let seen = clicked.clone();
     let mut fixture = Fixture::new(move |ui| {
         let wells = [PairWell::new("Foreground colour", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Background colour", Srgba::rgb(1.0, 1.0, 1.0))];
-        let shown = SwatchPair::new("Colours", wells, Bind::given(Well::Primary)).popover(false).show(ui);
+        let shown = SwatchPair::<()>::new("Colours", wells, Bind::given(Well::Primary)) // P3(widgets-w6): wg.W49
+            .popover(false)
+            .show(ui);
         if shown.clicked.is_some() {
             seen.set(shown.clicked);
         }

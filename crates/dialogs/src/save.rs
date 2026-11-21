@@ -59,6 +59,8 @@ pub struct SaveDocument<D> {
     /// When only the file's change time differs (Finder tags, LaunchServices), equal bytes are no
     /// change on disk, so Save doesn't ask. `None` asks on any difference.
     pub saved: Option<Arc<Vec<u8>>>,
+    /// The folder the picker starts in; `None` keeps [`save_dialog_folder`]'s rule.
+    pub directory: Option<PathBuf>,
 }
 
 /// What the app does next.
@@ -86,6 +88,9 @@ pub enum SaveStep<D> {
         path: PathBuf,
         /// Whether the document takes `path` as its file or keeps its own.
         target: SaveTarget,
+        /// The index of the file type picked in the save panel, when it reported one; `None` for the document's own
+        /// file.
+        file_type: Option<usize>,
     },
     /// The user cancelled (the picker or the question); nothing was written.
     Cancelled {
@@ -110,7 +115,7 @@ enum Pending<D> {
 /// ```ignore
 /// // File › Save
 /// match saves.start(host.files(), &watch, document(doc), SaveTarget::InPlace) {
-///     SaveStep::Write { key, path, target } => write_on_a_job(key, path, target),
+///     SaveStep::Write { key, path, target, .. } => write_on_a_job(key, path, target),
 ///     SaveStep::AskChangedOnDisk { key, path } => { dialogs.open(StandardPrompt::changed_on_disk(name(key)).tag(key)); }
 ///     SaveStep::Busy => status(SAVE_IN_PROGRESS),
 ///     SaveStep::Picking | SaveStep::Cancelled { .. } => {}
@@ -168,7 +173,7 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
             return Some(self.confirm(watch, document, target, path));
         }
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        Some(SaveStep::Write { key: document.key, path, target })
+        Some(SaveStep::Write { key: document.key, path, target, file_type: None }) // P3(files-w1): fl.F10
     }
 
     /// The changed-on-disk question's Replace: write over the changed file. [`SaveStep::Busy`]
@@ -177,7 +182,7 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
     pub fn replace(&mut self) -> SaveStep<D> {
         let Some(Pending::Asking { document, target, path }) = self.pending.take() else { return SaveStep::Busy };
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        SaveStep::Write { key: document.key, path, target }
+        SaveStep::Write { key: document.key, path, target, file_type: None } // P3(files-w1): fl.F10
     }
 
     /// The changed-on-disk question's Save As: leave the file on disk as it is and ask where to
@@ -247,7 +252,7 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
             return SaveStep::AskChangedOnDisk { key, path };
         }
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        SaveStep::Write { key: document.key, path, target }
+        SaveStep::Write { key: document.key, path, target, file_type: None } // P3(files-w1): fl.F10
     }
 
     fn open_picker(&mut self, files: &dyn Files, document: SaveDocument<D>, target: SaveTarget) -> SaveStep<D> {

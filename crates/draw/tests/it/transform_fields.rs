@@ -53,7 +53,7 @@ fn harness_of(row: TransformRow, config: Config) -> Harness {
             fields = fields.bar().groups(config.groups);
         }
         if let Some(units) = config.units {
-            fields = fields.units(units, units);
+            fields = fields.rulers(craft_ui::canvas::CanvasRulers::new(units, units, craft_behavior::kurbo::Point::ZERO)); // P3(object-panels-w1): op.F7
         }
         if let Some(document) = config.document {
             fields = fields.document(document);

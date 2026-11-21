@@ -78,7 +78,7 @@ pub use fill::{
 };
 pub use filter_gallery::{
     EffectParameters, EffectStack, FilterCatalog, FilterGalleryEvent, FilterGalleryOpen, FilterGallerySession, FilterGalleryWords,
-    FilterGalleryWorkspace, FilterTree, GalleryFilter,
+    FilterGalleryWorkspace, FilterTree, FilterTreeLayout, GalleryFilter, LayerId, SessionField,
 };
 pub use histogram::{
     BinCount, ChannelColor, Histogram, HistogramData, HistogramInks, HistogramLook, HistogramOutput, HistogramScale, LevelRange, PlotFrame,

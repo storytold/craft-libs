@@ -106,6 +106,8 @@ pub enum HandlesShown {
     Selected,
     /// Every anchor's (DesignCraft).
     All,
+    /// Handles only while one anchor is selected over all paths.
+    OneAnchor,
 }
 
 /// A part of a path under the pointer.

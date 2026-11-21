@@ -31,9 +31,9 @@ mod words;
 
 pub use catalog::{FilterCatalog, FilterCategory, FilterGallerySource, FilterIndex, GalleryFilter, GalleryThumb};
 pub use parameters::{EffectParameters, EffectParametersOutput};
-pub use session::{EffectChange, EffectLayer, FilterGallerySession};
+pub use session::{EffectChange, EffectLayer, FilterGallerySession, LayerId, SessionField};
 pub use stack::{EffectStack, EffectStackOutput};
-pub use tree::{FilterTree, FilterTreeOutput};
+pub use tree::{FilterTree, FilterTreeLayout, FilterTreeOutput};
 pub use words::FilterGalleryWords;
 
 use std::cell::RefCell;

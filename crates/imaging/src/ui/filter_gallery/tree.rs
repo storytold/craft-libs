@@ -68,6 +68,19 @@ impl Outcome for FilterTreeOutput {
     }
 }
 
+/// How a [`FilterTree`] lays out the categories and filters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FilterTreeLayout {
+    /// The category folders of tile grids.
+    #[default]
+    Folders,
+    /// A categories list beside a filters list, each filter row with its thumbnail; the current filter's category is
+    /// selected, a category press picks its first filter, a filter row press, Enter or Space picks it, and empty
+    /// categories are not listed.
+    Lists,
+}
+
 /// The folders column: one collapsible folder per category (its open state remembered; the folder of the
 /// filter the tree opens on starts open), each a `TileGrid` of the folder's filters, with the filter's name
 /// under its thumbnail. The current filter's tile is the grid's selection. Thumbnails come from a
@@ -88,6 +101,13 @@ impl<'a> FilterTree<'a> {
     /// asks for.
     pub fn new(index: &'a FilterIndex, selected: &'a str, thumbs: &'a Thumbnails<GalleryThumb>, source: &'a dyn ThumbSource<GalleryThumb>) -> Self {
         Self { index, selected, thumbs, source }
+    }
+
+    /// How the categories and filters are laid out; the folders by default.
+    #[must_use]
+    pub fn layout(self, layout: FilterTreeLayout) -> Self {
+        let _ = layout;
+        todo!("ef.F15")
     }
 
     /// Draws the category folders and filter thumbnails and reports the filter picked.

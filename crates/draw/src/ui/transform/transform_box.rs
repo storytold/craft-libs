@@ -21,7 +21,7 @@ use craft_ui::contract::{
 use craft_ui::primitives::{Draw, Handle, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::runtime::focus::{FocusShape, KeyUse};
-use craft_ui::style::{ComponentStyle, HandleLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, DataColor, HandleLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
 use crate::ui::corner::{CornerStyle, paint_widget};
@@ -143,6 +143,9 @@ pub enum TransformReach {
         /// The reach outside the frame, in screen points.
         points: f32,
     },
+    /// The box paints its frame and handles but declares no part, takes no key and has no menu: every press reaches
+    /// what lies under it, the tool.
+    Shown,
 }
 
 /// The box drawn as a live line's controls ([`TransformBox::line`]), in document units: a square at each end of the
@@ -379,10 +382,18 @@ pub struct TransformBox<'a> {
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
     #[prop]
     line: Option<LineLook>,
-    /// What of the box takes the pointer and the keys: the whole box, or only the move reach outside the frame.
-    /// Crate-private: the public entry is `TransformOverlay::reach`.
-    #[prop(vis = "pub(crate)")]
+    /// What of the box takes the pointer and the keys: the whole box, only the move reach outside the frame, or
+    /// nothing.
+    #[prop]
     reach: TransformReach,
+    /// The frame and handle edges in the host's colour, else `overlay.line`.
+    #[prop]
+    color: Option<DataColor>,
+    /// Whether Enter and Escape from the canvas session are the box's (apply and discard). Off, they stay untaken so
+    /// they reach the scope around the canvas (a dialog's OK and Cancel); arrows, Page keys and drags are unchanged,
+    /// and an open drag's Escape still cancels the drag.
+    #[prop]
+    session_commit: bool,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
     pivot_held: bool,
     /// Whether this pass holds a drag that began, so a live line's box shows as it scales.
@@ -409,6 +420,8 @@ impl<'a> TransformBox<'a> {
             centre_mark: false,
             line: None,
             reach: TransformReach::Box,
+            color: None,
+            session_commit: true,
             pivot_held: false,
             dragging: false,
             report: Report::default(),
@@ -433,6 +446,7 @@ impl<'a> TransformBox<'a> {
         match self.reach {
             TransformReach::MoveOnly { points } => Some(points),
             TransformReach::Box => None,
+            TransformReach::Shown => todo!("cv.F30"),
         }
     }
 

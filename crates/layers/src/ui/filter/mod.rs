@@ -49,11 +49,13 @@ pub enum FilterBy {
     Artboard,
     /// Every group with its contents; no controls.
     Group,
+    /// Object kinds and row states, ticked in a popover beside a name search.
+    Objects,
 }
 
 impl FilterBy {
     /// Every type, in the type select's order.
-    pub const ALL: [FilterBy; 9] = [
+    pub const ALL: [FilterBy; 10] = [
         FilterBy::Kind,
         FilterBy::Name,
         FilterBy::Effect,
@@ -63,6 +65,7 @@ impl FilterBy {
         FilterBy::SmartObject,
         FilterBy::Artboard,
         FilterBy::Group,
+        FilterBy::Objects,
     ];
 
     /// The type the filter uses when `by` is not among `offered`: `by` itself when offered, else the
@@ -118,7 +121,90 @@ impl LayerKind {
             LayerKind::Text => Some(FilterKind::Type),
             LayerKind::Shape => Some(FilterKind::Shape),
             LayerKind::SmartObject => Some(FilterKind::SmartObject),
-            LayerKind::Group | LayerKind::Artboard | LayerKind::Path | LayerKind::Image | LayerKind::Object | LayerKind::Frame => None,
+            LayerKind::Group
+            | LayerKind::Artboard
+            | LayerKind::Path
+            | LayerKind::Image
+            | LayerKind::Object
+            | LayerKind::Frame
+            | LayerKind::Layer
+            | LayerKind::Guide
+            | LayerKind::Spine => None,
+        }
+    }
+}
+
+/// An object kind the Objects filter ticks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum FilterObject {
+    /// Path rows.
+    Paths,
+    /// Shape rows.
+    Shapes,
+    /// Text rows.
+    Text,
+    /// Image rows.
+    Images,
+    /// Rows with effects.
+    Effects,
+    /// Group and layer rows.
+    Groups,
+    /// Linked smart objects.
+    LinkedFiles,
+    /// Guide rows.
+    Guides,
+}
+
+impl FilterObject {
+    /// Every object kind, in the filter popover's order.
+    pub const ALL: [FilterObject; 8] = [
+        FilterObject::Paths,
+        FilterObject::Shapes,
+        FilterObject::Text,
+        FilterObject::Images,
+        FilterObject::Effects,
+        FilterObject::Groups,
+        FilterObject::LinkedFiles,
+        FilterObject::Guides,
+    ];
+
+    /// The control-channel name: the serialised name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            FilterObject::Paths => "paths",
+            FilterObject::Shapes => "shapes",
+            FilterObject::Text => "text",
+            FilterObject::Images => "images",
+            FilterObject::Effects => "effects",
+            FilterObject::Groups => "groups",
+            FilterObject::LinkedFiles => "linkedFiles",
+            FilterObject::Guides => "guides",
+        }
+    }
+}
+
+/// A row state the Objects filter ticks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum FilterState {
+    /// Rows with a lock on.
+    Locked,
+    /// Rows that are not visible.
+    Hidden,
+}
+
+impl FilterState {
+    /// Every row state, in the filter popover's order.
+    pub const ALL: [FilterState; 2] = [FilterState::Locked, FilterState::Hidden];
+
+    /// The control-channel name: the serialised name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            FilterState::Locked => "locked",
+            FilterState::Hidden => "hidden",
         }
     }
 }
@@ -357,6 +443,12 @@ pub struct LayerFilter {
     pub color: Option<LabelColor>,
     /// Smart Object: the kinds toggled on, in the order they were toggled.
     pub smart: Vec<SmartKind>,
+    /// Objects: the object kinds ticked (OR).
+    #[serde(default)]
+    pub objects: Vec<FilterObject>,
+    /// Objects: the row states ticked (OR), AND-ed with the object kinds.
+    #[serde(default)]
+    pub states: Vec<FilterState>,
 }
 
 impl Default for LayerFilter {
@@ -371,6 +463,8 @@ impl Default for LayerFilter {
             attribute: LayerAttribute::default(),
             color: None,
             smart: Vec::new(),
+            objects: Vec::new(),
+            states: Vec::new(),
         }
     }
 }
@@ -387,7 +481,13 @@ impl LayerFilter {
             FilterBy::Name => !self.name.trim().is_empty(),
             FilterBy::SmartObject => !self.smart.is_empty(),
             FilterBy::Effect | FilterBy::Mode | FilterBy::Attribute | FilterBy::Color | FilterBy::Artboard | FilterBy::Group => true,
+            FilterBy::Objects => todo!("dp.F3"),
         }
+    }
+
+    /// Whether a row that holds a listed row stays listed at its own depth: true for Objects.
+    pub fn keeps_holders(&self) -> bool {
+        todo!("dp.F4")
     }
 
     /// Whether the filtered panel lists the contents of closed groups, so a match inside one shows:
@@ -423,6 +523,7 @@ impl LayerFilter {
                 None => false,
             },
             FilterBy::Artboard | FilterBy::Group => true,
+            FilterBy::Objects => todo!("dp.F3"),
         }
     }
 
@@ -583,6 +684,28 @@ craft_ui::words! {
         smart_linked: "layerFilterBar.smartLinked" = "Filter for smart objects linked locally";
         smart_missing: "layerFilterBar.smartMissing" = "Filter for linked smart objects that are missing";
         smart_embedded: "layerFilterBar.smartEmbedded" = "Filter for embedded smart objects";
+        /// The Objects filter's funnel button.
+        filter: "layerFilterBar.filter" = "Filter";
+        /// The popover's button that unticks everything.
+        clear_all: "layerFilterBar.clearAll" = "Clear All";
+        /// The popover's object heading.
+        by_object: "layerFilterBar.byObject" = "By Object";
+        /// The popover's state heading.
+        by_layer: "layerFilterBar.byLayer" = "By Layer";
+        /// The Objects search field's placeholder.
+        search_all: "layerFilterBar.searchAll" = "Search All";
+        /// The object kinds' checkboxes.
+        object_paths: "layerFilterBar.objectPaths" = "Paths";
+        object_shapes: "layerFilterBar.objectShapes" = "Shapes";
+        object_text: "layerFilterBar.objectText" = "Text";
+        object_images: "layerFilterBar.objectImages" = "Images";
+        object_effects: "layerFilterBar.objectEffects" = "Effects";
+        object_groups: "layerFilterBar.objectGroups" = "Groups";
+        object_linked_files: "layerFilterBar.objectLinkedFiles" = "Linked Files";
+        object_guides: "layerFilterBar.objectGuides" = "Guides";
+        /// The row states' checkboxes.
+        state_locked: "layerFilterBar.stateLocked" = "Locked";
+        state_hidden: "layerFilterBar.stateHidden" = "Hidden";
     }
 }
 
@@ -759,6 +882,7 @@ impl<'a> LayerFilterBar<'a> {
                 }
                 // The selected layers pick the artboards; Group lists every group.
                 FilterBy::Artboard | FilterBy::Group => {}
+                FilterBy::Objects => todo!("dp.F6"),
             }
             if next != stored {
                 let name: std::sync::Arc<str> = std::sync::Arc::from(words.filter_type.as_str());
@@ -782,6 +906,7 @@ fn type_label(by: FilterBy, words: &LayerFilterWords) -> &Label {
         FilterBy::SmartObject => &words.smart_objects,
         FilterBy::Artboard => &words.artboard,
         FilterBy::Group => &words.group,
+        FilterBy::Objects => todo!("dp.F6"),
     }
 }
 

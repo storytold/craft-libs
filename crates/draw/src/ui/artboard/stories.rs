@@ -309,7 +309,8 @@ fn artboard_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 kept.note = Some(note);
             }
         }
-        if let Some(index) = named {
+        // P3(canvas-w4): cv.F24
+        if let Some((index, _)) = named {
             boards.selected = vec![index];
         }
         let names: Vec<&str> = boards.selected.iter().filter_map(|&index| boards.items.get(index)).map(|item| item.name.as_str()).collect();

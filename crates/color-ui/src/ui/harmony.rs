@@ -14,8 +14,8 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use super::ColorDisc;
 use super::picker::{ChannelRow, ChannelRule};
+use super::{ColorDisc, DiscLook, DiscRadius};
 use crate::harmony::{Guide, GuideOptions, Harmony, Variation};
 use craft_ui::choice::{SwatchTable, SwatchTableOutput};
 
@@ -141,6 +141,20 @@ impl<'a> HarmonyWheel<'a> {
         self
     }
 
+    /// How the wheel draws its colours; smooth by default.
+    #[must_use]
+    pub fn look(self, look: DiscLook) -> Self {
+        let _ = look;
+        todo!("wg.W44")
+    }
+
+    /// The channel the wheel's radius shows; its slider shows the other. Saturation by default.
+    #[must_use]
+    pub fn radius(self, radius: DiscRadius) -> Self {
+        let _ = radius;
+        todo!("wg.W44")
+    }
+
     /// Shows the wheel and the Brightness row.
     pub fn show(self, ui: &mut Ui) -> HarmonyWheelOutput {
         let HarmonyWheel { label, colors, selected } = self;
@@ -158,13 +172,15 @@ impl<'a> HarmonyWheel<'a> {
             if let Some(selected) = selected {
                 disc = disc.chosen(selected);
             }
-            let disc = disc.brightness(brightness).names(names.clone()).show(ui);
+            // P3(widgets-w5): wg.W43
+            let disc = disc.level(brightness).names(names.clone()).show(ui);
             pressed = disc.pressed;
             let grabbed = disc.grabbed;
             for event in disc.edit.events {
                 let marker = event.value().map(|m| m.marker).or(grabbed).or(selected);
                 if let Some(marker) = marker {
-                    edits.push((marker, event.map(|m| [Some(m.hue), Some(m.saturation), None])));
+                    // P3(widgets-w5): wg.W43
+                    edits.push((marker, event.map(|m| [Some(m.hue), Some(m.radial), None])));
                 }
             }
             let track = hsb.map(|c| vec![Srgba::from_hsb(Hsb { b: 0.0, ..c }), Srgba::from_hsb(Hsb { b: 1.0, ..c })]).unwrap_or_default();
@@ -205,19 +221,42 @@ pub enum HarmonyMenuAction {
     Options,
 }
 
+/// Where a Color Guide cell lies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GuideCellAt {
+    /// The harmony strip's cell at this index.
+    Strip(usize),
+    /// The variation grid's cell at this row and column.
+    Grid {
+        /// The grid row.
+        row: usize,
+        /// The grid column.
+        column: usize,
+    },
+}
+
+/// A Color Guide cell: where it lies and the colour it shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GuideCell {
+    /// Where the cell lies.
+    pub at: GuideCellAt,
+    /// The colour the cell shows: the host's, when it gave one.
+    pub color: Srgba,
+}
+
 /// The cells of the variation grid chosen for Save Colors as Swatches. The host owns it and hands it to the panel and
 /// to the panel menu; the cells belong to the guide they were picked from.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HarmonyPicked {
     selection: Selection<usize>,
     guide: u64,
-    colors: Vec<Srgba>,
+    cells: Vec<GuideCell>,
 }
 
 impl HarmonyPicked {
-    /// The chosen colours, in grid order.
-    pub fn colors(&self) -> &[Srgba] {
-        &self.colors
+    /// The chosen cells, in grid order.
+    pub fn cells(&self) -> &[GuideCell] {
+        &self.cells
     }
 }
 
@@ -228,8 +267,9 @@ impl HarmonyPicked {
 pub struct HarmonyPanelOutput {
     /// The panel's response.
     pub response: Response,
-    /// A colour of the strip or the grid was clicked: the app applies it to the selection or the current colour.
-    pub chosen: Option<Srgba>,
+    /// A cell of the strip or the grid was clicked, with the colour the host gave it: the app applies it to the
+    /// selection or the current colour. One output per click.
+    pub chosen: Option<GuideCell>,
     /// The base swatch was clicked: the app sets the base to its current colour.
     pub set_base: bool,
 }
@@ -300,6 +340,20 @@ impl<'a> HarmonyPanel<'a> {
         HarmonyPanel { state, picked, base, limit: None }
     }
 
+    /// The colour the host shows in each cell (spot tints), drawn instead of the guide's.
+    #[must_use]
+    pub fn cell_color(self, color: impl Fn(&GuideCell) -> Srgba + 'a) -> Self {
+        let _ = color;
+        todo!("co.K38")
+    }
+
+    /// The payload a cell drags, through the swatch table's `drag_payload`.
+    #[must_use]
+    pub fn drag_payload<P: Send + Sync + 'static>(self, map: impl Fn(&GuideCell) -> Option<P> + Send + Sync + 'static) -> Self {
+        let _ = map;
+        todo!("co.K38")
+    }
+
     /// Limit to Library: every colour snaps to the nearest of `palette`.
     pub fn limit(mut self, palette: &'a [Srgba]) -> Self {
         self.limit = Some(palette);
@@ -337,7 +391,8 @@ impl<'a> HarmonyPanel<'a> {
                 .selection(Bind::bound(&mut strip_selection))
                 .show_all(ui);
             if let Some(i) = out.selected {
-                chosen = strip.get(i).map(|(_, c)| *c);
+                // P3(widgets-w5): co.K38
+                chosen = strip.get(i).map(|(_, c)| GuideCell { at: GuideCellAt::Strip(i), color: *c });
             }
 
             let columns = guide.grid.first().map_or(1, Vec::len).max(1);
@@ -354,13 +409,18 @@ impl<'a> HarmonyPanel<'a> {
             if let Some(i) = selected
                 && cells.len() == 1
             {
-                chosen = flat.get(i).map(|(_, c)| *c);
+                // P3(widgets-w5): co.K38
+                chosen = flat.get(i).map(|(_, c)| GuideCell { at: GuideCellAt::Grid { row: i / columns, column: i % columns }, color: *c });
             }
             let mut cells = selection.items.clone();
             cells.sort_unstable();
             cells.dedup();
-            let colors: Vec<Srgba> = cells.iter().filter_map(|&i| flat.get(i).map(|(_, c)| *c)).collect();
-            let after_picked = HarmonyPicked { selection, guide: stamp, colors };
+            // P3(widgets-w5): co.K38
+            let cells: Vec<GuideCell> = cells
+                .iter()
+                .filter_map(|&i| flat.get(i).map(|(_, c)| GuideCell { at: GuideCellAt::Grid { row: i / columns, column: i % columns }, color: *c }))
+                .collect();
+            let after_picked = HarmonyPicked { selection, guide: stamp, cells };
 
             let (left, right) = match before.options.variation {
                 Variation::TintsShades => (&words.shades, &words.tints),
@@ -437,7 +497,7 @@ impl HarmonyMenu {
             variation(HarmonyCommand::TintsShades, Variation::TintsShades),
             variation(HarmonyCommand::WarmCool, Variation::WarmCool),
             variation(HarmonyCommand::VividMuted, Variation::VividMuted),
-            (HarmonyCommand::SaveAsSwatches, CommandState::new().enabled(!picked.colors().is_empty())),
+            (HarmonyCommand::SaveAsSwatches, CommandState::new().enabled(!picked.cells().is_empty())),
             (HarmonyCommand::Options, CommandState::new()),
         ]
     }
@@ -449,7 +509,9 @@ impl HarmonyMenu {
             HarmonyCommand::WarmCool => state.options.variation = Variation::WarmCool,
             HarmonyCommand::VividMuted => state.options.variation = Variation::VividMuted,
             HarmonyCommand::SaveAsSwatches => {
-                return (!picked.colors().is_empty()).then(|| HarmonyMenuAction::SaveAsSwatches(picked.colors().to_vec()));
+                // P3(widgets-w5): co.K38
+                return (!picked.cells().is_empty())
+                    .then(|| HarmonyMenuAction::SaveAsSwatches(picked.cells().iter().map(|cell| cell.color).collect()));
             }
             HarmonyCommand::Options => return Some(HarmonyMenuAction::Options),
         }

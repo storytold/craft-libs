@@ -3,8 +3,8 @@
 
 use craft_behavior::{EditEvent, Mixed, Selection};
 use craft_theme::Srgba;
-use craft_ui::choice::SwatchTable;
-use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, ShowContainer as _};
+use craft_ui::choice::{SwatchSpacing, SwatchTable};
+use craft_ui::contract::{Bind, Held, ListDrag, NoValue, Outcome, Pattern, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
 use egui::{Response, Ui};
@@ -55,6 +55,20 @@ impl<'a> SwatchPalette<'a> {
     /// A palette named `label` of `swatches`, each a name and a colour, choosing the colour bound to `color`.
     pub fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, swatches: &'a [(Label, Srgba)]) -> Self {
         SwatchPalette { label: label.into(), color, swatches }
+    }
+
+    /// The gap between the cells, passed on to its `SwatchTable`.
+    #[must_use]
+    pub fn spacing(self, spacing: SwatchSpacing) -> Self {
+        let _ = spacing;
+        todo!("co.K7")
+    }
+
+    /// The payload a cell drags, passed on to its `SwatchTable`.
+    #[must_use]
+    pub fn drag_payload<P: Send + Sync + 'static>(self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
+        let _ = map;
+        todo!("co.K7")
     }
 
     /// Shows the palette.

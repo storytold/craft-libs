@@ -1,6 +1,7 @@
 //! [`ColorArea`]: two components of a colour across and down a field, the others fixed.
 
 use super::channels::{QUANTIZE_CELLS, channel_range, channel_step, quantized, settled, snapped, spoken};
+use super::ramp::Gamut;
 use crate::AreaMode;
 use craft_behavior::{Metrics, Mixed, Proposal, Sense};
 use craft_theme::ModelValues;
@@ -60,6 +61,10 @@ pub struct ColorArea<'a> {
     /// The size of an area that does not fill its room; plot proportions by default.
     #[prop]
     shape: AreaShape,
+    /// The host's gamut: a cell of the 16 × 16 grid whose centre colour it moves is shaded with `surface.scrim`, with
+    /// a dark line under a light one along the edges between shaded and unshaded cells; drawn under the marker.
+    #[prop]
+    gamut: Option<Gamut<'a>>,
 }
 
 /// The size of a [`ColorArea`] that does not fill its room.
@@ -77,7 +82,7 @@ pub enum AreaShape {
 impl<'a> ColorArea<'a> {
     /// An area named `label` ("Saturation and brightness") showing `values`, values of `mode`'s model.
     pub fn new(label: impl Into<Label>, mode: AreaMode, values: Bind<'a, ModelValues>) -> Self {
-        ColorArea { common: Common::new(), mode, values, quantize: None, names: None, shape: AreaShape::Plot }.label(label).ltr_axis()
+        ColorArea { common: Common::new(), mode, values, quantize: None, names: None, shape: AreaShape::Plot, gamut: None }.label(label).ltr_axis()
     }
 
     /// The across and down channels of the mode's model.

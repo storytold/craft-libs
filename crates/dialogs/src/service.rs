@@ -119,18 +119,36 @@ pub struct ExtensionPolicy {
     pub lowercase: bool,
     /// Add the request's suggested extension to a name that has none.
     pub add_suggested: bool,
+    /// Give a name the panel left alone the extension of the file type picked in the panel.
+    pub picked_type: bool,
 }
 
 impl ExtensionPolicy {
     /// Keep the typed name as the panel answered it.
-    pub const AS_TYPED: Self = Self { lowercase: false, add_suggested: false };
+    pub const AS_TYPED: Self = Self { lowercase: false, add_suggested: false, picked_type: false };
 }
 
 impl Default for ExtensionPolicy {
     /// Lowercase, and add the suggested extension.
     fn default() -> Self {
-        Self { lowercase: true, add_suggested: true }
+        Self { lowercase: true, add_suggested: true, picked_type: true }
     }
+}
+
+/// `path` with the extension of the file type picked in the Save panel (`chosen`, its extensions without the dot),
+/// where the panel left the name alone; an extension of the picked type, or one that any of `filters` lists, stays.
+#[allow(dead_code)] // P3(files-w1): fl.F9
+pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String], filters: &[Filter]) -> PathBuf {
+    let _ = (path, opened_with, chosen, filters);
+    todo!("fl.F9")
+}
+
+/// Which file type's extensions belong on the name the panel returned: the one it reported, or the only one it
+/// offered; `None` when the answer names no type the panel offered.
+#[allow(dead_code)] // P3(files-w1): fl.F9
+fn chosen_type(filters: &[Filter], picked: Option<usize>) -> Option<usize> {
+    let _ = (filters, picked);
+    todo!("fl.F9")
 }
 
 /// Where a Save answer that would overwrite goes next: the panel already asked (macOS, Windows,
@@ -159,6 +177,8 @@ struct Pending {
 struct ReplaceQuestion {
     answered: PathBuf,
     settled: PathBuf,
+    #[allow(dead_code)] // P3(files-w1): fl.F7
+    file_type: Option<usize>,
 }
 
 /// A replace question shown on the app's `DialogHost`: the pick it settles and the prompt's id,
@@ -433,7 +453,10 @@ impl FilePanels {
     /// replace that entry, and `"PHOTO.png"` next to `"PHOTO.PNG"` on a file system that tells
     /// letter case apart is a second file, so the one the user picked would be left unchanged.
     // pc: crates/ui-egui/src/file_dialog.rs:210 lowercased_extension, :365 saved_path
-    pub fn settled_save_path(policy: ExtensionPolicy, answered: &Path, suggested: Option<&str>) -> PathBuf {
+    pub fn settled_save_path(policy: ExtensionPolicy, answered: &Path, request: &PickRequest, file_type: Option<usize>) -> PathBuf {
+        // P3(files-w1): fl.F7
+        let suggested = request.suggested_extension.as_deref();
+        let _ = file_type;
         match answered.extension().and_then(|e| e.to_str()) {
             Some(ext) if policy.lowercase && ext.bytes().any(|b| b.is_ascii_uppercase()) && !answered.exists() => {
                 answered.with_extension(ext.to_ascii_lowercase())
@@ -480,13 +503,14 @@ impl FilePanels {
                     matches!(&result, MessageResult::Ok) || matches!(&result, MessageResult::Custom(label) if *label == self.replace_words.replace);
                 if replace { Picked::Paths(vec![question.settled]) } else { Picked::Cancelled }
             }
+            (Answer::Saved { .. }, _) => todo!("fl.F7"),
             (Answer::Paths(paths), _) if paths.is_empty() => Picked::Cancelled,
             (Answer::Paths(mut paths), _) => {
                 if pending.request.kind == PickKind::Save {
                     let answered = paths.swap_remove(0);
-                    let settled = Self::settled_save_path(self.extension_policy, &answered, pending.request.suggested_extension.as_deref());
+                    let settled = Self::settled_save_path(self.extension_policy, &answered, &pending.request, None); // P3(files-w1): fl.F7
                     if self.replace_guard == ReplaceGuard::AskWhenUnasked && Self::replaces_unasked(&answered, &settled) {
-                        let question = ReplaceQuestion { answered, settled };
+                        let question = ReplaceQuestion { answered, settled, file_type: None };
                         lock(&self.inner).pending.insert(id, Pending { request: pending.request, awaiting_replace: Some(question.clone()) });
                         return Some(question);
                     }
@@ -559,6 +583,10 @@ impl Files for FileService {
     fn pick_pending(&self) -> bool {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.panel_busy || !inner.pending.is_empty()
+    }
+
+    fn pending_pick(&self) -> Option<craft_host::PendingPick> {
+        todo!("fl.F7")
     }
 
     // pc: apps/photocraft/src/services.rs:359 write_atomic (read is plain `std::fs::read`)
@@ -665,14 +693,14 @@ mod service_tests {
             typed("/x/Photo"),
         ]);
         let path = |p: &str| Picked::Paths(vec![PathBuf::from(p)]);
-        let both = ExtensionPolicy { lowercase: true, add_suggested: true };
+        let both = ExtensionPolicy { lowercase: true, add_suggested: true, picked_type: false }; // P3(files-w1): fl.F6
         assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.png"), "only the extension is lowercased");
         assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.png"), "a bare name gets the suggested extension");
         assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.jpg"), "another known extension is kept, lowercased");
         let neither = ExtensionPolicy::AS_TYPED;
         assert_eq!(saved_as(&service, &mut panels, neither), path("/x/Photo.PNG"));
         assert_eq!(saved_as(&service, &mut panels, neither), path("/x/Photo"));
-        let add_only = ExtensionPolicy { lowercase: false, add_suggested: true };
+        let add_only = ExtensionPolicy { lowercase: false, add_suggested: true, picked_type: false }; // P3(files-w1): fl.F6
         assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.PNG"), "adding does not lowercase");
         assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.png"));
     }

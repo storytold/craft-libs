@@ -190,7 +190,7 @@ pub(super) fn put_ase_color(out: &mut Vec<u8>, name: &str, color: &AseColor, kin
         AseColor::Other => {}
     }
     let code: u16 = match kind {
-        SwatchKind::Global => 0,
+        SwatchKind::Global | SwatchKind::Registration => 0,
         SwatchKind::Spot => 1,
         SwatchKind::Process => 2,
     };

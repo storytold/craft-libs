@@ -20,7 +20,8 @@ use craft_ui::runtime::env::Label;
 use egui::{Pos2, Response, Ui};
 
 use super::{AreaMode, ColorWarning};
-pub(crate) use channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
+pub(crate) use channel::channel_name;
+pub use channel::{ChannelRow, ChannelRule, ChannelUnit, TrackRamp};
 pub use value::ColorConstraint;
 use value::Rules;
 

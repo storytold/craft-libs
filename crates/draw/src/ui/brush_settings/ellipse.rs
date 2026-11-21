@@ -39,7 +39,7 @@ const ROUND_MIN: f64 = 0.01;
 pub struct TipAngle {
     /// The major axis's angle in whole degrees, counter-clockwise from the right, −180 to 180.
     pub degrees: f64,
-    /// The minor axis over the major, 0.01 to 1.
+    /// The minor axis over the major, from the widget's least roundness to 1.
     pub roundness: f64,
 }
 
@@ -84,7 +84,8 @@ pub fn ellipse_grab(at: Vec2, angle: TipAngle, radius: f32, reach: f32) -> TipEl
 /// The value after a drag to `at` (relative to the centre) holding `grab`. Angle: the direction
 /// of `at` in whole degrees, counter-clockwise, `atan2(−y, x)` rounded; unchanged within 1 pt of
 /// the centre. Roundness: `|at · minor| / radius` clamped to 0.01 to 1; the angle stays.
-pub fn ellipse_drag(grab: TipEllipseGrab, at: Vec2, angle: TipAngle, radius: f32) -> TipAngle {
+pub fn ellipse_drag(grab: TipEllipseGrab, at: Vec2, angle: TipAngle, radius: f32, least: f64) -> TipAngle {
+    let _ = least; // P3(object-dialogs-w2): od.OD8
     if !(at.x.is_finite() && at.y.is_finite()) {
         return angle;
     }
@@ -146,13 +147,16 @@ pub struct TipEllipse<'a> {
     #[common]
     common: Common,
     value: Bind<'a, TipAngle>,
+    /// The least roundness a dot drag, an Alt+arrow step and the drawn ellipse reach; 0 draws the flat tip as a line.
+    #[prop]
+    least_roundness: f64,
 }
 
 impl<'a> TipEllipse<'a> {
     /// The widget named `label` over `value`.
     pub fn new(label: impl Into<craft_ui::runtime::env::Label>, value: Bind<'a, TipAngle>) -> Self {
         use craft_ui::contract::Props as _;
-        TipEllipse { common: Common::new(), value }.label(label)
+        TipEllipse { common: Common::new(), value, least_roundness: ROUND_MIN }.label(label)
     }
 }
 
@@ -261,7 +265,8 @@ impl Component for TipEllipse<'_> {
         ];
         for (grab, press) in presses {
             let current = cx.value().copied().unwrap_or_default();
-            let at = |pos: Pos2| ellipse_drag(grab, pos - center, current, radius);
+            let least = self.least_roundness;
+            let at = |pos: Pos2| ellipse_drag(grab, pos - center, current, radius, least); // P3(object-dialogs-w2): od.OD8
             match press.phase {
                 PressPhase::DragStart { pos, .. } => {
                     cx.begin();

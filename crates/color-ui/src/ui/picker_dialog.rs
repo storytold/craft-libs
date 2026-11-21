@@ -29,7 +29,7 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use egui::{Context, Id, Ui};
 use std::sync::Arc;
 
-use super::{ColorPicker, ColorPickerLayout, ColorWarning, PickedColor, ScreenPickGesture};
+use super::{ColorPicker, ColorPickerLayout, ColorWarning, Gamut, PickedColor, ScreenPickGesture};
 use crate::{AreaMode, CmykModel, not_web_safe, web_safe};
 
 craft_ui::words! {
@@ -57,6 +57,47 @@ pub struct ColorPickerMemory {
     pub mode: AreaMode,
     /// Only Web Colors: snap to the 216 web-safe colours.
     pub web_colors: bool,
+    /// The Color Swatches view is shown in place of the Color Models.
+    pub swatches: bool,
+    /// The index of the swatch library the Color Swatches view shows.
+    pub library: usize,
+}
+
+/// A named library of colours the Color Swatches view of a [`ColorPickerDialog`] shows.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PickerLibrary {
+    /// The library's name in the library `Select`.
+    pub name: Label,
+    /// The library's swatches, each a name and a colour.
+    pub swatches: Vec<(Label, Srgba)>,
+}
+
+impl PickerLibrary {
+    /// A library named `name` of `swatches`.
+    pub fn new(name: impl Into<Label>, swatches: Vec<(Label, Srgba)>) -> Self {
+        let _ = (name, swatches);
+        todo!("co.K10")
+    }
+}
+
+/// What the Color Swatches view of a [`ColorPickerDialog`] shows: the libraries to choose from, and the notice for an
+/// empty library.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PickerSwatches {
+    /// The libraries, in the order of the library `Select`.
+    pub libraries: Vec<PickerLibrary>,
+    /// The notice shown for an empty library.
+    pub empty: Label,
+}
+
+impl PickerSwatches {
+    /// Swatch libraries `libraries`, with `empty` as the notice for an empty one.
+    pub fn new(libraries: Vec<PickerLibrary>, empty: impl Into<Label>) -> Self {
+        let _ = (libraries, empty);
+        todo!("co.K10")
+    }
 }
 
 /// The remembered scope of [`ColorPickerMemory`].
@@ -186,6 +227,22 @@ impl ColorPickerDialog {
             started: false,
             open: true,
         }
+    }
+
+    /// A body button after Cancel switches between Color Models and Color Swatches: a library `Select` over a spaced
+    /// `SwatchPalette` with the current colour's cell marked, a pick being an edit. Without it there is no button.
+    #[must_use]
+    pub fn swatch_view(self, swatches: PickerSwatches) -> ColorPickerDialog {
+        let _ = swatches;
+        todo!("co.K10")
+    }
+
+    /// The gamut the out-of-gamut chip tests with `Gamut::nearest`; without it the `cmyk` converter gives
+    /// `Gamut::cmyk`.
+    #[must_use]
+    pub fn gamut(self, gamut: Gamut<'static>) -> ColorPickerDialog {
+        let _ = gamut;
+        todo!("co.K12")
     }
 
     /// Fills `{name}` in a given title with `value`, after the title is translated: the title follows a language

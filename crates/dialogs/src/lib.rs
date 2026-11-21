@@ -216,6 +216,14 @@ pub enum Answer {
     Cancelled,
     /// The chosen files, folder or save path.
     Paths(Vec<PathBuf>),
+    /// A Save panel's answer: the name as typed and the file type picked, when the panel reports it (the portal's
+    /// current filter; rfd reports `None`).
+    Saved {
+        /// The name as typed.
+        path: PathBuf,
+        /// The index of the picked filter, when the panel reports it.
+        filter: Option<usize>,
+    },
     /// The button a message box was closed with.
     Message(MessageResult),
     /// No dialog could be shown, or it stopped without an answer; the text says why. Report it as

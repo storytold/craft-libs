@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use craft_behavior::Mixed;
 use craft_behavior::{Axis, EditEvent, EditEvents, Metrics, PartKey};
 use craft_cms::convert::CmykConverter;
+use craft_keymap::Mods;
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{ChoiceWords, Segmented, Swatch, SwatchFace};
@@ -21,9 +22,9 @@ use craft_ui::contract::{
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
-use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetState, ThumbInfo};
+use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetRowMenu, PresetState, ThumbInfo};
 use craft_ui::primitives::textures::CachedTexture;
-use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth};
+use craft_ui::primitives::{ContentPainterCx, FacePaint, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx};
@@ -94,12 +95,22 @@ pub struct GradientPreview {
     /// Whether the host's gradient runs end to start. The ramp keeps the stops as given; the flag is part of the
     /// preview's value so that a Reverse edit, which leaves the stops alone, still changes the paint the chip sets.
     pub reverse: bool,
+    /// The host's painter for the preview's face; it paints over the checker, and `stops` still give the accessible
+    /// value.
+    pub face: Option<FacePaint>,
 }
 
 impl GradientPreview {
+    /// The preview shows `face` in the paint well.
+    #[must_use]
+    pub fn face(self, face: FacePaint) -> Self {
+        let _ = face;
+        todo!("wg.W47")
+    }
+
     /// A preview through `stops`, not reversed.
     pub fn new(stops: Vec<(f32, Srgba)>) -> Self {
-        GradientPreview { stops, reverse: false }
+        GradientPreview { stops, reverse: false, face: None }
     }
 
     /// The preview with the gradient reversed or not.
@@ -242,6 +253,8 @@ pub struct PaintChipOutput {
     /// The Color Picker… button was pressed: the popover closed and the host opens the full picker with this request
     /// for that pass.
     pub pick_color: Option<ColorRequest>,
+    /// A click, Enter or Space on a chip without a popover: the modifiers held.
+    pub clicked: Option<Mods>,
 }
 
 impl Outcome for PaintChipOutput {
@@ -255,6 +268,23 @@ impl Outcome for PaintChipOutput {
     fn story_facts(&self) -> craft_ui::testing::StoryOutput {
         self.edit.story_facts()
     }
+}
+
+/// The look of a paint well: the chip's own look fields.
+#[allow(dead_code)] // P3(color-w4): wg.W47
+pub(crate) struct WellLook {
+    none_fill: StyleColor,
+    none_mark: StyleColor,
+    edge: StyleColor,
+    height: f32,
+}
+
+/// One paint-well face for `PaintChip` and `SwatchPair`: none, solid, a gradient face or ramp, a pattern or a picture;
+/// a face paints over the checker.
+#[allow(dead_code)] // P3(color-w4): wg.W47
+pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl Component>, well: Rect, paint: &Paint, style: &WellLook) {
+    let _ = (ui, cx, well, paint, style);
+    todo!("wg.W47")
 }
 
 /// A paint chip, a control high and 1.5 times as wide.
@@ -298,6 +328,13 @@ pub struct PaintChip<'a> {
     /// A Color Picker… button at the end of the kind row opens the full picker.
     #[prop]
     full_picker: bool,
+    /// A click, Enter or Space opens the popover; on by default. Off, nothing opens and the chip reports the held
+    /// modifiers as [`clicked`](PaintChipOutput::clicked) (host-picker mode).
+    #[prop]
+    popover: bool,
+    /// The chip draws as a stroke ring through the one ring painter.
+    #[prop]
+    ring: bool,
     /// The request of the Color Picker… button, for this pass.
     pick_color: Option<ColorRequest>,
 }
@@ -320,6 +357,8 @@ impl<'a> PaintChip<'a> {
             swatches: None,
             cmyk: None,
             full_picker: false,
+            popover: true,
+            ring: false,
             pick_color: None,
         }
         .label(label)
@@ -516,10 +555,11 @@ impl Component for PaintChip<'_> {
                             let groups: &[SwatchGroup] = groups;
                             let rows = swatch_rows(groups, &swatch_words);
                             let colors: HashMap<&str, &SwatchColor> =
-                                groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
+                                // P3(color-w4): co.K28
+                                groups.iter().flat_map(|g| g.entries.iter().filter_map(|e| e.color().map(|c| (e.name.as_str(), c)))).collect();
                             let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &rows)
                                 .toolbar(false)
-                                .row_menu(false)
+                                .row_menu(PresetRowMenu::Off) // P3(color-w4): ap.AP5
                                 .default_open(DefaultOpen::None)
                                 .room_height(Env::of(ui).tokens.size.control.sm * SWATCH_ROWS)
                                 .thumb(|painter: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
@@ -627,7 +667,7 @@ impl Component for PaintChip<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PaintChipOutput {
-        PaintChipOutput { edit: cx.edit_response(), screen_pick: self.screen_pick, pick_color: self.pick_color }
+        PaintChipOutput { edit: cx.edit_response(), screen_pick: self.screen_pick, pick_color: self.pick_color, clicked: None }
     }
 }
 

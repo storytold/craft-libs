@@ -29,6 +29,7 @@ use std::cell::RefCell;
 use craft_ui::contract::{Bind, CommandSet as _, Commands as _, NoValue, Outcome, Show, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::ListWords;
+use craft_ui::menu::MenuRow;
 use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::memory::Remember as _;
@@ -75,6 +76,9 @@ craft_ui::words! {
         kind_image: "layersPanel.kindImage" = "image";
         kind_object: "layersPanel.kindObject" = "object";
         kind_frame: "layersPanel.kindFrame" = "frame";
+        kind_layer: "layersPanel.kindLayer" = "layer";
+        kind_guide: "layersPanel.kindGuide" = "guide";
+        kind_spine: "layersPanel.kindSpine" = "spine";
         clipped: "layersPanel.clipped" = "clipped";
         locked: "layersPanel.locked" = "locked";
         linked: "layersPanel.linked" = "linked";
@@ -177,6 +181,18 @@ pub struct LayersPanel<'a, T: LayerTree> {
     document: Option<u64>,
 }
 
+/// How a layer row is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LayerRowLook {
+    /// The row look of the base: an eye and a label.
+    #[default]
+    EyeLabel,
+    /// VectorCraft: each row shows `LayerInfo::color` as a stripe, `Heavy` on `LayerKind::Layer` rows and `Thick` on
+    /// the others; the active layer's row gets a corner mark and no target brackets, and the eye cell no label fill.
+    ColorBar,
+}
+
 /// What a reveal ([`LayersPanel::reveal`]) does with the closed groups that hold the layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -200,6 +216,8 @@ pub struct LayersOutput<Id> {
     /// The layer whose row is under the pointer, for the app's canvas outline of it (PhotoCraft's Move tool); `None`
     /// over an effects or Smart Filter row and away from the rows.
     pub hovered: Option<Id>,
+    /// Key focus is in the rows this pass.
+    pub focused: bool,
     /// The panel.
     pub response: Response,
 }
@@ -297,10 +315,39 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         self
     }
 
+    /// How the rows are drawn; the base's eye and label by default.
+    #[must_use]
+    pub fn row_look(self, look: LayerRowLook) -> Self {
+        let _ = look;
+        todo!("dp.L1")
+    }
+
+    /// The rows take a `P` dragged from outside the list, before, after or into a layer, wherever `accepts` passes.
+    #[must_use]
+    pub fn takes_drop<P: Send + Sync + 'static>(self, accepts: impl Fn(&P, &T::Id, LayerPosition) -> bool + 'a) -> Self {
+        let _ = accepts;
+        todo!("dp.L3")
+    }
+
+    /// The host's footer, in the panel's footer slot in place of the panel's own buttons: the panel then reports no
+    /// `Footer` or `FooterDrop` and never calls `LayerTree::footer`.
+    #[must_use]
+    pub fn footer(self, footer: impl FnMut(&mut Ui) + 'a) -> Self {
+        let _ = footer;
+        todo!("dp.L4")
+    }
+
+    /// Delete or Backspace in the rows reports [`LayersEvent::Delete`]; off by default.
+    #[must_use]
+    pub fn deletable(self, on: bool) -> Self {
+        let _ = on;
+        todo!("dp.L5")
+    }
+
     /// The host's row menu: called with where it was opened (a layer row, an effects row) each pass
     /// while a row menu is chosen; a pick is [`LayersEvent::Menu`]. A right-click outside the
     /// selection selects the row first.
-    pub fn row_menu(mut self, menu: impl Fn(&MenuTarget<T::Id>) -> Vec<craft_ui::contract::Entry<String>> + 'a) -> Self {
+    pub fn row_menu(mut self, menu: impl Fn(&MenuTarget<T::Id>) -> Vec<MenuRow<String>> + 'a) -> Self {
         self.row_menu = Some(Box::new(menu));
         self
     }
@@ -459,6 +506,6 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         let mut events = events.into_inner();
         let (body, drop_preview, hovered) = shown.inner.unwrap_or_default();
         events.extend(body);
-        LayersOutput { events, drop_preview, hovered, response: shown.output }
+        LayersOutput { events, drop_preview, hovered, focused: false, response: shown.output }
     }
 }

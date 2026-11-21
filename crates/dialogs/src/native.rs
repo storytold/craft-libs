@@ -100,7 +100,7 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
             let request = crate::portal::SaveRequest::new(&d, parent_id);
             Box::pin(async move {
                 match crate::portal::save_as(request) {
-                    Ok(Some(path)) => Answer::Paths(vec![path]),
+                    Ok(Some((path, _))) => Answer::Paths(vec![path]), // P3(files-w1): fl.F8
                     Ok(None) => Answer::Cancelled,
                     Err(e) => {
                         log::info!("portal save dialog unavailable ({e}), using rfd");

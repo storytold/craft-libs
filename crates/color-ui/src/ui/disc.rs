@@ -53,15 +53,65 @@ pub struct DiscMove {
     pub marker: usize,
     /// Degrees, 0 to 360, red at 0 and growing counter-clockwise.
     pub hue: f32,
-    /// 0 (the centre) to 1 (the rim).
-    pub saturation: f32,
+    /// 0 (the centre) to 1 (the rim): the channel the radius shows.
+    pub radial: f32,
 }
 
 impl DiscMove {
-    /// Marker `marker` at `hue` degrees and `saturation`.
-    pub const fn new(marker: usize, hue: f32, saturation: f32) -> Self {
-        DiscMove { marker, hue, saturation }
+    /// Marker `marker` at `hue` degrees and `radial`.
+    pub const fn new(marker: usize, hue: f32, radial: f32) -> Self {
+        DiscMove { marker, hue, radial }
     }
+}
+
+/// What a click on the disc reports: the marker it concerns and the point under the pointer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DiscHit {
+    /// The marker grabbed (a primary click) or in grab reach (a secondary click).
+    pub marker: Option<usize>,
+    /// The marker whose spoke is within the spoke hit width (a secondary click).
+    pub spoke: Option<usize>,
+    /// Degrees, 0 to 360: the hue under the pointer.
+    pub hue: f32,
+    /// 0 to 1: the channel the radius shows, under the pointer.
+    pub radial: f32,
+}
+
+impl DiscHit {
+    /// A hit on `marker` or `spoke` at `hue` and `radial`.
+    pub const fn new(marker: Option<usize>, spoke: Option<usize>, hue: f32, radial: f32) -> Self {
+        DiscHit { marker, spoke, hue, radial }
+    }
+}
+
+/// How a [`ColorDisc`] draws its colours.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DiscLook {
+    /// A smooth blend of hue around and the radial channel outwards.
+    #[default]
+    Smooth,
+    /// 24 hue sectors by 5 rings of solid patches with thin edges.
+    Segmented,
+}
+
+/// The channel the radius of a [`ColorDisc`] shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DiscRadius {
+    /// Saturation outwards.
+    #[default]
+    Saturation,
+    /// Brightness outwards.
+    Brightness,
+}
+
+/// The centre of the segmented patch at `hue` and `radial`, as `(hue, radial)`: sector `round(h/15) mod 24`, ring
+/// `floor(r*5).min(4)`.
+pub fn patch_at(hue: f32, radial: f32) -> (f32, f32) {
+    let _ = (hue, radial);
+    todo!("wg.W43")
 }
 
 /// The style of a colour disc.
@@ -98,6 +148,11 @@ pub struct ColorDiscOutput {
     pub pressed: Option<usize>,
     /// The marker a press grabbed and a drag is moving, also on the pass the drag ends.
     pub grabbed: Option<usize>,
+    /// A primary click (no drag): the marker it grabbed and the point under the release.
+    pub clicked: Option<DiscHit>,
+    /// A secondary click inside the disc: the marker in grab reach, else the marker whose spoke is within the spoke
+    /// hit width, with the point; `None` outside the circle.
+    pub context: Option<DiscHit>,
 }
 
 impl Outcome for ColorDiscOutput {
@@ -146,9 +201,20 @@ pub struct ColorDisc<'a> {
     /// The marker drawn larger and where Tab lands; the host owns it.
     #[prop]
     chosen: Option<usize>,
-    /// The brightness the disc is drawn at, 0 to 1; never below a floor.
-    #[prop(quantity = "brightness")]
-    brightness: f32,
+    /// The marker drawn large: the set's base colour; `chosen` keeps the Tab stop and, when it is not the base, gets
+    /// the marker look's selection ring.
+    #[prop]
+    base: Option<usize>,
+    /// The channel the radius does not show, 0 to 1; never below a floor (on a saturation disc).
+    #[prop(quantity = "level")]
+    level: f32,
+    /// How the disc draws its colours.
+    #[prop]
+    #[style_key]
+    look: DiscLook,
+    /// The channel the radius shows.
+    #[prop]
+    radius: DiscRadius,
     /// The markers' accessible names, in order; a marker without one is "Color N".
     #[prop(into)]
     names: Vec<Label>,
@@ -159,9 +225,21 @@ pub struct ColorDisc<'a> {
 impl<'a> ColorDisc<'a> {
     /// A disc named `label` ("Harmony") with a marker at each of `markers`, reporting moves through `drag`.
     pub fn new(label: impl Into<Label>, markers: &'a [Srgba], drag: Bind<'a, DiscMove>) -> Self {
-        ColorDisc { common: Common::new(), markers, drag, chosen: None, brightness: 1.0, names: Vec::new(), pressed: None, grabbed: None }
-            .label(label)
-            .ltr_axis()
+        ColorDisc {
+            common: Common::new(),
+            markers,
+            drag,
+            chosen: None,
+            base: None,
+            level: 1.0,
+            look: DiscLook::Smooth,
+            radius: DiscRadius::Saturation,
+            names: Vec::new(),
+            pressed: None,
+            grabbed: None,
+        }
+        .label(label)
+        .ltr_axis()
     }
 
     /// The disc's centre and radius in the area `rect`, `inset` inside its shorter side.
@@ -245,7 +323,7 @@ impl Component for ColorDisc<'_> {
                 None => self.resting(index),
             };
             let reach = Marker::reach(&cx.style.marker, marker_size(self.chosen == Some(index)));
-            let part = cx.part(MARKER.at(index as u64), HitShape::circle(Self::marker_pos(center, radius, at.hue, at.saturation), reach));
+            let part = cx.part(MARKER.at(index as u64), HitShape::circle(Self::marker_pos(center, radius, at.hue, at.radial), reach));
             // A marker takes no press of its own: the disc grabs the nearest.
             let part = part.focusable().focus_shape(FocusShape::Circle);
             if index == stop {
@@ -269,7 +347,7 @@ impl Component for ColorDisc<'_> {
             let near = origin.and_then(|origin| {
                 let distance = |index: usize| {
                     let at = self.resting(index);
-                    Self::marker_pos(center, radius, at.hue, at.saturation).distance(origin)
+                    Self::marker_pos(center, radius, at.hue, at.radial).distance(origin)
                 };
                 (0..self.markers.len()).map(|index| (index, distance(index))).filter(|(_, d)| *d <= grab_reach).min_by(|a, b| a.1.total_cmp(&b.1))
             });
@@ -286,7 +364,7 @@ impl Component for ColorDisc<'_> {
         if running && let Some(marker) = grabbed.filter(|marker| *marker < self.markers.len()) {
             let last = cx.memory::<Grab>().last.replace(self.markers[marker]);
             if let Some(moved) = cx.value().filter(|moved| moved.marker == marker) {
-                let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &[moved.hue, moved.saturation * 100.0, self.hsb(marker)[2]]).values);
+                let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &[moved.hue, moved.radial * 100.0, self.hsb(marker)[2]]).values);
                 if last.is_some_and(|last| last != self.markers[marker]) && !echo.same_rgb8(self.markers[marker]) {
                     cx.cancel(CancelReason::HostChanged);
                 }
@@ -297,7 +375,7 @@ impl Component for ColorDisc<'_> {
             let offset = pos - center;
             let mut out = base;
             if offset.length().is_finite() {
-                out.saturation = ((offset.length() / radius).clamp(0.0, 1.0) * 100.0).round() / 100.0;
+                out.radial = ((offset.length() / radius).clamp(0.0, 1.0) * 100.0).round() / 100.0;
                 if offset.length() >= CENTRE
                     && let Some(hue) = hue_at(center, pos)
                 {
@@ -342,12 +420,12 @@ impl Component for ColorDisc<'_> {
             match mv {
                 NavMove::Forward => now.hue += by,
                 NavMove::Back => now.hue -= by,
-                NavMove::Up => now.saturation += by / 100.0,
-                NavMove::Down => now.saturation -= by / 100.0,
+                NavMove::Up => now.radial += by / 100.0,
+                NavMove::Down => now.radial -= by / 100.0,
                 _ => continue,
             }
             now.hue = now.hue.round().rem_euclid(360.0);
-            now.saturation = (now.saturation * 100.0).round().clamp(0.0, 100.0) / 100.0;
+            now.radial = (now.radial * 100.0).round().clamp(0.0, 100.0) / 100.0;
             cx.set(now);
         }
         for index in 0..self.markers.len() {
@@ -368,7 +446,7 @@ impl Component for ColorDisc<'_> {
                 None => words.marker.fill(&[("n", (index + 1).to_string().as_str())]),
             };
             let hue = format!("{:.0}", live.hue.rem_euclid(360.0));
-            let saturation = format!("{:.0}", live.saturation * 100.0);
+            let saturation = format!("{:.0}", live.radial * 100.0);
             let node = access.node(MARKER.at(index as u64), Role::SLIDER);
             node.name = Name::Text(name);
             let text = words.value.fill(&[("hue", hue.as_str()), ("saturation", saturation.as_str())]);
@@ -378,7 +456,7 @@ impl Component for ColorDisc<'_> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let (center, radius) = Self::geometry(cx.rect, cx.style.inset);
-        let brightness = if self.brightness.is_finite() { self.brightness.clamp(0.0, 1.0).max(DISC_FLOOR) } else { 1.0 };
+        let brightness = if self.level.is_finite() { self.level.clamp(0.0, 1.0).max(DISC_FLOOR) } else { 1.0 };
         let painter = ui.content_painter(cx);
         painter.painter.add(disc_mesh(center, radius, brightness));
         let draw = ui.draw();
@@ -386,7 +464,7 @@ impl Component for ColorDisc<'_> {
         let places: Vec<Pos2> = (0..self.markers.len())
             .map(|index| {
                 let at = cx.value().filter(|moved| moved.marker == index).copied().unwrap_or_else(|| self.resting(index));
-                Self::marker_pos(center, radius, at.hue, at.saturation)
+                Self::marker_pos(center, radius, at.hue, at.radial)
             })
             .collect();
         for place in &places {
@@ -402,7 +480,7 @@ impl Component for ColorDisc<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> ColorDiscOutput {
         let (pressed, grabbed) = (self.pressed, self.grabbed);
-        ColorDiscOutput { edit: cx.edit_response(), pressed, grabbed }
+        ColorDiscOutput { edit: cx.edit_response(), pressed, grabbed, clicked: None, context: None }
     }
 }
 
