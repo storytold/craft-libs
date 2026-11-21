@@ -16,7 +16,7 @@ use craft_ui::runtime::commands::CommandState;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::sections::{FooterAction, FooterBar, Panel};
 use egui::{Response, Ui};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 mod picker;
 #[cfg(feature = "suite")]
@@ -324,8 +324,11 @@ impl<'a> TextStylesPanel<'a> {
         // The footer bar is a container of its own, so the list's id comes from here, not from either body.
         let list_id = ui.scope_id().with(("styles", kind, label.as_str()));
 
-        let footer = |ui: &mut Ui, cx: &mut craft_ui::contract::BodyCx<'_>| {
-            let facts = cx.memory::<Facts>().clone();
+        // The body runs before the footer and hands it this pass's facts: the footer bar is a container of its own, so
+        // its memory is not the body's.
+        let shown_facts = RefCell::new(Facts::default());
+        let footer = |ui: &mut Ui, _: &mut craft_ui::contract::BodyCx<'_>| {
+            let facts = shown_facts.borrow().clone();
             let actions = FOOTER.map(|command| {
                 let (icon, text) = match command {
                     TextStyleCommand::ClearOverride => ("ban", &words.clear_override),
@@ -392,6 +395,7 @@ impl<'a> TextStylesPanel<'a> {
                 ] {
                     cx.publish(command, CommandState::new().enabled(facts.action(command).is_some()));
                 }
+                shown_facts.replace(facts.clone());
                 *cx.memory::<Facts>() = facts;
 
                 let source = keyed(rows, |row: &TextStyleRow| row.id);
