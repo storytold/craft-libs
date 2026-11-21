@@ -147,7 +147,9 @@ egui::Panel::top("menu-bar").show(ui, |ui| {
   first fits, one `Menu` title holds them all. `.label(&tr)` translates `⋯`, `Menu` and the
   scroll arrows' names, with the same hook as `LayoutOptions::label`. The bar fills its row;
   `.shrink_to_fit(max_width)` makes it take only the width its titles need, up to `max_width`,
-  so other controls can share the row, and the menus past that overflow.
+  so other controls can share the row, and the menus past that overflow. `.natural_width(ui)`
+  returns that width before the bar is drawn, each title measured as shown with any "(F)" it
+  takes, so the app can divide the row.
 - **Quit:** without an app Quit item, the Windows and Linux layouts add `Builtin::Quit`
   (`craft_quit::QUIT_MENU_ID`). The bar runs it itself through `craft_quit::on_menu_event`,
   which asks the window to close so the unsaved-changes check runs, and doesn't return it; the

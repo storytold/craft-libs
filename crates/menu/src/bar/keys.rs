@@ -192,9 +192,15 @@ pub(crate) fn append_underlined(job: &mut egui::text::LayoutJob, label: &str, mu
     }
 }
 
+/// The font a title draws with: the style's `override_font_id` or `override_text_style` when
+/// one is set, else the Button style, as a button resolves plain text.
+pub(crate) fn title_font(ui: &egui::Ui) -> egui::FontId {
+    egui::FontSelection::Default.resolve_with_fallback(ui.style(), egui::TextStyle::Button.into())
+}
+
 /// A title's text: `label` in `color`, its mnemonic underlined.
 pub(crate) fn title_text(ui: &egui::Ui, label: &str, mnemonic: Option<char>, color: Color32) -> egui::WidgetText {
-    let font = egui::TextStyle::Button.resolve(ui.style());
+    let font = title_font(ui);
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = f32::INFINITY;
     append_underlined(&mut job, label, 0.0, mnemonic, &TextFormat { font_id: font, color, ..Default::default() });

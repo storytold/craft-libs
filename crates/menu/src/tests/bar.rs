@@ -85,6 +85,8 @@ struct Bar {
     /// `shrink_to_fit`'s limit; the bar then shares a row with a label, which starts at `after`.
     fit: Option<f32>,
     after: Option<f32>,
+    /// `natural_width` in the last frame.
+    natural: f32,
     /// The viewport commands the bar sent.
     sent: Vec<egui::ViewportCommand>,
 }
@@ -112,6 +114,7 @@ impl Bar {
             clicked: Vec::new(),
             fit: None,
             after: None,
+            natural: 0.0,
             sent: Vec::new(),
         };
         b.run(3);
@@ -130,11 +133,13 @@ impl Bar {
         let (bar, gate, target, english, preferred, fit) = (&self.bar, self.gate, self.target, self.english, &self.preferred, self.fit);
         let mut out = Vec::new();
         let mut after = None;
+        let mut natural = 0.0;
         let mut full = self.ctx.run_ui(raw, |ui| {
             let mut ui_bar = MenuBarUi::new(bar).gate(gate).target(target).mnemonics(preferred);
             if let Some(english) = &english {
                 ui_bar = ui_bar.english(english);
             }
+            natural = ui_bar.natural_width(ui);
             match fit {
                 Some(max) => {
                     ui.horizontal(|ui| {
@@ -147,6 +152,7 @@ impl Bar {
         });
         full.textures_delta.clear();
         self.after = after;
+        self.natural = natural;
         if let Some(root) = full.viewport_output.remove(&egui::ViewportId::ROOT) {
             self.sent.extend(root.commands);
         }
@@ -503,6 +509,56 @@ fn a_bar_shrunk_to_fit_shares_its_row() {
     // A limit an app computed from a full row can go negative.
     b.fit = Some(-20.0);
     b.run(2);
+}
+
+/// `natural_width` is the room the titles need as shown, "(F)" suffixes included: a bar given
+/// exactly that much keeps every title, and a little less sends the last into "⋯".
+#[test]
+fn natural_width_is_the_room_the_titles_need_as_shown() {
+    const TITLES: [(&str, &str); 4] = [("文件", "File"), ("编辑", "Edit"), ("视图", "View"), ("帮助", "Help")];
+    let mut b = wide();
+    for (menu, (title, _)) in b.bar.menus.iter_mut().zip(TITLES) {
+        menu.title = title.to_owned();
+    }
+    b.english = Some(|l: Labeled<'_>| match l {
+        Labeled::Title(t) => TITLES.iter().find(|(shown, _)| *shown == t).map(|(_, en)| (*en).to_owned()),
+        Labeled::Command(_) => None,
+    });
+    b.run(1);
+    let natural = b.natural;
+    b.fit = Some(natural);
+    b.run(2);
+    assert!(b.title("帮助(H)").is_some() && b.title("⋯").is_none(), "every title fits in {natural}");
+    b.fit = Some(natural - 5.0);
+    b.run(2);
+    assert!(b.title("⋯").is_some(), "{natural} is no wider than the titles need");
+    b.english = None;
+    b.fit = None;
+    b.run(1);
+    assert!(b.natural < natural, "the \"(F)\" suffixes take room: {} vs {natural}", b.natural);
+}
+
+/// With the style's `override_font_id` set, the titles draw in that font, underlined or not, and
+/// `natural_width` measures them in it.
+#[test]
+fn titles_are_measured_and_drawn_in_the_override_font() {
+    let mut b = wide();
+    b.run(1);
+    let plain = b.natural;
+    b.ctx.all_styles_mut(|s| s.override_font_id = Some(egui::FontId::proportional(24.0)));
+    b.run(1);
+    let natural = b.natural;
+    assert!(natural > plain, "the larger font takes more room: {natural} vs {plain}");
+    b.fit = Some(natural);
+    b.run(2);
+    assert!(b.title("Help").is_some() && b.title("⋯").is_none(), "every title fits in {natural}");
+    let drawn = b.rect("File").width();
+    b.events.push(Event::Key { key: Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    b.run(2);
+    assert!(b.nav().underline, "Alt held shows the mnemonics");
+    let underlined = b.rect("File").width();
+    assert!((underlined - drawn).abs() < 0.5, "an underlined title draws in the same font: {underlined} vs {drawn}");
+    assert!(b.title("Help").is_some() && b.title("⋯").is_none(), "every underlined title fits in {natural}");
 }
 
 /// A menu far taller than the window.
