@@ -18,13 +18,17 @@ pub fn check(text: &str) -> Vec<Issue> {
 /// Words Gujarati repeats on purpose (`હા હા`, `ના ના`, `ધીમે ધીમે`, `સાચે સાચે`).
 const ALLOWED_REPEATS: &[&str] = &["હા", "ના", "ધીમે", "જલ્દી", "વારંવાર", "સાચે", "રોજે", "ખરેખર", "જરા", "થોડું", "સાથે", "પાસે"];
 
+fn is_digit(c: char) -> bool {
+    c.is_ascii_digit() || ('\u{0AE6}'..='\u{0AEF}').contains(&c)
+}
+
 fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
     for pair in ws.windows(2) {
         let [(a0, b0), (a1, b1)] = pair else { continue };
         let (Some(w0), Some(w1), Some(gap)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*b0..*a1)) else { continue };
         if !gap.is_empty()
             && gap.chars().all(char::is_whitespace)
-            && w0.chars().all(|c| c.is_alphabetic() || ('\u{0A80}'..='\u{0AFF}').contains(&c))
+            && w0.chars().all(|c| c.is_alphabetic() || (super::is_gujarati_char(c) && !c.is_numeric()))
             && w0 == w1
             && !ALLOWED_REPEATS.contains(&w0)
         {
@@ -42,11 +46,11 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
         let mut it = rest.chars();
         let Some(p) = it.next() else { continue };
         let after = it.next();
-        // A ratio/score keeps the spaces in digit-space-colon-space-digit.
+        // A ratio/score keeps the spaces in digit-space-colon-space-digit (ASCII or Gujarati digits).
         let ratio = p == ':'
-            && text.get(..i).and_then(|before| before.chars().next_back()).is_some_and(|c| c.is_ascii_digit())
+            && text.get(..i).and_then(|before| before.chars().next_back()).is_some_and(is_digit)
             && after == Some(' ')
-            && it.next().is_some_and(|c| c.is_ascii_digit());
+            && it.next().is_some_and(is_digit);
         let flag = !ratio
             && match p {
                 ',' => true,
@@ -75,6 +79,8 @@ mod tests {
             assert!(check(text).is_empty(), "{text}: {:?}", check(text));
         }
         assert_eq!(check("પુસ્તક પુસ્તક છે.").len(), 1);
+        assert!(check("1 1").is_empty());
+        assert!(check("૧ ૧").is_empty());
     }
 
     #[test]
@@ -91,10 +97,10 @@ mod tests {
 
     #[test]
     fn ratios_and_scores_keep_their_spaces() {
-        for text in ["3 : 1", "1 : 2", "સ્કોર 12 : 10."] {
+        for text in ["3 : 1", "1 : 2", "સ્કોર 12 : 10.", "૩ : ૧", "૧ : ૨", "સ્કોર ૧૨ : ૧૦."] {
             assert!(check(text).is_empty(), "{text}: {:?}", check(text));
         }
-        for text in ["શબ્દ : બીજો", "3 : શબ્દ", "3 :"] {
+        for text in ["શબ્દ : બીજો", "3 : શબ્દ", "3 :", "૩ : શબ્દ", "૩ :"] {
             assert!(check(text).iter().any(|i| i.message == "વિરામચિહ્ન પહેલાં જગ્યા"), "{text}");
         }
     }

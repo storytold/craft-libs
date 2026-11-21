@@ -216,9 +216,9 @@ fn composed_chars(core: &[char]) -> (Vec<char>, Vec<Option<usize>>) {
     (nfc, starts)
 }
 
-/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian and Turkish: a word in
-/// their script (the guard their rules use) whose letters the patterns know, so a word with a
-/// letter the pack never mentions (`ё`) goes on to the built-in rules. Polish, Portuguese, Italian
+/// Does a pack's `pats` hyphenate `core` in `lang`? Russian, Bulgarian, Turkish and Gujarati: a
+/// word in their script (the guard their rules use) whose letters the patterns know, so a word with a
+/// letter the pack never mentions goes on to the fallback rules. Polish, Portuguese, Italian
 /// and German: every word, as their embedded patterns do. Any other language: a word whose letters
 /// the patterns know.
 fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
@@ -227,6 +227,7 @@ fn pack_patterns_fit(lang: ProofLang, pats: &Patterns, core: &[char]) -> bool {
         ProofLang::Bg => core.iter().all(|&c| crate::bg::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Tr => core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) && pack_knows(pats, core),
         ProofLang::Pl | ProofLang::Pt | ProofLang::It | ProofLang::De => true,
+        ProofLang::Gu => core.iter().all(|&c| crate::gu::is_gujarati_char(c)) && pack_knows(pats, core),
         _ => pats.values(core).is_some(),
     }
 }
@@ -1052,5 +1053,14 @@ mod tests {
         for w in ["publication", "WordCraft"] {
             assert_eq!(hyphen_points_in(w, &Limits::default(), ProofLang::Bg), hyphen_points(w, &Limits::default()), "{w}");
         }
+    }
+
+    #[test]
+    fn gujarati_pack_patterns_fit_checks_script_and_exceptions() {
+        let pats = Patterns::parse("1ક 1ત પુ-સ્ત-ક");
+        let gu_word: Vec<char> = "પુસ્તક".chars().collect();
+        assert!(pack_patterns_fit(ProofLang::Gu, &pats, &gu_word));
+        let en_word: Vec<char> = "hyphenation".chars().collect();
+        assert!(!pack_patterns_fit(ProofLang::Gu, &pats, &en_word));
     }
 }

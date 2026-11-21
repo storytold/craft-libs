@@ -66,7 +66,7 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
     }
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && !is_gujarati_char(c) && !matches!(c, '\'' | '’' | '-'));
     let w = w.trim_matches(['\'', '’', '-']);
-    let letter_count = w.chars().filter(|&c| is_gujarati_char(c) || c.is_alphabetic()).count();
+    let letter_count = w.chars().filter(|&c| (is_gujarati_char(c) && !c.is_numeric()) || c.is_alphabetic()).count();
     if letter_count <= 1 || (opts.ignore_numbers && w.chars().any(char::is_numeric)) {
         return true;
     }
@@ -150,9 +150,12 @@ mod tests {
         assert!(is_correct_with(&empty, "શાળા"));
         assert!(install_dictionary("FLAG bogus\n", "1\nઘર\n").is_err());
         let d = AffixDict::from_hunspell(test_dict::AFF, test_dict::DIC, &[]).unwrap();
-        for w in ["", "2026", "અ", "English", "日本語"] {
+        for w in ["", "2026", "૧૨", "૨૦૨૬", "અ", "English", "日本語"] {
             assert!(is_correct_with(&d, w), "{w}");
         }
+        let no_ignore = crate::Options { ignore_numbers: false, ..Default::default() };
+        assert!(check(&d, "૧૨", &no_ignore));
+        assert!(check(&d, "2026", &no_ignore));
     }
 
     #[test]
