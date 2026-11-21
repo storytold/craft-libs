@@ -16,7 +16,7 @@ pub struct FacePaint {
 impl FacePaint {
     /// A face identified by `key` that paints with `paint`.
     pub fn new(key: u64, paint: impl Fn(&ContentPainterCx<'_>, Rect) + Send + Sync + 'static) -> Self {
-        FacePaint { key, paint: Arc::new(paint) }
+        Self { key, paint: Arc::new(paint) }
     }
 
     /// The key that identifies the face.

@@ -2,11 +2,11 @@
 
 use std::hash::Hash;
 
-use craft_behavior::{EditEvents, IconId};
+use craft_behavior::{EditEvents, IconId, Selection};
 use craft_ui::contract::{Bind, EditResponse, Outcome, Props as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{
-    PresetBrowser, PresetEvent, PresetFooterEvent, PresetFooterOptions, PresetReorder, PresetRow, PresetRowMenu, PresetState,
+    PresetBrowser, PresetEvent, PresetFooterEvent, PresetFooterOptions, PresetReorder, PresetRow, PresetState,
 };
 use craft_ui::runtime::drag::DropZone;
 use craft_ui::runtime::env::{Env, Label};
@@ -88,12 +88,12 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> BrushesPanel<'a, K> {
             }
             let mut browser = PresetBrowser::new(label.clone(), state.reborrowed(), rows)
                 .toolbar(true)
-                .row_menu(PresetRowMenu::Standard) // P3(appearance-w5): ap.AP5
+
                 .reorder(PresetReorder::items_and_groups())
                 .thumb_range(BRUSH_THUMBS)
                 .footer(footer);
             if let Some(key) = selected.take() {
-                browser = browser.selected(key);
+                browser = browser.selection(Bind::given(Selection::single(key)));
             }
             if let Some(zone) = drop_zone.take() {
                 browser = browser.drop_zone(zone);

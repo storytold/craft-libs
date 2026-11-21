@@ -19,6 +19,7 @@ mod manager;
 mod named;
 mod picker;
 
+pub use crate::tile_grid::GroupHeads;
 pub use browser::{BrowserTools, PresetBrowser, PresetDrop, PresetItemCommands, PresetReorder, RowItems, ThumbPainter};
 pub use event::{PresetEvent, PresetOutput};
 pub use files::{PresetExport, PresetFileEvent, PresetFileFailure, PresetFileRequest, PresetFiles};
@@ -26,7 +27,7 @@ pub use footer::{PresetFooter, PresetFooterEvent, PresetFooterOptions, PresetFoo
 pub use manager::{HostedPresetManager, PresetManager, PresetManagerOutput, PresetManagerTaken};
 pub use model::{
     CellShape, GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetKind, PresetLibrary, PresetRow,
-    PresetRowMenu, PresetTiles, Preview, PreviewPaint, ThumbInfo, children_end, has_captions, nest_allowed,
+    PresetRowMenu, PresetTiles, Preview, ThumbInfo, children_end, has_captions, nest_allowed,
 };
 pub use named::{NameCheck, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow, NamedPresetStyle};
 pub use panel_menu::{PresetCommands, PresetMenuAction, PresetPanelMenu};

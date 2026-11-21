@@ -2,6 +2,7 @@
 //! family's [`PresetBrowser`]: the browser owns the grid, the list, the roving focus, the keys and the accessible tree;
 //! the palette supplies the rows and paints each preset's thumbnail as a gradient ramp.
 
+use craft_behavior::Selection;
 use craft_ui::contract::{Bind, NoValue, Outcome, Pattern};
 use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetRow, PresetState, PresetTiles};
 use craft_ui::runtime::env::{Env, Label};
@@ -215,7 +216,7 @@ impl<'a> GradientPalette<'a> {
             .room_height(most)
             .thumb(thumb);
         if let Some(selected) = self.selected {
-            browser = browser.selected(selected);
+            browser = browser.selection(Bind::given(Selection::single(selected)));
         }
         let out = browser.show(ui);
         let mut picked = None;

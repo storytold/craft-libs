@@ -1,10 +1,11 @@
 //! `PresetBrowser::drop_zone`: a preset dragged from the browser and released over the zone reports `DropAt`.
 
-use craft_ui::contract::{Bind, DropZone};
-use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetState, PresetView};
+use craft_behavior::{Selection, SelectionChange, SelectionModel};
+use craft_ui::contract::{Bind, DropAt, DropPlace, DropZone, ListDrag, SelectMode};
+use craft_ui::patterns::presets::{PresetBrowser, PresetDrop, PresetEvent, PresetRow, PresetState, PresetView};
 use craft_ui::runtime::drag;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Id, Key, Modifiers, Pos2, Rect, Sense, UiBuilder, pos2, vec2};
+use egui::{Event, Id, Key, Modifiers, Pos2, PointerButton, Rect, Sense, UiBuilder, pos2, vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -96,6 +97,134 @@ fn the_footer_stays_in_the_room_and_a_room_height_sizes_the_browser_to_its_prese
     assert!(footer.top() >= last.bottom() && footer.top() - last.bottom() < 40.0, "the footer follows two presets: {footer:?} {last:?}");
     let (footer, _) = footer_rig(40, Some(200.0));
     assert!(footer.bottom() <= 240.0, "a long library scrolls within the room height: {footer:?}");
+}
+
+type Events = Rc<RefCell<Vec<PresetEvent<u32>>>>;
+
+/// Presets 1 to 4 in `view` under `SelectMode::Multi`, the selection kept by the test and given with `Bind::given`.
+fn multi_rig(view: PresetView) -> (Fixture, Rc<RefCell<Selection<u32>>>, Events) {
+    let selection = Rc::new(RefCell::new(Selection::<u32>::default()));
+    let events: Events = Rc::new(RefCell::new(Vec::new()));
+    let (held, seen) = (selection.clone(), events.clone());
+    let rows: Vec<PresetRow<u32>> = (1..=4).map(|key| PresetRow::item(key, format!("Preset {key}"), 0)).collect();
+    let mut state = PresetState::<u32>::new();
+    let mut fixture = Fixture::new(move |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+            let given = held.borrow().clone();
+            let out = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
+                .view_lock(view)
+                .select(SelectMode::Multi)
+                .selection(Bind::given(given))
+                .show(ui);
+            for event in out.events {
+                if let PresetEvent::Selection(change) = &event {
+                    held.borrow_mut().apply(change.clone());
+                }
+                seen.borrow_mut().push(event);
+            }
+        });
+    });
+    fixture.room(vec2(480.0, 320.0)).settle();
+    (fixture, selection, events)
+}
+
+/// A primary click on preset `key` with `mods` held.
+fn click_preset(fixture: &mut Fixture, key: u32, mods: Modifiers) {
+    let row = fixture.by_label(&format!("Preset {key}")).expect("the preset is shown");
+    fixture.hold(mods).click(&row);
+    fixture.hold(Modifiers::NONE);
+    fixture.idle(2);
+}
+
+/// A secondary press and release on preset `key`.
+fn secondary_click_preset(fixture: &mut Fixture, key: u32) {
+    let at = fixture.by_label(&format!("Preset {key}")).expect("the preset is shown").center();
+    let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![Event::PointerMoved(at)]);
+    fixture.frame(vec![button(true)]);
+    fixture.frame(vec![button(false)]);
+    fixture.idle(2);
+}
+
+#[trial]
+fn multi_selection_ranges_toggles_and_reports_select_only_for_a_plain_pick() {
+    for view in [PresetView::List, PresetView::Grid] {
+        let (mut fixture, selection, events) = multi_rig(view);
+        let items = || {
+            let mut items = selection.borrow().items.clone();
+            items.sort_unstable();
+            items
+        };
+        let selects = || events.borrow().iter().filter(|event| matches!(event, PresetEvent::Select { .. })).count();
+
+        click_preset(&mut fixture, 1, Modifiers::NONE);
+        assert_eq!((items(), selects()), (vec![1], 1), "a plain click selects and reports Select in {view:?}");
+
+        events.borrow_mut().clear();
+        click_preset(&mut fixture, 3, Modifiers::SHIFT);
+        assert_eq!((items(), selects()), (vec![1, 2, 3], 0), "Shift extends from the anchor and reports no Select in {view:?}");
+
+        click_preset(&mut fixture, 2, Modifiers::COMMAND);
+        assert_eq!((items(), selects()), (vec![1, 3], 0), "Cmd/Ctrl toggles and reports no Select in {view:?}");
+
+        let before = items();
+        fixture.key(Key::Space, Modifiers::COMMAND);
+        fixture.idle(2);
+        assert_ne!(items(), before, "Cmd/Ctrl+Space toggles the lead in {view:?}");
+        assert_eq!(selects(), 0, "Cmd/Ctrl+Space is no pick in {view:?}");
+
+        click_preset(&mut fixture, 4, Modifiers::NONE);
+        events.borrow_mut().clear();
+        secondary_click_preset(&mut fixture, 2);
+        assert!(
+            events.borrow().contains(&PresetEvent::Selection(SelectionChange::Set(vec![2]))),
+            "a secondary press on an unselected preset selects it first in {view:?}: {:?}",
+            events.borrow()
+        );
+        assert_eq!(selects(), 0, "a secondary press is no pick in {view:?}");
+
+        click_preset(&mut fixture, 3, Modifiers::COMMAND);
+        events.borrow_mut().clear();
+        secondary_click_preset(&mut fixture, 3);
+        assert_eq!(items(), vec![2, 3], "a secondary press on a selected preset leaves the selection whole in {view:?}");
+    }
+}
+
+#[trial]
+fn a_payload_dropped_onto_a_preset_reports_dropped_and_wins_over_an_enclosing_drop_action() {
+    // (row grabbed, row released over, the preset reported)
+    let cases: [(&str, &str, Option<u32>); 2] = [("Preset 1", "Preset 2", Some(2)), ("Preset 1", "Group", None)];
+    for (grabbed, over, expected) in cases {
+        let events: Events = Rc::new(RefCell::new(Vec::new()));
+        let seen = events.clone();
+        let rows = vec![PresetRow::item(1, "Preset 1", 0), PresetRow::item(2, "Preset 2", 0), PresetRow::group(GROUP, "Group", 0), PresetRow::item(3, "Preset 3", 1)];
+        let mut state = PresetState::<u32>::new();
+        let mut fixture = Fixture::new(move |ui| {
+            ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                let out = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
+                    .view_lock(PresetView::List)
+                    .drags(true)
+                    .takes_drop(PresetDrop::new::<ListDrag<u32>>(DropPlace::Onto, |drag, at| matches!(at, DropAt::Onto(key) if *key != drag.grabbed)))
+                    .show(ui);
+                seen.borrow_mut().extend(out.events);
+            });
+        });
+        fixture.room(vec2(480.0, 320.0)).settle();
+        let from = fixture.by_label(grabbed).expect("the grabbed row is shown").center();
+        let to = fixture.by_label(over).expect("the row released over is shown").center();
+        fixture.hold(Modifiers::ALT).drag_at(from, to - from);
+        fixture.hold(Modifiers::NONE);
+        let dropped: Vec<(DropAt<u32>, bool)> = events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                PresetEvent::Dropped { at, mods, .. } => Some((at.clone(), mods.alt)),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<(DropAt<u32>, bool)> = expected.into_iter().map(|key| (DropAt::Onto(key), true)).collect();
+        assert_eq!(dropped, expected, "{grabbed} released over {over}");
+    }
 }
 
 /// Delete and Backspace on the selected preset report the same `Delete` the row menu and the footer give, in both views.

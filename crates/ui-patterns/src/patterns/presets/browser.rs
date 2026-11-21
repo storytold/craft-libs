@@ -20,7 +20,8 @@ use super::words::PresetWords;
 use crate::bars::{Bar, BarKind};
 use crate::choice::Segmented;
 use crate::contract::{
-    Bind, BodyCx, CollectionEvent, DropAt, DropMark, DropPlace, DropTarget, DropZone, Entry, ListDrag, OpenChange, Pattern, Props, Rename,
+    Bind, BodyCx, CollectionEvent, DropAt, DropKind, DropMark, DropPayload, DropPlace, DropTarget, DropZone, Entry, ListDrag, OpenChange, Pattern,
+    Props, Rename, TooltipSpec,
     ReorderMove, ReorderRule, RowHeight, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, request_rename,
 };
 use crate::display::Divider;
@@ -33,13 +34,14 @@ use crate::runtime::drag;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::Remember as _;
 use crate::text::TextField;
-use crate::tile_grid::{CaptionPlace, GridEvent, TailRow, Tile, TileGrid, TileGroup, TileZoom};
-use craft_behavior::{DisplayOrder, DropOperation, EditEvent, GesturePhase, IconId, ItemSource, Mixed, Selection, SelectionChange};
+use crate::tile_grid::{CaptionPlace, GridEvent, GroupHeads, TailRow, Tile, TileGrid, TileGroup, TileZoom};
+use craft_behavior::{DisplayOrder, DropOperation, EditEvent, GesturePhase, IconId, ItemSource, Mixed, Selection, SelectionChange, SelectionModel};
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
 use egui::{Id, Pos2, Rect, Ui};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// The commands of a preset's context menu. They are app commands: the browser reports a run row as the event of the
@@ -81,6 +83,26 @@ impl<K> BrowserKey<K> {
             BrowserKey::Action(_) => None,
         }
     }
+
+    /// The app's key of a preset or group row, `None` for an action row.
+    fn into_preset(self) -> Option<K> {
+        match self {
+            BrowserKey::Preset(key) => Some(key),
+            BrowserKey::Action(_) => None,
+        }
+    }
+}
+
+/// The app's change of a selection change the browser's collection reports: only the rows `selectable` accepts stay in
+/// it, so action rows and groups are never part of the host's selection. Cell changes do not occur under the modes the
+/// browser allows.
+fn app_change<K>(change: SelectionChange<BrowserKey<K>>, selectable: impl Fn(&K) -> bool) -> Option<SelectionChange<K>> {
+    match change {
+        SelectionChange::Set(keys) => Some(SelectionChange::Set(keys.into_iter().filter_map(BrowserKey::into_preset).filter(|key| selectable(key)).collect())),
+        SelectionChange::Toggle(key) => key.into_preset().filter(|key| selectable(key)).map(SelectionChange::Toggle),
+        SelectionChange::Clear => Some(SelectionChange::Clear),
+        _ => None,
+    }
 }
 
 /// The app's drag of a drag the browser's collection carries: its presets and groups. `None` for a drag grabbed at an
@@ -113,10 +135,7 @@ impl<K: Clone + PartialEq> DropTarget<ListDrag<BrowserKey<K>>> for ZoneDrop<'_, 
 /// The app's move of a move the browser's collection reports. Only presets and groups drag, and only they take a drop
 /// (`can_drag`, `accepts`), so every key of a move is one of the app's.
 fn app_move<K>(mv: ReorderMove<BrowserKey<K>>) -> Option<ReorderMove<K>> {
-    let app = |key: BrowserKey<K>| match key {
-        BrowserKey::Preset(key) => Some(key),
-        BrowserKey::Action(_) => None,
-    };
+    let app = BrowserKey::into_preset;
     Some(ReorderMove {
         key: app(mv.key)?,
         keys: mv.keys.into_iter().filter_map(app).collect(),
@@ -146,25 +165,63 @@ impl<'a, K> ThumbPainter<'a, K> {
 type RowItemsFn<'a, K> = Box<dyn Fn(&K) -> Vec<Entry<String>> + 'a>;
 
 /// The host's rows of the row menu for a target ([`PresetBrowser::row_items`]).
-pub struct RowItems<'a, K>(#[allow(dead_code)] RowItemsFn<'a, K>); // P3(appearance-w5): ap.AP5
+pub struct RowItems<'a, K>(RowItemsFn<'a, K>);
 
 impl<'a, K> RowItems<'a, K> {
     /// The rows that `items` gives for a target.
     pub fn new(items: impl Fn(&K) -> Vec<Entry<String>> + 'a) -> Self {
         RowItems(Box::new(items))
     }
+
+    /// The rows for `key`: how the browser builds its row menu.
+    pub(super) fn items(&self, key: &K) -> Vec<Entry<String>> {
+        (self.0)(key)
+    }
 }
+
+/// Paints the tip of a tile or row on hover ([`PresetBrowser::tip`]).
+pub(super) type TipFn<'a, K> = Box<dyn Fn(&mut Ui, &K) + 'a>;
+
+/// The rows and the order the shown collection lists them in: what a drop needs to say where a payload landed in the
+/// host's rows.
+struct RowMap<'a, K> {
+    rows: &'a [PresetRow<K>],
+    /// The positions in `rows` of the collection's items, in display order.
+    displayed: Vec<usize>,
+}
+
+impl<K: Clone + Eq> RowMap<'_, K> {
+    /// The host's place of a place in the browser's collection; `None` where no drop lands: on a group or an action
+    /// row, or past the presets.
+    fn host(&self, at: &DropAt<BrowserKey<K>>) -> Option<DropAt<K>> {
+        match at {
+            DropAt::Onto(BrowserKey::Preset(key)) => self.rows.iter().any(|row| row.key == *key && !row.is_group()).then(|| DropAt::Onto(key.clone())),
+            DropAt::Gap { key, insert, .. } if *insert <= self.displayed.len() => {
+                let over = match key {
+                    Some(BrowserKey::Action(_)) => return None,
+                    Some(BrowserKey::Preset(key)) => Some(key.clone()),
+                    None => None,
+                };
+                Some(DropAt::gap(over, full_position(self.rows, &self.displayed, &[], *insert)))
+            }
+            _ => None,
+        }
+    }
+}
+
+type DropMaker<'a, K> = Box<dyn Fn(Rc<RowMap<'a, K>>) -> DropKind<'a, BrowserKey<K>> + 'a>;
 
 /// A drop target on the presets: a host payload of type `P` dropped onto a preset or between presets.
-pub struct PresetDrop<'a, K> {
-    _marker: std::marker::PhantomData<(&'a (), K)>,
-}
+pub struct PresetDrop<'a, K>(DropMaker<'a, K>);
 
-impl<'a, K> PresetDrop<'a, K> {
+impl<'a, K: Clone + Eq + 'a> PresetDrop<'a, K> {
     /// Takes payloads of type `P` at `place` where `accepts` agrees; the drop comes back as `PresetEvent::Dropped`.
     pub fn new<P: Send + Sync + 'static>(place: DropPlace, accepts: impl Fn(&P, &DropAt<K>) -> bool + 'a) -> Self {
-        let _ = (place, accepts);
-        todo!("ap.AP2")
+        let accepts = Rc::new(accepts);
+        PresetDrop(Box::new(move |map| {
+            let accepts = Rc::clone(&accepts);
+            DropKind::new::<P>(place, move |payload, at| map.host(at).is_some_and(|at| accepts(payload, &at)))
+        }))
     }
 }
 
@@ -196,13 +253,15 @@ impl<'a> BrowserTools<'a> {
 ///   (Shift to the ends) reorder by the `reorder` rules. The host performs the delete, rename and move it is told of.
 /// - **Search.** The toolbar's field keeps the presets whose name matches, with their groups, all open; Up, Down and
 ///   Enter go from the field to the presets.
-/// - **Row menu.** Rename, Move to, Delete and the host's `extra_items` act on the row the menu was asked for, which the
-///   browser keeps until the menu closes, else on `selected`.
+/// - **Selection.** The host's `selection`, in the collection's modes (`select`): `Single` by default, `Multi` for
+///   Shift ranges and Cmd/Ctrl toggles. `PresetEvent::Select` reports a plain pick only.
+/// - **Row menu.** Rename, Move to, Delete and the host's `row_items` (`row_menu`) act on the row the menu was asked
+///   for, which the browser keeps until the menu closes, else on the selection's lead.
 /// - **Actions.** Rows after the presets, below a divider (`actions`): Down from the last preset reaches them, and a
 ///   click or Enter reports `PresetEvent::Action`. They are never selected, dragged or renamed.
 ///
 /// ```ignore
-/// let out = PresetBrowser::new("Swatches", Bind::bound(&mut state), &rows).selected(chosen.clone()).toolbar(true).show(ui);
+/// let out = PresetBrowser::new("Swatches", Bind::bound(&mut state), &rows).selection(Bind::given(Selection::single(chosen.clone()))).toolbar(true).show(ui);
 /// for event in out.events { /* the host applies Select, Activate, Reorder, ... */ }
 /// ```
 #[must_use = "show the browser with `show`"]
@@ -216,9 +275,7 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     browser_id: Option<Id>,
     state: Bind<'a, PresetState<K>>,
     rows: &'a [PresetRow<K>],
-    /// The selected preset, which the host keeps.
-    #[prop]
-    selected: Option<K>,
+
     /// The host's selection. With `Bind::given`, every change comes out as `PresetEvent::Selection`; with
     /// `Bind::bound`, the browser writes the binding.
     #[prop]
@@ -251,8 +308,8 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The host's controls at the reading end of the toolbar.
     #[prop(func = "FnMut(&mut Ui)")]
     tools: Option<BrowserTools<'a>>,
-    /// Whether a secondary click or the context-menu key opens the row menu: Rename, Move to, Delete and the host's
-    /// `extra_items`.
+    /// What a secondary click or the context-menu key opens: the standard row menu, the host's `row_items` alone, or
+    /// nothing.
     #[prop]
     row_menu: PresetRowMenu,
     /// The host's rows of the row menu for a target, after the standard ones (or alone with `PresetRowMenu::Host`).
@@ -260,8 +317,10 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     row_items: Option<RowItems<'a, K>>,
     /// Presets drag out as `ListDrag<K>`, without reorder or a drop zone.
     #[prop]
-    #[allow(dead_code)] // P3(appearance-w5): ap.AP-drags
     drags: bool,
+    /// How group heads show: titled rows, or full-width rules between the groups, which are always open.
+    #[prop]
+    group_heads: GroupHeads,
     /// Fixes the view, whatever the state says; the toolbar then has no view buttons.
     #[prop]
     view_lock: Option<PresetView>,
@@ -285,8 +344,9 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// `reorder` presets still drag, to the zone and to the host's own drop targets only.
     #[prop]
     drop_zone: Option<DropZone>,
-    extra_items: Vec<Entry<String>>,
     actions: Vec<Label>,
+    tip: Option<TipFn<'a, K>>,
+    drops: Vec<PresetDrop<'a, K>>,
     /// A footer under the presets, made from these options with the browser's zoom bound to its slider and the count
     /// of presets.
     #[prop]
@@ -317,7 +377,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             browser_id: None,
             state,
             rows,
-            selected: None,
             selection: None,
             select: SelectMode::Single,
             reveal: None,
@@ -331,6 +390,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             row_menu: PresetRowMenu::Standard,
             row_items: None,
             drags: false,
+            group_heads: GroupHeads::Titled,
             view_lock: None,
             can_rename: None,
             can_delete: None,
@@ -338,8 +398,9 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
             thumb: None,
             reorder: None,
             drop_zone: None,
-            extra_items: Vec::new(),
             actions: Vec::new(),
+            tip: None,
+            drops: Vec::new(),
             footer: None,
             max_rows: None,
             room_height: None,
@@ -350,16 +411,16 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
 
     /// Takes host payloads dropped onto a preset or between presets; each drop comes back as `PresetEvent::Dropped`.
     #[must_use]
-    pub fn takes_drop(self, drop: PresetDrop<'a, K>) -> Self {
-        let _ = (self, drop);
-        todo!("ap.AP2")
+    pub fn takes_drop(mut self, drop: PresetDrop<'a, K>) -> Self {
+        self.drops.push(drop);
+        self
     }
 
     /// Paints the tip that shows on hover over a tile or row.
     #[must_use]
-    pub fn tip(self, f: impl Fn(&mut Ui, &K) + 'a) -> Self {
-        let _ = (self, f);
-        todo!("ap.AP3")
+    pub fn tip(mut self, f: impl Fn(&mut Ui, &K) + 'a) -> Self {
+        self.tip = Some(Box::new(f));
+        self
     }
 
     /// The id of the browser's list, the `ListDrag::list` of its drags: a footer action accepts only drags from its own
@@ -373,13 +434,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
     /// click or Enter on one reports `PresetEvent::Action` with its index in `labels`.
     pub fn actions(mut self, labels: impl IntoIterator<Item = Label>) -> Self {
         self.actions = labels.into_iter().collect();
-        self
-    }
-
-    /// Rows added to the context menu after the standard ones; running one reports `PresetEvent::Menu` with the
-    /// entry's value.
-    pub fn extra_items(mut self, items: impl IntoIterator<Item = Entry<String>>) -> Self {
-        self.extra_items = items.into_iter().collect();
         self
     }
 }
@@ -506,17 +560,17 @@ fn grid_plan<K: Clone>(rows: &[PresetRow<K>], shown: &[usize], open: impl Fn(usi
     plan
 }
 
-/// The position in the full row list that a reorder of the shown rows means: `mv.to` counts the rows that remain
-/// shown once `mv.keys` are out; the result counts all rows that remain once the moved rows and the rows inside
-/// moved groups are out, as the library's reorder takes it.
-fn full_position<K: Eq>(rows: &[PresetRow<K>], shown: &[usize], mv: &ReorderMove<K>) -> usize {
+/// The position in the full row list that a place `to` among the shown rows means: `to` counts the rows that remain
+/// shown once `moved` are out (none for a drop); the result counts all rows that remain once the moved rows and the
+/// rows inside moved groups are out, as the library's reorder takes it.
+fn full_position<K: Eq>(rows: &[PresetRow<K>], shown: &[usize], moved: &[K], to: usize) -> usize {
     let mut gone = vec![false; rows.len()];
-    for key in &mv.keys {
+    for key in moved {
         if let Some(at) = rows.iter().position(|row| row.key == *key) {
             gone[at..children_end(rows, at)].fill(true);
         }
     }
-    let anchor = shown.iter().copied().filter(|&at| !mv.keys.contains(&rows[at].key)).nth(mv.to);
+    let anchor = shown.iter().copied().filter(|&at| !moved.contains(&rows[at].key)).nth(to);
     match anchor {
         Some(anchor) => (0..anchor).filter(|&at| !gone[at]).count(),
         None => gone.iter().filter(|gone| !**gone).count(),
@@ -554,7 +608,9 @@ struct Pass<K> {
 }
 
 enum Seen<K> {
+    Selection(SelectionChange<K>),
     Select(K),
+    Dropped(DropAt<K>, DropOperation, DropPayload),
     Activate(K),
     Open(OpenChange<K>),
     Menu(K),
@@ -564,20 +620,29 @@ enum Seen<K> {
 }
 
 /// The events of a collection that the browser acts on, whatever its items report.
-fn seen<K, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<Seen<K>> {
-    events
-        .into_iter()
-        .filter_map(|event| match event {
-            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => keys.into_iter().last().map(Seen::Select), // P3(mechanical): dp.C12
-            CollectionEvent::Activate(key) => Some(Seen::Activate(key)),
-            CollectionEvent::Open(change) => Some(Seen::Open(change)),
-            CollectionEvent::ContextMenu(request) => Some(Seen::Menu(request.key)),
-            CollectionEvent::Reorder(edit) => Some(Seen::Reorder(edit)),
-            CollectionEvent::Rename(edit) => Some(Seen::Rename(edit)),
-            CollectionEvent::Delete(keys) => Some(Seen::Delete(keys)),
-            _ => None,
-        })
-        .collect()
+fn seen<K: Clone, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<Seen<K>> {
+    let mut out = Vec::with_capacity(events.len());
+    for event in events {
+        match event {
+            CollectionEvent::Selection { change, .. } => {
+                let picked = match &change {
+                    SelectionChange::Set(keys) => keys.last().cloned(),
+                    _ => None,
+                };
+                out.push(Seen::Selection(change));
+                out.extend(picked.map(Seen::Select)); // P3(mechanical): dp.C12
+            }
+            CollectionEvent::Activate(key) => out.push(Seen::Activate(key)),
+            CollectionEvent::Open(change) => out.push(Seen::Open(change)),
+            CollectionEvent::ContextMenu(request) => out.push(Seen::Menu(request.key)),
+            CollectionEvent::Reorder(edit) => out.push(Seen::Reorder(edit)),
+            CollectionEvent::Rename(edit) => out.push(Seen::Rename(edit)),
+            CollectionEvent::Delete(keys) => out.push(Seen::Delete(keys)),
+            CollectionEvent::Dropped { at, op, payload, .. } => out.push(Seen::Dropped(at, op, payload)),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// What the browser keeps in its container's memory: the row the open menu was asked for, and the state as read and
@@ -611,7 +676,7 @@ fn commit<K: Clone + Eq + Hash + Send + Sync + 'static>(cx: &mut BodyCx<'_>, sta
     }
 }
 
-impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
+impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'a, K> {
     /// Asks the browser with the id `browser` (the one given to `browser_id`, or the `scope_id` of the `Ui`
     /// it is shown in) to start renaming the row `key` at its next pass, as the row menu's Rename does. A key the
     /// browser lacks or may not rename is ignored; the request is taken once.
@@ -626,10 +691,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             browser_id,
             state,
             rows,
-            selected,
-            selection: _,
-            select: _,
-            reveal: _,
+            selection,
+            select,
+            reveal,
             cell_shape,
             tiles: tile_size,
             thumb_range,
@@ -638,8 +702,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             search,
             mut tools,
             row_menu,
-            row_items: _,
-            drags: _,
+            row_items,
+            drags,
+            group_heads,
             view_lock,
             can_rename,
             can_delete,
@@ -647,8 +712,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             thumb,
             reorder,
             drop_zone,
-            extra_items,
             actions,
+            tip: tip_painter,
+            drops,
             footer,
             max_rows,
             room_height,
@@ -662,6 +728,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
         let name = label.as_str().to_owned();
         let has_footer = footer.is_some();
         let state = RefCell::new(state);
+        let selection = RefCell::new(selection);
         let footer_events: RefCell<Vec<PresetFooterEvent<K>>> = RefCell::new(Vec::new());
 
         #[expect(
@@ -713,13 +780,26 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
 
             let query = local.filter.trim().to_owned();
             let matcher = (!query.is_empty()).then(|| Matcher::new(&env.folder(), &query));
-            let shown = shown_rows(rows, &local, default_open, matcher.as_ref());
+            // Under `Rule` every group is open and the state's open groups are not read.
+            let ruled_heads = group_heads == GroupHeads::Rule;
+            let all_open = PresetState::<K>::new();
+            let (opens, opens_default) = if ruled_heads { (&all_open, DefaultOpen::All) } else { (&local, default_open) };
+            let shown = shown_rows(rows, opens, opens_default, matcher.as_ref());
             let open_flags: Vec<bool> = {
-                let test = local.open_test(rows, default_open);
+                let test = opens.open_test(rows, opens_default);
                 (0..rows.len()).map(test).collect()
             };
             let counted = |at: usize| rows[at].count.map(|n| words.group_count.text(n as u64, &env.format().integer(n as u64)));
-            let selection = selected.clone().map_or_else(|| Selection::new(Vec::new(), None, None), |key| Selection::single(BrowserKey::Preset(key)));
+            let mut held: Selection<K> = match selection.borrow_mut().as_mut().map(|bind| bind.reborrow().read(cx)) {
+                Some(Some(Mixed::Same(held))) => held,
+                _ => Selection::default(),
+            };
+            let shown_selection = Selection::new(
+                held.items.iter().cloned().map(BrowserKey::Preset).collect(),
+                held.lead.clone().map(BrowserKey::Preset),
+                held.anchor.clone().map(BrowserKey::Preset),
+            );
+            let payload_drag = reorder.is_some() || drop_zone.is_some() || !drops.is_empty() || drags;
             let stamp = query_stamp(&query);
             let zoom = local.zoom;
 
@@ -751,21 +831,22 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 }
             };
 
-            let (response, displayed, pass) = if shown.is_empty() && actions.is_empty() {
+            let (response, map, pass) = if shown.is_empty() && actions.is_empty() {
                 let message = if query.is_empty() { empty_text.clone().unwrap_or_else(|| words.empty.clone()) } else { words.no_match.clone() };
                 let response = Notice::new(Tone::Neutral, message).layout(NoticeLayout::Centred).show(ui).response;
-                (response, Vec::new(), Pass { seen: Vec::new(), grid: Vec::new() })
+                (response, Rc::new(RowMap { rows, displayed: Vec::new() }), Pass { seen: Vec::new(), grid: Vec::new() })
             } else if view == PresetView::Grid {
                 let plan = grid_plan(rows, &shown, |at| open_flags[at], counted);
                 let tiles = Shown { rows, at: plan.tiles.clone(), open: vec![false; plan.tiles.len()], tree: false, actions: 0 };
+                let map = Rc::new(RowMap { rows, displayed: plan.tiles.clone() });
                 let tail: Vec<TailRow<BrowserKey<K>>> =
                     actions.iter().enumerate().map(|(at, label)| TailRow::new(BrowserKey::Action(at), label.clone())).collect();
                 let aspect = card_aspect(cell_shape);
                 let grid = TileGrid::<BrowserKey<K>>::new(label.clone())
                     .id(list_id)
-                    .select(SelectMode::Single)
+                    .select(select)
                     .arrows_select(false)
-                    .selection(Bind::given(selection))
+                    .selection(Bind::given(shown_selection))
                     .aspect(aspect);
                 let grid = match tile_size {
                     PresetTiles::Thumbnails => {
@@ -780,7 +861,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 let mut grid = grid
                     .groups(&plan.groups)
                     .tail(&tail)
-                    .collapsible()
+                    .group_heads(group_heads)
                     .rename(true)
                     .deletable(true)
                     .rows_stamp(stamp)
@@ -791,8 +872,17 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 if reorder.is_some() {
                     grid = grid.reorder(ReorderRule::new());
                 }
-                if reorder.is_some() || drop_zone.is_some() {
+                if !ruled_heads {
+                    grid = grid.collapsible();
+                }
+                if payload_drag {
                     grid = grid.drag_payload(app_drag::<K>);
+                }
+                for drop in &drops {
+                    grid = grid.takes_drop((drop.0)(Rc::clone(&map)));
+                }
+                if let Some(key) = &reveal {
+                    grid = grid.reveal(BrowserKey::Preset(key.clone()));
                 }
                 if let Some(rows) = max_rows {
                     grid = grid.max_rows(rows);
@@ -800,6 +890,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 let aspect = cell_shape.aspect();
                 let out = grid.show_items(ui, &tiles, &mut |key, icx| {
                     let Some(row) = tiles.index_of(key).and_then(|at| tiles.row(at)) else { return Tile::new(Label::default()) };
+                    if let Some(tip) = tip_painter.as_ref() {
+                        let key = row.key.clone();
+                        icx.tip(move |ui| tip(ui, &key));
+                    }
                     let mut tile = Tile::new(row.label.clone());
                     if let Some(detail) = &row.caption {
                         tile = tile.detail(detail.clone());
@@ -817,17 +911,19 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     let draw = paint(row, selected);
                     tile.thumb(row.preview.as_ref().map_or(aspect, |preview| preview.aspect), move |cx, rect| draw(cx, rect, painter))
                 });
-                (out.response.response.clone(), plan.tiles.clone(), Pass { seen: seen(out.response.events), grid: out.events })
+                (out.response.response.clone(), map, Pass { seen: seen(out.response.events), grid: out.events })
             } else {
                 let open: Vec<bool> = shown.iter().map(|&at| open_flags[at]).collect();
                 let source = Shown { rows, at: shown.clone(), open, tree: true, actions: actions.len() };
+                let map = Rc::new(RowMap { rows, displayed: shown.clone() });
                 let thumb_size = list_thumb(zoom);
                 let mut list = List::<BrowserKey<K>>::new(label.clone())
                     .id(list_id)
                     .tree(true)
-                    .select(SelectMode::Single)
+                    .group_heads(group_heads)
+                    .select(select)
                     .arrows_select(false)
-                    .selection(Bind::given(selection))
+                    .selection(Bind::given(shown_selection))
                     .rename(true)
                     .deletable(true)
                     .rows_stamp(stamp)
@@ -837,8 +933,14 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 if reorder.is_some() {
                     list = list.reorder(ReorderRule::new().into_groups());
                 }
-                if reorder.is_some() || drop_zone.is_some() {
+                if payload_drag {
                     list = list.drag_payload(app_drag::<K>);
+                }
+                for drop in &drops {
+                    list = list.takes_drop((drop.0)(Rc::clone(&map)));
+                }
+                if let Some(key) = &reveal {
+                    list = list.reveal(BrowserKey::Preset(key.clone()));
                 }
                 if let Some(rows) = max_rows {
                     list = list.max_rows(rows);
@@ -863,6 +965,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                         }
                         return line;
                     }
+                    if let Some(tip) = tip_painter.as_ref() {
+                        let key = row.key.clone();
+                        icx.tip(move |ui| tip(ui, &key));
+                    }
                     let mut line = ListRow::new(row.label.clone()).depth(row.depth).rule(ruled(icx.at));
                     if let Some(caption) = &row.caption {
                         line = line.detail(caption.clone());
@@ -876,15 +982,19 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     if let Some(name) = &row.accessible_name {
                         line = line.accessible_name(name.clone());
                     }
+                    for (icon, name) in &row.trailing {
+                        line = line.trailing_icon(icon.clone(), name.clone());
+                    }
                     let draw = paint(row, icx.row.selected);
                     line.thumb_aspect(thumb_size, row.preview.as_ref().map_or(aspect, |preview| preview.aspect), move |cx, rect| {
                         draw(cx, rect, painter)
                     })
                 });
-                (out.response.clone(), shown.clone(), Pass { seen: seen(out.events), grid: Vec::new() })
+                (out.response.clone(), map, Pass { seen: seen(out.events), grid: Vec::new() })
             };
 
-            let mods = crate::runtime::pointer::frame(ui.ctx()).mods;
+            let frame = crate::runtime::pointer::frame(ui.ctx());
+            let mods = frame.pick_mods;
             let row_of = |key: &K| rows.iter().position(|row| row.key == *key);
             if let Some(zone) = drop_zone {
                 let target = ZoneDrop { source: response.id, rows, zone };
@@ -893,6 +1003,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 }
             }
             let toggle = |local: &mut PresetState<K>, events: &mut Vec<PresetEvent<K>>, at: usize, open: Option<bool>| {
+                if ruled_heads {
+                    return;
+                }
                 let open = open.unwrap_or_else(|| !local.is_open(rows, at, default_open));
                 let change = OpenChange::new(rows[at].key.clone(), open);
                 local.apply_open(rows, &change, default_open);
@@ -920,7 +1033,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             }
             // A secondary press or release selects the row it lands on so that the row's menu acts on it; that selection
             // is not a pick, and a picker would commit it.
-            let frame = crate::runtime::pointer::frame(ui.ctx());
             let secondary =
                 frame.buttons.contains(craft_behavior::Buttons::SECONDARY) || frame.release == Some(craft_behavior::PointerButton::Secondary);
             // An action row of the list is a plain row: a single press picks it, and Enter activates it. Its selection by
@@ -936,9 +1048,26 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             };
             for event in pass.seen {
                 match event {
+                    Seen::Selection(change) => {
+                        let selectable = |key: &K| row_of(key).is_some_and(|at| !rows[at].is_group());
+                        if let Some(change) = app_change(change, selectable) {
+                            let before = held.clone();
+                            held.apply(change.clone());
+                            let edit = EditEvent::set(Mixed::Same(before), held.clone(), Arc::from(name.as_str()), None);
+                            let written = selection.borrow_mut().as_mut().is_some_and(|bind| bind.reborrow().write(cx, &edit));
+                            if !written {
+                                events.push(PresetEvent::Selection(change));
+                            }
+                        }
+                    }
                     Seen::Select(BrowserKey::Preset(key)) => {
-                        if !secondary && row_of(&key).is_some_and(|at| !rows[at].is_group()) {
+                        if !secondary && !mods.shift && !mods.cmd && row_of(&key).is_some_and(|at| !rows[at].is_group()) {
                             events.push(PresetEvent::Select { key, mods });
+                        }
+                    }
+                    Seen::Dropped(at, op, payload) => {
+                        if let Some(at) = map.host(&at) {
+                            events.push(PresetEvent::Dropped { at, op, payload, mods });
                         }
                     }
                     Seen::Select(BrowserKey::Action(at)) => {
@@ -957,7 +1086,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                         }
                     }
                     Seen::Open(change) => {
-                        if let BrowserKey::Preset(key) = change.key {
+                        if !ruled_heads && let BrowserKey::Preset(key) = change.key {
                             let change = OpenChange { key, open: change.open, all: change.all };
                             local.apply_open(rows, &change, default_open);
                             events.push(PresetEvent::Open(change));
@@ -971,7 +1100,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     Seen::Reorder(edit) => {
                         let moved = |mv: ReorderMove<BrowserKey<K>>| {
                             let mv = app_move(mv)?;
-                            let to = full_position(rows, &displayed, &mv);
+                            let to = full_position(rows, &map.displayed, &mv.keys, mv.to);
                             Some(ReorderMove { to, ..mv })
                         };
                         events.extend(edit.filter_map(moved).map(PresetEvent::Reorder));
@@ -1002,8 +1131,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 }
             }
 
-            if row_menu != PresetRowMenu::Off // P3(appearance-w5): ap.AP5
-                && let Some(target) = menu_target.clone().or_else(|| selected.clone()).filter(|key| row_of(key).is_some())
+            if row_menu != PresetRowMenu::Off
+                && let Some(target) = menu_target.clone().or_else(|| held.lead.clone()).filter(|key| row_of(key).is_some())
             {
                 let at = row_of(&target).unwrap_or_default();
                 let group = rows[at].is_group();
@@ -1012,6 +1141,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 let movable = !group && can_move.as_ref().is_none_or(|test| test.passes(&target));
                 let home = rows[..at].iter().rposition(|row| row.is_group() && row.depth < rows[at].depth);
                 let destinations: Vec<usize> = (0..rows.len()).filter(|&to| rows[to].is_group() && Some(to) != home).collect();
+                let standard = row_menu == PresetRowMenu::Standard;
+                let host_rows = row_items.as_ref().map(|items| items.items(&target)).unwrap_or_default();
                 let mut ran: Vec<PresetEvent<K>> = Vec::new();
                 let menu = Menu::context(words.menu.clone(), &response).show(ui, |ui, _| {
                     let (rename, delete) = if group {
@@ -1019,10 +1150,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                     } else {
                         (PresetItemCommands::Rename, PresetItemCommands::Delete)
                     };
-                    if MenuItem::command(rename).enabled(renamable).show(ui).ran {
+                    if standard && MenuItem::command(rename).enabled(renamable).show(ui).ran {
                         request_rename(ui.ctx(), list_id, &BrowserKey::Preset(target.clone()));
                     }
-                    if movable && !destinations.is_empty() {
+                    if standard && movable && !destinations.is_empty() {
                         let _ = Menu::submenu_row(ui, words.move_to.clone(), |ui, _| {
                             for &to in &destinations {
                                 if MenuItem::new(Label::from(rows[to].label.clone())).show(ui).ran {
@@ -1031,17 +1162,20 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                             }
                         });
                     }
-                    if MenuItem::command(delete).enabled(deletable).show(ui).ran {
+                    if standard && MenuItem::command(delete).enabled(deletable).show(ui).ran {
                         ran.push(PresetEvent::Delete(target.clone()));
                     }
-                    if !extra_items.is_empty() {
+                    if standard && !host_rows.is_empty() {
                         Divider::horizontal().show(ui);
                     }
-                    for entry in &extra_items {
+                    for entry in &host_rows {
                         if entry.is_separator() {
                             Divider::horizontal().show(ui);
                         } else if let Some(value) = entry.value() {
-                            let row = MenuItem::new(entry.label().clone()).enabled(entry.is_enabled());
+                            let mut row = MenuItem::new(entry.label().clone()).enabled(entry.is_enabled()).check(entry.is_checked());
+                            if let Some(reason) = entry.why_disabled() {
+                                row = row.tooltip(TooltipSpec::new(reason.clone()).disabled_text(reason.clone()));
+                            }
                             if row.show(ui).ran {
                                 ran.push(PresetEvent::Menu { target: target.clone(), command: value.clone() });
                             }

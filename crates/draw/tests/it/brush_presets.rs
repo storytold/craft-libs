@@ -6,6 +6,7 @@ use craft_draw::ui::brush_presets::{BrushPick, BrushPickerState, BrushPickerValu
 use craft_draw::ui::brush_settings::TipAngle;
 use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::patterns::presets::PresetEvent;
+use craft_ui::primitives::FacePaint;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Vec2};
@@ -13,6 +14,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 const HARD: u32 = 2;
+
+/// Rows whose tip and stroke paint nothing, each face with a key of its own.
+fn silent() -> BrushRowPaint {
+    BrushRowPaint::new(FacePaint::new(1, |_, _| {}), FacePaint::new(2, |_, _| {}))
+}
 
 struct Host {
     current: Option<u32>,
@@ -26,7 +32,7 @@ fn rename_brush_opens_the_name_field_on_the_current_preset() {
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
         let env = Env::of(ui);
-        let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
+        let paint = silent();
         let mut host = shown.borrow_mut();
         let Host { current, state, picks } = &mut *host;
         let rows =
@@ -89,7 +95,7 @@ fn opened_rig(at_point: bool, remember: bool) -> (Fixture, Rc<RefCell<Opened>>) 
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
         let env = Env::of(ui);
-        let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
+        let paint = silent();
         let mut host = shown.borrow_mut();
         let Opened { current, state, values, open, tip_edits, at, offset } = &mut *host;
         ui.add_space(*offset);

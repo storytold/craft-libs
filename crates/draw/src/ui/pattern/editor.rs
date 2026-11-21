@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::{PatternColors, PatternFillOptions, PatternSwatch, PatternWords};
-use craft_behavior::{EditEvent, EditEvents, Mixed, NumberCodec};
+use craft_behavior::{EditEvent, EditEvents, Mixed, NumberCodec, Selection};
 use craft_color_ui::ui::{ColorPopover, PickedColor};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
@@ -110,10 +110,10 @@ impl<'a> PatternFillEditor<'a> {
                 let browser = Field::new(words.pattern.clone()).id_salt("grid").show(ui, |ui, _| {
                     let thumbs = thumbnails.clone();
                     let mut browser = PresetBrowser::new(words.pattern.clone(), Bind::bound(&mut state), &rows)
-                        .selected(current.pattern.clone())
+                        .selection(Bind::given(Selection::single(current.pattern.clone())))
                         .cell_shape(CellShape::Square)
                         .view_lock(PresetView::Grid)
-                        .row_menu(PresetRowMenu::Off); // P3(appearance-w5): ap.AP5
+                        .row_menu(PresetRowMenu::Off);
                     if let Some(thumbs) = thumbs {
                         browser = browser.thumb(move |cx: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, String>| {
                             if let Some(swatch) = swatches.iter().find(|swatch| swatch.id == *info.key) {
