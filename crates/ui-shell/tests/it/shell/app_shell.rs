@@ -282,7 +282,8 @@ fn content_rails_sit_at_their_sides_and_settle_in_one_pass() {
         let (left, right) = if rtl { (end_rail, start_rail) } else { (start_rail, end_rail) };
         assert!(left.max.x <= body.min.x + SLACK, "RTL {rtl}: the rail {left:?} lies left of the body {body:?}");
         assert!(right.min.x >= body.max.x - SLACK, "RTL {rtl}: the rail {right:?} lies right of the body {body:?}");
-        (start_runs.set(0), end_runs.set(0));
+        start_runs.set(0);
+        end_runs.set(0);
         fixture.frame(Vec::new());
         assert_eq!(fixture.passes(), 1, "RTL {rtl}: a settled frame runs one pass");
         assert_eq!((start_runs.get(), end_runs.get()), (1, 1), "RTL {rtl}: a settled frame runs each rail's content once");
