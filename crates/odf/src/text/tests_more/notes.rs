@@ -2,8 +2,9 @@
 
 use crate::text::tests::{NS_T, package};
 use crate::text::{export, import};
-use craft_wordmodel::para::{InlineObject, NoteKind, OBJ};
-use craft_wordmodel::{Document, PartKind};
+use craft_wordmodel::para::{InlineObject, NoteKind, OBJ, Paragraph, Run};
+use craft_wordmodel::props::CharProps;
+use craft_wordmodel::{Block, Document, PartKind};
 
 fn body(xml: &str) -> Vec<u8> {
     package(
@@ -170,6 +171,38 @@ fn a_footnote_keeps_its_text_beside_a_footer() {
     });
     assert_eq!(note.map(text).as_deref(), Some("The note."));
     assert_eq!(d.last_section.footers.default.map(text).as_deref(), Some("Footer text"));
+}
+
+#[test]
+fn custom_note_mark_is_written_once() {
+    // A DOCX read leaves a custom note mark as literal text at the start of the note's own story
+    // (there is no NoteRef object there); the reference in the text carries it as `custom`.
+    // Exporting to ODT must not copy that mark into the note body as well as the citation label
+    // (storytold/wordcraft#7126). Here the mark is its own run, so the first body inline equals it.
+    let mut d = Document::new();
+    let mut story = Paragraph::with_text("#Custom body", CharProps::default());
+    story.runs = vec![Run { len: 1, props: CharProps::default() }, Run { len: 11, props: CharProps::default() }];
+    let note = d.add_part(PartKind::Footnote, vec![std::sync::Arc::new(Block::Para(story))]);
+    let mut p = Paragraph::with_text("ref", CharProps::default());
+    p.insert_object(
+        p.text.len(),
+        InlineObject::NoteRef { kind: NoteKind::Footnote, id: note, custom: "#".into() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![std::sync::Arc::new(Block::Para(p))];
+
+    let saved = export(&d).unwrap();
+    let c = crate::text::tests::content_of(&saved);
+    // The mark is still the citation label (ODF `text:label`); it must not also lead the body.
+    assert!(c.contains("<text:note-citation text:label=\"#\">#</text:note-citation>"), "{c}");
+    let back = import(&saved).unwrap();
+    let ns = notes(&back);
+    assert_eq!(ns.len(), 1);
+    assert_eq!(ns[0].0, NoteKind::Footnote);
+    assert_eq!(ns[0].1, "#");
+    assert!(!ns[0].2.starts_with('#'), "the note body duplicates the custom mark: {:?}", ns[0].2);
+    assert_eq!(ns[0].2, "Custom body");
 }
 
 #[test]
