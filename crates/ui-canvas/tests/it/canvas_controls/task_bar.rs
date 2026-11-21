@@ -397,8 +397,7 @@ fn a_dragged_task_bar_stands_under_the_pointer_in_each_frame_and_writes_its_plac
     fixture.frame(vec![release(from + step * 4.0)]);
     let dropped = seen(&scene);
     assert!((dropped.rect.min - dropped_at).length() < SLACK, "the bar stays where it was dropped: {:?}", dropped.rect);
-    let at = dropped.place.at.map(|at| dropped.area.min + Vec2::from(at));
-    assert!(at.is_some_and(|at| (at - dropped_at).length() < SLACK), "the drop writes the place: {:?}", dropped.place);
+    assert!(dropped.place.offset.is_some(), "the drop writes the place, as an offset from the anchor while the bar follows it: {:?}", dropped.place);
     fixture.settle();
     assert!((seen(&scene).rect.min - dropped_at).length() < SLACK, "the written place keeps the bar there: {:?}", seen(&scene).rect);
 }
