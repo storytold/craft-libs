@@ -26,15 +26,20 @@
 //! before it allocates the target: malformed indices, references and spans, values that are not
 //! finite, sizes, triangle counts, light counts and coverage work over the limits. Rows run on
 //! several threads with rayon.
+//!
+//! [`Camera::fit`] and [`Camera::fit_scene`] frame a box or a scene's drawn vertices from a view
+//! direction, and [`Camera::apply`] writes a camera's clip and view transforms into a scene.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod camera;
 mod raster;
 mod resolve;
 mod scene;
 mod shade;
 mod shadow;
 
+pub use camera::{Bounds, Camera, CameraError, FIT_FOV_Y, Projection};
 pub use raster::{GUARD_BAND, Target, try_render};
 pub use resolve::{Image, try_encode, try_render_cpu, try_resolve};
 pub use scene::{EnvInfo, Light, Material, Scene, ShadowMap, TexInfo, Vertex};
@@ -143,29 +148,54 @@ pub enum RenderError {
     /// of its range).
     #[error("pixel {0} has a color that is not finite or an alpha out of range")]
     BadPixel(usize),
+    /// A camera could not be fitted or could not form a scene's transforms.
+    #[error("invalid camera: {0}")]
+    BadCamera(CameraError),
 }
+
+/// The default [`Limits::max_pixels`]: 2^24 raster pixels.
+pub const MAX_RENDER_PIXELS: u64 = 1 << 24;
+
+/// The default [`Limits::max_work`]: 2^31 coverage tests, 128 full layers of the largest raster.
+pub const MAX_RENDER_WORK: u64 = 1 << 31;
+
+/// The default [`Limits::max_triangles`]: 2^24 triangles.
+pub const MAX_RENDER_TRIANGLES: u64 = 1 << 24;
+
+/// The default [`Limits::max_vertices`]: 2^24 vertices.
+pub const MAX_RENDER_VERTICES: u64 = 1 << 24;
 
 /// Caps on sizes and work, checked before the target is allocated.
 /// `#[non_exhaustive]`: start from [`Limits::default`] and set the fields you change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Limits {
-    /// Most raster pixels (width × height). Default 2^24.
+    /// Most raster pixels (width × height). Default [`MAX_RENDER_PIXELS`].
     pub max_pixels: u64,
-    /// Most triangles in a scene. Default 2^22.
+    /// Most triangles in a scene. Default [`MAX_RENDER_TRIANGLES`].
     pub max_triangles: u64,
-    /// Most vertices in a scene, used or not. Default 3 × 2^22.
+    /// Most vertices in a scene, used or not. Default [`MAX_RENDER_VERTICES`].
     pub max_vertices: u64,
     /// Most lights in a scene. Default 1024.
     pub max_lights: usize,
-    /// Most coverage tests of the visibility and transparent passes: the pixels of every clipped
-    /// triangle's bounding box, plus one per clipped triangle. Default 2^31.
+    /// Most coverage tests of one [`try_render`]: the pixels of every clipped triangle's bounding
+    /// box, plus one per clipped triangle, for the visibility and transparent passes, and the
+    /// opaque triangles' count once more when an opaque triangle's material can discard a
+    /// fragment (single-sided, or an alpha mode other than 0), for the search under discarded
+    /// pixels. [`try_shadow_maps`] counts its own tests against the same limit. Default
+    /// [`MAX_RENDER_WORK`].
     pub max_work: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_pixels: 1 << 24, max_triangles: 1 << 22, max_vertices: 3 << 22, max_lights: 1024, max_work: 1 << 31 }
+        Self {
+            max_pixels: MAX_RENDER_PIXELS,
+            max_triangles: MAX_RENDER_TRIANGLES,
+            max_vertices: MAX_RENDER_VERTICES,
+            max_lights: 1024,
+            max_work: MAX_RENDER_WORK,
+        }
     }
 }
 
@@ -192,5 +222,17 @@ impl Limits {
             return Err(RenderError::TooLarge(w, h));
         }
         usize::try_from(pixels).map_err(|_| RenderError::TooLarge(w, h))
+    }
+
+    /// The error the limits give for a scene of `triangles` triangles and `vertices` vertices,
+    /// if any. Nothing is allocated.
+    pub fn check_geometry(&self, triangles: u64, vertices: u64) -> Result<(), RenderError> {
+        if triangles > self.max_triangles {
+            return Err(RenderError::TooManyTriangles { count: triangles, limit: self.max_triangles });
+        }
+        if vertices > self.max_vertices {
+            return Err(RenderError::TooManyVertices { count: vertices, limit: self.max_vertices });
+        }
+        Ok(())
     }
 }

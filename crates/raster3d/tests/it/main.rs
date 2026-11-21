@@ -3,12 +3,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod bounds;
+mod camera;
 mod differential;
 mod moved;
 
-/// A verbatim copy of the app's previous code, run by `differential`.
+/// Copies of the apps' previous code, run by `differential` and `camera`.
 mod reference {
     pub mod effectcraft;
+    pub mod pdfcraft;
 }
 
 use craft_raster3d::{EnvInfo, Light, Limits, Material, Scene, TexInfo, Vertex};

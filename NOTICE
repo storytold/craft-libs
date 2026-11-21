@@ -440,3 +440,11 @@ the copy of it in crates/raster3d/tests/it/reference/ are moved from:
   License, Version 2.0, at your option.
   https://github.com/storytold/effectcraft
   Copyright (c) 2026 ArtCraft Team and the EffectCraft contributors.
+
+The camera fit in crates/raster3d/src/camera.rs and the copy of it in
+crates/raster3d/tests/it/reference/pdfcraft.rs are adapted from:
+- PdfCraft, crates/prc-render/src/render.rs and src/vec3.rs, revision
+  4f23ee1c1c2afc6611ca3a71b38162f6259629fb, licensed under the MIT License or the Apache License,
+  Version 2.0, at your option.
+  https://github.com/storytold/pdfcraft
+  Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors.

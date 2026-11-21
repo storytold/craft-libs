@@ -253,14 +253,7 @@ fn validate_indices(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
     if opaque > len || !opaque.is_multiple_of(3) {
         return Err(RenderError::BadOpaqueCount { opaque: s.opaque_count, len });
     }
-    let count = (len / 3) as u64;
-    if count > limits.max_triangles {
-        return Err(RenderError::TooManyTriangles { count, limit: limits.max_triangles });
-    }
-    let vertices = s.vertices.len() as u64;
-    if vertices > limits.max_vertices {
-        return Err(RenderError::TooManyVertices { count: vertices, limit: limits.max_vertices });
-    }
+    limits.check_geometry((len / 3) as u64, s.vertices.len() as u64)?;
     if let Some((position, &index)) = s.indices.iter().enumerate().find(|(_, i)| **i as usize >= s.vertices.len()) {
         return Err(RenderError::BadIndex { position, index });
     }

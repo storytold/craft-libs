@@ -4,9 +4,32 @@ A CPU renderer for a prepared 3D scene. A `Scene` holds world-space triangles, t
 textures, lights, an optional environment light and shadow maps, as plain arrays. The crate clips,
 rasterizes and shades the scene into premultiplied linear RGBA and camera depth, renders the shadow
 maps of its lights, box-filters a supersampled result to output size and converts linear pixels to
-the sRGB transfer curve. It has no UI, does no file or network I/O and has no `unsafe` code.
-Building a scene from an app's document (layers, cameras, models, text) stays in the app.
+the sRGB transfer curve. It also fits a camera to a box or to a scene's drawn vertices and writes
+the camera's transforms into the scene. It has no UI, does no file or network I/O and has no
+`unsafe` code. Building a scene from an app's document (layers, cameras, models, text) stays in the
+app.
 
+- **Cameras.** `Camera::fit(&bounds, direction, up, perspective, aspect)` frames the eight
+  corners of a `Bounds` box, and `Camera::fit_scene(&scene, ...)` frames every vertex of the
+  scene's drawn triangles, so an oblique view is not padded by empty box corners. Both look along
+  `direction` with a 30° vertical field of view (`FIT_FOV_Y`) or an orthographic projection, aim
+  at the middle of the points' projection, and keep 5% clear on each side of the tighter image
+  axis, where `aspect` is width over height as in `gluPerspective`
+  (<https://registry.khronos.org/OpenGL-Refpages/gl2.1/xhtml/gluPerspective.xml>). A box of zero
+  size is framed as a box of radius 1 around its center. `Camera::apply(&mut scene)` writes
+  `Scene::view` (rows right, up and forward, with right = forward × up), `Scene::clip`,
+  `Scene::eye`, `Scene::cam_fwd` and `Scene::ortho` for the scene's raster aspect ratio. A
+  perspective camera's near plane is 1/10,000 of the eye-to-target distance and it has no far
+  plane; an orthographic camera's depth range holds the scene's drawn vertices, so it is applied
+  again after they change. Bounds that are not finite or whose minimum is above the maximum, an
+  aspect ratio that is not positive and finite, a view direction that is zero or not finite, an
+  up direction that is zero, not finite or parallel to the view
+  (<https://registry.khronos.org/OpenGL-Refpages/gl2.1/xhtml/gluLookAt.xml>), a field of view
+  outside 0 to 180 degrees, an orthographic height that is not positive and finite, a scene with
+  no drawn vertex, and an eye, extent, transform or near plane outside `f64` or `f32` (or an eye
+  that rounds onto its target in `f64`, or that leaves the target short of the near plane in the
+  `f32` transforms) are a `RenderError::BadCamera`. `apply` leaves the scene as it was
+  on an error.
 - **Rendering.** `try_render(&scene, &limits)` returns a `Target` at the scene's raster size:
   premultiplied linear RGBA and the camera-space depth of the nearest opaque surface, infinity where
   nothing is drawn. `Scene::clip` maps world to clip space with reversed depth (a larger
@@ -77,9 +100,15 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   linear. Pixels with alpha of 1e-6 or less are left as they are. `try_render_cpu` renders and
   resolves by `Scene::ssaa`, and rejects a factor that does not divide the raster size before it
   renders.
-- **Limits.** `Limits` caps the raster pixels (2^24), the triangles of a scene (2^22), its vertices, used or not (3 × 2^22), the lights
-  (1024) and the coverage tests of the visibility and transparent passes (2^31: the pixels of every
-  clipped triangle's bounding box, plus one per triangle). Every `try_` function checks the scene
+- **Limits.** `Limits` caps the raster pixels (`MAX_RENDER_PIXELS`, 2^24), the triangles of a
+  scene (`MAX_RENDER_TRIANGLES`, 2^24), its vertices, used or not (`MAX_RENDER_VERTICES`, 2^24),
+  the lights (1024) and the coverage tests of one render (`MAX_RENDER_WORK`, 2^31: the pixels of
+  every clipped triangle's bounding box, plus one per triangle, for the visibility and transparent
+  passes, and the opaque pass's count once more when an opaque triangle's material is single-sided
+  or has an alpha mode other than 0, for the search under discarded pixels). `try_shadow_maps`
+  counts its own tests against the same limit, so a caller that renders shadow maps and then the
+  scene spends two budgets. `Limits::check` and `Limits::check_geometry` give the error for a
+  raster size or a triangle and vertex count without allocating. Every `try_` function checks the scene
   first and returns a `RenderError` before it allocates the target: a zero side, a size over the
   limits, a side over 2^30, a buffer over `isize::MAX` bytes, a light whose shadow map does not
   exist (`try_render`; a mark of −1 means no shadow), an index list that is not whole triangles, an index, material
@@ -99,9 +128,7 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   not divide both sides and for buffers of the wrong length. `try_encode` returns an error for a
   pixel that is not finite, an alpha below 0 or above 1 (beyond 1e-4 of rounding), or a color whose
   division by alpha or encoding overflows, and changes no pixel then. The renderer holds 40 bytes per raster
-  pixel and up to seven clipped triangles of about 140 bytes per scene triangle. The search for a
-  surviving fragment under discarded opaque pixels visits each opaque triangle's bounding box
-  once more, so it runs no more coverage tests than the visibility pass.
+  pixel and up to seven clipped triangles of about 140 bytes per scene triangle.
 
 ## Origin
 
@@ -188,6 +215,25 @@ files:
   same order of operations.
 - The camera basis of the shadow maps is computed in this crate from the same operations as
   EffectCraft's `camera::basis_view`.
+
+The camera fit comes from PdfCraft's `crates/prc-render/src/render.rs` (`Camera::fit`,
+`Camera::fit_meshes`, `Bounds`) and `src/vec3.rs`, at `4f23ee1c1`, and the render ceilings from
+its `MAX_RENDER_PIXELS` and `MAX_RENDER_WORK` and its 2^24 triangle and vertex ceilings. For
+finite, ordered bounds and points whose diagonal fits `f64`, every fitted camera's eye, target, up
+direction and projection match PdfCraft's bit for bit; `tests/it/camera.rs` runs a copy of
+PdfCraft's code on the same inputs. Changes from those files:
+
+- `Camera::fit_scene` frames the vertices of a `Scene`'s drawn triangles in place of PdfCraft's
+  meshes, and `Camera::apply` writes the camera into the scene's `f32` transforms. PdfCraft
+  projects in `f64` inside its own rasterizer and does not clip an orthographic view in depth.
+- `Bounds::radius` halves each side before taking the diagonal. PdfCraft took the whole diagonal,
+  which overflowed for a box wider than `f64`'s largest value, and then framed it as a box of
+  radius 1, with the eye inside the box.
+- Bounds that are not finite or whose minimum is above the maximum are errors, and so is an up
+  direction that is not finite. An up direction whose cross product with the view overflows is
+  normalized first; PdfCraft refused it.
+- Each error is a `CameraError` variant inside `RenderError::BadCamera` in place of PdfCraft's
+  message string.
 
 ## Migration
 

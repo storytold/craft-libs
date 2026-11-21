@@ -535,6 +535,25 @@ fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Target {
     Target { width: s.width, height: s.height, color, depth }
 }
 
+/// Adds the tests of the search under discarded opaque pixels ([`Band::fallback`]) to `work`,
+/// which holds the opaque pass's tests: the same count again when an opaque triangle's material
+/// can discard a fragment (single-sided, or an alpha mode other than 0), since the search visits
+/// each opaque triangle's bounding box once more. Stops with [`RenderError::TooMuchWork`] when
+/// `work` passes `limit`.
+fn charge_fallback(s: &Scene, opaque: &[STri], work: &mut u64, limit: u64) -> Result<(), RenderError> {
+    let discards = |t: &STri| {
+        let first = s.indices.get(t.tri as usize * 3).and_then(|&i| s.vertices.get(i as usize));
+        first.and_then(|v| s.materials.get(v.material as usize)).is_some_and(|m| !m.double_sided || m.alpha_mode != 0)
+    };
+    if opaque.iter().any(discards) {
+        *work = work.saturating_add(*work);
+        if *work > limit {
+            return Err(RenderError::TooMuchWork { needed: *work, limit });
+        }
+    }
+    Ok(())
+}
+
 /// Rasterize and shade the scene at its raster size.
 ///
 /// The scene is checked first (see [`Limits`]); an empty scene gives a transparent target with
@@ -545,6 +564,7 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
     let clip = clip_positions(s)?;
     let mut work = 0;
     let opaque = setup(s, &clip, 0..s.opaque_count as usize, &mut work, limits.max_work)?;
+    charge_fallback(s, &opaque, &mut work, limits.max_work)?;
     let trans = setup(s, &clip, s.opaque_count as usize..s.indices.len(), &mut work, limits.max_work)?;
     let t = raster(s, &opaque, &trans, pixels);
     // Finite inputs near the top of the f32 range can still overflow in shading.
