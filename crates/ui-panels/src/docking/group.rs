@@ -116,7 +116,7 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     /// A drag on the grip drags the unit.
     #[prop]
     movable: bool,
-    /// The grip shows the dock's row of grip marks ([`GripMarks`]) in its middle; else it is an unmarked band.
+    /// The grip shows the dock's row of grip marks in its middle; else it is an unmarked band.
     #[prop]
     ticks: bool,
     double: bool,
