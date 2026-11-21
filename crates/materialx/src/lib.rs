@@ -59,8 +59,8 @@ pub enum Shader {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     /// One to four finite numbers, kept in the source color space. The numbers may be separated
-    /// by commas, spaces or both, and a `boolean` input's `true` and `false` are 1 and 0. A
-    /// `convert` node's output holds the converted channels. `colorspace` is the color
+    /// by commas, spaces or both, a `boolean` input's `true` and `false` are 1 and 0, and an
+    /// `integer` input holds one whole number. A `convert` node's output holds the converted channels. `colorspace` is the color
     /// space in effect where the value is written: the input's own `colorspace`, else that of the
     /// nearest enclosing element (the node, then its nodegraph), else the document's. A value
     /// written on an input with a boolean, integer, float or vector type, on such a `constant`
@@ -400,17 +400,18 @@ fn parse_numbers(text: &str) -> Option<Vec<f32>> {
     nums.filter(|v| !v.is_empty() && v.len() <= 4)
 }
 
-/// The value of the input `input`, read as a `boolean` (`true` or `false`, as 1 or 0) when its
-/// type says so, and as numbers otherwise.
+/// The value of the input `input`, read as a `boolean` (`true` or `false`, as 1 or 0) or an
+/// `integer` (one whole number) when its type says so, and as numbers otherwise.
 fn input_numbers(input: &El, text: &str) -> Option<Vec<f32>> {
-    if input.attr("type") == Some("boolean") {
-        return match text.trim() {
+    match input.attr("type") {
+        Some("boolean") => match text.trim() {
             "true" => Some(vec![1.0]),
             "false" => Some(vec![0.0]),
             _ => None,
-        };
+        },
+        Some("integer") => text.trim().parse::<i32>().ok().map(|v| vec![v as f32]),
+        _ => parse_numbers(text),
     }
-    parse_numbers(text)
 }
 
 /// The number of channels of a MaterialX numeric type.
@@ -485,8 +486,9 @@ impl<'a> Resolver<'a> {
     }
 
     /// The value of `input`, an input of an element in nodegraph `scope` (or at the top level)
-    /// whose color space in effect is `space`. A `value` that is not one to four finite numbers
-    /// is [`Error::Malformed`]; an unsupported connection is skipped with a warning.
+    /// whose color space in effect is `space`. A `value` that is not one to four finite numbers,
+    /// or that does not fit a `boolean` or `integer` type, is [`Error::Malformed`]; an
+    /// unsupported connection is skipped with a warning.
     fn value(
         &self,
         input: &'a El,
@@ -502,7 +504,7 @@ impl<'a> Resolver<'a> {
         if let Some(value) = input.attr("value") {
             let Some(values) = input_numbers(input, value) else {
                 let name = input.attr("name").unwrap_or("");
-                return Err(Error::Malformed(format!("input {name} has a value that is not one to four finite numbers")));
+                return Err(Error::Malformed(format!("input {name} has a value that is not one to four finite numbers or does not fit its type")));
             };
             let colorspace = if is_numeric_non_color(input.attr("type")) { self.working() } else { input.attr("colorspace").or(space) };
             return Ok(Some(Value::Constant { values, colorspace: colorspace.map(str::to_owned) }));
@@ -1033,6 +1035,14 @@ mod tests {
             let unsupported = via(ty, in_ty, value);
             assert_eq!(input(&unsupported, "base_color"), None, "{in_ty} to {ty}");
             assert!(unsupported.warnings.iter().any(|w| w.contains("convert node")), "{:?}", unsupported.warnings);
+        }
+        // An integer is one whole number.
+        for bad in ["1.5", "1.00000001", "1 2"] {
+            let r = read(&open_pbr(
+                r#"<input name="base_color" nodename="C"/>"#,
+                &format!(r#"<convert name="C" type="boolean"><input name="in" type="integer" value="{bad}"/></convert>"#),
+            ));
+            assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("input in ")), "{bad:?}: {r:?}");
         }
         let image = |ty: &str, image_ty: &str| {
             read(&open_pbr(
