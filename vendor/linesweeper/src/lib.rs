@@ -107,7 +107,18 @@ pub fn binary_op(
     op: BinaryOp,
 ) -> Result<topology::Contours, Error> {
     // Find the extremal values, to figure out how much precision we can support.
-    let bbox = set_a.bounding_box().union(set_b.bounding_box());
+    // Craft patch (leading ClosePath): `BezPath::bounding_box` panics on a leading ClosePath.
+    let bounding_box = |path: &kurbo::BezPath| {
+        if matches!(path.elements().first(), Some(kurbo::PathEl::ClosePath)) {
+            kurbo::segments(segments::skip_leading_close_paths(path.iter()))
+                .map(|seg| kurbo::ParamCurveExtrema::bounding_box(&seg))
+                .reduce(|a, b| a.union(b))
+                .unwrap_or_default()
+        } else {
+            path.bounding_box()
+        }
+    };
+    let bbox = bounding_box(set_a).union(bounding_box(set_b));
     let min = bbox.min_x().min(bbox.min_y());
     let max = bbox.max_x().max(bbox.max_y());
     if min.is_infinite() || max.is_infinite() {
@@ -203,6 +214,41 @@ mod tests {
         .unwrap();
 
         insta::assert_ron_snapshot!(output);
+    }
+
+    // Craft patch (leading ClosePath).
+    #[test]
+    fn leading_close_path() {
+        // `BezPath`'s own constructors reject these, but deserializing does not.
+        let close_only: BezPath = serde_json::from_str(r#"["ClosePath"]"#).unwrap();
+        let triangle = r#"{"MoveTo":{"x":0.0,"y":0.0}},{"LineTo":{"x":10.0,"y":0.0}},{"LineTo":{"x":0.0,"y":10.0}},"ClosePath""#;
+        let plain: BezPath = serde_json::from_str(&format!("[{triangle}]")).unwrap();
+        let leading: BezPath =
+            serde_json::from_str(&format!(r#"["ClosePath",{triangle}]"#)).unwrap();
+
+        let empty = Topology::<i32>::from_path(&close_only, 1e-6).unwrap();
+        assert_eq!(empty.contours(|w| *w != 0).contours().count(), 0);
+
+        let expected = Topology::<i32>::from_path(&plain, 1e-6)
+            .unwrap()
+            .contours(|w| *w != 0);
+        let actual = Topology::<i32>::from_path(&leading, 1e-6)
+            .unwrap()
+            .contours(|w| *w != 0);
+        let paths =
+            |c: &topology::Contours| c.contours().map(|c| c.path.clone()).collect::<Vec<_>>();
+        assert_eq!(paths(&actual), paths(&expected));
+        assert_eq!(paths(&actual).len(), 1);
+
+        for (a, b) in [
+            (&close_only, &plain),
+            (&plain, &close_only),
+            (&leading, &plain),
+            (&plain, &leading),
+        ] {
+            let output = binary_op(a, b, FillRule::NonZero, BinaryOp::Union).unwrap();
+            assert_eq!(output.contours().count(), 1);
+        }
     }
 
     // This example has a union of two not-quite-axis-aligned crosses. It
