@@ -9,6 +9,7 @@ use crate::runtime::layout_memory;
 use crate::runtime::measure;
 use crate::runtime::memory::sub;
 use crate::runtime::pass_state;
+use craft_behavior::layout_memory::measure_tolerance;
 use craft_behavior::{Axis, ColumnWidth, Flow, GridCursor, GridMeasure};
 use egui::{Id, IdMap, Rect, Ui, Vec2};
 use std::borrow::Cow;
@@ -453,6 +454,9 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
                 Some(width) => {
                     let rtl = Env::of(ui).direction.is_rtl();
                     let bounded = own_room.derive_local(|scoped| scoped.unbounded.0 = false);
+                    // Half a pixel past the width the level measured at, as a bounded re-run of a measured body is given:
+                    // content that took exactly that width lays out the same here, never wrapping on a rounding.
+                    let width = width + measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
                     let rect = Flow::new(ui.available_rect_before_wrap(), rtl).span(0.0, width);
                     child::block(ui, Some(rect), child::column_layout(rtl), |ui| {
                         let installed = Env::install_for(ui, bounded);
