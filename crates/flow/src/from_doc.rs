@@ -140,7 +140,9 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
         shadow: set(e.shadow),
         emboss: set(e.emboss),
         engrave: set(e.engrave),
-        border: e.border.filter(|b| b.is_visible()),
+        // A border of width 0 (a DOCX one without `w:sz`) is drawn at the thinnest line, which is
+        // all a format with no width-0 border can keep of it (storytold/wordcraft#5065).
+        border: e.border.map(|b| b.as_drawn()).filter(|b| b.is_visible()),
         lang: e.lang.clone().filter(|l| !l.is_empty()),
         font_cs: e.font_cs.clone().filter(|f| !f.is_empty()),
         font_ea: e.font_ea.clone().filter(|f| !f.is_empty()),
@@ -248,7 +250,7 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
         Kind::Quote
     } else if is_code_style(doc, style) {
         Kind::Code
-    } else if blank && rp.borders.and_then(|b| b.bottom).is_some_and(|b| b.is_visible()) {
+    } else if blank && rp.borders.and_then(|b| b.bottom).is_some_and(|b| b.is_drawn()) {
         Kind::Rule
     } else {
         Kind::Normal
@@ -432,10 +434,11 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
     }
 }
 
-/// The placement a flow keeps for a drawing: when it floats, or turns or mirrors it in line.
+/// Keep placement, transforms, and explicit stacking metadata even for inline drawings.
+/// Presence alone does not imply anchoring: the retained Float keeps its original wrap.
 fn kept_float(f: &craft_wordmodel::para::Float) -> Option<Box<craft_wordmodel::para::Float>> {
     let turned = f.rot.is_finite() && f.rot.rem_euclid(360.0) > 0.001 && f.rot.rem_euclid(360.0) < 359.999;
-    (f.wrap != craft_wordmodel::para::Wrap::Inline || turned || f.flip_h || f.flip_v).then(|| Box::new(f.clone()))
+    (f.wrap != craft_wordmodel::para::Wrap::Inline || turned || f.flip_h || f.flip_v || f.z != 0).then(|| Box::new(f.clone()))
 }
 
 fn flow_comment(doc: &Document, c: &craft_wordmodel::Comment, parent: Option<u32>, opts: FlowOpts) -> FComment {
@@ -502,7 +505,9 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let (kind, list) = para_kind(doc, p);
     let list = flow_list(doc, kind, list, p, opts);
     let mut done: Vec<Para> = Vec::new();
-    let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.takes_room()) };
+    // A side of width 0 (a DOCX border without `w:sz`) is drawn at the thinnest line here: no
+    // format below has a border that is drawn and still takes no room (storytold/wordcraft#5065).
+    let borders = if kind == Kind::Rule { None } else { p.props.borders.map(|b| b.as_drawn()).filter(|b| b.takes_room()) };
     let mut out = Para {
         kind,
         list,
@@ -684,7 +689,16 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             // Direction resolved like the current paragraph's: the old properties' own `w:bidi`, else
             // the style's.
             let rtl = doc.styles.resolve_para(&c.old).bidi;
-            let old = Para { kind, list, align: c.old.align, rtl, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
+            let old = Para {
+                kind,
+                list,
+                align: c.old.align,
+                rtl,
+                page_break: c.old.page_break_before.unwrap_or(false),
+                spacing: direct_spacing(&c.old),
+                borders: c.old.borders,
+                ..Default::default()
+            };
             Box::new(FmtChange { mark: rev_mark(doc, c.rev), old })
         });
     }
@@ -1113,6 +1127,9 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
         // Word. Only Repeat as header row makes it one then.
         let header = r.props.header || (ri == 0 && style.is_some() && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
+        for _ in 0..r.first_grid() {
+            cells.push(Cell::default());
+        }
         for (ci, c) in r.cells.iter().enumerate() {
             let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };
             let mut rowspan = 1;
@@ -1158,6 +1175,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                     Some(Box::new(crate::CellPic { img, repeat: p.repeat, align: p.align }))
                 }),
                 width: None,
+                vmerge_restart: c.props.vmerge == VMerge::Restart,
+                synthetic_covered: false,
             });
         }
         rows.push(cells);
@@ -1280,5 +1299,20 @@ impl ListCounter {
             1 => format!("{}.", craft_wordmodel::section::letters(n)),
             _ => format!("{}.", craft_wordmodel::section::roman(n)),
         }
+    }
+}
+
+#[cfg(test)]
+mod stacking_tests {
+    #[test]
+    fn explicit_inline_stacking_preserves_wrap_without_creating_an_anchor() {
+        use craft_wordmodel::para::{Float, Wrap};
+        let f = Float { z: u32::MAX, ..Float::default() };
+        assert_eq!(f.wrap, Wrap::Inline);
+        let kept = super::kept_float(&f).unwrap();
+        assert_eq!(kept.wrap, Wrap::Inline);
+        assert_eq!(kept.z, u32::MAX);
+        assert_eq!(kept.rot, f.rot);
+        assert!(super::kept_float(&Float::default()).is_none());
     }
 }

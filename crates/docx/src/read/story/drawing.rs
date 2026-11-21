@@ -12,7 +12,7 @@ impl Reader<'_> {
     /// text and drawing ids are carried into the object. Returns `None` when the frame or payload
     /// cannot be read. Ink written by WordCraft keeps its tool's caps rather than an outline cap.
     pub(super) fn read_drawing(&mut self, sc: &mut StoryCtx, d: &El, rels: &Rels) -> Option<InlineObject> {
-        let Frame { c, anchored, w, h, alt, mut float } = drawing_frame(d)?;
+        let Frame { c, anchored, w, h, alt, mut float } = drawing_frame(d, self.file_orders)?;
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
         // Checked by URI before the blip search: a diagram's data can hold a blip further down.
         let uri = gd.attr("uri").unwrap_or("");
@@ -26,7 +26,7 @@ impl Reader<'_> {
             let source = self.keep_embedded(c.child("a:graphic")?, rels, &[])?;
             float.set_spin(xfrm_spin(content.child("w14:xfrm")));
             float.bare_turn = !anchored && float.rot != 0.0 && float.effect == [0.0; 4];
-            let (px, py) = float.spin_pad(w, h);
+            let (px, py) = float.effect_spin_pad(w, h);
             for (e, p) in float.effect.iter_mut().zip([px, py, px, py]) {
                 if *e != 0.0 {
                     *e = (*e - p).clamp(0.0, 1584.0);
@@ -100,7 +100,7 @@ impl Reader<'_> {
         if let Some(f) = obj.float_mut() {
             // None recorded: Word keeps an inline one's line to the frame (see `Float::bare_turn`).
             f.bare_turn = !anchored && !fx_room && f.rot != 0.0 && f.effect == [0.0; 4];
-            let (px, py) = f.spin_pad(w, h);
+            let (px, py) = f.effect_spin_pad(w, h);
             for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
                 // Zero adds no effects room when rotation contracts this axis.
                 if *e != 0.0 {
@@ -195,7 +195,7 @@ impl Reader<'_> {
         if fallback.find("a:graphic").is_some() || !fallback.els().all(|e| RUN_CONTENT.contains(&e.name.as_str())) {
             return None;
         }
-        let Frame { c, w, h, alt, mut float, .. } = drawing_frame(choice.child("w:drawing")?)?;
+        let Frame { c, w, h, alt, mut float, .. } = drawing_frame(choice.child("w:drawing")?, self.file_orders)?;
         let part = c
             .child("a:graphic")
             .and_then(|g| g.child("a:graphicData"))
@@ -291,7 +291,8 @@ impl Reader<'_> {
     /// A picture: the first `a:blip` in `pic` and its crop.
     fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
-        float.set_spin(xfrm_spin(pic.find("pic:spPr")));
+        let props = pic.find("pic:spPr");
+        float.set_spin(xfrm_spin(props));
         let Some(embed) = blip.attr("r:embed") else {
             // A linked picture holds no copy: nothing to draw, and nothing is fetched.
             if let Some(link) = blip.attr("r:link") {
@@ -311,7 +312,14 @@ impl Reader<'_> {
                 }
             }
         }
-        Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None })
+        let radius = props
+            .and_then(|e| e.child("a:effectLst"))
+            .and_then(|e| e.child("a:softEdge"))
+            .and_then(|e| e.attr("rad"))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let fx = crate::units::blip_fx(blip).with_soft_edge_emu(radius);
+        Some(InlineObject::Image { media, w, h, alt, float, crop, fx, ole: None })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
@@ -627,7 +635,7 @@ struct Frame<'a> {
     float: Float,
 }
 
-fn drawing_frame(d: &El) -> Option<Frame<'_>> {
+fn drawing_frame(d: &El, file_orders: craft_wordmodel::para::FileOrders) -> Option<Frame<'_>> {
     let (c, anchored) = match d.child("wp:inline") {
         Some(c) => (c, false),
         None => (d.child("wp:anchor")?, true),
@@ -636,7 +644,7 @@ fn drawing_frame(d: &El) -> Option<Frame<'_>> {
     let dim = |n: &str| ext.and_then(|e| e.attr(n)).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
     let (w, h) = (dim("cx"), dim("cy"));
     let (alt, meta) = nv_alt(c.child("wp:docPr"));
-    let mut float = if anchored { anchor_float(c) } else { Float::default() };
+    let mut float = if anchored { anchor_float(c, file_orders) } else { Float::default() };
     float.alt = meta;
     float.hidden = c.child("wp:docPr").is_some_and(|p| on_off_attr(p, "hidden"));
     if let Some(e) = c.child("wp:effectExtent") {
@@ -670,10 +678,11 @@ fn nv_alt(p: Option<&El>) -> (String, AltText) {
     (descr, AltText { text: String::new(), title, decorative })
 }
 
-fn anchor_float(c: &El) -> Float {
+fn anchor_float(c: &El, orders: craft_wordmodel::para::FileOrders) -> Float {
     // `relativeHeight`: the stacking order Word draws floating objects in (higher on top), which
-    // need not be their order in the file.
-    let z = c.attr("relativeHeight").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+    // need not be their order in the file. Kept one more (see `Float::z`): 0, the lowest a file
+    // can give, isn't the 0 of an object without one, which stacks above them all.
+    let z = orders.model_order(c.attr("relativeHeight").and_then(|v| v.trim().parse::<u32>().ok()));
     let mut f = Float { wrap: Wrap::Square, z, ..Float::default() };
     let behind = on_off_attr(c, "behindDoc");
     // Word wraps a position relative to the page's size (`wp14:pctPosVOffset`) in
