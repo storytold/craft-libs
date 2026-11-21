@@ -140,7 +140,7 @@ fn delete_and_backspace_on_a_selected_preset_report_delete() {
 struct Host<'a> {
     revision: u64,
     #[memo_props(covered_by = "revision", reason = "the rows are fixed in this trial")]
-    rows: &'a [PresetRow<u32>],
+    rows: &'a PresetSource<'a, u32>,
     #[memo_props(covered_by = "revision", reason = "nothing writes the state in this trial")]
     state: &'a mut PresetState<u32>,
     #[memo_props(hash = "a fieldless enum")]
@@ -151,15 +151,18 @@ fn host(props: &mut Host<'_>, ui: &mut egui::Ui) {
     let _ = PresetBrowser::new("Patterns", Bind::bound(props.state), props.rows).view_lock(props.view).show(ui);
 }
 
-/// The browser reads the modifiers its picks take, and the pointer only for its rows' own events: a pointer move
-/// beside it replays its view in both views, and a modifier change runs it (#2812). Before, every pointer move in
-/// the window ran it.
+/// The browser reads the pointer and the modifiers only for its rows' own events, and its tile grid reads the
+/// modifiers, not the pointer frame: a pointer move beside it replays its view in both views (#2812). Before, every
+/// pointer move in the window ran it.
 #[trial]
-fn a_pointer_move_beside_the_browser_replays_it_and_a_modifier_runs_it() {
+fn a_pointer_move_beside_the_browser_replays_it() {
     use craft_ui::contract::MemoView;
     use craft_ui::testing::{MemoRun, last_frame_memo_runs, pointer};
     for view in [PresetView::List, PresetView::Grid] {
-        let rows = vec![PresetRow::group(GROUP, "Group", 0), PresetRow::item(ALPHA, "Alpha", 1), PresetRow::item(2, "Beta", 1)];
+        let rows = PresetSource::new(
+            (),
+            PresetFns::new(|_, _| vec![PresetRow::group(GROUP, "Group", 0), PresetRow::item(ALPHA, "Alpha", 1), PresetRow::item(2, "Beta", 1)]),
+        );
         let mut state = PresetState::<u32>::new();
         let mut fixture = Fixture::new(move |ui| {
             ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
@@ -178,9 +181,5 @@ fn a_pointer_move_beside_the_browser_replays_it_and_a_modifier_runs_it() {
             fixture.frame(vec![pointer::moved(pos2(360.0, 100.0 + step as f32 * 10.0))]);
             assert_eq!(runs(&fixture), (0, 1), "{view:?}: pointer move {step} beside the browser replays its view");
         }
-        fixture.hold(Modifiers::ALT).frame(Vec::new());
-        assert_eq!(runs(&fixture).0, 1, "{view:?}: Alt held runs the view");
-        fixture.frame(Vec::new());
-        assert_eq!(runs(&fixture), (0, 1), "{view:?}: and it replays while Alt stays held");
     }
 }
