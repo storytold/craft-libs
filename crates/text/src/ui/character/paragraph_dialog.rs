@@ -16,6 +16,7 @@ use std::borrow::Cow;
 use std::cell::Cell;
 
 use crate::ui::length::{DocUnit, length_field, shown};
+use crate::ui::tabs_dialog::{TabStopsDialog, TabStopsResult, TabStopsWords};
 use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec, SelectionChange, keyed};
 use craft_theme::variant::{Tone, Variant};
 use craft_ui::buttons::Button;
@@ -275,6 +276,8 @@ pub enum ParagraphTab {
     LineAndPageBreaks,
     /// Asian Typography.
     AsianTypography,
+    /// Tabs, when the dialog has the page ([`ParagraphDialog::tabs_page`]).
+    Tabs,
 }
 
 /// OK's answer: the format, and whether Tabs… was pressed (the app applies the format, then opens
@@ -286,6 +289,8 @@ pub struct ParagraphAnswer {
     pub format: ParagraphFormat,
     /// Whether Tabs… was pressed.
     pub open_tabs: bool,
+    /// The Tabs page's stops, when the dialog has the page ([`ParagraphDialog::tabs_page`]).
+    pub tabs: Option<TabStopsResult>,
 }
 
 /// The Paragraph dialog.
@@ -316,6 +321,8 @@ pub struct ParagraphDialog {
     /// Whether the dialog draws only its content (pages and buttons), for a window of its own that has the title and
     /// the close button (`DialogHost::run_windowed`).
     bare: bool,
+    /// The Tabs page, which takes the place of the Tabs… button.
+    tabs: Option<TabStopsDialog>,
     held: HeldAnswer<ParagraphAnswer>,
 }
 
@@ -330,6 +337,7 @@ impl ParagraphDialog {
             tab: ParagraphTab::default(),
             hold: false,
             bare: false,
+            tabs: None,
             held: HeldAnswer::new(),
         }
     }
@@ -628,6 +636,15 @@ impl ParagraphDialog {
         self.word && self.format.breaks.is_some() && self.format.asian.is_some()
     }
 
+    /// Adds a Tabs page showing `tabs`'s content, in place of the Tabs… button; OK's answer carries its stops
+    /// ([`ParagraphAnswer::tabs`]). For a dialog in a window of its own, where a second window for Tabs would be one
+    /// window too many.
+    #[must_use]
+    pub fn tabs_page(mut self, tabs: TabStopsDialog) -> Self {
+        self.tabs = Some(tabs);
+        self
+    }
+
     fn body(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>) {
         let words = scope.words;
         valid.set(true);
@@ -635,9 +652,10 @@ impl ParagraphDialog {
         if paged {
             self.tab_strip(ui, words);
         }
-        match self.tab {
-            ParagraphTab::LineAndPageBreaks if paged => self.breaks_page(ui, words),
-            ParagraphTab::AsianTypography if paged => self.asian_page(ui, words),
+        match (self.tab, self.tabs.as_mut()) {
+            (ParagraphTab::LineAndPageBreaks, _) if paged => self.breaks_page(ui, words),
+            (ParagraphTab::AsianTypography, _) if paged => self.asian_page(ui, words),
+            (ParagraphTab::Tabs, Some(tabs)) if paged => tabs.page(ui),
             _ => self.indents_page(ui, scope, valid),
         }
         if !self.out_of_range().is_empty() {
@@ -668,8 +686,10 @@ impl ParagraphDialog {
             (ParagraphTab::IndentsAndSpacing, words.indents_and_spacing.as_str().to_owned()),
             (ParagraphTab::LineAndPageBreaks, words.line_and_page_breaks.as_str().to_owned()),
             (ParagraphTab::AsianTypography, words.asian_typography.as_str().to_owned()),
+            (ParagraphTab::Tabs, Env::of(ui).words::<TabStopsWords>().title.as_str().to_owned()),
         ];
-        let source = keyed(&tabs[..], |tab: &(ParagraphTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
+        let tabs = &tabs[..if self.tabs.is_some() { 4 } else { 3 }];
+        let source = keyed(tabs, |tab: &(ParagraphTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let strip = TabStrip::new(words.title.clone()).kind(TabKind::Text).shown(self.tab).natural_height(true);
         let out = strip
             .show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone())));
@@ -829,8 +849,9 @@ impl ParagraphDialog {
         }
     }
 
-    fn answer(&self, open_tabs: bool) -> ParagraphAnswer {
-        ParagraphAnswer { format: self.format.clone(), open_tabs }
+    fn answer(&mut self, open_tabs: bool) -> ParagraphAnswer {
+        let tabs = self.tabs.as_mut().map(TabStopsDialog::result);
+        ParagraphAnswer { format: self.format.clone(), open_tabs, tabs }
     }
 }
 
@@ -873,7 +894,7 @@ impl ParagraphDialog {
     }
 
     /// The bare content: the pages beside the button column; the button picked, if any.
-    fn show_bare(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>, labels: [Label; 3], waiting: bool) -> Option<usize> {
+    fn show_bare(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>, labels: &[Label], waiting: bool) -> Option<usize> {
         let mut picked = None;
         // The pages take a fixed width, as the dialog's do, so a window that follows its content keeps one width and
         // follows only the height of the page shown (the preview fills what it is given).
@@ -885,7 +906,7 @@ impl ParagraphDialog {
             ui.vertical(|ui| {
                 ui.set_width(BARE_BUTTON_WIDTH);
                 let enabled = valid.get() && !waiting;
-                for (at, label) in labels.into_iter().enumerate() {
+                for (at, label) in labels.iter().cloned().enumerate() {
                     let button = Button::new(label).sizing(Sizing::FillWidth).enabled(at == CANCEL || enabled);
                     let button = if at == OK { button.variant(Variant::PRIMARY) } else { button };
                     if button.show(ui).clicks == 1 {
@@ -897,7 +918,8 @@ impl ParagraphDialog {
         let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
         picked.or(match keys {
             (_, true) => Some(CANCEL),
-            (true, _) if valid.get() && !waiting => Some(OK),
+            // Enter in a tab stop's position ends that edit, not the dialog.
+            (true, _) if valid.get() && !waiting && !self.tabs.as_ref().is_some_and(TabStopsDialog::editing) => Some(OK),
             _ => None,
         })
     }
@@ -944,13 +966,18 @@ impl StackDialog for ParagraphDialog {
         let waiting = self.held.is_waiting();
         let refused = self.held.refusal().map(|(reason, answer)| (reason.clone(), answer.format.clone()));
         let unchanged = Cell::new(true);
+        // With the Tabs page, its button goes.
+        let buttons = if self.tabs.is_some() { 2 } else { 3 };
         let buttons = [
             FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(self.hold),
             FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
             FooterButton::new(words.tabs.clone(), DialogRole::Other).stays_open(self.hold),
-        ];
+        ]
+        .into_iter()
+        .take(buttons);
         if self.bare {
             let labels = [common.ok.clone(), common.cancel.clone(), words.tabs.clone()];
+            let labels = &labels[..if self.tabs.is_some() { 2 } else { 3 }];
             let picked = self.show_bare(ui, &scope, &valid, labels, waiting);
             // A refused answer stands until a field changes, as in the dialog.
             if refused.as_ref().is_some_and(|(_, format)| *format != self.format) {

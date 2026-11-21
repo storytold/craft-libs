@@ -295,6 +295,19 @@ impl TabStopsDialog {
         self
     }
 
+    /// The dialog's content alone, as a page of another dialog (the Paragraph dialog's Tabs page,
+    /// [`crate::ui::character::ParagraphDialog::tabs_page`]).
+    pub(crate) fn page(&mut self, ui: &mut Ui) {
+        let env = Env::of(ui);
+        let (words, units) = (env.words::<TabStopsWords>(), env.units());
+        self.body(ui, &words, &units);
+    }
+
+    /// Whether a stop's position is being edited in place, where Enter ends the edit.
+    pub(crate) fn editing(&self) -> bool {
+        self.edited.is_some()
+    }
+
     /// The bare content: the body above Cancel and OK at its end; the button picked, if any.
     fn show_bare(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units, labels: [Label; 2], waiting: bool) -> Option<usize> {
         let mut picked = None;
