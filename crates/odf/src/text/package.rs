@@ -23,6 +23,14 @@ fn columns_xml(c: &Columns) -> String {
     format!("<style:columns fo:column-count=\"{count}\"{gap}>{sep}{each}</style:columns>")
 }
 
+fn writing_mode(rtl: Option<bool>) -> &'static str {
+    match rtl {
+        Some(true) => " style:writing-mode=\"rl-tb\"",
+        Some(false) => " style:writing-mode=\"lr-tb\"",
+        None => "",
+    }
+}
+
 /// One master page per entry of `pages` (name, setup), each with its own page layout `pm1`, `pm2`…
 /// (§16.5, §16.9); the first is the default one, "Standard".
 /// The styles WordCraft's paragraph kinds are written in (Heading 1–6, Title, Quotations,
@@ -63,6 +71,11 @@ fn kind_styles(doc: &Document, on_outline: &std::collections::BTreeSet<String>) 
         if let Some(c) = pp.contextual_spacing {
             para.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
+        // The emitted kind style is based on Standard. Keep an explicit override, or a
+        // direction inherited from a parent that differs from the document default.
+        let default_rtl = doc.styles.default_para.bidi;
+        let rtl = doc.styles.get(&id).and_then(|style| style.para.bidi).or_else(|| pp.bidi.filter(|b| Some(*b) != default_rtl));
+        para.push_str(writing_mode(rtl));
         let outline = outline.map(|n| outline_attrs(doc, n, &pp, on_outline.contains(&id))).unwrap_or_default();
         s.push_str(&format!(
             "<style:style style:name=\"{name}\" style:display-name=\"{display}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:next-style-name=\"Standard\"{outline} style:class=\"{class}\"><style:paragraph-properties{para}/><style:text-properties{}/></style:style>",
@@ -156,11 +169,7 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
         if let Some(c) = pp.contextual_spacing {
             attrs.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
-        match pp.bidi {
-            Some(true) => attrs.push_str(" style:writing-mode=\"rl-tb\""),
-            Some(false) => attrs.push_str(" style:writing-mode=\"lr-tb\""),
-            None => {}
-        }
+        attrs.push_str(writing_mode(pp.bidi));
         // At the width each side is drawn at, as the paragraph's own borders already are by the
         // time the flow model holds them: ODF has no border that is drawn and takes no room
         // (storytold/wordcraft#5065).
@@ -396,11 +405,7 @@ fn styles_xml(
         "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows}{writing_mode} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:font-size-asian=\"{size}\"{size_cs} style:letter-kerning=\"{kern}\"{color}{lang}{scripts}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
-        writing_mode = match doc.styles.default_para.bidi {
-            Some(true) => " style:writing-mode=\"rl-tb\"",
-            Some(false) => " style:writing-mode=\"lr-tb\"",
-            None => "",
-        },
+        writing_mode = writing_mode(doc.styles.default_para.bidi),
         // Widow and orphan control as Normal has it, said either way (the standard leaves it open
         // when unsaid, and readers differ: docs/odf-interpretation.md).
         widows = if normal.widow_control { " fo:widows=\"2\" fo:orphans=\"2\"" } else { " fo:widows=\"0\" fo:orphans=\"0\"" },

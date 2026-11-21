@@ -1,7 +1,7 @@
 //! Right-to-left paragraphs (ODF 1.3 §20.404 `style:writing-mode` on paragraph properties: `rl-tb`
 //! and `rl`), read as WordCraft's bidirectional paragraphs and written back.
 
-use crate::text::tests::{NS_T, package};
+use crate::text::tests::{NS_T, entry, package};
 use crate::text::{export, import};
 use craft_wordmodel::Document;
 
@@ -74,6 +74,32 @@ fn right_to_left_heading_style_survives_import_and_reexport() {
     assert_eq!(resolved_directions(&doc), [true, true, true, false]);
     doc.kept.clear();
     assert_eq!(resolved_directions(&import(&export(&doc).unwrap()).unwrap()), [true, true, true, false]);
+}
+
+#[test]
+fn exported_heading_styles_keep_explicit_and_inherited_directions() {
+    use craft_wordmodel::{Path, StoryRef};
+    use std::sync::Arc;
+
+    for default_rtl in [false, true] {
+        let mut doc = Document::from_text("Explicit heading\nInherited heading\nBody");
+        let styles = Arc::make_mut(&mut doc.styles);
+        styles.default_para.bidi = Some(default_rtl);
+        styles.get_mut("Heading1").unwrap().para.bidi = Some(!default_rtl);
+        for (i, style) in ["Heading1", "Heading2"].into_iter().enumerate() {
+            doc.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.style = Some(style.into());
+        }
+        let expected = [!default_rtl, default_rtl, default_rtl];
+        assert_eq!(resolved_directions(&doc), expected);
+
+        let bytes = export(&doc).unwrap();
+        assert_eq!(resolved_directions(&import(&bytes).unwrap()), expected);
+        let styles_xml = entry(&bytes, "styles.xml");
+        let heading = |name: &str| styles_xml.split_once(name).unwrap().1.split_once("</style:style>").unwrap().0;
+        let mode = if default_rtl { "lr-tb" } else { "rl-tb" };
+        assert!(heading("style:name=\"Heading_20_1\"").contains(&format!("style:writing-mode=\"{mode}\"")));
+        assert!(!heading("style:name=\"Heading_20_2\"").contains("style:writing-mode"));
+    }
 }
 
 #[test]
