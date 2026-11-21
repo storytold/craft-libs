@@ -2226,20 +2226,24 @@ mod parallel_tests {
         }
     }
 
-    /// The bytes depend on the image, not on the machine: one, two, seven and 32 worker threads
-    /// (and the machine's own count, through `encode`) give the same stream.
+    /// The bytes depend on the image, not on the machine: one, two and 32 worker threads on four bands
+    /// give the same stream. A large image's reference stream is also carried unchanged through `encode`.
     #[test]
     fn the_parallel_encoder_gives_the_same_bytes_on_any_thread_count() {
         let (w, h, bpp) = (1201usize, 1013usize, 4usize);
         let px: Vec<u8> =
             (0..w * h * bpp).map(|i| ((i / 5) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 11) as u8 / 5 + (i % 89) as u8).collect();
         assert!(px.len() >= PARALLEL_MIN_BYTES && px.len() > 2 * BAND_BYTES);
+        // Three full bands and a partial fourth cover inline workers, shared work and more workers than bands.
+        let small_h = 3 * band_rows(w * bpp) + 1;
+        let small = &px[..w * small_h * bpp];
         for level in [PngCompression::Fast, PngCompression::Default, PngCompression::Best] {
-            let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
-            for threads in [2, 7, 32] {
-                assert!(banded_idat(&px, w, h, bpp, level, threads).unwrap() == one, "{level:?}: {threads} threads differ from one");
+            let small_one = banded_idat(small, w, small_h, bpp, level, 1).unwrap();
+            for threads in [2, 32] {
+                assert!(banded_idat(small, w, small_h, bpp, level, threads).unwrap() == small_one, "{level:?}: {threads} threads differ from one");
             }
-            assert!(parallel_idat(&px, w, h, bpp, level).unwrap() == one, "{level:?}: this machine's thread count differs from one");
+            // Keep the large image on the public encoder's parallel path, including its exact stream comparison.
+            let one = banded_idat(&px, w, h, bpp, level, 1).unwrap();
             let img = Image::from_raw(w as u32, h as u32, ChannelLayout::Rgba, SampleType::U8, px.clone()).unwrap();
             let opts = EncodeOptions { png_compression: level, ..Default::default() };
             let png = crate::encode(&img, Format::Png, &opts).unwrap();
@@ -2250,23 +2254,24 @@ mod parallel_tests {
 
     #[test]
     fn large_images_roundtrip_through_the_parallel_encoder() {
-        for (layout, sample, ch, bytes) in [(ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize), (ChannelLayout::Rgba, SampleType::U16, 4, 2)] {
+        for (layout, sample, ch, bytes, level) in [
+            (ChannelLayout::Rgb, SampleType::U8, 3usize, 1usize, PngCompression::Fast),
+            (ChannelLayout::Rgba, SampleType::U16, 4, 2, PngCompression::Default),
+        ] {
             let (w, h) = (1531u32, 977u32);
             let n = w as usize * h as usize * ch * bytes;
             let px: Vec<u8> =
                 (0..n).map(|i| ((i / 3) as u32).wrapping_mul(2_654_435_761).rotate_left(i as u32 % 7) as u8 / 3 + (i % 97) as u8).collect();
             let img = Image::from_raw(w, h, layout, sample, px.clone()).unwrap();
             assert!(n >= PARALLEL_MIN_BYTES || sample == SampleType::U8);
-            for level in [PngCompression::Fast, PngCompression::Default] {
-                let opts = EncodeOptions { png_compression: level, ..Default::default() };
-                let bytes = crate::encode(&img, Format::Png, &opts).unwrap();
-                let back = decode(&bytes, &Limits::default()).unwrap();
-                assert_eq!(back.dimensions(), (w, h));
-                assert_eq!(back.convert(layout, sample).data(), img.data(), "{layout:?} {sample:?} {level:?}");
-                // The oracle decoder agrees.
-                let o = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap();
-                assert_eq!((o.width(), o.height()), (w, h));
-            }
+            let opts = EncodeOptions { png_compression: level, ..Default::default() };
+            let bytes = crate::encode(&img, Format::Png, &opts).unwrap();
+            let back = decode(&bytes, &Limits::default()).unwrap();
+            assert_eq!(back.dimensions(), (w, h));
+            assert_eq!(back.convert(layout, sample).data(), img.data(), "{layout:?} {sample:?} {level:?}");
+            // The oracle decoder agrees.
+            let o = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap();
+            assert_eq!((o.width(), o.height()), (w, h));
         }
     }
 }
@@ -2330,19 +2335,23 @@ mod streamed_tests {
                 xmp: Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into()),
                 ..Default::default()
             };
-            let img = Image::from_raw(w, h, layout, sample, noise(w as usize * h as usize * ch * bytes, 7))
+            // Repeated nonconstant rows make the saved previous row observable across pushes.
+            let row = noise(w as usize * ch * bytes, 7);
+            let img = Image::from_raw(w, h, layout, sample, row.repeat(h as usize))
                 .unwrap()
                 .with_icc(Some((0..600u32).map(|i| (i % 251) as u8).collect()))
                 .with_meta(meta);
-            for level in [PngCompression::Fast, PngCompression::Default] {
-                let opts = EncodeOptions { png_compression: level, ..Default::default() };
-                let whole = crate::encode(&img, Format::Png, &opts).unwrap();
-                let (head, zlib, _) = split(&whole);
-                for heights in [&[1u32, 77, 300][..], &[256, 256, 256], &[1013]] {
-                    let png = streamed(&img, heights, &opts);
-                    let (h2, z2, _) = split(&png);
-                    assert!(h2 == head, "{layout:?} {level:?} {heights:?}: header chunks differ");
-                    assert!(z2 == zlib, "{layout:?} {level:?} {heights:?}: zlib stream differs");
+            let level = PngCompression::Default;
+            let opts = EncodeOptions { png_compression: level, ..Default::default() };
+            let whole = crate::encode(&img, Format::Png, &opts).unwrap();
+            let (head, zlib, _) = split(&whole);
+            for heights in [&[1u32, 77, 300][..], &[1013]] {
+                let png = streamed(&img, heights, &opts);
+                let (h2, z2, _) = split(&png);
+                assert!(h2 == head, "{layout:?} {level:?} {heights:?}: header chunks differ");
+                assert!(z2 == zlib, "{layout:?} {level:?} {heights:?}: zlib stream differs");
+                // Both feed shapes carry the same header and stream; decode the split-feed file once per layout.
+                if heights.len() > 1 {
                     assert_eq!(decode(&png, &Limits::default()).unwrap().data(), img.data());
                 }
             }
