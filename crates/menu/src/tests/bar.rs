@@ -87,6 +87,8 @@ struct Bar {
     after: Option<f32>,
     /// The viewport commands the bar sent.
     sent: Vec<egui::ViewportCommand>,
+    /// The shapes the last frame painted.
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Bar {
@@ -113,6 +115,7 @@ impl Bar {
             fit: None,
             after: None,
             sent: Vec::new(),
+            shapes: Vec::new(),
         };
         b.run(3);
         b
@@ -146,6 +149,7 @@ impl Bar {
             }
         });
         full.textures_delta.clear();
+        self.shapes = std::mem::take(&mut full.shapes);
         self.after = after;
         if let Some(root) = full.viewport_output.remove(&egui::ViewportId::ROOT) {
             self.sent.extend(root.commands);
@@ -189,6 +193,17 @@ impl Bar {
         let n = self.node(label).unwrap_or_else(|| panic!("no {label:?}"));
         let b = n.bounds().unwrap_or_else(|| panic!("{label:?} has no bounds"));
         Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32))
+    }
+
+    /// The fill painted behind a bar title: the largest filled rectangle inside the title's
+    /// bounds, or transparent when none is painted.
+    fn title_fill(&self, label: &str) -> egui::Color32 {
+        let bounds = self.rect(label).expand(1.0);
+        let fills = self.shapes.iter().filter_map(|clipped| match &clipped.shape {
+            egui::epaint::Shape::Rect(r) if r.fill != egui::Color32::TRANSPARENT && bounds.contains_rect(r.rect) => Some(r),
+            _ => None,
+        });
+        fills.max_by(|a, b| a.rect.area().total_cmp(&b.rect.area())).map_or(egui::Color32::TRANSPARENT, |r| r.fill)
     }
 
     fn move_to(&mut self, p: Pos2) {
@@ -714,4 +729,16 @@ fn heading_is_the_triangle_to_the_submenus_near_edge() {
     assert!(heading(pos2(150.0, 110.0), pos2(130.0, 160.0), left));
     assert!(!heading(pos2(150.0, 110.0), pos2(170.0, 160.0), left));
     assert!(!heading(from, from, Rect::NOTHING));
+}
+
+/// #723: the title of an open menu stays lit while the pointer is inside the menu, not only while
+/// it is on the title.
+#[test]
+fn the_title_of_an_open_menu_stays_lit_while_the_pointer_is_in_the_menu() {
+    let mut bar = wide();
+    let open = bar.ctx.global_style().visuals.widgets.open.weak_bg_fill;
+    bar.click("File");
+    bar.hover("New");
+    assert_eq!(bar.title_fill("File"), open, "File is lit while its menu is open");
+    assert_eq!(bar.title_fill("Edit"), egui::Color32::TRANSPARENT, "another title stays unlit");
 }
