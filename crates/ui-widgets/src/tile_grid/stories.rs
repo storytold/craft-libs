@@ -107,6 +107,12 @@ fn tile_hue(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Tile::new("Quarterly report.pdf").icon(IconId::new("file")).hue(DataColor::new(Color32::from_rgb(196, 64, 52))).show(ui).into()
 }
 
+/// A compact action card: icon and name, a description, and the action that activates the whole card.
+#[story(Tile<'static>, covers = [], drive = Drive::Activate)]
+fn tile_summary_card(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Arrange pages").icon(IconId::new("layout_grid")).detail("Move · Rotate · Delete").summary_action("Use now").card().show(ui).into()
+}
+
 fn click_check(fixture: &mut Fixture) {
     if let Some(check) = fixture.by_label("Select IMG_0003.jpg") {
         fixture.click(&check);

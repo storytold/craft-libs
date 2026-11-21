@@ -344,6 +344,10 @@ pub struct Tile<'a> {
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
+    /// Compact action card: the title sits beside the icon, above the detail and action text. An empty action
+    /// shows a centered icon and title for a simple destination card. Clicking anywhere activates the tile.
+    #[prop(into)]
+    summary_action: Option<Label>,
     /// What a screen reader reads as the tile's name, in place of the name with its details; the marks' tips still
     /// join it.
     #[prop(into)]
@@ -424,6 +428,7 @@ impl<'a> Tile<'a> {
             detail_line: false,
             card: false,
             detail: None,
+            summary_action: None,
             accessible_name: None,
             rating: None,
             flag: None,
@@ -800,6 +805,10 @@ impl Component for Tile<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let sizes = &cx.style.sizes;
+        if self.summary_action.is_some() {
+            let width = cx.room.map_or(sizes.thumbs[1], |room| room.min(sizes.thumbs[1]));
+            return Vec2::new(width, sizes.face + sizes.name_line + 2.0 * sizes.detail_line + 3.0 * sizes.tight);
+        }
         let ratio = self.aspect.of(1.0);
         let caption = sizes.caption(self.caption, self.has_detail_line());
         let column = sizes.column(self.caption);
@@ -840,6 +849,9 @@ impl Component for Tile<'_> {
                 _ => cx.hovered() || cx.resolved.selected == Some(true) || self.has_bar_values(),
             };
         let mut placed = self.place(&sizes, cx.content_rect, rtl, bar_shown, &faces, &pill_widths);
+        if self.summary_action.is_some() {
+            placed.picture = cx.content_rect;
+        }
         let _ = cx.part(PICTURE, placed.picture).sense(Sense::HOVER);
         if let (Some(state), Some((at, _))) = (self.check, &placed.check) {
             let mut flags = Flags::empty();
@@ -930,6 +942,46 @@ impl Component for Tile<'_> {
         let Some(placed) = self.placed.take() else { return };
         let style = cx.style;
         let picture = placed.picture;
+        if let Some(action) = &self.summary_action {
+            let flow = Flow::new(picture, cx.flow.is_rtl());
+            let draw = ui.draw();
+            let icon_side = style.face.side.min(picture.width()).min(picture.height());
+            let ink = match self.hue {
+                Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(style.placeholder.egui()))),
+                None => cx.resolve(&style.face.color),
+            };
+            let centered = action.as_str().is_empty();
+            let icon = if centered {
+                Rect::from_center_size(egui::pos2(picture.center().x, picture.center().y - icon_side / 2.0), Vec2::splat(icon_side))
+            } else {
+                let cell = flow.span(0.0, icon_side);
+                Rect::from_min_size(cell.min, Vec2::splat(icon_side))
+            };
+            if let Some(face) = self.icon.take() {
+                draw.icon(icon, &face.color(ink));
+            }
+            let title = TextRun::new(cx.resolved.label).role(style.name.role).color(cx.resolve(&style.name.color)).elide();
+            let title_area = if centered {
+                Rect::from_min_max(egui::pos2(picture.left(), icon.bottom() + style.sizes.tight), picture.max)
+            } else {
+                flow.take_start(icon_side + style.sizes.tight).1.rect()
+            };
+            let title_layout = draw.layout(&title, title_area.width());
+            let title_x = if centered { title_area.center().x - title_layout.size().x / 2.0 } else { self.text_x(title_area, title_layout.size().x, cx) };
+            draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
+            if !centered {
+                if let Some(detail) = &self.detail {
+                    let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();
+                    let layout = draw.layout(&run, picture.width());
+                    draw.galley(egui::pos2(self.text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
+                }
+                let run = TextRun::new(action.as_str()).role(style.detail.role).color(style.range).elide();
+                let layout = draw.layout(&run, picture.width());
+                draw.galley(egui::pos2(self.text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
+            }
+            self.caption_rect = Some(title_area);
+            return;
+        }
         let flat = CornerRadius::ZERO;
         {
             let draw = ui.draw();

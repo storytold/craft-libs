@@ -46,6 +46,21 @@ fn overlap(a: &Rect, b: &Rect) -> bool {
 }
 
 #[trial]
+fn summary_card_paints_title_description_and_action() {
+    let mut frames = Frames::new();
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            Tile::new("Arrange").icon(craft_behavior::IconId::new("grid")).detail("Move pages").summary_action("Use now").card().show(ui);
+        });
+    }
+    let texts: Vec<_> = shapes.iter().filter_map(|shape| match shape { Shape::Text(text) => Some(text.galley.job.text.as_str()), _ => None }).collect();
+    for text in ["Arrange", "Move pages", "Use now"] {
+        assert!(texts.contains(&text), "missing {text}: {texts:?}");
+    }
+}
+
+#[trial]
 fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlaps() {
     let (_, glyphs, dots) = badges(400.0);
     assert_eq!((glyphs.len(), dots.len()), (6, 1), "at the default card width the five stars, the flag and the dot show");
