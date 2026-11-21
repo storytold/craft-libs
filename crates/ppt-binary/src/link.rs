@@ -41,9 +41,10 @@ const LT_OTHER_FILE: u8 = 0x0A;
 /// `MacroNameAtom`'s CString instance (§2.6.11).
 const MACRO_NAME: u16 = 2;
 
-/// The most link-target text a document's links copy out, in bytes. Many actions can name one
-/// target, so without a total a small file could ask for one long target over and over; a link
-/// past this total is left out.
+/// The most text a document's actions copy out, in bytes: link targets, show names and program
+/// paths together. Many actions can name one target, and one range's action is copied into each
+/// of its runs, so without a total a small file could ask for one long text over and over; an
+/// action past this total is left out.
 pub const MAX_LINK_TARGET_BYTES: usize = 16 << 20;
 
 /// An `InteractiveInfoAtom` (§2.6.10) and its container's `MacroNameAtom`.
@@ -84,16 +85,18 @@ pub fn read(container: &Rec) -> Option<Info> {
     })
 }
 
-/// An action, or a link to a target not copied yet.
+/// An action, or one whose text (a link target, a show name or a program path) is not copied yet.
 enum Planned<'t> {
     Action(Action),
     Url(&'t str),
+    CustomShow(&'t str),
+    Program(&'t str),
 }
 
-/// What `info` does, without copying a link target. `None` for no action, one the model can't
-/// hold, or a link whose target is missing.
-fn plan<'t>(info: &Info, targets: &'t HashMap<u32, String>) -> Option<Planned<'t>> {
-    let named = || Some(info.name.clone()).filter(|n| !n.is_empty());
+/// What `info` does, without copying any text. `None` for no action, one the model can't hold,
+/// or a link whose target is missing.
+fn plan<'t>(info: &'t Info, targets: &'t HashMap<u32, String>) -> Option<Planned<'t>> {
+    let named = Some(info.name.as_str()).filter(|n| !n.is_empty());
     let action = match info.action {
         // InteractiveInfoJumpEnum (§2.13.14).
         JUMP => match info.jump {
@@ -115,8 +118,8 @@ fn plan<'t>(info: &Info, targets: &'t HashMap<u32, String>) -> Option<Planned<'t
             }
             _ => return None,
         },
-        CUSTOM_SHOW => Action::CustomShow { name: named()?, returns: info.show_returns },
-        RUN_PROGRAM => Action::Program { path: named()? },
+        CUSTOM_SHOW => return Some(Planned::CustomShow(named?)),
+        RUN_PROGRAM => return Some(Planned::Program(named?)),
         MEDIA => Action::PlayMedia,
         _ => return None,
     };
@@ -128,16 +131,20 @@ pub fn resolves(info: &Info, targets: &HashMap<u32, String>) -> bool {
     plan(info, targets).is_some()
 }
 
-/// The action `info` performs, with `targets` the document's hyperlink targets by id. A link's
-/// target is copied out of `budget` (bytes left of [`MAX_LINK_TARGET_BYTES`]). `None` for no
-/// action, one the model can't hold, a link whose target is missing, or one past the budget.
+/// The action `info` performs, with `targets` the document's hyperlink targets by id. The text
+/// an action copies (a link's target, a show name or a program path) is charged to `budget`
+/// (bytes left of [`MAX_LINK_TARGET_BYTES`]). `None` for no action, one the model can't hold, a
+/// link whose target is missing, or one past the budget.
 pub fn hyperlink(info: &Info, targets: &HashMap<u32, String>, budget: &Cell<usize>) -> Option<Hyperlink> {
+    let copy = |text: &str| {
+        budget.set(budget.get().checked_sub(text.len())?);
+        Some(text.to_owned())
+    };
     let action = match plan(info, targets)? {
         Planned::Action(action) => action,
-        Planned::Url(target) => {
-            budget.set(budget.get().checked_sub(target.len())?);
-            Action::Url { url: target.to_owned() }
-        }
+        Planned::Url(target) => Action::Url { url: copy(target)? },
+        Planned::CustomShow(name) => Action::CustomShow { name: copy(name)?, returns: info.show_returns },
+        Planned::Program(path) => Action::Program { path: copy(path)? },
     };
     Some(Hyperlink { action, tooltip: String::new(), highlight_click: false, sound: None, stop_sound: info.stop_sound, zoom_return: None })
 }
