@@ -37,7 +37,7 @@ use crate::runtime::words::common::CommonWords;
 use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole};
 use crate::text::TextField;
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
-use craft_behavior::{Arrows, Axis, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Roving, Sense};
+use craft_behavior::{Arrows, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic;
 use craft_theme::Flags;
@@ -436,18 +436,15 @@ impl Component for MenuBar<'_> {
         MenuBarStyle { metrics: Metrics::new() }
     }
 
-    /// Every title's width when the room allows it; the bar fills the row, so what is left over is room for the
-    /// overflow.
+    /// Every title's width; at its least (`Proposal::Min`) the width of the "…" title alone. A row that has less room
+    /// than every title needs narrows the bar, and the titles that no longer fit go into "…".
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         if !Self::in_window(&cx.env) {
             return Vec2::ZERO;
         }
-        let (widths, height, _) = self.widths(cx);
-        Vec2::new(widths.iter().sum(), height)
-    }
-
-    fn fills(&self) -> Option<Axis> {
-        Some(Axis::X)
+        let (widths, height, more) = self.widths(cx);
+        let width = if cx.proposal == Proposal::Min { more } else { widths.iter().sum() };
+        Vec2::new(width, height)
     }
 
     fn sense(&self) -> Sense {

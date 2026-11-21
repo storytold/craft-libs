@@ -10,12 +10,11 @@ use craft_behavior::{CancelReason, EditEvent, Gesture, Mixed, Value};
 use egui::{Context, Id};
 use std::sync::Arc;
 
-/// What a component showed last pass, in one shown slot under its id: the shown copy of its value, the pass its value
-/// step last ran in, the `(hovered, focus_visible)` that `PartsCx::hovered` and `focus_visible` read, and its eased
+/// What a component showed last pass, in one shown slot under its id: the shown copy of its value, the
+/// `(hovered, focus_visible)` that `PartsCx::hovered` and `focus_visible` read, and its eased
 /// hover, press and on.
 pub(crate) struct Shown<V> {
     pub copy: Option<Arc<V>>,
-    pub drawn: u64,
     pub state: ShownState,
 }
 
@@ -38,13 +37,13 @@ impl ShownState {
 
 impl<V> Clone for Shown<V> {
     fn clone(&self) -> Self {
-        Shown { copy: self.copy.clone(), drawn: self.drawn, state: self.state.clone() }
+        Shown { copy: self.copy.clone(), state: self.state.clone() }
     }
 }
 
 impl<V> Default for Shown<V> {
     fn default() -> Self {
-        Shown { copy: None, drawn: 0, state: ShownState::default() }
+        Shown { copy: None, state: ShownState::default() }
     }
 }
 
@@ -99,10 +98,9 @@ fn resolve_value<V: Value>(comp: &mut dyn ValueSource<V>, stage: &mut MemoryStag
     let slot = gesture_key(id);
     let (serial, all_reason) = crate::runtime::edit::latest(stage.ctx());
     let mut cancelled = None;
-    // A component not drawn for a pass loses its press at the end hook; its running gesture ends here, the first pass it is
-    // drawn again.
-    let pass_nr = crate::runtime::pointer::pass_of(stage.ctx());
-    let removed = std::mem::replace(&mut stage.shown::<Shown<V>>(id).drawn, pass_nr).saturating_add(1) < pass_nr;
+    // A component not shown for a pass, by a run or a replay of one, loses its press at the end hook; its running gesture
+    // ends here, the first pass it is shown again.
+    let removed = !crate::runtime::memory::shown_last_pass(stage.ctx(), id);
     if stage.shown::<Gesture<V>>(slot).is_running() {
         // `(given, value)` of a single-valued binding the app owns.
         let host = comp.binding().and_then(|bind| match bind.get() {

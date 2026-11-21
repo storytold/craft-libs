@@ -421,6 +421,30 @@ fn measure_names(measure: Option<craft_color_ui::ui::InfoMeasure>) -> [bool; 4] 
     ["A", "L", "L1", "L2"].map(|name| fixture.by_label(name).is_some())
 }
 
+/// The painted run whose text is `text`, without a colon.
+fn run(fixture: &Fixture, text: &str) -> egui::Rect {
+    fixture.texts().iter().find(|run| run.text.trim_end_matches(':') == text).unwrap_or_else(|| panic!("no run \"{text}\"")).rect
+}
+
+#[trial]
+fn the_info_panel_shows_rgb_and_cmyk_as_two_aligned_columns() {
+    let mut fixture = Fixture::new(|ui| {
+        let color = craft_color_ui::ui::InfoColor::from_parts([10, 200, 30], [1, 22, 33, 44]);
+        let readings = craft_color_ui::ui::InfoReadings::new().color(Some(color)).document(Some([640, 480]));
+        let _ = craft_color_ui::ui::InfoPanel::new("Info", &readings).show(ui);
+    });
+    fixture.settle();
+    let [r, g, b] = ["10", "200", "30"].map(|value| run(&fixture, value));
+    let [c, m, y, k] = ["1%", "22%", "33%", "44%"].map(|value| run(&fixture, value));
+    assert!(c.left() > r.right().max(g.right()).max(b.right()), "CMYK starts right of RGB: {r:?} {c:?}");
+    assert!(r.left() == g.left() && g.left() == b.left(), "the RGB values share a column");
+    assert!(c.left() == m.left() && m.left() == y.left() && y.left() == k.left(), "the CMYK values share a column");
+    let [rn, gn, bn] = ["R", "G", "B"].map(|name| run(&fixture, name));
+    assert!(rn.right() == gn.right() && gn.right() == bn.right(), "the RGB labels end at one x");
+    assert!(rn.right() < r.left(), "the labels sit left of their values");
+    assert!(fixture.texts().iter().any(|run| run.text == ":"), "a label carries its colon");
+}
+
 #[trial]
 fn the_info_panel_shows_the_rulers_measure_while_it_has_one() {
     use craft_color_ui::ui::InfoMeasure;

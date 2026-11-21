@@ -102,8 +102,8 @@ pub struct RowSpec<'a> {
     pub key: &'a str,
     /// Translated; also the row's accessible name.
     pub label: &'a str,
-    /// Extra search text: the key, the English label, synonyms. A [`RowKind::Custom`] row, which the search can't look
-    /// into, lists the terms of its control here.
+    /// Extra search text: the key, the English label, synonyms. A [`RowKind::Custom`] or [`RowKind::CustomRows`] row,
+    /// which the search can't look into, lists the terms of what the host draws here.
     pub keywords: &'a str,
     /// Help under the control: "Applies at next launch." A line break starts a new paragraph. The search matches it.
     pub help: Option<&'a str>,
@@ -204,8 +204,12 @@ pub enum RowKind<'a> {
     },
     /// A text field.
     Text(&'a str),
-    /// The host draws the control ([`PreferencesModel::custom_row`]).
+    /// The host draws the control ([`PreferencesModel::custom_row`]); the window labels it beside the control.
     Custom,
+    /// The host draws whole rows, labels included ([`PreferencesModel::custom_row`]): the window adds no label, and
+    /// shows the row's help under them and its enabled state on them. The row's label stays its search text and its
+    /// group's name.
+    CustomRows,
 }
 
 impl<'a> RowKind<'a> {
@@ -298,7 +302,8 @@ pub trait PreferencesModel {
     fn set_color(&mut self, key: &str, color: Srgba) {
         self.set(key, PrefValue::Color(color.into()));
     }
-    /// Draws a [`RowKind::Custom`] row's control.
+    /// Draws a [`RowKind::Custom`] row's control, which the window labels from the row's label (an empty label shows
+    /// an empty one), or a [`RowKind::CustomRows`] row's whole rows, labels included.
     fn custom_row(&mut self, ui: &mut Ui, key: &str);
     /// Draws a [`PageSpec::custom`] page.
     fn custom_page(&mut self, ui: &mut Ui, page: &str);

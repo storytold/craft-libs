@@ -951,6 +951,20 @@ impl MemoProps for craft_theme::Srgba {
     }
 }
 
+impl MemoProps for craft_theme::Rgba {
+    fn key(&self, key: &mut MemoKey) {
+        let craft_theme::Rgba(channels) = *self;
+        channels.key(key);
+    }
+}
+
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::TypeRole {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 /// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_theme::variant::Tone {
     fn key(&self, key: &mut MemoKey) {
@@ -1036,6 +1050,13 @@ impl MemoProps for craft_host::target::Os {
 
 /// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_host::target::WindowKind {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (the layer's order and id).
+impl MemoProps for crate::runtime::egui::areas::LayerKey {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }

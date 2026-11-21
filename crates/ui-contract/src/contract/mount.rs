@@ -342,6 +342,8 @@ impl Host for ViewportHost {
             return;
         }
         let ctx = parent.ctx().clone();
+        // The window's content runs in its own viewport's pass, which no record of this one holds.
+        crate::runtime::replay::block(&ctx);
         let focus = self.overlay.focus;
         let mut window_rules = self.overlay.clone();
         window_rules.dismiss.outside = Outside::Keep;

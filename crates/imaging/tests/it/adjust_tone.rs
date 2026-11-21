@@ -1,10 +1,15 @@
 //! The Levels editor and panel, the Curves panel's point helper and the tone pickers, driven through the public
 //! widgets as a host would show them.
 
-use craft_imaging::ui::adjust::{CurvesPanel, Levels, ToneChannels, ToneCurves, ToneSpace};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use craft_imaging::ui::adjust::{CurvesPanel, Levels, LevelsEditor, ToneChannels, ToneCurves, ToneSpace};
 use craft_imaging::ui::curve::Curve;
 use craft_theme::Srgba;
-use craft_ui::testing::trial;
+use craft_ui::contract::{Bind, Show as _};
+use craft_ui::testing::{Fixture, trial};
+use egui::Vec2;
 
 fn grey(v: f32) -> Srgba {
     Srgba { r: v, g: v, b: v, a: 1.0 }
@@ -72,4 +77,29 @@ fn a_curves_point_from_a_sample_goes_on_the_shown_channel_or_on_each_colour() {
     assert_eq!(shown, Some(1), "the point is selected by its index on the curve, not by the channel number");
     assert_eq!(xs(&curves, 2), [0.0, 153.0, 255.0]);
     assert_eq!((xs(&curves, 1).len(), xs(&curves, 3).len()), (2, 2), "the other colours stay as they were");
+}
+
+/// Every value field of the editor holds its value whole: the gamma at both ends of its range and the levels at both
+/// ends of theirs lie inside the field, not cut by its edge.
+#[trial]
+fn the_levels_fields_hold_their_values_whole() {
+    for (levels, shown) in
+        [(Levels::new(0.0, 1.0, 255.0, 0.0, 255.0), ["0", "1.00", "255"]), (Levels::new(255.0, 9.99, 255.0, 255.0, 255.0), ["255", "9.99", "255"])]
+    {
+        let state = Rc::new(RefCell::new(levels));
+        let held = Rc::clone(&state);
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = LevelsEditor::new("Levels", Bind::bound(&mut *held.borrow_mut())).show(ui);
+        });
+        fixture.room(Vec2::new(800.0, 600.0));
+        fixture.settle();
+        for value in shown {
+            let painted: Vec<_> = fixture.texts().iter().filter(|text| text.text == value).collect();
+            assert!(!painted.is_empty(), "{value} is painted");
+            for text in painted {
+                assert!(!text.elided, "{value} is not elided");
+                assert!(text.clip.contains_rect(text.rect), "{value} {:?} lies inside its field's clip {:?}", text.rect, text.clip);
+            }
+        }
+    }
 }

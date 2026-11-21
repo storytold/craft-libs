@@ -11,7 +11,7 @@ pub(crate) mod panel;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows};
+pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows, swatch_source};
 pub use menu::{SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput};
 pub use panel::{SwatchesPanel, SwatchesPanelOutput};
 

@@ -2,7 +2,7 @@
 
 use super::kit::{Count, Dismissed, Row};
 use super::table::Table;
-use craft_behavior::{ColumnKey, ColumnWidth, ItemSource, keyed};
+use craft_behavior::{CanvasTransform, ColumnKey, ColumnWidth, ItemSource, keyed};
 use craft_ui::contract::{
     CollectionEvent, CollectionProps, CollectionResponse, ColumnEvent, ColumnKind, ColumnSpec, Props as _, ShowCollection as _, ToggleColumn,
 };
@@ -179,6 +179,58 @@ fn a_keyed_slice_reports_toggle_presses_and_sweeps_by_key() {
             assert_eq!(scene.toggles(), vec![(11, true), (12, true)], "the sweep reports the rows' keys");
         }
     }
+}
+
+#[trial]
+fn a_collection_sweep_follows_each_move_in_the_same_frame() {
+    let scene = Scene::default();
+    let mut frames = Frames::new();
+    let rows = [0, 1, 2];
+    let mut show = |ui: &mut Ui| {
+        let props = CollectionProps::new().columns(vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Fixed(COL)),
+            ColumnSpec::new(MUTE, "Mute", ColumnWidth::Fixed(COL)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),
+        ]);
+        show_table(ui, props, &keyed(&rows, |row| *row), &scene);
+    };
+    frames.idle(3, &mut show);
+    let cell = |row| Pos2::new(ORIGIN.x + COL * 1.5, scene.row(row).center().y);
+    let (first, last) = (cell(0), cell(2));
+    let outside_column = Vec2::new(-COL, 0.0);
+    frames.frame(vec![pointer::moved(first)], &mut show);
+    frames.frame(vec![pointer::press(first)], &mut show);
+    frames.frame(vec![pointer::moved(first + outside_column), pointer::moved(last + outside_column), pointer::moved(last)], &mut show);
+    frames.frame(vec![pointer::release(last)], &mut show);
+    assert_eq!(scene.toggles(), vec![(0, true), (2, true)]);
+}
+
+#[trial]
+fn a_sweep_uses_the_transformed_collection_body() {
+    let scene = Scene::default();
+    let mut frames = Frames::new();
+    let scale = 0.75;
+    let offset = Vec2::new(18.0, 7.0);
+    let rows = [0, 1, 2];
+    let mut show = |ui: &mut Ui| {
+        let props = CollectionProps::new()
+            .columns(vec![ColumnSpec::new(NAME, "Name", ColumnWidth::Fixed(COL)), ColumnSpec::toggle(MUTE, "Mute", ToggleColumn::sweepable())]);
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let source = keyed(&rows, |row| *row);
+            let out = Table::new(props).id_salt("zoomed").transformed(CanvasTransform::new(scale, offset)).show_items(ui, &source, &mut |key, cx| {
+                scene.note(*key, cx.rect);
+                Row::new()
+            });
+            scene.take(out);
+        });
+    };
+    frames.idle(3, &mut show);
+    let origin = scene.row(0).min;
+    let cell = |row| {
+        let local = Pos2::new(ORIGIN.x + COL + 10.0, scene.row(row).center().y);
+        origin + (local - origin) * scale + offset
+    };
+    pointer::drag(&mut frames, cell(0), cell(2) - cell(0), &mut show);
+    assert_eq!(scene.toggles(), vec![(0, true), (1, true), (2, true)]);
 }
 
 /// A toggle column's key flips that column on every selected row as one gesture, while Space keeps flipping the first
