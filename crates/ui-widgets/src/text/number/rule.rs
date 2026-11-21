@@ -19,8 +19,8 @@ impl<'a> NumberStepper<'a> {
         NumberStepper(Box::new(next))
     }
 
-    pub(super) fn next(&self, from: f64, direction: i32) -> f64 {
-        (self.0)(from, direction, 1.0) // P3(appearance-w3): ap.AP15
+    pub(super) fn next(&self, from: f64, direction: i32, scale: f64) -> f64 {
+        (self.0)(from, direction, scale)
     }
 }
 
