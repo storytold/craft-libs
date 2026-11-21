@@ -1,5 +1,7 @@
 //! Recognising SVG data by its first bytes, for open, place and paste routes.
 
+use quick_xml::{Error, Reader, errors::SyntaxError, events::Event, name::QName};
+
 /// How much of the data [`is_svg`] reads.
 const HEAD: usize = 4096;
 
@@ -9,23 +11,52 @@ pub fn is_svgz(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x1f, 0x8b])
 }
 
-/// Does `bytes` look like an SVG document? Its first element is `<svg`, after nothing but a byte
-/// order mark, white space, an XML declaration or other processing instructions, a document type
-/// and comments. Only the first 4096 bytes are read. Plain UTF-8 text only: SVGZ is recognised
+/// Does `bytes` look like an SVG document? The first element must have the local name `svg`.
+/// It may follow a byte order mark, whitespace, processing instructions, a doctype or comments.
+/// Only the first 4096 bytes are read. Plain UTF-8 text only: SVGZ is recognised
 /// by [`is_svgz`], and UTF-16 after [`crate::svgz::decode`].
 pub fn is_svg(bytes: &[u8]) -> bool {
     let head = bytes.get(..bytes.len().min(HEAD)).unwrap_or(bytes);
     let text = String::from_utf8_lossy(head);
-    let t = text.trim_start_matches('\u{feff}').trim_start();
-    if t.starts_with("<svg") {
-        return true;
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    if !text.starts_with('<') {
+        return false;
     }
-    (t.starts_with("<?") || t.starts_with("<!DOCTYPE") || t.starts_with("<!--")) && t.contains("<svg")
+    let mut reader = Reader::from_str(text);
+    reader.config_mut().trim_text(true);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(tag) | Event::Empty(tag)) => return tag.local_name().as_ref() == b"svg",
+            Ok(Event::Decl(_) | Event::PI(_) | Event::Comment(_) | Event::DocType(_)) => {}
+            Err(Error::Syntax(
+                SyntaxError::UnclosedTag | SyntaxError::UnclosedSingleQuotedAttributeValue | SyntaxError::UnclosedDoubleQuotedAttributeValue,
+            )) => {
+                // The prefix can end before the opening tag's closing bracket.
+                let name = text
+                    .get(reader.error_position() as usize..)
+                    .and_then(|tag| tag.strip_prefix('<'))
+                    .and_then(|tag| tag.split([' ', '\t', '\r', '\n', '/', '>']).next());
+                return name.is_some_and(|name| QName(name.as_bytes()).local_name().as_ref() == b"svg");
+            }
+            _ => return false,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_first_element_can_identify_an_svg() {
+        assert!(!is_svg(b"<!-- mentions <svg/> -->"));
+        assert!(!is_svg(b"<?xml version='1.0'?><html><svg/></html>"));
+        assert!(!is_svg(b"<!DOCTYPE html><html><svg/></html>"));
+        assert!(!is_svg(b"<svg-icon/>"));
+        assert!(is_svg(b"<!DOCTYPE svg [<!ENTITY color 'red'>]><svg/>"));
+        assert!(is_svg(b"<svg:svg xmlns:svg='http://www.w3.org/2000/svg'/>"));
+        assert!(is_svg(b"<svg"));
+    }
 
     #[test]
     fn an_svg_is_recognised_after_its_prolog() {
@@ -52,6 +83,10 @@ mod tests {
         let mut late = format!("<?xml version=\"1.0\"?><!--{}-->", " ".repeat(HEAD)).into_bytes();
         late.extend_from_slice(b"<svg/>");
         assert!(!is_svg(&late));
+        for quote in ['\'', '"'] {
+            let clipped_tag = format!("<!-- prefix --><svg width={quote}{}{quote}/>", "1".repeat(HEAD));
+            assert!(is_svg(clipped_tag.as_bytes()));
+        }
         // A multi-byte character cut at the end of the head is not a reason to refuse.
         let mut cut = b"<svg>".to_vec();
         cut.extend("é".repeat(HEAD).as_bytes());
