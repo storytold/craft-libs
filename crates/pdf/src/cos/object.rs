@@ -235,6 +235,22 @@ impl Dict {
         Some(self.entries.remove(i).1)
     }
 
+    /// Keeps the entries `keep` says to, in their order, in one pass. Removing many keys one at
+    /// a time with [`Dict::remove`] moves the entries after each, and, in a dictionary with a key
+    /// index, renumbers it, every time: as many steps as entries for each key removed.
+    pub fn retain(&mut self, mut keep: impl FnMut(&[u8], &Object) -> bool) {
+        let before = self.entries.len();
+        // Out while `keep` runs: should it panic, no index is left pointing at entries that moved,
+        // and lookups search the entries until the next one is built.
+        let index = self.index.take();
+        self.entries.retain(|(k, v)| keep(k, v));
+        self.index = if self.entries.len() == before {
+            index
+        } else {
+            (self.entries.len() >= INDEX_FROM).then(|| Box::new(self.entries.iter().enumerate().map(|(i, (k, _))| (k.clone(), i)).collect()))
+        };
+    }
+
     pub fn contains(&self, key: &[u8]) -> bool {
         self.get(key).is_some()
     }
@@ -636,6 +652,44 @@ mod tests {
             assert!(s.decoded().is_err(), "{filter:?}");
             assert!(s.decoded_first_filter_strict(1 << 20).is_err(), "{filter:?}");
         }
+    }
+
+    /// `retain` keeps the entries it is told to, in their order, and lookups after it find them
+    /// where they now stand, in a dictionary with a key index and in one without.
+    #[test]
+    fn retain_keeps_the_order_and_the_lookups() {
+        for n in [10, 1_000] {
+            let mut d: Dict = (0..n).map(|i| (format!("K{i}").into_bytes(), Object::Int(i))).collect();
+            d.retain(|_, v| v.as_int().is_some_and(|i| i % 3 == 0));
+            assert_eq!(d.len(), (0..n).filter(|i| i % 3 == 0).count());
+            assert!(d.iter().zip((0..n).filter(|i| i % 3 == 0)).all(|((k, v), i)| *k == format!("K{i}").into_bytes() && *v == Object::Int(i)));
+            assert_eq!(d.get(b"K9"), Some(&Object::Int(9)));
+            assert!(d.get(b"K8").is_none());
+            d.set(b"K8".to_vec(), Object::Null);
+            assert_eq!(d.iter().last().map(|(k, _)| k.as_slice()), Some(&b"K8"[..]));
+            assert_eq!(d.get(b"K8"), Some(&Object::Null));
+            // Down to one entry, under the index's size: lookups still find it.
+            d.retain(|k, _| k == b"K3");
+            assert_eq!((d.len(), d.get(b"K3")), (1, Some(&Object::Int(3))));
+        }
+    }
+
+    /// A `keep` that panics part way leaves no stale key index: each key left finds its own value,
+    /// and removing the last one doesn't reach past the end.
+    #[test]
+    fn retain_that_panics_leaves_the_lookups_right() {
+        let mut d: Dict = (0..40).map(|i| (format!("K{i}").into_bytes(), Object::Int(i))).collect();
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            d.retain(|k, _| {
+                assert!(k != b"K20", "stops part way");
+                k != b"K1"
+            })
+        }));
+        assert!(stopped.is_err());
+        assert_eq!(d.len(), 39);
+        assert!(d.iter().all(|(k, v)| d.get(k) == Some(v)));
+        let last = d.iter().last().map(|(k, _)| k.clone()).unwrap();
+        assert_eq!(d.remove(&last), Some(Object::Int(39)));
     }
 
     #[test]
