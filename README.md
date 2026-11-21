@@ -96,6 +96,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   maps) textures, legacy and DX10 headers, and our own block encoder with optional mip chains. No dependencies (rayon behind `parallel`), so an
   app that only exports textures needn't take the whole `craft-image-codecs` codec set and its
   licences; `craft-image-codecs` reads and writes DDS through it.
+- [`craft-deskew`](crates/deskew/README.md): scan straightening: measures how far a raster's
+  content is tilted (ink projection, an edge vote for sparse pages, scanner frames ignored) and
+  rotates it level at its own bit depth, with a three-way result and a re-measure that drops a
+  correction that did not help. Raw samples in and out; encoding stays in each app.
 - [`craft-dialogs`](crates/dialogs/README.md): native file and message dialogs that never block
   the event loop: queued requests shown at the end of the frame and answered on a later frame,
   free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What

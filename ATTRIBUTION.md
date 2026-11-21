@@ -180,3 +180,7 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 `crates/xfdf` extracts PDFCraft field reading from #5937 refresh `cb564fd827f572818e9ddb0ea5989a432b1f39fd` (MIT OR Apache-2.0). App-side annotation and form policy remains local; source history is retained in the original repository.
 
 Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
+
+## Scan straightening
+
+`crates/deskew` adapts the skew estimator and rotation of pdfcer `crates/pdfcer-core/src/deskew.rs` at `a53d4695f1917a47d50dc592ef7974c1e7e59ec8` (MIT, by the same author as this change). The point cap, the removal of ink connected to the image edge, the ink-share gate, the edge vote, the three-way result and the re-measure follow ideas discussed in storytold/pdfcraft#3662, #1012 and #7242; no code from those PRs is used. The key phase, thresholds and tests are new.
