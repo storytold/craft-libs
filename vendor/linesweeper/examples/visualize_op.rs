@@ -55,7 +55,8 @@ pub fn main() -> anyhow::Result<()> {
     let pad = 1.0 + eps;
     let one_width = max_x - min_x + 2.0 * pad;
     let one_height = max_y - min_y + 2.0 * pad;
-    let stroke_width = (max_y - min_y).max(max_x - max_y) / 512.0;
+    // Craft patch (example stroke width).
+    let stroke_width = stroke_width(bbox);
 
     let mut document = svg::Document::new().set(
         "viewBox",
@@ -127,4 +128,25 @@ fn add_op(mut doc: Document, contours: &Contours, x_off: f64, stroke_width: f64)
         doc = doc.add(path);
     }
     doc
+}
+
+// Craft patch (example stroke width): the larger of the bounding box's width
+// and height, divided by 512.
+fn stroke_width(bbox: kurbo::Rect) -> f64 {
+    let (min_x, min_y, max_x, max_y) = (bbox.min_x(), bbox.min_y(), bbox.max_x(), bbox.max_y());
+    (max_y - min_y).max(max_x - min_x) / 512.0
+}
+
+// Craft patch (example stroke width).
+#[cfg(test)]
+mod tests {
+    use super::stroke_width;
+
+    #[test]
+    fn stroke_width_follows_the_larger_side() {
+        let wide = kurbo::Rect::new(0.0, 1000.0, 512.0, 1001.0);
+        assert_eq!(stroke_width(wide), 1.0);
+        let tall = kurbo::Rect::new(100.0, 0.0, 101.0, 512.0);
+        assert_eq!(stroke_width(tall), 1.0);
+    }
 }

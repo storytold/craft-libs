@@ -5,7 +5,9 @@ local patches listed below. `.cargo_vcs_info.json` names the commit it was packa
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs` and `docs/sweep.typ`.
+The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs`, `src/curve/mod.rs`,
+`src/curve/line.rs`, `docs/sweep.typ`, `examples/boolean_op.rs`, `examples/visualize_op.rs` and
+`examples/winding-numbers.rs`.
 
 Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
@@ -13,7 +15,7 @@ in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local patch.
 
-## Local patches
+## Local changes
 
 | File | Change |
 |---|---|
@@ -24,6 +26,9 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 | `docs/sweep.typ` | Two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. |
 | `docs/sweep.typ` | The lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. |
 | `src/sweep/sweep_line.rs`, `src/topology.rs` | Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change. Code comments label the change `Craft patch (clippy lints)`. |
+| `examples/boolean_op.rs`, `examples/visualize_op.rs`, `examples/winding-numbers.rs` | The SVG stroke width is the larger of the bounding box's width and height divided by 512. Code comments label the change `Craft patch (example stroke width)`. `stroke_width_follows_the_larger_side` in `examples/visualize_op.rs` tests it. |
+
+Every change here updates this table and `SOURCE.json` in the same commit.
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
@@ -50,14 +55,15 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
-tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter lists this directory,
-so a pull request that changes files here starts `pdf.yml`. No workflow runs clippy on this copy. Run
-the tests and clippy from this directory:
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests and the
+`visualize_op` example's test. The `craft-prepress` tests with the `flatten` feature run against this
+copy. `pdf.yml`'s path filter lists this directory, so a pull request that changes files here starts
+`pdf.yml`. No workflow runs clippy on this copy. Run the tests and clippy from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
 cargo test --locked --doc
+cargo test --locked --example visualize_op
 cargo clippy --locked --all-features --lib --test regression -- -D warnings
 cargo clippy --locked --all-features --lib --profile test -- -D warnings
 ```
