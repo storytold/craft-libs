@@ -9,7 +9,7 @@ use crate::contract::run::{Measuring, ShowAt};
 use crate::contract::{Collection, Internal, ItemCx, Props, Show as _};
 use crate::runtime::access::SetPosition;
 use crate::runtime::env::ArenaId;
-use crate::runtime::env::{Env, EnvView, ItemFacts};
+use crate::runtime::env::{Env, EnvView, ItemFacts, ScrollOwner};
 use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::style::{Flags, SurfaceKind};
@@ -330,10 +330,15 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// The env the rows lay out under, from the collection's env `env`: the collection's arena, the child size (else
     /// the collection's `size`), the child glyph role, and the surface the rows sit on (`own`, else the one the
     /// collection sits on). The rows lay out their own content: no line or first line of the body around reaches them.
-    /// The content step adds the app values its body gives (the row-hook contract on `ItemCx`).
+    /// A collection that scrolls its rows is their scroll owner: a reveal in a row comes to it. The content step adds
+    /// the app values its body gives (the row-hook contract on `ItemCx`).
     pub(super) fn rows_env(comp: &C, env: &Env, id: Id, size: craft_theme::ControlSize, own: Option<SurfaceKind>) -> Env {
         let (child_size, child_glyphs) = (comp.props(Internal::new()).child_size, comp.props(Internal::new()).child_glyphs);
+        let owns = super::hooks::scrolls_rows(comp.items(), env);
         env.derive(|scoped| {
+            if owns {
+                scoped.scroll_owner = Some(ScrollOwner { id, view: false });
+            }
             scoped.arena = Some(ArenaId::new(id));
             scoped.size = child_size.unwrap_or(size);
             if let Some(role) = child_glyphs {

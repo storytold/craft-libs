@@ -132,7 +132,9 @@ app translates. The dialog never opens a file dialog or touches the file system.
 
 ## Windows, Linux and web: the in-window bar
 
-`MenuBarUi` draws a laid-out bar in a top panel and returns the titles' rect (`MenuBarOutput`).
+`MenuBarUi` draws a laid-out bar and returns the titles' rect (`MenuBarOutput`). Show it inside a
+`Stack` (a top panel's body) or the title bar's row: there the titles that don't fit its room fold
+into "…".
 Each item is a command row: its enabled state, check mark and chord follow the command in the
 runtime's command state and keymap, and a choice is a `Fired` with `FireSource::Menu` in the
 frame's output. `.help_search(true)` starts the Help menu with a search field over every command
@@ -141,7 +143,9 @@ frame's output. `.help_search(true)` starts the Help menu with a search field ov
 ```rust
 let laid_out = craft_menu::layout(&menu_bar, Target::current(), &LayoutOptions::new("Sample")).bar;
 egui::Panel::top("menu-bar").show(ui, |ui| {
-    MenuBarUi::new(&laid_out).keyboard(!dialog_open).help_search(true).show(ui);
+    Stack::new().show(ui, |ui, _| {
+        MenuBarUi::new(&laid_out).keyboard(!dialog_open).help_search(true).show(ui);
+    });
 });
 // The commands chosen arrive in `FrameOutput.fired`.
 ```
@@ -156,7 +160,7 @@ egui::Panel::top("menu-bar").show(ui, |ui| {
   they are off unless set. `.mnemonics(&[("View", 'W'), ("file.open", 'P')])` names preferred
   letters by title as shown or by command id. A label without an ASCII letter or digit shows its
   English label's letter after it, "文件(F)", before a trailing ellipsis ("開く(O)…"), when
-  `.english(&hook)` returns that English label for the `Labeled::Command` or `Labeled::Title`.
+  the item, submenu or menu carries that English label (`Item::english`, `Node::english`, `Menu::english`).
 - **Items:** a command the runtime's gate forbids, or whose state is disabled, is greyed and never
   fires. A submenu whose items are all disabled is greyed. The shortcut column shows the command's
   chord, else the item's own shortcut, in the shell's names (⌘ glyphs on a Mac). `.target(..)`

@@ -469,9 +469,6 @@ const MINOR_SHARE: f32 = 0.45;
 /// How many times a thinned grid doubles its step before it gives up.
 const MAX_DOUBLINGS: u32 = 32;
 
-/// The radius of a dot, in screen points.
-const DOT_RADIUS: f32 = 0.6;
-
 /// What a grid does when its lines come closer than the minimum step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -693,7 +690,7 @@ pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_
             match ink.stroke {
                 GridStroke::Solid => shapes.extend(Rule::shapes(&RuleLook { color, width: look.width }, a, b, pixels_per_point)),
                 GridStroke::Dashed => shapes.extend(dashed(&[a, b], Dashes::new(look.dash, look.gap), look.width.points(pixels_per_point), color)),
-                GridStroke::Dots => shapes.extend(Shape::dotted_line(&[a, b], color, look.gap, DOT_RADIUS)),
+                GridStroke::Dots => shapes.extend(Rule::dotted(&RuleLook { color, width: look.width }, a, b, look.gap, pixels_per_point)),
             }
         }
     }

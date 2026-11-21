@@ -87,7 +87,7 @@ pub use screen_picker::{CaptureResult, CaptureSource, LOUPE_PIXELS, LOUPE_ZOOM, 
 pub use strip::{ColorStrip, ColorStripStyle};
 pub use swatches::{
     MAX_GROUPS, MAX_SWATCHES, SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput,
-    SwatchesPanel, SwatchesPanelOutput, SwatchesState, SwatchesWords, swatch_rows,
+    SwatchesPanel, SwatchesPanelOutput, SwatchesState, SwatchesWords, swatch_rows, swatch_source,
 };
 pub use warning::{ColorWarning, ColorWarningArrangement, ColorWarningChip, ColorWarningChipOutput, ColorWarningChipStyle};
 pub use wheel::{

@@ -277,8 +277,9 @@ pub struct FloatingGroup<'a> {
     placed: Option<PlacementChange>,
     /// The width a resize gave the collapsed column this pass.
     collapsed_width: Option<f32>,
-    /// The display scale of the OS window the group shows in, which sizes the rule under its title row; unset, the
-    /// running window's.
+    /// The display scale of the OS window the group shows in (`native::pixels_per_point`), when it differs from the
+    /// running window's: its chrome, the rule under its title row included, is sized at that scale.
+    #[prop(quantity = "display scale, pixels per point")]
     scale: Option<f32>,
     /// Starts the window-unit drag; set by `window_of`.
     start_drag: Option<StartDrag<'a>>,
@@ -360,14 +361,6 @@ impl<'a> FloatingGroup<'a> {
                 *dropped.borrow_mut() = taken;
             }
         }));
-        self
-    }
-
-    /// The display scale of the OS window the group shows in (`native::pixels_per_point`), when it differs from the
-    /// running window's: its chrome is sized at that scale.
-    #[must_use]
-    pub fn scale(mut self, pixels_per_point: f32) -> Self {
-        self.scale = Some(pixels_per_point);
         self
     }
 

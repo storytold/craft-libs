@@ -14,7 +14,7 @@ use std::fmt;
 use std::sync::Arc;
 
 /// The shape of a grid cell's thumbnail.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum CellShape {
     /// As wide as high.
@@ -46,7 +46,7 @@ impl CellShape {
 }
 
 /// How large the grid view's tiles are.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PresetTiles {
     /// Thumbnails at the browser's zoom, with captions when the rows have them, under control-high group headers: a

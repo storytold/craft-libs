@@ -6,11 +6,10 @@ use crate::contract::{Component, Cx, ValueOf};
 use crate::runtime::egui::repaint;
 use crate::runtime::focus::{self};
 use crate::runtime::pass_state;
-use crate::runtime::wheel;
 
 /// Step 15, settle: child edits adopted with `cx.adopt` join the pass's events and are applied, and the open state of the
-/// component's popups is written. A reveal request goes to the nearest scroll owner, from a component `in_flow` (one that
-/// takes room in its parent's flow); anything queued for the next pass requests a repaint.
+/// component's popups is written. A reveal request goes to the scroll owner around the component, from a component
+/// `in_flow` (one that takes room in its parent's flow); anything queued for the next pass requests a repaint.
 pub(crate) fn settle<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>, in_flow: bool) -> ValueEdit {
     let adopted = std::mem::take(&mut cx.core.paint.borrow_mut().adopted);
     for event in adopted.into_iter().filter_map(|adopted| adopted.take::<ValueOf<C>>()) {
@@ -28,12 +27,12 @@ pub(crate) fn settle<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>, in_flow: bo
         let rect = part.and_then(|part| cx.core.results.get(&(part.key, part.index))).map_or(cx.core.rect, |result| result.rect);
         cx.core.reveal.get_or_insert(rect);
     }
-    // The nearest scroll owner under the rect may be the component itself (a collection takes the wheel): a reveal it
-    // passes on goes to the owner around it, never back to itself. A component on its own layer or window is not inside
-    // the scroll regions of its opener's flow, nor of what lies under it on screen: its reveals end at it.
+    // The owner is the innermost scrolling body or collection the component is shown in, as its scope names it: a
+    // region beside it on screen holds none of it, and with no owner around it nothing scrolls. A component on its own
+    // layer or window starts a scope with no owner, so its reveals end at it.
     if let Some(rect) = cx.core.reveal.take()
         && in_flow
-        && let Some(owner) = cx.core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&cx.core.ctx, rect).filter(|&found| found != id))
+        && let Some(owner) = cx.core.env.scroll_owner()
     {
         pass_state::with::<Reveals, _>(&cx.core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(rect) }));
         repaint::request(&cx.core.ctx);

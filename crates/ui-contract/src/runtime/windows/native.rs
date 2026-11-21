@@ -9,7 +9,7 @@ use super::spec::{Standing, WindowLevel};
 use super::{HandOff, Record, SEARCH_EVERY, shared};
 use crate::runtime::egui::{pass, viewports};
 use crate::runtime::frame::{PerViewport, Stored};
-use craft_host::target::{Caps, DoubleClick, WindowState};
+use craft_host::target::{Caps, DoubleClick, Os, WindowState};
 use craft_window::native::NativeWindow;
 use craft_window::policy::Frame;
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
@@ -49,7 +49,7 @@ pub enum WindowAction {
     StartResize(ResizeEdge),
     /// Moves the window's outer top-left corner to a desktop position in points.
     SetOuterPosition(Pos2),
-    /// Sizes the window's inner area in points.
+    /// Sizes the window's inner area in points; its outer top-left corner stays where it is known to be.
     SetInnerSize(Vec2),
     /// Restores a minimized window.
     Restore,
@@ -138,7 +138,18 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
         }
         WindowAction::SetInnerSize(size) => {
             viewports::command(ctx, viewport, egui::ViewportCommand::InnerSize(size));
-            PerViewport::<Record>::with(ctx, viewport, |record| record.known = record.known.map(|known| Rect::from_min_size(known.min, size)));
+            let known = PerViewport::<Record>::with(ctx, viewport, |record| {
+                record.known = record.known.map(|known| Rect::from_min_size(known.min, size));
+                record.known
+            });
+            // AppKit keeps a window's bottom-left corner when its size changes (`setContentSize`), so a new height
+            // moves its top edge: the window goes back to the top-left corner its caller knows it at, which a position
+            // sent before the size has already set.
+            if base.os == Os::Mac
+                && let Some(known) = known
+            {
+                viewports::command(ctx, viewport, egui::ViewportCommand::OuterPosition(known.min));
+            }
         }
         WindowAction::Restore => viewports::command(ctx, viewport, egui::ViewportCommand::Minimized(false)),
         WindowAction::SetMinInnerSize(size) => viewports::command(ctx, viewport, egui::ViewportCommand::MinInnerSize(size)),

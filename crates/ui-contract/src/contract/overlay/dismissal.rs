@@ -96,8 +96,7 @@ pub(super) fn popup_dismissal(
 
 /// Whether a primary press landed outside the layer, its anchor and the layers opened from inside it.
 fn press_outside(ctx: &Context, layer: &Layer<'_>, rect: Rect, anchor: Rect) -> bool {
-    let Some(press) = pointer::frame_raw(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
-    else {
+    let Some(press) = pointer::primary_press(ctx) else {
         return false;
     };
     let inside_family = overlay::family(ctx, layer.id).iter().filter_map(|id| overlay::entry(ctx, *id)).any(|entry| entry.rect.contains(press));
@@ -125,6 +124,8 @@ fn escape(ctx: &Context, layer: &Layer<'_>, scope: Option<FocusPolicy>, inside: 
     if inside != Some(true) && !(owns_loose && focus_in_no_layer(ctx)) {
         return None;
     }
+    // The focus may be in no record of the layer's host: the Escape is read from the events of the frame.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Sent);
     let step = keys::scope_escape(ctx, policy.cancel, pointer::press_captured(ctx), false)?;
     matches!(step, craft_behavior::focus::EscapeStep::CloseScope).then_some(CloseReason::Escape)
 }
