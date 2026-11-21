@@ -51,6 +51,12 @@ pub mod rt {
     pub const DATETIME_MC: u16 = 0x0FF7;
     pub const GENERIC_DATE_MC: u16 = 0x0FF8;
     pub const PLACEHOLDER_ATOM: u16 = 0x0BC3;
+    pub const EX_OBJ_LIST: u16 = 0x0409;
+    pub const EX_HYPERLINK_ATOM: u16 = 0x0FD3;
+    pub const EX_HYPERLINK: u16 = 0x0FD7;
+    pub const TEXT_INTERACTIVE_INFO_ATOM: u16 = 0x0FDF;
+    pub const INTERACTIVE_INFO: u16 = 0x0FF2;
+    pub const INTERACTIVE_INFO_ATOM: u16 = 0x0FF3;
     pub const PERSIST_DIRECTORY: u16 = 0x1772;
     pub const CRYPT_SESSION: u16 = 0x2F14;
 
@@ -334,7 +340,7 @@ pub struct HeadersFooters {
 
 /// The UTF-16 units of a `CString` body, up to its first NUL: the record has no terminator, but a
 /// writer that adds one would otherwise put a NUL into the text, or make a tag name fail to match.
-fn cstring_units(b: &[u8]) -> impl Iterator<Item = u16> + '_ {
+pub(crate) fn cstring_units(b: &[u8]) -> impl Iterator<Item = u16> + '_ {
     b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&u| u != 0)
 }
 
@@ -385,6 +391,24 @@ pub fn outline_numbering(document: &Rec) -> HashMap<(u32, u32), Vec<Vec<crate::t
                 out.entry(key).or_default().push(crate::text::read_style9(r.data));
             }
         }
+    }
+    out
+}
+
+/// The hyperlinks of the document's `ExObjListContainer` ([MS-PPT] §2.10.1, §2.10.16): each
+/// `ExHyperlinkContainer`'s `exHyperlinkId` with its `TargetAtom` (CString instance 1: a URL or a
+/// file path). A later hyperlink with the same id is ignored.
+pub fn hyperlink_targets(document: &Rec) -> HashMap<u32, String> {
+    let mut out = HashMap::new();
+    let Some(list) = document.child(rt::EX_OBJ_LIST) else { return out };
+    for link in list.children_of(rt::EX_HYPERLINK) {
+        let Some(id) = link.child(rt::EX_HYPERLINK_ATOM).and_then(|a| a.u32(0)) else { continue };
+        let target = link
+            .children()
+            .find(|r| r.kind == rt::CSTRING && r.instance == 1)
+            .map(|r| String::from_utf16_lossy(&cstring_units(r.data).collect::<Vec<u16>>()))
+            .unwrap_or_default();
+        out.entry(id).or_insert(target);
     }
     out
 }
