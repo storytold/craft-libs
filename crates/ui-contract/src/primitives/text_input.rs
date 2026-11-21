@@ -97,9 +97,10 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
-    /// Set from the codec by `Cx::text`, never by hosts: a pasted text, trimmed, that this says is whole replaces all
-    /// the text instead of the selection.
-    pub whole_paste: Option<std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>>,
+    /// Set from the codec by `PartsCx::text`, never by hosts: a pasted text that this says is whole replaces all the
+    /// text instead of the selection. It gets the paste as copied; the codec trims it.
+    // PLAN: no `Send + Sync`: `Codec` and `PartsCx::text`'s codec are not `Send`.
+    pub whole_paste: Option<Arc<dyn Fn(&str) -> bool>>,
 }
 
 impl Default for TextOptions {

@@ -3,6 +3,7 @@
 
 use super::kit::PlainStyle;
 use craft_behavior::Sense;
+use craft_ui::buttons::Button;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Common, Component, Cx, GlyphLabel, LabelKind, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::Field;
@@ -120,4 +121,12 @@ fn a_control_that_paints_no_label_shows_its_own_label_as_tooltip() {
 
     assert_eq!(glyph_label(None), ["Leading"], "a glyph label shows its name");
     assert_eq!(glyph_label(Some("Leading (1/1000 em)")), ["Leading (1/1000 em)"], "a glyph label's tooltip replaces its name");
+}
+
+/// A label the layout cut shows its full text as the tooltip of a rest on it.
+#[trial]
+fn an_elided_label_shows_its_full_text_as_its_tooltip() {
+    let long = "Harbour at dusk, seen from the lighthouse on the northern breakwater";
+    let shown = texts_added_by_hover(move |ui| ui.allocate_ui(Vec2::new(72.0, 32.0), |ui| Button::new(long).show(ui).rect).inner);
+    assert_eq!(shown, [long], "the cut label's tooltip is its whole text, shown once");
 }

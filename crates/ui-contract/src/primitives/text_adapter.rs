@@ -277,8 +277,12 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
             }
             EditCommand::Paste => {
                 if let Some(pasted) = keys::pasted_text(ctx, input.id) {
-                    let pasted = if input.options.multiline() { pasted.to_string() } else { pasted.replace(['\n', '\r'], " ") };
-                    replace_selection(ctx, widget, text, selection(text), &pasted);
+                    if input.options.whole_paste.as_ref().is_some_and(|whole| whole(&*pasted)) {
+                        replace_selection(ctx, widget, text, (0, text.chars().count()), pasted.trim());
+                    } else {
+                        let pasted = if input.options.multiline() { pasted.to_string() } else { pasted.replace(['\n', '\r'], " ") };
+                        replace_selection(ctx, widget, text, selection(text), &pasted);
+                    }
                     changed = true;
                 }
             }

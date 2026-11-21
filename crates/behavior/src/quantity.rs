@@ -11,9 +11,10 @@ fn digit(c: char) -> Option<u32> {
     DIGIT_BLOCKS.iter().find_map(|&zero| (zero..zero + 10).contains(&(c as u32)).then(|| c as u32 - zero))
 }
 
-/// Whether `c` can be part of a unit spelling: a letter or a symbol that stands for a unit (`%`, `°`, `×`).
+/// Whether `c` can be part of a unit spelling: a letter or a symbol that stands for a unit (`%`, `°`). `×` is the
+/// product sign, never part of a unit.
 fn is_unit_char(c: char) -> bool {
-    c.is_alphabetic() || matches!(c, '%' | '\u{2030}' | '°' | '×' | '′' | '″')
+    c.is_alphabetic() || matches!(c, '%' | '\u{2030}' | '°' | '′' | '″')
 }
 
 /// Whether `spelling` can be registered with [`Reader::unit`]: letters and unit symbols only, so the reader can
@@ -33,16 +34,17 @@ struct Unit {
 
 /// Reads numbers, expressions and unit quantities written in one locale.
 ///
-/// Grammar: `expr = term (('+' | '-') term)*`, `term = factor (('*' | '/') factor)*`,
+/// Grammar: `expr = term (('+' | '-') term)*`, `term = factor (('*' | '/' | 'x' | 'X' | '×') factor)*`,
 /// `factor = ('-' | '+')? (number unit? | '(' expr ')')`. Text that starts with `+`, `*` or `/` is relative: it
-/// applies to the start value (`+5` adds 5, `*2` doubles). A leading `-` is a negative number.
+/// applies to the start value (`+5` adds 5, `*2` doubles). A leading `-` is a negative number. A unit is the longest
+/// registered spelling at the start of the letters after a number, so `2inx3` is `2in` times 3 and `2px` stays a
+/// quantity when `px` is registered. A group separator counts only before exactly three digits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reader {
     decimal: char,
     group: Option<char>,
     units: Vec<Unit>,
     /// The factor of a number with no unit ([`Reader::bare`]).
-    #[allow(dead_code)] // P3(widgets-w7): wg.W37
     bare: f64,
 }
 
@@ -58,11 +60,13 @@ impl Reader {
         Self::default()
     }
 
-    /// A number with no unit counts as `factor` of the reader's base unit.
+    /// A number with no unit counts as `factor` of the reader's base unit (a picas field reads bare numbers as
+    /// points: `1.0 / 12.0`). The factor applies to the first number of each term; a number after `*`, `/`, `x` or
+    /// `×` is a plain multiplier, so `12*2` is two factors of twelve points.
     #[must_use]
-    pub fn bare(self, factor: f64) -> Self {
-        let _ = factor;
-        todo!("wg.W37")
+    pub fn bare(mut self, factor: f64) -> Self {
+        self.bare = factor;
+        self
     }
 
     /// The decimal separator.
@@ -79,7 +83,7 @@ impl Reader {
         self
     }
 
-    /// A unit spelling (case-insensitive; letters or the symbols `%`, `°`, `×`) and its factor to the base unit.
+    /// A unit spelling (case-insensitive; letters or the symbols `%`, `°`) and its factor to the base unit.
     /// Spaces between the number and the spelling are skipped, so "12 %" reads like "12%".
     #[must_use]
     pub fn unit(mut self, spelling: &str, factor: f64) -> Self {
@@ -151,29 +155,31 @@ impl Parse<'_> {
     }
 
     fn term(&mut self) -> Result<f64, NotAValue> {
-        let first = self.factor()?;
+        let first = self.factor(true)?;
         self.product(first)
     }
 
     fn product(&mut self, mut left: f64) -> Result<f64, NotAValue> {
         // A bare relative `+5` has no product to run; the sum loop takes it.
-        while let Some(op @ ('*' | '/')) = self.peek() {
+        while let Some(op @ ('*' | '/' | 'x' | 'X' | '×')) = self.peek() {
             self.at += 1;
-            let right = self.factor()?;
-            left = if op == '*' { left * right } else { left / right };
+            // A multiplier is a plain number: the reader's bare factor does not scale it.
+            let right = self.factor(false)?;
+            left = if op == '/' { left / right } else { left * right };
         }
         Ok(left)
     }
 
-    fn factor(&mut self) -> Result<f64, NotAValue> {
+    /// A factor; `scaled` says a number with no unit counts as the reader's bare factor.
+    fn factor(&mut self, scaled: bool) -> Result<f64, NotAValue> {
         match self.peek() {
             Some('-') => {
                 self.at += 1;
-                self.factor().map(|value| -value)
+                self.factor(scaled).map(|value| -value)
             }
             Some('+') => {
                 self.at += 1;
-                self.factor()
+                self.factor(scaled)
             }
             Some('(') => {
                 self.at += 1;
@@ -181,22 +187,35 @@ impl Parse<'_> {
                 (self.peek() == Some(')')).then(|| self.at += 1).ok_or(NotAValue)?;
                 Ok(value)
             }
-            _ => self.quantity(),
+            _ => self.quantity(scaled),
         }
     }
 
-    fn quantity(&mut self) -> Result<f64, NotAValue> {
+    /// A number and the longest registered unit spelling at the start of the letters after it. Letters that start no
+    /// unit stay unread: a product sign (`2x3`) takes them, and anything else leaves the text unread, which refuses it.
+    fn quantity(&mut self, scaled: bool) -> Result<f64, NotAValue> {
         let number = self.number()?;
         self.tag = None;
-        let rest: String = self.chars[self.at..].iter().copied().take_while(|c| is_unit_char(*c)).collect();
-        if rest.is_empty() {
-            return Ok(number);
+        let reader = self.reader;
+        let run: Vec<char> = self.chars[self.at..].iter().copied().take_while(|c| is_unit_char(*c)).collect();
+        let unit = (1..=run.len()).rev().find_map(|len| {
+            let lowered = run[..len].iter().collect::<String>().to_lowercase();
+            reader.units.iter().find(|unit| unit.spelling == lowered).map(|unit| (len, unit))
+        });
+        match unit {
+            Some((len, unit)) => {
+                self.at += len;
+                self.tag = unit.tag;
+                Ok(number * unit.factor)
+            }
+            None if scaled => Ok(number * reader.bare),
+            None => Ok(number),
         }
-        let lowered = rest.to_lowercase();
-        let unit = self.reader.units.iter().find(|unit| unit.spelling == lowered).ok_or(NotAValue)?;
-        self.at += rest.chars().count();
-        self.tag = unit.tag;
-        Ok(number * unit.factor)
+    }
+
+    /// Whether the group separator at `at` is followed by exactly three digits.
+    fn three_digits_after(&self, at: usize) -> bool {
+        self.chars[at + 1..].iter().take_while(|c| digit(**c).is_some()).count() == 3
     }
 
     fn number(&mut self) -> Result<f64, NotAValue> {
@@ -208,7 +227,7 @@ impl Parse<'_> {
             } else if c == self.reader.decimal && !seen_decimal {
                 seen_decimal = true;
                 text.push('.');
-            } else if Some(c) == self.reader.group && !seen_decimal && !text.is_empty() {
+            } else if Some(c) == self.reader.group && !seen_decimal && !text.is_empty() && self.three_digits_after(self.at) {
             } else {
                 break;
             }
@@ -236,13 +255,41 @@ mod tests {
         assert_eq!(reader.read("+5", Some(10.0)), Ok(15.0));
         assert_eq!(reader.read("*2", Some(10.0)), Ok(20.0));
         assert_eq!(reader.read("٣٤", None), Ok(34.0), "Arabic-Indic digits");
-        let symbols = Reader::new().unit("%", 1.0).unit("°", 1.0).unit("×", 1.0);
+        let symbols = Reader::new().unit("%", 1.0).unit("°", 1.0);
         assert_eq!(symbols.read("12 %", None), Ok(12.0), "a symbol spelling after a space");
         assert_eq!(symbols.read("12°", None), Ok(12.0));
-        assert_eq!(symbols.read("1.5×", None), Ok(1.5));
+        assert_eq!(symbols.read("1.5×2", None), Ok(3.0), "× is the product sign");
         assert_eq!(symbols.read("10%+5%", None), Ok(15.0), "a symbol ends where the next operator starts");
         for bad in ["", "abc", "1 +", "2px", "1/0", "(1"] {
             assert_eq!(reader.read(bad, Some(1.0)), Err(NotAValue), "{bad:?} is not a value");
+        }
+    }
+
+    #[test]
+    fn times_signs_and_bare_numbers_read_through_the_grammar() {
+        let near = |reader: &Reader, text: &str, want: f64| {
+            let got = reader.read(text, None).unwrap_or(f64::NAN);
+            assert!((got - want).abs() < 1e-9, "{text:?} read {got}, wanted {want}");
+        };
+        let lengths = Reader::new().unit("px", 1.0).unit("in", 72.0);
+        for sign in ["x", "X", "×", "*"] {
+            near(&lengths, &format!("2{sign}3"), 6.0);
+        }
+        near(&lengths, "2inx3", 432.0);
+        near(&lengths, "2px", 2.0);
+        near(&lengths, "2px×2", 4.0);
+
+        let picas = Reader::new().bare(1.0 / 12.0).unit("pt", 1.0 / 12.0).unit("pc", 1.0);
+        near(&picas, "12", 1.0);
+        near(&picas, "1pt+12", 2.0 / 12.0);
+        near(&picas, "1pc+12", 2.0);
+        near(&picas, "12*2", 2.0);
+
+        let german = Reader::new().decimal(',').group('.');
+        near(&german, "1.234,5", 1234.5);
+        near(&german, "1.234.567", 1_234_567.0);
+        for bad in ["1.2", "1.2345", "×3", "x3"] {
+            assert_eq!(german.read(bad, None), Err(NotAValue), "{bad:?} is not a value");
         }
     }
 }

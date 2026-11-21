@@ -1,11 +1,20 @@
 //! The lead and the selection: picks, ranges, and where the lead starts and follows.
 
-use super::{ItemsHooks, Placement};
+use super::{ItemsHooks, Placement, members};
 use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, ListDrag, SelectMode};
 use crate::contract::{Collection, Cx};
-use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel};
-use egui::{Pos2, Rect, Vec2};
+use crate::runtime::memory::sub;
+use crate::runtime::{drag, pointer};
+use craft_behavior::{Flow, ItemLayout, PointerEvent, Sense, SelectionChange, SelectionModel};
+use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::any::TypeId;
+
+/// What the rest timer of `drag_select` last saw: the drag's pointer and the row it is timing.
+#[derive(Clone, Copy, Default)]
+struct DragRest {
+    pointer: Option<Pos2>,
+    row: Option<usize>,
+}
 
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     pub(super) fn select_mode(comp: &C) -> SelectMode {
@@ -86,7 +95,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 self.select_rows(comp, anchor, at);
             }
             SelectMode::Multi | SelectMode::Cells => {
-                if extend {
+                if extend && toggle {
+                    self.add_range(at);
+                } else if extend {
                     let anchor = self.anchor_at(self.lead.at);
                     self.change(SelectionChange::Set(self.range(anchor, at)));
                 } else if toggle {
@@ -96,6 +107,24 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 }
             }
         }
+    }
+
+    /// Shift+Cmd: the rows from the anchor to `at` join the selection. `Set` takes its first key as the anchor and its
+    /// last as the lead, so the anchor's key goes first and the key of `at` last.
+    fn add_range(&mut self, at: usize) {
+        let anchor = self.anchor_at(self.lead.at);
+        let anchor_key = self.source.key(anchor);
+        let mut keys = self.selected_keys(&self.selection);
+        if let Some(held) = keys.iter().position(|key| *key == anchor_key) {
+            keys[..=held].rotate_right(1);
+        }
+        let added: Vec<C::Key> = self.range(anchor, at).into_iter().filter(|key| !keys.contains(key)).collect();
+        keys.extend(added);
+        let end = self.source.key(at);
+        if let Some(held) = keys.iter().position(|key| *key == end) {
+            keys[held..].rotate_left(1);
+        }
+        self.change(SelectionChange::Set(keys));
     }
 }
 
@@ -167,22 +196,39 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// While a drag session another source started runs over the rows (its payload is neither this collection's row
-    /// drag nor a kind it takes), the unselected row under the pointer becomes the lead and the selection. The drag
-    /// holds the pointer, so the row comes from the pointer's position, not the collection's hover.
-    pub(super) fn drag_select(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
-        let ctx = &cx.core.ctx;
-        if !crate::runtime::drag::running(ctx)
-            || crate::runtime::drag::active_of(ctx, TypeId::of::<ListDrag<C::Key>>()).is_some()
-            || comp.drops().iter().any(|kind| crate::runtime::drag::active_of(ctx, kind.payload()).is_some())
+    /// drag nor a kind it takes), the unselected row under the pointer becomes the lead and the selection once the
+    /// pointer has rested on it for the tooltip delay. The drag holds the pointer, so the row comes from the session's
+    /// pointer, not the collection's hover. Leaving the row restarts the wait; so does a part of the row that presses
+    /// (a tab's close button) under the pointer. A row that comes under a still pointer because the rows scrolled
+    /// starts no wait until the pointer moves.
+    pub(super) fn drag_select(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
+        let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
+        let foreign = drag::running(&ctx)
+            && drag::active_of(&ctx, TypeId::of::<ListDrag<C::Key>>()).is_none()
+            && !comp.drops().iter().any(|kind| drag::active_of(&ctx, kind.payload()).is_some());
+        let pos = drag::session_pointer(&ctx).filter(|_| foreign);
+        let slot = sub(id, "drag rest row");
+        let before = *cx.core.memory.shown::<DragRest>(slot);
+        let target = pos
+            .and_then(|pos| self.row_under(layout, at, pos).map(|row| (pos, row)))
+            .filter(|&(pos, row)| !self.holds(row) && !self.over_pressing_part(&ctx, id, row, pos))
+            .map(|(_, row)| row)
+            .filter(|row| before.pointer != pos || before.row == Some(*row));
+        *cx.core.memory.shown::<DragRest>(slot) = DragRest { pointer: pos, row: target };
+        if crate::contract::overlay::dwell(&ctx, &mut *cx.core.memory, id, "drag rest", target.is_some(), crate::contract::tooltip::DELAY)
+            && let Some(row) = target
         {
-            return;
+            self.move_lead(row, LeadSource::Pointer);
+            self.pick(comp, row, false, false);
         }
-        let Some(row) = crate::runtime::pointer::frame(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
-        if self.holds(row) {
-            return;
-        }
-        self.move_lead(row, LeadSource::Pointer);
-        self.pick(comp, row, false, false);
+    }
+
+    /// Whether a part of the row `row` that presses (a tab's close button) lies under `pos`, in the collection `id`.
+    fn over_pressing_part(&self, ctx: &Context, id: Id, row: usize, pos: Pos2) -> bool {
+        let item = members::item_id(id, &self.source.key(row));
+        pointer::shapes_at(ctx, pos)
+            .into_iter()
+            .any(|(owner, part)| owner == item && part.is_some_and(|part| pointer::part_senses(ctx, owner, part, Sense::CLICK)))
     }
 
     /// A lead whose key left the source moves to the key now in its place, else the one before it. The selection is

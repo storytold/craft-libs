@@ -1,16 +1,20 @@
 //! The app shell's named slots: a bar in a top or bottom slot fills it
 //! with its members on the slot's middle, and a slot with a content version settles.
 
+use craft_host::target::Os;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::menu::bar::{MenuBar, MenuTitle};
+use craft_ui::menu::{Menu, MenuItem};
+use craft_ui::pickers::Select;
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::shell::{AppShell, Title, TitleBar, slots};
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::{Fixture, Frames, trial};
-use egui::{Rect, Vec2};
+use egui::{Rect, Ui, Vec2};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -136,4 +140,67 @@ fn a_slot_with_a_content_version_runs_only_when_its_version_changes() {
     version.set(2);
     assert!(frame(&mut frames, vec![]) > 0, "a new version runs the slot");
     assert_eq!(frame(&mut frames, vec![]), 0, "and it settles at it");
+}
+
+/// A window shell with a status slot and `body`, 400 x 300, and the status slot's rect.
+fn shell_with_status(body: fn(&mut Ui)) -> (Fixture, Rc<Cell<Rect>>) {
+    let slot = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&slot);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .status(true, |ui, _, _: &mut ()| {
+                Text::new("Ready").show(ui);
+            })
+            .body(|ui, _, _| body(ui))
+            .show(ui, &mut ());
+        if let Some(rect) = shown.regions.slots.iter().find(|(key, _)| *key == slots::STATUS).map(|(_, rect)| *rect) {
+            seen.set(rect);
+        }
+    });
+    // The in-window menu bar is PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
+    fixture.room(Vec2::new(400.0, 300.0)).settle();
+    (fixture, slot)
+}
+
+fn button_menu(ui: &mut Ui) {
+    let opener = Button::new("Open").show(ui);
+    Menu::new("Long").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+        for at in 0..40 {
+            MenuItem::new(format!("Row {at}")).show(ui);
+        }
+    });
+}
+
+fn menu_bar(ui: &mut Ui) {
+    let titles = vec![MenuTitle::new("&File", |ui| {
+        for at in 0..40 {
+            MenuItem::new(format!("Row {at}")).show(ui);
+        }
+    })];
+    MenuBar::new("Main menu", titles).show(ui);
+}
+
+fn select_list(ui: &mut Ui) {
+    let entries: Vec<Entry<u8>> = (0..60u8).map(|at| Entry::new(at, format!("Item {at}"))).collect();
+    let mut value = 0u8;
+    Select::new("Pick", Bind::bound(&mut value), &entries).show(ui);
+}
+
+/// What a shell's body opens (a menu, a menu bar's menu, a select's list) ends above the shell's bottom slot, so the
+/// status bar is never covered.
+#[trial]
+fn popups_stop_above_the_bottom_slots_in_each_window() {
+    let cases: [(&str, fn(&mut Ui)); 3] = [("Open", button_menu), ("File", menu_bar), ("Pick", select_list)];
+    for (opener, body) in cases {
+        let (mut fixture, slot) = shell_with_status(body);
+        let opener_node = fixture.by_label(opener).unwrap_or_else(|| panic!("the opener {opener:?} shows"));
+        fixture.click(&opener_node).settle();
+        let popups: Vec<Rect> = [Role::MENU, Role::LIST_BOX].into_iter().flat_map(|role| fixture.by_role(role).iter().map(|node| node.rect).collect::<Vec<_>>()).collect();
+        let slot = slot.get();
+        assert!(!popups.is_empty() && slot.height() > 0.0, "{opener:?} opens a popup over a shown status slot");
+        for popup in popups {
+            assert!(popup.bottom() <= slot.top() + 0.5, "{opener:?}: the popup {popup:?} ends above the status slot {slot:?}");
+        }
+    }
 }

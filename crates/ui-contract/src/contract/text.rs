@@ -270,13 +270,15 @@ impl<C: Component> PartsCx<'_, C> {
     pub fn text<K: Codec + Clone + 'static>(&mut self, key: TextKey<K::Value>, rect: Rect, codec: &K, value: &K::Value, options: &TextOptions) {
         debug_assert!(self.text.decl.is_none(), "a component registers one text part");
         let shown = if options.mixed { String::new() } else { codec.format(value) };
+        let reads = codec.clone();
+        let declared = TextOptions { whole_paste: Some(Arc::new(move |pasted: &str| reads.whole_paste(pasted))), ..options.clone() };
         self.text.decl = Some(TextDecl {
             key: key.0,
             rect,
             caret: if options.select_on_focus { Caret::All } else { codec.caret_on_focus(&shown) },
             shown,
-            options: options.clone(),
-            resolve: Box::new(resolver(codec.clone(), options, rect, value.clone())),
+            resolve: Box::new(resolver(codec.clone(), &declared, rect, value.clone())),
+            options: declared,
             values: ValueOps::of::<K::Value>(),
         });
     }
