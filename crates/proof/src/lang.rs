@@ -27,6 +27,8 @@ pub enum ProofLang {
     /// Polish (`pl`, `pl-PL`): the installed Hunspell dictionary (when there is one), the Polish grammar rules and the Polish
     /// hyphenation patterns.
     Pl,
+    /// Hebrew (`he`, `he-IL`, `iw`, `iw-IL`): installed Hunspell he_IL dictionary.
+    He,
     /// Bulgarian (`bg`, `bg-BG`): hyphenation by the Bulgarian syllable rules ([`crate::bg`]), and
     /// spelling when a Bulgarian Hunspell dictionary or `bg` pack is found. No grammar rules yet.
     Bg,
@@ -90,12 +92,13 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 16] = [
+    pub const PROOFED: [ProofLang; 17] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnAu,
         ProofLang::EnCa,
         ProofLang::Pl,
+        ProofLang::He,
         ProofLang::Pt,
         ProofLang::It,
         ProofLang::Hr,
@@ -119,6 +122,8 @@ impl ProofLang {
         let primary = tag.split(['-', '_', '.', '@']).next().unwrap_or("");
         if primary.eq_ignore_ascii_case("en") || primary.eq_ignore_ascii_case("eng") {
             ProofLang::english(tag)
+        } else if primary.eq_ignore_ascii_case("he") || primary.eq_ignore_ascii_case("heb") || primary.eq_ignore_ascii_case("iw") {
+            ProofLang::He
         } else if primary.eq_ignore_ascii_case("pl") || primary.eq_ignore_ascii_case("pol") {
             ProofLang::Pl
         } else if primary.eq_ignore_ascii_case("bg") || primary.eq_ignore_ascii_case("bul") {
@@ -227,6 +232,7 @@ impl ProofLang {
             ProofLang::Id => "id",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
+            ProofLang::He => "he",
             ProofLang::Other => "",
         }
     }

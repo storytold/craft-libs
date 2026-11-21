@@ -551,7 +551,7 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
         ProofLang::EsUy => &["es-uy", "es-419", "es"],
         ProofLang::De => &["de", "de-1996", "de-de"],
         ProofLang::Pack(l) => return crate::pack_lang::hyphenation_locales(l),
-        ProofLang::En | ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa | ProofLang::Other => &[],
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa | ProofLang::He | ProofLang::Other => &[],
     };
     names.iter().map(|n| (*n).to_string()).collect()
 }
