@@ -211,7 +211,7 @@ fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &
     match doc.output_security() {
         (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::cos::security::Pass::EncryptReplacing } else { crate::cos::security::Pass::Encrypt };
-            Cow::Owned(crate::cos::security::transform(doc, h, o, num, generation, pass))
+            Cow::Owned(crate::cos::security::transform(doc, h, o, source_num, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -221,6 +221,42 @@ fn write_indirect(num: u32, generation: u16, o: &Object, out: &mut Vec<u8>) {
     let _ = writeln!(out, "{num} {generation} obj");
     serialize(o, out);
     out.extend_from_slice(b"\nendobj\n");
+}
+
+/// A document whose `/Encrypt` is there but can't be read ([`Document::encryption_unreadable`])
+/// holds data nothing can decrypt. Written without the `/Encrypt` that data would never decrypt
+/// again; written with it, whatever is written new would be in the clear where readers decrypt.
+/// Either way the file would lose data, so it isn't written (ISO 32000-2 §7.6.1: an encrypted
+/// document's strings and streams are read through its encryption dictionary).
+fn unreadable_encryption_check(doc: &Document) -> Result<(), CosError> {
+    if doc.encryption_unreadable() {
+        return Err(CosError::Security(
+            "the document's encryption dictionary (/Encrypt) is damaged and can't be read, so what it encrypts can't be decrypted: saving would write a file whose encrypted content could never be read again".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// With `/EncryptMetadata false` the stream the catalog's `/Metadata` names is the one in the
+/// clear (ISO 32000-2 Table 21), and a reader of the saved file asks the catalog as saved. An edit
+/// that points `/Metadata` at another stream changes that for both streams: written as the file
+/// holds them, the one named now would be read in the clear while it is ciphertext, and the one
+/// named before decrypted while it is plaintext. An incremental save writes both again, from what
+/// they read as, so each is written as the saved catalog has it. A stream held as stored has
+/// nothing it reads as, and stays as it is.
+fn rewrite_moved_metadata(doc: &mut Document) {
+    for num in crate::cos::security::metadata_scope_moved(doc) {
+        if doc.overlay_entries().any(|(n, _, _)| n == num) {
+            continue; // edited: written anyway, as the saved catalog has it
+        }
+        let r = ObjRef::new(num, doc.generation(num));
+        let o = doc.get(r);
+        if let Object::Stream(s) = &*o
+            && !doc.reads_as_stored(s)
+        {
+            doc.set(r, (*o).clone());
+        }
+    }
 }
 
 /// Options for saving.
@@ -281,6 +317,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
         return Err(CosError::ReadOnlyLimit);
     }
     keyless_check(doc)?;
+    unreadable_encryption_check(doc)?;
     // Reconstructed files have no chain to append to; added or removed encryption must
     // rewrite every object; redaction must not leave the old revision behind. All need a full save.
     if doc.reconstructed() || doc.encryption_changed() || doc.full_save_required() {
@@ -288,6 +325,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     }
     let mut doc = doc.clone();
     stamp_mod_date(&mut doc, opts);
+    rewrite_moved_metadata(&mut doc);
     let original = doc.bytes().clone();
     // The revision is written on its own and joined to the original at the end, so the result is
     // allocated once at its exact size: growing a buffer that holds a large original past a
@@ -424,6 +462,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         return Err(CosError::ReadOnlyLimit);
     }
     keyless_check(doc)?;
+    unreadable_encryption_check(doc)?;
     // Renumbering breaks a key that mixes in the object number.
     if doc.security().is_some_and(|h| !h.has_key() && !h.survives_renumbering()) {
         return Err(CosError::Security(

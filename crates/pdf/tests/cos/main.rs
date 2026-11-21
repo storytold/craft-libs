@@ -4,6 +4,7 @@
 
 mod bounded_writer;
 mod corpus;
+mod decryption_scope;
 mod efopen;
 mod encryption;
 mod file_identifier;
