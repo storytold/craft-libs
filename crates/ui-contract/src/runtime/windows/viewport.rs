@@ -172,11 +172,10 @@ pub(crate) fn show_popup(ctx: &Context, open: &PopupOpen<'_>, body: impl FnMut(&
 pub(crate) fn place_popup(ctx: &Context, id: Id, rect: Rect) {
     let viewport = viewports::viewport_id(id);
     let known = PerViewport::<Record>::with(ctx, viewport, |record| record.known);
-    let differs = |delta: Vec2| delta.x.abs() > ROUNDING || delta.y.abs() > ROUNDING;
-    if known.is_none_or(|known| differs(rect.min - known.min)) {
+    if known.is_none_or(|known| differs(ctx, viewport, rect.min - known.min)) {
         act(ctx, viewport, WindowAction::SetOuterPosition(rect.min));
     }
-    if known.is_none_or(|known| differs(rect.size() - known.size())) {
+    if known.is_none_or(|known| differs(ctx, viewport, rect.size() - known.size())) {
         act(ctx, viewport, WindowAction::SetInnerSize(rect.size()));
     }
     PerViewport::<Record>::with(ctx, viewport, |record| record.known = Some(rect));
@@ -226,9 +225,17 @@ pub(crate) fn unplaced(ctx: &Context, id: Id) -> bool {
         && PerViewport::<Record>::with(ctx, viewports::viewport_id(id), |record| record.kind.is_some() && record.seen.is_none())
 }
 
-/// How far a caller's place may differ from the known place before it is a change: the OS rounds to pixels, and a
-/// placement records the position in pixels.
-const ROUNDING: f32 = 0.5;
+/// How far a caller's place may differ from the known place before it is a change, in physical pixels of the window's
+/// display: the OS rounds to pixels, and a placement records the position in pixels.
+const ROUNDING_PX: f32 = 0.5;
+
+/// Whether `delta`, in points, moves the window `viewport` by more than rounding on its display: a whole pixel on
+/// a 2x display is half a point.
+fn differs(ctx: &Context, viewport: ViewportId, delta: Vec2) -> bool {
+    let facts = PerViewport::<Record>::with(ctx, viewport, |record| record.facts);
+    let scale = facts.and_then(|facts| super::host::scale_of(ctx, &facts)).unwrap_or(1.0);
+    delta.x.abs() * scale > ROUNDING_PX || delta.y.abs() * scale > ROUNDING_PX
+}
 
 /// The place of a window with `facts`: its outer top-left corner and its inner size.
 fn place_of(facts: &viewports::Facts) -> Option<Rect> {
@@ -257,11 +264,10 @@ fn keep_placed(ctx: &Context, viewport: ViewportId, pos: Option<Pos2>, size: Opt
         (record.known, state || record.moved_pointer.is_some())
     });
     let Some(known) = known.filter(|_| !held) else { return };
-    let differs = |delta: Vec2| delta.x.abs() > ROUNDING || delta.y.abs() > ROUNDING;
-    if let Some(pos) = pos.filter(|pos| differs(*pos - known.min)) {
+    if let Some(pos) = pos.filter(|pos| differs(ctx, viewport, *pos - known.min)) {
         act(ctx, viewport, WindowAction::SetOuterPosition(pos));
     }
-    if let Some(size) = size.filter(|size| differs(*size - known.size())) {
+    if let Some(size) = size.filter(|size| differs(ctx, viewport, *size - known.size())) {
         act(ctx, viewport, WindowAction::SetInnerSize(size));
     }
 }

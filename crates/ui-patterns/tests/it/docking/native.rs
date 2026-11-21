@@ -834,9 +834,12 @@ const COLLAPSED_SCALE: f32 = 1.25;
 /// A native palette collapsed to icons on Windows at 125 %, and the rect its OS window shows the strip at.
 fn collapsed_palette() -> (NativeDock, Rect) {
     let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    // Both windows report the display at 125 % before the column collapses.
     dock.windows.root_info(scaled(true, MAIN_AT, COLLAPSED_SCALE));
-    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     let mut at = FLOAT_AT;
+    dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
+    collapsed_frame(&mut dock, &mut BodyProbe::default(), &mut at, vec![], vec![]);
+    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     for _ in 0..4 {
         collapsed_frame(&mut dock, &mut BodyProbe::default(), &mut at, vec![], vec![]);
     }
@@ -990,6 +993,26 @@ fn a_collapsed_native_palette_paints_its_icons_and_no_clipped_text() {
     assert!(tree.with_role(Role::TOOLTIP).is_empty(), "no tooltip shows inside the strip");
     if let Err(fit) = fits_exactly(tree, at.size(), Role::BUTTON) {
         panic!("the strip's window fits its icons: {fit}");
+    }
+}
+
+/// A native palette on a monitor at 1x while the main window is on one at 2x (a laptop with an external display):
+/// collapsed to icons, its window fits the title row, the rule under it and the icons exactly at its own scale.
+#[trial]
+fn a_collapsed_native_palette_on_a_1x_monitor_beside_a_2x_main_window_fits_its_icons_exactly() {
+    let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
+    dock.windows.root_info(scaled(true, MAIN_AT, 2.0));
+    let mut at = FLOAT_AT;
+    dock.windows.child_info(scaled(true, at, 1.0));
+    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    for _ in 0..4 {
+        let commands = dock.frame(vec![]).1;
+        at = placed_by(&commands, at);
+        dock.windows.child_info(scaled(true, at, 1.0));
+    }
+    let tree = dock.palette_tree.as_ref().expect("the palette ran a pass");
+    if let Err(fit) = fits_exactly(tree, at.size(), Role::BUTTON) {
+        panic!("the strip's window fits its icons at its own scale: {fit}");
     }
 }
 

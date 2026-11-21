@@ -1222,6 +1222,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
             let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
+            // An OS window lays out at its own monitor's scale, which sizes its chrome; one in the app window at the
+            // main window's.
+            let scale = opening
+                .spec
+                .as_ref()
+                .and_then(|_| WindowHost::of(&ctx).viewport_of(group_id))
+                .and_then(|viewport| native::pixels_per_point(&ctx, viewport));
+            let window_sizes = scale.map_or(scene.sizes, |scale| scene.sizes.at_scale(scale));
             let movable = rights.iter().all(|rights| rights.movable);
             // The title row is the column's bar: its double arrow and Close; the menu opens from a context request on
             // its band.
@@ -1270,6 +1278,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .takes_drops(target, &dropped)
                 .command_scope(DockCommands::SCOPE)
                 .id(group_id);
+            if let Some(scale) = scale {
+                group = group.scale(scale);
+            }
             group = match opening.spec.clone() {
                 Some(window_spec) => group.native(window_spec),
                 None => group.bounds(scene.bounds),
@@ -1303,8 +1314,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
             }
-            // The height above the window's body: the title row, and in the app window the band over it.
-            let chrome = scene.sizes.window_chrome(opening.spec.is_none());
+            // The height above the window's body at its scale: the title row, the rule under it, and in the app window
+            // the band over it.
+            let chrome = window_sizes.window_chrome(opening.spec.is_none());
             // A resize of a window whose column has steps: the steps it sets, and the window's rect at them.
             let resized = output
                 .placed

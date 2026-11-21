@@ -7,7 +7,7 @@
 use super::{DragUnit, PanelKey, PanelSpec, scale_widths, stepped, width_bounds};
 use crate::contract::DropMark;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
-use crate::style::{RuleKind, StyleCx};
+use crate::style::{RuleKind, RuleWidth, StyleCx};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Layout, Node, ZoneSize, node_at, zones};
 use egui::{Context, Id, Pos2, Rect, Vec2};
@@ -53,9 +53,12 @@ pub struct DockSizes {
     pub bar: f32,
     /// The height of a floating window's title row, which is the bar of the column the window holds.
     pub title_row: f32,
-    /// The band of the divider rule a floating window draws under its title row, in points on the running display:
-    /// the rule's width in whole physical pixels, as the container lays it out in a band of its own.
-    pub title_rule: f32,
+    /// The divider rule a floating window draws under its title row, which the container lays out in a band of its
+    /// own: the rule's width in whole physical pixels on the window's display ([`Self::pixels_per_point`]).
+    pub title_rule: RuleWidth,
+    /// The display scale the sizes that depend on it are for: the running window's, or with [`Self::at_scale`] an OS
+    /// window's own.
+    pub pixels_per_point: f32,
     /// The band a floating window in the app window keeps clear over its title row for its top grip
     /// (`contract::grip_band`); an OS window keeps none. Every height of a window's body or content is the window's
     /// height less its chrome ([`Self::window_chrome`]).
@@ -99,7 +102,8 @@ impl DockSizes {
             strip: size.panel_header,
             bar: size.control.sm,
             title_row: super::floating::title_row(cx.tokens),
-            title_rule: cx.rule(RuleKind::Divider).width.points(cx.frame_ctx().pixels_per_point()),
+            title_rule: cx.rule(RuleKind::Divider).width,
+            pixels_per_point: cx.frame_ctx().pixels_per_point(),
             top_band: crate::contract::grip_band(cx.tokens),
             least: size.panel_header,
             reach: size.hit.target,
@@ -113,7 +117,14 @@ impl DockSizes {
     /// The height above a floating window's body: its title row, the rule under it and, for a window in the app
     /// window (`in_app`), the band over it.
     pub fn window_chrome(&self, in_app: bool) -> f32 {
-        self.title_row + self.title_rule + if in_app { self.top_band } else { 0.0 }
+        self.title_row + self.title_rule.points(self.pixels_per_point) + if in_app { self.top_band } else { 0.0 }
+    }
+
+    /// The sizes for a window on a display of `pixels_per_point`: an OS window lays out at its own monitor's scale.
+    #[must_use]
+    pub fn at_scale(mut self, pixels_per_point: f32) -> Self {
+        self.pixels_per_point = pixels_per_point;
+        self
     }
 
     /// The height of a column whose every group is minimized: their tab strips, as the column stacks them. `None`

@@ -277,6 +277,9 @@ pub struct FloatingGroup<'a> {
     placed: Option<PlacementChange>,
     /// The width a resize gave the collapsed column this pass.
     collapsed_width: Option<f32>,
+    /// The display scale of the OS window the group shows in, which sizes the rule under its title row; unset, the
+    /// running window's.
+    scale: Option<f32>,
     /// Starts the window-unit drag; set by `window_of`.
     start_drag: Option<StartDrag<'a>>,
     /// Takes the drops released on the group, on the group's own layer.
@@ -323,6 +326,7 @@ impl<'a> FloatingGroup<'a> {
             rtl: false,
             placed: None,
             collapsed_width: None,
+            scale: None,
             start_drag: None,
             take_drop: None,
             moving: false,
@@ -359,6 +363,14 @@ impl<'a> FloatingGroup<'a> {
         self
     }
 
+    /// The display scale of the OS window the group shows in (`native::pixels_per_point`), when it differs from the
+    /// running window's: its chrome is sized at that scale.
+    #[must_use]
+    pub fn scale(mut self, pixels_per_point: f32) -> Self {
+        self.scale = Some(pixels_per_point);
+        self
+    }
+
     /// The action parts at the end of the title row, in reading order.
     #[must_use]
     pub fn actions(mut self, actions: impl IntoIterator<Item = HeaderAction>) -> Self {
@@ -372,6 +384,7 @@ impl<'a> FloatingGroup<'a> {
         // A window in the app window keeps the band over its title row that a layer the user moves keeps for its top
         // grip; an OS window's grips lie over its title row. The rule under the title row takes a band of its own.
         let sizes = DockSizes::style(&StyleCx::of_env(ui.ctx(), &env));
+        let sizes = self.scale.map_or(sizes, |scale| sizes.at_scale(scale));
         (self.header, self.chrome, self.rtl) = (sizes.title_row, sizes.window_chrome(self.native.is_none()), env.direction.is_rtl());
         let mount = self.mount();
         self.props = self.props.mount(mount);
