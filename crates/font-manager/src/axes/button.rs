@@ -1,7 +1,7 @@
 //! The axes behind one button: a `Button` that opens the axis sliders in a popover.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Pattern, PopupKind, Props, Remember as _, Show as _, ShowContainer as _, clicked};
