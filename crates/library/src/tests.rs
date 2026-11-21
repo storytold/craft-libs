@@ -320,3 +320,159 @@ fn the_core_reads_files_only_through_the_apps_fs() {
         assert!(used.is_empty(), "{word}: {used:?}");
     }
 }
+
+/// `.frag` files that open, then make the app's reader panic where their text says: counting
+/// (`COUNT`), the title (`TITLE`), an item (`ITEM`) or a thumbnail (`THUMB`); a file named
+/// `name-panic…` panics as its name is read.
+#[derive(Default)]
+struct Fragile;
+
+impl Kind for Fragile {
+    type Doc = String;
+    fn extensions(&self) -> &[&str] {
+        &["frag"]
+    }
+    fn nouns(&self) -> Nouns {
+        Nouns { one: "page", many: "pages" }
+    }
+    fn open(&self, _name: &str, bytes: &[u8]) -> Result<String, String> {
+        Ok(String::from_utf8_lossy(bytes).into_owned())
+    }
+    fn title(&self, doc: &String) -> Option<String> {
+        if doc == "TITLE" {
+            panic!("a title that can't be read");
+        }
+        None
+    }
+    fn count(&self, doc: &String) -> usize {
+        if doc == "COUNT" {
+            panic!("a count that can't be read");
+        }
+        2
+    }
+    fn item(&self, doc: &String, index: usize) -> Item {
+        if doc == "ITEM" && index == 1 {
+            panic!("an item that can't be read");
+        }
+        Item { title: format!("{doc} {index}"), ..Item::default() }
+    }
+    fn thumbnail(&self, doc: &String, _index: usize, width: u32) -> Result<Thumbnail, String> {
+        if doc == "THUMB" {
+            panic!("a thumbnail that can't be drawn");
+        }
+        Ok(Thumbnail { png: Arc::new(vec![1]), width, height: width })
+    }
+    fn item_from_name(&self, name: &str) -> Option<Item> {
+        if name.starts_with("name-panic") {
+            panic!("a name that can't be read");
+        }
+        None
+    }
+}
+
+/// A hostile file that opens can still make the app's reader panic later: that fails the file
+/// alone, listed, searched and drawn, never the app.
+#[test]
+fn a_reader_that_panics_after_opening_fails_that_file_alone() {
+    let dir = folder("fragile");
+    for (name, text) in [
+        ("count.frag", "COUNT"),
+        ("title.frag", "TITLE"),
+        ("item.frag", "ITEM"),
+        ("thumb.frag", "THUMB"),
+        ("name-panic.frag", "fine"),
+        ("fine.frag", "fine"),
+    ] {
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+    let folders = vec![s(&dir)];
+    let mut lib = Library::new(Fragile);
+    let listed = lib.list(&Disk, &folders, &json!({})).unwrap();
+    let file = |stem: &str| {
+        listed.as_array().unwrap().iter().find(|f| f["file"].as_str().is_some_and(|p| p.ends_with(&format!("{stem}.frag")))).cloned().unwrap()
+    };
+    for stem in ["count", "title", "item", "name-panic"] {
+        let f = file(stem);
+        assert!(f["error"].as_str().is_some_and(|e| e.contains("could not be read")), "{f}");
+        assert_eq!(f["pages"], json!([]), "{f}");
+    }
+    assert_eq!(file("fine")["pageCount"], json!(2));
+    assert_eq!(file("thumb")["pageCount"], json!(2), "a thumbnail that panics doesn't stop the listing");
+    // Listing without opening asks each name, so a name that panics is listed with its error.
+    let quick = lib.list(&Disk, &folders, &json!({"pages": false})).unwrap();
+    assert_eq!(quick.as_array().map(Vec::len), Some(6));
+    let hits = lib.search(&Disk, &folders, &json!({"query": "fine"})).unwrap();
+    assert_eq!(hits.as_array().map(Vec::len), Some(2), "{hits}");
+    for (stem, page) in [("thumb", 0), ("count", 0)] {
+        let p = json!({"file": s(&dir.join(format!("{stem}.frag"))), "page": page});
+        let e = lib.thumbnail(&Disk, &folders, &p).unwrap_err();
+        assert!(e.contains(&format!("{stem}.frag")), "{e}");
+    }
+    assert!(lib.thumbnail(&Disk, &folders, &json!({"file": s(&dir.join("fine.frag")), "page": 1})).is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The plain file system, with reads that fail while the file is locked.
+#[derive(Default)]
+struct Flaky(std::cell::Cell<bool>);
+
+impl Fs for Flaky {
+    fn read_dir(&self, path: &Path, max: usize) -> Result<(Vec<DirEntry>, bool), String> {
+        Disk.read_dir(path, max)
+    }
+    fn stat(&self, path: &Path) -> Result<(EntryKind, Stamp), String> {
+        Disk.stat(path)
+    }
+    fn canonical(&self, path: &Path) -> Result<PathBuf, String> {
+        Disk.canonical(path)
+    }
+    fn read(&self, path: &Path, max: u64) -> Result<Vec<u8>, String> {
+        if self.0.get() { Err("locked by another app".into()) } else { Disk.read(path, max) }
+    }
+}
+
+/// A file that couldn't be read keeps its error while it stays the same, until a refresh, which
+/// reads it again: a lock can go away without the file changing.
+#[test]
+fn a_refresh_reads_again_the_files_that_couldnt_be_read() {
+    let dir = folder("flaky");
+    std::fs::write(dir.join("Plans.notes"), "Agenda\nBudget").unwrap();
+    std::fs::write(dir.join("Other.notes"), "Cover").unwrap();
+    let folders = vec![s(&dir)];
+    let fs = Flaky(std::cell::Cell::new(true));
+    let mut lib = Library::new(Notes);
+    let file = s(&dir.join("Plans.notes"));
+    let locked = lib.list(&fs, &folders, &json!({"file": file})).unwrap();
+    assert!(locked[0]["error"].as_str().is_some_and(|e| e.contains("locked")), "{locked}");
+    fs.0.set(false);
+    let cached = lib.list(&fs, &folders, &json!({"file": file})).unwrap();
+    assert!(cached[0]["error"].is_string(), "unchanged, so not read again: {cached}");
+    let listed = lib.list(&fs, &folders, &json!({"refresh": true, "pages": false})).unwrap();
+    assert_eq!(listed.as_array().map(Vec::len), Some(2));
+    let read = lib.list(&fs, &folders, &json!({"file": file})).unwrap();
+    assert_eq!(read[0]["pageCount"], json!(2), "{read}");
+    assert!(read[0].get("error").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// One file can be searched on its own, and a hit says whether its item is hidden.
+#[test]
+fn one_file_is_searched_on_its_own() {
+    let dir = folder("one-file");
+    std::fs::write(dir.join("Plans.notes"), "Agenda|first steps\n!Hidden|secret plans").unwrap();
+    std::fs::write(dir.join("More.notes"), "Plans for later").unwrap();
+    let folders = vec![s(&dir)];
+    let mut lib = Library::new(Notes);
+    let all = lib.search(&Disk, &folders, &json!({"query": "plans"})).unwrap();
+    assert_eq!(all.as_array().map(Vec::len), Some(3), "{all}");
+    let file = s(&dir.join("Plans.notes"));
+    let one = lib.search(&Disk, &folders, &json!({"query": "plans", "file": file})).unwrap();
+    assert_eq!(one.as_array().map(Vec::len), Some(2), "{one}");
+    assert!(one.as_array().unwrap().iter().all(|h| h["file"] == json!(file)));
+    let hidden = lib.search(&Disk, &folders, &json!({"query": "secret", "file": file})).unwrap();
+    assert_eq!((hidden[0]["page"].clone(), hidden[0]["hidden"].clone()), (json!(1), json!(true)));
+    assert_eq!(all[0]["hidden"], json!(false));
+    // Only a Library file is searched.
+    assert!(lib.search(&Disk, &folders, &json!({"query": "x", "file": "/etc/hosts.notes"})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}

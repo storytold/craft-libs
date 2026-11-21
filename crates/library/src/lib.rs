@@ -25,10 +25,16 @@
 //! | Items listed per file | [`MAX_ITEMS`] |
 //! | Links | never followed, so nothing outside the folder is reached through one |
 //!
-//! A file that can't be read is listed with its error rather than dropped, and a reader that
-//! panics on a hostile file gives an error for that file alone. What has been read is cached: an
-//! index of each file (titles and text, for search), a few opened documents and the thumbnails
-//! drawn from them, each within a fixed budget; a file whose size or time changed is read again.
+//! A file that can't be read is listed with its error rather than dropped, and a [`Kind`] that
+//! panics on a hostile file (opening it, counting or listing its items, drawing a thumbnail) gives
+//! an error for that file alone. That holds where a panic unwinds, as in desktop builds; where a
+//! panic aborts, as `wasm32-unknown-unknown` does by default, it ends the app, so a `Kind` built
+//! for such a target must not panic.
+//!
+//! What has been read is cached: an index of each file (titles and text, for search), a few
+//! opened documents and the thumbnails drawn from them, each within a fixed budget. A file whose
+//! size or time changed is read again, and so is one that couldn't be read, after
+//! [`Library::forget_failed`] (`library.list` with `refresh`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -341,9 +347,13 @@ pub fn stem(path: &Path) -> String {
     path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// The index of an opened document. A `Kind` that panics on it fails this file alone.
 fn index_of<K: Kind>(kind: &K, path: &Path, doc: &K::Doc, stamp: Stamp) -> FileIndex {
-    let count = kind.count(doc);
-    index_from(path, kind.title(doc), count, (0..count.min(MAX_ITEMS)).map(|i| kind.item(doc, i)), stamp)
+    guarded(&cant_read(path), || {
+        let count = kind.count(doc);
+        index_from(path, kind.title(doc), count, (0..count.min(MAX_ITEMS)).map(|i| kind.item(doc, i)), stamp)
+    })
+    .unwrap_or_else(|e| failed(path, stamp, e))
 }
 
 /// The index of the file at `path`: its `title` (else the file name), how many items it has, and
@@ -378,18 +388,31 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "unknown panic".into())
 }
 
+/// `f`, a call into the app's [`Kind`] on a hostile file: a panic in it is the error `failure`
+/// (with the panic's message) rather than the app's end. This holds where a panic unwinds; where
+/// it aborts (`wasm32-unknown-unknown` by default) nothing can catch it.
+fn guarded<T>(failure: &str, f: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|payload| format!("{failure} ({})", panic_message(payload.as_ref())))
+}
+
+/// The file name of `path`, as an error names it.
+fn file_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+fn cant_read(path: &Path) -> String {
+    format!("{} could not be read", file_name(path))
+}
+
 /// Open the document at `path`, no larger than [`MAX_FILE_BYTES`]. A reader that panics on a
-/// hostile file gives an error for that file alone.
+/// hostile file gives an error for that file alone ([`guarded`]).
 fn open<K: Kind>(kind: &K, fs: &dyn Fs, path: &Path, stamp: Stamp) -> Result<K::Doc, String> {
     if stamp.len > MAX_FILE_BYTES {
         return Err(too_large());
     }
     let bytes = fs.read(path, MAX_FILE_BYTES)?;
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| kind.open(&name, &bytes))) {
-        Ok(r) => r,
-        Err(payload) => Err(format!("{name} could not be read ({})", panic_message(payload.as_ref()))),
-    }
+    let name = file_name(path);
+    guarded(&cant_read(path), || kind.open(&name, &bytes))?
 }
 
 fn too_large() -> String {
@@ -402,6 +425,7 @@ pub struct Hit {
     pub file: PathBuf,
     pub item: usize,
     pub title: String,
+    pub hidden: bool,
     pub how: Match,
 }
 
@@ -423,7 +447,7 @@ pub fn matches(index: &FileIndex, path: &Path, query: &str) -> Vec<Hit> {
             } else {
                 return None;
             };
-            Some(Hit { file: path.to_path_buf(), item: i, title: s.title.clone(), how })
+            Some(Hit { file: path.to_path_buf(), item: i, title: s.title.clone(), hidden: s.hidden, how })
         })
         .collect()
 }
@@ -537,7 +561,8 @@ impl<K: Kind> Library<K> {
             let fresh = match named {
                 // Known from its name: nothing is read.
                 Some(_) if stamp.len > MAX_FILE_BYTES => failed(path, stamp, too_large()),
-                Some(item) => index_from(path, None, 1, std::iter::once(item), stamp),
+                Some(Ok(item)) => index_from(path, None, 1, std::iter::once(item), stamp),
+                Some(Err(e)) => failed(path, stamp, e),
                 None => match self.doc(fs, path, stamp) {
                     Ok(doc) => index_of(&self.kind, path, &doc, stamp),
                     Err(e) => failed(path, stamp, e),
@@ -555,9 +580,26 @@ impl<K: Kind> Library<K> {
         entry
     }
 
-    /// The one item of the file at `path` when the kind knows it from the name.
-    fn named_item(&self, path: &Path) -> Option<Item> {
-        path.file_name().and_then(|n| n.to_str()).and_then(|n| self.kind.item_from_name(n))
+    /// The one item of the file at `path` when the kind knows it from the name; an error when
+    /// the kind panics on the name.
+    fn named_item(&self, path: &Path) -> Option<Result<Item, String>> {
+        let name = path.file_name()?.to_str()?;
+        guarded(&cant_read(path), || self.kind.item_from_name(name)).transpose()
+    }
+
+    /// Forget the files that couldn't be read, so each is read again when it is next listed or
+    /// searched. A file is otherwise read again only when its size or time changes, which a file
+    /// that was locked, or on a drive that was away, may not do.
+    pub fn forget_failed(&mut self) {
+        let mut freed = 0;
+        self.index.retain(|_, f| {
+            let keep = f.error.is_none();
+            if !keep {
+                freed += f.bytes;
+            }
+            keep
+        });
+        self.index_bytes = self.index_bytes.saturating_sub(freed);
     }
 
     /// Drop the least recently used indexes until they fit the budget, never `keep`.
@@ -599,12 +641,14 @@ impl<K: Kind> Library<K> {
             return Ok(t.thumb.clone());
         }
         let doc = self.doc(fs, path, stamp)?;
-        let n = self.kind.count(&doc).min(MAX_ITEMS);
+        let kind = &self.kind;
+        let n = guarded(&cant_read(path), || kind.count(&doc))?.min(MAX_ITEMS);
         if item >= n {
-            let many = self.kind.nouns().many;
+            let many = kind.nouns().many;
             return Err(format!("{} has {n} {many}; {item} isn't one of them (indices count from 0)", stem(path)));
         }
-        let mut thumb = self.kind.thumbnail(&doc, item, width)?;
+        let failure = format!("{} {} could not be drawn", file_name(path), kind.nouns().one);
+        let mut thumb = guarded(&failure, || kind.thumbnail(&doc, item, width))??;
         thumb.width = thumb.width.min(*THUMB_WIDTHS.end());
         thumb.height = thumb.height.min(MAX_THUMB_HEIGHT);
         if let Some(old) = self.thumbs.insert(key.clone(), Thumb { stamp, thumb: thumb.clone(), used: now }) {
@@ -786,11 +830,15 @@ impl<K: Kind> Library<K> {
         v
     }
 
-    /// `library.list {folder?, file?, <many>?: bool}` → `[{file, folder, title, <many>: [{index,
-    /// title, hidden}], <one>Count, truncated?, error?}]`; with `<many>: false` the files are
-    /// listed without being opened (and without their items, unless [`Kind::item_from_name`] gives
-    /// them).
+    /// `library.list {folder?, file?, <many>?: bool, refresh?: bool}` → `[{file, folder, title,
+    /// <many>: [{index, title, hidden}], <one>Count, truncated?, error?}]`; with `<many>: false`
+    /// the files are listed without being opened (and without their items, unless
+    /// [`Kind::item_from_name`] gives them). With `refresh`, files that couldn't be read are read
+    /// again ([`Library::forget_failed`]).
     pub fn list(&mut self, fs: &dyn Fs, folders: &[String], p: &Value) -> Result<Value, String> {
+        if p.get("refresh").and_then(Value::as_bool) == Some(true) {
+            self.forget_failed();
+        }
         let open = p.get(self.kind.nouns().many).and_then(Value::as_bool).unwrap_or(true);
         let files = if str_param(p, "file").is_some() {
             vec![self.file(fs, folders, p)?]
@@ -801,8 +849,9 @@ impl<K: Kind> Library<K> {
         Ok(Value::Array(files.iter().map(|(path, stamp, folder)| self.file_json(fs, path, *stamp, folder, open)).collect()))
     }
 
-    /// `library.search {query, limit?, folder?}` → `[{file, <one>, title, match}]`, title matches
-    /// first, then text, then file names.
+    /// `library.search {query, limit?, folder?, file?}` → `[{file, <one>, title, hidden, match}]`,
+    /// title matches first, then text, then file names. With `file`, that one file is searched, so
+    /// a pane can search a large Library a few files at a time.
     pub fn search(&mut self, fs: &dyn Fs, folders: &[String], p: &Value) -> Result<Value, String> {
         let query = str_param(p, "query").map(str::trim).filter(|q| !q.is_empty()).ok_or("missing `query`")?;
         if query.chars().count() > MAX_QUERY {
@@ -810,8 +859,12 @@ impl<K: Kind> Library<K> {
         }
         let limit = ranged(p, "limit", SEARCH_LIMITS, "a count from 1 to 500")?.unwrap_or(SEARCH_LIMIT);
         let query = query.to_lowercase();
-        let (chosen, named) = Self::chosen(fs, folders, p)?;
-        let files = self.files_in(fs, &chosen, named)?;
+        let files = if str_param(p, "file").is_some() {
+            vec![self.file(fs, folders, p)?]
+        } else {
+            let (chosen, named) = Self::chosen(fs, folders, p)?;
+            self.files_in(fs, &chosen, named)?
+        };
         // The first `limit` of each kind of match is enough to rank.
         let mut kinds: [Vec<Hit>; 3] = Default::default();
         for (path, stamp, _) in &files {
@@ -833,7 +886,7 @@ impl<K: Kind> Library<K> {
             .flatten()
             .take(limit)
             .map(|h| {
-                let mut v = json!({"file": h.file.to_string_lossy(), "title": h.title, "match": h.how.name()});
+                let mut v = json!({"file": h.file.to_string_lossy(), "title": h.title, "hidden": h.hidden, "match": h.how.name()});
                 v[one] = json!(h.item);
                 v
             })

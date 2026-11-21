@@ -29,6 +29,10 @@ struct Pages {
     inserts: bool,
     /// There is nowhere to put a page.
     nowhere: bool,
+    /// The folder holds `second.doc` rather than `contract.doc`.
+    second: bool,
+    /// The params of each listing of the folders.
+    lists: Vec<Value>,
 }
 
 impl Host for Pages {
@@ -44,9 +48,13 @@ impl Host for Pages {
     fn ask(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.asked.push(id.to_string());
         let pages = json!([{"index": 0, "title": "Cover", "hidden": false}, {"index": 1, "title": "Terms", "hidden": true}]);
+        let (file, title) = if self.second { ("/lib/second.doc", "Second") } else { ("/lib/contract.doc", "Contract") };
         match id {
-            "library.list" if params.get("file").is_some() => Ok(json!([{"file": "/lib/contract.doc", "title": "Contract", "pages": pages}])),
-            "library.list" => Ok(json!([{"file": "/lib/contract.doc", "folder": "/lib", "title": "contract"}])),
+            "library.list" if params.get("file").is_some() => Ok(json!([{"file": file, "title": title, "pages": pages}])),
+            "library.list" => {
+                self.lists.push(params);
+                Ok(json!([{"file": file, "folder": "/lib", "title": title.to_lowercase()}]))
+            }
             "library.search" => Ok(json!([{"file": "/lib/contract.doc", "page": 1, "title": "Terms", "match": "title"}])),
             "library.thumbnail" => Ok(json!({"png": png(), "width": 16, "height": 9})),
             "library.shapes" => Ok(json!({"shapes": [{"name": "Signature block"}, {"name": "Seal"}, {"name": "Inner", "parent": "Seal"}]})),
@@ -305,11 +313,28 @@ fn files_of_one_item_each_share_one_grid() {
     let second = h.get_by_label("Picture: pic1").rect();
     assert_eq!(first.top(), second.top(), "side by side");
     assert!(h.query_by_label("pic0").is_none(), "no heading per file");
-    // Grouped by file, each file has its heading and its one item a row to itself.
+    // Grouped by file, each file has its heading and its one item a row to itself (the cells
+    // in view, which are the ones drawn).
     let h = pics(4, false, LABELS, false);
     assert!(h.query_by_label("pic0").is_some());
     let cells: Vec<_> = h.query_all_by_label("Page 1").map(|n| n.rect().top()).collect();
-    assert!(cells.len() == 4 && cells[0] < cells[1], "{cells:?}");
+    assert!(cells.len() >= 2 && cells[0] < cells[1], "{cells:?}");
+}
+
+/// Where each of the cells `Page 1: p0`… drawn now is, by its number.
+fn tops<S>(h: &Harness<'_, S>, n: usize) -> Vec<(usize, f32)> {
+    (0..n).filter_map(|i| h.query_by_label(&format!("Page 1: p{i}")).map(|c| (i, c.rect().top()))).collect()
+}
+
+/// The grid moved up: the cells drawn both `before` and `after` by more than `by`, or, when it
+/// moved so far that none is drawn in both, the cells drawn now come after those drawn before.
+fn moved_up(before: &[(usize, f32)], after: &[(usize, f32)], by: f32) -> bool {
+    let both: Vec<(f32, f32)> = before.iter().filter_map(|(i, b)| after.iter().find(|(j, _)| j == i).map(|(_, a)| (*b, *a))).collect();
+    match (before.last(), after.first()) {
+        _ if !both.is_empty() => both.iter().all(|(b, a)| *a < *b - by),
+        (Some((last, _)), Some((first, _))) => first > last,
+        _ => false,
+    }
 }
 
 #[test]
@@ -318,9 +343,8 @@ fn the_controls_stay_in_view_when_the_grid_scrolls() {
     for drags in [false, true] {
         let mut h = pics_with(Pics { n: 40, titled: true, drags }, LABELS, true);
         let controls = h.get_by_label("Library folder").rect().top();
-        let item = || "Page 1: p0";
-        let before = h.get_by_label(item()).rect().top();
-        let over = h.get_by_label(item()).rect().center();
+        let before = tops(&h, 40);
+        let over = h.get_by_label("Page 1: p0").rect().center();
         h.event(egui::Event::PointerMoved(over));
         h.event(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
@@ -330,7 +354,7 @@ fn the_controls_stay_in_view_when_the_grid_scrolls() {
             modifiers: egui::Modifiers::NONE,
         });
         h.run_steps(8);
-        assert!(h.get_by_label(item()).rect().top() < before - 100.0, "the grid scrolled (drags: {drags})");
+        assert!(moved_up(&before, &tops(&h, 40), 100.0), "the grid scrolled (drags: {drags}): {before:?} {:?}", tops(&h, 40));
         assert_eq!(h.get_by_label("Library folder").rect().top(), controls, "the folder and search controls didn't");
     }
 }
@@ -418,9 +442,8 @@ fn a_right_drag_doesnt_carry_the_item() {
 #[test]
 fn a_finger_still_scrolls_the_grid_over_items_that_drag() {
     let mut h = pics_with(Pics { n: 40, titled: true, drags: true }, LABELS, true);
-    let item = || "Page 1: p0";
-    let before = h.get_by_label(item()).rect().top();
-    let from = h.get_by_label(item()).rect().center();
+    let before = tops(&h, 40);
+    let from = h.get_by_label("Page 1: p0").rect().center();
     let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos, force: None };
     // A touch screen sends the touch and the pointer events it stands for.
     h.event(touch(egui::TouchPhase::Start, from));
@@ -439,7 +462,7 @@ fn a_finger_still_scrolls_the_grid_over_items_that_drag() {
     h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
     h.event(egui::Event::PointerGone);
     h.run_steps(4);
-    assert!(h.get_by_label(item()).rect().top() < before - 100.0, "the grid followed the finger");
+    assert!(moved_up(&before, &tops(&h, 40), 100.0), "the grid followed the finger: {before:?} {:?}", tops(&h, 40));
 }
 
 #[test]
@@ -473,4 +496,173 @@ fn the_apps_own_inserts_follow_the_panes_in_the_menu() {
     let mut h = harness(Pages { folders: vec!["/lib".into()], ..Default::default() });
     open_menu(&mut h);
     assert!(h.query_by_label("Insert page").is_some() && h.query_by_label(PLACE_IN_MARGIN).is_none());
+}
+
+/// Folders removed and added back are listed again: what they hold may have changed.
+#[test]
+fn folders_that_come_back_are_listed_again() {
+    let mut h = harness(Pages { folders: vec!["/lib".into()], ..Default::default() });
+    assert!(h.query_by_label("Contract").is_some());
+    h.state_mut().1.folders.clear();
+    h.run_steps(2);
+    let host = &mut h.state_mut().1;
+    host.folders = vec!["/lib".into()];
+    host.second = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Second").is_some(), "what the folder holds now");
+    assert!(h.query_by_label("Contract").is_none());
+}
+
+/// Refresh asks the Library to read again the files that couldn't be read, once.
+#[test]
+fn refresh_reads_again_the_files_that_couldnt_be_read() {
+    let mut h = harness(Pages { folders: vec!["/lib".into()], ..Default::default() });
+    assert_eq!(h.state().1.lists.len(), 1);
+    assert!(h.state().1.lists[0].get("refresh").is_none());
+    h.get_by_label("Refresh").click();
+    h.run_steps(2);
+    assert_eq!(h.state().1.lists.len(), 2);
+    assert_eq!(h.state().1.lists[1]["refresh"], json!(true));
+}
+
+/// `files` documents in `/lib`, `doc0.doc`…, each of `items` pages `p0`…; a search finds page 0
+/// of every file, taking `search_ms` milliseconds a file.
+#[derive(Default)]
+struct Many {
+    files: usize,
+    items: usize,
+    search_ms: u64,
+    /// The files read and the searches asked.
+    read: Vec<String>,
+    searches: Vec<Value>,
+    /// How many cells were named, which the pane does for each cell it draws.
+    named: std::cell::Cell<usize>,
+}
+
+impl Host for Many {
+    fn act(&mut self, _id: &str, _params: Value) -> Result<Value, String> {
+        Ok(json!({}))
+    }
+    fn ask(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        match id {
+            "library.list" => match params["file"].as_str() {
+                Some(f) => {
+                    self.read.push(f.to_string());
+                    let pages: Vec<Value> = (0..self.items).map(|k| json!({"index": k, "title": format!("p{k}"), "hidden": false})).collect();
+                    Ok(json!([{"file": f, "title": f, "pages": pages}]))
+                }
+                None => Ok(Value::Array(
+                    (0..self.files).map(|i| json!({"file": format!("/lib/doc{i}.doc"), "folder": "/lib", "title": format!("doc{i}")})).collect(),
+                )),
+            },
+            "library.search" => {
+                self.searches.push(params.clone());
+                std::thread::sleep(std::time::Duration::from_millis(self.search_ms));
+                Ok(match params["file"].as_str() {
+                    Some(f) => json!([{"file": f, "page": 0, "title": "p0", "hidden": false, "match": "title"}]),
+                    None => json!([]),
+                })
+            }
+            "library.thumbnail" => Ok(json!({"png": png(), "width": 16, "height": 9})),
+            _ => Ok(json!([])),
+        }
+    }
+    fn folders(&self) -> Vec<String> {
+        vec!["/lib".into()]
+    }
+    fn pick_folder(&mut self) -> Option<Option<String>> {
+        None
+    }
+    fn can_place(&self) -> bool {
+        true
+    }
+    fn report(&mut self, _message: String) {}
+    fn text<'a>(&self, english: &'a str) -> Cow<'a, str> {
+        if english == LABELS.item {
+            self.named.set(self.named.get() + 1);
+        }
+        Cow::Borrowed(english)
+    }
+}
+
+fn many(host: Many) -> Harness<'static, (State, Many)> {
+    let mut h = Harness::builder().with_size(egui::vec2(320.0, 480.0)).build_ui_state(
+        |ui, s: &mut (State, Many)| {
+            let pal = Palette::from_visuals(ui.visuals());
+            show(ui, &mut s.0, &mut s.1, &LABELS, &pal);
+        },
+        (State::default(), host),
+    );
+    for _ in 0..300 {
+        h.step();
+        if h.state().0.ready() {
+            break;
+        }
+    }
+    h
+}
+
+/// A Library of many large files is read only as far as can be laid out, and only those files
+/// keep their items.
+#[test]
+fn only_the_files_laid_out_are_read_and_keep_their_items() {
+    let h = many(Many { files: 400, items: 100, ..Default::default() });
+    assert!(h.state().0.ready());
+    let laid_out = MAX_SHOWN_ITEMS / 100;
+    assert_eq!(h.state().1.read.len(), laid_out, "files read until they hold enough items");
+    let kept: usize = h.state().0.files.iter().filter_map(|f| f.items.as_ref()).map(|s| s.len()).sum();
+    assert_eq!(kept, MAX_SHOWN_ITEMS);
+    assert!(h.query_by_label_contains(&format!("Showing the first {laid_out} of 400 files")).is_some());
+}
+
+/// A search runs a few files a frame, each file on its own, so a large Library never stalls the
+/// window, and its hits are ranked as one search.
+#[test]
+fn a_search_runs_a_few_files_a_frame() {
+    let mut h = many(Many { files: 20, items: 2, search_ms: 5, ..Default::default() });
+    h.state_mut().0.query = "p0".into();
+    let mut first = None;
+    for _ in 0..300 {
+        h.step();
+        let asked = h.state().1.searches.len();
+        if asked > 0 && first.is_none() {
+            first = Some(asked);
+        }
+        if h.state().0.hits().is_some() {
+            break;
+        }
+    }
+    let first = first.unwrap_or_default();
+    assert!(first > 0 && first < 20, "the first frame searched {first} of 20 files");
+    assert_eq!(h.state().0.hits(), Some(20));
+    assert_eq!(h.state().1.searches.len(), 20);
+    assert!(h.state().1.searches.iter().all(|p| p["file"].is_string()), "each file on its own");
+}
+
+/// Of a file with thousands of items, only the rows in view are drawn, and scrolling reaches the
+/// last.
+#[test]
+fn only_the_rows_in_view_are_drawn() {
+    let mut h = many(Many { files: 1, items: 2_000, ..Default::default() });
+    h.run_steps(2);
+    h.state().1.named.set(0);
+    h.step();
+    let drawn = h.state().1.named.get();
+    assert!(drawn > 0 && drawn < 40, "{drawn} cells drawn of 2000");
+    assert!(h.query_by_label("Page 1: p0").is_some() && h.query_by_label("Page 2000: p1999").is_none());
+    let over = h.get_by_label("Page 1: p0").rect().center();
+    h.event(egui::Event::PointerMoved(over));
+    for _ in 0..40 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -20_000.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+    }
+    h.run_steps(8);
+    assert!(h.query_by_label("Page 2000: p1999").is_some(), "the last row, scrolled to");
+    assert!(h.query_by_label("Page 1: p0").is_none());
 }

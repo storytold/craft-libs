@@ -43,7 +43,8 @@ order can change. The `Labels` stay English constants: nothing has to be built p
 ## Layout
 
 The pane scrolls its own grid within the part of it that can be seen, so the folder and search
-controls stay in view, also when the app puts its panes in a scroll area.
+controls stay in view, also when the app puts its panes in a scroll area. Only the rows of the grid
+in view are drawn: a row out of view only takes its space.
 
 ```rust
 let palette = craft_library_egui::Palette::from_visuals(ui.visuals());
@@ -51,5 +52,8 @@ craft_library_egui::show(ui, &mut app.library_state, &mut MyHost(app), &LABELS, 
 ```
 
 The pane holds no document and reads no file. It reads a few files per frame and draws only the
-thumbnails in view, so a large Library fills in without stalling the window. At most 300 files
-are laid out at once.
+thumbnails in view, so a large Library fills in without stalling the window. It reads and lays out
+at most 300 files, and stops reading once they hold 10,000 items; the other files are listed but
+not read, and the pane asks to choose a folder or search to see them. A search also runs a few
+files per frame (`library.search` with `file`), showing what it has found so far. Refresh lists the
+folders again and has the Library read again the files that couldn't be read.

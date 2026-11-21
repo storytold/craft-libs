@@ -44,8 +44,8 @@ The app keeps the folder list in its own settings and passes it in.
 |---|---|
 | `library.folders` | the folders and how many files each holds |
 | `library.addFolder`, `library.removeFolder` | change the app's folder list (associated functions) |
-| `library.list` | the files of every folder or one, or one file's items |
-| `library.search` | items whose title, text or file name matches |
+| `library.list` | the files of every folder or one, or one file's items; with `refresh`, files that couldn't be read are read again |
+| `library.search` | items whose title, text or file name matches, in every folder, one, or one `file` |
 | `library.thumbnail` | one item drawn as base64 PNG |
 
 Inserting stays with the app, because only the app knows its document. `Library::file` and
@@ -64,6 +64,13 @@ Everything read is hostile:
 | Items per file | 2,000 |
 | Links | never followed |
 
-A file that can't be read is listed with its error. A reader that panics on a hostile file gives
-an error for that file alone. Indexes, opened documents and thumbnails are cached within fixed
-budgets, and a file whose size or time changes is read again.
+A file that can't be read is listed with its error. A `Kind` that panics on a hostile file, while
+opening it, counting or listing its items or drawing a thumbnail, gives an error for that file
+alone. That holds where a panic unwinds, as in desktop builds. Where a panic aborts, as
+`wasm32-unknown-unknown` does by default, it ends the app, so a `Kind` built for such a target must
+not panic.
+
+Indexes, opened documents and thumbnails are cached within fixed budgets. A file whose size or time
+changes is read again. A file that couldn't be read keeps its error until then, or until
+`Library::forget_failed` (`library.list` with `refresh`, which the pane's Refresh sends): a lock
+can go away without the file changing.

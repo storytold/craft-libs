@@ -12,11 +12,12 @@
 //! which it draws in [`Host::tab`]. Every word the pane shows, the app's and the pane's own
 //! ([`words`]), goes through [`Host::text`], so the app can show it in the person's language.
 //!
-//! Files are read a few per frame, so a large Library fills in without stalling the window, only
-//! thumbnails in view are drawn, and at most [`MAX_SHOWN_FILES`] files are laid out at once. The
-//! pane scrolls its own grid within the space it can be seen in, so its folder and search controls
-//! stay in view even when the app puts it in a scroll area. A Library whose files each hold one
-//! item (pictures, icons) shows them in one grid ([`Labels::one_per_file`]).
+//! Files are read, and searched, a few per frame, so a large Library fills in without stalling
+//! the window. At most [`MAX_SHOWN_FILES`] files and about [`MAX_SHOWN_ITEMS`] items are read and
+//! laid out at once, and only the rows of the grid in view are drawn. The pane scrolls its own
+//! grid within the space it can be seen in, so its folder and search controls stay in view even
+//! when the app puts it in a scroll area. A Library whose files each hold one item (pictures,
+//! icons) shows them in one grid ([`Labels::one_per_file`]).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -31,7 +32,7 @@ use serde_json::{Value, json};
 /// The shared tab's id: the items of the Library's documents.
 pub const ITEMS: &str = "items";
 
-/// Time spent reading files per frame, in seconds.
+/// Time spent reading or searching files per frame, in seconds.
 const READ_BUDGET: f64 = 0.012;
 /// Thumbnails drawn per frame.
 const THUMBS_PER_FRAME: usize = 2;
@@ -41,6 +42,13 @@ const MAX_TEXTURES: usize = 256;
 const SEARCH_DELAY: f64 = 0.25;
 /// Files laid out at once; past this the pane asks to choose a folder or search.
 pub const MAX_SHOWN_FILES: usize = 300;
+/// Items laid out at once: files are read until they hold this many (the last may add up to
+/// [`craft_library::MAX_ITEMS`] more), and the pane asks to choose a folder or search past it.
+pub const MAX_SHOWN_ITEMS: usize = 10_000;
+/// Items a search finds and shows, as `library.search` answers at most.
+const MAX_HITS: usize = 500;
+/// The height of the name under a thumbnail.
+const LABEL_H: f32 = 16.0;
 /// Elements listed in an item's Insert Element menu, and items whose lists are kept.
 const MAX_MENU_ELEMENTS: usize = 40;
 const MAX_ELEMENT_LISTS: usize = 64;
@@ -304,7 +312,29 @@ enum Thumb {
     Failed,
 }
 
+/// A thumbnail: its file, the item and its width in pixels.
 type ThumbKey = (String, usize, u32);
+
+/// A search the pane runs a few files at a time.
+struct Search {
+    query: String,
+    /// The next of the listed files to search.
+    next: usize,
+    /// What was found, by how it matched (title, text, file name), each at most [`MAX_HITS`]: the
+    /// file's place in the listing and the item.
+    found: [Vec<(usize, ItemRow)>; 3],
+    /// `found` grouped by file, best first, as drawn.
+    groups: Vec<Group>,
+    /// An error was shown (once a search: they are likely the same for every file).
+    reported: bool,
+}
+
+impl Search {
+    /// Every file has been searched, or enough title matches found that no other could be shown.
+    fn done(&self, files: usize) -> bool {
+        self.next >= files || self.found.first().is_some_and(|t| t.len() >= MAX_HITS)
+    }
+}
 
 /// Pane-only state: nothing here is part of a document or a preference.
 #[derive(Default)]
@@ -320,38 +350,52 @@ pub struct State {
     pub adding: bool,
     /// The Library folders and the folder shown that `files` was listed for.
     listed_for: Option<(Vec<String>, Option<String>)>,
+    /// The files listed; only those laid out keep their items.
     pub files: Vec<FileRow>,
-    /// How many of `files` have been read.
+    /// How many of `files` have been read, in order, and the items they hold.
     read: usize,
-    /// What `library.search` found for `searched`, grouped by file.
-    hits: Option<Vec<Group>>,
-    searched: String,
+    read_items: usize,
+    /// The next listing reads again the files that couldn't be read (after Refresh).
+    reread: bool,
+    /// The search being run, or run last.
+    search: Option<Search>,
     typed_at: f64,
-    thumbs: HashMap<ThumbKey, Thumb>,
+    /// Thumbnails by file, then by item and width, and the order they were drawn in.
+    thumbs: HashMap<String, HashMap<(usize, u32), Thumb>>,
     thumb_order: VecDeque<ThumbKey>,
     /// An item's top-level shape names and how many shapes carry each, for Insert Element.
     elements: HashMap<(String, usize), Vec<(String, usize)>>,
 }
 
 impl State {
-    /// List and read the folders again, and draw the thumbnails again (after files changed).
+    /// List and read the folders again, files that couldn't be read too, and draw the
+    /// thumbnails again (after files changed).
     pub fn refresh(&mut self) {
         self.listed_for = None;
-        self.hits = None;
-        self.searched.clear();
+        self.reread = true;
+        self.search = None;
         self.thumbs.clear();
         self.thumb_order.clear();
         self.elements.clear();
     }
 
-    /// Every file has been read.
+    /// Every file to be laid out has been read.
     pub fn ready(&self) -> bool {
-        self.listed_for.is_some() && self.read >= self.files.len()
+        self.listed_for.is_some() && !self.reading()
     }
 
-    /// How many items the last search found, once it has run.
+    /// Files to be laid out are still being read.
+    fn reading(&self) -> bool {
+        self.read < self.files.len().min(MAX_SHOWN_FILES) && self.read_items < MAX_SHOWN_ITEMS
+    }
+
+    /// How many items the last search found, once every file has been searched.
     pub fn hits(&self) -> Option<usize> {
-        self.hits.as_ref().map(|g| g.iter().map(|g| g.items.len()).sum())
+        self.search.as_ref().filter(|s| s.done(self.files.len())).map(|s| s.groups.iter().map(|g| g.items.len()).sum())
+    }
+
+    fn thumb(&self, file: &str, item: usize, px: u32) -> Option<&Thumb> {
+        self.thumbs.get(file)?.get(&(item, px))
     }
 }
 
@@ -461,30 +505,24 @@ fn folder_controls(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &La
     }
 }
 
-/// The rows `library.list` answered.
-fn rows(v: &Value, nouns: Nouns) -> Vec<FileRow> {
-    v.as_array()
-        .map(|a| {
-            a.iter()
-                .map(|f| FileRow {
-                    file: f["file"].as_str().unwrap_or_default().to_string(),
-                    title: f["title"].as_str().unwrap_or_default().to_string(),
-                    items: f[nouns.many].as_array().map(|s| {
-                        Arc::new(
-                            s.iter()
-                                .map(|x| ItemRow {
-                                    index: x["index"].as_u64().and_then(|i| usize::try_from(i).ok()).unwrap_or(0),
-                                    title: x["title"].as_str().unwrap_or_default().to_string(),
-                                    hidden: x["hidden"].as_bool().unwrap_or(false),
-                                })
-                                .collect(),
-                        )
-                    }),
-                    error: f["error"].as_str().map(String::from),
-                })
-                .collect()
+/// The rows `library.list` answered; only the first `keep` keep their items, each at most
+/// [`craft_library::MAX_ITEMS`] of them.
+fn rows(v: &Value, nouns: Nouns, keep: usize) -> Vec<FileRow> {
+    let item = |x: &Value| ItemRow {
+        index: x["index"].as_u64().and_then(|i| usize::try_from(i).ok()).unwrap_or(0),
+        title: x["title"].as_str().unwrap_or_default().to_string(),
+        hidden: x["hidden"].as_bool().unwrap_or(false),
+    };
+    let Some(a) = v.as_array() else { return vec![] };
+    a.iter()
+        .enumerate()
+        .map(|(i, f)| FileRow {
+            file: f["file"].as_str().unwrap_or_default().to_string(),
+            title: f["title"].as_str().unwrap_or_default().to_string(),
+            items: f[nouns.many].as_array().filter(|_| i < keep).map(|s| Arc::new(s.iter().take(craft_library::MAX_ITEMS).map(item).collect())),
+            error: f["error"].as_str().map(String::from),
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// List the files of the folder shown (without opening them); they are read a few per frame.
@@ -494,8 +532,12 @@ fn list_files(st: &mut State, host: &mut dyn Host, nouns: Nouns, key: (Vec<Strin
     if let Some(f) = &key.1 {
         p["folder"] = json!(f);
     }
+    if std::mem::take(&mut st.reread) {
+        p["refresh"] = json!(true);
+    }
     let mut files = match host.ask("library.list", p) {
-        Ok(v) => rows(&v, nouns),
+        // Files listed with their items (pictures) keep them only when they can be laid out.
+        Ok(v) => rows(&v, nouns, MAX_SHOWN_FILES),
         Err(e) => {
             host.report(e);
             vec![]
@@ -509,82 +551,96 @@ fn list_files(st: &mut State, host: &mut dyn Host, nouns: Nouns, key: (Vec<Strin
     }
     st.files = files;
     st.read = 0;
+    st.read_items = 0;
     st.listed_for = Some(key);
-    st.hits = None;
-    st.searched.clear();
+    st.search = None;
 }
 
-/// Read files until this frame's budget is spent.
-fn read_some(st: &mut State, host: &mut dyn Host, nouns: Nouns) {
-    let start = web_time::Instant::now();
-    while st.read < st.files.len() && start.elapsed().as_secs_f64() < READ_BUDGET {
+/// Read the files to be laid out, in order, until this frame's budget is spent.
+fn read_some(st: &mut State, host: &mut dyn Host, nouns: Nouns, start: web_time::Instant) {
+    while st.reading() && start.elapsed().as_secs_f64() < READ_BUDGET {
         let i = st.read;
         st.read += 1;
-        let Some(file) = st.files.get(i).filter(|f| f.items.is_none()).map(|f| f.file.clone()) else { continue };
-        let answer = host.ask("library.list", json!({"file": file}));
-        let Some(row) = st.files.get_mut(i) else { continue };
-        match answer.map(|v| rows(&v, nouns)) {
-            Ok(read) => match read.into_iter().next() {
-                Some(r) => {
-                    row.title = r.title;
-                    row.items = Some(r.items.unwrap_or_default());
-                    row.error = r.error;
+        let Some(file) = st.files.get(i).map(|f| f.file.clone()) else { break };
+        if st.files.get(i).is_some_and(|f| f.items.is_none()) {
+            let answer = host.ask("library.list", json!({"file": file}));
+            let Some(row) = st.files.get_mut(i) else { break };
+            match answer.map(|v| rows(&v, nouns, 1)) {
+                Ok(read) => match read.into_iter().next() {
+                    Some(r) => {
+                        row.title = r.title;
+                        row.items = Some(r.items.unwrap_or_default());
+                        row.error = r.error;
+                    }
+                    None => row.items = Some(Arc::default()),
+                },
+                Err(e) => {
+                    row.items = Some(Arc::default());
+                    row.error = Some(e);
                 }
-                None => row.items = Some(Arc::default()),
-            },
+            }
+        }
+        st.read_items += st.files.get(i).and_then(|f| f.items.as_ref()).map_or(0, |s| s.len());
+    }
+}
+
+/// Search the next listed files with `library.search`, one at a time, until this frame's budget
+/// is spent.
+fn search_some(s: &mut Search, files: &[FileRow], host: &mut dyn Host, nouns: Nouns, start: web_time::Instant) {
+    let mut found = false;
+    while !s.done(files.len()) && start.elapsed().as_secs_f64() < READ_BUDGET {
+        let i = s.next;
+        s.next += 1;
+        // A file listed with an error has nothing to find.
+        let Some(f) = files.get(i).filter(|f| f.error.is_none()) else { continue };
+        let answer = match host.ask("library.search", json!({"query": s.query, "file": f.file, "limit": MAX_HITS})) {
+            Ok(a) => a,
             Err(e) => {
-                row.items = Some(Arc::default());
-                row.error = Some(e);
+                if !std::mem::replace(&mut s.reported, true) {
+                    host.report(e);
+                }
+                continue;
+            }
+        };
+        for h in answer.as_array().into_iter().flatten() {
+            let Some(item) = h[nouns.one].as_u64().and_then(|i| usize::try_from(i).ok()) else { continue };
+            let how = match h["match"].as_str() {
+                Some("title") => 0,
+                Some("text") => 1,
+                _ => 2,
+            };
+            let hidden =
+                h["hidden"].as_bool().unwrap_or_else(|| f.items.as_ref().and_then(|s| s.iter().find(|x| x.index == item)).is_some_and(|x| x.hidden));
+            let title = h["title"].as_str().unwrap_or_default().to_string();
+            if let Some(kind) = s.found.get_mut(how).filter(|k| k.len() < MAX_HITS) {
+                kind.push((i, ItemRow { index: item, title, hidden }));
+                found = true;
             }
         }
     }
-}
-
-fn search(st: &mut State, host: &mut dyn Host, nouns: Nouns, query: &str) {
-    let mut p = json!({"query": query, "limit": 500});
-    if let Some(f) = &st.folder {
-        p["folder"] = json!(f);
+    if found {
+        s.groups = hit_groups(&s.found, files);
     }
-    let hits: Vec<(String, usize, String)> = match host.ask("library.search", p) {
-        Ok(v) => v
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|h| {
-                        let item = h[nouns.one].as_u64().and_then(|i| usize::try_from(i).ok())?;
-                        Some((h["file"].as_str()?.to_string(), item, h["title"].as_str().unwrap_or_default().to_string()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        Err(e) => {
-            host.report(e);
-            vec![]
-        }
-    };
-    st.hits = Some(hit_groups(&st.files, &hits));
-    st.searched = query.to_string();
 }
 
-/// The search hits grouped by file, files in the order they were first found.
-fn hit_groups(files: &[FileRow], hits: &[(String, usize, String)]) -> Vec<Group> {
-    let rows: HashMap<&str, &FileRow> = files.iter().map(|f| (f.file.as_str(), f)).collect();
-    let mut groups: Vec<(Group, Vec<ItemRow>)> = vec![];
-    let mut at: HashMap<&str, usize> = HashMap::new();
-    for (file, item, title) in hits {
-        let row = rows.get(file.as_str()).copied();
-        let hidden = row.and_then(|r| r.items.as_ref()).and_then(|s| s.iter().find(|x| x.index == *item)).is_some_and(|x| x.hidden);
-        let entry = ItemRow { index: *item, title: title.clone(), hidden };
-        match at.get(file.as_str()).and_then(|i| groups.get_mut(*i)) {
-            Some((_, items)) => items.push(entry),
+/// The best [`MAX_HITS`] hits (title matches, then text, then file names), grouped by file in
+/// the order the files were first found.
+fn hit_groups(found: &[Vec<(usize, ItemRow)>; 3], files: &[FileRow]) -> Vec<Group> {
+    let mut groups: Vec<(usize, Vec<ItemRow>)> = vec![];
+    let mut at: HashMap<usize, usize> = HashMap::new();
+    for (file, row) in found.iter().flatten().take(MAX_HITS) {
+        match at.get(file).and_then(|g| groups.get_mut(*g)) {
+            Some((_, items)) => items.push(row.clone()),
             None => {
-                at.insert(file.as_str(), groups.len());
-                let title = row.map(|r| r.title.clone()).unwrap_or_else(|| file.rsplit(['/', '\\']).next().unwrap_or(file).to_string());
-                groups.push((Group { file: file.clone(), title, error: None, items: Arc::default() }, vec![entry]));
+                at.insert(*file, groups.len());
+                groups.push((*file, vec![row.clone()]));
             }
         }
     }
-    groups.into_iter().map(|(g, items)| Group { items: Arc::new(items), ..g }).collect()
+    groups
+        .into_iter()
+        .filter_map(|(i, items)| files.get(i).map(|f| Group { file: f.file.clone(), title: f.title.clone(), error: None, items: Arc::new(items) }))
+        .collect()
 }
 
 fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal: &Palette) {
@@ -595,6 +651,10 @@ fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
     folder_controls(ui, st, host, labels);
     let folders = host.folders();
     if folders.is_empty() {
+        // Listed again when folders come back, even the same ones: what they hold may differ.
+        st.listed_for = None;
+        st.files.clear();
+        st.search = None;
         ui.add_space(6.0);
         ui.label(dim(pal, tr(host, labels.empty)));
         return;
@@ -609,46 +669,56 @@ fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
     if st.listed_for.as_ref() != Some(&key) {
         list_files(st, host, labels.nouns, key);
     }
-    read_some(st, host, labels.nouns);
-    let reading = !st.ready();
-    if reading {
-        let (read, total) = (st.read.to_string(), st.files.len().to_string());
-        ui.label(dim(pal, trf(host, words::READING, &[("read", &read), ("total", &total)])));
-        ui.ctx().request_repaint();
-    }
+    let start = web_time::Instant::now();
     let query = st.query.trim().to_string();
     let groups: Vec<Group> = if query.is_empty() {
-        st.files
+        read_some(st, host, labels.nouns, start);
+        if st.reading() {
+            let (read, total) = (st.read.to_string(), st.files.len().min(MAX_SHOWN_FILES).to_string());
+            ui.label(dim(pal, trf(host, words::READING, &[("read", &read), ("total", &total)])));
+            ui.ctx().request_repaint();
+        }
+        let groups: Vec<Group> = st
+            .files
             .iter()
-            .filter_map(|f| Some(Group { file: f.file.clone(), title: f.title.clone(), error: f.error.clone(), items: f.items.clone()? }))
             .take(MAX_SHOWN_FILES)
-            .collect()
+            .filter_map(|f| Some(Group { file: f.file.clone(), title: f.title.clone(), error: f.error.clone(), items: f.items.clone()? }))
+            .collect();
+        if !st.reading() {
+            if groups.is_empty() {
+                ui.label(dim(pal, tr(host, words::NOTHING_HERE)));
+            } else if groups.len() < st.files.len() {
+                let (shown, total) = (groups.len().to_string(), st.files.len().to_string());
+                ui.label(dim(pal, trf(host, words::SHOWING_FIRST, &[("shown", &shown), ("total", &total)])));
+            }
+        }
+        groups
     } else {
-        if !reading && query != st.searched {
+        if st.search.as_ref().is_none_or(|s| s.query != query) {
             let waited = ui.input(|i| i.time) - st.typed_at;
             if waited >= SEARCH_DELAY {
-                search(st, host, labels.nouns, &query);
+                st.search = Some(Search { query: query.clone(), next: 0, found: Default::default(), groups: vec![], reported: false });
             } else {
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SEARCH_DELAY - waited));
             }
         }
-        match st.hits.as_ref().filter(|_| st.searched == query) {
-            Some(groups) => {
-                if groups.is_empty() {
-                    ui.label(dim(pal, trf(host, words::NO_MATCH, &[("query", &query)])));
+        match st.search.as_mut().filter(|s| s.query == query) {
+            Some(s) => {
+                search_some(s, &st.files, host, labels.nouns, start);
+                if s.done(st.files.len()) {
+                    if s.groups.is_empty() {
+                        ui.label(dim(pal, trf(host, words::NO_MATCH, &[("query", &query)])));
+                    }
+                } else {
+                    let (read, total) = (s.next.to_string(), st.files.len().to_string());
+                    ui.label(dim(pal, trf(host, words::READING, &[("read", &read), ("total", &total)])));
+                    ui.ctx().request_repaint();
                 }
-                groups.clone()
+                s.groups.clone()
             }
             None => vec![],
         }
     };
-    if !reading && query.is_empty() && groups.is_empty() {
-        ui.label(dim(pal, tr(host, words::NOTHING_HERE)));
-    }
-    if query.is_empty() && st.files.len() > MAX_SHOWN_FILES {
-        let (shown, total) = (MAX_SHOWN_FILES.to_string(), st.files.len().to_string());
-        ui.label(dim(pal, trf(host, words::SHOWING_FIRST, &[("shown", &shown), ("total", &total)])));
-    }
     // The grid scrolls within the part of the pane that can be seen, so the controls above stay
     // in view even inside the app's own scroll area (where the height left is unbounded).
     let visible = ui.clip_rect().bottom() - ui.cursor().top();
@@ -674,6 +744,52 @@ fn thumb_px(ui: &Ui, w: f32) -> u32 {
     px.clamp(*craft_library::THUMB_WIDTHS.start(), *craft_library::THUMB_WIDTHS.end())
 }
 
+/// An item's height over its width: its thumbnail's, once drawn.
+fn aspect(st: &State, labels: &Labels, file: &str, item: usize, px: u32) -> f32 {
+    match st.thumb(file, item, px) {
+        Some(Thumb::Ready(tex)) => {
+            let size = tex.size_vec2();
+            if size.x > 0.0 { (size.y / size.x).clamp(0.1, 4.0) } else { labels.aspect }
+        }
+        _ => labels.aspect,
+    }
+}
+
+/// One row of cells `w` points wide: drawn when it is in view, else only its space taken, so a
+/// long grid costs only the rows that can be seen. `cells` gives each cell's file, its item and,
+/// in a one-item-per-file grid, the file's title, which names an untitled item.
+#[allow(clippy::too_many_arguments)]
+fn grid_row(
+    ui: &mut Ui,
+    st: &mut State,
+    host: &mut dyn Host,
+    labels: &Labels,
+    pal: &Palette,
+    cells: &[(&str, &ItemRow, &str)],
+    size: (f32, u32, bool),
+    budget: &mut usize,
+) {
+    let (w, px, named) = size;
+    let tallest = cells.iter().map(|(file, it, _)| w * aspect(st, labels, file, it.index, px)).fold(0.0, f32::max);
+    let h = (tallest + LABEL_H).max(ui.spacing().interact_size.y);
+    let row = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), h));
+    if !ui.is_rect_visible(row) {
+        ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        for (file, it, file_title) in cells {
+            if named && it.title.trim().is_empty() {
+                let it = ItemRow { title: (*file_title).to_string(), ..(*it).clone() };
+                cell(ui, st, host, labels, pal, file, &it, size, budget);
+            } else {
+                cell(ui, st, host, labels, pal, file, it, size, budget);
+            }
+        }
+    });
+}
+
 /// Every file's one item in one grid, named under its thumbnail; files that couldn't be read
 /// after it.
 fn flat(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal: &Palette, groups: &[Group], budget: &mut usize) {
@@ -682,23 +798,11 @@ fn flat(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal: 
     let columns = (((width + gap) / (FLAT_CELL + gap)).floor() as usize).clamp(2, MAX_FLAT_COLUMNS);
     let w = ((width - gap * (columns - 1) as f32) / columns as f32).floor().max(32.0);
     let px = thumb_px(ui, w);
-    let cells: Vec<(&str, ItemRow)> = groups
-        .iter()
-        .flat_map(|g| {
-            g.items.iter().map(move |it| {
-                let title = if it.title.trim().is_empty() { g.title.clone() } else { it.title.clone() };
-                (g.file.as_str(), ItemRow { title, ..it.clone() })
-            })
-        })
-        .collect();
+    let cells: Vec<(&str, &ItemRow, &str)> =
+        groups.iter().flat_map(|g| g.items.iter().map(move |it| (g.file.as_str(), it, g.title.as_str()))).collect();
     ui.add_space(6.0);
     for row in cells.chunks(columns) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for (file, it) in row {
-                cell(ui, st, host, labels, pal, file, it, (w, px, true), budget);
-            }
-        });
+        grid_row(ui, st, host, labels, pal, row, (w, px, true), budget);
     }
     for g in groups {
         if let Some(e) = &g.error {
@@ -722,12 +826,8 @@ fn group(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
     let w = ((ui.available_width() - gap) / 2.0).floor().max(48.0);
     let px = thumb_px(ui, w);
     for pair in g.items.chunks(2) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for it in pair {
-                cell(ui, st, host, labels, pal, &g.file, it, (w, px, false), budget);
-            }
-        });
+        let row: Vec<(&str, &ItemRow, &str)> = pair.iter().map(|it| (g.file.as_str(), it, g.title.as_str())).collect();
+        grid_row(ui, st, host, labels, pal, &row, (w, px, false), budget);
     }
 }
 
@@ -761,29 +861,21 @@ fn cell(
 ) {
     let (w, px, named) = size;
     let key: ThumbKey = (file.to_string(), row.index, px);
-    let aspect = match st.thumbs.get(&key) {
-        Some(Thumb::Ready(tex)) => {
-            let size = tex.size_vec2();
-            if size.x > 0.0 { (size.y / size.x).clamp(0.1, 4.0) } else { labels.aspect }
-        }
-        _ => labels.aspect,
-    };
-    let h = w * aspect;
-    let label_h = 16.0;
+    let h = w * aspect(st, labels, file, row.index, px);
     let drag_hint = host.drag_hint();
     let sense = if drag_hint.is_some() { Sense::click_and_drag() } else { Sense::click() };
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, h + label_h), sense);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, h + LABEL_H), sense);
     let label = cell_label(host, labels, row);
     resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
     let img = Rect::from_min_size(rect.min, vec2(w, h));
     if ui.is_rect_visible(rect) {
-        if !st.thumbs.contains_key(&key) && *budget > 0 {
+        if st.thumb(file, row.index, px).is_none() && *budget > 0 {
             *budget -= 1;
             load_thumb(st, host, ui.ctx(), labels.nouns, &key);
         }
         let p = ui.painter();
         let tint = if row.hidden { Color32::from_white_alpha(110) } else { Color32::WHITE };
-        match st.thumbs.get(&key) {
+        match st.thumb(file, row.index, px) {
             Some(Thumb::Ready(tex)) => {
                 p.image(tex.id(), img, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), tint);
             }
@@ -900,7 +992,7 @@ fn drag(ui: &Ui, st: &State, resp: &egui::Response, dragged: &Dragged, key: &Thu
     }
     let carried = egui::DragAndDrop::payload::<Dragged>(ctx).is_some_and(|d| *d == *dragged);
     let Some(at) = ctx.pointer_latest_pos().filter(|_| resp.dragged_by(primary) && carried) else { return };
-    let (size, tex) = match st.thumbs.get(key) {
+    let (size, tex) = match st.thumb(&key.0, key.1, key.2) {
         Some(Thumb::Ready(tex)) => {
             let s = tex.size_vec2();
             let w = s.x.clamp(1.0, GHOST_WIDTH);
@@ -993,11 +1085,15 @@ fn load_thumb(st: &mut State, host: &mut dyn Host, ctx: &egui::Context, nouns: N
         .and_then(|png| decode(&png))
         .map(|image| Thumb::Ready(ctx.load_texture(format!("library {} {} {}", key.0, key.1, key.2), image, TextureOptions::LINEAR)))
         .unwrap_or(Thumb::Failed);
-    st.thumbs.insert(key.clone(), thumb);
+    st.thumbs.entry(key.0.clone()).or_default().insert((key.1, key.2), thumb);
     st.thumb_order.push_back(key.clone());
     while st.thumb_order.len() > MAX_TEXTURES {
-        if let Some(old) = st.thumb_order.pop_front() {
-            st.thumbs.remove(&old);
+        let Some((file, item, px)) = st.thumb_order.pop_front() else { break };
+        if let Some(of_file) = st.thumbs.get_mut(&file) {
+            of_file.remove(&(item, px));
+            if of_file.is_empty() {
+                st.thumbs.remove(&file);
+            }
         }
     }
 }
