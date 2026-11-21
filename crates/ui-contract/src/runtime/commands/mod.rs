@@ -7,7 +7,7 @@ mod registry;
 
 pub use clipboard::{ClipContent, ClipError, ClipItem, ClipboardHandle};
 pub use craft_behavior::EditCommand;
-pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope};
+pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope, Trigger};
 pub use library::ChromeCommand;
 pub(crate) use library::WindowShortcut;
 pub use library::{EditCommands, NavCommand, WindowCommand};
@@ -32,6 +32,10 @@ pub use board::{chord_text_builds, keymap_builds};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
 
 use crate::contract::{MemoKey, MemoProps, PlainData, Revision, Tracked};
+use crate::runtime::egui::{areas, pass};
+use crate::runtime::env::Label;
+use crate::runtime::memory::Facts;
+use crate::runtime::overlay;
 use craft_behavior::CommandFlags;
 use craft_behavior::edit_history::Step;
 use craft_keymap::{Chord, Overrides};
@@ -59,7 +63,7 @@ impl AppCatalog {
             if !def.scope.is_app() {
                 return Err(CommandDefError::NotApp { command: def.command.id.clone() });
             }
-            registry::index_id(&mut index, &def.command.id, at)?;
+            registry::index_id(&mut index, &def.command.key_text(), at)?;
         }
         Ok(AppCatalog { defs: defs.into(), index: Arc::new(index), generation })
     }
@@ -76,8 +80,8 @@ impl AppCatalog {
 
     /// The def with the command's key, else the def with the bare id.
     pub(crate) fn get(&self, command: &CommandRef) -> Option<&CommandDef> {
-        // P3(shortcuts-w1): kb.C2
-        self.index.get(command.id.as_str()).and_then(|&at| self.defs.get(at))
+        let at = self.index.get(command.key_text().as_ref()).or_else(|| self.index.get(command.id.as_str()))?;
+        self.defs.get(*at)
     }
 }
 
@@ -154,8 +158,7 @@ impl Fired {
 
     /// The command with `mods` as the modifiers its firing input carried.
     pub fn mods(self, mods: craft_keymap::Mods) -> Fired {
-        let _ = mods;
-        todo!("ap.AP9")
+        Fired { mods, ..self }
     }
 }
 
@@ -369,6 +372,7 @@ pub struct CommandInput {
     pub(crate) overrides: Option<Arc<Overrides>>,
     pub(crate) gate: Option<CommandGate>,
     pub(crate) catalog: Option<AppCatalog>,
+    pub(crate) holds: Option<f64>,
 }
 
 impl CommandInput {
@@ -395,9 +399,9 @@ impl CommandInput {
     /// Turns hold bindings on with the app's hold delay in seconds, `Some(delay)`; `None`, the default, turns them off.
     /// The keymap is rebuilt when this changes.
     #[must_use]
-    pub fn holds(self, delay: Option<f64>) -> Self {
-        let _ = delay;
-        todo!("kb.C14")
+    pub fn holds(mut self, delay: Option<f64>) -> Self {
+        self.holds = delay;
+        self
     }
 
     /// The frame's app catalog; the keymap is rebuilt when the platform, the overrides or the catalog's generation change.
@@ -560,30 +564,49 @@ pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
 /// The runtime's keymap: the linked sets and the app catalog on the window's platform, under the overrides, with the
 /// system chords reserved. `None` before the first frame.
 pub fn keymap(ctx: &Context) -> Option<Arc<craft_keymap::Keymap>> {
-    let _ = ctx;
-    todo!("kb.C4")
+    board::keymap(ctx)
+}
+
+/// A command shown at `rect` in `layer`, as a pass registered it.
+#[derive(Clone)]
+struct ShownFact {
+    command: CommandRef,
+    layer: egui::LayerId,
+    rect: egui::Rect,
+    label: Label,
+    holder: bool,
+}
+
+/// Registers `command` as shown for the next pass of the running viewport.
+fn register_shown(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, label: Label, command: &CommandRef, holder: bool) {
+    Facts::register(ctx, ShownFact { command: command.clone(), layer, rect, label, holder });
 }
 
 /// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
 /// turns hold bindings on.
-pub fn holds(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, commands: &[CommandRef], label: crate::runtime::env::Label) {
-    let _ = (ctx, layer, rect, commands, label);
-    todo!("mn.M36")
+pub fn holds(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, commands: &[CommandRef], label: Label) {
+    for command in commands {
+        register_shown(ctx, layer, rect, label.clone(), command, true);
+    }
 }
 
-/// Records that `command` was shown at `rect` in `layer`, with `label`, for this pass and viewport: [`holds`] calls it
-/// for a holder and the report step for a bound component wholly inside its clip.
-#[allow(dead_code)] // P3(shortcuts-w1): mn.M37
-pub(crate) fn note_shown(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, label: crate::runtime::env::Label, command: &CommandRef) {
-    let _ = (ctx, layer, rect, label, command);
-    todo!("mn.M37")
+/// Records that the bound component of `command` was shown at `rect` in `layer`, with `label`, for this pass and
+/// viewport: the report step calls it for a component wholly inside its clip.
+// PLAN: the caller is the report step (menus-w3); until it lands nothing in this crate calls it.
+pub(crate) fn note_shown(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, label: Label, command: &CommandRef) {
+    register_shown(ctx, layer, rect, label, command, false);
 }
 
 /// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it
 /// was wholly in view and not under another window.
 pub fn shown(ctx: &Context, command: &CommandRef) -> Option<Shown> {
-    let _ = (ctx, command);
-    todo!("mn.M37")
+    let viewport = pass::current_viewport(ctx);
+    let scrim = overlay::top_modal_in(ctx, viewport).and_then(|top| top.cover);
+    Facts::<ShownFact>::of_last_pass(ctx)
+        .into_iter()
+        .filter(|fact| fact.command == *command)
+        .find(|fact| !areas::rects_over(ctx, fact.layer, scrim).iter().any(|over| over.intersects(fact.rect)))
+        .map(|fact| Shown { rect: fact.rect, viewport, label: fact.label, holder: fact.holder })
 }
 
 /// Where a command was shown, from [`shown`].

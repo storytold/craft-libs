@@ -16,8 +16,8 @@ use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler};
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
-    Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, Scopes,
-    Trigger,
+    Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, PressKind,
+    Scopes, Trigger,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -103,6 +103,8 @@ struct KeymapCache {
     overrides: Option<Arc<Overrides>>,
     /// The generation of the app catalog the keymap joined, `None` for none.
     generation: Option<u64>,
+    /// Whether hold bindings count in the keymap.
+    holds: bool,
     /// The chords bound to the edit commands, which the input hook removes from the raw input when the focused
     /// component lists the command.
     edit_chords: Arc<[(EditCommand, Chord)]>,
@@ -117,6 +119,21 @@ struct Held {
     key: craft_keymap::Key,
     command: CommandRef,
     target: Option<Id>,
+}
+
+/// A key down that has a hold binding: its release or its deadline settles whether it was a tap or a hold. Interaction
+/// state like `Board::held`, set from a pass's own key events.
+struct HoldWait {
+    key: craft_keymap::Key,
+    /// What the hold runs once the delay passes with the key down.
+    hold: Hit,
+    /// When the key went down, by its own input time.
+    since: f64,
+    /// The hold delay at the press: a later change of the app's delay does not move this wait.
+    delay: f64,
+    /// What a release before the delay runs.
+    tap: Option<Hit>,
+    viewport: ViewportId,
 }
 
 #[derive(Default)]
@@ -165,6 +182,10 @@ pub(crate) struct Board {
     views: HashMap<ViewportId, View>,
     matcher: Matcher,
     held: Vec<Held>,
+    /// The key whose tap or hold is still to be decided.
+    hold_wait: Option<HoldWait>,
+    /// The app's hold delay in seconds, from this frame's input.
+    hold_delay: f64,
     /// The top modal layer's root container of each viewport that has one.
     modal_roots: HashMap<ViewportId, Id>,
     /// The states published this pass, and the pass before, by an instance inside the top modal layer.
@@ -634,7 +655,12 @@ impl Board {
 
     /// The scope name of `command`; commands no definition names belong to the application.
     fn scope_of(&self, command: &CommandRef) -> &str {
-        self.def(command).map_or(CommandScope::APP.name(), |def| def.scope.as_str()) // P3(shortcuts-w1): kb.C3
+        self.def(command).map_or(CommandScope::APP.name(), |def| def.scope.as_str())
+    }
+
+    /// The app's state of `command`: the one set for its params, else the one set for its bare id.
+    fn app_state(&self, number: u32, command: &CommandRef) -> Option<&CommandState> {
+        params_key(command).and_then(|key| self.app_states.get(&(number, Some(key)))).or_else(|| self.app_states.get(&(number, None)))
     }
 
     fn state_key(&self, command: &CommandRef, instance: Option<Id>) -> Option<StateKey> {
@@ -727,7 +753,7 @@ impl Board {
         from: &Vantage,
         reads: &mut Reads,
     ) -> (ResolvedCommand, Option<StateKey>) {
-        let def = self.def(command); // P3(shortcuts-w1): kb.C3
+        let def = self.def(command);
         let app = self.to_app(self.scope_of(command));
         let instance = if app { None } else { instance };
         let dialog_open = from.modal_open || from.dialog_keys;
@@ -748,8 +774,7 @@ impl Board {
         };
         // An app-scope state is the app's held one; an instance's is this frame's publish, else last frame's.
         let (this, last) = match key {
-            // P3(shortcuts-w1): op.F9
-            Some((number, None)) => (self.app_states.get(&(number, None)), None),
+            Some((number, None)) => (self.app_state(number, command), None),
             Some(key) => (self.this.get(&key), self.last.get(&key)),
             None => (None, None),
         };
@@ -796,6 +821,12 @@ fn is_app(scope: &str) -> bool {
     scope == CommandScope::APP.name()
 }
 
+/// The key of `command`'s app state when it carries params: `None` for a bare id, which answers every ref of its id.
+fn params_key(command: &CommandRef) -> Option<String> {
+    let key = command.key_text();
+    (key != command.id.as_str()).then(|| key.into_owned())
+}
+
 /// The window's key matching: the keymap and the scopes a key matches in, innermost first. The key stage, the
 /// routing question whether a scoped command takes a key (`binds_scoped`) and a key automation holds at a canvas
 /// (`bound_around`) all match through it.
@@ -809,18 +840,28 @@ struct KeyScopes {
 }
 
 impl KeyScopes {
-    /// What a press of `input` runs, read through `layout`, with `typing` when a text field has the keys. With
-    /// `matcher` and the press's time the press counts toward a double press; without, it is matched on its own. A
-    /// held scope's keys stay with the text while typing; a typing scope's keys are the text component's own.
-    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
+    /// Runs `f` with the active scopes and the outer ones a press matches in, with `typing` when a text field has the
+    /// keys. A held scope's keys stay with the text while typing; a typing scope's keys are the text component's own.
+    fn matching<R>(&self, typing: bool, f: impl FnOnce(&Active<'_>, &[&str]) -> R) -> R {
         let (panel, outer) = self.scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
         let held: &[&'static str] = if typing { &[] } else { &self.held };
         let contexts: Vec<&str> = self.typing.iter().chain(held).copied().collect();
-        let active = Active { panel, contexts: &contexts, typing };
-        match matcher {
-            Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }),
-            None => Matcher::single(layout, &self.keymap, input, &active, outer),
-        }
+        f(&Active { panel, contexts: &contexts, typing }, outer)
+    }
+
+    /// What a press of `input` runs, read through `layout`. With `matcher` and the press's time the press counts toward
+    /// a double press; without, it is matched on its own.
+    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
+        self.matching(typing, |active, outer| match matcher {
+            Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active, outer }),
+            None => Matcher::single(layout, &self.keymap, input, active, outer),
+        })
+    }
+
+    /// What a hold of `input`'s key runs, when a hold binding applies.
+    fn hold(&self, layout: &Layout, input: &KeyInput, typing: bool) -> Option<Hit> {
+        // PLAN: assumed `Matcher::hold(layout, keymap, input, active, outer) -> Option<Hit>` (kb.C13f, shortcuts-w3)
+        self.matching(typing, |active, outer| Matcher::hold(layout, &self.keymap, input, active, outer))
     }
 }
 
@@ -849,9 +890,11 @@ struct BuiltKeymap {
     shown_text: Arc<HashMap<Chord, Arc<str>>>,
 }
 
-/// The keymap of `defs` on `platform` under `overrides`.
-fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>) -> Keymap {
-    let mut keymap = Keymap::new(defs, scopes, platform);
+/// The keymap of `defs` on `platform` under `overrides`, with the system chords reserved and hold bindings counting
+/// when `holds`.
+fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>, holds: bool) -> Keymap {
+    let mut keymap = Keymap::new(defs, scopes, platform).with_reserved(craft_keymap::reserved::system(platform));
+    keymap.set_holds(holds);
     if let Some(overrides) = overrides {
         keymap.set_overrides((**overrides).clone());
     }
@@ -891,7 +934,13 @@ pub fn keymap_builds() -> u64 {
 ///
 /// A window shortcut's default chord that another command also binds is that command's: the window shortcut loses it, so the
 /// app's binding beats the framework's default. A window shortcut the overrides name keeps what they give it.
-fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
+fn build_keymap(
+    registry: &registry::Registry,
+    app: Option<&AppCatalog>,
+    platform: Platform,
+    overrides: Option<&Arc<Overrides>>,
+    holds: bool,
+) -> BuiltKeymap {
     #[cfg(feature = "testing")]
     KEYMAP_BUILDS.with(|builds| builds.set(builds.get() + 1));
     // A held scope and a typing scope are contexts of the keymap: their keys work while they are active, before any
@@ -920,7 +969,7 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
             }
         }
     }
-    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides);
+    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides, holds);
     let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
     let yielded: Vec<(CommandRef, Trigger)> = defs
         .iter()
@@ -934,15 +983,14 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
             def.defaults
                 .retain(|binding| !yielded.iter().any(|(command, chord)| *command == def.command && binding.trigger.effective(platform) == *chord));
         }
-        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides);
+        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides, holds);
     }
     let window_shortcuts = registry
         .defs()
         .iter()
         .filter_map(|def| WindowShortcut::of(&def.command).map(|key| (key, &def.command)))
         .flat_map(|(key, command)| {
-            // P3(shortcuts-w1): kb.C13b
-            keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.is_double()).map(move |binding| (key, binding.trigger.chord))
+            keymap.bindings(command).into_iter().filter(|binding| binding.trigger.press == PressKind::Single).map(move |binding| (key, binding.trigger.chord))
         })
         .collect();
     let edit_chords = registry
@@ -952,8 +1000,7 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
         // Delete's keys (Delete, Backspace) stay a focused text part's own deletion, which also deletes one character.
         .filter(|(edit, _)| *edit != EditCommand::Delete)
         .flat_map(|(edit, command)| {
-            // P3(shortcuts-w1): kb.C13b
-            keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.is_double()).map(move |binding| (edit, binding.trigger.chord))
+            keymap.bindings(command).into_iter().filter(|binding| binding.trigger.press == PressKind::Single).map(move |binding| (edit, binding.trigger.chord))
         })
         .collect();
     let mut shown_text = HashMap::new();
@@ -974,17 +1021,23 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
 static DEFAULT_KEYMAPS: std::sync::Mutex<Vec<(Platform, bool, BuiltKeymap)>> = std::sync::Mutex::new(Vec::new());
 
 /// The keymap of `registry` and `app` on `platform` under `overrides`: built once per platform for the shared
-/// registry with no overrides and no catalog, else built here.
-fn keymap_for(registry: &Arc<registry::Registry>, app: Option<&AppCatalog>, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
-    if app.is_some() || overrides.is_some() || !registry::Registry::is_shared(registry) {
-        return build_keymap(registry, app, platform, overrides);
+/// registry with no overrides, no catalog and holds off, else built here.
+fn keymap_for(
+    registry: &Arc<registry::Registry>,
+    app: Option<&AppCatalog>,
+    platform: Platform,
+    overrides: Option<&Arc<Overrides>>,
+    holds: bool,
+) -> BuiltKeymap {
+    if app.is_some() || overrides.is_some() || holds || !registry::Registry::is_shared(registry) {
+        return build_keymap(registry, app, platform, overrides, holds);
     }
     let mut kept = DEFAULT_KEYMAPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let stories = registry.has_stories();
     if let Some((.., built)) = kept.iter().find(|(on, with, _)| *on == platform && *with == stories) {
         return built.clone();
     }
-    let built = build_keymap(registry, None, platform, None);
+    let built = build_keymap(registry, None, platform, None, false);
     kept.push((platform, stories, built.clone()));
     built
 }
@@ -1018,6 +1071,7 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
     let platform = platform(ctx);
     let frame = pass::root_frame_nr(ctx);
     let generation = input.catalog.as_ref().map(AppCatalog::generation);
+    let holds = input.holds.is_some();
     let shadowed = with(ctx, |board| {
         // A published state resolves from this frame's, else the last frame's: one published last frame and not again
         // is gone now.
@@ -1035,12 +1089,10 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
             board.app_revision = revision;
             let mut states = HashMap::new();
             for (command, state) in input.states.iter().flat_map(|(_, states)| states.iter()) {
-                // P3(shortcuts-w1): op.F9
-                states.insert((board.number(&command.id), None), state.clone());
+                states.insert((board.number(&command.id), params_key(command)), state.clone());
             }
             let changed: Vec<u32> = states
                 .iter()
-                // P3(shortcuts-w1): op.F9
                 .filter(|(key, state)| board.app_states.get(*key) != Some(*state))
                 .map(|(key, _)| key.0)
                 .chain(board.app_states.keys().filter(|key| !states.contains_key(*key)).map(|key| key.0))
@@ -1055,9 +1107,15 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
         }
         board.gate = input.gate.clone();
         board.app = input.catalog.clone();
+        board.hold_delay = input.holds.unwrap_or_default();
+        // Turning holds off ends a wait: its key's hold no longer exists.
+        if !holds {
+            board.hold_wait = None;
+        }
         let stale = board.keymap.as_ref().is_none_or(|cache| {
             cache.platform != platform
                 || cache.generation != generation
+                || cache.holds != holds
                 || match (&cache.overrides, &input.overrides) {
                     (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
                     (None, None) => false,
@@ -1067,9 +1125,9 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
         let mut shadowed = Vec::new();
         if stale {
             let BuiltKeymap { keymap, edit_chords, window_shortcuts, shown_text } =
-                keymap_for(&board.registry, input.catalog.as_ref(), platform, input.overrides.as_ref());
+                keymap_for(&board.registry, input.catalog.as_ref(), platform, input.overrides.as_ref(), holds);
             board.keymap =
-                Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), generation, edit_chords, window_shortcuts, shown_text });
+                Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), generation, holds, edit_chords, window_shortcuts, shown_text });
             board.gens.shared += 1;
             for def in input.catalog.as_ref().map_or(&[][..], AppCatalog::defs) {
                 if board.registry.get(&def.command.id).is_some() && board.shadowed.insert(def.command.id.clone()) {
@@ -1089,6 +1147,11 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
 /// focused component lists the command.
 pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.edit_chords)).unwrap_or_default())
+}
+
+/// The window's keymap; none before the first frame builds one.
+pub(crate) fn keymap(ctx: &Context) -> Option<Arc<Keymap>> {
+    with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap)))
 }
 
 /// The bindings the window's keymap gives `command`; none before the first frame builds one.
@@ -1238,7 +1301,7 @@ fn resolve_in(
     mut reads: Reads,
 ) -> (ResolvedCommand, ResolveKey) {
     let (resolved, key, first_unknown) = with(ctx, |board| {
-        let first_unknown = board.def(command).is_none() && board.unknown.insert(command.id.clone()); // P3(shortcuts-w1): kb.C3
+        let first_unknown = board.def(command).is_none() && board.unknown.insert(command.id.clone());
         // A command no state named yet has a key too, so a state given later reaches the regions that read it.
         board.number(&command.id);
         let (mut resolved, state) = board.resolve(ctx, command, instance, reach, from.unwrap_or(&board.here), &mut reads);
@@ -1526,11 +1589,10 @@ pub(crate) fn fire_bound(ctx: &Context, command: &ResolvedCommand, mods: craft_k
 
 /// Queues `command` for its instance with `source`; false when disabled.
 pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: FireSource, mods: craft_keymap::Mods) -> bool {
-    let _ = mods; // P3(shortcuts-w1): ap.AP9
     if !command.enabled || !crate::runtime::measure::effect(ctx, "board::fire_resolved") {
         return false;
     }
-    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press, pass::now(ctx)) });
+    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press, pass::now(ctx)) }.mods(mods));
     true
 }
 
@@ -1577,7 +1639,7 @@ pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef,
     );
     let changed = with(ctx, |board| {
         let scope = board.scope_of(command);
-        let declared = board.def(command).is_some_and(|def| def.modal == ModalRule::Declared); // P3(shortcuts-w1): kb.C3
+        let declared = board.def(command).is_some_and(|def| def.modal == ModalRule::Declared);
         debug_assert!(
             !is_app(scope) || declared,
             "{command} is an app-scope command: its state comes from `FrameInput.commands`, unless the command is declared by an instance"
@@ -1727,8 +1789,24 @@ impl Returning {
     }
 }
 
+/// The release of the momentary or tool command `held`, fired when its key goes up or the window loses focus (the key's
+/// release then goes to another window).
+fn release_fired(held: Held, mods: craft_keymap::Mods, time: f64) -> Fired {
+    Fired {
+        command: held.command,
+        target: held.target,
+        source: FireSource::Key,
+        phase: FirePhase::Release,
+        cycle: false,
+        alt_variant: false,
+        mods,
+        time,
+    }
+}
+
 /// H7: the key stage's shortcut events, matched against the keymap in the scopes around the focused component,
-/// through the gate, to their commands.
+/// through the gate, to their commands. A key with a hold binding waits (`HoldWait`) for its release, the next event
+/// or its deadline.
 pub(crate) fn begin(ctx: &Context) {
     let (arrived, changed) = with(ctx, |board| board.changed.clone());
     if arrived == pass::root_frame_nr(ctx) && changed.keymap {
@@ -1796,7 +1874,8 @@ pub(crate) fn begin(ctx: &Context) {
         }
         board.here.dialog_keys = view.dialog_keys;
         board.here.inside_modal.clone_from(&view.inside_modal);
-        if shortcuts.keys.is_empty() {
+        let waiting = board.hold_wait.as_ref().is_some_and(|wait| wait.viewport == viewport);
+        if shortcuts.keys.is_empty() && shortcuts.mods.is_empty() && !shortcuts.focus_lost && !waiting {
             return None;
         }
         let mut keys = board.key_scopes(&chain)?;
@@ -1816,63 +1895,113 @@ pub(crate) fn begin(ctx: &Context) {
         check_kept(ctx, viewport);
     }
     let Some((keys, mut matcher)) = taken else { return };
+    let modal_at_start = overlay::any_open(ctx, overlay::OpenFilter::Modal);
+    let (delay, mut wait) = with(ctx, |board| {
+        let wait = if board.hold_wait.as_ref().is_some_and(|wait| wait.viewport == viewport) { board.hold_wait.take() } else { None };
+        (board.hold_delay, wait)
+    });
+    // A modal layer or a text field that has the keys ends the wait without firing: the key is no longer the shortcut's.
+    // PLAN: a tool claim or an IME composition on the key also ends it; the claim stage (kb.C11c, shortcuts-w2) gives the board no signal for either yet.
+    if modal_at_start || shortcuts.typing {
+        wait = None;
+    }
+    // The fired press of `hit`, or `None` when its command is disabled now or blocked by a modal layer an earlier hit of
+    // the pass opened (kb.C9). A momentary or tool command is kept with its key, whose release fires it again.
+    let press = |hit: Hit, key: Option<craft_keymap::Key>, time: f64| -> Option<Fired> {
+        let (blocked, holds_key) = with(ctx, |board| {
+            board.def(&hit.command).map_or((false, false), |def| {
+                (def.modal == ModalRule::Blocked, matches!(def.kind, CommandKind::Momentary | CommandKind::Tool { .. }))
+            })
+        });
+        if blocked && !modal_at_start && overlay::any_open(ctx, overlay::OpenFilter::Modal) {
+            return None;
+        }
+        let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
+        let resolved = resolve_once(ctx, &hit.command, instance, Reach::Focus, None);
+        if !resolved.enabled {
+            return None;
+        }
+        // An app-scope command a modal layer's instance declares is delivered to that instance.
+        let target = if app { resolved.instance } else { instance };
+        if let Some(key) = key.filter(|_| holds_key) {
+            with(ctx, |board| {
+                board.held.retain(|held| held.key != key);
+                board.held.push(Held { key, command: hit.command.clone(), target });
+            });
+        }
+        Some(Fired {
+            command: hit.command,
+            target,
+            source: FireSource::Key,
+            phase: FirePhase::Press,
+            cycle: hit.cycle.len() > 1,
+            alt_variant: hit.alt_variant,
+            mods: hit.trigger.chord.mods,
+            time,
+        })
+    };
+    // Settles a wait by the time of the event that ends it: the hold when the key was down for the delay, else the tap.
+    let settle = |wait: Option<HoldWait>, time: f64| -> Option<Fired> {
+        let wait = wait?;
+        let hit = if time - wait.since >= wait.delay { Some(wait.hold) } else { wait.tap }?;
+        press(hit, Some(wait.key), time)
+    };
     let mut fired = Vec::new();
-    for shortcut in &shortcuts.keys {
+    let mut changes = shortcuts.mods.iter().map(|(index, _)| *index).peekable();
+    for (index, shortcut) in shortcuts.keys.iter().enumerate() {
+        // A change of Cmd, Ctrl or Alt before this key settles the wait first.
+        while changes.next_if(|change| *change <= index).is_some() {
+            fired.extend(settle(wait.take(), now));
+        }
         // When the key event arrived: a frame may run it later, and a double press and a hold read the key's own times.
         let time = shortcut.at.unwrap_or(now);
+        let key = shortcut.input.physical.or(shortcut.input.typed);
         match shortcut.phase {
             FirePhase::Release => {
-                let key = shortcut.input.physical.or(shortcut.input.typed);
-                let held = with(ctx, |board| key.and_then(|key| board.held.iter().position(|held| held.key == key)).map(|at| board.held.remove(at)));
-                if let Some(held) = held {
-                    fired.push(Fired {
-                        command: held.command,
-                        target: held.target,
-                        source: FireSource::Key,
-                        phase: FirePhase::Release,
-                        cycle: false,
-                        alt_variant: false,
-                        mods: craft_keymap::Mods::NONE, // P3(shortcuts-w1): ap.AP9
-                        time,
-                    });
+                if wait.as_ref().is_some_and(|wait| Some(wait.key) == key) {
+                    fired.extend(settle(wait.take(), time));
                 }
+                let held = with(ctx, |board| key.and_then(|key| board.held.iter().position(|held| held.key == key)).map(|at| board.held.remove(at)));
+                fired.extend(held.map(|held| release_fired(held, shortcut.input.mods, time)));
             }
             _ => {
-                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing && !shortcut.canvas, Some((&mut matcher, time)))
-                else {
-                    continue;
-                };
-                let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
-                let resolved = resolve_once(ctx, &hit.command, instance, Reach::Focus, None);
-                if !resolved.enabled {
-                    continue;
+                // Another key's press settles the wait first: keys act in the order they went down.
+                fired.extend(settle(wait.take(), time));
+                let typing = shortcuts.typing && !shortcut.canvas;
+                let hold = key
+                    .filter(|_| !typing && !modal_at_start)
+                    .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));
+                let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time)));
+                match hold {
+                    Some((key, hold)) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
+                    None => fired.extend(tap.and_then(|hit| press(hit, key, time))),
                 }
-                // An app-scope command a modal layer's instance declares is delivered to that instance.
-                let target = if app { resolved.instance } else { instance };
-                let key = shortcut.input.physical.or(shortcut.input.typed);
-                with(ctx, |board| {
-                    if let Some(key) = key.filter(|_| {
-                        // P3(shortcuts-w1): kb.C3
-                        board.def(&hit.command).is_some_and(|def| matches!(def.kind, CommandKind::Momentary | CommandKind::Tool { .. }))
-                    }) {
-                        board.held.retain(|held| held.key != key);
-                        board.held.push(Held { key, command: hit.command.clone(), target });
-                    }
-                });
-                fired.push(Fired {
-                    command: hit.command,
-                    target,
-                    source: FireSource::Key,
-                    phase: FirePhase::Press,
-                    cycle: hit.cycle.len() > 1,
-                    alt_variant: hit.alt_variant,
-                    mods: craft_keymap::Mods::NONE, // P3(shortcuts-w1): ap.AP9
-                    time,
-                });
             }
         }
     }
-    with(ctx, |board| board.matcher = matcher);
+    for _ in changes {
+        fired.extend(settle(wait.take(), now));
+    }
+    // The key's release goes to another window: a momentary command ends and a wait drops.
+    if shortcuts.focus_lost {
+        wait = None;
+        let held = with(ctx, |board| std::mem::take(&mut board.held));
+        fired.extend(held.into_iter().map(|held| release_fired(held, craft_keymap::Mods::NONE, now)));
+    }
+    // The deadline is a time event: only the first pass of a frame, which has elapsed time, fires it.
+    if let Some(due) = wait.as_ref().map(|wait| wait.since + wait.delay) {
+        if now < due {
+            frame::request_repaint_after(ctx, due - now);
+        } else if frame::running(ctx).is_some_and(|pass| pass.elapsed > 0.0) {
+            fired.extend(wait.take().and_then(|wait| press(wait.hold, Some(wait.key), now)));
+        }
+    }
+    with(ctx, |board| {
+        board.matcher = matcher;
+        if wait.is_some() {
+            board.hold_wait = wait;
+        }
+    });
     let pressed = fired.iter().any(|fired| fired.phase == FirePhase::Press);
     if pressed && let Some(returning) = returning {
         returning.give_back(ctx);
@@ -1920,6 +2049,9 @@ pub(crate) fn end(ctx: &Context) {
         let ids = |id: Id| instances.contains(id);
         board.queue.retain(|fired| fired.target.is_some_and(ids));
         board.held.retain(|held| held.target.is_none_or(ids));
+        if board.hold_wait.as_ref().is_some_and(|wait| !live.contains(&wait.viewport)) {
+            board.hold_wait = None;
+        }
         board.chains.retain(|viewport, _| live.contains(viewport));
         board.before.retain(|viewport, _| live.contains(viewport));
         board.views.retain(|viewport, _| live.contains(viewport));

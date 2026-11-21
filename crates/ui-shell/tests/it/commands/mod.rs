@@ -3,5 +3,6 @@
 mod app_catalog;
 mod app_scope;
 mod board;
+mod hold;
 mod kit;
 mod resolve;
