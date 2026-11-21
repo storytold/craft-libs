@@ -303,7 +303,7 @@ pub enum ChartBuildStep {
 
 impl ChartBuildStep {
     pub fn from_xml(value: &str) -> Option<Self> {
-        Some(match value {
+        Some(match value.trim_matches([' ', '\t', '\n', '\r']) {
             "category" => Self::Category,
             "ptInCategory" => Self::PointInCategory,
             "series" => Self::Series,
@@ -346,7 +346,7 @@ pub enum ChartBuildKind {
 
 impl ChartBuildKind {
     pub fn from_xml(value: &str) -> Option<Self> {
-        Some(match value {
+        Some(match value.trim_matches([' ', '\t', '\n', '\r']) {
             "allAtOnce" => Self::AllAtOnce,
             "series" => Self::Series,
             "category" => Self::Category,
@@ -370,6 +370,9 @@ impl ChartBuildKind {
 #[serde(rename_all = "camelCase")]
 pub struct ChartBuild {
     pub group: u32,
+    /// The source builds the entire chart with the PresentationML whole-object marker.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub as_one: bool,
     pub kind: Option<ChartBuildKind>,
     pub animate_background: Option<bool>,
     /// Animation Pane expanded state of the build (`p:bldGraphic uiExpand`).

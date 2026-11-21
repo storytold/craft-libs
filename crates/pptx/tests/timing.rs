@@ -102,10 +102,10 @@ fn preset_nodes<'a>(node: &'a El, found: &mut Vec<&'a El>) {
     }
 }
 
-#[test]
-fn chart_targets_and_build_groups_survive_two_saves() {
+const CHART_SLIDE: &str = "ppt/slides/slide1.xml";
+
+fn chart_animation_package(series_token: &str, whole_chart_build: bool) -> Vec<u8> {
     // Original synthetic chart and timing markup, using ISO/IEC 29500-1 chart build elements.
-    const SLIDE: &str = "ppt/slides/slide1.xml";
     let mut p = common::deck();
     let id = ShapeId(p.alloc_id().unwrap());
     let chart = Chart {
@@ -124,7 +124,7 @@ fn chart_targets_and_build_groups_survive_two_saves() {
         ..Default::default()
     });
     let bytes = common::export(&p);
-    let slide_xml = common::part(&bytes, SLIDE);
+    let slide_xml = common::part(&bytes, CHART_SLIDE);
     let slide = Options::default().strict().parse(slide_xml.as_bytes()).unwrap();
     let spid = slide
         .find(Local("graphicFrame"))
@@ -140,25 +140,32 @@ fn chart_targets_and_build_groups_survive_two_saves() {
             r#"<p:par><p:cTn id="{id}" presetID="1" presetClass="entr" nodeType="clickEffect" grpId="{group}"><p:childTnLst><p:set><p:cBhvr><p:cTn id="{child}" dur="1" fill="hold"/><p:tgtEl>{target}</p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set></p:childTnLst></p:cTn></p:par>"#
         )
     };
+    let whole_build =
+        if whole_chart_build { format!(r#"<p:bldGraphic spid="{spid}" grpId="7" uiExpand="1"><p:bldAsOne/></p:bldGraphic>"#) } else { String::new() };
     let timing = format!(
         r#"<p:timing><p:tnLst>{}{}{}{}</p:tnLst><p:bldLst>
-        <p:bldGraphic spid="{spid}" grpId="0" uiExpand="1"><p:bldSub><a:bldChart bld="series" animBg="1"/></p:bldSub></p:bldGraphic>
+        <p:bldGraphic spid="{spid}" grpId="0" uiExpand="1"><p:bldSub><a:bldChart bld="{series_token}" animBg="1"/></p:bldSub></p:bldGraphic>
         <p:bldGraphic spid="{spid}" grpId="{last_group}" uiExpand="0"><p:bldSub><a:bldChart bld="seriesEl" animBg="0"/></p:bldSub></p:bldGraphic>
-        </p:bldLst></p:timing>"#,
+        {whole_build}</p:bldLst></p:timing>"#,
         effect(10, "0", &chart_target(r#"bldStep="gridLegend""#)),
-        effect(20, "0", &chart_target(r#"bldStep="series" seriesIdx="1""#)),
+        effect(20, "0", &chart_target(&format!(r#"bldStep="{series_token}" seriesIdx="1""#))),
         effect(30, &last_group, &chart_target(r#"bldStep="ptInSeries" seriesIdx="1" categoryIdx="0""#)),
         effect(40, "7", &shape_target)
     );
     let original_slide = slide_xml.replace("</p:sld>", &format!("{timing}</p:sld>"));
     assert_ne!(original_slide, slide_xml);
-    let mut bytes = common::rewrite(&bytes, |name, data| Some(if name == SLIDE { original_slide.as_bytes() } else { data }.to_vec()), &[]);
+    common::rewrite(&bytes, |name, data| Some(if name == CHART_SLIDE { original_slide.as_bytes() } else { data }.to_vec()), &[])
+}
 
+#[test]
+fn chart_targets_and_build_groups_survive_two_saves() {
+    let mut bytes = chart_animation_package("series", false);
+    let last_group = u32::MAX.to_string();
     for _ in 0..2 {
         let p = common::import(&bytes);
         assert_eq!(p.slides[0].animations.len(), 4);
         bytes = common::export(&p);
-        let slide = Options::default().strict().parse(&common::bytes_of(&bytes, SLIDE)).unwrap();
+        let slide = Options::default().strict().parse(&common::bytes_of(&bytes, CHART_SLIDE)).unwrap();
         let timing = slide.child(Local("timing")).unwrap();
         let mut effects = vec![];
         preset_nodes(timing, &mut effects);
@@ -188,5 +195,38 @@ fn chart_targets_and_build_groups_survive_two_saves() {
             })
             .collect();
         assert_eq!(builds, [(Some("0"), Some("1"), Some("series"), Some("1")), (Some(last_group.as_str()), Some("0"), Some("seriesEl"), Some("0"))]);
+    }
+}
+
+#[test]
+fn chart_timing_preserves_padded_selector_and_build_tokens() {
+    let bytes = chart_animation_package(" &#9;series&#xA; ", false);
+    let saved = common::export(&common::import(&bytes));
+    let slide = Options::default().strict().parse(&common::bytes_of(&saved, CHART_SLIDE)).unwrap();
+    let timing = slide.child(Local("timing")).unwrap();
+    let mut effects = vec![];
+    preset_nodes(timing, &mut effects);
+    let step =
+        effects[1].find(Local("spTgt")).and_then(|t| t.path(&[Local("graphicEl"), Local("chart")])).and_then(|chart| chart.attr_local("bldStep"));
+    let build = timing.path(&[Local("bldLst"), Local("bldGraphic"), Local("bldSub"), Local("bldChart")]).and_then(|chart| chart.attr_local("bld"));
+    assert_eq!((step, build), (Some("series"), Some("series")));
+}
+
+#[test]
+fn whole_chart_build_stays_separate_from_series_builds_after_two_saves() {
+    let mut bytes = chart_animation_package("series", true);
+    for _ in 0..2 {
+        bytes = common::export(&common::import(&bytes));
+        let slide = Options::default().strict().parse(&common::bytes_of(&bytes, CHART_SLIDE)).unwrap();
+        let timing = slide.child(Local("timing")).unwrap();
+        let mut effects = vec![];
+        preset_nodes(timing, &mut effects);
+        let whole = timing.child(Local("bldLst")).unwrap().children(Local("bldGraphic")).find(|graphic| graphic.attr_local("grpId") == Some("7"));
+        assert_eq!(
+            (effects[3].attr_local("grpId"), whole.and_then(|g| g.attr_local("uiExpand")), whole.and_then(|g| g.child(Local("bldAsOne"))).is_some()),
+            (Some("7"), Some("1"), true)
+        );
+        assert!(whole.unwrap().child(Local("bldSub")).is_none());
+        assert_eq!(effects[1].attr_local("grpId"), Some("0"));
     }
 }

@@ -243,17 +243,38 @@ pub fn media_settings(timing: &El, ctx: &IdCtx, shapes: &mut [Shape]) {
     }
 }
 
-fn chart_builds(timing: &El) -> std::collections::HashMap<(u32, u32), ChartBuild> {
+fn chart_builds(timing: &El, ctx: &IdCtx, shapes: &[Shape]) -> std::collections::HashMap<(u32, u32), ChartBuild> {
     let mut builds = std::collections::HashMap::new();
+    let mut chart_ids = None;
     if let Some(list) = timing.child(Local("bldLst")) {
         for graphic in list.children(Local("bldGraphic")).take(10_000) {
             let Some(spid) = graphic.attr_local("spid").and_then(value::to_u32_lossy) else { continue };
-            let Some(chart) = graphic.path(&[Local("bldSub"), Local("bldChart")]) else { continue };
+            let as_one = graphic.child(Local("bldAsOne")).is_some();
+            let chart = if as_one {
+                // A whole-object record has no DrawingML child identifying its object type.
+                let ids = chart_ids.get_or_insert_with(|| {
+                    let mut ids = std::collections::HashSet::new();
+                    crate::walk(shapes, &mut |shape, _| {
+                        if matches!(shape.kind, ShapeKind::Chart(_)) {
+                            ids.insert(shape.id);
+                        }
+                    });
+                    ids
+                });
+                if !ctx.lookup(spid).is_some_and(|id| ids.contains(&id)) {
+                    continue;
+                }
+                None
+            } else {
+                let Some(chart) = graphic.path(&[Local("bldSub"), Local("bldChart")]) else { continue };
+                Some(chart)
+            };
             let group = graphic.attr_local("grpId").and_then(value::to_u32_lossy).unwrap_or(0);
             builds.entry((spid, group)).or_insert(ChartBuild {
                 group,
-                kind: chart.attr_local("bld").and_then(ChartBuildKind::from_xml),
-                animate_background: chart.attr_local("animBg").and_then(value::to_bool),
+                as_one,
+                kind: chart.and_then(|c| c.attr_local("bld")).and_then(ChartBuildKind::from_xml),
+                animate_background: chart.and_then(|c| c.attr_local("animBg")).and_then(value::to_bool),
                 ui_expand: graphic.attr_local("uiExpand").and_then(value::to_bool),
             });
         }
@@ -276,7 +297,7 @@ pub fn animations(imp: &mut Imp, part: &Part, ctx: &IdCtx, timing: &El, shapes: 
     let Some(tn) = timing.child(Local("tnLst")) else { return vec![] };
     let mut found = vec![];
     collect(tn, At { trigger: None, group: 0, offset: 0 }, &mut 0, &mut found, 0);
-    let chart_builds = chart_builds(timing);
+    let chart_builds = chart_builds(timing, ctx, shapes);
     // Paragraph builds (`bldP build="p"`) by (spid, grpId).
     let by_para: Vec<(u32, String)> = timing
         .child(Local("bldLst"))

@@ -825,9 +825,13 @@ fn build_list(w: &mut Writer, bld: Vec<(u32, u32, bool)>, chart_bld: Vec<(u32, C
         }
         for (spid, build) in chart_bld {
             w.tag("p:bldGraphic").attr("spid", spid).attr("grpId", build.group).attr_opt("uiExpand", build.ui_expand.map(u8::from)).open();
-            w.open("p:bldSub", &[]);
-            w.tag("a:bldChart").attr_opt("bld", build.kind.map(|k| k.xml())).attr_opt("animBg", build.animate_background.map(u8::from)).empty();
-            w.close();
+            if build.as_one {
+                w.tag("p:bldAsOne").empty();
+            } else {
+                w.open("p:bldSub", &[]);
+                w.tag("a:bldChart").attr_opt("bld", build.kind.map(|k| k.xml())).attr_opt("animBg", build.animate_background.map(u8::from)).empty();
+                w.close();
+            }
             w.close();
         }
         w.close();
