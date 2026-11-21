@@ -933,7 +933,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 // Columns side by side at their own widths: a `Content` column takes its widest cell, not the share of
                 // the widest row it would get.
                 let columns = if self.header.has_columns() { self.header.content_width() } else { 0.0 };
-                widest.max(columns).max(comp.ideal_width(item, self.source.len(), scx)).max(floor).min(room.x)
+                widest.max(columns).max(comp.ideal_width(item, Self::line(ui.ctx(), id), scx)).max(floor).min(room.x)
             }
         };
         let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
