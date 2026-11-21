@@ -37,24 +37,37 @@ fn underline_styles_and_strikes_are_read() {
         r#"style:text-underline-style="wave""#,
         r#"style:text-underline-style="solid" style:text-underline-width="bold""#,
         r##"style:text-underline-style="dash" style:text-underline-color="#ff0000""##,
+        // A dash at a bold width is the heavy dash (`w:u w:val="dashedHeavy"`), not a plain
+        // dash that lost its weight (#7121).
+        r#"style:text-underline-style="dash" style:text-underline-width="bold""#,
         r#"style:text-underline-style="solid" style:text-underline-mode="skip-white-space""#,
         r#"style:text-line-through-style="solid" style:text-line-through-type="double""#,
     ]);
     let r = runs(&d);
     let u: Vec<Option<Underline>> = r.iter().map(|p| p.underline).collect();
     assert_eq!(
-        u[..6],
+        u[..7],
         [
             Some(Underline::Double),
             Some(Underline::Dotted),
             Some(Underline::Wave),
             Some(Underline::Thick),
             Some(Underline::Dash),
+            Some(Underline::DashHeavy),
             Some(Underline::Words)
         ]
     );
     assert_eq!(r[4].underline_color, Some(Rgb(255, 0, 0)));
-    assert_eq!((r[6].double_strike, r[6].strike), (Some(true), None));
+    assert_eq!((r[7].double_strike, r[7].strike), (Some(true), None));
+}
+
+/// The heavy dash round trips through ODT: reading the export is `DashHeavy` again, which only
+/// the bold width can produce, so the writer really exported dash at a bold width (#7121).
+#[test]
+fn heavy_dash_underline_round_trips() {
+    let d = spans(&[r#"style:text-underline-style="dash" style:text-underline-width="bold""#]);
+    let back = runs(&import(&export(&d).unwrap()).unwrap());
+    assert_eq!(back[0].underline, Some(Underline::DashHeavy));
 }
 
 #[test]

@@ -190,6 +190,7 @@ pub(in crate::text) fn text_props(f: &Fmt) -> String {
             Some(U::Thick) => ("solid", "single", "bold", ""),
             Some(U::Dotted) => ("dotted", "single", "auto", ""),
             Some(U::Dash) => ("dash", "single", "auto", ""),
+            Some(U::DashHeavy) => ("dash", "single", "bold", ""),
             Some(U::DotDash) => ("dot-dash", "single", "auto", ""),
             Some(U::DotDotDash) => ("dot-dot-dash", "single", "auto", ""),
             Some(U::Wave) => ("wave", "single", "auto", ""),

@@ -15,6 +15,8 @@ pub enum Underline {
     Thick,
     Dotted,
     Dash,
+    /// A heavy dash (`w:u w:val="dashedHeavy"`, ODF `dash` at a bold width).
+    DashHeavy,
     DotDash,
     DotDotDash,
     Wave,
@@ -22,7 +24,7 @@ pub enum Underline {
 }
 
 impl Underline {
-    pub const ALL: [Underline; 11] = [
+    pub const ALL: [Underline; 12] = [
         Underline::None,
         Underline::Single,
         Underline::Words,
@@ -30,6 +32,7 @@ impl Underline {
         Underline::Thick,
         Underline::Dotted,
         Underline::Dash,
+        Underline::DashHeavy,
         Underline::DotDash,
         Underline::DotDotDash,
         Underline::Wave,
@@ -45,6 +48,7 @@ impl Underline {
             Underline::Thick => "thick",
             Underline::Dotted => "dotted",
             Underline::Dash => "dash",
+            Underline::DashHeavy => "dashedHeavy",
             Underline::DotDash => "dotDash",
             Underline::DotDotDash => "dotDotDash",
             Underline::Wave => "wave",
@@ -57,7 +61,7 @@ impl Underline {
             // underline simple type normally uses `none`. Honor an explicit disable rather
             // than treating an unrecognized value as the default single underline.
             "off" | "false" | "0" => Underline::None,
-            "thickDash" | "dashLong" | "dashedHeavy" | "dashLongHeavy" => Underline::Dash,
+            "thickDash" | "dashLong" | "dashLongHeavy" => Underline::Dash,
             "dottedHeavy" => Underline::Dotted,
             "wavyHeavy" => Underline::Wave,
             "dashDotHeavy" => Underline::DotDash,
