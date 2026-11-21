@@ -166,7 +166,11 @@ impl Reader<'_> {
         // A fully transparent outline is kept as a shape without one, as Word keeps it.
         let transparent = stroke_opacity == 0.0;
         let stroke = freeform_stroke.filter(|_| !transparent);
-        let stroke_width = attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0);
+        // A line that is off has no width: the model's width is the room an outline takes from
+        // the shape's text, and Word gives a VML shape's line none while it is off, whatever its
+        // `strokeweight` (measured in Word for Windows: text in a 3 pt `stroked="f"` box starts
+        // where it does without a line, in a stroked one 1.5 pt further in).
+        let stroke_width = if enabled { attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0) } else { 0.0 };
         let fill = vml_fill(shape, shapetype);
         let cap = match stroke_prop("endcap", None) {
             Some("square") => craft_wordmodel::connector::LineCap::Square,
@@ -222,7 +226,7 @@ impl Reader<'_> {
                 h,
                 fill: None,
                 stroke: None,
-                stroke_width,
+                stroke_width: 0.0,
                 float,
                 story: Some(id),
                 freeform: None,
