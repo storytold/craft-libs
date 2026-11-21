@@ -7,6 +7,7 @@ pub(crate) mod channels_delete;
 pub(crate) mod color_range;
 pub(crate) mod contour_field;
 pub(crate) mod curve;
+pub(crate) mod curve_point_keys;
 pub(crate) mod fill;
 pub(crate) mod filter_gallery;
 pub(crate) mod histogram;
