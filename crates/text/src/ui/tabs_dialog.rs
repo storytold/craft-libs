@@ -12,6 +12,7 @@
 use super::length::{DocUnit, length_field, shown};
 use super::ruler::{MAX_POSITION, SAME_POSITION, TabAlign, TabLeader, TabStop};
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, ItemSource, Mixed, Selection, SelectionChange};
+use craft_theme::variant::Variant;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnSpec, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked,
@@ -21,7 +22,7 @@ use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::list::ListRow;
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Env, Units};
+use craft_ui::runtime::env::{Env, Label, Units};
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -35,6 +36,11 @@ mod stories;
 
 /// The OK footer button's index, in the order the buttons are given.
 const OK: usize = 0;
+/// Cancel's place among the bare dialog's buttons ([`TabStopsDialog::bare`]).
+const CANCEL: usize = 1;
+/// The bare dialog's width, and the room above its Cancel and OK.
+const BARE_WIDTH: f32 = 420.0;
+const BARE_GAP: f32 = 12.0;
 
 const POSITION: ColumnKey = ColumnKey::new("position");
 const ALIGNMENT: ColumnKey = ColumnKey::new("alignment");
@@ -112,6 +118,9 @@ pub struct TabStopsDialog {
     to_edit: bool,
     /// Whether OK files its result for the app to judge instead of closing.
     hold: bool,
+    /// Whether the dialog draws only its content and its Cancel and OK, for a window of its own that has the title and
+    /// the close button (`DialogHost::run_windowed`).
+    bare: bool,
     held: HeldAnswer<TabStopsResult>,
 }
 
@@ -131,6 +140,7 @@ impl TabStopsDialog {
             draft: None,
             to_edit: false,
             hold: false,
+            bare: false,
             held: HeldAnswer::new(),
         }
     }
@@ -277,6 +287,40 @@ impl TabStopsDialog {
         self
     }
 
+    /// Draws only the content and a row of Cancel and OK at its end, without the dialog's frame, title and close
+    /// button, for a window of its own that has them (`DialogHost::run_windowed`). Enter is OK, Esc Cancel.
+    #[must_use]
+    pub fn bare(mut self, on: bool) -> Self {
+        self.bare = on;
+        self
+    }
+
+    /// The bare content: the body above Cancel and OK at its end; the button picked, if any.
+    fn show_bare(&mut self, ui: &mut Ui, words: &TabStopsWords, units: &Units, labels: [Label; 2], waiting: bool) -> Option<usize> {
+        let mut picked = None;
+        ui.vertical(|ui| {
+            ui.set_width(BARE_WIDTH);
+            self.body(ui, words, units);
+            ui.add_space(BARE_GAP);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                // Right to left: OK at the end, Cancel before it.
+                let [ok, cancel] = labels;
+                if Button::new(ok).variant(Variant::PRIMARY).enabled(!waiting).show(ui).clicks == 1 {
+                    picked = Some(OK);
+                }
+                if Button::new(cancel).show(ui).clicks == 1 {
+                    picked = Some(CANCEL);
+                }
+            });
+        });
+        let keys = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        picked.or(match keys {
+            (_, true) => Some(CANCEL),
+            (true, _) if !waiting && self.edited.is_none() => Some(OK),
+            _ => None,
+        })
+    }
+
     /// The result OK filed, once, for the app to judge.
     pub fn take_ok(&mut self) -> Option<TabStopsResult> {
         self.held.take()
@@ -326,6 +370,21 @@ impl StackDialog for TabStopsDialog {
             FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(self.hold),
             FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
         ];
+        if self.bare {
+            let picked = self.show_bare(ui, &words, &units, [common.ok.clone(), common.cancel.clone()], waiting);
+            // A refused result stands until the stops change, as in the dialog.
+            if refused.as_ref().is_some_and(|(_, result)| !self.matches(result)) {
+                self.held.clear_refusal();
+            }
+            return match picked {
+                Some(OK) => {
+                    let result = self.result();
+                    self.settle(result).map(DialogResult::Ok)
+                }
+                Some(_) => Some(DialogResult::Cancel),
+                None => None,
+            };
+        }
         let shown = Dialog::new(words.title.clone())
             .buttons(buttons)
             .settle_buttons(|_, buttons| {

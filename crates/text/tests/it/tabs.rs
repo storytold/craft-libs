@@ -130,3 +130,17 @@ fn a_held_ok_stays_open_until_answered_and_a_refusal_shows_until_a_value_changes
     let answer = result.borrow().clone().expect("the accepted answer closes the dialog");
     assert_eq!(answer.stops.len(), 1, "the dialog closes with the answer it filed");
 }
+
+/// Drawn bare, for a window of its own that has the title and close button, the dialog shows its stops and its Cancel
+/// and OK without its own close box, and OK still answers.
+#[trial]
+fn a_bare_tabs_dialog_has_no_close_box_of_its_own_and_ok_answers() {
+    let (framed, _, _) = shown(TabStopsDialog::new(vec![stop(72.0, TabAlign::Left, TabLeader::None)], 36.0));
+    assert!(framed.by_label("Close").is_some(), "the dialog over a window has its own close box");
+
+    let (mut fixture, _, result) = shown(TabStopsDialog::new(vec![stop(72.0, TabAlign::Left, TabLeader::None)], 36.0).bare(true));
+    assert!(fixture.by_label("Close").is_none(), "the bare dialog leaves the close box to its window");
+    assert!(fixture.by_label("Cancel").is_some(), "Cancel is shown");
+    press(&mut fixture, "OK");
+    assert!(result.borrow().is_some(), "OK answered");
+}
