@@ -7,7 +7,7 @@ use crate::notices::{Notice, NoticeAction, NoticeLayout};
 use crate::runtime::env::{Env, WindowKey};
 use crate::runtime::toast::ToastEnd;
 use crate::style::TypeRole;
-use egui::{Rect, Ui};
+use egui::{Align2, Rect, Ui};
 
 /// The cards of a window's toast queue. Whoever owns the window root calls `show` once per pass. A card with progress
 /// shows a progress bar named by its title (else its message) and the percentage under its text, before its actions.
@@ -18,7 +18,12 @@ impl ToastStack {
     /// Shows every queued toast of `window` at the end-bottom corner of `body`, a rect of `ui`'s layer, through the
     /// toast host.
     pub fn show(ui: &Ui, window: &WindowKey, body: Rect) {
-        ToastHost::show(ui, window, body, &mut |ui, toast, salt| {
+        Self::show_at(ui, window, body, None);
+    }
+
+    /// Shows the queue at a bottom alignment of the body, or its locale's trailing bottom corner when `None`.
+    pub fn show_at(ui: &Ui, window: &WindowKey, body: Rect, alignment: Option<Align2>) {
+        ToastHost::show_at(ui, window, body, alignment, &mut |ui, toast, salt| {
             let mut notice =
                 Notice::new(toast.tone, toast.message.clone()).layout(NoticeLayout::Card).lines(toast.lines.clone()).dismiss().id_salt(salt);
             if let Some(title) = &toast.title {

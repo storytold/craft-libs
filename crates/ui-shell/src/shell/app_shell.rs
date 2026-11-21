@@ -288,6 +288,9 @@ pub struct AppShell<'a, S> {
     /// The screen mode. Without a binding the shell keeps it, starting at `Standard`.
     #[prop]
     screen_mode: Bind<'a, ScreenMode>,
+    /// The bottom alignment of notices in the body; without one they use its trailing bottom corner.
+    #[prop]
+    toast_alignment: Option<egui::Align2>,
     /// Whether the Tab reveal and the edge reveal work in body-only mode. Off for a presentation.
     #[prop]
     allow_reveal: bool,
@@ -320,6 +323,7 @@ impl<'a, S> AppShell<'a, S> {
             embedded: false,
             content_room: None,
             screen_mode: Bind::kept(),
+            toast_alignment: None,
             allow_reveal: true,
             edge_reveal: true,
             document_tabs: true,
@@ -430,6 +434,7 @@ impl<'a, S> AppShell<'a, S> {
             embedded,
             content_room,
             mut screen_mode,
+            toast_alignment,
             allow_reveal,
             edge_reveal,
             document_tabs,
@@ -582,9 +587,9 @@ impl<'a, S> AppShell<'a, S> {
                 outer.note_dialog();
             }
 
-            // The window's toasts sit at the end-bottom corner of its body; an embedded shell's in the part of it in view.
+            // The window's toasts sit in its body; an embedded shell's in the part of it in view.
             let body = if embedded { regions.body.intersect(region) } else { regions.body };
-            ToastStack::show(ui, &window, body);
+            ToastStack::show_at(ui, &window, body, toast_alignment);
 
             let mut edges: Vec<(RevealEdge, Rect)> = regions
                 .slots

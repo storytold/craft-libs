@@ -247,3 +247,20 @@ fn a_card_left_after_a_long_still_hover_gets_its_whole_delay() {
     assert!(!queued(&fixture), "a full timeout after the leave the card is gone");
     assert_eq!(toast::end(fixture.ctx(), card), Some(ToastEnd::Expired), "it expired");
 }
+
+/// A shell can keep transient notices clear of controls at its trailing edge.
+#[trial]
+fn a_shell_can_center_its_toasts() {
+    let window = WindowKey::new("centered-toast-shell");
+    let mut fixture = Fixture::new(move |ui| {
+        if toast::cards(ui.ctx(), &window).is_empty() {
+            toast::post(ui.ctx(), &window, Toast::new("Saved document").timeout(None));
+        }
+        AppShell::new(window.clone()).toast_alignment(egui::Align2::CENTER_BOTTOM).body(|_, _, _| {}).show(ui, &mut ());
+    });
+    fixture.room(egui::vec2(900.0, 500.0)).settle();
+    let text = fixture.texts().iter().find(|painted| painted.text == "Saved document").expect("the toast is drawn").rect;
+    let layers = craft_ui::testing::snapshot::layer_rects(fixture.ctx());
+    let card = layers.iter().find(|rect| rect.contains(text.center())).expect("the toast layer contains its text");
+    assert!((card.center().x - fixture.shown().center().x).abs() < 1.0, "the notice is centred: {card:?}");
+}
