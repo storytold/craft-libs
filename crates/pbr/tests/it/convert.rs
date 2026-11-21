@@ -403,6 +403,37 @@ fn materialx_coat_and_sheen_are_kept_only_when_they_are_on() {
 }
 
 #[test]
+fn materialx_coat_only_inputs_are_dropped_while_the_coat_is_off() {
+    let coat_only = [
+        (Shader::OpenPbr, "coat_weight", ["geometry_coat_normal", "coat_color", "coat_ior"]),
+        (Shader::StandardSurface, "coat", ["coat_normal", "coat_color", "coat_IOR"]),
+    ];
+    for (shader, weight, [normal, color, ior]) in coat_only {
+        let inputs = [(normal, img("coat_n.png", None, None)), (color, img("coat_c.png", None, None)), (ior, k(&[1.4]))];
+        // The coat weight is left at its default of 0.
+        let off = try_from_materialx(&mx(shader, &inputs)).unwrap();
+        assert_eq!(off.surface.clearcoat, None);
+        assert!(off.surface.textures.is_empty(), "{:?}", off.surface.textures);
+        assert!(off.surface.other_inputs.is_empty(), "{:?}", off.surface.other_inputs);
+        for name in [normal, color, ior] {
+            assert!(dropped(&off, name) && !unshaded(&off, name), "{name}: {:?}", off.report);
+        }
+        // With the coat on, the same inputs are kept and reported as unshaded.
+        let mut with_coat = inputs.to_vec();
+        with_coat.push((weight, k(&[0.5])));
+        let on = try_from_materialx(&mx(shader, &with_coat)).unwrap();
+        assert!(on.surface.clearcoat.is_some());
+        assert_eq!(on.surface.textures.len(), 2);
+        assert_eq!(on.surface.other_inputs, vec![(ior.to_owned(), vec![1.4])]);
+        for name in [normal, color, ior] {
+            assert!(unshaded(&on, name) && !dropped(&on, name), "{name}");
+        }
+    }
+    let gltf = try_from_materialx(&mx(Shader::GltfPbr, &[("clearcoat_normal", img("cc_n.png", None, None))])).unwrap();
+    assert!(gltf.surface.textures.is_empty() && dropped(&gltf, "clearcoat_normal"));
+}
+
+#[test]
 fn materialx_emission_is_the_color_times_its_strength() {
     let dark = try_from_materialx(&mx(Shader::OpenPbr, &[("emission_color", k(&[1.0, 0.5, 0.0]))])).unwrap();
     assert_eq!(dark.surface.emissive, [0.0; 3]);
@@ -464,6 +495,14 @@ fn materialx_bad_inputs_are_errors_and_unknown_ones_are_dropped() {
         bad_value(open(&[("geometry_normal", k(&[0.0, 0.0, if v < 0.0 { f32::NAN } else { v }]))]), "geometry_normal");
     }
     bad_value(try_from_materialx(&mx(Shader::GltfPbr, &[("ior", k(&[0.9]))])), "ior");
+    // glTF PBR's specular_color has no upper bound, so a large encoded value overflows to
+    // infinity when it is decoded to linear; that is an error, not an infinite input.
+    for space in ["g22_rec709", "srgb_texture", "srgb_rec709_scene", "g24_rec709_scene"] {
+        bad_value(try_from_materialx(&mx(Shader::GltfPbr, &[("specular_color", ks(&[1e20, 1.0, 1.0], space))])), "specular_color");
+    }
+    let wide = try_from_materialx(&mx(Shader::GltfPbr, &[("specular_color", ks(&[4.0, 1.0, 1.0], "g22_rec709"))])).unwrap();
+    assert_eq!(wide.surface.other_inputs.len(), 1);
+    assert!(close(wide.surface.other_inputs[0].1[0], 4f32.powf(2.2)));
     bad_value(open(&[("base_color", img("a.png", None, Some([0.0, 1.0])))]), "base_color");
     bad_value(open(&[("base_color", img("a.png", None, Some([f32::NAN, 1.0])))]), "base_color");
     let unknown = open(&[("thin_film_weight", k(&[0.5])), ("not_an_input", img("x.png", None, None))]).unwrap();

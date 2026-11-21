@@ -27,6 +27,9 @@ const UNIT_KIND: Kind = Kind::Scalar(0.0, 1.0);
 const NON_NEGATIVE_KIND: Kind = Kind::Scalar(0.0, f32::MAX);
 const COLOR: Kind = Kind::Color(1.0);
 
+const COAT_OFF: &str = "the coat weight is 0, which turns the layer off";
+const SHEEN_OFF: &str = "the sheen color is black or its weight is 0, which turns the layer off";
+
 /// What an input maps to on the [`Surface`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
@@ -50,6 +53,8 @@ enum Role {
     Occlusion,
     /// Kept as an other input or a texture, and not shaded.
     Kept,
+    /// Kept like [`Role::Kept`] while the coat is on, and dropped when it is off.
+    CoatKept,
 }
 
 /// A shader input the conversion reads, with its default from the shader's node definition.
@@ -82,13 +87,13 @@ const OPEN_PBR: &[Field] = &[
     field("emission_color", COLOR, Role::EmissionColor, 1.0),
     field("geometry_opacity", UNIT_KIND, Role::Opacity, 1.0),
     field("geometry_normal", Kind::Vector, Role::Normal, 0.0),
-    field("geometry_coat_normal", Kind::Vector, Role::Kept, 0.0),
+    field("geometry_coat_normal", Kind::Vector, Role::CoatKept, 0.0),
     field("specular_color", COLOR, Role::Kept, 1.0),
     field("specular_roughness_anisotropy", UNIT_KIND, Role::Kept, 0.0),
     field("transmission_weight", UNIT_KIND, Role::Kept, 0.0),
     field("subsurface_weight", UNIT_KIND, Role::Kept, 0.0),
-    field("coat_color", COLOR, Role::Kept, 1.0),
-    field("coat_ior", NON_NEGATIVE_KIND, Role::Kept, 1.6),
+    field("coat_color", COLOR, Role::CoatKept, 1.0),
+    field("coat_ior", NON_NEGATIVE_KIND, Role::CoatKept, 1.6),
 ];
 
 /// Standard Surface 1.0.1 inputs and defaults, from its node definition
@@ -109,13 +114,13 @@ const STANDARD_SURFACE: &[Field] = &[
     field("emission_color", COLOR, Role::EmissionColor, 1.0),
     field("opacity", COLOR, Role::Opacity, 1.0),
     field("normal", Kind::Vector, Role::Normal, 0.0),
-    field("coat_normal", Kind::Vector, Role::Kept, 0.0),
+    field("coat_normal", Kind::Vector, Role::CoatKept, 0.0),
     field("specular_color", COLOR, Role::Kept, 1.0),
     field("specular_anisotropy", UNIT_KIND, Role::Kept, 0.0),
     field("transmission", UNIT_KIND, Role::Kept, 0.0),
     field("subsurface", UNIT_KIND, Role::Kept, 0.0),
-    field("coat_color", COLOR, Role::Kept, 1.0),
-    field("coat_IOR", NON_NEGATIVE_KIND, Role::Kept, 1.5),
+    field("coat_color", COLOR, Role::CoatKept, 1.0),
+    field("coat_IOR", NON_NEGATIVE_KIND, Role::CoatKept, 1.5),
 ];
 
 /// glTF PBR inputs and defaults, from its node definition
@@ -137,7 +142,7 @@ const GLTF_PBR: &[Field] = &[
     field("alpha_cutoff", UNIT_KIND, Role::AlphaCutoff, 0.5),
     field("normal", Kind::Vector, Role::Normal, 0.0),
     field("occlusion", UNIT_KIND, Role::Occlusion, 1.0),
-    field("clearcoat_normal", Kind::Vector, Role::Kept, 0.0),
+    field("clearcoat_normal", Kind::Vector, Role::CoatKept, 0.0),
     field("transmission", UNIT_KIND, Role::Kept, 0.0),
     field("specular_color", Kind::Color(f32::MAX), Role::Kept, 1.0),
 ];
@@ -215,7 +220,8 @@ impl Inputs {
 /// - An image becomes a [`TextureBinding`] with the file path, the UV tiling as its transform's
 ///   scale, and an encoding from its color space for a color input (linear for data); the core
 ///   holds 1 times any weight in its place, and an IOR texture leaves the default IOR, reported
-///   as approximated. Textures of a layer that is off are dropped and reported.
+///   as approximated. The inputs and textures of a layer that is off (the coat's color, IOR and
+///   normal among them) are dropped and reported.
 /// - Color constants are decoded to linear Rec.709 from the color space in effect, as the
 ///   MaterialX specification asks
 ///   (<https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#color-spaces-and-color-management-systems>):
@@ -225,9 +231,10 @@ impl Inputs {
 /// - The reader's warnings are carried into the report. Inputs outside the table are dropped and
 ///   reported.
 ///
-/// Every value is checked and none is clamped: a value that is not finite, is outside the
-/// definition's range (`0..=1` for weights, colors and roughness, at least 0 for strengths and
-/// IOR, at least 1 for glTF PBR's `ior`), has the wrong number of components, or is an
+/// Every value is checked and none is clamped: a value that is not finite (a color also after it
+/// is decoded to linear), is outside the definition's range (`0..=1` for weights, colors and
+/// roughness, at least 0 for strengths and IOR, at least 1 for glTF PBR's `ior`), has the wrong
+/// number of components, or is an
 /// `alpha_mode` other than 0, 1 or 2 is an error, and so is a texture on `alpha_mode` or
 /// `alpha_cutoff`, a UV tiling that is not two positive numbers, or an input named twice.
 pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
@@ -239,7 +246,7 @@ pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
     let mut report = ConversionReport::default();
     let mut inputs = Inputs { table, got: table.iter().map(|_| Got::Missing).collect() };
     let mut textures: Vec<(Role, TextureBinding)> = Vec::new();
-    let mut other_inputs = Vec::new();
+    let mut others: Vec<(Role, String, Vec<f32>)> = Vec::new();
     for (i, (name, value)) in m.inputs.iter().enumerate() {
         if m.inputs[..i].iter().any(|(n, _)| n == name) {
             return Err(ConvertError::Duplicate(name.clone()));
@@ -252,9 +259,8 @@ pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
         match value {
             Value::Constant { values, colorspace } => {
                 let v = checked_values(f, values, colorspace.as_deref())?;
-                if matches!(f.role, Role::Kept | Role::Normal | Role::Occlusion) {
-                    other_inputs.push((name.clone(), v));
-                    report.items.push(ReportItem::Unshaded { input: name.clone() });
+                if matches!(f.role, Role::Kept | Role::CoatKept | Role::Normal | Role::Occlusion) {
+                    others.push((f.role, name.clone(), v));
                 } else {
                     inputs.got[idx] = Got::Constant(v);
                 }
@@ -273,15 +279,24 @@ pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
     let sheen = sheen(&inputs, m.shader, &mut report);
     let emissive = emission(&inputs, m.shader, &mut report);
     let (alpha, alpha_mode) = alpha(&inputs, m.shader, &mut report)?;
+    let off = |role: Role| match role {
+        Role::CoatWeight | Role::CoatRoughness | Role::CoatKept if clearcoat.is_none() => Some(COAT_OFF),
+        Role::SheenWeight | Role::SheenColor | Role::SheenRoughness if sheen.is_none() => Some(SHEEN_OFF),
+        _ => None,
+    };
+    let mut other_inputs = Vec::new();
+    for (role, input, values) in others {
+        match off(role) {
+            Some(why) => report.items.push(ReportItem::Dropped { input, why }),
+            None => {
+                report.items.push(ReportItem::Unshaded { input: input.clone() });
+                other_inputs.push((input, values));
+            }
+        }
+    }
     let mut kept = Vec::new();
     for (role, binding) in textures {
-        let off = match role {
-            Role::CoatWeight | Role::CoatRoughness if clearcoat.is_none() => Some("the coat weight is 0, which turns the layer off"),
-            Role::SheenWeight | Role::SheenColor | Role::SheenRoughness if sheen.is_none() => {
-                Some("the sheen color is black or its weight is 0, which turns the layer off")
-            }
-            _ => None,
-        };
+        let off = off(role);
         let input = texture_name(&inputs, role, &binding);
         match off {
             Some(why) => report.items.push(ReportItem::Dropped { input, why }),
@@ -349,8 +364,9 @@ fn checked_values(f: &Field, values: &[f32], space: Option<&str>) -> Result<Vec<
         Kind::Vector => (f32::MIN, f32::MAX),
         Kind::Mode => (0.0, 2.0),
     };
+    let in_range = |v: f32| v.is_finite() && (lo..=hi).contains(&v);
     for &v in values {
-        if !(v.is_finite() && (lo..=hi).contains(&v)) {
+        if !in_range(v) {
             return Err(bad(reason(lo, hi)));
         }
         if f.kind == Kind::Mode && v.fract() != 0.0 {
@@ -358,7 +374,10 @@ fn checked_values(f: &Field, values: &[f32], space: Option<&str>) -> Result<Vec<
         }
     }
     match f.kind {
-        Kind::Color(_) => decode(values, space, f.name),
+        Kind::Color(_) => {
+            let linear = decode(values, space, f.name)?;
+            if linear.iter().all(|&v| in_range(v)) { Ok(linear) } else { Err(bad("is not a finite color once decoded to linear")) }
+        }
         _ => Ok(values.to_vec()),
     }
 }
