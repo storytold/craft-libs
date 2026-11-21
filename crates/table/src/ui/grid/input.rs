@@ -491,9 +491,13 @@ impl CellGrid<'_> {
             {
                 selection.select_range(all, &space);
             }
-            for &column in &frame.columns {
+        }
+        for &column in &frame.columns {
+            if self.headings {
                 let press = cx.part(COLUMN.at(u64::from(column))).press;
                 Self::line_press(&mut edits, selection, grab, &space, geometry, press, (false, column), Self::column_header(geometry, column));
+            }
+            if self.shows_column_edges() {
                 let edge = cx.part(COLUMN_EDGE.at(u64::from(column))).press;
                 let size = model.columns().size(column) as f32;
                 Self::edge_press(cx, &mut edits, grab, &range_label(words.resize_column.as_str()), (false, column), size, zoom, rtl, edge);
@@ -502,6 +506,8 @@ impl CellGrid<'_> {
                     edits.push(if next_hidden { GridEdit::UnhideColumn { column: column + 1 } } else { GridEdit::AutoFitColumn { column } });
                 }
             }
+        }
+        if self.headings {
             for &row in &frame.rows {
                 let press = cx.part(ROW.at(u64::from(row))).press;
                 Self::line_press(&mut edits, selection, grab, &space, geometry, press, (true, row), Self::row_header(geometry, row));

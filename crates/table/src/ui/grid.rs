@@ -156,7 +156,8 @@ pub struct CellGridStyle {
 /// - Pointer: click selects, drag extends with auto-scroll, Shift+click extends from the anchor, Cmd/Ctrl+click adds a
 ///   range on an unselected cell and removes a selected one; a header click selects the line, Shift+click extends the
 ///   current range to it, Cmd/Ctrl+click adds it as a range, a drag over headers several; the corner selects all. A
-///   header edge drags a resize, a double-click autofits (or unhides a hidden line); the fill handle on the current
+///   header edge drags a resize, a double-click autofits (or unhides a hidden line); with [`ColumnEdges::Cells`] a
+///   column's edge over the cells does the same, with or without headings; the fill handle on the current
 ///   range's corner drags a [`GridEdit::Fill`], the range's border a [`GridEdit::MoveCells`] (Esc cancels either).
 /// - Keys: arrows move (Shift extends; Cmd/Ctrl jumps to [`GridModel::data_edge`]), Page Up and Down a screen, Home the
 ///   row start, Cmd/Ctrl+Home the first cell after the frozen panes, Cmd/Ctrl+End [`GridModel::last_used`], Enter and

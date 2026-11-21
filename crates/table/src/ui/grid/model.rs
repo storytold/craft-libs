@@ -124,7 +124,8 @@ pub enum GridEdit {
     Clear,
     /// Backspace: clear the active cell and edit it.
     ClearAndEdit,
-    /// A column header's end edge dragged: the new width in points at 100 % zoom, as one gesture (Esc cancels). Several
+    /// A column's end edge, on the header or in the cells (`ColumnEdges::Cells`), dragged: the new width in points at
+    /// 100 % zoom, as one gesture (Esc cancels). Several
     /// selected columns resize together: the app applies the width to every column of the selection that holds
     /// `column`.
     #[non_exhaustive]
