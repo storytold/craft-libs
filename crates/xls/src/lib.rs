@@ -110,9 +110,9 @@ pub enum Warning {
     /// Charts embedded in a worksheet are not read.
     #[error("charts were not read")]
     Charts,
-    /// Pictures in a format that is not read (PICT, TIFF), damaged ones, ones past the limits,
+    /// Pictures in a format that is not read (PICT), damaged ones, ones past the limits,
     /// and shapes that name a missing picture.
-    #[error("some pictures were damaged, in a format that is not read (PICT, TIFF), or past the limits, and were skipped")]
+    #[error("some pictures were damaged, in a format that is not read (PICT), or past the limits, and were skipped")]
     PicturesSkipped,
     /// Some CF records could not be read: a rule type other than "cell value is" and "formula
     /// is", a formula that could not be decoded, a damaged record, or more than the reader keeps.

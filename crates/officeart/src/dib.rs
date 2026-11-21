@@ -98,15 +98,18 @@ pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
         return Some(Dib::Bmp(bmp));
     }
     // The PNG may be at most what is left of `work` (and `limit`); what it takes is charged.
-    match encode_png(&bmp, image::ImageFormat::Bmp, limit.min(work.left)) {
+    match encode_png(&bmp, image::ImageFormat::Bmp, limit, limit.min(work.left)) {
         Some(png) if work.charge(png.len(), "bitmap") => Some(Dib::Png(png)),
         _ => Some(Dib::Bmp(bmp)),
     }
 }
 
 /// A picture file of `format` decoded (at most [`MAX_SIDE`] pixels a side, and `limit` and
-/// 256 MiB of memory) and encoded as a PNG of at most `limit` bytes. `None` when it can't be.
-pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize) -> Option<Vec<u8>> {
+/// 256 MiB of memory: its pixels are charged by the caller) and encoded as a PNG of at most
+/// `out` bytes. The picture is turned as the file says (a TIFF's or JPEG's orientation), and
+/// floating-point pixels, which PNG can't hold, become 16-bit ones. `None` when it can't be.
+pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize, out: usize) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
     let mut reader = image::ImageReader::new(std::io::Cursor::new(file));
     reader.set_format(format);
     let mut limits = image::Limits::default();
@@ -114,8 +117,16 @@ pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize) 
     limits.max_image_height = Some(MAX_SIDE);
     limits.max_alloc = Some((256 << 20).min(limit as u64));
     reader.limits(limits);
-    let img = reader.decode().ok()?;
-    let mut png = PictureWriter { bytes: Vec::new(), limit };
+    let mut decoder = reader.into_decoder().ok()?;
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
+    img.apply_orientation(orientation);
+    let img = match img {
+        image::DynamicImage::ImageRgb32F(_) => image::DynamicImage::ImageRgb16(img.to_rgb16()),
+        image::DynamicImage::ImageRgba32F(_) => image::DynamicImage::ImageRgba16(img.to_rgba16()),
+        other => other,
+    };
+    let mut png = PictureWriter { bytes: Vec::new(), limit: out };
     image::codecs::png::PngEncoder::new(&mut png).write_image(img.as_bytes(), img.width(), img.height(), img.color().into()).ok()?;
     Some(png.bytes)
 }

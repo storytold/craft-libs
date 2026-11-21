@@ -16,7 +16,7 @@ use crate::model::ClientAnchor;
 const MAX_PICTURE_BYTES: usize = 256 << 20;
 
 /// One stored picture: its bytes (shared by every shape that shows it) and MIME type, or `None`
-/// for a format that is not read (PICT, TIFF) or a damaged one, so that `pib` indexes still
+/// for a format that is not read (PICT) or a damaged one, so that `pib` indexes still
 /// line up.
 pub(crate) type Blip = Option<(Arc<Vec<u8>>, &'static str)>;
 

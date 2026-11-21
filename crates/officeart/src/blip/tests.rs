@@ -148,6 +148,23 @@ fn every_copy_of_a_dib_is_charged() {
     assert!((1 << 20) - work.left >= bmp + 4 + png.len(), "{} charged", (1 << 20) - work.left);
 }
 
+/// Decoding a DIB isn't held to what is left for the PNG: its pixels were charged already, so a
+/// 100 × 100 bitmap whose PNG fits what is left becomes a PNG though its pixels wouldn't.
+#[test]
+fn a_dibs_png_needs_only_its_own_room() {
+    let (w, h) = (100u32, 100u32);
+    let mut dib = vec![0u8; 40];
+    dib[0] = 40;
+    dib[4..8].copy_from_slice(&w.to_le_bytes());
+    dib[8..12].copy_from_slice(&h.to_le_bytes());
+    dib[12] = 1;
+    dib[14] = 24;
+    dib.extend(std::iter::repeat_n([0u8, 0, 255], (w * h) as usize).flatten());
+    let charged = 14 + dib.len() + (w * h * 4) as usize;
+    let mut work = Decode::new(charged + 10_000);
+    assert!(matches!(crate::dib::to_png(&dib, usize::MAX, &mut work), Some(crate::dib::Dib::Png(_))));
+}
+
 /// A WMF's file with its placeable header is a second copy of its records, charged whole with the
 /// header; when that doesn't fit in the limit or the budget, or its bounds can't make a header,
 /// the records are kept as a WMF without one.
