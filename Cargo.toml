@@ -202,6 +202,7 @@ craft-testkit = { path = "crates/testkit" }
 craft-text = { path = "crates/text" }
 craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }
+craft-pbr = { path = "crates/pbr" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
