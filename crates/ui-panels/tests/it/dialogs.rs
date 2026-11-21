@@ -665,3 +665,76 @@ fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
     // Typing replaced the first field's text: the text field first, then the number field first.
     assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
 }
+
+/// A dialog around an icon picker takes its size from the picker, so the category picked does not resize or move it.
+#[trial]
+fn a_dialog_around_the_icon_picker_keeps_its_size_across_categories() {
+    use craft_behavior::IconId;
+    use craft_ui::pickers::{IconPicker, IconPickerGroup, IconPickerGroups, IconPickerItem};
+    let size = std::rc::Rc::new(std::cell::Cell::new(egui::Rect::NOTHING));
+    let seen = size.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let item = |key: u8, name: &str| IconPickerItem::new(key, name).icon(IconId::new("settings"));
+        let groups = vec![
+            IconPickerGroup::new("Selection", (0..40).map(|key| item(key, &format!("Tool {key}"))).collect()),
+            IconPickerGroup::new("Drawing", vec![item(100, "Brush")]),
+        ];
+        let mut value = None;
+        let mut open = true;
+        let shown = Dialog::new("Icons").collection_body().opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+            IconPicker::new("Tool", Bind::bound(&mut value), &groups).group_display(IconPickerGroups::Filter).show(ui);
+        });
+        seen.set(shown.response.rect);
+    });
+    fixture.settle();
+    let all = size.get();
+    for name in ["Drawing", "All"] {
+        let tab = fixture.by_label(name).expect("the category's tab");
+        fixture.click(&tab).settle();
+        assert_eq!(size.get(), all, "the dialog moved or resized on {name}");
+    }
+}
+
+/// The width of a dialog around an icon picker of `columns` columns, with a filter tab for each of `groups`, in a
+/// window of 1440 by 900.
+fn icon_dialog_width(groups: &'static [&'static str], columns: usize) -> f32 {
+    use craft_behavior::IconId;
+    use craft_ui::pickers::{IconPicker, IconPickerGroup, IconPickerGroups, IconPickerItem};
+    let size = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = size.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let groups: Vec<IconPickerGroup<u8>> = groups
+            .iter()
+            .enumerate()
+            .map(|(at, name)| {
+                let items =
+                    (0..8u8).map(|key| IconPickerItem::new(at as u8 * 8 + key, format!("{name} {key}")).icon(IconId::new("settings"))).collect();
+                IconPickerGroup::new(*name, items)
+            })
+            .collect();
+        let mut value = None;
+        let mut open = true;
+        let shown = Dialog::new("Icons").collection_body().opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+            IconPicker::new("Tool", Bind::bound(&mut value), &groups)
+                .group_display(IconPickerGroups::Filter)
+                .large_previews()
+                .columns(columns)
+                .show(ui);
+        });
+        seen.set(shown.response.rect);
+    });
+    fixture.room(vec2(1440.0, 900.0)).settle();
+    size.get().width()
+}
+
+/// A dialog around an icon picker is as wide as the picker's columns (storytold/wordcraft#7167): its filter row of
+/// one long name among short ones asks for its tabs' own widths, not for every tab as wide as the longest, which took
+/// the dialog to the most of the window it may have.
+#[trial]
+fn a_dialog_around_the_icon_picker_is_as_wide_as_its_columns() {
+    const MANY: &[&str] = &["Communication", "Art", "Fun", "Map", "Pet", "Sky", "Sun", "Toy"];
+    const ONE: &[&str] = &["Art"];
+    let (many, one) = (icon_dialog_width(MANY, 12), icon_dialog_width(ONE, 12));
+    assert_eq!(many, one, "the filter row widened the dialog past its 12 columns");
+    assert!(icon_dialog_width(ONE, 8) < one, "8 columns make a narrower dialog than 12");
+}

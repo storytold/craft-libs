@@ -644,8 +644,9 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
 
     /// The width the collection asks for when it takes its width from its content, over its widest row: a grid of
     /// cards asks for its declared number of columns. 0 asks for nothing. `item` is as `item_layout_from` gets it;
-    /// `rows` is the number of rows the source holds, for a collection whose rows stand side by side.
-    fn ideal_width(&self, _item: Option<Vec2>, _rows: usize, _cx: &StyleCx<'_>) -> f32 {
+    /// `line` is the ideal widths of all the rows added up, for a collection whose rows stand side by side (measured
+    /// with `measures_items`, else 0).
+    fn ideal_width(&self, _item: Option<Vec2>, _line: f32, _cx: &StyleCx<'_>) -> f32 {
         0.0
     }
 

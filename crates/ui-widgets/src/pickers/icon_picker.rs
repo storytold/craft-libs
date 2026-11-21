@@ -115,6 +115,13 @@ pub struct IconPicker<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Shown when there are no cells.
     #[prop(into)]
     empty: Option<Label>,
+    /// The icons are drawn at the large thumbnail step, so they fill their cells.
+    #[prop(flag)]
+    large_previews: bool,
+    /// How many cells a row holds. A picker that takes its width from its content (in a dialog) is as wide as this
+    /// many cells; 0 leaves the width to the room.
+    #[prop]
+    columns: usize,
 }
 
 /// How an [`IconPicker`] shows its groups.
@@ -160,13 +167,14 @@ impl<K> ItemSource<usize> for Cells<'_, K> {}
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
     /// A picker named `label` over `value`, choosing among the cells of `groups`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<K>>, groups: &'a [IconPickerGroup<K>]) -> Self {
-        IconPicker { label: label.into(), value, groups, group_display: IconPickerGroups::default(), empty: None }
+        IconPicker { label: label.into(), value, groups, group_display: IconPickerGroups::default(), empty: None, large_previews: false, columns: 0 }
     }
 
     /// Shows the picker and returns what the user did this pass.
     pub fn show(self, ui: &mut Ui) -> IconPickerOutput<K> {
-        let IconPicker { label, mut value, groups, group_display, empty } = self;
-        let shown = Stack::new().show(ui, |ui, cx| Self::body(ui, cx, &label, &mut value, groups, (group_display, empty.as_ref())));
+        let IconPicker { label, mut value, groups, group_display, empty, large_previews, columns } = self;
+        let shown =
+            Stack::new().show(ui, |ui, cx| Self::body(ui, cx, &label, &mut value, groups, (group_display, empty.as_ref(), large_previews, columns)));
         shown.inner.unwrap_or_else(|| IconPickerOutput { response: shown.output.clone(), picked: None, search_changed: false })
     }
 
@@ -178,7 +186,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
         label: &Label,
         value: &mut Bind<'a, Option<K>>,
         groups: &[IconPickerGroup<K>],
-        (group_display, empty): (IconPickerGroups, Option<&Label>),
+        (group_display, empty, large_previews, columns): (IconPickerGroups, Option<&Label>, bool, usize),
     ) -> IconPickerOutput<K> {
         let env = Env::of(ui);
         let words = env.words::<PickerWords>();
@@ -245,7 +253,15 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
         let selection =
             held.as_ref().and_then(|held| items.iter().position(|item| item.key == *held)).map_or_else(Selection::default, Selection::single);
         let source = Cells { items };
+        // The grid keeps the height of the tallest set it has shown at this width, so a category with fewer icons, or a
+        // search, does not shrink the picker and the dialog around it.
+        let width = ui.available_width();
+        let kept = cx.memory::<Tallest>().clone();
+        if kept.width.to_bits() == width.to_bits() {
+            ui.set_min_height(kept.height);
+        }
         let grid = TileGrid::<usize>::new(label.clone())
+            .card_columns(columns)
             .id(grid_id)
             .select(SelectMode::Single)
             .activate(ActivateOn::Click)
@@ -259,6 +275,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
             .show_items(ui, &source, &mut |at, _| {
                 let item = source.items[*at];
                 let tile = Tile::new(item.label.clone());
+                let tile = if large_previews { tile.large_icon() } else { tile };
                 match &item.icon {
                     Some(icon) => tile.icon(icon.clone()),
                     None => tile,
@@ -289,6 +306,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
             let name: Arc<str> = Arc::from(label.as_str());
             value.reborrow().apply(&EditEvent::set(Mixed::Same(held), Some(key.clone()), name, None));
         }
+        let height = grid.response.response.rect.height();
+        let tallest = cx.memory::<Tallest>();
+        if tallest.width.to_bits() != width.to_bits() {
+            *tallest = Tallest { width, height };
+        } else {
+            tallest.height = tallest.height.max(height);
+        }
         IconPickerOutput { response: grid.response.response, picked, search_changed }
     }
 }
@@ -296,6 +320,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
 /// The names of the groups the user closed.
 #[derive(Clone, Default)]
 struct ClosedGroups(HashSet<String>);
+
+/// The tallest the grid has been at a width.
+#[derive(Clone, Default)]
+struct Tallest {
+    width: f32,
+    height: f32,
+}
 
 /// The category the filter row shows: 0 is All, `n` the group at `n - 1`.
 #[derive(Clone, Default)]

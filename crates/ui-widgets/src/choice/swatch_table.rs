@@ -460,7 +460,7 @@ impl Collection for SwatchTable<'_> {
 
     /// Where the table takes its width from its content it asks for every cell in one row, or its count per row: the
     /// room it is offered then wraps the cells, as it does where it is given the width.
-    fn ideal_width(&self, _item: Option<Vec2>, _rows: usize, cx: &StyleCx<'_>) -> f32 {
+    fn ideal_width(&self, _item: Option<Vec2>, _line: f32, cx: &StyleCx<'_>) -> f32 {
         if self.arrangement == SwatchArrangement::Honeycomb {
             return HoneycombLayout::new(self.swatches.len(), self.cell(cx)).columns() as f32 * self.cell(cx) + 0.5;
         }

@@ -104,6 +104,8 @@ struct Sizes {
     dot: f32,
     range_bar: f32,
     face: f32,
+    /// The side of an icon face that `Tile::large_icon` asks for: the large thumbnail step.
+    face_large: f32,
     name_line: f32,
     detail_line: f32,
     start: f32,
@@ -165,6 +167,7 @@ impl Sizes {
             dot: tokens.size.handle.md,
             range_bar: tokens.size.handle.sm,
             face: tokens.size.icon.lg,
+            face_large: tokens.size.thumb.lg,
             name_line,
             detail_line: line,
             start: control.height,
@@ -324,6 +327,10 @@ pub struct Tile<'a> {
     /// The stars, 0 to 5; a tile without a rating has no stars.
     #[prop]
     rating: Option<u8>,
+    /// The icon face is drawn at the large thumbnail step instead of the toolbar icon size, so a grid of icons shows
+    /// previews that fill their cells.
+    #[prop(flag)]
+    large_icon: bool,
     /// A pick or reject flag.
     #[prop]
     flag: Option<TileFlag>,
@@ -394,6 +401,7 @@ impl<'a> Tile<'a> {
             accessible_name: None,
             rating: None,
             flag: None,
+            large_icon: false,
             label_color: None,
             label_name: None,
             status: TileStatus::Normal,
@@ -734,6 +742,7 @@ impl Component for Tile<'_> {
         // An icon tile's picture is its icon. Any other picture is a card of a grid at zoom 1: as wide as the thumbnail
         // side, with what the density adds around it. A narrower room shrinks the picture to fit.
         let side = match (&self.icon, cx.proposal) {
+            (Some(_), _) if self.large_icon => cx.style.sizes.face_large,
             (Some(_), _) => cx.style.face.side,
             (None, Proposal::Min) => sizes.thumbs[0],
             (None, _) => sizes.thumbs[1],
@@ -880,7 +889,8 @@ impl Component for Tile<'_> {
             let draw = ui.draw();
             let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));
             if let Some(face) = face {
-                let icon = Rect::from_center_size(picture.center(), Vec2::splat(style.face.side));
+                let side = if self.large_icon { style.sizes.face_large } else { style.face.side };
+                let icon = Rect::from_center_size(picture.center(), Vec2::splat(side));
                 draw.icon(icon, &face.color(cx.resolve(&style.face.color)));
             }
             if self.dimmed || self.rejected || self.hidden {

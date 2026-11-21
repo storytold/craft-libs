@@ -923,10 +923,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         true
     }
 
-    /// Where the strip takes its width from its content (a dialog sized by what it holds), every tab fits in a row:
-    /// as many as the source holds, each as wide as the widest, so the strip does not send tabs to its overflow menu.
-    fn ideal_width(&self, item: Option<Vec2>, rows: usize, _: &StyleCx<'_>) -> f32 {
-        item.map_or(0.0, |largest| largest.x * rows as f32)
+    /// Where the strip takes its width from its content (a dialog sized by what it holds), every tab fits in a row,
+    /// each as wide as it measures itself, after the strip lead, so the strip sends no tab to its overflow menu. Not
+    /// every tab as wide as the widest: one long name among short ones took a dialog to the most of the window it may
+    /// have (storytold/wordcraft#7167).
+    fn ideal_width(&self, _item: Option<Vec2>, line: f32, cx: &StyleCx<'_>) -> f32 {
+        if line > 0.0 { line + strip_lead(self.kind, cx.tokens) } else { 0.0 }
     }
 
     /// The shown tab is the single selection; the strip reports a change and the host applies it.
