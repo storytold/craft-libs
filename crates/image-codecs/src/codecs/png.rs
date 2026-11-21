@@ -1362,21 +1362,22 @@ fn start<W: Write>(
     {
         info.icc_profile = Some(icc.clone().into());
     }
-    if opts.embed_metadata {
-        if let Some(exif) = &meta.exif {
-            // The pixels are written as they are shown: never let a viewer rotate them again.
-            info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi).into_owned().into());
-        }
-        if let Some((x, y)) = meta.dpi
-            && x > 0.0
-            && y > 0.0
-        {
-            info.pixel_dims = Some(png::PixelDimensions {
-                xppu: (x / METERS_PER_INCH).round() as u32,
-                yppu: (y / METERS_PER_INCH).round() as u32,
-                unit: png::Unit::Meter,
-            });
-        }
+    if opts.embed_metadata
+        && let Some(exif) = &meta.exif
+    {
+        // The pixels are written as they are shown: never let a viewer rotate them again.
+        info.exif_metadata = Some(crate::resolution::export_exif(exif, meta.dpi).into_owned().into());
+    }
+    // The resolution is written whenever it is known, with or without the other metadata.
+    if let Some((x, y)) = meta.dpi
+        && x > 0.0
+        && y > 0.0
+    {
+        info.pixel_dims = Some(png::PixelDimensions {
+            xppu: (x / METERS_PER_INCH).round() as u32,
+            yppu: (y / METERS_PER_INCH).round() as u32,
+            unit: png::Unit::Meter,
+        });
     }
     let mut encoder = png::Encoder::with_info(out, info).map_err(|e| CodecError::encode(F, e))?;
     encoder.set_compression(match opts.png_compression {

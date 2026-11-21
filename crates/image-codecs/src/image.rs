@@ -139,7 +139,8 @@ pub struct Metadata {
     pub exif: Option<Vec<u8>>,
     /// XMP packet as UTF-8.
     pub xmp: Option<String>,
-    /// Horizontal and vertical resolution in dots per inch.
+    /// Horizontal and vertical resolution in dots per inch. When `Some`, encoders for formats
+    /// with a resolution field write it even with [`EncodeOptions::embed_metadata`](crate::EncodeOptions::embed_metadata) off.
     pub dpi: Option<(f32, f32)>,
     /// Free-form key/value text (PNG tEXt/iTXt, TIFF ASCII tags).
     pub text: Vec<(String, String)>,

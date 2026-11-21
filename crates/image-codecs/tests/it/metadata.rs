@@ -222,6 +222,8 @@ fn embed_flags_disable_metadata() {
         assert!(back.icc.is_none(), "{f:?}");
         assert!(back.meta.exif.is_none() && back.meta.xmp.is_none(), "{f:?}");
         assert!(back.meta.text.is_empty(), "{f:?}");
+        // The resolution is not metadata: JPEG, PNG and TIFF keep it (WebP only has EXIF for it).
+        assert_eq!(back.meta.dpi, (f != Format::WebP).then_some((300.0, 150.0)), "{f:?}");
         assert!(
             fidelity_warnings_with(&img, Format::Bmp, &opts).iter().all(|w| !matches!(w, FidelityWarning::IccDropped | FidelityWarning::ExifDropped))
         );
