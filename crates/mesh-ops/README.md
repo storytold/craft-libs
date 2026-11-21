@@ -72,7 +72,10 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   distance, a NaN box and a negative or NaN search distance find nothing. Ray casts and the
   nearest-point search work in `f64` at any finite `f32` coordinates. The ray test is watertight
   (Woop, Benthin and Wald, 2013): a ray through an edge that two triangles share hits at least
-  one of them, and the test has no slack around the edges. A hit closer than the least positive
+  one of them, and the test has no slack around the edges. Box exit distances are scaled past
+  their rounding error, so a ray that touches a box where it enters on one axis and leaves on
+  another still reaches its triangles. A triangle whose corners lie on one line is never hit, and
+  `nearest` still measures it as a segment. A hit closer than the least positive
   `f32` is reported at that distance. The nearest-point search does not
   find a point more than about 1.8e19 away, where the squared distance overflows `f32`.
 - **`Mesh`.** Positions, normals, tangents, UVs, vertex colors, indices, per-material submeshes
@@ -99,13 +102,19 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   exactly one triangle. It returns `Invalid` for a contour with fewer than three points, a
   non-finite or repeated point, a contour without area, edges that cross or touch, a hole outside
   the outer contour or inside another hole, a bounding box wider or taller than 1e150, and a
-  polygon with no ear left to clip. Coordinates are taken relative to the corner of the bounding
-  box, and `triangulate::signed_area` relative to the first point, so a contour far from the
-  origin keeps its area.
+  polygon with no ear left to clip. Coordinates are used as given, and every test of which side
+  of a line a point lies on takes the exact sign of the cross product, so a contour far from the
+  origin keeps its shape and points far apart in scale stay apart. The sign is exact unless a
+  product of two coordinate differences, or its rounding error, falls below the normal `f64`
+  range (differences near 1e-154 or smaller); such a cross product can round to 0. `triangulate::signed_area`
+  takes its terms from the contour's lowest point, so the area does not depend on where the
+  contour starts.
 - **Outlines.** `outline::group_contours` groups closed contours into `Outline`s by nesting depth
   (a hole goes to the innermost containing outer contour; overlapping contours each count as a
   container) after removing repeated points and dropping contours of area 1e-9 or less. Contours
-  that together span more than 1e150 in x or y are `Invalid`. `outline::extrude` builds a beveled solid from outlines in a y-down plane: the front cap at
+  that together span more than 1e150 in x or y are `Invalid`. A contour that touches a larger
+  one still counts as inside it; `extrude` rejects a hole that touches its outer contour, so such
+  a hole has to be moved off it or merged into it first. `outline::extrude` builds a beveled solid from outlines in a y-down plane: the front cap at
   z = 0 facing -z, the back cap at the extrusion depth facing +z, walls between them and a
   `BevelStyle` (none, angular, concave or convex) at both edges. `extrude_surfaces` splits the
   result into front, bevel, side and back meshes, and the `_stacked` forms move it by
@@ -267,7 +276,7 @@ For EffectCraft:
 | `triangulate` returns `usize` triangles | `u32` triangles, with the contour count, point count and work checked against `Limits` |
 | `triangulate` clips arbitrary triangles when no ear is left (a bow-tie, a crossing or touching hole, a hole outside the outer contour) and ignores a hole shorter than three points | an `Invalid` error |
 | `triangulate` can join a hole to the copy of an earlier bridge that faces away from it, leaving no ear | only edges that run upward across the hole's ray count, so the hole joins the copy that faces it |
-| `signed_area` multiplies absolute coordinates, so a contour far from the origin loses its area | the products are taken relative to the first point |
+| `signed_area` multiplies absolute coordinates, so a contour far from the origin loses its area | the terms are taken from the contour's lowest point, so the area does not depend on where the contour starts |
 | `group_contours` takes `Vec<Vec<[f64; 2]>>`, drops a contour with a NaN point, and keeps the 10,000 largest contours with a warning | it takes a slice of contours, returns `Invalid` for a non-finite point or a span over 1e150 and `TooLarge` for more than `max_outline_contours`; `group_largest_contours` keeps the largest |
 | `extrude` raises a depth under 1e-3, or NaN, to 1e-3, clamps the hole bevel to 0..1, and builds no bevel for a NaN bevel depth or hole bevel | an `Invalid` error for a depth that is not finite and positive, a bevel depth that is not finite and 0 or more, and a hole bevel outside 0 to 1 |
 | `extrude` builds a cap from a bevel that collapses or turns the contour inside out, and from an outline whose contours cross | an `Invalid` error |
@@ -280,7 +289,7 @@ For EffectCraft:
 | `group_contours` counts a larger contour as a container when it holds a contour's first point, so the result depends on where the contour starts | a larger contour is a container only when the whole contour lies inside it or on its edges |
 | `group_contours` drops a contour whose area overflows to NaN | a contour wider than 1e150 is `Invalid` before its area is taken |
 | `triangulate` shifts the points by their lowest corner, which can merge points of an outline that spans very different scales | the points are used as given |
-| `triangulate` treats a turn whose cross product is under 1e-12 as straight | only an exact zero is straight |
+| `triangulate` treats a turn whose cross product is under 1e-12 as straight | only an exact zero is straight, and every cross product's sign is exact unless its products or their rounding errors fall below the normal `f64` range |
 | `triangulate` can fail to bridge a hole whose ray reaches a ring vertex exactly | the hole bridges to that vertex |
 | `extrude` triangulates the caps at `f64` precision, so a cap triangle can face the wrong way once stored | the caps are triangulated from the `f32` positions the mesh stores; profile rings that round to one position, and bevel steps without `f32` width, are `Invalid` |
 | The cone's side normal divides by at least 1e-6, so a cone lower than that tilts its normal | the slope is taken from the real height in `f64` |

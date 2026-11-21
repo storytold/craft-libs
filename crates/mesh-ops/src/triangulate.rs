@@ -10,7 +10,9 @@
 //! differences of the coordinates as given, so a contour far from the origin keeps its shape and
 //! points far apart in scale stay apart. Every decision on which side of a line a point lies
 //! (convex and reflex corners, straight corners, crossings and containment) takes the exact sign
-//! of the cross product, computed again exactly when rounding could change it.
+//! of the cross product, computed again exactly when rounding could change it. The sign is exact
+//! unless a product of coordinate differences, or its rounding error, falls below the normal
+//! `f64` range.
 
 use crate::mesh::{exact_sum, two_sum};
 use crate::{Limits, MeshOpsError, Result, check_limit, try_vec};
@@ -107,7 +109,7 @@ pub(crate) fn try_collect<T>(it: impl ExactSizeIterator<Item = T>, what: &'stati
 /// Whether `p` is inside the closed contour `c` (even-odd rule). A contour with fewer than three
 /// points holds nothing. An edge counts when one end is above `p` and the other is not (a ray
 /// through a vertex counts one of its two edges) and `p` lies strictly on its left seen from its
-/// lower end, by the exact sign of [`cross`].
+/// lower end, by the sign of [`cross`].
 pub(crate) fn point_in(p: P, c: &[P]) -> bool {
     let n = c.len();
     if n < 3 {
