@@ -91,3 +91,23 @@ proptest::proptest! {
         let _ = craft_html::doc::export(&d);
     }
 }
+
+#[test]
+fn links_keep_element_identity_across_formatting_and_adjacent_targets() {
+    use std::sync::Arc;
+    let flow = parse(r#"<p><a href="https://example.com">a<b>b</b>c</a><a href="https://example.com">d</a></p>"#);
+    let FBlock::Para(para) = &flow.blocks[0] else { panic!("expected paragraph") };
+    let links: Vec<_> = para
+        .inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            Inline::Text(text, fmt) => fmt.link.as_ref().map(|uri| (text.as_str(), uri)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(links.iter().map(|(text, _)| *text).collect::<String>(), "abcd");
+    assert!(links.len() >= 4, "distinct source links must not merge");
+    assert!(Arc::ptr_eq(links[0].1, links[1].1));
+    assert!(Arc::ptr_eq(links[1].1, links[2].1));
+    assert!(!Arc::ptr_eq(links[2].1, links[3].1));
+}
