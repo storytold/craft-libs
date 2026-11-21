@@ -75,7 +75,7 @@ pub struct Animation {
 pub enum FrameError {
     /// Not a GIF, or the first frame does not decode.
     Malformed(String),
-    /// The canvas is over [`FrameLimits::max_canvas_bytes`] or more than the file can hold.
+    /// A configured budget cannot fit the first frame, or the file cannot back its canvas.
     LimitExceeded(String),
 }
 
@@ -116,6 +116,9 @@ pub fn read_frames(bytes: &[u8], limits: &FrameLimits) -> Result<Animation, Fram
     // The decoder sets up the whole logical screen before the first frame: the file must back it.
     if !crate::plausible(info.bytes_to_back(4, 1 << 28), bytes.len(), 1 << 14) {
         return Err(FrameError::LimitExceeded(format!("a {} byte file cannot hold a {width}x{height} picture", bytes.len())));
+    }
+    if canvas > limits.max_bytes {
+        return Err(FrameError::LimitExceeded(format!("the first frame needs {canvas} retained bytes but the limit is {}", limits.max_bytes)));
     }
     let malformed = |e: image::ImageError| FrameError::Malformed(e.to_string());
     let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(malformed)?;
@@ -311,6 +314,19 @@ mod tests {
         assert!(
             matches!(read_frames(&bytes, &FrameLimits { max_frames: 0, ..FrameLimits::default() }), Err(FrameError::LimitExceeded(message)) if message.contains("frame limit is zero"))
         );
+    }
+
+    #[test]
+    fn retained_byte_budget_must_fit_one_frame() {
+        let bytes = gif(&[(10, 5), (200, 10)]);
+        let first_frame_bytes = 3 * 2 * 4;
+        let limits = FrameLimits { max_bytes: first_frame_bytes - 1, ..FrameLimits::default() };
+        assert!(matches!(read_frames(&bytes, &limits), Err(FrameError::LimitExceeded(_))));
+
+        let limits = FrameLimits { max_bytes: first_frame_bytes, ..limits };
+        let animation = read_frames(&bytes, &limits).unwrap();
+        assert_eq!(reds(&animation), [(10, 50)]);
+        assert_eq!(animation.stop, Stop::ByteLimit);
     }
 
     #[test]
