@@ -72,7 +72,7 @@ impl Default for Limits {
 }
 
 /// The running counters of one read against its [`Limits`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Budget {
     pub(crate) limits: Limits,
     inflated: usize,
