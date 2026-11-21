@@ -183,7 +183,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
             Stack::new().id_salt(key).enabled(row.enabled).show(ui, |ui, _| {
                 host.custom_row(ui, key);
                 if let Some(help) = &row.help {
-                    Help::Text(help.clone()).show(ui);
+                    Help::Text(help.clone()).text().show(ui);
                 }
             });
         }

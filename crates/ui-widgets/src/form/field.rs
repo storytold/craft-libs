@@ -22,12 +22,12 @@ pub enum Help {
 }
 
 impl Help {
-    /// Shows the help line as a field shows it under its control.
-    pub fn show(&self, ui: &mut Ui) {
+    /// The help line as a field shows it under its control.
+    pub fn text(&self) -> Text {
         match self {
-            Help::Text(text) => Text::new(text.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui),
-            Help::Status(tone, text) => Text::new(text.clone()).role(TypeRole::Caption).tone(*tone).show(ui),
-        };
+            Help::Text(text) => Text::new(text.clone()).role(TypeRole::Caption).shade(Shade::Muted),
+            Help::Status(tone, text) => Text::new(text.clone()).role(TypeRole::Caption).tone(*tone),
+        }
     }
 }
 
@@ -127,7 +127,7 @@ impl Container for Field {
             return;
         }
         if let Some(help) = &self.help {
-            help.show(ui);
+            help.text().show(ui);
         }
     }
 }
