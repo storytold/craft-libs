@@ -1,0 +1,45 @@
+{
+  "repository": "https://github.com/sbbic-khmer/aksara-khmer-word-processor",
+  "revision": "31740e9d51d38171ae6119fc2d18a4a18fbfb2f1",
+  "files": [
+    {
+      "file": "frequency.tsv",
+      "source": "public/dictionaries/km_frequency_dictionary.json",
+      "source_sha256": "a646aa6365c064f31fc8b125263596d42c207b1c595ab479fc074872b86ad283",
+      "bundled_sha256": "89c2c9adc3a2a570ab517f87220a39d01ee410146bc62059d77ba674b20509a9"
+    },
+    {
+      "file": "km_symspell_dictionary.txt",
+      "source": "public/dictionaries/km_symspell_dictionary.txt",
+      "source_sha256": "a50b9b7270c062d04d5119537a35c938285d665714de60cde4cff09828c5f0c7",
+      "bundled_sha256": "a50b9b7270c062d04d5119537a35c938285d665714de60cde4cff09828c5f0c7"
+    },
+    {
+      "file": "khmer-multiple-spellings.txt",
+      "source": "public/dictionaries/khmer-multiple-spellings.txt",
+      "source_sha256": "277d0784c64d963aff733866179a86f4cbb25c7ada63eb5111aa739a4542b9d1",
+      "bundled_sha256": "277d0784c64d963aff733866179a86f4cbb25c7ada63eb5111aa739a4542b9d1"
+    },
+    {
+      "file": "titles.txt",
+      "source": "lib/khmer-titles.json",
+      "source_sha256": "1ff185a370bcb083ffb1db08089b7e2698f4d4209173df181909c480445aa50d",
+      "bundled_sha256": "ac825a5baa28686f1f18e5311b603d176e20d1085eda5ace3921f2700b34ec5a"
+    },
+    {
+      "file": "affixes.tsv",
+      "source": "lib/khmer-affixes.ts",
+      "source_sha256": "405efda8fc2476ca14f24b7aa1475bf32e356089f3f770a2d0e2ea677ee23872",
+      "bundled_sha256": "a563292abf3c4fbcfed5007ed6544fd3da307aef1b90d59905cc58316e9f1a4f"
+    },
+    {
+      "file": "kcc-weights.tsv",
+      "source": "public/dictionaries/km_kcc_tagger.json",
+      "source_sha256": "7b7ccb448b681d77858f02a0dea23ffd52208e6375d705cfb4ca8a885259339b",
+      "bundled_sha256": "b8f166ee8ab17161a02f4c94b34468a82f2af7ef6b077961bcda86918f50678c"
+    }
+  ],
+  "licence_sha256": "b017745ab6702816195c73987a7ce0dc3660db31328583252afdf3bcfc5f43e8",
+  "licence_class": "Download-only",
+  "licence_review": "Exact SIL input and contributor permissions confirmed; CLDR 28 content and full historical notices retained. Pending maintainer Embeddable/model-config ADR sign-off; see PROVENANCE.md."
+}

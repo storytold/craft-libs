@@ -40,6 +40,8 @@ pub enum ProofLang {
     It,
     /// Croatian (`hr`, `hr-HR`)
     Hr,
+    /// Khmer: optional Aksara language-build dictionary and preferred-spelling rules.
+    Km,
     /// Turkish (`tr`, `tr-TR`, `tr-CY`): the installed Hunspell dictionary (when there is one),
     /// Turkish grammar rules, spelling suggestions and Turkish syllable hyphenation rules.
     Tr,
@@ -90,7 +92,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 16] = [
+    pub const PROOFED: [ProofLang; 17] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnAu,
@@ -99,6 +101,7 @@ impl ProofLang {
         ProofLang::Pt,
         ProofLang::It,
         ProofLang::Hr,
+        ProofLang::Km,
         ProofLang::Tr,
         ProofLang::Ru,
         ProofLang::Cs,
@@ -134,6 +137,8 @@ impl ProofLang {
             ProofLang::It
         } else if primary.eq_ignore_ascii_case("hr") || primary.eq_ignore_ascii_case("hrv") {
             ProofLang::Hr
+        } else if primary.eq_ignore_ascii_case("km") || primary.eq_ignore_ascii_case("khm") {
+            ProofLang::Km
         } else if primary.eq_ignore_ascii_case("tr") || primary.eq_ignore_ascii_case("tur") {
             ProofLang::Tr
         } else if primary.eq_ignore_ascii_case("ru") || primary.eq_ignore_ascii_case("rus") {
@@ -221,6 +226,7 @@ impl ProofLang {
             ProofLang::Pt => "pt",
             ProofLang::It => "it",
             ProofLang::Hr => "hr",
+            ProofLang::Km => "km",
             ProofLang::Tr => "tr",
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
@@ -476,6 +482,9 @@ mod tests {
         let pt_pt = ProofLang::Pack(PackLocale::new("pt-pt").unwrap());
         assert_tags(&[" pt-PT ", "pt_PT.UTF-8", "por-PT"], pt_pt);
         assert_eq!((pt_pt.built_in(), ProofLang::Pt.built_in()), (ProofLang::Pt, ProofLang::Pt));
+        assert_tags(&["km", "km-KH", "KM_kh", "khm"], ProofLang::Km);
+        assert_eq!(ProofLang::Km.code(), "km");
+        assert!(ProofLang::Km.is_proofed());
         assert_tags(&["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"], ProofLang::It);
         assert_tags(&["cs", "cs-CZ", "CS-cz", "cs_CZ", " ces ", "CES", "cze", "CZE"], ProofLang::Cs);
         assert_tags(&["id", "id-ID", "ID-id", "id_ID", "id_ID.UTF-8", " id-ID ", "ind", "in", "in_ID"], ProofLang::Id);
