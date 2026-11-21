@@ -133,6 +133,12 @@ crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two 
   4bec22bd03bd1d995c9cf72e02a284f96d3d72cd.
   https://github.com/storytold/filmcraft
   Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+crates/raw/src/vc5.rs (craft-raw) ports the VC-5 decoder of GoPro's GPR SDK
+(https://github.com/gopro/gpr, source/lib/vc5_common and source/lib/vc5_decoder, including its codebook 17
+table), Copyright 2018 GoPro Inc., licensed under the Apache License 2.0 or the MIT License, at your
+option. The port was made by the LightCraft contributors (2026): translated from C to Rust and
+restructured; the file says so. crates/raw/tests/data/gpr-table17.inc is a verbatim, unmodified copy of the
+SDK's source/lib/vc5_common/table17.inc (same copyright and licence), used by a test to check the port's codebook.
 The SVG icon preparation in crates/ui is adapted from:
 - PhotoCraft, crates/ui-egui/src/icons.rs, revision e7a83ca342cdff568254f85f442b9cc8afb08066.
   https://github.com/storytold/photocraft
