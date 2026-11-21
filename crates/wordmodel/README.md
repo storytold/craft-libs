@@ -44,3 +44,14 @@ The model carries the limits its readers rely on: nesting of tables (`table::MAX
 text boxes (`MAX_TEXT_BOX_DEPTH`, `BoxBudget`), math (`math::MAX_DEPTH`, matrix sizes), group
 children, alt text length, linked boxes and the walk depth (`PARA_WALK_DEPTH`). Their tests
 moved with them.
+
+## Distinct small-gap borders
+
+`BorderStyle::DashSmallGap` retains the OOXML `dashSmallGap` and RTF
+`brdrdashsm` identities. The legacy DOC reader distinguishes BRC type 0x16
+from the ordinary dash type 0x07. ODF exports the distinct style using its
+available `dashed` fallback, which cannot retain the separate gap ratio.
+Synthetic DOCX/RTF round trips, legacy BRC/BRC80 mapping and ODF export/reopen
+controls accompany the public [WordCraft #4558](https://github.com/storytold/wordcraft/pull/4558)
+port. Application rendering and preview ratios remain in WordCraft. This port
+adds no new native Word measurement or competing-PR integration decision.
