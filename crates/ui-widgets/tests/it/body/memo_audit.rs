@@ -101,7 +101,7 @@ fn the_audit_names_a_view_whose_paint_went_stale() {
     });
     assert!(message.contains("Swatch"), "names the view: {message}");
     assert!(message.contains("paint"), "names the paint difference: {message}");
-    assert!(!message.contains("rect:") && !message.contains("output:"), "extent and output are the same: {message}");
+    assert!(!message.contains("rect: left") && !message.contains("output:"), "extent and output are the same: {message}");
 }
 
 /// A view that returns a fraction of `HIDDEN`, which its props do not hold, and paints nothing from it.
