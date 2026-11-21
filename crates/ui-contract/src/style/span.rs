@@ -46,8 +46,9 @@ impl<'a> Span<'a> {
     }
 
     /// Makes the span a link: it takes the run's link colour and the pointer.
-    pub fn link(self) -> Self {
-        todo!("dp.R2")
+    pub fn link(mut self) -> Self {
+        self.link = true;
+        self
     }
 
     /// Italic.

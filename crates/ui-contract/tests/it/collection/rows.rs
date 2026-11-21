@@ -3,9 +3,10 @@
 
 use super::kit::{Count, Dismissed, List, ROW_H, RowOut, Words};
 use craft_behavior::{
-    CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, ItemSource, PartKey, ScrollPos, Selection, SelectionModel as _, Sense,
-    SheetLayout, SpanLayout, keyed,
+    CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, GestureId, ItemSource, Mixed, PartKey, ScrollPos, Selection, SelectionModel as _,
+    Sense, SheetLayout, SpanLayout, keyed,
 };
+use craft_keymap::Mods;
 use craft_ui::contract::{
     Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, EditResponse, Focus as _,
     MeasureCx, PartsCx, Props as _, Role, SelectMode, ShowCollection as _, request_rename,
@@ -122,6 +123,28 @@ impl Component for ProbeRow {
     }
 }
 
+/// What the stub rename editor reports for a typed Enter: the key, the text typed, the modifiers held with it, and how
+/// often the editor was shown.
+struct Typing {
+    enter: Cell<bool>,
+    text: Cell<Option<String>>,
+    mods: Cell<Mods>,
+    shown: Cell<usize>,
+}
+
+impl Typing {
+    fn new() -> Self {
+        Typing { enter: Cell::new(false), text: Cell::new(None), mods: Cell::new(Mods::NONE), shown: Cell::new(0) }
+    }
+
+    /// The next pass sees one Enter with `text` typed (none: the proposed draft), with Shift held when `shift`.
+    fn press(&self, text: Option<&str>, shift: bool) {
+        self.text.set(text.map(str::to_owned));
+        self.mods.set(if shift { Mods::SHIFT } else { Mods::NONE });
+        self.enter.set(true);
+    }
+}
+
 /// A list of `ProbeRow`s over `SpanLayout`, rows of the control height or of the heights they measure.
 #[derive(craft_ui::contract::Component)]
 #[component(collection)]
@@ -136,6 +159,8 @@ struct Probe<'a> {
     auto: bool,
     /// The rename draft every row proposes, and whether the rename field reports Enter.
     rename: Option<(&'a str, &'a Cell<bool>)>,
+    /// The typed Enter the rename field reports, one per `Typing::press`.
+    typing: Option<&'a Typing>,
 }
 
 impl<'a> Probe<'a> {
@@ -148,6 +173,7 @@ impl<'a> Probe<'a> {
             scroll: None,
             auto: false,
             rename: None,
+            typing: None,
         }
     }
 
@@ -155,6 +181,13 @@ impl<'a> Probe<'a> {
     fn renaming(mut self, draft: &'a str, enter: &'a Cell<bool>) -> Self {
         self.items = self.items.rename(true);
         self.rename = Some((draft, enter));
+        self
+    }
+
+    /// Rows rename with `draft` proposed; the field reports the Enters `typing` is given, each once.
+    fn typing(mut self, draft: &'a str, typing: &'a Typing) -> Self {
+        self = self.renaming(draft, &typing.enter);
+        self.typing = Some(typing);
         self
     }
 
@@ -211,9 +244,22 @@ impl Collection for Probe<'_> {
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, _: Bind<'_, String>, label: Rect, _: &str) -> Option<EditResponse<String>> {
-        let (_, enter) = self.rename?;
-        let mut editor = EditResponse::lifted(ui.allocate_rect(label, egui::Sense::hover()), EditEvents::new(), None);
-        editor.submitted = enter.get();
+        let (draft, enter) = self.rename?;
+        let mut events = EditEvents::new();
+        let (submitted, mods) = match self.typing {
+            Some(typing) => {
+                typing.shown.set(typing.shown.get() + 1);
+                let pressed = enter.replace(false);
+                if pressed && let Some(text) = typing.text.take() {
+                    events.push(EditEvent::commit(GestureId::new(0), Mixed::Same(draft.to_owned()), text));
+                }
+                (pressed, typing.mods.get())
+            }
+            None => (enter.get(), Mods::NONE),
+        };
+        let mut editor = EditResponse::lifted(ui.allocate_rect(label, egui::Sense::hover()), events, None);
+        editor.submitted = submitted;
+        editor.submit_mods = mods;
         Some(editor)
     }
 }
@@ -541,4 +587,62 @@ fn enter_on_an_untyped_rename_commits_only_a_proposed_draft() {
     };
     assert_eq!(renamed("proposed"), ["proposed"], "Enter accepts the proposed draft");
     assert!(renamed("b").is_empty(), "a draft equal to the row's text reports no commit");
+}
+
+/// Shift+Enter in a rename field applies the name as a commit and the rename goes on, each Shift+Enter its own gesture;
+/// plain Enter commits and ends it. The proposed draft does the same with Shift.
+#[trial]
+fn shift_enter_applies_a_rename_and_keeps_the_field_open() {
+    let (log, typing, words) = (Log::new(), Typing::new(), Words::flat(&["a", "b", "c"]));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = Probe::new(SelectMode::Single).id_salt("list").typing("proposed", &typing);
+            log.take(list.show_items(ui, &words, &mut |key, _| ProbeRow::new(*key, log)));
+        });
+    };
+    let commits = || -> Vec<(GestureId, String)> {
+        log.events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Rename(EditEvent::Commit { id, after, .. }) => Some((*id, after.name.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    frames.idle(3, &mut show);
+    request_rename(&frames.ctx, log.id(), &1_usize);
+    frames.idle(3, &mut show);
+    assert!(typing.shown.get() > 0, "the rename shows its editor");
+
+    typing.press(Some("one"), true);
+    frames.frame(vec![], &mut show);
+    assert_eq!(commits().iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), ["one"], "Shift+Enter reports the typed name once");
+    let shown = typing.shown.get();
+    frames.idle(2, &mut show);
+    assert!(typing.shown.get() > shown, "the rename goes on: the editor shows in the next passes");
+    assert_eq!(commits().len(), 1, "an idle pass reports nothing more");
+
+    typing.press(Some("two"), true);
+    frames.frame(vec![], &mut show);
+    let applied = commits();
+    assert_eq!(applied.len(), 2, "a second Shift+Enter is a second commit");
+    assert_ne!(applied[0].0, applied[1].0, "each is its own gesture, so its own undo step");
+
+    typing.press(Some("three"), false);
+    frames.frame(vec![], &mut show);
+    assert_eq!(commits().len(), 3, "plain Enter commits");
+    let shown = typing.shown.get();
+    frames.idle(2, &mut show);
+    assert_eq!(typing.shown.get(), shown, "and ends the rename");
+
+    request_rename(&frames.ctx, log.id(), &1_usize);
+    frames.idle(3, &mut show);
+    typing.press(None, true);
+    frames.frame(vec![], &mut show);
+    assert_eq!(commits().last().map(|(_, name)| name.as_str()), Some("proposed"), "Shift+Enter on a proposed draft commits it");
+    let shown = typing.shown.get();
+    frames.idle(2, &mut show);
+    assert!(typing.shown.get() > shown, "and keeps the rename going");
 }

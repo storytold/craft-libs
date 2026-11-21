@@ -121,9 +121,9 @@ impl<'a> TextRun<'a> {
     }
 
     /// Sets the colour of the run's link spans.
-    pub fn link_color(self, color: Color32) -> Self {
-        let _ = color;
-        todo!("dp.R2")
+    pub fn link_color(mut self, color: Color32) -> Self {
+        self.link_color = Some(color);
+        self
     }
 
     /// Sets the colour.
@@ -299,6 +299,8 @@ impl TextRun<'_> {
                 to_color(text.muted)
             } else if span.shortcut {
                 to_color(text.faint)
+            } else if span.link {
+                self.link_color.unwrap_or(base)
             } else {
                 base
             };
@@ -496,8 +498,9 @@ impl TextLayout {
         runs
     }
 
-    /// Every row as its text, its rect from the galley's origin and its bidi runs, for the AccessKit run nodes.
-    pub(crate) fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)> {
+    /// Every row as its text, its rect from the galley's origin and its bidi runs: the one per-row geometry, read by
+    /// the AccessKit run nodes and by a component that hits parts of a wrapped run, such as a link in a sentence.
+    pub fn row_lines(&self) -> Vec<(String, egui::Rect, Vec<LayoutRun>)> {
         (0..self.galley.rows.len())
             .map(|at| {
                 let placed = &self.galley.rows[at];
