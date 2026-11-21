@@ -492,9 +492,18 @@ lists (hidden entries keep their keys and still count in conflicts).
     as Ctrl+Alt.
   - On X11 a symbol chord is grabbed at the key that types the symbol in the current layout. A
     symbol the layout types only with AltGr is refused (`GlobalError::Unbindable`): with German,
-    `Ctrl+[` would grab Ctrl+8. A symbol typed with Shift needs Shift in the chord
-    (`Ctrl+Shift+.` with AZERTY). Two chords that land on one key and modifier set are one hotkey
-    (`GlobalError::Duplicate`): with AZERTY, `Ctrl+-` and `Ctrl+6`.
+    `Ctrl+[` would grab Ctrl+8. A symbol typed with Shift is written without Shift, as the keymap
+    matches punctuation: with AZERTY, `Ctrl+.` grabs Ctrl+Shift on the key that types `.`, and
+    `Ctrl+Shift+.` is refused (`GlobalError::Unbindable`). The Latin letters of a second layout
+    group count as that layout's own keys, so with Russian and US `Ctrl+A` grabs the key that
+    types A. Symbols of a second group are refused like AltGr ones.
+    Two chords that land on one key and modifier set are one hotkey (`GlobalError::Duplicate`):
+    with AZERTY, `Ctrl+-` and `Ctrl+6`.
+  - On X11, when a layout change moves a chord's key, `replace`, `unregister` and `clear`
+    release the key that was grabbed. A grab that no key of the current layout leads to stays
+    until a later change can release it, and its chord is refused meanwhile (`GlobalError::Taken`).
+    When the keyboard mapping cannot be read, `replace` refuses every binding and keeps the set
+    as it is.
   - On Windows and X11 a letter chord is grabbed at the key that types the letter, as the keymap
     matches letters on a Latin layout. On macOS it is grabbed at the letter's position on a US
     keyboard: with AZERTY, `Cmd+A` is the key that types Q.
@@ -502,7 +511,9 @@ lists (hidden entries keep their keys and still count in conflicts).
     and command do not change registered, so a held chord stays held. Unregistering a held chord,
     or replacing its binding, gives its `Released` at the next `poll`; events the system sent
     before the change go to the command the chord ran then. On Windows and macOS a press that
-    waits in the app's event queue while the bindings change goes to the new command.
+    waits in the app's event queue while the bindings change goes to the new command. On Windows
+    the release of a chord unregistered while held is dropped when it arrives, so it does not end
+    a later hold of the same chord.
   - At most 256 system events wait between polls (`MAX_QUEUED`); beyond that the oldest are
     dropped, and after such a loss every chord that was down is released. When more than 256
     events wait for `poll`, the oldest press whose release also waits is dropped with that
