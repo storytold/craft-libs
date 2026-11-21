@@ -20,6 +20,7 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx, Props as _,
     Role, WordSetCx as _,
 };
+use craft_ui::primitives::RulerFace;
 use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeyUse};
 use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, TextLook, TypeRole};
 use egui::{Rect, Response, Vec2};
@@ -282,6 +283,10 @@ pub struct TextRulerStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
+    /// The face: the prop's, else the component set's.
+    face: RulerFace,
+    /// The strip round the centred face's bar.
+    strip: StyleColor,
     /// The column.
     fill: StyleColor,
     /// The margins beside the column.
@@ -326,7 +331,9 @@ pub struct TextRulerStyle {
 ///
 /// - Ticks and numbers in the unit through the canvas rulers' tick rule (inches follow Word's sixteenths), from the
 ///   column's start edge; numbers keep clear of the markers. The column takes the ruler's fill, the margins the
-///   margin shade.
+///   margin shade. The face ([`RulerFace`]) is the prop's, else the component set's: the edge face hangs the ticks
+///   from the strip's bottom with each number beside its whole-unit tick; the centred face (Word's) draws a bar inset
+///   in the strip with the ticks centred on it and the numbers in place of the whole-unit ticks.
 /// - Indent markers (Word's): the first-line triangle down at the top, the hanging triangle up and the left box under
 ///   it at the bottom, the right triangle at the right. Dragging the box moves first-line and left together; Alt drags
 ///   freely (no snap).
@@ -388,6 +395,10 @@ pub struct TextRuler<'a> {
     /// The stop shown picked.
     #[prop(name = "picked_stop")]
     selected: Option<usize>,
+    /// The face; unset, the scope's component set picks it ([`RulerFace::of`]).
+    #[style_key]
+    #[prop]
+    face: Option<RulerFace>,
     report: Report,
 }
 
@@ -408,6 +419,7 @@ impl<'a> TextRuler<'a> {
             scale: None,
             right_to_left: None,
             selected: None,
+            face: None,
             report: Report::default(),
         }
         .label(label)
@@ -478,12 +490,14 @@ impl Component for TextRuler<'_> {
     type Style = TextRulerStyle;
     type Output = TextRulerOutput;
 
-    fn style(cx: &StyleCx<'_>, _: TextRulerStyleKey) -> TextRulerStyle {
+    fn style(cx: &StyleCx<'_>, key: TextRulerStyleKey) -> TextRulerStyle {
         let tokens = cx.tokens;
         let colors = &tokens.color;
         TextRulerStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
+            face: key.face.unwrap_or(RulerFace::of(cx.set())),
+            strip: cx.color(colors.surface.chrome),
             // The column is the light well the text goes in; the margins are shaded as the desk round the page, so the
             // column reads lighter than the margins in both modes.
             fill: cx.color(colors.surface.sunken),

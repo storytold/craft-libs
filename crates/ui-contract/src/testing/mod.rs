@@ -63,7 +63,7 @@ pub use fixture::{Fixture, Impure, Room, Target};
 pub use frames::Frames;
 #[cfg(feature = "suite")]
 pub use registry::{Registered, Registry};
-pub use stage::{room_height, stage, stage_fitting, stage_width};
+pub use stage::{least_stage_width, room_height, stage, stage_fitting, stage_width};
 #[doc(hidden)]
 pub use story::{
     CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, ValueAt, show_as_only_item,

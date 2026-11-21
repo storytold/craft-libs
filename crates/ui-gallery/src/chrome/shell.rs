@@ -119,7 +119,7 @@ fn body(ui: &mut Ui, _: &mut BodyCx<'_>, viewer: &mut Viewer) {
         on: !in_theme && variants.is_none() && front(&PanelId::Inspect),
         front: [Some(PanelId::Overview), selected].into_iter().flatten().filter(|panel| front(panel)).collect(),
     };
-    let window = Look { mode: Some(appearance.mode), direction: Some(env.direction), ..Look::default() };
+    let window = Look { mode: Some(appearance.mode), direction: Some(env.direction), set: Some(env.component_set()), ..Look::default() };
     let variants_in = (*variants).zip(variants_tab.clone()).map(|(axis, tab)| (tab, VariantsIn::new(axis, window)));
     let mut content = GalleryDock {
         browser,
@@ -146,6 +146,9 @@ fn body(ui: &mut Ui, _: &mut BodyCx<'_>, viewer: &mut Viewer) {
             }
             if let Some(direction) = look.direction {
                 env.direction = direction;
+            }
+            if let Some(set) = look.set {
+                env.values.set(set);
             }
         }
         *variants = None;
