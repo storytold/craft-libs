@@ -6,3 +6,4 @@ mod bench;
 mod cmx;
 mod provenance;
 mod read;
+mod write;
