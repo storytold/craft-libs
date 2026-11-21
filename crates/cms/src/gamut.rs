@@ -143,15 +143,18 @@ mod tests {
     #[test]
     fn mask_rgba_matches_per_pixel_check() {
         let src = Builtin::Srgb.profile();
-        // Sizes straddle the parallel threshold and the chunk size, odd ones included.
+        let pixels = image(50_001);
         for (proof, threshold) in [(Builtin::CoatedCmyk, 4.0), (Builtin::CoatedCmyk, 1.5), (Builtin::GrayGamma22, 4.0), (Builtin::DisplayP3, 0.5)] {
             let check = GamutCheck::new(src, proof.profile(), threshold).unwrap();
-            for n in [0, 1, 1023, 16 * 1024 - 1, 16 * 1024, 16 * 1024 + 1, 50_001] {
-                let px = image(n);
-                let want: Vec<u8> = px.iter().map(|p| if p[3] > 0.0 && check.out_of_gamut(&p[..3]).unwrap() { 255 } else { 0 }).collect();
+            // Each input size is a prefix of the same deterministic image.
+            let expected_mask: Vec<u8> = pixels.iter().map(|p| if p[3] > 0.0 && check.out_of_gamut(&p[..3]).unwrap() { 255 } else { 0 }).collect();
+            // Sizes straddle the parallel threshold and the chunk size, odd ones included.
+            for n in [0, 1, 1023, 16 * 1024 - 1, 16 * 1024, 16 * 1024 + 1, pixels.len()] {
+                let px = &pixels[..n];
+                let want = &expected_mask[..n];
                 let mut got = vec![7u8; n];
-                let count = check.mask_rgba(&px, &mut got).unwrap();
-                assert_eq!(got, want, "{proof:?} threshold {threshold} n {n}");
+                let count = check.mask_rgba(px, &mut got).unwrap();
+                assert_eq!(got.as_slice(), want, "{proof:?} threshold {threshold} n {n}");
                 assert_eq!(count, want.iter().filter(|&&m| m == 255).count());
             }
         }
