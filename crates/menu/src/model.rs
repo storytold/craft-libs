@@ -4,8 +4,10 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::BitOr;
 
-use craft_keymap::{Chord, CommandRef, Mods};
+use craft_keymap::{Chord, CommandRef};
 use craft_theme::Srgba;
+use craft_ui::list::ThumbAspect;
+use craft_ui::menu::Alternate;
 use craft_ui::primitives::FacePaint;
 
 /// The app's menus, in order, and its open documents.
@@ -197,34 +199,10 @@ pub struct Item {
     pub tooltip: Option<String>,
     /// The command the item runs instead while its modifiers are held as it is chosen.
     pub alternate: Option<Alternate>,
-    /// A small painted sample shown in the row (in-window bar only; the native menu ignores it, as it
-    /// ignores `tint`).
-    pub sample: Option<FacePaint>,
-}
-
-/// The command a row runs while `mods` are held as it is chosen (Alt on Merge Visible runs Stamp
-/// Visible).
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct Alternate {
-    /// The modifiers that select the alternate.
-    pub mods: Mods,
-    /// The command a pick runs while they are held.
-    pub command: CommandRef,
-}
-
-impl Alternate {
-    /// The alternate that runs `command` while `mods` are held.
-    pub fn new(mods: Mods, command: impl Into<CommandRef>) -> Alternate {
-        Alternate { mods, command: command.into() }
-    }
-
-    /// Whether `held` includes every modifier of the alternate. The one rule the in-window row and
-    /// the native dispatch share.
-    pub(crate) fn selected_by(&self, held: Mods) -> bool {
-        let m = self.mods;
-        (!m.cmd || held.cmd) && (!m.ctrl || held.ctrl) && (!m.alt || held.alt) && (!m.shift || held.shift)
-    }
+    /// A small painted sample shown in the row, its width `aspect` times the row's text height
+    /// (in-window bar only; the native menu ignores it, as it ignores `tint`).
+    // PLAN: mn.M6 gives `Option<FacePaint>`, but the row's cell (mn.M14) needs the aspect too; the sheet follows q182.
+    pub sample: Option<(ThumbAspect, FacePaint)>,
 }
 
 /// A plain item, or one with a checked state.
@@ -426,10 +404,10 @@ impl Item {
         self
     }
 
-    /// Show `sample` in the row, painted by the in-window bar.
-    pub fn sample(self, sample: FacePaint) -> Item {
-        let _ = sample;
-        todo!("mn.M6")
+    /// Show `face` in the row, painted by the in-window bar in a cell `aspect` times as wide as the row's text is high.
+    pub fn sample(mut self, aspect: ThumbAspect, face: FacePaint) -> Item {
+        self.sample = Some((aspect, face));
+        self
     }
 }
 
@@ -452,8 +430,7 @@ impl Node {
 
     /// A caption over the rows that follow it.
     pub fn heading(label: impl Into<String>) -> Node {
-        let _ = label;
-        todo!("mn.M2")
+        Node::Heading(label.into())
     }
 
     /// Give an item or a submenu a role: `Node::submenu("Theme", pages).role(ItemRole::Appearance)`.
@@ -714,12 +691,15 @@ pub fn from_items(tops: &[&str], rows: &[Row]) -> MenuBar {
     MenuBar { menus, documents: Vec::new() }
 }
 
-/// Drop separators at the start or end of a level and collapse runs of them, and drop empty
-/// submenus, at every depth. A submenu holding only a disabled placeholder (`No Recent Files`)
-/// stays.
+/// Drop separators at the start or end of a level and collapse runs of them, drop empty
+/// submenus, and drop a heading with no item or submenu after it before the next separator or the
+/// end of its level, at every depth. A submenu holding only a disabled placeholder (`No Recent
+/// Files`) stays.
 pub fn tidy(nodes: Vec<Node>) -> Vec<Node> {
-    let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
-    for n in nodes {
+    // Back to front, so a heading knows whether an item follows it in its group.
+    let mut kept: Vec<Node> = Vec::with_capacity(nodes.len());
+    let mut item_after = false;
+    for n in nodes.into_iter().rev() {
         let n = match n {
             Node::Submenu { label, children, role, platforms } => {
                 let children = tidy(children);
@@ -730,6 +710,17 @@ pub fn tidy(nodes: Vec<Node>) -> Vec<Node> {
             }
             other => other,
         };
+        match &n {
+            Node::Item(_) | Node::Submenu { .. } => item_after = true,
+            Node::Separator => item_after = false,
+            Node::Heading(_) if !item_after => continue,
+            _ => {}
+        }
+        kept.push(n);
+    }
+    // Separators last, so one left first or doubled by a dropped heading or submenu collapses too.
+    let mut out: Vec<Node> = Vec::with_capacity(kept.len());
+    for n in kept.into_iter().rev() {
         if matches!(n, Node::Separator) && matches!(out.last(), None | Some(Node::Separator)) {
             continue;
         }
@@ -742,7 +733,7 @@ pub fn tidy(nodes: Vec<Node>) -> Vec<Node> {
 }
 
 /// A hash of everything a native menu can only change by rebuilding: menus, roles, item
-/// commands, kinds (plain, check or radio), shortcuts, submenu labels and the labels of AppKit's items. Item
+/// commands, kinds (plain, check or radio), shortcuts, submenu labels, headings and the labels of AppKit's items. Item
 /// labels, enabled and checked are updated in place. Window's open documents (the items running a
 /// [`MenuBar::documents`] command) are left out: opening or closing a document rebuilds only the
 /// Window menu ([`window_key`]).
@@ -789,7 +780,8 @@ fn hash_nodes(nodes: &[Node], h: &mut DefaultHasher) {
                 ']'.hash(h);
             }
             Node::Standard { kind, label } => ('s', kind, label).hash(h),
-            Node::Heading(_) => todo!("mn.M4"),
+            // A heading's native item has no target to update in place, so its label is structure.
+            Node::Heading(label) => ('h', label).hash(h),
         }
     }
 }

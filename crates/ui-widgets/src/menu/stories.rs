@@ -1,14 +1,20 @@
 //! Stories of the menu rows and the menu.
 
-use super::{Menu, MenuItem};
+use super::{Alternate, Menu, MenuItem, PanelMenu, PanelRow};
 use crate::buttons::Button;
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
+use crate::fonts::FontRef;
 use crate::layout_components::Stack;
+use crate::list::ThumbAspect;
+use crate::primitives::{DocRun, DocText, FacePaint};
+use crate::runtime::commands::EditCommands;
+use crate::style::DataColor;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
+use craft_keymap::Mods;
 use craft_theme::ControlSize;
-use egui::Ui;
+use egui::{Color32, Ui, pos2};
 
 #[story(MenuItem<'static>, covers = [Default], drive = Drive::Activate)]
 fn menu_item(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -41,6 +47,36 @@ fn menu_item_marks_and_submenu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .inner
         .map(StoryOutput::from)
         .unwrap_or_default()
+}
+
+/// A sample of `font` that paints "Handgloves" across its cell, as a font menu shows a family.
+fn family_sample(key: u64, font: FontRef, italic: bool) -> FacePaint {
+    FacePaint::new(key, move |painter, rect| {
+        let mut run = DocRun::new("Handgloves", font.clone(), rect.height() * 0.75, DataColor::new(painter.ink()));
+        if italic {
+            run = run.italic();
+        }
+        let runs = [run];
+        let layout = painter.layout(&DocText { wrap: Some(rect.width()), ..DocText::new(&runs) }.elide());
+        let at = pos2(rect.left(), rect.center().y - layout.size().y / 2.0);
+        painter.painter.galley(at, layout.galley, Color32::PLACEHOLDER);
+    })
+}
+
+/// A "Font family" menu: each row shows its face in the level's sample column, between the label and the shortcut.
+#[story(MenuItem<'static>, covers = [], drive = Drive::Never)]
+fn menu_item_samples(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let families = [
+        (1, "Sans", FontRef::proportional(), false, "Ctrl+1"),
+        (2, "Sans Italic", FontRef::proportional(), true, "Ctrl+2"),
+        (3, "Mono", FontRef::monospace(), false, "Ctrl+3"),
+    ];
+    let shown = Menu::inline("Font family").show(ui, |ui, _| {
+        for (key, label, font, italic, shortcut) in families {
+            MenuItem::new(label).shortcut(shortcut).sample(ThumbAspect::new(4, 1), family_sample(key, font, italic)).show(ui);
+        }
+    });
+    StoryOutput::from(shown.output)
 }
 
 /// Shows `story` in a row as wide as the room: the opener sits at the start edge and the menu hangs from it, so the
@@ -89,6 +125,19 @@ fn menu_taller_than_the_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
         let mut output = StoryOutput::from(shown.output);
         output.clicked |= ran;
         output
+    })
+}
+
+/// A panel menu whose Undo row runs Redo while Alt is held, and shows it then, as the bar's rows with an alternate do.
+#[story(PanelMenu, covers = [], drive = Drive::Never)]
+fn panel_menu_alternate(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    in_row(ui, |ui| {
+        let opener = Button::new("Panel menu").show(ui);
+        let shown = Menu::new("Panel menu").open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            let undo = PanelRow::Alternated(EditCommands::Undo.into(), Alternate::new(Mods::ALT, EditCommands::Redo));
+            PanelMenu::new(vec![undo], vec![PanelRow::Command(EditCommands::Copy.into())]).show(ui);
+        });
+        StoryOutput::from(shown.output)
     })
 }
 

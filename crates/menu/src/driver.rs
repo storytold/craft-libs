@@ -5,11 +5,12 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
+use craft_ui::menu::Alternate;
 use craft_ui::runtime::windows::{KeyEquivalent, WindowAction, WindowHost};
 
 use crate::layout::{Clash, Layout};
 use crate::modal::ModalRules;
-use crate::model::{Alternate, Builtin, Item, ItemKind, MenuBar, Node};
+use crate::model::{Builtin, Item, ItemKind, MenuBar, Node};
 
 /// What the native menu reports.
 #[derive(Clone, Debug, PartialEq)]
@@ -225,7 +226,6 @@ pub struct NativeMenu {
     /// that `checked` going from `Some` to `None` doesn't rebuild the menus.
     checkable: HashSet<String>,
     /// A backend reported [`Event::Opened`] since [`NativeMenu::take_opened`] last answered.
-    #[allow(dead_code)] // P3(menus-w1): mn.M10
     opened: bool,
 }
 
@@ -344,7 +344,11 @@ impl NativeMenu {
                 Event::Tap(chord) => self.add_key(&host, &chord, true),
                 Event::Click(command) => self.clicks.push(command),
                 Event::Handled(_) => {}
-                Event::Opened => todo!("mn.M10"),
+                // A menu opening changes nothing the menus show, so it does not re-sync them.
+                Event::Opened => {
+                    self.opened = true;
+                    continue;
+                }
             }
             self.dirty = true;
         }
@@ -352,7 +356,7 @@ impl NativeMenu {
 
     /// Whether a backend reported [`Event::Opened`] since the last call; reports it once and clears it.
     pub fn take_opened(&mut self) -> bool {
-        todo!("mn.M10")
+        std::mem::take(&mut self.opened)
     }
 
     /// `tap`: a press and its release, for a click that stands for the key (no key-up follows).

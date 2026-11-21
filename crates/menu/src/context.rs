@@ -22,7 +22,8 @@ use crate::model::{Builtin, Item, ItemKind, Node};
 /// Shows `nodes` as rows of the menu body `ui` is in: a context menu's
 /// (`Menu::context(label, &response).show(ui, |ui, _| craft_menu::context::rows(ui, &nodes))`) or any other menu's.
 ///
-/// A [`Node::Item`] is a command row, a [`Node::Separator`] a divider and a [`Node::Submenu`] a submenu row;
+/// A [`Node::Item`] is a command row, a [`Node::Separator`] a divider, a [`Node::Heading`] a caption that takes no
+/// mnemonic letter and a [`Node::Submenu`] a submenu row;
 /// AppKit's own items ([`Node::Standard`]) are left out. The chord of a row without a binding is the item's own
 /// shortcut, written for the shell's operating system.
 pub fn rows(ui: &mut Ui, nodes: &[Node]) {
@@ -93,7 +94,7 @@ impl<'a> Rows<'a> {
 
     /// The label a node shows as the menu's sibling, for the preferred letters and the English labels.
     pub(crate) fn node_labels(&self, nodes: &[Node]) -> Vec<String> {
-        let shown: Vec<&Node> = nodes.iter().filter(|node| !matches!(node, Node::Separator | Node::Standard { .. })).collect();
+        let shown: Vec<&Node> = nodes.iter().filter(|node| !takes_no_letter(node)).collect();
         let mut labels = self
             .labels(
                 &shown,
@@ -116,7 +117,7 @@ impl<'a> Rows<'a> {
             .into_iter();
         nodes
             .iter()
-            .map(|node| if matches!(node, Node::Separator | Node::Standard { .. }) { String::new() } else { labels.next().unwrap_or_default() })
+            .map(|node| if takes_no_letter(node) { String::new() } else { labels.next().unwrap_or_default() })
             .collect()
     }
 
@@ -136,7 +137,9 @@ impl<'a> Rows<'a> {
                         Menu::submenu_row(ui, label, |ui, _| self.show(ui, children));
                     }
                 }
-                Node::Heading(_) => todo!("mn.M7"),
+                Node::Heading(text) => {
+                    MenuItem::heading(text.clone()).show(ui);
+                }
                 Node::Standard { .. } => {}
             }
         }
@@ -201,7 +204,16 @@ fn command_row<'a>(ui: &Ui, item: &Item, label: String, shortcut: Option<String>
     if let Some(tooltip) = &item.tooltip {
         row = row.tooltip(tooltip.clone());
     }
+    if let Some((aspect, face)) = &item.sample {
+        row = row.sample(*aspect, face.clone());
+    }
     row
+}
+
+/// Whether `node` shows no row of its own to choose, so it takes no mnemonic letter and leaves its siblings'
+/// letters as they are.
+fn takes_no_letter(node: &Node) -> bool {
+    matches!(node, Node::Separator | Node::Heading(_) | Node::Standard { .. })
 }
 
 /// The checked state the command itself reports.

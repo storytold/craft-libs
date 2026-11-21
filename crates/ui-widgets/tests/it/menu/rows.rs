@@ -1,10 +1,15 @@
-//! Menu rows: the detail line under the label and the row's own tooltip.
+//! Menu rows: the detail line under the label, the row's own tooltip and the sample column.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
+use craft_ui::list::ThumbAspect;
 use craft_ui::menu::{Menu, MenuItem};
-use craft_ui::testing::{Fixture, pointer, trial};
+use craft_ui::primitives::FacePaint;
+use craft_ui::testing::{Fixture, Room, pointer, trial};
 
 #[trial]
 fn a_detail_shows_as_a_second_line_under_the_label() {
@@ -104,4 +109,61 @@ fn the_menu_highlight_moves_to_the_next_row_in_the_frame_the_pointer_reaches_it(
     let shapes = fixture.frame_shapes_with(vec![pointer::moved(redo.center())]);
     assert_eq!(fills_in(&shapes, redo), [lit], "the row the pointer reached paints the full highlight at once");
     assert!(fills_in(&shapes, undo).is_empty(), "the row the pointer left paints no highlight at once: {:?}", fills_in(&shapes, undo));
+}
+
+/// The rect each sample was painted in, by the face's key.
+type Cells = Arc<Mutex<HashMap<u64, egui::Rect>>>;
+
+/// A label long enough that a menu of it is wider than a popup's least width, so a sample column shows in the width.
+const LONG: &str = "Neue Grotesk Display Condensed Extra Light Italic";
+
+/// An open "Font family" menu of a long-labelled row and a short one, with a wide and a narrow sample when `samples`:
+/// the fixture and where the samples were painted.
+fn font_family(samples: bool) -> (Fixture, Cells) {
+    let cells = Cells::default();
+    let painted = cells.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Open").show(ui);
+        Menu::new("Font family").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            for (key, label, wide) in [(1_u64, LONG, 12_u16), (2, "Mono", 6)] {
+                let mut row = MenuItem::new(label);
+                if samples {
+                    let painted = painted.clone();
+                    row = row.sample(
+                        ThumbAspect::new(wide, 1),
+                        FacePaint::new(key, move |_, rect| {
+                            painted.lock().unwrap().insert(key, rect);
+                        }),
+                    );
+                }
+                row.show(ui);
+            }
+        });
+    });
+    // A window's room, so the long row shows unelided beside its sample.
+    fixture.in_room(Room::Window).settle();
+    let opener = fixture.by_label("Open").expect("the opener");
+    fixture.click(&opener).settle();
+    (fixture, cells)
+}
+
+/// A font menu's samples sit in one column after the labels: the narrower sample starts where the wider one does,
+/// and the column widens the menu by the widest sample once. A menu without samples reserves no column.
+#[trial]
+fn a_level_with_samples_shares_one_sample_column_and_a_level_without_has_none() {
+    let (sampled, cells) = font_family(true);
+    let cells = cells.lock().unwrap().clone();
+    let (wide, narrow) = (cells[&1], cells[&2]);
+    assert!(wide.width() > narrow.width(), "the aspect sets a sample's width");
+    assert!((wide.height() - narrow.height()).abs() < 0.5, "every sample is as high as its row's text line");
+    assert!((wide.min.x - narrow.min.x).abs() < 0.5, "the narrower sample starts where the wider one does: one column");
+    let row = |fixture: &Fixture, label: &str| fixture.by_label(label).expect("the menu is open").rect;
+    assert!(row(&sampled, "Mono").expand(0.5).contains_rect(narrow), "the sample lies inside its row");
+    let label = |text: &str| sampled.texts().iter().find(|run| run.text == text).map(|run| run.rect).expect("the label is painted");
+    assert!(label(LONG).max.x <= wide.min.x + 0.5, "the long label ends before the column");
+
+    let (plain, none) = font_family(false);
+    assert!(none.lock().unwrap().is_empty(), "a level without samples paints none");
+    let grown = row(&sampled, "Mono").width() - row(&plain, "Mono").width();
+    assert!(grown >= wide.width() && grown < wide.width() + narrow.width(), "the column is the widest sample and its gap, once: {grown}");
 }

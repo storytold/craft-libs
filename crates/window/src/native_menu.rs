@@ -254,13 +254,13 @@ impl Options {
 
 /// Whether a menu is open. Safe from any thread; false where there is no application menu bar.
 pub fn menu_tracking() -> bool {
-    todo!("mn.M12")
+    imp::menu_tracking()
 }
 
 /// Whether a menu began tracking since the last call, which clears it. Safe from any thread; false where there is
 /// no application menu bar.
 pub fn take_menu_began() -> bool {
-    todo!("mn.M12")
+    imp::take_menu_began()
 }
 
 /// The installed menu bar.
@@ -273,8 +273,7 @@ impl NativeBar {
     /// without an application menu bar. It replaces a menu from [`install_app_menu`]. `wake` is called when menu
     /// tracking ends.
     pub fn install(bar: &Bar, options: Options, wake: Wake) -> Option<NativeBar> {
-        let _ = wake; // P3(menus-w1): mn.M13
-        imp::Installed::install(bar, options).map(NativeBar)
+        imp::Installed::install(bar, options, wake).map(NativeBar)
     }
 
     /// Where chosen items go. The process has one handler, the one set last.
@@ -296,7 +295,7 @@ impl NativeBar {
 
     /// Whether a menu began tracking since the last call ([`take_menu_began`]).
     pub fn take_began(&self) -> bool {
-        todo!("mn.M13")
+        self.0.take_began()
     }
 
     /// Close the open menu, if there is one.

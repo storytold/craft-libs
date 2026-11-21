@@ -1,5 +1,6 @@
 //! The integration binary of craft-menu: every test is a registered trial.
 
+mod heading;
 mod layout;
 mod mnemonic;
 mod native;

@@ -30,6 +30,9 @@ const MARKS: ColumnKey = ColumnKey::new("menu_marks");
 /// The column of a level's row icons, and the gap after it, after the mark column.
 const ICONS: ColumnKey = ColumnKey::new("menu_icons");
 
+/// The column of a level's samples, and the gap before it, between the label and the shortcut.
+const SAMPLES: ColumnKey = ColumnKey::new("menu_samples");
+
 /// The seconds the pointer rests on a row it crossed on its way to another row's open submenu before the row takes
 /// over: opens its own submenu, or closes the open one. A row the pointer does not cross that way takes over at once.
 const AIM_REST: f64 = 0.3;
@@ -120,10 +123,11 @@ impl Outcome for MenuItemOutput {
 }
 
 /// The widths of a row's columns and its trailing items, in points; zero for a column the row does not show. The mark
-/// and icon columns include the gap after them.
+/// and icon columns include the gap after them, the sample column the gap before it.
 struct Columns {
     mark: f32,
     icon: f32,
+    sample: f32,
     trail: f32,
 }
 
@@ -132,6 +136,7 @@ struct Placed {
     mark: Rect,
     icon: Rect,
     label: Rect,
+    sample: Rect,
     trail: Rect,
 }
 
@@ -158,6 +163,7 @@ fn label_line(area: Rect, detail: f32) -> Rect {
 ///   the text readable on (`MenuTint`); the active, open and disabled looks win over it. The row keeps its text, so the
 ///   colour is never the only cue.
 #[derive(crate::contract::Component, crate::contract::Props)]
+#[component(content_painter)]
 pub struct MenuItem<'a> {
     #[common]
     common: Common,
@@ -193,7 +199,6 @@ pub struct MenuItem<'a> {
     /// The checked state of the entry the row shows: a radio mark in a value menu, a check mark elsewhere while true.
     #[prop(name = "entry_checked")]
     entry: Option<bool>,
-    #[allow(dead_code)] // P3(menus-w1): mn.M14
     sample: Option<(crate::list::ThumbAspect, crate::primitives::FacePaint)>,
     ran: bool,
     opens: bool,
@@ -230,9 +235,9 @@ impl<'a> MenuItem<'a> {
     /// A content-painted cell after the label and before the shortcut, in a column shared by the level's rows: as high
     /// as the row's text line and as wide as that height times `aspect`.
     #[must_use]
-    pub fn sample(self, aspect: crate::list::ThumbAspect, face: crate::primitives::FacePaint) -> Self {
-        let _ = (aspect, face);
-        todo!("mn.M14")
+    pub fn sample(mut self, aspect: crate::list::ThumbAspect, face: crate::primitives::FacePaint) -> Self {
+        self.sample = Some((aspect, face));
+        self
     }
 
     /// A row bound to `command`: its label, chord, enabled state and checked state follow the command, and running it
@@ -304,7 +309,8 @@ impl<'a> MenuItem<'a> {
         let (mark, flow) = Flow::new(line, rtl).take_start(columns.mark);
         let (icon, flow) = flow.take_start(columns.icon);
         let (trail, flow) = flow.take_end(step(columns.trail, trail_gap));
-        Placed { mark, icon, label: flow.rect(), trail }
+        let (sample, flow) = flow.take_end(columns.sample);
+        Placed { mark, icon, label: flow.rect(), sample, trail }
     }
 
     fn register(&self, ctx: &Context, level: &MenuLevel, id: Id, label: &str, enabled: bool) {
@@ -323,12 +329,22 @@ impl<'a> MenuItem<'a> {
         (shared(&MARKS, own(self.mark(command, level).is_some())), shared(&ICONS, own(self.lead_icon(command).is_some())))
     }
 
-    fn columns(&self, cx: &MeasureCx<'_, Self>, level: &MenuLevel) -> Columns {
+    /// The row's sample column with the gap before it: as wide as the column group of the menu body gives it (the
+    /// widest sample of its rows), or the row's own outside a group. A sample is as high as the label line, `line`
+    /// high; a level with no sample has no column.
+    fn sample_column(&self, ctx: &Context, line: f32, gap: f32) -> f32 {
+        let own = self.sample.as_ref().map_or(0.0, |(aspect, _)| gap + aspect.of(line));
+        crate::layout::ambient_width(ctx, &SAMPLES, own).unwrap_or(own)
+    }
+
+    /// The row's columns, for a label line `line` high.
+    fn columns(&self, cx: &MeasureCx<'_, Self>, level: &MenuLevel, line: f32) -> Columns {
         let side = cx.icon();
         let command = cx.command();
         let (mark, icon) = self.lead_columns(cx.ui.ctx(), side, cx.gap(), command, level);
+        let sample = self.sample_column(cx.ui.ctx(), line, cx.gap());
         let trail = if self.submenu { side } else { self.keys(command).map_or(0.0, |keys| cx.face(keys).x) };
-        Columns { mark, icon, trail }
+        Columns { mark, icon, sample, trail }
     }
 
     /// The size of the detail line; zero without one.
@@ -383,20 +399,21 @@ impl Component for MenuItem<'_> {
         if !self.heading {
             self.register(cx.ui.ctx(), &level, cx.id, cx.resolved.label, cx.resolved.enabled);
         }
-        let columns = self.columns(cx, &level);
         let detail = self.detail_size(cx);
         let text = mnemonic::marked(cx.resolved.label, &cx.env.folder()).0;
         let run = TextRun::new(text.as_str()).role(self.label_look(cx.style).role);
         let label = if text.is_empty() { Vec2::ZERO } else { cx.layout_at(&run, f32::INFINITY).size() };
+        let line = label.y.max(cx.icon());
+        let columns = self.columns(cx, &level, line);
         let gap = cx.gap();
         let step = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
         let rest = label.x.max(detail.x) + step(columns.trail, cx.style.shortcut_gap.max(gap));
         let padding = cx.style.metrics.padding;
-        // A row measured before the level's widest mark or icon read narrower columns: the body's group adds the
-        // widest columns to what the rows reach past them.
-        crate::layout::report_beyond(cx.ui.ctx(), &[MARKS, ICONS], padding.start + padding.end + rest);
-        let width = columns.mark + columns.icon + rest;
-        Vec2::new(cx.room.map_or(width, |room| width.min(room)), label.y.max(cx.icon()) + detail.y)
+        // A row measured before the level's widest mark, icon or sample read narrower columns: the body's group adds
+        // the widest columns to what the rows reach past them.
+        crate::layout::report_beyond(cx.ui.ctx(), &[MARKS, ICONS, SAMPLES], padding.start + padding.end + rest);
+        let width = columns.mark + columns.icon + columns.sample + rest;
+        Vec2::new(cx.room.map_or(width, |room| width.min(room)), line + detail.y)
     }
 
     fn fills(&self) -> Option<craft_behavior::Axis> {
@@ -410,12 +427,12 @@ impl Component for MenuItem<'_> {
     /// The shortcut's slot, which paints as the face of a `Kbd`.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let level = cx.env.get::<MenuLevel>();
-        let columns = self.columns(cx, &level);
+        let line = label_line(cx.content_rect, self.detail_size(cx).y);
+        let columns = self.columns(cx, &level, line.height());
         if columns.trail == 0.0 || self.submenu || self.heading {
             return;
         }
         let rtl = cx.flow.is_rtl();
-        let line = label_line(cx.content_rect, self.detail_size(cx).y);
         let placed = self.place(&columns, line, rtl, cx.style.shortcut_gap.max(cx.gap()));
         let (rect, _) = Flow::new(placed.trail, rtl).take_end(columns.trail);
         cx.part(SHORTCUT, rect);
@@ -540,8 +557,9 @@ impl Component for MenuItem<'_> {
             detail.as_ref().map(|detail| TextRun::new(detail.as_str()).role(cx.style.detail.role).color(cx.resolve(&cx.style.detail.color)));
         let detail_height = detail_run.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().y);
         let trail = if self.submenu { side } else { cx.part_if_declared(SHORTCUT).map_or(0.0, |part| part.rect.width()) };
-        let columns = Columns { mark: mark_column, icon: icon_column, trail };
         let line = label_line(cx.content_rect, detail_height);
+        let sample_column = self.sample_column(&cx.core.ctx, line.height(), gap);
+        let columns = Columns { mark: mark_column, icon: icon_column, sample: sample_column, trail };
         let placed = self.place(&columns, line, rtl, cx.style.shortcut_gap.max(gap));
         let ink = cx.resolve(&cx.style.icon.color);
         let centred = |slot: Rect| Rect::from_center_size(slot.center(), Vec2::splat(side));
@@ -574,6 +592,10 @@ impl Component for MenuItem<'_> {
             let size = layout.size();
             let x = if rtl { placed.label.max.x - size.x } else { placed.label.min.x };
             draw.galley(pos2(x, line.max.y), &layout);
+        }
+        // Samples start at one edge of the shared column, after its gap, so a level's samples line up.
+        if let Some((aspect, face)) = &self.sample {
+            face.paint(&ui.content_painter(cx), Flow::new(placed.sample, rtl).span(gap, aspect.of(line.height())));
         }
         if self.submenu {
             let slot = Flow::new(placed.trail, rtl).take_end(side).0;

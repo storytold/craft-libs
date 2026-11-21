@@ -7,7 +7,14 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-# The workspace table with `unsafe_code` at `deny`: the real body allows it for this crate's FFI calls, and design-lint's
+# `NSMenuDidBeginTrackingNotification` and `NSMenuDidEndTrackingNotification`, observed through
+# `NSNotificationCenter` with a block.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSMenu"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
+
+# The workspace table with `unsafe_code` at `deny`: `lib.rs` allows it for this crate's FFI calls, and design-lint's
 # `contract/unsafe-allow` rule names this crate's source as one of the places that may. Cargo cannot override one
 # workspace lint.
 [lints.rust]
