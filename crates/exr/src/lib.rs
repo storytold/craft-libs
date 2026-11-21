@@ -22,7 +22,7 @@
 
 /// Scanline OpenEXR writer using a caller-supplied linearization table.
 pub mod rgba8;
-/// RFC 1950/1951 compressor for ZIP-compressed EXR chunks.
+/// RFC 1950/1951 compression and bounded inflation for EXR chunks.
 pub mod zlib;
 
 pub mod channels;
