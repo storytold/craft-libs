@@ -123,6 +123,27 @@ pub fn align_galley_rows(mut galley: Arc<Galley>, width: f32, mut align: impl Fn
     AlignedGalley::Aligned { galley, paint_offset, reading_rect }
 }
 
+/// The start-edge alignment for `row`'s paragraph direction: [`Align::Max`] (right) for a
+/// right-to-left paragraph (`row.rtl_paragraph`), or [`Align::Min`] (left) for a left-to-right
+/// paragraph.
+pub fn row_start_align(row: &PlacedRow) -> Align {
+    if row.rtl_paragraph { Align::Max } else { Align::Min }
+}
+
+/// The end-edge alignment for `row`'s paragraph direction: [`Align::Min`] (left) for a
+/// right-to-left paragraph (`row.rtl_paragraph`), or [`Align::Max`] (right) for a left-to-right
+/// paragraph.
+pub fn row_end_align(row: &PlacedRow) -> Align {
+    if row.rtl_paragraph { Align::Min } else { Align::Max }
+}
+
+/// Align each row inside `width` to the start edge of its paragraph ([`row_start_align`]):
+/// right-to-left paragraphs flush with the right edge (`Align::Max`), and left-to-right
+/// paragraphs flush with the left edge (`Align::Min`).
+pub fn align_galley_rows_by_direction(galley: Arc<Galley>, width: f32) -> AlignedGalley {
+    align_galley_rows(galley, width, row_start_align)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,6 +545,27 @@ mod tests {
         let before = Arc::as_ptr(&original);
         let result = align_galley_rows(original, 400.0, |_| Align::Max);
         assert_eq!(before, Arc::as_ptr(parts(&result).0));
+    }
+
+    #[test]
+    /// Mixed RTL (Hebrew) and LTR (English) paragraphs align to their respective start edges within `width`.
+    fn align_galley_rows_by_direction_aligns_mixed_rtl_and_ltr_paragraphs() {
+        let original = layout_text("שלום עולם\nHello world\nשורה שלישית Hello", 1.0, Align::Min);
+        assert_eq!(original.rows.len(), 3);
+        assert!(original.rows[0].rtl_paragraph);
+        assert!(!original.rows[1].rtl_paragraph);
+        assert!(original.rows[2].rtl_paragraph);
+        assert_eq!(row_start_align(&original.rows[0]), Align::Max);
+        assert_eq!(row_start_align(&original.rows[1]), Align::Min);
+        assert_eq!(row_end_align(&original.rows[0]), Align::Min);
+        assert_eq!(row_end_align(&original.rows[1]), Align::Max);
+
+        let result = align_galley_rows_by_direction(original, 300.0);
+        let (aligned, offset, _) = parts(&result);
+        assert_eq!(offset, Vec2::ZERO);
+        assert!((aligned.rows[0].rect().right() - 300.0).abs() < 1.0, "RTL paragraph must align to right edge");
+        assert_eq!(aligned.rows[1].pos.x, 0.0, "LTR paragraph must align to left edge");
+        assert!((aligned.rows[2].rect().right() - 300.0).abs() < 1.0, "mixed paragraph starting with Hebrew must align to right edge");
     }
 
     const MIXED: &str = "First extraordinarily long reading row\nSecond independently aligned reading row\nThird right-aligned overwide reading row";
