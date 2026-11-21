@@ -488,6 +488,16 @@ fn sources_merge_with_the_first_preferred() {
     // A second source with the same ID is left out and reported.
     let twice = Index::merge([index_of(&noto_fixture().index).unwrap(), index_of(&noto_fixture().index).unwrap()]);
     assert_eq!((twice.sources().len(), twice.families().len(), twice.problems().len()), (1, 3, 1));
+    // A source left out brings no samples, also from inside an index merged before.
+    let sample = |text: &str| json!({"text": text, "method": "udhr", "language": "xx"});
+    let a0 = index_of(&noto_fixture().index).unwrap();
+    let mut a1 = noto_fixture().index;
+    a1["samples"] = json!({"Latn": sample("A")});
+    let mut b = fixture().index;
+    b["version"] = json!("1.2");
+    b["samples"] = json!({"Latn": sample("B")});
+    let nested = Index::merge([a0, Index::merge([index_of(&a1).unwrap(), index_of(&b).unwrap()])]);
+    assert_eq!((nested.sources().len(), nested.sample("Latn").map(|s| s.text.as_str())), (2, Some("B")));
 }
 
 #[test]
@@ -764,6 +774,14 @@ mod store {
         server.serve("mirror", &format!("v1/files/{sha}"), Reply::Ok(b"not the font".to_vec()));
         user.install_face(&index, face, &Cancel::new(), &mut none).unwrap();
         assert!(user.is_installed(face.family, face.file));
+
+        // A family from a source the user added never goes to the service.
+        let added = Index::from_user_bytes(f.index.to_string().as_bytes(), "https://fonts.example.org/index.json").unwrap();
+        let face = added.find_face("Test Sans", "Bold").unwrap();
+        let before = server.requests().len();
+        user.legal_text(&added, face.family, crate::LegalText::License, &Cancel::new()).unwrap();
+        user.install_face(&added, face, &Cancel::new(), &mut none).unwrap();
+        assert!(server.requests()[before..].iter().all(|r| !r.starts_with("/mirror/")), "{:?}", &server.requests()[before..]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -941,6 +959,20 @@ mod store {
         assert_eq!(host(Network::Off).network(), Network::On);
         // A file from before the choice could be absent: its "off" is the user's.
         std::fs::write(dir.join("settings.json"), br#"{"network":"off","user_sources":[]}"#).unwrap();
+        assert_eq!(host(Network::On).network(), Network::Off);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_settings_file_that_does_not_parse_fails_closed() {
+        let dir = temp("settings-broken");
+        let host = |network| FontStore::new(dir.clone(), Caller::User).with_default_network(network);
+        std::fs::write(dir.join("settings.json"), b"{not json").unwrap();
+        // No network and no preview service, not even the host's; a setting saved over the file
+        // keeps the network off.
+        let broken = host(Network::On).with_default_preview_service("https://default.example.com").with_preview_env(None);
+        assert_eq!((broken.network(), broken.preview_service(), broken.previews_enabled()), (Network::Off, None, true));
+        broken.set_previews_enabled(true).unwrap();
         assert_eq!(host(Network::On).network(), Network::Off);
         let _ = std::fs::remove_dir_all(dir);
     }

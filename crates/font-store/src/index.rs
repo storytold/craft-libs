@@ -466,6 +466,8 @@ pub struct Index {
     languages: Vec<Language>,
     scripts: Vec<Script>,
     samples: BTreeMap<String, Sample>,
+    /// Each source's own samples, by its position in `sources`, for [`Index::merge`].
+    source_samples: Vec<BTreeMap<String, Sample>>,
     families: Vec<Family>,
     by_name: HashMap<String, Vec<usize>>,
     by_postscript: HashMap<String, Vec<(usize, usize)>>,
@@ -510,10 +512,10 @@ impl Index {
         for part in parts {
             problems.extend(part.problems);
             let mut families = part.families;
-            for source in part.sources {
+            for (source, samples) in part.sources.into_iter().zip(part.source_samples) {
                 let (mine, rest): (Vec<Family>, Vec<Family>) = families.into_iter().partition(|f| f.source == source.id);
                 families = rest;
-                list.push((source, part.languages.clone(), part.scripts.clone(), part.samples.clone(), mine));
+                list.push((source, part.languages.clone(), part.scripts.clone(), samples, mine));
             }
         }
         Self::assemble(list, problems)
@@ -538,6 +540,7 @@ impl Index {
         let mut languages: BTreeMap<String, Language> = BTreeMap::new();
         let mut scripts: BTreeMap<String, Script> = BTreeMap::new();
         let mut samples: BTreeMap<String, Sample> = BTreeMap::new();
+        let mut source_samples = Vec::new();
         let mut families: Vec<(Family, Vec<String>)> = Vec::new();
         for (source, langs, scrs, smps, fams) in parts {
             if sources.iter().any(|s| s.id == source.id) {
@@ -558,9 +561,10 @@ impl Index {
             for s in scrs {
                 scripts.entry(s.id.clone()).or_insert(s);
             }
-            for (script, sample) in smps {
-                samples.entry(script).or_insert(sample);
+            for (script, sample) in &smps {
+                samples.entry(script.clone()).or_insert_with(|| sample.clone());
             }
+            source_samples.push(smps);
             sources.push(source);
         }
         let position: HashMap<&str, usize> = languages.keys().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
@@ -595,6 +599,7 @@ impl Index {
             languages: languages.into_values().collect(),
             scripts: scripts.into_values().collect(),
             samples,
+            source_samples,
             families: merged,
             by_name,
             by_postscript,

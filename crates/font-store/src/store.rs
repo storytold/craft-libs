@@ -209,6 +209,9 @@ struct Settings {
     preview_service: Option<String>,
     #[serde(default = "on")]
     previews: bool,
+    /// The file exists but couldn't be read or parsed.
+    #[serde(skip)]
+    unreadable: bool,
 }
 
 fn on() -> bool {
@@ -217,7 +220,15 @@ fn on() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true }
+        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true, unreadable: false }
+    }
+}
+
+impl Settings {
+    /// What a `settings.json` that can't be read or parsed stands for: the network off and no
+    /// preview service, not even the host's default. A write starts from these.
+    fn unreadable() -> Self {
+        Self { network: Some(Network::Off), unreadable: true, ..Self::default() }
     }
 }
 
@@ -372,13 +383,20 @@ impl FontStore {
     // ----- consent
 
     /// The user's saved choice, else the host's default ([`FontStore::with_default_network`]),
-    /// else [`Network::Off`]. A file that can't be read counts as no choice.
+    /// else [`Network::Off`]. A missing `settings.json` is no choice; one that can't be read or
+    /// parsed is [`Network::Off`].
     pub fn network(&self) -> Network {
         self.settings().network.or(self.default_network).unwrap_or_default()
     }
 
+    /// The saved settings: the defaults without a file, [`Settings::unreadable`] for a file that
+    /// can't be read, is too large or doesn't parse.
     fn settings(&self) -> Settings {
-        read_limited(&self.dir.join(SETTINGS), MAX_SETTINGS_BYTES).and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).unwrap_or_default()
+        let path = self.dir.join(SETTINGS);
+        if std::fs::metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            return Settings::default();
+        }
+        read_limited(&path, MAX_SETTINGS_BYTES).and_then(|b| serde_json::from_slice::<Settings>(&b).ok()).unwrap_or_else(Settings::unreadable)
     }
 
     /// Turns downloading on: call it only from the user's own action (a setting, an Install
@@ -392,15 +410,17 @@ impl FontStore {
 
     /// The preview service's base URL, or `None` while there is none: [`PREVIEW_SERVICE_ENV`]
     /// environment variable when set and not empty, else the `preview_service` setting, else the
-    /// host's default ([`FontStore::with_default_preview_service`]). Installs
-    /// try its mirror (`<service>/v1/files/<sha256>`, `<service>/v1/licences/<sha256>`) before
-    /// the index's URLs. A value that is not a usable URL counts as unset.
+    /// host's default ([`FontStore::with_default_preview_service`]); no host default while
+    /// `settings.json` can't be read or parsed. Installs of curated families
+    /// ([`crate::Family::is_curated`]) try its mirror (`<service>/v1/files/<sha256>`,
+    /// `<service>/v1/licences/<sha256>`) before the index's URLs. A value that is not a usable URL
+    /// counts as unset.
     pub fn preview_service(&self) -> Option<String> {
         self.preview_service_and_source().0
     }
 
     /// Where [`FontStore::preview_service`] gets its value: the environment, the saved setting,
-    /// or nowhere. An unusable value counts as unset, as there.
+    /// the host's default, or nowhere. An unusable value counts as unset, as there.
     pub fn preview_service_source(&self) -> PreviewServiceSource {
         self.preview_service_and_source().1
     }
@@ -410,13 +430,17 @@ impl FontStore {
         let env = self.preview_env.clone().unwrap_or_else(|| std::env::var(PREVIEW_SERVICE_ENV).ok());
         #[cfg(not(test))]
         let env = std::env::var(PREVIEW_SERVICE_ENV).ok();
-        resolve_preview_source(env.as_deref(), self.settings().preview_service.as_deref(), self.default_preview_service.as_deref())
+        let settings = self.settings();
+        let default = if settings.unreadable { None } else { self.default_preview_service.as_deref() };
+        resolve_preview_source(env.as_deref(), settings.preview_service.as_deref(), default)
     }
 
     /// Sets (or with `None` clears) the preview service in `settings.json`, from the user's own
     /// action. Only https URLs are accepted, and http for a loopback host. The environment
-    /// variable still takes precedence; while the setting is clear, the host's default applies. [`Error::NotAllowed`] for an agent, [`Error::BadServiceUrl`]
-    /// for an unusable URL.
+    /// variable still takes precedence; while the setting is clear, the host's default applies.
+    /// Installs and [`FontStore::legal_text`] ask the service only for curated families
+    /// ([`crate::Family::is_curated`]), never with the hashes of files from the user's sources.
+    /// [`Error::NotAllowed`] for an agent, [`Error::BadServiceUrl`] for an unusable URL.
     pub fn set_preview_service(&self, url: Option<&str>) -> Result<(), Error> {
         if self.caller != Caller::User {
             return Err(Error::NotAllowed);
@@ -662,7 +686,7 @@ impl FontStore {
         for (i, file) in wanted.iter().enumerate() {
             let mut on_bytes = |n: u64| progress(Progress { file: i, files: wanted.len(), done: done_before + n, total });
             let check = |bytes: &[u8]| verify_font(file, bytes);
-            let mut urls = self.mirror_urls("files", &file.sha256);
+            let mut urls = self.mirror_urls(family, "files", &file.sha256);
             let mirrors = urls.len();
             urls.extend(index.file_urls(family, file));
             let bytes = self.fetch(&urls, mirrors, file.size, file.file_name(), cancel, &mut on_bytes, &check)?;
@@ -675,7 +699,7 @@ impl FontStore {
             let max = family.license_file.as_ref().map_or(MAX_LICENSE_BYTES, |f| f.size);
             let check = |bytes: &[u8]| check_license(family.license_file.as_ref(), bytes);
             // Without a sha256 there is no mirror address.
-            let mut urls = family.license_file.as_ref().map(|f| self.mirror_urls("licences", &f.sha256)).unwrap_or_default();
+            let mut urls = family.license_file.as_ref().map(|f| self.mirror_urls(family, "licences", &f.sha256)).unwrap_or_default();
             let mirrors = urls.len();
             urls.extend(index.license_urls(family));
             let bytes = self.fetch(&urls, mirrors, max, name, cancel, &mut |_| {}, &check)?;
@@ -725,15 +749,20 @@ impl FontStore {
             return Ok(Some(text(&bytes)));
         }
         self.require_network()?;
-        let mut all = file.map(|f| self.mirror_urls("licences", &f.sha256)).unwrap_or_default();
+        let mut all = file.map(|f| self.mirror_urls(family, "licences", &f.sha256)).unwrap_or_default();
         let mirrors = all.len();
         all.extend(urls);
         let bytes = self.fetch(&all, mirrors, max, name, cancel, &mut |_| {}, &|b| check_license(file, b))?;
         Ok(Some(text(&bytes)))
     }
 
-    /// The preview service's address for a file by its sha256; empty without a service.
-    fn mirror_urls(&self, kind: &str, sha256: &str) -> Vec<String> {
+    /// The preview service's address for a file of `family` by its sha256; empty without a
+    /// service, and for a family the user's sources added: the service holds only the built-in
+    /// sources' files, and asking would tell it the file's hash.
+    fn mirror_urls(&self, family: &Family, kind: &str, sha256: &str) -> Vec<String> {
+        if !family.is_curated() {
+            return Vec::new();
+        }
         self.preview_service().map(|base| format!("{base}/v1/{kind}/{sha256}")).into_iter().collect()
     }
 
