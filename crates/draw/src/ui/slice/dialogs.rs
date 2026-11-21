@@ -2,6 +2,7 @@
 //! what the fields mean at export is the app's.
 
 use super::SliceWords;
+use craft_behavior::Value;
 use craft_color_ui::ui::{ChosenColor, ColorChoice, NamedColor};
 use craft_theme::Srgba;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
@@ -170,7 +171,7 @@ fn text_row(ui: &mut Ui, label: &Label, value: &mut String) {
 }
 
 /// A labelled `Select` over `entries`.
-fn select_row<T: Copy + Eq + std::hash::Hash + std::fmt::Debug + 'static>(ui: &mut Ui, label: &Label, value: &mut T, entries: &[Entry<T>]) {
+fn select_row<T: Copy + Value>(ui: &mut Ui, label: &Label, value: &mut T, entries: &[Entry<T>]) {
     Field::new(label.clone()).show(ui, |ui, _| {
         if let Some(picked) = Select::new(label.clone(), Bind::given(*value), entries).show(ui).value().copied() {
             *value = picked;
@@ -371,14 +372,14 @@ impl StackDialog for SliceOptionsDialog {
                     SliceBackground::Color(color) if chosen == ChosenColor::Custom => Some(color),
                     _ => None,
                 };
-                let named = SliceBackground::NAMED.iter().zip(background_labels).map(|((id, background), label)| {
-                    let swatch = match background {
-                        SliceBackground::Color(color) => Some(*color),
-                        _ => None,
-                    };
-                    NamedColor::new(*id, label.clone(), swatch)
-                });
                 Field::new(words.background.clone()).show(ui, |ui, _| {
+                    let named = SliceBackground::NAMED.iter().zip(background_labels).map(|((id, background), label)| {
+                        let swatch = match background {
+                            SliceBackground::Color(color) => Some(*color),
+                            _ => None,
+                        };
+                        NamedColor::new(*id, label.clone(), swatch)
+                    });
                     let picked = ColorChoice::new(words.background.clone(), &chosen).named(named).custom(custom).show(ui);
                     if let Some(ChosenColor::Named(id)) = &picked.chosen
                         && let Some(background) = SliceBackground::named(id)
