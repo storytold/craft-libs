@@ -129,7 +129,8 @@ pub fn install_at(
         #[cfg(target_os = "macos")]
         PackageKind::Dmg => {
             let wait = macos::CheckTurn { stop: job.stop, phase: &mut *job.phase };
-            macos::install_dmg(app, &file, existing, destination.as_deref(), job.replace, job.paths, &macos::Expect::release(release), wait)
+            macos::Expect::release(app, release)
+                .and_then(|expect| macos::install_dmg(app, &file, existing, destination.as_deref(), job.replace, job.paths, &expect, wait))
                 .map(|path| Some(record(&version, kind, path, Vec::new(), false)))
         }
         #[cfg(windows)]
@@ -1624,9 +1625,9 @@ pub mod macos {
         Ok(user)
     }
 
-    /// The Apple Developer team that signs every Craft App and ArtCraft Launcher (Learning
-    /// Machines LLC): the macOS side of the Windows publisher check.
-    pub const TEAM_ID: &str = "DJ6XS33FX8";
+    /// The Apple Developer team that signs every Craft App and ArtCraft Launcher: the default
+    /// [`App::apple_team`].
+    pub const TEAM_ID: &str = crate::app::APPLE_TEAM;
 
     /// The start of [`install_dmg`]'s error when hdiutil can't attach the disk image.
     pub(crate) const IMAGE_NOT_OPENED: &str = "couldn't open the disk image";
@@ -1645,14 +1646,24 @@ pub mod macos {
     }
 
     impl<'a> Expect<'a> {
-        pub fn release(release: &'a Release) -> Self {
-            Self { team: Some(TEAM_ID), version: release.version.as_ref(), quit_first: true }
+        /// What `app`'s copy from `release` must prove: its [`App::apple_team`]'s signature. An app
+        /// that names no team has nothing a copy could prove, so it gets an error and nothing is
+        /// replaced.
+        pub fn release(app: &App, release: &'a Release) -> Result<Self, String> {
+            let team = app.apple_team.ok_or_else(|| no_team(app))?;
+            Ok(Self { team: Some(team), version: release.version.as_ref(), quit_first: true })
         }
 
         /// [`Self::release`] for an app replacing itself.
-        pub fn self_update(release: &'a Release) -> Self {
-            Self { quit_first: false, ..Self::release(release) }
+        pub fn self_update(app: &App, release: &'a Release) -> Result<Self, String> {
+            Ok(Self { quit_first: false, ..Self::release(app, release)? })
         }
+    }
+
+    /// Why `app`'s macOS app isn't replaced in place: it names no team whose signature a new copy
+    /// must carry.
+    pub(crate) fn no_team(app: &App) -> String {
+        format!("{} doesn't update its macOS app in place; download the new version from {}", app.name, app.releases_url())
     }
 
     /// Held while this process asks diskimages-helper for something (an attach here; the tests'
@@ -4441,6 +4452,48 @@ exit 0
             assert!(!signed_by(&app, ""));
         }
 
+        /// An app's update must carry the signature of the team the app names, not the suite's.
+        /// The stand-in for `codesign` accepts only the requirement that names `ours`.
+        #[test]
+        fn only_the_apps_own_teams_signature_passes() {
+            let ours = "ABCDE12345";
+            let codesign = |_: &str, args: &[&str], _: std::time::Duration| {
+                if args.iter().any(|a| a.contains(&format!("\"{ours}\""))) {
+                    Ok(String::new())
+                } else {
+                    Err(HelperFailure::Exited { code: 3, reason: "test-requirement: failed".into() })
+                }
+            };
+            let release = Release::default();
+            let own = App { apple_team: Some(ours), ..*photocraft() };
+
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect::release(&own, &release).unwrap();
+            place_checked(&own, &staged, &installed, &Expect { quit_first: false, ..expect }, codesign, |_| Ok(false)).unwrap();
+            assert_eq!(version_at(&installed), "0.6.0");
+
+            // The suite's team is not ours, so the same copy is refused for a suite app.
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect::release(photocraft(), &release).unwrap();
+            let refused = place_checked(photocraft(), &staged, &installed, &Expect { quit_first: false, ..expect }, codesign, |_| Ok(false));
+            assert_eq!(refused, Err("the app isn't signed by its developer, so it wasn't installed".into()));
+            assert_eq!(version_at(&installed), "0.5.0");
+        }
+
+        /// An app that names no team has no signature to check, so its macOS app is never
+        /// replaced, and the refusal points to the release page.
+        #[test]
+        fn an_app_without_a_signing_team_replaces_nothing() {
+            let release = Release::default();
+            let unsigned = App { apple_team: None, ..*photocraft() };
+            for expect in [Expect::release(&unsigned, &release), Expect::self_update(&unsigned, &release)] {
+                let refusal = expect.err().expect("an app without a team got something to check");
+                assert!(refusal.contains(&unsigned.releases_url()), "{refusal}");
+            }
+        }
+
         /// `codesign`'s own exit codes for the two kinds of refusal, which [`signature`] reads as
         /// answers and not as a check that couldn't finish.
         #[test]
@@ -4646,8 +4699,8 @@ exit 0
         #[test]
         fn only_a_self_update_replaces_an_app_that_is_running() {
             let release = Release { tag: "v0.6.0".into(), version: version::parse("0.6.0"), ..Release::default() };
-            assert!(Expect::release(&release).quit_first);
-            assert!(!Expect::self_update(&release).quit_first);
+            assert!(Expect::release(photocraft(), &release).unwrap().quit_first);
+            assert!(!Expect::self_update(photocraft(), &release).unwrap().quit_first);
         }
 
         #[test]
@@ -4708,7 +4761,15 @@ exit 0
             let image = dmg(dir.path(), "0.6.0");
             let release = Release { tag: "v0.6.0".into(), version: version::parse("0.6.0"), ..Release::default() };
 
-            let result = install_dmg(photocraft(), &image, Some(&existing), None, false, &Paths::under(dir.path()), &Expect::release(&release));
+            let result = install_dmg(
+                photocraft(),
+                &image,
+                Some(&existing),
+                None,
+                false,
+                &Paths::under(dir.path()),
+                &Expect::release(photocraft(), &release).unwrap(),
+            );
             let refusal = result.unwrap_err();
             assert!(refusal.starts_with("the app failed its signature check (") && refusal.contains("not signed"), "{refusal}");
             assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.5.0");
