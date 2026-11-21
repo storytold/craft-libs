@@ -43,6 +43,7 @@ use craft_pdf::{OpenError, open_slice};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape, Stroke, StrokeOpts};
 
 use super::font::FontCache;
+use super::geom;
 use super::shade::{self, Canvas, StopInks};
 use super::{
     BlendMode, DisplayList, FillItem, FillRule, GradientGeometry, GroupItem, ImageItem, ImageSpace, Item, Mask, MaskKind, Paint, PlacedGlyph,
@@ -1312,23 +1313,45 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 }
 
 /// `path` filled by `rule`, as a path and the rule it is filled by. An even-odd path is
-/// rebuilt from its boundary as a path filled nonzero; if that fails it is kept closed and
-/// filled even-odd.
+/// rebuilt from its boundary as a path filled nonzero; if that fails, panics, or passes the
+/// flattener's default sweep work or output limit ([`geom::DEFAULT_MAX_SWEEP_WORK`],
+/// [`geom::DEFAULT_MAX_TOPOLOGY_UNITS`]), it is kept closed and filled even-odd. A subpath too
+/// small for the tolerance that the path's largest coordinate needs is rebuilt at that tolerance,
+/// and may be dropped.
 fn nonzero(path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
+    nonzero_within(path, rule, geom::DEFAULT_MAX_SWEEP_WORK, geom::DEFAULT_MAX_TOPOLOGY_UNITS)
+}
+
+/// [`nonzero`], with the sweep stopped after `work_limit` units of work or before its topology
+/// holds more than `output_limit` units.
+fn nonzero_within(path: &BezPath, rule: FillRule, work_limit: u64, output_limit: usize) -> (BezPath, FillRule) {
     if rule == FillRule::NonZero {
         return (path.clone(), FillRule::NonZero);
     }
     let closed = closed(path);
-    match linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union) {
-        Ok(contours) => {
+    let op = catch_unwind(AssertUnwindSafe(|| {
+        let top = linesweeper::topology::Topology::<i32>::from_paths_with_limits([(&closed, ())], sweep_eps(&closed), work_limit, output_limit)?;
+        top.try_contours(|winding| winding % 2 != 0)
+    }));
+    match op {
+        Ok(Ok(contours)) => {
             let mut out = BezPath::new();
             for contour in contours.contours() {
                 out.extend(contour.path.iter());
             }
             (out, FillRule::NonZero)
         }
-        Err(_) => (closed, FillRule::EvenOdd),
+        Ok(Err(_)) | Err(_) => (closed, FillRule::EvenOdd),
     }
+}
+
+/// The sweep tolerance [`linesweeper::binary_op`] picks for `path`: 64 times `f64::EPSILON`
+/// times its largest coordinate magnitude, and at least [`linesweeper::MIN_AUTO_EPS`].
+fn sweep_eps(path: &BezPath) -> f64 {
+    let largest = kurbo::segments(path.iter().skip_while(|el| matches!(el, PathEl::ClosePath)))
+        .map(|seg| kurbo::ParamCurveExtrema::bounding_box(&seg))
+        .fold(0.0_f64, |m, r| m.max(r.x0.abs()).max(r.y0.abs()).max(r.x1.abs()).max(r.y1.abs()));
+    (largest * f64::EPSILON * 64.0).max(linesweeper::MIN_AUTO_EPS)
 }
 
 /// `path` with every subpath closed, as a fill closes them.
@@ -1372,6 +1395,60 @@ mod tests {
         assert!(values(cell, cell_scale, 1000) <= MAX_CELL_PIXELS * CANVAS_INKS * 1.01);
         // A CMYK page keeps its resolution.
         assert_eq!(tiling_scales(dpi, page, cell, 1.0, 4).0, dpi);
+    }
+
+    #[test]
+    fn even_odd_path_with_inconsistent_windings_is_kept() {
+        // `nonzero` returns a path for this input whether the sweep succeeds or reports
+        // winding numbers that disagree around a point.
+        let path = BezPath::from_svg("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z").unwrap();
+        assert!(!nonzero(&path, FillRule::EvenOdd).0.elements().is_empty());
+    }
+
+    #[test]
+    fn even_odd_holes_stay_open_beside_a_far_point() {
+        // A square with a hole drawn in the same direction, a 0.3 wide sliver and a triangle at
+        // 3e13, which makes the sweep tolerance about 0.43.
+        let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
+        path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
+        path.extend(Rect::new(200.0, 0.0, 200.3, 10.0).to_path(0.0).iter());
+        path.move_to((3.0e13, 3.0e13));
+        path.line_to((3.0e13 + 1.0e3, 3.0e13));
+        path.line_to((3.0e13, 3.0e13 + 1.0e3));
+        path.close_path();
+        // linesweeper reports the sliver, and the rebuild runs again at its tolerance.
+        let swept = linesweeper::binary_op(&path, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+        assert!(matches!(swept, Err(linesweeper::Error::FeatureBelowTolerance { .. })));
+        let (out, rule) = nonzero(&path, FillRule::EvenOdd);
+        assert_eq!(rule, FillRule::NonZero);
+        assert_ne!(out.winding((10.0, 10.0).into()), 0);
+        assert_eq!(out.winding((50.0, 50.0).into()), 0);
+    }
+
+    #[test]
+    fn even_odd_path_past_the_sweep_work_limit_is_kept() {
+        // 21 stacked copies of one circle: the sweep compares their segments many times over.
+        let circle = kurbo::Circle::new((50.0, 50.0), 40.0).to_path(0.01);
+        let mut path = BezPath::new();
+        for _ in 0..21 {
+            path.extend(circle.iter());
+        }
+        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, 1_000, geom::DEFAULT_MAX_TOPOLOGY_UNITS);
+        assert_eq!(kept.elements(), closed(&path).elements());
+        assert_eq!(rule, FillRule::EvenOdd);
+        assert_ne!(nonzero(&path, FillRule::EvenOdd).0.elements(), closed(&path).elements());
+    }
+
+    #[test]
+    fn even_odd_path_past_the_sweep_output_limit_is_kept() {
+        // A square with a hole drawn in the same direction makes 8 output segments.
+        let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
+        path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
+        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, geom::DEFAULT_MAX_SWEEP_WORK, 4);
+        assert_eq!(kept.elements(), closed(&path).elements());
+        assert_eq!(rule, FillRule::EvenOdd);
+        assert_ne!(kept.winding((50.0, 50.0).into()), 0);
+        assert_eq!(nonzero(&path, FillRule::EvenOdd).0.winding((50.0, 50.0).into()), 0);
     }
 
     #[test]
