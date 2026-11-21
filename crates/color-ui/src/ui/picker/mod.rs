@@ -22,6 +22,7 @@ use egui::{Pos2, Response, Ui};
 use super::{AreaMode, ColorWarning};
 pub(crate) use channel::channel_name;
 pub use channel::{ChannelRow, ChannelRule, ChannelUnit, TrackRamp};
+pub(crate) use full::TWO_COLUMNS;
 pub use value::ColorConstraint;
 use value::Rules;
 

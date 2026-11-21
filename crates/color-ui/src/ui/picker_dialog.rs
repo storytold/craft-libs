@@ -17,11 +17,14 @@ use craft_settings::Remembered;
 use craft_theme::variant::Tone;
 use craft_theme::{ColorModel, Srgba, builtin_models};
 use craft_ui::choice::{SwatchArrangement, SwatchSpacing, SwatchTable};
-use craft_ui::contract::{Bind, CanvasGesture, CollectionEvent, Entry, Sampler as _, Show as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::contract::{
+    Bind, CanvasGesture, CollectionEvent, Entry, FooterSlot, Gap, Sampler as _, Show as _, ShowCollection as _, ShowContainer as _,
+};
 use craft_ui::dialog::{
     ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
-use craft_ui::layout_components::Stack;
+use craft_ui::layout::{CellAlign, GridFit};
+use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::pickers::Select;
@@ -37,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use super::picker::TWO_COLUMNS;
 use super::{ColorPicker, ColorPickerLayout, ColorWarning, Gamut, PickedColor, ScreenPickGesture, SwatchPalette};
 use crate::{AreaMode, CmykModel, not_web_safe, web_safe};
 
@@ -121,31 +125,35 @@ impl PickerSwatches {
 
 /// The Color Swatches view: the library `Select` over the chosen library's spaced palette, whose cell equal to the colour
 /// in `held` is marked and whose pick replaces `held`; the notice for a library without swatches. `library` is the
-/// remembered index, which may lie past the end; it is written only when the user chooses another.
+/// remembered index, which may lie past the end; it is written only when the user chooses another. The dialog's buttons
+/// stand in the cell after it, as they head the Full picker's second column.
 fn show_swatches(ui: &mut Ui, view: &PickerSwatches, library: &mut usize, held: &mut Mixed<PickedColor>, library_label: &Label) {
     let mut chosen = (*library).min(view.libraries.len().saturating_sub(1));
-    Stack::new().show(ui, |ui, _| {
-        if !view.libraries.is_empty() {
-            let entries: Vec<Entry<usize>> = view.libraries.iter().enumerate().map(|(i, lib)| Entry::new(i, lib.name.clone())).collect();
-            let shown = Select::new(library_label.clone(), Bind::given(chosen), &entries).show(ui);
-            if let Some(next) = shown.value().copied() {
-                chosen = next;
-                *library = next;
-            }
-        }
-        match view.libraries.get(chosen).filter(|lib| !lib.swatches.is_empty()) {
-            Some(lib) => {
-                // A colour that is not set marks no cell of a library without it; black stands for "none yet".
-                let color = held.same().map_or(Srgba::BLACK, |picked| picked.color);
-                let shown = SwatchPalette::new(lib.name.clone(), Bind::given(color), &lib.swatches).spacing(SwatchSpacing::Spaced).show(ui);
-                if let Some(picked) = shown.edit.as_ref().and_then(|edit| edit.value()).copied() {
-                    *held = Mixed::Same(PickedColor::rgb(picked));
+    Grid::new(TWO_COLUMNS).fit(GridFit::Fixed).cells(CellAlign::Top).gap(Gap::Section).show(ui, |ui, _| {
+        Stack::new().show(ui, |ui, _| {
+            if !view.libraries.is_empty() {
+                let entries: Vec<Entry<usize>> = view.libraries.iter().enumerate().map(|(i, lib)| Entry::new(i, lib.name.clone())).collect();
+                let shown = Select::new(library_label.clone(), Bind::given(chosen), &entries).show(ui);
+                if let Some(next) = shown.value().copied() {
+                    chosen = next;
+                    *library = next;
                 }
             }
-            None => {
-                Notice::new(Tone::Neutral, view.empty.clone()).layout(NoticeLayout::Centred).show(ui);
+            match view.libraries.get(chosen).filter(|lib| !lib.swatches.is_empty()) {
+                Some(lib) => {
+                    // A colour that is not set marks no cell of a library without it; black stands for "none yet".
+                    let color = held.same().map_or(Srgba::BLACK, |picked| picked.color);
+                    let shown = SwatchPalette::new(lib.name.clone(), Bind::given(color), &lib.swatches).spacing(SwatchSpacing::Spaced).show(ui);
+                    if let Some(picked) = shown.edit.as_ref().and_then(|edit| edit.value()).copied() {
+                        *held = Mixed::Same(PickedColor::rgb(picked));
+                    }
+                }
+                None => {
+                    Notice::new(Tone::Neutral, view.empty.clone()).layout(NoticeLayout::Centred).show(ui);
+                }
             }
-        }
+        });
+        let _ = FooterSlot::new().show(ui);
     });
 }
 

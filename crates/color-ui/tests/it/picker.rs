@@ -541,10 +541,10 @@ fn a_request_for_the_swatches_opens_the_picker_on_its_swatch_view() {
         let shown = Rc::clone(&dialogs);
         let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
         fixture.room(vec2(900.0, 700.0));
-        let libraries = vec![PickerLibrary::new("Basic", vec![(Label::from("Red"), red)])];
+        let libraries = vec![PickerLibrary::new("Basic", vec![(Label::from("Brick"), red)])];
         dialogs.borrow_mut().open(ColorPickerDialog::from_request(request).swatch_view(PickerSwatches::new(libraries, "No swatches")));
         fixture.idle(6);
-        fixture.by_label("Red").is_some()
+        fixture.by_label("Brick").is_some()
     };
     let request = || craft_ui::runtime::requests::ColorRequest::new("fill", red);
     assert!(shows_swatches(request().on_swatches()), "the swatch view shows the library's cells");
