@@ -516,8 +516,11 @@ pub const UNSET_CHOICE: &str = "default";
 
 /// Reads `null` and [`UNSET_CHOICE`] as `None`, any other value as a choice.
 fn unset_or_choice<'de, D: serde::Deserializer<'de>, T: serde::Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
-    let _ = d;
-    todo!("ex.P2")
+    match <Option<String> as serde::Deserialize>::deserialize(d)? {
+        None => Ok(None),
+        Some(id) if id == UNSET_CHOICE => Ok(None),
+        Some(id) => <T as serde::Deserialize>::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(id)).map(Some),
+    }
 }
 
 /// The Output section.

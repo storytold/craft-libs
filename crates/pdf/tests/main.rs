@@ -7,6 +7,7 @@ mod knockout;
 mod knockout_backdrop;
 mod plates;
 mod print_color;
+mod settings;
 mod testing_pdf;
 mod unicode_writing;
 mod upstream_compatibility;
