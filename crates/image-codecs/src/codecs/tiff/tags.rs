@@ -10,11 +10,11 @@ pub(super) const TAG_PHOTOSHOP: u16 = 34377;
 /// Photoshop `ImageSourceData`: the layers of a layered TIFF.
 pub(super) const TAG_IMAGE_SOURCE_DATA: u16 = 37724;
 
-/// `true` when `encode` writes little-endian (`II`) files: the `tiff` encoder writes the
-/// running target's byte order, and every target PhotoCraft builds for is little-endian.
-/// Byte-order-sensitive payloads (Photoshop layer data) must be produced to match.
+/// `true` when [`crate::encode`] writes little-endian (`II`) TIFF files with the default options.
+/// [`crate::EncodeOptions::tiff_byte_order`] chooses the byte order; byte-order-sensitive
+/// payloads (Photoshop layer data) must be produced in the order it names.
 pub fn writes_little_endian() -> bool {
-    cfg!(target_endian = "little")
+    crate::EncodeOptions::default().tiff_byte_order.is_little()
 }
 
 /// `(34377 image resources, 37724 image source data)` payloads, each absent when the tag is.
