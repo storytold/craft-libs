@@ -83,7 +83,8 @@ pub fn css_transform_to_svg(value: &str) -> Option<String> {
 
 /// A CSS transform length in user units: `px` or unitless.
 fn css_length(a: &str) -> Option<f64> {
-    let n = a.strip_suffix("px").unwrap_or(a).parse::<f64>().ok()?;
+    let a = a.to_ascii_lowercase();
+    let n = a.strip_suffix("px").unwrap_or(&a).parse::<f64>().ok()?;
     n.is_finite().then_some(n)
 }
 
