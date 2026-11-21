@@ -1368,11 +1368,75 @@ fn containers_naming_one_group_stop_at_the_clipped_chunk_limit() {
     let d = read(&file, Limits::default()).unwrap();
     assert_eq!((count(&d.pages[0].layers[0].objects), d.pages[0].layers[0].guides.len()), (20, 20));
     assert!(d.warnings.is_empty(), "{:?}", d.warnings);
-    // The sixth container's walk stops after its guideline and 8 empty groups.
-    let d = read(&file, Limits { clipped_chunks: 53 * 5 + 10, ..Limits::default() }).unwrap();
+    // Looking through the guideline's and the rectangle's lists for what they keep for themselves
+    // takes 13 chunks, counted once. The sixth container's walk stops after its guideline and 8
+    // empty groups.
+    let d = read(&file, Limits { clipped_chunks: 53 * 5 + 13 + 10, ..Limits::default() }).unwrap();
     let layer = &d.pages[0].layers[0];
     assert_eq!((layer.objects.len(), count(&layer.objects), layer.guides.len()), (20, 5, 5));
     assert_eq!(d.warnings, vec![Warning::TooDeep]);
+}
+
+/// The chunks an object of a clipped group keeps for itself count toward the clipped chunk limit
+/// the first time a container names the group, and are not looked through again for the next
+/// containers.
+#[test]
+fn a_clipped_objects_own_chunks_count_once() {
+    let v = V(1100);
+    // A rectangle whose list holds 1,000 chunks before its own 5.
+    let synth::Node::List(form, own) = clip_rect(v, 10.0, &[], [0.0, 0.0]) else { panic!("an object is a list") };
+    let rect = synth::Node::List(form, (0..1000).map(|_| chunk(b"pad ", vec![])).chain(own).collect());
+    let containers: Vec<synth::Node> = (0..20).map(|_| clip_rect(v, 40.0, &[synth::container(0x77)], [0.0, 0.0])).collect();
+    let file = clip_drawing(1100, vec![(0x77, vec![rect.clone()])], containers);
+    let count = |d: &craft_cdr::Drawing| d.pages[0].layers[0].objects.iter().filter(|o| matches!(o, Object::Clip { .. })).count();
+    // Each container walks the group's `spnd` and the rectangle's list, and the first also looks
+    // through the rectangle's chunks for its `loda` (1,003 chunks), `flgs` (1,001) and `trfd`
+    // (1,005).
+    let first = 1003 + 1001 + 1005;
+    let d = read(&file, Limits { clipped_chunks: first + 20 * 2, ..Limits::default() }).unwrap();
+    assert_eq!(count(&d), 20);
+    assert!(d.warnings.is_empty(), "{:?}", d.warnings);
+    // Past the limit while looking through them, no container keeps its group, nor the objects
+    // and guidelines read before it.
+    let mut guide = vec![0; 12];
+    guide.extend(90_000_000i32.to_le_bytes());
+    guide.extend([v.coord(36.0), v.coord(0.0)].concat());
+    let before = vec![clip_rect(v, 5.0, &[], [0.0, 0.0]), synth::object(v, 0x16, &[(16000, guide)], None), rect];
+    let file = clip_drawing(1100, vec![(0x77, before)], vec![clip_rect(v, 40.0, &[synth::container(0x77)], [0.0, 0.0])]);
+    let d = read(&file, Limits { clipped_chunks: 1000, ..Limits::default() }).unwrap();
+    let layer = &d.pages[0].layers[0];
+    assert!(matches!(layer.objects.as_slice(), [Object::Shape(_)]), "{:?}", layer.objects);
+    assert!(layer.guides.is_empty() && d.guides.is_empty(), "{:?}", layer.guides);
+    assert_eq!(d.warnings, vec![Warning::TooDeep]);
+    // The same past the limit while looking for an object's `loda`, `flgs` or `trfd` after 1,000
+    // chunks.
+    let synth::Node::List(form, own) = clip_rect(v, 10.0, &[], [0.0, 0.0]) else { panic!("an object is a list") };
+    let [flgs, lgob @ synth::Node::List(lgob_form, kids)] = own.as_slice() else { panic!("{own:?}") };
+    let [loda, transform @ synth::Node::List(trfl, trfd)] = kids.as_slice() else { panic!("{kids:?}") };
+    let pads = || (0..1000).map(|_| chunk(b"pad ", vec![]));
+    let loda_late = synth::Node::List(
+        form,
+        vec![flgs.clone(), synth::Node::List(*lgob_form, std::iter::once(transform.clone()).chain(pads()).chain([loda.clone()]).collect())],
+    );
+    let flags_late = synth::Node::List(form, std::iter::once(lgob.clone()).chain(pads()).chain([flgs.clone()]).collect());
+    let trfd_late = synth::Node::List(
+        form,
+        vec![flgs.clone(), synth::Node::List(*lgob_form, vec![loda.clone(), synth::Node::List(*trfl, pads().chain(trfd.iter().cloned()).collect())])],
+    );
+    for late in [loda_late, flags_late, trfd_late] {
+        let file = clip_drawing(1100, vec![(0x77, vec![late])], vec![clip_rect(v, 40.0, &[synth::container(0x77)], [0.0, 0.0])]);
+        let d = read(&file, Limits { clipped_chunks: 500, ..Limits::default() }).unwrap();
+        assert!(matches!(d.pages[0].layers[0].objects.as_slice(), [Object::Shape(_)]), "{:?}", d.pages[0].layers[0].objects);
+        assert_eq!(d.warnings, vec![Warning::TooDeep]);
+    }
+    // Chunks after the ones an object keeps for itself are not looked through.
+    let synth::Node::List(form, own) = clip_rect(v, 10.0, &[], [0.0, 0.0]) else { panic!("an object is a list") };
+    let rect = synth::Node::List(form, own.into_iter().chain((0..1000).map(|_| chunk(b"pad ", vec![]))).collect());
+    let containers: Vec<synth::Node> = (0..20).map(|_| clip_rect(v, 40.0, &[synth::container(0x77)], [0.0, 0.0])).collect();
+    let file = clip_drawing(1100, vec![(0x77, vec![rect])], containers);
+    let d = read(&file, Limits { clipped_chunks: 3 + 1 + 5 + 20 * 2, ..Limits::default() }).unwrap();
+    assert_eq!(count(&d), 20);
+    assert!(d.warnings.is_empty(), "{:?}", d.warnings);
 }
 
 /// A container, fill, outline or style argument too short for the id it names is damage: the

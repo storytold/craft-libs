@@ -58,6 +58,33 @@ struct Ctx<'a, 'b> {
     open_clips: Vec<u32>,
     /// Whether the walk of a clipped group stopped at the clipped chunk limit.
     clip_cut: bool,
+    /// The chunks the object lists of clipped groups keep for themselves, by list, each found the
+    /// first time a read needs it.
+    own: HashMap<(*const Chunk, Own), Option<&'b Chunk>>,
+    /// The matrices the `trfd` chunks of clipped groups' objects hold, by chunk; `None` for one
+    /// that can't be read.
+    trfds: HashMap<*const Chunk, Option<Matrix>>,
+}
+
+/// A chunk an object list keeps for itself.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Own {
+    /// Its `loda` (or `lobj`).
+    Loda,
+    /// Its `flgs`, among its own chunks alone.
+    Flags,
+    /// Its `trfd`.
+    Trfd,
+}
+
+impl Own {
+    fn ids(self) -> &'static [&'static [u8; 4]] {
+        match self {
+            Own::Loda => &[b"loda", b"lobj"],
+            Own::Flags => &[b"flgs"],
+            Own::Trfd => &[b"trfd"],
+        }
+    }
 }
 
 /// The most clipped groups read one inside another: VectorCraft's own limit.
@@ -97,6 +124,8 @@ pub(crate) fn drawing(ix: &Index, budget: &mut Budget, warn: &mut Vec<Warning>) 
         clips: HashMap::new(),
         open_clips: Vec::new(),
         clip_cut: false,
+        own: HashMap::new(),
+        trfds: HashMap::new(),
     };
     // The `spnd` id is a u16 in files of 16-bit fields (R46).
     let spnd = |b: &[u8]| if p.short { Rd::new(b).u16().map(u32::from) } else { Rd::new(b).u32() };
@@ -233,14 +262,23 @@ fn hide_guides(guides: &mut [Guideline], from: usize, flags: Flags) {
 
 /// A list's flags (R19): four bytes.
 fn flags(ix: &Index, list: &Chunk) -> Option<[u8; 4]> {
-    let c = ix.children(list).iter().find(|c| &c.id == b"flgs")?;
+    flgs_bytes(ix, ix.children(list).iter().find(|c| &c.id == b"flgs")?)
+}
+
+/// The four bytes of a `flgs` chunk.
+fn flgs_bytes(ix: &Index, c: &Chunk) -> Option<[u8; 4]> {
     ix.data(c).get(..4)?.try_into().ok()
 }
 
 /// Whether a layer, group or object list is hidden (bit 0x01 of byte 1) or locked (bit 0x10 of
 /// byte 0) (R19).
 fn state(ix: &Index, list: &Chunk) -> Flags {
-    flags(ix, list).map_or(Flags::default(), |[b0, b1, _, _]| Flags { hidden: b1 & 0x01 != 0, locked: b0 & 0x10 != 0 })
+    flags(ix, list).map_or(Flags::default(), flag_bits)
+}
+
+/// What a list's four flag bytes say, as [`state`] reads them.
+fn flag_bits([b0, b1, _, _]: [u8; 4]) -> Flags {
+    Flags { hidden: b1 & 0x01 != 0, locked: b0 & 0x10 != 0 }
 }
 
 /// `o` with `f` added to its own flags: the objects of a group left ungrouped keep the group's.
@@ -287,16 +325,41 @@ fn layer_kind(f: [u8; 4], version_below_14: bool) -> LayerKind {
 /// The first chunk of one of `ids` that a page, layer or object keeps for itself: among its own
 /// chunks, or in its `lgob` list and the `trfl` list there (R22).
 fn own_chunk<'i>(ix: &'i Index, list: &'i Chunk, ids: &[&[u8; 4]]) -> Option<&'i Chunk> {
-    let mut stack: Vec<(&Chunk, u8)> = ix.children(list).iter().rev().map(|c| (c, 0)).collect();
-    while let Some((c, depth)) = stack.pop() {
-        if ids.contains(&&c.id) {
-            return Some(c);
+    find_own(ix, list, ids, true, || true).flatten()
+}
+
+/// The first chunk of one of `ids` among `list`'s own chunks, and when `nested` also in its `lgob`
+/// list and the `trfl` list there, as [`own_chunk`] finds it. `visit` is asked before each chunk
+/// the search looks at, and the search stops with `None` when it answers `false`.
+fn find_own<'i>(ix: &'i Index, list: &'i Chunk, ids: &[&[u8; 4]], nested: bool, mut visit: impl FnMut() -> bool) -> Option<Option<&'i Chunk>> {
+    // The lists being looked through, outermost first, each with the next chunk to look at, and
+    // the innermost one's place.
+    let mut stack: [(&'i [Chunk], usize); 3] = [(ix.children(list), 0), (&[], 0), (&[], 0)];
+    let mut depth = 0;
+    loop {
+        let Some(top) = stack.get_mut(depth) else { return Some(None) };
+        let chunks: &'i [Chunk] = top.0;
+        let Some(c) = chunks.get(top.1) else {
+            if depth == 0 {
+                return Some(None);
+            }
+            depth -= 1;
+            continue;
+        };
+        top.1 += 1;
+        if !visit() {
+            return None;
         }
-        if depth < 2 && (c.is_list(b"lgob") || c.is_list(b"trfl")) {
-            stack.extend(ix.children(c).iter().rev().map(|k| (k, depth + 1)));
+        if ids.contains(&&c.id) {
+            return Some(Some(c));
+        }
+        if nested && depth < 2 && (c.is_list(b"lgob") || c.is_list(b"trfl")) {
+            depth += 1;
+            if let Some(next) = stack.get_mut(depth) {
+                *next = (ix.children(c), 0);
+            }
         }
     }
-    None
 }
 
 /// The `loda` (or `lobj`) a page, layer or object keeps for itself.
@@ -429,6 +492,10 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 if let Some(o) = self.object(c, guides, &outer) {
                     top.objects.push(o);
                 }
+                // Past the limit while looking for what the object keeps for itself.
+                if self.clip_cut {
+                    return Vec::new();
+                }
             } else if c.is_list(b"grp ") {
                 let own = self.group_placement(c);
                 let flags = state(ix, c);
@@ -444,6 +511,38 @@ impl<'a, 'b> Ctx<'a, 'b> {
                 stack.push(Frame { chunks: ix.children(c), next: 0, objects: Vec::new(), group: false, flags: Flags::default(), guides_from, outer });
             }
         }
+    }
+
+    /// The `which` chunk object list `list` keeps for itself. In a clipped group it is looked for
+    /// once per read, the first time a container's walk needs it, and each chunk the search looks
+    /// at counts toward the clipped chunk limit then; past that limit the walk stops (`None`).
+    fn own(&mut self, list: &'b Chunk, which: Own) -> Option<Option<&'b Chunk>> {
+        let nested = which != Own::Flags;
+        if self.open_clips.is_empty() {
+            return find_own(self.ix, list, which.ids(), nested, || true);
+        }
+        let key = (std::ptr::from_ref(list), which);
+        if let Some(c) = self.own.get(&key) {
+            return Some(*c);
+        }
+        let Some(c) = find_own(self.ix, list, which.ids(), nested, || self.budget.take_clipped_chunk()) else {
+            push(self.warn, Warning::TooDeep);
+            self.clip_cut = true;
+            return None;
+        };
+        self.own.insert(key, c);
+        Some(c)
+    }
+
+    /// The matrix `trfd` holds, or `None` when it can't be read. In a clipped group each `trfd` is
+    /// read once per read, however many containers name the group.
+    fn trfd(&mut self, c: &'b Chunk) -> Option<Matrix> {
+        if self.open_clips.is_empty() {
+            return records::trfd(self.ix.data(c), &self.p);
+        }
+        let ix = self.ix;
+        let p = &self.p;
+        *self.trfds.entry(std::ptr::from_ref(c)).or_insert_with(|| records::trfd(ix.data(c), p))
     }
 
     /// The matrix a group places its objects with. Only a version 3 group has one, in the
@@ -481,9 +580,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
 
     /// One `LIST obj `: a shape placed by its own transform and then by `outer`, or `None` (a
     /// guideline goes to `guides`).
-    fn object(&mut self, list: &Chunk, guides: &mut Vec<Guideline>, outer: &Matrix) -> Option<Object> {
+    fn object(&mut self, list: &'b Chunk, guides: &mut Vec<Guideline>, outer: &Matrix) -> Option<Object> {
         let ix = self.ix;
-        let Some(loda) = own_loda(ix, list).and_then(|c| records::loda(ix.data(c), &self.p, &self.budget.limits, self.warn)) else {
+        let Some(loda) = self.own(list, Own::Loda)?.and_then(|c| records::loda(ix.data(c), &self.p, &self.budget.limits, self.warn)) else {
             push(self.warn, Warning::Damaged);
             return None;
         };
@@ -492,7 +591,7 @@ impl<'a, 'b> Ctx<'a, 'b> {
             push(self.warn, Warning::TooDeep);
             return None;
         }
-        let flags = state(ix, list);
+        let flags = self.own(list, Own::Flags)?.and_then(|c| flgs_bytes(ix, c)).map_or(Flags::default(), flag_bits);
         if loda.kind == GUIDELINE {
             guides.extend(loda.arg(ARG_GUIDE).and_then(|b| guideline(b, &self.p)).map(|g| Guideline { hidden: flags.hidden, ..g }));
             return None;
@@ -515,9 +614,9 @@ impl<'a, 'b> Ctx<'a, 'b> {
         };
         let nonzero = self.nonzero(&loda);
         // A transform that is there but can't be read is damage; the shape stays where it is.
-        let matrix = match own_chunk(ix, list, &[b"trfd"]) {
+        let matrix = match self.own(list, Own::Trfd)? {
             None => Matrix::IDENTITY,
-            Some(c) => records::trfd(ix.data(c), &self.p).unwrap_or_else(|| {
+            Some(c) => self.trfd(c).unwrap_or_else(|| {
                 push(self.warn, Warning::Damaged);
                 Matrix::IDENTITY
             }),
@@ -805,6 +904,8 @@ mod tests {
             clips: HashMap::new(),
             open_clips: Vec::new(),
             clip_cut: false,
+            own: HashMap::new(),
+            trfds: HashMap::new(),
         };
         assert_eq!(cx.outline(1).map(|o| o.dashes.len()), Some(3));
         for _ in 0..3 {
