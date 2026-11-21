@@ -465,13 +465,16 @@ fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
     assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks a listed method");
 }
 
+/// Opens a dialog on a host.
+type Opener = fn(&mut DialogHost);
+
 /// Image Size's and Canvas Size's Width and Height rows (a stack of fields beside the link) show as they measured, at
 /// 1x and 1.25x (#15483, #15538): each label sits beside its field, each field and unit select is as tall as a direct
 /// row's control (`reference`), and Height's label starts under Width's controls.
 #[trial]
 fn sizing_dialogs_show_width_and_height_beside_their_labels_at_full_height() {
     for scale in [1.0, 1.25] {
-        let opens: [(fn(&mut DialogHost), &str); 2] = [
+        let opens: [(Opener, &str); 2] = [
             (
                 |host| {
                     host.open(image_size());
