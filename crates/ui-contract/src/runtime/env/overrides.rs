@@ -176,6 +176,15 @@ impl Overrides {
     }
 }
 
+/// Runs `body` in a child `Ui` built from `builder`, as `ui.scope_builder` does, under the env of `ui`: the components
+/// it shows are children of the body around `ui` as those shown in `ui` itself are, on its line and in its cells. The
+/// craft form of `ui.scope`, `ui.push_id` (`UiBuilder::id_salt`) and `ui.with_layout` around craft content: what a
+/// body sets up for its children in flow does not reach a `Ui` egui code makes below the body's own (`Env::of`).
+pub fn flow_scope<R>(ui: &mut Ui, builder: egui::UiBuilder, body: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
+    let env = Env::of(ui);
+    ui.scope_builder(builder, |child| Env::run_in(child, env, body))
+}
+
 /// Runs `body` in a child `Ui` with `set`'s changes applied to the inherited values. A scope that disables
 /// disables its child `Ui`; one that changes direction builds the child with an explicit layout and never
 /// inherits the parent's.

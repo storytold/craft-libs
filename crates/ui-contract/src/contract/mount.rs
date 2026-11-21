@@ -149,7 +149,9 @@ impl Host for PaneHost {
             if self.0.content_height {
                 let builder = egui::UiBuilder::new().max_rect(rect);
                 let mut ui = crate::runtime::egui::alloc::child(parent, builder);
-                pass(&mut ui, Some(ShowAt::Flow), None);
+                // A layout room of its own, as a docked pane's.
+                let room = env.new_room();
+                Env::run_in(&mut ui, room.clone(), |ui| pass(ui, Some(ShowAt::Flow), Some(&room)));
                 crate::runtime::egui::alloc::advance_past(parent, ui.min_rect());
             } else {
                 pass(parent, Some(ShowAt::Rect(rect)), None);

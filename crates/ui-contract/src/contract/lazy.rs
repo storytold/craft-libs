@@ -172,8 +172,10 @@ impl Lazy {
             open_record(&ctx, audited.is_some());
         }
         let mut child = alloc::child(ui, UiBuilder::new().max_rect(available).layout(layout).scope_id(id));
-        // Its extent in the body around it comes from its content's measure, so a change inside reaches that body.
-        let out = layout_memory::boundary(&ctx, false, || add(&mut child, &mut run));
+        // Its extent in the body around it comes from its content's measure, so a change inside reaches that body. The
+        // content runs in the env of `ui`, as the direct children of the body around it: a plain `Lazy` keeps their
+        // line, cells and shrink step, and a memoized view starts its own room on top of it.
+        let out = layout_memory::boundary(&ctx, false, || Env::run_in(&mut child, env, |child| add(child, &mut run)));
         let rect = child.min_rect();
         // The child `Ui` writes its widget rect when it drops: the record holds it as written.
         drop(child);
@@ -317,7 +319,7 @@ fn place_view(ui: &mut Ui, rect: Rect) -> Rect {
 /// view taller than that reaches, and a view no run showed yet, stays at the row's top. The room keeps its size, so a
 /// kept run replays moved with it.
 fn on_row_line(ui: &Ui, id: egui::Id, room: Rect) -> Rect {
-    let Some(centre) = crate::layout::row_line_of(ui, &Env::of(ui)).and_then(|line| line.centre) else {
+    let Some(centre) = Env::of(ui).row_line.and_then(|line| line.centre) else {
         return room;
     };
     let Some(size) = lazy::last_extent(ui.ctx(), id) else {

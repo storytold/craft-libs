@@ -87,7 +87,7 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     let gap = label_gap(env);
     let indent = after_indent(ctx, env, input, gap);
     let mut natural = leaf.measure_in(kids, craft_behavior::Proposal::Ideal);
-    if input.side.layout == FieldLayout::After && !input.unbounded {
+    if input.side.layout == FieldLayout::After && !input.egui_cell {
         // The label takes the room the control and the gap leave, and its detail wraps there.
         let room = (input.row.width() - indent - input.control_min - gap).max(0.0);
         if natural.x > room {
@@ -95,9 +95,11 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
         }
     }
     let baseline = leaf.baseline.get();
+    // An egui grid's cell grows at its right edge in any direction (`LabelIn::egui_cell`); a row grows at its end edge.
+    let grows = if input.egui_cell { Grows::Right } else { Grows::End };
     if input.side.layout == FieldLayout::Line {
         let number = env.control(input.size).number;
-        let flow = if input.unbounded { widened(flow, natural.x + gap + number) } else { flow };
+        let flow = if input.egui_cell { widened(flow, natural.x + gap + number, grows) } else { flow };
         let (cell, rest) = flow.take_end(number);
         let width = natural.x.min((rest.rect().width() - gap).max(0.0));
         let drop = (cell.height() - natural.y).max(0.0) / 2.0;
@@ -127,18 +129,18 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     // The room decides; a beside label gets the width it needs even where last frame's content was narrower. A label
     // that never sits beside stacks in an unbounded room as well.
     let stacks = (input.room < stack_below || stack_below == f32::INFINITY)
-        && !((input.content_row || input.unbounded) && input.side.layout == FieldLayout::Beside);
-    // A stacked label has the row's width at most, where its name elides; in a row without an end it keeps its own.
-    let column = if stacks && !input.unbounded { column.min(input.row.width()) } else { column };
+        && !((input.content_row || input.egui_cell) && input.side.layout == FieldLayout::Beside);
+    // A stacked label has the row's width at most, where its name elides; in an egui grid's cell it keeps its own.
+    let column = if stacks && !input.egui_cell { column.min(input.row.width()) } else { column };
     // A beside label that does not stack takes its column, the gap and the control's least, past the row's end where
-    // the row is narrower. A row without an end is as wide as its label and control need, whatever the layout.
+    // the row is narrower. An egui grid's cell is as wide as its label and control need, whatever the layout.
     let need = match input.side.layout {
-        FieldLayout::After if input.unbounded => indent + input.control_min + gap + natural.x,
-        _ if input.unbounded && stacks => column.max(input.control_min),
+        FieldLayout::After if input.egui_cell => indent + input.control_min + gap + natural.x,
+        _ if input.egui_cell && stacks => column.max(input.control_min),
         _ if stacks => 0.0,
         _ => stack_below,
     };
-    let flow = widened(flow, need);
+    let flow = widened(flow, need, grows);
 
     if input.side.layout == FieldLayout::After {
         let flow = if indent > 0.0 { flow.take_start(indent).1 } else { flow };
@@ -163,16 +165,24 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     }
 }
 
-/// `flow` widened from its start edge to `need` when it is narrower: its end edge moves, to the left under RTL.
-fn widened(flow: Flow, need: f32) -> Flow {
+/// The edge a flow that is too narrow grows at (`widened`).
+#[derive(Clone, Copy)]
+enum Grows {
+    /// Its end edge: the left one under RTL.
+    End,
+    /// Its right edge, in either direction.
+    Right,
+}
+
+/// `flow` widened to `need` at the edge `grows` names, when it is narrower.
+fn widened(flow: Flow, need: f32, grows: Grows) -> Flow {
     let mut wide = flow.rect();
     if wide.width() >= need {
         return flow;
     }
-    if flow.is_rtl() {
-        wide.min.x = wide.max.x - need;
-    } else {
-        wide.max.x = wide.min.x + need;
+    match grows {
+        Grows::End if flow.is_rtl() => wide.min.x = wide.max.x - need,
+        Grows::End | Grows::Right => wide.max.x = wide.min.x + need,
     }
     Flow::new(wide, flow.is_rtl())
 }

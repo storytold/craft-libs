@@ -81,7 +81,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, flow_scope};
 use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -462,7 +462,7 @@ impl LiquifyWorkspace {
             .opened(open)
             .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
             .footer(|ui, _| {
-                ui.vertical_centered(|ui| {
+                let _ = flow_scope(ui, egui::UiBuilder::new().layout(egui::Layout::top_down(egui::Align::Center)), |ui| {
                     let mut guard = this.borrow_mut();
                     let work: &mut LiquifyWorkspace = &mut guard;
                     let events = Checkbox::new(Bind::given(work.preview)).label(preview_label.clone()).show(ui).events;

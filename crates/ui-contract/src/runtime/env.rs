@@ -44,7 +44,7 @@ mod view;
 pub use app_values::{AppValues, EnvValue, StyleValue};
 pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
-pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
+pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, flow_scope, with_env};
 pub use root::{ResolvedRoot, RootEnv};
 pub use system::{SystemState, system_appearance};
 pub(crate) use tokens::TokenInputs;
@@ -307,8 +307,7 @@ pub(crate) enum ColumnSweep {
 }
 
 /// The line of an unwrapped `Row` body, as its direct children placed in flow see it: a child of one line sits with
-/// its centre on the line's centre, and a child of more than one line, or with no line of its own, at its top. Read
-/// through `layout::row_line_of`, which gives it only to the direct children (`Env::installed_for`).
+/// its centre on the line's centre, and a child of more than one line, or with no line of its own, at its top.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RowLine {
     /// The row body, which the children of a measuring run report their lines to.
@@ -417,7 +416,8 @@ impl Scoped {
 
     /// Ends the layout room of the enclosing body: its flow grid and content column. The axes the body sizes from its
     /// content stay (`content`): like `cell_fills` and `least`, they say what a child that fills takes there, its
-    /// measured size or the room, and the place of a memoized view holds them (`flow`).
+    /// measured size or the room, and the place of a memoized view holds them (`flow`). `has_room` checks the same set,
+    /// and `Env::of` ends it for a `Ui` below the one an entry was installed for.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
         self.grid_top = false;
@@ -433,6 +433,24 @@ impl Scoped {
         self.shrink = None;
         self.column = None;
         self.offered = None;
+    }
+
+    /// Whether any of the facts `start_room` ends is set.
+    fn has_room(&self) -> bool {
+        self.grid.is_some()
+            || self.grid_top
+            || self.content_column
+            || self.given_column
+            || self.row_room.is_some()
+            || self.row_line.is_some()
+            || self.first_line.is_some()
+            || self.flow_body.is_some()
+            || self.column_row
+            || self.fill_body.is_some()
+            || self.fill_share.is_some()
+            || self.shrink.is_some()
+            || self.column.is_some()
+            || self.offered.is_some()
     }
 
     /// Starts the layout room of a memoized view's content (`start_room`), keeping whether the enclosing body is a
@@ -664,14 +682,27 @@ impl Env {
     /// The env of `ui`: the nearest entry up the `Ui` stack, else the running viewport's root env, so the `Ui`
     /// of an egui `Area` or `Window` reads the app's root values. For app panels (layer 8) and caller closures only.
     ///
+    /// What a body sets up for the children it places in flow (`Scoped::start_room`: its `Grid` or spread row's cells,
+    /// its unwrapped row's line and shrink step, its flow start, its content column) is for its direct children, which
+    /// it shows in the `Ui` it installed its env for. A `Ui` egui code makes below that one (an `egui::Grid`,
+    /// `ui.horizontal`, `ui.push_id` in a caller's closure) lays out its own children: an entry found for an ancestor
+    /// of `ui` comes without those facts, so a component there takes no cell, line or shrink step of the body around it.
+    ///
     /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
+        let own = stack::node_id(ui);
         let found = PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| {
-            stack::nearest(ui, |node| envs.entries.get(&node).cloned()).or_else(|| envs.root.clone())
+            stack::nearest(ui, |node| envs.entries.get(&node).map(|env| (env.clone(), node == own)))
+                .or_else(|| envs.root.clone().map(|env| (env, true)))
         });
-        let env = found.unwrap_or_else(|| Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)));
+        let env = match found {
+            Some((env, true)) => env,
+            Some((env, false)) if env.scoped.has_room() => env.derive_local(Scoped::start_room),
+            Some((env, false)) => env,
+            None => Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)),
+        };
         // egui's `invisible()` also disables the `Ui`, and a sizing `Ui` is invisible, not disabled: in a sizing pass
         // the env keeps the enabled state the real run has, so a memoized view keys alike in both.
         if style::is_enabled(ui) || ui.is_sizing_pass() { env } else { env.derive_local(|s| s.enabled = false) }
@@ -773,14 +804,12 @@ impl Env {
         Installed { viewport, node, previous }
     }
 
-    /// Whether `ui` is a `Ui` an env entry was installed for (`install_for`), not one that reads an entry installed
-    /// further up its stack. What a body sets up for the children it places in flow (its `Grid` or spread row's cells,
-    /// its unwrapped row's line) is for its direct children, which it shows in the `Ui` it installed its env for. A
-    /// `Ui` egui code makes inside that one (an `egui::Grid`, `ui.horizontal` in a caller's closure) lays out its own
-    /// children: a component placed there takes no cell or line of the body around it.
-    pub(crate) fn installed_for(ui: &Ui) -> bool {
-        let node = stack::node_id(ui);
-        PerViewport::<ViewportEnvs>::with(ui.ctx(), pass::current_viewport(ui.ctx()), |envs| envs.entries.contains_key(&node))
+    /// Runs `body` in `ui` with `env` installed for it, and puts back what the install replaced, also when `body`
+    /// panics. A body runs its direct children this way in a `Ui` it makes for them.
+    pub(crate) fn run_in<R>(ui: &mut Ui, env: Env, body: impl FnOnce(&mut Ui) -> R) -> R {
+        let ctx = ui.ctx().clone();
+        let _restore = Restore { ctx: &ctx, installed: Some(Env::install_for(ui, env)) };
+        body(ui)
     }
 
     /// Puts back the entry `install_for` replaced.

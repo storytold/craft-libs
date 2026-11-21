@@ -291,13 +291,14 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let props = comp.props(Internal::new());
         self.room = self.mount_room(props, ui, id, at, scx.tokens);
         let env = Env::of(ui);
-        self.given = self.given_axes(props, (&env, ui), at);
+        self.given = self.given_axes(props, &env, at);
         self.fixed_height = self.fixed_height(props, at);
         self.passes = self.passes_width(props, &env, at);
         self.held = self.held(props, &env);
         self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(..)));
         self.in_column = label::in_column(ui);
-        self.given.1 |= self.given_room(props, (&env, ui), at, id);
+        self.egui_cell = ui.is_grid();
+        self.given.1 |= self.given_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
         let room = self.room.x - 2.0 * self.pads(props, scx.tokens).x;
@@ -1288,7 +1289,7 @@ impl BodyHooks<'_> {
                     plan.regions.body.width()
                 },
                 content_row: false,
-                unbounded: false,
+                egui_cell: self.egui_cell,
                 text: resolved.label_value,
                 side,
                 help: props.help.as_ref(),
@@ -1829,8 +1830,8 @@ impl BodyHooks<'_> {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),
             None => self.mount_room(&props, at.ui, id, at.at, at.scx.tokens),
         };
-        self.given = self.given_axes(&props, (at.env, at.ui), at.at);
-        self.given.1 |= self.given_room(&props, (at.env, at.ui), at.at, id);
+        self.given = self.given_axes(&props, at.env, at.at);
+        self.given.1 |= self.given_room(&props, at.env, at.at, at.ui.ctx(), id);
         self.fixed_height = self.fixed_height(&props, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
         self.held = self.held(&props, at.env);
@@ -1840,6 +1841,7 @@ impl BodyHooks<'_> {
             self.room.x = width;
         }
         self.in_column = label::in_column(at.ui);
+        self.egui_cell = at.ui.is_grid();
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
