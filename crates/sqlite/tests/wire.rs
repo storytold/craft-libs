@@ -1,7 +1,42 @@
 use craft_sqlite::{
     BtreePageHeader, Error, PayloadKind, btree_cell_offset, decode_signed_be_int, local_payload_len, page_size_from_raw, parse_btree_page_header,
-    read_varint, serial_type_len, usable_page_size,
+    read_varint, serial_type_len, split_record, usable_page_size,
 };
+
+#[test]
+fn record_split_excludes_the_length_encoding() {
+    assert_eq!(split_record(&[3, 1, 15, 42, b'A']), Ok((&[1, 15][..], &[42, b'A'][..])));
+    assert_eq!(split_record(&[1]), Ok((&[][..], &[][..])));
+    assert_eq!(split_record(&[3, 0, 9]), Ok((&[0, 9][..], &[][..])));
+
+    let mut payload = [0; 129];
+    payload[..3].copy_from_slice(&[0x81, 0, 1]);
+    payload[128] = 42;
+    let (serial_types, body) = split_record(&payload).unwrap();
+    assert_eq!(serial_types.len(), 126);
+    assert_eq!(serial_types[0], 1);
+    assert_eq!(body, [42]);
+}
+
+#[test]
+fn record_split_limits_a_serial_type_to_its_header() {
+    let (serial_types, body) = split_record(&[2, 0x81, 0]).unwrap();
+    assert_eq!(body, [0]);
+    assert_eq!(read_varint(serial_types), Err(Error::TruncatedVarint));
+
+    let (serial_types, _) = split_record(&[3, 0x81, 0]).unwrap();
+    assert_eq!(read_varint(serial_types), Ok((128, 2)));
+}
+
+#[test]
+fn record_split_rejects_incomplete_and_out_of_range_lengths() {
+    for payload in [&[][..], &[0x80][..]] {
+        assert_eq!(split_record(payload), Err(Error::TruncatedVarint));
+    }
+    for (payload, length) in [(&[0][..], 0), (&[0x80, 1][..], 1), (&[2][..], 2), (&[0xff; 9][..], u64::MAX)] {
+        assert_eq!(split_record(payload), Err(Error::InvalidRecordHeaderLength(length)));
+    }
+}
 
 #[test]
 fn local_payload_preserves_inline_and_overflow_boundaries() {
