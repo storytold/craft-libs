@@ -1,7 +1,7 @@
 //! Bounded OpenEXR reading and writing on top of the `exr` crate (feature `decode`).
 //!
 //! - [`parts`] lists every part from the headers alone (size, windows, channels, compression,
-//!   text attributes), after checking the declared sizes against [`Limits`] and the file's size.
+//!   views, text attributes), after checking the declared sizes against [`Limits`] and the file's size.
 //! - [`pick_part`] chooses the part a plain picture decode shows: the best colour channel group
 //!   ([`crate::channels::color_channels`]), the earliest part on a tie.
 //! - [`decode_part`] decodes the channels of one flat part that a filter keeps, in their stored
@@ -161,6 +161,11 @@ pub struct PartInfo {
     pub name: Option<String>,
     /// The `view` attribute of a stereo part.
     pub view: Option<String>,
+    /// The `multiView` attribute of a single-part stereo file: its view names, the default view
+    /// first. A channel without a period is the default view's; another view's channels carry
+    /// the view name before the channel's own (`right.R`, `diffuse.right.R`). Empty without the
+    /// attribute.
+    pub multi_view: Vec<String>,
     pub data_window: Window,
     pub display_window: Window,
     pub deep: bool,
@@ -317,6 +322,7 @@ pub(crate) fn part_info(index: usize, header: &Header) -> PartInfo {
         index,
         name: header.own_attributes.layer_name.as_ref().map(|n| n.to_string()),
         view: header.own_attributes.view_name.as_ref().map(|v| v.to_string()),
+        multi_view: header.own_attributes.multi_view_names.iter().flatten().map(|v| v.to_string()).collect(),
         data_window: Window { x: header.own_attributes.layer_position.0, y: header.own_attributes.layer_position.1, width: w, height: h },
         display_window: Window { x: display.position.0, y: display.position.1, width: dw, height: dh },
         deep: header.deep,

@@ -87,6 +87,32 @@ fn multi_part_files_list_and_decode_one_part() {
 }
 
 #[test]
+fn a_multi_view_part_lists_its_views_default_first() {
+    let mut stereo = layer(None, 3, 2, &["B", "G", "R", "right.B", "right.G", "right.R"], false, exr::prelude::Compression::ZIP1);
+    stereo.attributes.multi_view_names = Some(vec![Text::from("left"), Text::from("right")]);
+    let bytes = file(vec![stereo], (3, 2));
+    let listed = parts(&bytes, &Limits::default()).unwrap();
+    assert_eq!(listed[0].multi_view, ["left", "right"]);
+    assert_eq!(listed[0].view, None);
+    // The decoded part carries the same header facts.
+    assert_eq!(decode_part(&bytes, 0, &all, &Limits::default()).unwrap().info.multi_view, ["left", "right"]);
+    // The declared order, not a sorted one: the right view may be the default.
+    let mut right_first = layer(None, 3, 2, &["B", "G", "R", "left.B", "left.G", "left.R"], false, exr::prelude::Compression::ZIP1);
+    right_first.attributes.multi_view_names = Some(vec![Text::from("right"), Text::from("left")]);
+    assert_eq!(parts(&file(vec![right_first], (3, 2)), &Limits::default()).unwrap()[0].multi_view, ["right", "left"]);
+
+    // Parts that each name their own view, and a plain file, have no `multiView`.
+    let mut left = layer(Some("beauty.left"), 3, 2, &["R"], false, exr::prelude::Compression::ZIP1);
+    left.attributes.view_name = Some(Text::from("left"));
+    let mut right = layer(Some("beauty.right"), 3, 2, &["R"], false, exr::prelude::Compression::ZIP1);
+    right.attributes.view_name = Some(Text::from("right"));
+    let listed = parts(&file(vec![left, right], (3, 2)), &Limits::default()).unwrap();
+    assert_eq!(listed.iter().map(|p| (p.view.as_deref(), p.multi_view.len())).collect::<Vec<_>>(), [(Some("left"), 0), (Some("right"), 0)]);
+    let plain = file(vec![layer(None, 3, 2, &["R"], false, exr::prelude::Compression::ZIP1)], (3, 2));
+    assert!(parts(&plain, &Limits::default()).unwrap()[0].multi_view.is_empty());
+}
+
+#[test]
 fn written_files_read_back() {
     let h: Vec<f16> = (0..6).map(|i| f16::from_f32(i as f32 / 4.0)).collect();
     let channels = vec![
