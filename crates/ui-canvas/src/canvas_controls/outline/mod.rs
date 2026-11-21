@@ -474,6 +474,7 @@ impl Component for SelectionOutline<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitives::Serials;
 
     /// The alpha a covered edge texel carries, as the image stores it.
     const EDGE_A8: u8 = (EDGE_ALPHA * 255.0).round() as u8;
@@ -483,7 +484,9 @@ mod tests {
     /// A 6 x 6 mask with a 4 x 4 covered block at (1, 1), one texel per document unit: the block's
     /// ring sits one texel from an uncovered texel, its middle does not.
     fn block() -> HoverMask {
-        HoverMask::sampled(Rect::new(0.0, 0.0, 6.0, 6.0), |x, y| if (1.0..5.0).contains(&x) && (1.0..5.0).contains(&y) { 1.0 } else { 0.0 })
+        HoverMask::sampled(&mut Serials::default(), Rect::new(0.0, 0.0, 6.0, 6.0), |x, y| {
+            if (1.0..5.0).contains(&x) && (1.0..5.0).contains(&y) { 1.0 } else { 0.0 }
+        })
     }
 
     fn alpha(image: &ColorImage, x: usize, y: usize) -> u8 {
@@ -545,7 +548,7 @@ mod tests {
         let thin = tint(&block(), Color32::RED, &look(None, Some(0.4)));
         let one = tint(&block(), Color32::RED, &look(None, Some(1.0)));
         assert_eq!(edged(&thin), edged(&one), "the grid's own texel is the narrowest band");
-        let empty = HoverMask::sampled(Rect::new(0.0, 0.0, 6.0, 6.0), |_, _| 0.0);
+        let empty = HoverMask::sampled(&mut Serials::default(), Rect::new(0.0, 0.0, 6.0, 6.0), |_, _| 0.0);
         let image = tint(&empty, Color32::RED, &MaskLook::of(&empty, Some(1.0), Some(30.0)));
         assert!(image.pixels.iter().all(|p| p.a() == 0), "an object with no coverage draws nothing");
     }
