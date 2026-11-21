@@ -8,29 +8,31 @@ mod stories;
 
 pub use self::dialogs::{ShellDialogsCx, WindowDialogs};
 use super::canvas_shell::slots as keys;
-use super::options_place::OptionsBarPlace;
+use super::options_place::{FloatingBar, OptionsBarDrag, OptionsBarPlace, PlaceTarget};
 use super::regions::{Claim, SlotSize, layout};
 use super::reveal::{Aim, Reveal, Tracking};
 use super::screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeFollow};
 use super::words::ShellWords;
-use crate::contract::overlay::Resize;
+use crate::contract::overlay::{PopupRegion, Resize};
 use crate::contract::{
-    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Lazy, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _,
-    Role, ShellPane, ShowContainer as _, Sizing,
+    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DropZone, Lazy, Mount, NoValue, Outcome, Overlay, PaneEdge, Props as _,
+    Remember as _, Role, ShellPane, ShowContainer as _, Sizing,
 };
 use crate::notices::ToastStack;
 use crate::runtime::commands::{CommandAccess as _, CommandSet as _};
+use crate::runtime::drag::zone_target;
 use crate::runtime::egui::pass;
 use crate::runtime::env::{AppValues, BodyMode, Env, Label, RevealEdge, ShellCx, ShellEntry, ShellRegions, SlotKey, WindowKey};
 use crate::runtime::focus::FocusPolicy;
-use crate::runtime::frame::{note_shell, take_chrome_toggles};
+use crate::runtime::frame::{note_shell, shell_root, take_chrome_toggles};
+use crate::runtime::memory;
 use crate::runtime::overlay::{OpenFilter, any_open};
 use crate::runtime::pointer;
 use crate::runtime::windows::{WindowAction, WindowHost};
 use crate::shell::Slot;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
-use craft_behavior::{Metrics, Sense};
-use egui::{Context, Rect, Response, Ui, ViewportId};
+use craft_behavior::{EditEvent, Metrics, Mixed, Sense};
+use egui::{Context, Rect, Response, Ui, ViewportId, pos2};
 use std::sync::Arc;
 
 /// The closure that fills a region.
@@ -92,7 +94,8 @@ pub struct ShellRegion {
     common: Common,
     #[container]
     props: ContainerProps,
-    shell: Option<ShellCx>,
+    /// The shell the scope carries to its slots, and the rect popups opened inside it are contained in.
+    shell: Option<(ShellCx, Option<Rect>)>,
     /// Whether the region senses a press on its own surface, where no child or part takes it (`Sense::SURFACE`).
     #[prop(flag)]
     senses_surface: bool,
@@ -119,7 +122,15 @@ impl ShellRegion {
     /// An inline region that fills its room and sets `shell` for everything inside it.
     pub fn scope(shell: ShellCx) -> Self {
         let props = ContainerProps::new().sizing(crate::contract::Sizing::Fill).command_scope(crate::runtime::commands::CommandScope::APP);
-        ShellRegion { common: Common::new(), props, shell: Some(shell), senses_surface: false }
+        ShellRegion { common: Common::new(), props, shell: Some((shell, None)), senses_surface: false }
+    }
+
+    /// The scope's popups, and the popups opened from them, stay inside `rect`.
+    fn popups(mut self, rect: Rect) -> Self {
+        if let Some((_, popups)) = &mut self.shell {
+            *popups = Some(rect);
+        }
+        self
     }
 
     /// A pane of the window; it fills the room its edge gives it. A top or bottom pane lays its content along its edge
@@ -158,8 +169,9 @@ impl Component for ShellRegion {
     }
 
     fn content_env(&self, _: &Cx<'_, Self>, values: &mut AppValues) {
-        if let Some(shell) = &self.shell {
+        if let Some((shell, popups)) = &self.shell {
             shell.put(values);
+            values.set(PopupRegion(*popups));
         }
     }
 
@@ -176,6 +188,8 @@ struct Placed<'a, S> {
     edge: PaneEdge,
     /// The size of a slot that sets none: the title bar for the title, else the edge's default.
     title: bool,
+    /// The options bar: it follows the place, and it is the options bar's height at every edge.
+    options: bool,
     /// The slot's name in the shell's words, for a slot of the canvas preset.
     named: Option<fn(&ShellWords) -> Label>,
     add: SlotFn<'a, S>,
@@ -197,6 +211,7 @@ impl<S> Placed<'_, S> {
         let size = self.slot.slot_size().unwrap_or(match self.edge {
             PaneEdge::Top if self.title => SlotSize::TitleBar,
             PaneEdge::Top => SlotSize::OptionsBar,
+            PaneEdge::Bottom if self.options => SlotSize::OptionsBar,
             PaneEdge::Bottom => SlotSize::StatusBar,
             _ => SlotSize::RailWidth,
         });
@@ -253,8 +268,17 @@ pub struct ChromeState {
 /// reveal. It serves code that runs outside the shell's pass and has no [`AppShellOutput`]: the window commands'
 /// handlers and the menu check refresh. A viewport with no shell reads `ChromeState::default()`.
 pub fn chrome_state(ctx: &Context, viewport: ViewportId) -> ChromeState {
-    let _ = (ctx, viewport);
-    todo!("ch.K6")
+    shell_root(ctx, viewport).map_or_else(ChromeState::default, |root| {
+        // A container keeps its session memory under `sub(id, "body")`, where the shell's body keeps its state.
+        memory::with_session::<ShellState, _>(ctx, memory::sub(root, "body"), |state| ChromeState::of(&state.reveal))
+    })
+}
+
+impl ChromeState {
+    /// What `reveal` says: the one source of a pass's output and of [`chrome_state`].
+    fn of(reveal: &Reveal) -> Self {
+        ChromeState { hidden: reveal.hidden(), panels_hidden: reveal.panels_hidden(), revealed: reveal.revealed_edge() }
+    }
 }
 
 impl Outcome for AppShellOutput {
@@ -327,6 +351,8 @@ pub struct AppShell<'a, S> {
     body_label: Option<Label>,
     title: Option<Placed<'a, S>>,
     slots: Vec<Placed<'a, S>>,
+    /// Where the options bar sits; the top slot without a binding.
+    place: Bind<'a, OptionsBarPlace>,
     /// The body, shown in what the slots leave.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>, &mut S)")]
     body: Option<SlotBody<'a, S>>,
@@ -348,6 +374,7 @@ impl<'a, S> AppShell<'a, S> {
             body_label: None,
             title: None,
             slots: Vec::new(),
+            place: Bind::kept(),
             body: None,
         }
     }
@@ -373,7 +400,7 @@ impl<'a, S> AppShell<'a, S> {
 
     /// The title slot with a slot of your own, for a title that follows the host's menu bar flag.
     pub fn title(mut self, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.title = Some(Placed { slot, edge: PaneEdge::Top, title: true, named: None, add: Box::new(add) });
+        self.title = Some(Placed { slot, edge: PaneEdge::Top, title: true, options: false, named: None, add: Box::new(add) });
         self
     }
 
@@ -386,22 +413,22 @@ impl<'a, S> AppShell<'a, S> {
     /// The options bar, a top slot keyed `"options"` that reveals in body-only mode.
     pub fn options_bar(mut self, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
         let slot = Slot::new(keys::OPTIONS).visible(visible).reveal();
-        self.slots.push(Placed { slot, edge: PaneEdge::Top, title: false, named: Some(|words| words.options.clone()), add: Box::new(add) });
+        self.slots.push(Placed { slot, edge: PaneEdge::Top, title: false, options: true, named: Some(|words| words.options.clone()), add: Box::new(add) });
         self
     }
 
     /// The options bar follows `place`: the top or the bottom slot, or, while floating, a movable modeless layer over
     /// the body that takes no room. A drag of a [`BarGrip`](super::BarGrip) writes the place on the release. Without the
     /// call the bar is the top slot, as [`options_bar`](Self::options_bar) shows it.
-    pub fn options_place(self, place: Bind<'a, OptionsBarPlace>) -> Self {
-        let _ = place;
-        todo!("ch.K10")
+    pub fn options_place(mut self, place: Bind<'a, OptionsBarPlace>) -> Self {
+        self.place = place;
+        self
     }
 
     /// The status bar, a bottom slot keyed `"status"` that never reveals.
     pub fn status(mut self, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
         let slot = Slot::new(keys::STATUS).visible(visible);
-        self.slots.push(Placed { slot, edge: PaneEdge::Bottom, title: false, named: Some(|words| words.status.clone()), add: Box::new(add) });
+        self.slots.push(Placed { slot, edge: PaneEdge::Bottom, title: false, options: false, named: Some(|words| words.status.clone()), add: Box::new(add) });
         self
     }
 
@@ -426,7 +453,7 @@ impl<'a, S> AppShell<'a, S> {
     }
 
     fn place(mut self, edge: PaneEdge, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        self.slots.push(Placed { slot, edge, title: false, named: None, add: Box::new(add) });
+        self.slots.push(Placed { slot, edge, title: false, options: false, named: None, add: Box::new(add) });
         self
     }
 
@@ -459,6 +486,7 @@ impl<'a, S> AppShell<'a, S> {
             embedded,
             content_room,
             mut screen_mode,
+            mut place,
             allow_reveal,
             edge_reveal,
             document_tabs,
@@ -482,7 +510,15 @@ impl<'a, S> AppShell<'a, S> {
         let words = env.words::<ShellWords>();
         let tokens = env.tokens.clone();
         let body_label = body_label.unwrap_or_else(|| words.document.clone());
+        let held = match place.reborrow().get() {
+            Some(Mixed::Same(held)) => held,
+            _ => OptionsBarPlace::default(),
+        };
+        let floating = held.floating;
         let mut slots: Vec<Placed<'a, S>> = title.into_iter().chain(slots).collect();
+        for placed in slots.iter_mut().filter(|placed| placed.options) {
+            placed.edge = if held.bottom { PaneEdge::Bottom } else { PaneEdge::Top };
+        }
         slots.sort_by_key(Placed::rank);
 
         let mut root = if embedded { ShellRegion::embedded() } else { ShellRegion::window() }.id_salt(window.as_str()).label(words.window.clone());
@@ -522,16 +558,17 @@ impl<'a, S> AppShell<'a, S> {
             let claims: Vec<Claim> = slots
                 .iter()
                 .zip(&visible)
-                .filter(|(_, shown)| **shown)
+                .filter(|(placed, shown)| **shown && !(floating && placed.options))
                 .map(|(placed, _)| Claim { key: placed.slot.key(), edge: placed.edge, extent: placed.extent(&tokens), overlay: only })
                 .collect();
             let regions = layout(cx.rect, &claims, rtl);
 
+            let chrome = ChromeState::of(&kept.reveal);
             let tabs = mode.tabs_visible() && document_tabs;
             let mut shell = ShellCx::new(window.clone(), if only { BodyMode::Only } else { BodyMode::Normal }, regions.clone())
                 .with_tabs(tabs)
                 .with_tab_reveal(kept.reveal.tab())
-                .with_panels_hidden(kept.reveal.panels_hidden());
+                .with_panels_hidden(chrome.panels_hidden);
             // The room an embedded shell shows: its rect less what a scroll or a parent clips. Its dialogs are contained in
             // it.
             let region = cx.rect.intersect(ui.clip_rect());
@@ -544,11 +581,21 @@ impl<'a, S> AppShell<'a, S> {
             for edge in [RevealEdge::Top, RevealEdge::Start, RevealEdge::End] {
                 shell = shell.with_edge_reveal(edge, kept.reveal.edge(edge));
             }
-            let panels_hidden = kept.reveal.panels_hidden();
+            // Popups stay above every bottom slot the pass shows, the covering ones included: they are painted there.
+            let shell_rect = if embedded { region } else { cx.rect };
+            let floor = claims
+                .iter()
+                .filter(|claim| claim.edge == PaneEdge::Bottom)
+                .filter_map(|claim| regions.slots.iter().find(|(key, _)| *key == claim.key).map(|(_, rect)| rect.top()))
+                .fold(shell_rect.bottom(), f32::min);
+            let popups = Rect::from_min_max(shell_rect.min, pos2(shell_rect.right(), floor.max(shell_rect.top())));
+            let bar_extent = slots.iter().find(|placed| placed.options).map(|placed| placed.extent(&tokens));
+            let mut landed = None;
+            let mut floated: Vec<(RevealEdge, Rect)> = Vec::new();
 
             let rect_of = |key| regions.slots.iter().find(|(shown, _)| *shown == key).map_or(Rect::ZERO, |(_, rect)| *rect);
             let scope = shell.clone();
-            let mut scope_region = ShellRegion::scope(shell).id_salt("shell");
+            let mut scope_region = ShellRegion::scope(shell).id_salt("shell").popups(popups);
             if content_room.is_some() {
                 scope_region = scope_region.sizing(Sizing::FillWidth);
             }
@@ -558,25 +605,36 @@ impl<'a, S> AppShell<'a, S> {
                 }
                 let mut show_slots = |ui: &mut Ui, covering: bool, app: &mut S| {
                     for (placed, shown) in slots.iter_mut().zip(&visible) {
-                        if !*shown || only != covering {
+                        let floats = floating && placed.options;
+                        // A floating bar is a layer over the body: it shows with the covering slots in every mode.
+                        if !*shown || if floats { !covering } else { only != covering } {
                             continue;
                         }
                         let extent = placed.extent(&tokens);
                         let Placed { slot, edge, named, add, .. } = placed;
-                        let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(rect_of(slot.key()));
-                        // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
-                        // the body.
-                        let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
-                        if let Some(label) = slot.name().cloned().or_else(|| named.map(|name| name(&words))) {
-                            region = region.label(label);
-                        }
+                        let label = slot.name().cloned().or_else(|| named.map(|name| name(&words)));
                         let content = slot.content_version();
-                        region.show(ui, |ui, bcx| match content {
+                        let mut fill = |ui: &mut Ui, bcx: &mut BodyCx<'_>| match content {
                             Some(version) => {
                                 Lazy::new(("slot", slot.key()), 0.0).settles(true).content(version).show(ui, |ui| add(ui, bcx, app));
                             }
                             None => add(ui, bcx, app),
-                        });
+                        };
+                        if floats {
+                            let corner = held.corner(regions.body, tokens.space.gap.section);
+                            let overlay = Overlay::floating().modeless().bounds(regions.body).placed_at(corner).body_scroll(false);
+                            let layer = FloatingBar::new(overlay, label).id_salt(("slot", slot.key())).show(ui, &mut fill);
+                            floated.extend(edge.reveal_edge().map(|edge| (edge, layer.output.response.rect)));
+                        } else {
+                            let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(rect_of(slot.key()));
+                            // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
+                            // the body.
+                            let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
+                            if let Some(label) = label {
+                                region = region.label(label);
+                            }
+                            region.show(ui, &mut fill);
+                        }
                     }
                 };
                 show_slots(ui, false, app);
@@ -598,11 +656,21 @@ impl<'a, S> AppShell<'a, S> {
                     let bottom: f32 = claims.iter().filter(|claim| claim.edge == PaneEdge::Bottom && !claim.overlay).map(|claim| claim.extent).sum();
                     crate::runtime::egui::alloc::reach_down_to(ui, shown.output.response.rect.max.y + bottom);
                 }
+                if let Some(bar) = bar_extent.filter(|_| !bare) {
+                    let target = PlaceTarget { body: regions.body, bar, held };
+                    let zone = DropZone::new(ui.layer_id(), regions.body);
+                    landed = zone_target::<OptionsBarDrag, _>(ui, ui.id().with("options_place"), zone, &target);
+                }
                 show_slots(ui, true, app);
                 if let Some(dialogs) = WindowDialogs::existing(ui.ctx(), &window) {
                     dialogs.run(ui);
                 }
             });
+            // The place is written only from a taken drop; a drop that leaves it as it is writes nothing.
+            if let Some(landing) = landed.filter(|landing| landing.place != held) {
+                let event = EditEvent::set(Mixed::Same(held), landing.place, Arc::from(words.move_bar.as_str()), None);
+                let _ = place.reborrow().write(cx, &event);
+            }
             // What shows here counts for the shell around this one too, so a host reads it from its own shell.
             if scope.dialogs_shown() > 0
                 && !ui.is_sizing_pass()
@@ -623,10 +691,11 @@ impl<'a, S> AppShell<'a, S> {
                 })
                 .collect();
             edges.extend(scope.revealed_rects());
+            edges.extend(floated);
             kept.reveal.record(edges);
             let revealed = only && !regions.slots.is_empty();
             *cx.keep::<ShellState>() = kept;
-            Parts { regions, revealed, panels_hidden, mode }
+            Parts { regions, revealed, panels_hidden: chrome.panels_hidden, mode }
         };
         let shown = match at {
             Some(rect) => root.show_at_taking_room(ui, rect, shell_body),

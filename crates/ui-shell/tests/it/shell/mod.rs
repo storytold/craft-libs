@@ -6,6 +6,7 @@ mod caption_button;
 mod document_window;
 mod embed;
 mod opening;
+mod options_place;
 mod reveal;
 mod screen_mode;
 mod start;
