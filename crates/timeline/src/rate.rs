@@ -63,7 +63,7 @@ pub fn rate_from_f64(r: f64) -> FrameRate {
 // ---------------------------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 

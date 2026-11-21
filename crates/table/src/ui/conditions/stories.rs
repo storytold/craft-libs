@@ -1,7 +1,8 @@
-//! Stories of `ConditionBuilder`: a nested group, a date-range rule and a group problem.
+//! Stories of `ConditionBuilder`: a nested group, a date-range rule and a group problem; the joined layout at its rule limit.
 
-use super::{Condition, ConditionBuilder, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionValue, Match};
-use craft_ui::contract::Bind;
+use super::{
+    Condition, ConditionBuilder, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionLayout, ConditionValue, Join, Match,
+};
 use craft_ui::pickers::PickedDate;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -66,6 +67,28 @@ fn rules() -> ConditionGroup {
 
 #[story(ConditionBuilder<'static>, covers = [Default], drive = Drive::Never)]
 fn condition_builder(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let group = data.value("group", rules());
-    ConditionBuilder::new("Rules", Bind::bound(group), &Photos).show(ui).into()
+    let (group, group_at) = data.value_at("group", rules());
+    ConditionBuilder::new("Rules", group_at.bind(group), &Photos).show(ui).into()
+}
+
+/// Three rules in the joined layout, the third joined to the second by Or, at the rule limit so "+ Rule" is disabled.
+#[story(ConditionBuilder<'static>, covers = [], drive = Drive::Never)]
+fn condition_builder_joined(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rule = |field: &str, operator: &str, value, join| {
+        let mut rule = Condition::new(field, operator, value);
+        rule.join = join;
+        ConditionItem::Rule(rule)
+    };
+    let (group, group_at) = data.value_at(
+        "joined",
+        ConditionGroup::new(
+            Match::All,
+            vec![
+                rule("name", "contains", ConditionValue::Text("beach".into()), Join::And),
+                rule("rating", "is", ConditionValue::Number(4.0), Join::And),
+                rule("name", "is", ConditionValue::Text("dune".into()), Join::Or),
+            ],
+        ),
+    );
+    ConditionBuilder::new("Rules", group_at.bind(group), &Photos).layout(ConditionLayout::Joined).max_rules(3).show(ui).into()
 }

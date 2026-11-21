@@ -4,13 +4,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::Mixed;
-use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorPopover, ColorReadout, ColorWarning, PickedColor};
+use craft_color_ui::ui::{
+    ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab, ColorPopover, ColorReadout, ColorWarning, PickedColor,
+};
 use craft_host::{AppInfo, Host};
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, OklchModel, RgbModel, Rgba, Size, Srgba, ThemeId};
 use craft_ui::contract::{Bind, Role, ShowContainer as _};
-use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog, dialog_id};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rect, vec2};
 
@@ -381,4 +384,95 @@ fn the_compact_picker_is_as_wide_as_its_area_and_strip_wherever_it_opens() {
     }
     assert!(first.0.x > first.0.y, "the compact area is wider than tall");
     assert!(first.1 > first.0.x, "the rows reach past the area, to the strip's end");
+}
+
+/// A field of the open dialog as automation reads it.
+fn dialog_field(dialogs: &Rc<RefCell<DialogHost>>, name: &str) -> Option<serde_json::Value> {
+    dialogs.borrow().get::<ColorPickerDialog>().and_then(|dialog| dialog.json_fields()).and_then(|fields| fields.get(name).cloned())
+}
+
+/// The current colour of the open dialog as `#rrggbb`.
+fn dialog_color(dialogs: &Rc<RefCell<DialogHost>>) -> Option<String> {
+    dialogs.borrow().get::<ColorPickerDialog>().and_then(|dialog| dialog.current()).map(|picked| picked.color.to_hex())
+}
+
+/// The tabbed dialog opens on the tab it was given; a hex typed on Custom and a honeycomb cell picked on Standard both
+/// reach the answer, and the tab is a field automation reads and sets.
+#[trial]
+fn the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page() {
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(vec2(900.0, 700.0));
+    fixture.host(std::sync::Arc::new(Host::builder(AppInfo { id: "picker-test", name: "Picker test", version: "0" }).build()));
+    let ctx = fixture.ctx().clone();
+    let id = dialog_id(("color-picker", "fill"));
+    let colour = |hex: &str| Srgba::from_hex(hex).expect("a colour");
+    let cells: Vec<(Label, Srgba)> = ["#ff0000", "#00ff00", "#0000ff", "#ffff00"]
+        .iter()
+        .enumerate()
+        .map(|(at, hex)| (Label::from(format!("Standard {at}")), colour(hex)))
+        .collect();
+    let greys = vec![(Label::from("Gray 1"), colour("#808080"))];
+
+    dialogs.borrow_mut().open(
+        ColorPickerDialog::new("fill", "Fill", colour("#123456"))
+            .layout(ColorPickerDialogLayout::Tabbed)
+            .standard(cells, greys)
+            .tab(ColorPickerTab::Custom)
+            .web_colors_remembered(false),
+    );
+    fixture.idle(6);
+    assert_eq!(dialog_field(&dialogs, "tab"), Some(serde_json::json!("custom")), "the dialog opens on the tab it was given");
+    assert!(fixture.by_label("Hex color").is_some(), "the Custom page shows the compact picker");
+    assert!(fixture.by_label("Standard 0").is_none(), "and not the honeycomb");
+    assert_eq!(dialog_field(&dialogs, "model"), Some(serde_json::Value::Null), "no model is picked yet");
+    assert!(fixture.by_label("Red").is_none(), "the first model (HSB) shows no red channel");
+    let set = dialogs.borrow_mut().set_json_field(&ctx, id, "model", serde_json::json!(RgbModel.id()));
+    assert_eq!(set, Ok(()), "the model of the Custom page is a field");
+    fixture.idle(6);
+    assert_eq!(dialog_field(&dialogs, "model"), Some(serde_json::json!(RgbModel.id())), "the field names the model shown");
+    assert!(fixture.by_label("Red").is_some(), "and the compact rows show that model's channels");
+
+    type_into(&mut fixture, "Hex color", "336699");
+    assert_eq!(dialog_color(&dialogs).as_deref(), Some("#336699"), "a hex typed on Custom is the colour");
+
+    let set = dialogs.borrow_mut().set_json_field(&ctx, id, "tab", serde_json::json!("standard"));
+    assert_eq!(set, Ok(()), "the tab is a field of the dialog");
+    fixture.idle(6);
+    assert!(fixture.by_label("Hex color").is_none(), "Standard shows no hex field");
+    let cell = fixture.by_label("Standard 2").expect("the honeycomb shows its cells");
+    fixture.click(&cell);
+    fixture.idle(4);
+    assert_eq!(dialog_color(&dialogs).as_deref(), Some("#0000ff"), "a honeycomb pick is the colour");
+
+    assert!(dialogs.borrow_mut().confirm::<ColorPickerDialog>(&ctx), "OK answers");
+    let answered = dialogs.borrow_mut().take::<ColorPickerDialog>().and_then(DialogResult::ok).map(|result| result.picked.color.to_hex());
+    assert_eq!(answered.as_deref(), Some("#0000ff"));
+}
+
+/// The Full dialog opens with its hex field focused and selected; digits typed there and Enter commit the colour and
+/// confirm the dialog, as in the reference image editor's Color Picker (the tabbed Colors dialog keeps Enter in the
+/// field instead).
+#[trial]
+fn enter_in_the_full_dialogs_hex_field_confirms_the_typed_colour() {
+    let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&dialogs);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(vec2(900.0, 700.0));
+    fixture.host(std::sync::Arc::new(Host::builder(AppInfo { id: "picker-test", name: "Picker test", version: "0" }).build()));
+    let colour = |hex: &str| Srgba::from_hex(hex).expect("a colour");
+    dialogs
+        .borrow_mut()
+        .open(ColorPickerDialog::new("foreground", "Color Picker (Foreground Color)", colour("#000000")).web_colors_remembered(false));
+    fixture.idle(6);
+    assert!(dialogs.borrow().get::<ColorPickerDialog>().is_some(), "the picker is open");
+
+    fixture.type_text("336699");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert!(dialogs.borrow().get::<ColorPickerDialog>().is_none(), "Enter in the hex field confirms the dialog");
+    let answer = dialogs.borrow_mut().take::<ColorPickerDialog>();
+    let Some(DialogResult::Ok(result)) = answer else { panic!("the dialog answers OK") };
+    assert_eq!(result.picked.color.to_hex(), "#336699", "with the typed colour");
 }

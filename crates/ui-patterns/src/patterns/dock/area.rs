@@ -4,7 +4,7 @@
 use super::hide::{self, Shown};
 use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Cx, Entry, Lazy, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Bind, BindMut, BodyCx, Cx, Entry, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
@@ -35,8 +35,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A layout the dock cannot show: the workspace failed `Workspace::validate`. The area draws nothing for it.
 #[derive(Clone, Debug, PartialEq)]
@@ -204,7 +204,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         let sizes = *cx.style.sizes();
         let shell = cx.env.get::<ShellEntry>().0;
         let bounds = shell.as_ref().map_or(cx.rect, ShellCx::float_bounds);
-        let space = float_space(bounds, &sizes, self.config, self.specs);
+        let space = float_space(&ctx, bounds, &sizes, self.config, self.specs);
         let spec = |panel: &P| spec_in(self.specs, panel);
         let protected = |panel: &P| (self.permissions)(panel).is_protected();
         let (hide, _) = hide::resolved(self.hide, shell.as_ref());
@@ -247,9 +247,6 @@ struct Scene<'s, P> {
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
-    /// The key of what every region of the chrome shows of the pass beyond its own room ([`chrome_key`]); `None` when
-    /// the host gives no [`DockPanels::spec_version`], and the chrome runs every pass.
-    chrome: Option<u64>,
 }
 
 /// The spec of `panel` in `specs`, or an unnamed one.
@@ -300,7 +297,6 @@ struct Look {
 /// gave any, and the panel commands' states.
 struct GroupParts {
     titles: Vec<PanelTitle>,
-    menu: Vec<PanelRow>,
     hosted: bool,
     states: Vec<(DockCommands, CommandState)>,
 }
@@ -410,7 +406,6 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 hide,
                 maximized: maximized.as_ref(),
                 auto_collapse,
-                locked,
                 sizes,
                 rtl,
             };
@@ -509,7 +504,6 @@ struct Input<'i, P> {
     hide: HidePanels<'i, P>,
     maximized: Option<&'i P>,
     auto_collapse: bool,
-    locked: bool,
     sizes: DockSizes,
     rtl: bool,
 }
@@ -536,7 +530,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, locked, sizes, rtl } = *input;
+    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, sizes, rtl } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let keys: HashMap<PanelKey, P> = current.layout.panels().into_iter().map(|panel| (PanelKey::of(panel), panel.clone())).collect();
@@ -544,8 +538,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let Shown { view, floating } = hide::shown(&current.layout, maximized, hide, shell.as_ref(), &protected);
     let layout: &Layout<P> = &view.layout;
     let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
-    let space = float_space(bounds, &sizes, config, specs);
-    let chrome = panels.spec_version().map(|version| chrome_key(layout, version, config, locked, auto_collapse));
+    let space = float_space(ctx, bounds, &sizes, config, specs);
     let scene = Scene {
         dock: id,
         sizes,
@@ -559,7 +552,6 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         auto_collapse,
         rtl,
         floated: &current.floated,
-        chrome,
     };
     let open = open_of(&mut flyout, body, &memory);
     let mut pass = Pass {
@@ -597,8 +589,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
                 let Some(path) = scene.layout.dock_path(edge) else { continue };
                 let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
                 leaves.push((path.clone(), rect));
-                if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed() && crate::runtime::measure::effect(ctx, "shell::reveal_rect")) {
-                    shell.reveal_rect(if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
+                if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed()) {
+                    shell.reveal_rect(ctx, if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
                 }
                 pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
             }
@@ -702,9 +694,16 @@ fn register_bands<P: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
 }
 
 /// Where floats land in an area whose float bounds are `bounds`: each panel at its spec's float size, else the
-/// default float size of `sizes`.
-fn float_space<P: Clone + PartialEq>(bounds: Rect, sizes: &DockSizes, config: &DockConfig, specs: &HashMap<P, PanelSpec>) -> FloatSpace<P> {
-    let mut space = FloatSpace::new(bounds, sizes).with_side_edge_zones(config.side_edge_zones);
+/// default float size of `sizes`, under the chrome of the windows the dock opens floats in.
+fn float_space<P: Clone + PartialEq>(
+    ctx: &Context,
+    bounds: Rect,
+    sizes: &DockSizes,
+    config: &DockConfig,
+    specs: &HashMap<P, PanelSpec>,
+) -> FloatSpace<P> {
+    let mut space =
+        FloatSpace::new(bounds, sizes).in_os_windows(sizes, native::opens_os_windows(ctx, config)).with_side_edge_zones(config.side_edge_zones);
     for (panel, spec) in specs {
         if let Some(size) = spec.float_size {
             space = space.with_panel_size(panel.clone(), size);
@@ -755,51 +754,6 @@ fn panel_menu_rows<P: Clone + Eq + Hash>(
     }
     rows.extend(group);
     (rows, hosted)
-}
-
-/// The key of what the chrome's regions show beyond their own room: the host's panel specs (`version`), the config,
-/// whether the workspace is locked, Auto-Collapse, and the shown arrangement: which panels each group, column and
-/// floating window holds, the shown tab, and the minimized, open, iconic and stepped states, which the panel menus'
-/// command states and move targets read across groups. Sizes are left out: a size reaches a region as its room.
-fn chrome_key<P: Hash>(layout: &Layout<P>, version: u64, config: &DockConfig, locked: bool, auto_collapse: bool) -> u64 {
-    use std::hash::Hasher;
-    fn column<P: Hash>(shown: &Column<P>, hasher: &mut impl Hasher) {
-        (shown.iconic, shown.steps, shown.groups.len()).hash(hasher);
-        for group in &shown.groups {
-            (&group.panels, group.active, group.minimized).hash(hasher);
-        }
-    }
-    fn node<P: Hash>(shown: &Node<P>, hasher: &mut impl Hasher) {
-        std::mem::discriminant(shown).hash(hasher);
-        match shown {
-            Node::Split { first, second, .. } => {
-                node(first, hasher);
-                node(second, hasher);
-            }
-            Node::Tabs { panels, active, .. } => (panels, active).hash(hasher),
-            Node::Stack { entries, .. } => {
-                for entry in entries {
-                    (&entry.panel, entry.open).hash(hasher);
-                }
-            }
-            Node::Dock { side, columns, .. } => {
-                side.hash(hasher);
-                columns.iter().for_each(|one| column(one, hasher));
-            }
-            // `Node` is non_exhaustive: a variant added later hashes only its discriminant until it is listed here.
-            _ => {}
-        }
-    }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    (version, config, locked, auto_collapse).hash(&mut hasher);
-    if let Some(root) = &layout.root {
-        node(root, &mut hasher);
-    }
-    for window in &layout.floating {
-        (window.id, window.edge).hash(&mut hasher);
-        column(&window.column, &mut hasher);
-    }
-    hasher.finish()
 }
 
 /// Whether `spec` is a document's: its group shows its body edge to edge. Every other docked body fills its group's
@@ -902,26 +856,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             return Some(height);
         }
         let shown = &members[active];
-        let content = self.panels.content(shown);
-        // A host view settles as a panel body does, under the shown panel's content version (`DockPanels::content`):
-        // it runs again when that version, the group's panels or the shown tab change.
-        let view_version = content.map(|content| {
-            use std::hash::Hasher;
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (content, members, active).hash(&mut hasher);
-            hasher.finish()
-        });
-        // The group settles when the host versions its specs and the shown body: it runs again when the pass's chrome
-        // key, the body's version or how the group shows changes.
-        let version = scene.chrome.zip(content).map(|(chrome, content)| {
-            use std::hash::Hasher;
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (chrome, content, members, active, look.minimized, look.section, look.in_window).hash(&mut hasher);
-            hasher.finish()
-        });
         let words = body.words::<MenuWords>();
         let panels = RefCell::new(&mut *self.panels);
         // The tab titles, the menu rows and the panel commands' states, built when the group runs.
+        // The tab titles, whether the host gives menu rows and the panel commands' states, built once per pass; the
+        // menu's rows are built only while it is open.
         let parts: OnceCell<GroupParts> = OnceCell::new();
         let parts_of = || {
             parts.get_or_init(|| {
@@ -929,22 +868,23 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .iter()
                     .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
                     .collect();
-                let (menu, hosted) = panel_menu_rows(scene, &mut **panels.borrow_mut(), &words, shown);
+                let hosted = !panels.borrow_mut().panel_rows(shown).is_empty();
                 let permissions = |panel: &P| scene.permissions(panel);
                 let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
-                GroupParts { titles, menu, hosted, states }
+                GroupParts { titles, hosted, states }
             })
         };
         // The group with `members[at]` shown: as it shows, or as it is measured.
         let make = |at: usize, minimized: bool| {
             let panels = &panels;
-            let GroupParts { titles, menu, hosted, states } = parts_of();
+            let words = &words;
+            let GroupParts { titles, hosted, states } = parts_of();
             let mut group = DockGroup::new(anchor.clone(), titles, PanelKey::of(&members[at]))
                 .extra(move |ui, body| panels.borrow_mut().group_header(members, at, ui, body))
                 .dock(self.dock)
                 .zones(scene.config.zone_rule())
                 .movable(scene.permissions(shown).movable)
-                .menu(menu.clone())
+                .menu(move || panel_menu_rows(scene, &mut **panels.borrow_mut(), words, shown).0)
                 .panel_menu_shown(*hosted)
                 .command_states(states.clone());
             if look.in_window {
@@ -970,50 +910,27 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             GroupAt::Show(rect) => rect,
         };
-        // One child `Ui` held to the group's rect, whether the group settles or not. It takes the parent's next id, as
-        // the group did before it settled, so a change of the group's first tab keeps every id inside; each Lazy is
-        // keyed by its `Ui`'s id, unique among the groups of a dock in a scroll area too. The host view runs first and
-        // settles; where the host leaves the group to the dock, the group shows in its place and settles under its own
-        // version.
+        // One child `Ui` held to the group's rect. It takes the parent's next id, so a change of the group's first tab
+        // keeps every id inside. The host's view runs first, held to the group's rect and clipped to it: it lays out in
+        // the group's room, never in the room the area has left. Where the host leaves the group to the dock, the
+        // group shows in its place. Both run every pass; the host memoizes inside its view, the group inside its
+        // header and its bodies.
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                let view = Lazy::new(ui.unique_id(), 0.0).settles(view_version.is_some());
-                let view = match view_version {
-                    Some(version) => view.content(version),
-                    None => view,
-                };
-                view.show_or(
-                    ui,
-                    |ui| {
-                        // The view draws held to the group's rect and clipped to it: it lays out in the group's room,
-                        // never in the room the area has left.
-                        let taken = ui
-                            .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                                ui.shrink_clip_rect(rect);
-                                panels.borrow_mut().group_view(members, active, ui, at, body)
-                            })
-                            .inner;
-                        // The run covers the group, so the pointer over it runs the view again.
-                        taken.map(|_| ui.expand_to_include_rect(rect))
-                    },
-                    |ui| {
-                        let lazy = Lazy::new(ui.unique_id(), 0.0).settles(version.is_some());
-                        let lazy = match version {
-                            Some(version) => lazy.content(version),
-                            None => lazy,
-                        };
-                        lazy.show(ui, |ui| {
-                            let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
-                            // `show_at` takes no room in flow; the run covers the group, so the pointer over it runs it again.
-                            ui.expand_to_include_rect(rect);
-                            output
-                        })
-                    },
-                )
+                let taken = ui
+                    .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                        ui.shrink_clip_rect(rect);
+                        panels.borrow_mut().group_view(members, active, ui, at, body)
+                    })
+                    .inner;
+                match taken {
+                    Some(_) => None,
+                    None => Some(make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output),
+                }
             })
             .inner;
-        // A host view took the group, or a settled view or group replayed its last run: nothing reached it.
-        let output = output.and_then(Result::err).flatten()?;
+        // A host view took the group.
+        let output = output?;
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
         let fitted = |ui: &Ui, panel: &P| {
@@ -1094,8 +1011,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     }
 
     /// The steps a resize `change` of the floating window of the stepped `column`, whose first panel is `first`, sets,
-    /// and the window's rect at them: as wide as its steps and as tall as its title row and its content at that width.
-    /// `fitted` is the content's size under the title row before the change. A grip on the top or bottom edge sets the
+    /// and the window's rect at them: as wide as its steps and as tall as its chrome and its content at that width.
+    /// `fitted` is the content's size under the chrome before the change, `chrome` the height above the window's body
+    /// (`DockSizes::window_chrome`). A grip on the top or bottom edge sets the
     /// steps by height (the fewest whose content fits), any other grip by width (the most that fit); keyboard Size
     /// mode, which names no grip, by the side it changed. The window keeps its place: a grip on the left keeps the
     /// right edge where it is and one on the top the bottom edge, so the window grows or shrinks that way. Reports
@@ -1107,7 +1025,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         column: &Column<P>,
         first: &P,
         change: &PlacementChange,
-        fitted: Vec2,
+        (fitted, chrome): (Vec2, f32),
     ) -> Option<Rect> {
         let scene = self.scene;
         let spec_of = |panel: &P| scene.spec(panel);
@@ -1117,7 +1035,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             _ => (change.rect.width() - fitted.x).abs() <= 0.5,
         };
         let to = if by_height {
-            let room = change.rect.height() - scene.sizes.title_row;
+            let room = change.rect.height() - chrome;
             grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
         } else {
             grid.steps_within(change.rect.width())
@@ -1125,7 +1043,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         if to != steps {
             self.report.actions.push(Action::set_column_steps(first.clone(), to));
         }
-        let size = Vec2::new(grid.width(to), scene.sizes.title_row + self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0));
+        let size = Vec2::new(grid.width(to), chrome + self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0));
         let left = match change.kind {
             PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - size.x,
             _ => change.rect.left(),
@@ -1187,28 +1105,22 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
         let work = if column.iconic {
-            let mut shown = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
+            let shown = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
                 .edge(edge)
                 .opens(opens)
                 .bar(bar)
                 .within(within)
                 .auto_collapse(scene.auto_collapse);
-            if let Some(chrome) = scene.chrome {
-                shown = shown.content(chrome);
-            }
             let output = shown.show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
             self.report.flyout.extend(output.edit.events);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
         } else {
-            let mut shown = DockColumn::new(name, dock, column, &spec)
+            let shown = DockColumn::new(name, dock, column, &spec)
                 .edge(edge)
                 .bar(bar)
                 .arrow(self.arrow_of(column))
                 .within(within)
                 .auto_collapse(scene.auto_collapse);
-            if let Some(chrome) = scene.chrome {
-                shown = shown.content(chrome);
-            }
             let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
                 self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
             });
@@ -1273,7 +1185,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// double arrow sits at that end, and its collapsed column shows against that edge of its rect. A move or resize
     /// keeps the edge the window had when it began, so nothing jumps while the window crosses the middle. A collapsed
     /// window's move ends at the edge nearer the strip where it was dropped, with the rect that shows the strip there
-    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. An OS window is measured
+    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. A collapsed window's sides
+    /// resize its column's width within [`DockSizes::iconic_bounds`] (`Action::ResizeIconic`, as a docked collapsed
+    /// column's inner edge does), and the window keeps its edge and its expanded rect's size. An OS window is measured
     /// where it would sit in the app window ([`native::in_app`]), and the end of each of its moves and resizes records
     /// that rect and edge; its placement keeps its expanded rect while its column is collapsed ([`WindowColumn::kept`]).
     ///
@@ -1334,7 +1248,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let width = scene.sizes.expanded_width(&window.column, &spec_of);
             let shape = if window.column.iconic {
                 let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
-                WindowColumn::collapsed(edge, size)
+                WindowColumn::collapsed(edge, size, scene.sizes.iconic_bounds(&window.column, &spec_of))
             } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
                 WindowColumn::fitted(edge, Vec2::new(width, content))
             } else {
@@ -1380,12 +1294,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
             }
+            // The height above the window's body: the title row, and in the app window the band over it.
+            let chrome = scene.sizes.window_chrome(opening.spec.is_none());
             // A resize of a window whose column has steps: the steps it sets, and the window's rect at them.
             let resized = output
                 .placed
                 .filter(|change| !matches!(change.kind, PlacementKind::Move))
                 .zip(shape.fitted)
-                .and_then(|(change, fitted)| self.stepped_resize(ui, body, &window.column, &anchor, &change, fitted));
+                .and_then(|(change, fitted)| self.stepped_resize(ui, body, &window.column, &anchor, &change, (fitted, chrome)));
             if opening.spec.is_some() {
                 if let Some(viewport) = WindowHost::of(&ctx).viewport_of(output.response.id) {
                     // The OS window takes the rect of its steps at once, so the place recorded below is that rect.
@@ -1402,18 +1318,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         && let Some(change) = output.placed.filter(|change| change.phase == GesturePhase::Commit)
                         && let Some(rect) = native::in_app(&ctx, change.rect)
                     {
-                        let (rect, keeps) = shape.dropped(rect, scene.bounds, scene.rtl);
+                        // A resize of a collapsed window keeps its edge; a move ends where its strip was dropped.
+                        let (rect, keeps) =
+                            if output.collapsed_width.is_some() { (rect, Some(edge)) } else { shape.dropped(rect, scene.bounds, scene.rtl) };
                         kept.edge = keeps.unwrap_or(kept.edge);
                         self.report.actions.push(Action::move_floating_with_edge(anchor.clone(), rect, keeps));
                     }
-                    let title_row = scene.sizes.title_row;
-                    let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, title_row, scene.rtl));
+                    let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, chrome, scene.rtl));
                     self.report.actions.extend(reported);
                 }
             } else if let Some(mut change) = output.placed {
                 // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
                 let mut keeps = shape.collapsed.map(|_| edge);
-                if change.phase == GesturePhase::Commit {
+                if change.phase == GesturePhase::Commit && output.collapsed_width.is_none() {
                     (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
                 }
                 // The window keeps the place of its steps; its size is the steps' own, whatever the rect keeps.
@@ -1425,6 +1342,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 }
                 moved = Some((anchor.clone(), change, keeps));
             }
+            // The sides of a collapsed window set its column's width, as a docked collapsed column's inner edge does.
+            if let Some(width) = output.collapsed_width {
+                let work = ColumnWork { iconic: None, picked: None, resized: Vec::new(), width: Some(width), flyout: None };
+                self.column_work(&window.column, work);
+            }
             // The OS close of a native window arrives here as well, also where the title row offers no Close.
             if output.action == Some(HeaderAction::Close) && rights.iter().all(|rights| rights.closable) {
                 self.report.actions.push(Action::close_window(anchor.clone()));
@@ -1433,7 +1355,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 self.pick(&active, item);
             }
             // The window's commands run from its body, below the title row.
-            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.title_row);
+            let body = opening.rect.size() - Vec2::new(0.0, chrome);
             for command in commands {
                 self.run(&active, command, Some(body));
             }
@@ -1504,13 +1426,7 @@ fn window_edit<P: Clone + Eq + Hash>(
     }
 }
 
-/// Shows `panel`'s body in a group's body; a panel with a content version settles (`DockPanels::content`).
+/// Shows `panel`'s body in a group's body. It runs every pass the group shows; the host memoizes inside it.
 fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, panel: &P, ui: &mut Ui, body: &mut BodyCx<'_>) {
-    let content = panels.borrow().content(panel);
-    match content {
-        Some(version) => {
-            Lazy::new(("panel", PanelKey::of(panel).0), 0.0).settles(true).content(version).show(ui, |ui| panels.borrow_mut().body(panel, ui, body));
-        }
-        None => panels.borrow_mut().body(panel, ui, body),
-    }
+    panels.borrow_mut().body(panel, ui, body);
 }

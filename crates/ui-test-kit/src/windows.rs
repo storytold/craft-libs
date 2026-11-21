@@ -26,7 +26,8 @@ thread_local! {
     static CHILD_INFO: RefCell<ViewportInfo> = RefCell::new(ViewportInfo::default());
     /// The window facts the root reports.
     static ROOT_INFO: RefCell<ViewportInfo> = RefCell::new(ViewportInfo::default());
-    /// The children that ran a pass so far: like an integration, every pass's input lists all the windows.
+    /// The children whose windows are open: those that ran a pass and are still shown. Like an integration, every pass's
+    /// input lists all the windows.
     static CHILDREN: RefCell<Vec<ViewportId>> = const { RefCell::new(Vec::new()) };
     /// The window commands every pass's output carried since the last frame.
     static COMMANDS: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
@@ -259,6 +260,9 @@ impl Windows {
         ROOT_INFO.with(|info| *info.borrow_mut() = self.root_info.borrow().clone());
         input.viewports = all_viewports(CHILD_INFO.with(|info| info.borrow().clone()));
         let mut output = self.ctx.run_ui(input, ui);
+        // A child the frame no longer shows has closed: like an integration, the kit drops its window, so later inputs
+        // stop listing it (and what its last pass left, such as a modal, stops counting).
+        CHILDREN.with(|children| children.borrow_mut().retain(|id| output.viewport_output.contains_key(id)));
         output.textures_delta.clear();
         keep_commands(&output);
         keep_tree(&mut output, ViewportId::ROOT);

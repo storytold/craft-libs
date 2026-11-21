@@ -32,6 +32,7 @@ const HEART_POINTS: usize = 32;
 
 /// One entry of the shape menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "ui", derive(craft_ui::contract::MemoProps))]
 #[non_exhaustive]
 pub enum ShapePreset {
     /// A rectangle.

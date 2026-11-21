@@ -19,8 +19,8 @@ use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The LUT picker's rows, English by default, and the built-in looks' names in

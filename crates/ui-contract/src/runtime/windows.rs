@@ -144,6 +144,8 @@ pub(crate) struct Record {
     known: Option<Rect>,
     /// The place the window's own pass last saw.
     seen: Option<Rect>,
+    /// The smallest inner size its caller asks for, as the window's builder carries it.
+    min_size: Option<Vec2>,
 }
 
 /// Passes between searches for an OS window that was not found.
@@ -176,6 +178,14 @@ fn shared<R>(ctx: &Context, f: impl FnOnce(&mut Shared) -> R) -> R {
 #[cfg(feature = "testing")]
 pub(crate) fn take_sent(ctx: &Context) -> Vec<(ViewportId, WindowAction)> {
     shared(ctx, |shared| std::mem::take(&mut shared.sent))
+}
+
+/// Whether the OS resizes `viewport`'s window from a frame of its own: it draws the frame (macOS `Inset`, a titled
+/// window under the app's bar) and the window is resizable. A window its caller sizes opens not resizable, so the OS
+/// leaves it to the app's grips.
+pub(crate) fn os_resizes(ctx: &Context, viewport: ViewportId) -> bool {
+    let chrome = shell_of(ctx, viewport).window.chrome;
+    chrome == WindowChrome::Inset && PerViewport::<Record>::with(ctx, viewport, |record| record.resizable != Some(false))
 }
 
 /// Whether the app runs the move of `viewport`'s window (`Overlay::moved_by_app`).

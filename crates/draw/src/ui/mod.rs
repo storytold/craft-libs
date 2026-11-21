@@ -77,11 +77,11 @@ pub use crop::{
     CropPresetList, CropPresetListOutput, CropSizeTarget, PerspectiveCropBar, PerspectiveCropBarOutput, PerspectiveCropPass, PerspectiveInput,
 };
 pub use crop::{PerspectiveCropQuad, PerspectiveQuad};
-pub use gradient::{GradientFill, GradientFillEditor, GradientFillEditorOutput, GradientFillWords, GradientStyle};
 pub use gradient::{
-    GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput, GradientOverlay, GradientPalette, GradientRef,
-    GradientSwatch, LineGradient, LinePart,
+    FocusOutline, GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput, GradientOverlay, GradientPalette,
+    GradientRef, GradientSwatch, GradientTile, LineGradient, LinePart,
 };
+pub use gradient::{GradientFill, GradientFillEditor, GradientFillEditorOutput, GradientFillWords, GradientStyle};
 pub use measure::{
     MIN_LINE, RulerBar, RulerBarOutput, RulerLine, RulerOverlay, RulerPass, RulerTool, RulerWords, box_distances, ruler_line_form, show_ruler,
 };

@@ -12,7 +12,7 @@ use egui::{Response, Ui};
 use std::sync::Arc;
 
 use super::labels::ChannelsWords;
-use super::model::{ChannelKind, ChannelRow, ChannelsEvent, ColorIndicates, OVERLAY_OPACITIES, OverlayPreset, targeted_row};
+use super::model::{ChannelKind, ChannelRow, ChannelsEvent, ColorIndicates, OVERLAY_OPACITIES, OverlayPreset, targeted_for_delete, targeted_row};
 
 /// The commands of the Channels panel: its panel-menu rows, its row menu, and the keys of the list.
 ///
@@ -217,10 +217,14 @@ impl ChannelsCommands {
         }
     }
 
+    fn applies_to_row<K>(self, row: Option<&ChannelRow<K>>) -> bool {
+        self.applies_to(row.map(|row| row.kind)) || (self == Self::Delete && row.is_some_and(ChannelRow::can_delete_color))
+    }
+
     /// The event the command makes over `rows` with the modifiers `mods` held; `None` when it does nothing there.
     /// Rename has no event: the panel opens the row's rename field.
     pub fn event<K: Clone + PartialEq>(self, rows: &[ChannelRow<K>], mods: Mods) -> Option<ChannelsEvent<K>> {
-        let target = targeted_row(rows)?;
+        let target = if self == Self::Delete { targeted_for_delete(rows) } else { targeted_row(rows) }?;
         match self {
             ChannelsCommands::LoadSelection => {
                 Some(ChannelsEvent::LoadSelection { key: target.key.clone(), operation: SelectionOperation::from_mods(mods) })
@@ -229,7 +233,7 @@ impl ChannelsCommands {
             ChannelsCommands::ChannelOptions => target.kind.has_options().then(|| ChannelsEvent::Options(target.key.clone())),
             ChannelsCommands::RenameChannel => None,
             command => {
-                self.applies_to(Some(target.kind)).then(|| ChannelsEvent::Command { command, key: command_key(command).then(|| target.key.clone()) })
+                self.applies_to_row(Some(target)).then(|| ChannelsEvent::Command { command, key: command_key(command).then(|| target.key.clone()) })
             }
         }
     }
@@ -294,7 +298,7 @@ fn add_commands(lines: &mut Vec<Plan>, commands: &[ChannelsCommands]) {
 }
 
 /// The menu lines for a row of `kind`; with no row, the document's.
-fn plan(kind: Option<ChannelKind>) -> Vec<Plan> {
+fn plan(kind: Option<ChannelKind>, can_delete_color: bool) -> Vec<Plan> {
     use ChannelsCommands as C;
     let mut lines: Vec<Plan> = Vec::new();
     match kind {
@@ -313,6 +317,7 @@ fn plan(kind: Option<ChannelKind>) -> Vec<Plan> {
             lines.extend(overlay_plan());
         }
         Some(ChannelKind::LayerMask(_)) => add_commands(&mut lines, &[C::ToggleLayerMask, C::DeleteLayerMask, C::ChannelOptions]),
+        Some(ChannelKind::Color) if can_delete_color => add_commands(&mut lines, &[C::Duplicate, C::Delete]),
         Some(ChannelKind::Composite | ChannelKind::Color) => add_commands(&mut lines, &[C::Duplicate]),
         None => {}
     }
@@ -342,10 +347,17 @@ pub fn panel_rows() -> Vec<PanelRow> {
     ]
 }
 
-/// Each command greyed by the targeted row's kind, the one rule the panel's publish loop and the dock's panel menu share.
+/// Enabled states shared by the panel and the dock's panel menu.
 pub fn states<K>(rows: &[ChannelRow<K>]) -> Vec<(ChannelsCommands, CommandState)> {
-    let kind = targeted_row(rows).map(|row| row.kind);
-    ChannelsCommands::ALL.into_iter().map(|command| (command, CommandState::new().enabled(command.applies_to(kind)))).collect()
+    let target = targeted_row(rows);
+    let delete_target = targeted_for_delete(rows);
+    ChannelsCommands::ALL
+        .into_iter()
+        .map(|command| {
+            let row = if command == ChannelsCommands::Delete { delete_target } else { target };
+            (command, CommandState::new().enabled(command.applies_to_row(row)))
+        })
+        .collect()
 }
 
 fn label_of(command: ChannelsCommands, kind: Option<ChannelKind>, words: &ChannelsWords) -> Label {
@@ -403,7 +415,7 @@ fn checked(command: ChannelsCommands, kind: Option<ChannelKind>) -> Option<bool>
 pub(super) fn show_row_menu<K>(ui: &mut Ui, opener: &Response, row: &ChannelRow<K>, words: &ChannelsWords) -> Option<ChannelsCommands> {
     let kind = Some(row.kind);
     let units = Env::of(ui).units();
-    let lines = plan(kind);
+    let lines = plan(kind, row.can_delete_color());
     let shown = Menu::context(words.row_menu.clone(), opener).show(ui, |ui, _| {
         use craft_ui::contract::Show as _;
         let mut ran = None;
@@ -413,7 +425,7 @@ pub(super) fn show_row_menu<K>(ui: &mut Ui, opener: &Response, row: &ChannelRow<
                     craft_ui::display::Divider::horizontal().show(ui);
                 }
                 Plan::Command(command) => {
-                    let mut item = MenuItem::new(label_of(command, kind, words)).enabled(command.applies_to(kind));
+                    let mut item = MenuItem::new(label_of(command, kind, words)).enabled(command.applies_to_row(Some(row)));
                     if let Some(on) = checked(command, kind) {
                         item = item.radio_mark(on);
                     }

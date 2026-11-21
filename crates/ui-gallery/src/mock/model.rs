@@ -8,7 +8,7 @@ use craft_behavior::{Axis, PixelSize};
 use craft_behavior::{CanvasView, Selection};
 use craft_ui::bars::{StatusItem, StatusMessage};
 use craft_ui::canvas::{Guide, GuideKey, PickStep, PixelRect, tool_pick};
-use craft_ui::contract::CommandSet;
+use craft_ui::contract::{CommandSet, Tracked};
 use craft_ui::rails::{LastUsed, RailTool, SlotId, ToolSlot};
 use craft_ui::runtime::env::UnitKind;
 use egui::{Color32, Rect};
@@ -30,7 +30,7 @@ const TOOLS_DOCK_WIDTH: f32 = 120.0;
 
 /// The tools of the rail. Each is a command of the `tools` group; a tool alone in its slot carries its letter, and the
 /// letter of a slot with several is the pick command of [`ToolKey`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet, craft_ui::contract::MemoProps)]
 #[command(prefix = "mockTool")]
 #[non_exhaustive]
 pub enum Tool {
@@ -239,8 +239,9 @@ pub struct Document {
     pub layers: Vec<Layer>,
     /// The selected layers; the lead is the current layer.
     pub selected: Selection<LayerId>,
-    /// The canvas view. A view that was never shown opens fitted.
-    pub view: CanvasView,
+    /// The canvas view, which the canvas, the Navigator and the status bar show and edit. A view that was never shown
+    /// opens fitted.
+    pub view: Tracked<CanvasView>,
     /// The ruler zero point.
     pub zero: Point,
     /// The unit the rulers count in.
@@ -277,7 +278,7 @@ impl Default for Document {
             size,
             selected: Selection::single(layers[0].id),
             layers,
-            view,
+            view: Tracked::new(view),
             zero: Point::ZERO,
             units: UnitKind::Pixels,
             guides: Vec::new(),

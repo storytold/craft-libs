@@ -52,7 +52,7 @@ const PERCENT: f64 = 100.0;
 
 /// The size of a point, the Point/Pica Size of the Units preference. An app sets it once on its root env with
 /// `RootEnv::values`; `Units` reads it for typed Points and Picas and for their conversion to other lengths.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum PointSize {
@@ -312,6 +312,15 @@ pub struct Units {
     readers: Arc<[OnceLock<Reader>; UnitKind::ALL.len() + 1]>,
     /// The scope's point size: what `reader` and `points_per_inch` use for Points and Picas.
     point_size: PointSize,
+}
+
+/// What every number it reads and writes depends on: the format, the unit words and the scope's words (each by its
+/// generation) and the point size.
+impl crate::contract::MemoProps for Units {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        let Units { format, words, scope_words, readers: _, point_size } = self;
+        crate::contract::MemoProps::key(&(format, words, scope_words, point_size), key);
+    }
 }
 
 impl Units {

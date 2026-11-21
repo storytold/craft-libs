@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use craft_ui::contract::ReorderMove;
 use craft_ui::patterns::presets::{PresetRow, PresetState};
 
-use super::{MAX_GROUPS, MAX_SWATCHES, SwatchesWords};
+use super::{MAX_GROUPS, MAX_SWATCHES, SWATCH_ZOOM, SwatchesWords};
 use crate::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchReport};
 use crate::ui::PickedColor;
 
@@ -37,7 +37,9 @@ pub struct SwatchesState {
 
 impl Default for SwatchesState {
     fn default() -> Self {
-        SwatchesState { browser: PresetState::new(), selected: None, rename: None, export_notes: None }
+        let mut browser = PresetState::new();
+        browser.zoom = SWATCH_ZOOM.default_value();
+        SwatchesState { browser, selected: None, rename: None, export_notes: None }
     }
 }
 
@@ -569,7 +571,7 @@ pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetR
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 

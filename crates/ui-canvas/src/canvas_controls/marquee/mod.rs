@@ -2,8 +2,8 @@
 //! selection band or an outline being drawn over the canvas, mapped from document geometry through the canvas's view.
 //! It takes no pointer and no key: the press, the drag and the modifier rules are the canvas tool's.
 
-#[cfg(feature = "testing")]
-pub(super) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::CanvasControlWords;
 use crate::canvas::{MARCH_SECONDS, MARCH_TICK, canvas_space, march_shift};

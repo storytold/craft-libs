@@ -5,8 +5,8 @@
 //! End, the marquee, the move gesture, rename, delete and the context menu. `FreeBin` adds the placement and turns the
 //! move gesture into the cards' new positions.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

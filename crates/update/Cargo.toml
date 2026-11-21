@@ -17,6 +17,7 @@ harness = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 # Opt-in migration of first party Flatpak bundles to the ArtCraft OCI remote.
 oci_migration = []
 default = []
@@ -43,7 +44,7 @@ chrono = { workspace = true }
 semver = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 flate2 = "1"
 
 [target.'cfg(unix)'.dependencies]

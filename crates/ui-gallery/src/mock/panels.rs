@@ -3,9 +3,10 @@
 use super::model::{Document, Layer, Panel, Tool};
 use super::tools::{MarqueeTool, MoveTool, Tools};
 use super::words::MockWords;
+use craft_behavior::CanvasView;
 use craft_behavior::dock::Permissions;
 use craft_behavior::geometry::Directions;
-use craft_behavior::kurbo::Rect as DocRect;
+use craft_behavior::kurbo::{Rect as DocRect, Size};
 use craft_behavior::{ColumnKey, ColumnWidth, PixelSize, RulerUnits, Ticks, keyed};
 use craft_ui::canvas::{
     Canvas, CanvasScrollbars, CanvasSpace, NoTool, PageFrame, Pasteboard, PixelRect, RasterDisplay, RasterSource, RulerText, Rulers, ToolHost,
@@ -14,8 +15,8 @@ use craft_ui::canvas::{
 use craft_ui::canvas_controls::{Guides, Marquee};
 use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{
-    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
+    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, MemoProps, MemoView, Props as _, Remember as _, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
 };
 use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
 use craft_ui::list::{ListRow, ToggleCell};
@@ -76,7 +77,7 @@ impl Panels<'_> {
     /// The document tab's title: the name, the zoom of the device and the current layer.
     fn tab_title(&self, ui: &Ui, cx: &BodyCx<'_>) -> String {
         let document = &self.document;
-        let zoom = CanvasSpace::new(document.view, ui.pixels_per_point()).zoom_device() * 100.0;
+        let zoom = CanvasSpace::new(*document.view, ui.pixels_per_point()).zoom_device() * 100.0;
         let layer = document.current_layer().map_or("", |layer| layer.name.as_str());
         cx.words::<MockWords>().tab_title.fill(&[("name", &document.title), ("zoom", &cx.format().integer(zoom.round() as i64)), ("layer", layer)])
     }
@@ -114,8 +115,8 @@ impl DockPanels<Panel> for Panels<'_> {
     fn body(&mut self, panel: &Panel, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         match panel {
             Panel::Navigator => {
-                let size = self.document.size;
-                let _ = NavigatorPanel::new("Navigator", Bind::bound(&mut self.document.view), size).show(ui);
+                let props = NavigatorProps { view: craft_ui::contract::bind_tracked!(self.document.view), size: self.document.size };
+                let _ = MemoView::new("navigator", props, navigator).show(ui);
             }
             Panel::Layers => layers(ui, cx, self.document),
             Panel::Canvas | Panel::Tools => {}
@@ -208,38 +209,26 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let page = DocRect::new(0.0, 0.0, document.size.width, document.size.height);
     let pages = [PageFrame::new(page)];
     let pixels = document.pixel_size();
-    let (view, show_rulers) = (document.view, document.rulers);
+    let (view, show_rulers) = (*document.view, document.rulers);
     let editing = matches!(tool, Tool::Move | Tool::Marquee);
     let canvas_id = ui.scope_id().with("mock document canvas");
     // What the host reported; none in a measuring run, where it does not run.
     let mut reported = None;
     let mut scrolled = None;
-    let _ = Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, document.zero).show(
-        ui,
-        |ui, body| {
+    let mut zero = document.zero;
+    let strips = show_rulers.then(|| Rulers::new("Rulers", Bind::bound(&mut zero)).units(&UNITS));
+    let shown =
+        Canvas::new("Document").id(canvas_id).view(view).document(page.size()).with_rulers(strips).rulers(units, units).show(ui, |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
-            let mut content = body.rect;
-            let mut pending = None;
-            let Document { guides, guide, zero, units: unit, .. } = &mut *document;
-            if show_rulers {
-                let rulers = Rulers::new("Rulers", Bind::bound(zero)).units(&UNITS).show_at(ui, body.rect);
-                content = rulers.content_rect();
-                pending = rulers.guide;
-                if let Some(picked) = rulers.unit_picked {
-                    *unit = picked;
-                }
-            }
+            let Document { guides, guide, .. } = &mut *document;
             let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
             if let Some(selected) = *guide {
                 controls = controls.selected_guide(selected);
             }
-            if let Some(drag) = pending {
-                controls = controls.pending(drag);
-            }
             if let Some(select) = controls.show_at(ui, body.rect).select {
                 *guide = select;
             }
-            let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, content);
+            let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, body.rect);
             scrolled = bars.view.value().copied();
             // The tool runs after the controls, which take a press first, and before the picture and the selection,
             // which show what it did with this pass's input. The tool leaves the press alone over a scroll bar.
@@ -257,16 +246,31 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
             if let Some(rect) = document.marquee {
                 let _ = Marquee::rect("Selection", rect).show_at(ui, body.rect);
             }
-        },
-    );
+        });
+    if let Some(picked) = shown.output.rulers.and_then(|rulers| rulers.unit_picked) {
+        document.units = picked;
+    }
+    document.zero = zero;
     let reported: craft_ui::canvas::ToolHostResponse = reported.unwrap_or_default();
     if let Some(next) = scrolled.or(reported.view) {
-        document.view = next;
+        *document.view = next;
     }
 }
 
 /// The layer table: an eye column and a name column over the layers, top first, with several layers selectable and
 /// the lead being the current layer.
+/// What the Navigator shows: the document's view, which it pans and zooms, and the document's size.
+#[derive(MemoProps)]
+struct NavigatorProps<'a> {
+    view: Bind<'a, CanvasView>,
+    size: Size,
+}
+
+/// The Navigator, a memoized view: it runs when the view or the document's size changes or the pointer is over it.
+fn navigator(props: &mut NavigatorProps<'_>, ui: &mut Ui) {
+    let _ = NavigatorPanel::new("Navigator", props.view.reborrowed(), props.size).show(ui);
+}
+
 fn layers(ui: &mut Ui, cx: &mut BodyCx<'_>, document: &mut Document) {
     let columns = vec![
         ColumnSpec::new(VISIBLE, "Visible", ColumnWidth::Controls(1.5)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),

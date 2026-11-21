@@ -51,9 +51,12 @@ pub struct DockSizes {
     pub strip: f32,
     /// The height of a column bar (a small control).
     pub bar: f32,
-    /// The height of a floating window's title row, which is the bar of the column the window holds: every height of
-    /// a window's body or content is the window's height less this.
+    /// The height of a floating window's title row, which is the bar of the column the window holds.
     pub title_row: f32,
+    /// The band a floating window in the app window keeps clear over its title row for its top grip
+    /// (`contract::grip_band`); an OS window keeps none. Every height of a window's body or content is the window's
+    /// height less its chrome ([`Self::window_chrome`]).
+    pub top_band: f32,
     /// The least body size of a column's group and the least width of an expanded column (the panel header height).
     pub least: f32,
     /// How thick a divider is across its boundary (the least hit size).
@@ -93,6 +96,7 @@ impl DockSizes {
             strip: size.panel_header,
             bar: size.control.sm,
             title_row: super::floating::title_row(cx.tokens),
+            top_band: crate::contract::grip_band(cx.tokens),
             least: size.panel_header,
             reach: size.hit.target,
             step: cx.control().gap,
@@ -100,6 +104,12 @@ impl DockSizes {
             iconic_least: size.rail.width,
             column: size.dock.column,
         }
+    }
+
+    /// The height above a floating window's body: its title row and, for a window in the app window (`in_app`), the
+    /// band over it.
+    pub fn window_chrome(&self, in_app: bool) -> f32 {
+        self.title_row + if in_app { self.top_band } else { 0.0 }
     }
 
     /// The width bounds of an expanded column from the limits of its panels.
@@ -119,13 +129,18 @@ impl DockSizes {
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
+    /// The width bounds of a column collapsed to icons, docked or floating: the rail width up to the width it expands
+    /// to. A docked column's inner edge and a floating window's sides resize it within them.
+    pub fn iconic_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
+        (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
+    }
+
     /// The bounds [`width`](Self::width) keeps a column in: an expanded column's [`width_bounds`](Self::width_bounds);
-    /// a stepped one's width at one step up to its width at all its grid's columns; an iconic column's rail width up
-    /// to the width it expands to.
+    /// a stepped one's width at one step up to its width at all its grid's columns; an iconic column's
+    /// [`iconic_bounds`](Self::iconic_bounds).
     pub fn shown_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
         if column.iconic {
-            // Widening an iconic column stops at the width it expands to.
-            (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
+            self.iconic_bounds(column, spec)
         } else if let Some((grid, _)) = stepped(column, spec) {
             (grid.width(1), grid.width(grid.most))
         } else {
@@ -190,6 +205,17 @@ impl DockSizes {
                 (self.width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
             })
             .collect()
+    }
+}
+
+/// A spot names panels and sides: it has no place, so a replay at another place keeps it.
+impl<P: Clone> crate::runtime::Shift for DockSpot<P> {
+    fn shifted(&self, _: &egui::RecordShift) -> Self {
+        self.clone()
+    }
+
+    fn snapped(&self, _: &Self, _: f32) -> Self {
+        self.clone()
     }
 }
 
@@ -454,8 +480,8 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     }
 }
 
-/// The registrations of a pass. A settled region's run record keeps each one to make it again and compares it with a
-/// real run's, so the panel type is `Sync`, `PartialEq` and `Debug`.
+/// The registrations of a pass. A settled memoized view's run record keeps each one to make it again and compares it
+/// with a real run's, so the panel type is `Sync`, `PartialEq` and `Debug`.
 impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
     /// Registers `spot` over `rect` for the dock `dock` in the running pass of this viewport. Group and column
     /// rendering call it; it does nothing outside a pass. A floating window registers on its own egui layer, and
@@ -509,12 +535,12 @@ impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
         Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
     }
 
-    /// Notes a registration in the records of the settling regions around the running code, so a region that settles
+    /// Notes a registration in the records of the memoized views around the running code, so a region that settles
     /// registers its drop spots again when it replays its last run.
     fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
     where
-        A: PartialEq + Debug + Send + Sync + 'static,
-        F: Fn(&Context, &A) + Send + Sync + 'static,
+        A: PartialEq + Debug + crate::runtime::Shift + Send + Sync + 'static,
+        F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
     {
         crate::runtime::journal(ctx, args, again);
     }

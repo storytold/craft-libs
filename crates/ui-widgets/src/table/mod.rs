@@ -1,10 +1,10 @@
 //! `Table` and `MetadataTable`, as `List` with columns.
 
-mod metadata;
+pub(crate) mod metadata;
 mod sort;
-#[cfg(feature = "testing")]
-mod stories;
-mod view;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+pub(crate) mod view;
 mod words;
 
 pub use metadata::{Checked, FieldKey, MetadataGroup, MetadataRow, MetadataTable, MetadataTableOutput};

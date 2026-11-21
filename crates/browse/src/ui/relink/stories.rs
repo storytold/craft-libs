@@ -13,7 +13,7 @@ use craft_behavior::Selection;
 use craft_docpath::Refused;
 use craft_docpath::links::{FakeLinkFiles, Link, LinkIdentity, LinkStatus, identity_of};
 use craft_host::{Jobs, ManualJobs};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::display::Text;
 use craft_ui::list::ThumbSize;
@@ -68,7 +68,7 @@ fn links() -> (Vec<Link<u32>>, HashMap<u32, LinkStatus>) {
 }
 
 fn list_story(ui: &mut Ui, data: &mut StoryData, links: &[Link<u32>], statuses: &HashMap<u32, LinkStatus>) -> StoryOutput {
-    let state = data.value(
+    let (state, state_at) = data.value_at(
         "state",
         LinkListState {
             selection: Selection::single(2),
@@ -80,7 +80,7 @@ fn list_story(ui: &mut Ui, data: &mut StoryData, links: &[Link<u32>], statuses: 
     let info = lead.map_or_else(|| words.info_none.as_str().to_owned(), |link| words.info_path.fill(&[("path", &link.stored)]));
     let thumbs = Thumbnails::<u32>::in_context(ui.ctx(), "craft-browse-link-list-story", ThumbnailOptions::new());
     let pictures = FakeThumbSource::<u32>::new().aspect(4, 3);
-    LinkList::new("Links", links, statuses, Bind::bound(state))
+    LinkList::new("Links", links, statuses, state_at.bind(state))
         .thumbnails(&thumbs, &pictures)
         .info(move |ui| {
             Text::new(info.clone()).show(ui);
@@ -156,10 +156,11 @@ fn dialog_story(ui: &mut Ui, data: &mut StoryData, search: bool, finish: bool) -
     if search && !*started {
         *started = true;
         dialog.begin_search();
-        ui.ctx().request_repaint();
+        craft_ui::runtime::frame::request_repaint(ui.ctx());
     }
+    // The framework's repaint runs the story's view again, where the next jobs run.
     if finish && demo.jobs.run_all() > 0 {
-        ui.ctx().request_repaint();
+        craft_ui::runtime::frame::request_repaint(ui.ctx());
     }
     StoryOutput::default()
 }

@@ -13,8 +13,8 @@ use egui::{Response, Ui};
 
 use super::SamplerReadout;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What a missing value shows.
 const DASH: &str = "–";

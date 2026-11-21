@@ -17,7 +17,9 @@ pub mod testing {
     use egui::accesskit::NodeId;
     use egui::{Context, Rect};
 
-    craft_ui::testing_registered!();
+    #[cfg(feature = "suite")]
+
+    craft_ui::registry!();
 
     /// The rect of the thumbnail that shows `part` of the layer `info`, in the row whose node is `row`, as the row
     /// recorded it last pass; `None` when the row shows no such thumbnail. `row` is the layer's row, or for

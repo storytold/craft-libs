@@ -17,6 +17,7 @@ harness = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The egui parts: the Actions panel, the control channel's server side (screenshots, synthetic
 # input) and `ui` stories. Without it the crate has no egui: `ControlOptions`, `ControlClient`,
@@ -40,20 +41,22 @@ craft-ui = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-# The control channel, its server and client, screenshots, the profiler and the trace.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+web-time = "1.1"
+# The screenshot queue encodes and inlines PNGs on every target the control channel builds for.
 base64 = "0.22"
+png = "0.17"
+
+# The server, client, profiler and trace.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-platform = { workspace = true }
 craft-host = { workspace = true, optional = true }
 getrandom = "0.3"
 hmac = "0.12"
 log = "0.4"
-png = "0.17"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }

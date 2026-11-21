@@ -16,6 +16,7 @@ test = false
 workspace = true
 
 [features]
+suite = ["testing", "craft-ui-contract/suite", "craft-ui-widgets/suite", "craft-ui-panels/suite", "craft-ui-canvas/suite", "craft-ui-patterns/suite", "craft-ui-shell/suite"]
 default = []
 # `shell::app`: the eframe entry point.
 app = ["craft-ui-shell/app"]
@@ -51,7 +52,7 @@ craft-ui-shell = { workspace = true }
 craft-cloud-ui = { workspace = true }
 
 [dev-dependencies]
-craft-ui = { path = ".", features = ["testing"] }
+craft-ui = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-i18n = { workspace = true, features = ["collate"] }
 egui = { workspace = true }

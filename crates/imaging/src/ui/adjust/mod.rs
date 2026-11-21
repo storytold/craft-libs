@@ -15,21 +15,21 @@
 //!
 //! Gradient Map is `craft_draw::ui::gradient::map`, beside the gradient editor it builds on.
 
-mod basic;
+pub(crate) mod basic;
 mod context;
-mod curves_panel;
+pub(crate) mod curves_panel;
 mod hosted;
-mod hue_saturation;
+pub(crate) mod hue_saturation;
 mod kinds;
 mod labels;
-mod levels_editor;
-mod levels_panel;
-mod mixers;
-mod panel;
-mod session;
-mod sliders;
+pub(crate) mod levels_editor;
+pub(crate) mod levels_panel;
+pub(crate) mod mixers;
+pub(crate) mod panel;
+pub(crate) mod session;
+pub(crate) mod sliders;
 mod style;
-mod tone;
+pub(crate) mod tone;
 
 pub use basic::{
     BrightnessContrast, BrightnessContrastEditor, ColorBalance, ColorBalanceEditor, ColorBalanceOutput, ColorBalanceTone, PhotoFilter,

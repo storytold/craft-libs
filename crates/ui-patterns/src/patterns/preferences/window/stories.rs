@@ -1,8 +1,8 @@
 //! Stories of `PreferencesWindow`.
 
 use super::{PreferencesState, PreferencesWindow};
-use crate::contract::{Bind, Entry};
-use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
+use crate::contract::Entry;
+use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesDraft, PreferencesModel, RowKind, RowSpec};
 use crate::runtime::env::UnitKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
@@ -77,6 +77,19 @@ impl PreferencesModel for Demo {
 
     fn custom_page(&mut self, _: &mut Ui, _: &str) {}
 
+    fn reset_page(&mut self, page: &str) {
+        let defaults = Values::default();
+        match page {
+            "general" => (self.draft.snap, self.draft.language, self.draft.name) = (defaults.snap, defaults.language, defaults.name),
+            "canvas" => (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint),
+            _ => {}
+        }
+    }
+
+    fn nested(&mut self, _: &Context) {}
+}
+
+impl PreferencesDraft for Demo {
     fn differs(&self) -> bool {
         self.draft != self.saved
     }
@@ -92,23 +105,12 @@ impl PreferencesModel for Demo {
     fn cancel(&mut self) {
         self.draft = self.saved.clone();
     }
-
-    fn reset_page(&mut self, page: &str) {
-        let defaults = Values::default();
-        match page {
-            "general" => (self.draft.snap, self.draft.language, self.draft.name) = (defaults.snap, defaults.language, defaults.name),
-            "canvas" => (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint),
-            _ => {}
-        }
-    }
-
-    fn nested(&mut self, _: &Context) {}
 }
 
 fn window(ui: &mut Ui, data: &mut StoryData, state: PreferencesState, demo: Demo) -> StoryOutput {
     let mut demo = data.value("demo", demo).clone();
-    let state = data.value("state", state);
-    let shown = PreferencesWindow::new(Bind::bound(state)).embedded().show(ui, &mut demo).into();
+    let (state, state_at) = data.value_at("state", state);
+    let shown = PreferencesWindow::new(state_at.bind(state)).embedded().show(ui, &mut demo).into();
     *data.value("demo", Demo::default()) = demo;
     shown
 }
