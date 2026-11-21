@@ -40,7 +40,9 @@ std::thread_local! {
     // PdfCraft patch (89): the form XObjects being drawn on this page, outermost first, across
     // the contexts of the tiling patterns, Type 3 glyphs, soft masks and groups painted while
     // they draw. A form already on it draws itself and is skipped. Its length is bounded by the
-    // nesting limits: every form on it is nested in the ones before it.
+    // nesting limits: every form on it is nested in the ones before it. While a device
+    // interprets a soft mask, tiling pattern or Type 3 glyph, it holds the forms that one was
+    // set in (`with_forms_drawing`).
     static FORMS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
         const { RefCell::new(Vec::new()) };
 }
@@ -157,6 +159,42 @@ pub(crate) fn take_nested_paint(depth: u32) -> bool {
         n.set(used + 1);
         true
     })
+}
+
+/// Craft patch (self-draw scope): the forms being drawn where a soft mask, a tiling pattern or a
+/// Type 3 glyph was set in the content. A device may interpret any of them later, while it draws
+/// another form: a soft mask set on the page is interpreted for each fill it applies to, inside
+/// whatever form that fill is in. Its content is nested in the forms it was set in, so the
+/// self-draw check of patch (89) runs against those (see [`with_forms_drawing`]).
+#[derive(Clone, Default)]
+pub(crate) struct FormsDrawing(Vec<hayro_syntax::object::ObjectIdentifier>);
+
+impl FormsDrawing {
+    /// The forms being drawn now.
+    pub(crate) fn current() -> Self {
+        FORMS_DRAWING.with(|forms| Self(forms.try_borrow().map(|forms| forms.clone()).unwrap_or_default()))
+    }
+
+    /// The forms, outermost first.
+    pub(crate) fn ids(&self) -> &[hayro_syntax::object::ObjectIdentifier] {
+        &self.0
+    }
+}
+
+/// Craft patch (self-draw scope): run `draw` with `forms` as the forms being drawn, and put
+/// back the ones being drawn before. A form `draw` reaches is skipped only when it is among
+/// `forms` or nested in itself within `draw`.
+pub(crate) fn with_forms_drawing<R>(forms: &FormsDrawing, draw: impl FnOnce() -> R) -> R {
+    let outer = FORMS_DRAWING.with(|stack| stack.try_borrow_mut().ok().map(|mut stack| core::mem::replace(&mut *stack, forms.0.clone())));
+    let result = draw();
+    if let Some(outer) = outer {
+        FORMS_DRAWING.with(|stack| {
+            if let Ok(mut stack) = stack.try_borrow_mut() {
+                *stack = outer;
+            }
+        });
+    }
+    result
 }
 
 /// A cache used by the interpreter.
@@ -363,7 +401,9 @@ impl<'a> Context<'a> {
     /// The forms being drawn are those of this page's context and of every context painting
     /// inside it (a tiling pattern, a Type 3 glyph, a soft mask or a group), so a form that
     /// reaches itself through one of those is skipped too, while a form drawn again after it
-    /// has finished draws as usual.
+    /// has finished draws as usual. A soft mask, tiling pattern or Type 3 glyph draws inside
+    /// the forms it was set in, wherever the device interprets it (Craft patch (self-draw
+    /// scope), [`FormsDrawing`]).
     pub(crate) fn enter_form(
         &mut self,
         id: Option<hayro_syntax::object::ObjectIdentifier>,
