@@ -92,44 +92,4 @@ pub fn cpio_newc(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
     out
 }
 
-/// Deterministic pseudo-random bytes (xorshift) for fuzz-like loops.
-pub fn noise(seed: u64, len: usize) -> Vec<u8> {
-    let mut x = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    (0..len)
-        .map(|_| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            x as u8
-        })
-        .collect()
-}
-
-/// Every way to damage a sample used by robustness tests: truncations at many lengths and
-/// single-byte corruptions spread across the file.
-pub fn mutations(sample: &[u8]) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    let n = sample.len();
-    let step = (n / 64).max(1);
-    let mut len = 0;
-    while len < n {
-        out.push(sample[..len].to_vec());
-        len += step;
-    }
-    for (i, seed) in (0..n).step_by(step).zip(1u64..) {
-        let mut m = sample.to_vec();
-        let noise = noise(seed, 8);
-        for (j, v) in noise.iter().enumerate() {
-            if let Some(b) = m.get_mut(i + j) {
-                *b = *v;
-            }
-        }
-        out.push(m);
-        let mut m = sample.to_vec();
-        if let Some(b) = m.get_mut(i) {
-            *b = 0xff;
-        }
-        out.push(m);
-    }
-    out
-}
+pub use craft_testkit::sample_damage::{mutations, noise};
