@@ -48,12 +48,14 @@ impl<'a> Resources<'a> {
         self.by_location.get(&location.to_ascii_lowercase()).copied()
     }
 
-    /// The part a reference in a page names: `cid:id` by `Content-ID`; anything else by
-    /// `Content-Location`, as written, or resolved against `base`, the page's own location
-    /// ([`resolve_location`]; empty when it has none). Nothing is fetched.
+    /// The part a reference in a page names. A `cid:` URL is percent-decoded before the
+    /// `Content-ID` lookup. Other references use `Content-Location`, as written or resolved
+    /// against `base`, the page's own location ([`resolve_location`]). Nothing is fetched.
     pub fn find(&self, reference: &str, base: &str) -> Option<&'a Part> {
         let reference = reference.trim();
         match reference.get(..4).filter(|s| s.eq_ignore_ascii_case("cid:")).and(reference.get(4..)) {
+            // RFC 2392 percent-decodes the URL, without form-style plus substitution.
+            Some(id) if id.contains('%') => self.by_content_id(&crate::mailto::percent_decode(id)).or_else(|| self.by_content_id(id)),
             Some(id) => self.by_content_id(id),
             None => self.by_location(reference).or_else(|| self.by_location(&resolve_location(base, reference))),
         }
@@ -229,6 +231,27 @@ mod tests {
         assert!(start_part(&page_and_logo("https://example.test/p.html").root).is_none());
         let m = parse(b"Content-Type: multipart/related; start=\"<gone>\"; boundary=b\n\n--b\nContent-ID: <here>\n\nx\n--b--\n", &Limits::default());
         assert!(start_part(&m.root).is_none());
+    }
+
+    #[test]
+    fn cid_references_decode_url_escapes_once() {
+        let message = parse(
+            b"Content-Type: multipart/related; boundary=b\n\n\
+              --b\nContent-ID: <part+id@example.test>\n\nplus\n\
+              --b\nContent-ID: <part%2Bid@example.test>\n\npercent\n\
+              --b\nContent-ID: <legacy%41@example.test>\n\nlegacy\n--b--\n",
+            &Limits::default(),
+        );
+        let resources = Resources::of(&message.root);
+        for (reference, expected) in [
+            ("cid:part+id@example.test", "part+id@example.test"),
+            ("CID:part%2bid%40example.test", "part+id@example.test"),
+            ("cid:part%2Bid@example.test", "part+id@example.test"),
+            ("cid:part%252Bid@example.test", "part%2Bid@example.test"),
+            ("cid:legacy%41@example.test", "legacy%41@example.test"),
+        ] {
+            assert_eq!(resources.find(reference, "").and_then(Part::content_id), Some(expected), "{reference}");
+        }
     }
 
     proptest::proptest! {
