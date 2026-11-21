@@ -1191,6 +1191,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// where it would sit in the app window ([`native::in_app`]), and the end of each of its moves and resizes records
     /// that rect and edge; its placement keeps its expanded rect while its column is collapsed ([`WindowColumn::kept`]).
     ///
+    /// A window whose every group is minimized shows its title row and their strips at its rect's place and width
+    /// ([`WindowColumn::minimized`]): its sides resize its width, and its placement keeps its expanded height, so a
+    /// restore shows it at that height again.
+    ///
     /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
     /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
     /// bottom the fewest whose content fits the height, and the window keeps its place; a drag of its left side keeps
@@ -1251,6 +1255,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 WindowColumn::collapsed(edge, size, scene.sizes.iconic_bounds(&window.column, &spec_of))
             } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
                 WindowColumn::fitted(edge, Vec2::new(width, content))
+            } else if let Some(strips) = scene.sizes.minimized_height(&window.column) {
+                WindowColumn::minimized(edge, strips)
             } else {
                 WindowColumn::expanded(edge)
             }

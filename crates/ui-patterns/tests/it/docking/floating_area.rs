@@ -529,6 +529,48 @@ fn a_collapsed_windows_sides_resize_its_width_and_show_names_from_the_docked_col
     assert_eq!(bed.workspace.borrow().layout.floating[0].rect, WINDOW_AT, "the expanded rect is unchanged");
 }
 
+/// A floating window whose every group is minimized shows its title row and tab strip at its place and width. Its free
+/// side resizes its width and not its height, and its rect keeps the expanded height, which the window shows at again
+/// once the group is restored.
+#[trial]
+fn a_window_whose_groups_are_all_minimized_shows_its_strip_and_comes_back_at_its_height() {
+    let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let window_layer = |bed: &Bed| {
+        let layers = layer_rects(bed.fixture.ctx()).into_iter().filter(|rect| rect.contains(window_title()));
+        layers.min_by(|a, b| a.area().total_cmp(&b.area())).expect("the window's layer holds its title row")
+    };
+    let strip = |bed: &Bed| {
+        let lists = bed.fixture.by_role(Role::TAB_LIST).into_iter().filter(|list| WINDOW_AT.expand(SLACK).contains_rect(list.rect));
+        lists.map(|list| list.rect).next().expect("the window shows its tab strip")
+    };
+    bed.workspace.borrow_mut().apply(Action::set_minimized(WINDOW, true), false, |_| Permissions::ALL).expect("the group minimizes");
+    bed.fixture.settle();
+    let shown = window_layer(&bed);
+    assert!((shown.bottom() - strip(&bed).bottom()).abs() <= SLACK, "the window ends at its strip: {shown:?}, {:?}", strip(&bed));
+    assert!((shown.min - WINDOW_AT.min).length() <= SLACK && (shown.width() - WINDOW_AT.width()).abs() <= SLACK, "at its place and width: {shown:?}");
+
+    // The window keeps to the end edge; its start side is free, and a press just inside it holds the side's grip.
+    let side = Pos2::new(shown.left() + 2.0, shown.center().y);
+    let by = Vec2::new(-40.0, 10.0);
+    press_and_move(&mut bed.fixture, side, by);
+    bed.fixture.frame(vec![release(side + by)]);
+    bed.fixture.settle();
+    let resized = window_layer(&bed);
+    let rect = bed.workspace.borrow().layout.floating[0].rect;
+    assert!((resized.width() - (shown.width() - by.x)).abs() <= SLACK, "the side resizes the width: {shown:?}, then {resized:?}");
+    assert!((resized.height() - shown.height()).abs() <= SLACK, "the height stays the strip's: {resized:?}");
+    assert!(
+        (rect.width() - resized.width()).abs() <= SLACK && rect.height() == WINDOW_AT.height(),
+        "the rect takes the width and keeps its height: {rect:?}"
+    );
+
+    bed.workspace.borrow_mut().apply(Action::set_minimized(WINDOW, false), false, |_| Permissions::ALL).expect("the group restores");
+    bed.fixture.settle();
+    let restored = window_layer(&bed);
+    assert!((restored.height() - WINDOW_AT.height()).abs() <= SLACK, "restored, the window shows at its height: {restored:?}");
+    assert!((restored.width() - resized.width()).abs() <= SLACK, "at the width the side gave it: {restored:?}");
+}
+
 /// A floating collapsed column opens its flyouts towards the room of the float area, away from the edge it keeps to.
 #[trial]
 fn a_floating_collapsed_columns_flyout_opens_towards_the_room() {

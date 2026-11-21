@@ -704,6 +704,65 @@ fn a_collapsed_native_palette_on_macos_is_resized_by_appkit_in_its_width_only() 
     assert_eq!(at.width(), width, "the window keeps the width the OS gave it");
 }
 
+/// A native palette whose every group is minimized shrinks to its title row and tab strip at its place and width.
+/// The OS resizes its width and never its height: AppKit takes the height as fixed, and the app sends no size back
+/// for the width the OS gave it. The model keeps the expanded height throughout, and restored, the window takes that
+/// height back at the width it was given.
+#[trial]
+fn a_minimized_native_palette_keeps_its_width_resizable_and_comes_back_at_its_height() {
+    for os in [Os::Mac, Os::Windows] {
+        let mut dock = NativeDock::on(os, Arc::new(FakeSystem::new()));
+        let expanded = FLOAT_AT.size();
+        let mut at = FLOAT_AT;
+        // The OS follows the window commands of each frame, within the limits in force, and the window reports where it is.
+        let follow = |dock: &mut NativeDock, at: &mut Rect, frames: usize| {
+            let mut sent = Vec::new();
+            for _ in 0..frames {
+                let mut max = dock.builder.as_ref().and_then(|builder| builder.max_inner_size);
+                let commands = dock.frame(vec![]).1;
+                for command in &commands {
+                    match command {
+                        ViewportCommand::MaxInnerSize(limit) => max = Some(*limit),
+                        ViewportCommand::InnerSize(size) => *at = Rect::from_min_size(at.min, max.map_or(*size, |max| size.min(max))),
+                        ViewportCommand::OuterPosition(to) => *at = Rect::from_min_size(*to, at.size()),
+                        _ => {}
+                    }
+                }
+                dock.windows.child_info(info(true, *at));
+                sent.extend(commands);
+            }
+            sent
+        };
+        let recorded =
+            |dock: &NativeDock| Vec2::from(dock.workspace.layout.floating[0].native.clone().expect("the model records the window").normal.size);
+        dock.workspace.apply(Action::set_minimized(1, true), false, |_| Permissions::ALL).expect("the group minimizes");
+        follow(&mut dock, &mut at, 3);
+        let strips = at;
+        assert!(strips.height() < expanded.y / 4.0, "{os:?}: the window shrinks to its title row and strip: {strips:?}");
+        assert_eq!((strips.min, strips.width()), (FLOAT_AT.min, expanded.x), "{os:?}: at its place and width");
+        assert_eq!(recorded(&dock), expanded, "{os:?}: minimized, the model keeps the expanded size");
+        let builder = dock.builder.clone().expect("the palette's window opened");
+        let (least, most) = (builder.min_inner_size.expect("a least size"), builder.max_inner_size.expect("a most size"));
+        assert!(least.y == most.y && (least.y - strips.height()).abs() <= 0.5, "{os:?}: the height is fixed: {least:?}..{most:?}, {strips:?}");
+        assert!(least.x < most.x, "{os:?}: the width resizes: {least:?}..{most:?}");
+        if os == Os::Mac {
+            assert_eq!(builder.resizable, Some(true), "AppKit resizes the minimized window");
+        }
+
+        // The OS widens the window.
+        let width = expanded.x + 60.0;
+        at = Rect::from_min_size(at.min, Vec2::new(width, at.height()));
+        dock.windows.child_info(info(true, at));
+        let sent = follow(&mut dock, &mut at, 3);
+        assert!(!sent.iter().any(|command| matches!(command, ViewportCommand::InnerSize(_))), "{os:?}: no size goes back: {sent:?}");
+        assert_eq!(recorded(&dock), Vec2::new(width, expanded.y), "{os:?}: the model takes the width and keeps the expanded height");
+
+        dock.workspace.apply(Action::set_minimized(1, false), false, |_| Permissions::ALL).expect("the group restores");
+        follow(&mut dock, &mut at, 3);
+        assert_eq!(at, Rect::from_min_size(FLOAT_AT.min, Vec2::new(width, expanded.y)), "{os:?}: restored, the window takes its height back");
+    }
+}
+
 /// On a display at 125 % (Windows), a click on the double arrow of a native palette collapsed to icons expands its
 /// column, and the OS window takes its expanded size.
 #[trial]

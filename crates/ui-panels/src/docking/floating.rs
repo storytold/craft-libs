@@ -53,14 +53,21 @@ pub struct FloatingGroupStyle {
 
 /// The column a dock's floating window holds. The window's title row is the column's bar: it shows the column's
 /// double arrow at the end on `edge`, and a collapsed column shows against that edge of the window's rect.
+///
+/// A column whose content fixes its height ([`held`](Self::held)) shows at that height whatever the rect's, and the
+/// rect keeps its own height for when the content no longer fixes it: a column collapsed to icons, and one whose
+/// every group is minimized.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct WindowColumn {
     /// The edge of the float area, in reading order, that the window keeps to: the dock model's `Floating::edge`,
     /// else the one nearer the window.
     pub edge: DockEdge,
-    /// The size of the collapsed column under the title row; `None` while the column is expanded.
-    pub collapsed: Option<Vec2>,
+    /// The height of the column under the title row when its content fixes it: a collapsed column's icons, or the
+    /// tab strips of a column whose every group is minimized. `None` while the rect gives the height.
+    pub held: Option<f32>,
+    /// The width of the collapsed column; `None` while the column is expanded, and the rect gives the width.
+    pub collapsed: Option<f32>,
     /// The least and most width the sides of a collapsed column's window resize it to
     /// ([`DockSizes::iconic_bounds`](super::DockSizes::iconic_bounds)); unbounded while the column is expanded.
     pub widths: (f32, f32),
@@ -74,20 +81,27 @@ pub struct WindowColumn {
 impl WindowColumn {
     /// An expanded column that keeps to `edge`.
     pub fn expanded(edge: DockEdge) -> Self {
-        WindowColumn { edge, collapsed: None, widths: UNBOUNDED, fitted: None, arrow: ColumnArrow::Collapse }
+        WindowColumn { edge, held: None, collapsed: None, widths: UNBOUNDED, fitted: None, arrow: ColumnArrow::Collapse }
     }
 
     /// A column collapsed to icons, `size` under the title row, that keeps to `edge`. The window's sides resize its
     /// width within `widths`, as a docked collapsed column's inner edge does; its height stays `size`'s.
     pub fn collapsed(edge: DockEdge, size: Vec2, widths: (f32, f32)) -> Self {
-        WindowColumn { edge, collapsed: Some(size), widths, fitted: None, arrow: ColumnArrow::Collapse }
+        WindowColumn { edge, held: Some(size.y), collapsed: Some(size.x), widths, fitted: None, arrow: ColumnArrow::Collapse }
+    }
+
+    /// An expanded column whose every group is minimized, their strips `height` under the title row, that keeps to
+    /// `edge`. The window shows at its rect's place and width and that height; its sides resize the width, and the
+    /// rect keeps its height, which the window takes back once a group is restored.
+    pub fn minimized(edge: DockEdge, height: f32) -> Self {
+        WindowColumn { edge, held: Some(height), collapsed: None, widths: UNBOUNDED, fitted: None, arrow: ColumnArrow::Collapse }
     }
 
     /// An expanded column whose content is `size` under the title row, that keeps to `edge`. The window shows at
     /// that size at its rect's place; a resize the user makes is reported for the host to turn into the column's
     /// steps, and a move keeps the rect's size.
     pub fn fitted(edge: DockEdge, size: Vec2) -> Self {
-        WindowColumn { edge, collapsed: None, widths: UNBOUNDED, fitted: Some(size), arrow: ColumnArrow::Collapse }
+        WindowColumn { edge, held: None, collapsed: None, widths: UNBOUNDED, fitted: Some(size), arrow: ColumnArrow::Collapse }
     }
 
     /// The column with the double arrow `arrow` ([`ColumnArrow::of`]).
@@ -96,20 +110,25 @@ impl WindowColumn {
         self
     }
 
-    /// Where a window that keeps `rect` shows while its column is collapsed: the collapsed column under the window's
-    /// chrome, `chrome` tall (`DockSizes::window_chrome`), at the top of `rect` and against the edge the window keeps
-    /// to. `None` while the column is expanded.
+    /// Where a window that keeps `rect` shows while its content fixes its height ([`Self::held`]): the column under
+    /// the window's chrome, `chrome` tall (`DockSizes::window_chrome`), at the top of `rect`, as wide as a collapsed
+    /// column or else as `rect`, and against the edge the window keeps to. `None` while the rect gives the height.
     pub fn shown(self, rect: Rect, chrome: f32, rtl: bool) -> Option<Rect> {
-        let size = self.collapsed? + Vec2::new(0.0, chrome);
+        let size = Vec2::new(self.collapsed.unwrap_or(rect.width()), self.held? + chrome);
         let left = if at_left(self.edge, rtl) { rect.left() } else { rect.right() - size.x };
         Some(Rect::from_min_size(Pos2::new(left, rect.top()), size))
     }
 
-    /// The rect a window that keeps `rect` keeps when it shows at `shown`: while collapsed, `rect` moved with the
-    /// collapsed column ([`Self::shown`]) so that the column's side on the edge the window keeps to stays on that side
-    /// of `rect`, whatever width the column shows at; `rect` keeps its expanded size. While expanded, `shown`.
+    /// The rect a window that keeps `rect` keeps when it shows at `shown`, so that it keeps its height while its
+    /// content fixes the shown one ([`Self::shown`]). While collapsed, `rect` moved with the collapsed column so that
+    /// the column's side on the edge the window keeps to stays on that side of `rect`, whatever width the column shows
+    /// at; `rect` keeps its expanded size. While every group is minimized, `shown`'s place and width with `rect`'s
+    /// height. Otherwise `shown`.
     pub fn kept(self, shown: Rect, rect: Rect, chrome: f32, rtl: bool) -> Rect {
         let Some(at) = self.shown(rect, chrome, rtl) else { return shown };
+        if self.collapsed.is_none() {
+            return Rect::from_min_size(shown.min, Vec2::new(shown.width(), rect.height()));
+        }
         let dx = if at_left(self.edge, rtl) { shown.left() - at.left() } else { shown.right() - at.right() };
         rect.translate(Vec2::new(dx, shown.top() - at.top()))
     }
@@ -126,7 +145,8 @@ impl WindowColumn {
     /// at the same place against that edge ([`Self::around_strip`]); an expanded window keeps `rect`, and the edge
     /// nearer it (`None`).
     pub fn dropped(self, rect: Rect, bounds: Rect, rtl: bool) -> (Rect, Option<DockEdge>) {
-        let Some(size) = self.collapsed else { return (rect, None) };
+        let (Some(width), Some(height)) = (self.collapsed, self.held) else { return (rect, None) };
+        let size = Vec2::new(width, height);
         let left = if at_left(self.edge, rtl) { rect.left() } else { rect.right() - size.x };
         let (rect, edge) = Self::around_strip(Rect::from_min_size(Pos2::new(left, rect.top()), size), rect.size(), bounds, rtl);
         (rect, Some(edge))
@@ -199,7 +219,8 @@ impl Outcome for FloatingGroupOutput {
 ///   in [`FloatingGroupOutput::collapsed_width`]) while its height stays the icons', and the rect keeps its size. A
 ///   column its content sizes ([`WindowColumn::fitted`]) shows at that size at the rect's place; its resizes are
 ///   reported as the user makes them, and in an OS window the app runs them, so the window takes only the size the
-///   host gives it.
+///   host gives it. A column whose every group is minimized ([`WindowColumn::minimized`]) shows at the rect's place
+///   and width and its strips' height; its sides resize the width, and the rect keeps its height.
 /// - Docking: with [`window_of`](FloatingGroup::window_of) set, a move by the title starts a window-unit drag
 ///   (`GroupDrag`) for the dock's `DockDropTarget`, which shows the drop mark and docks the window on release.
 /// - Window: with `native` set the group opens in an OS window of that kind, with the layer as the fallback where
@@ -367,10 +388,15 @@ impl<'a> FloatingGroup<'a> {
     fn mount(&self) -> Mount {
         // The frame's limits are the body's with the chrome on top.
         let frame = self.limits.around(Vec2::new(0.0, self.chrome));
-        let collapsed = self.collapsed_rect().zip(self.column.map(|column| column.widths));
+        // A collapsed column's width stays within its own bounds, a minimized one's within the panels' limits.
+        let widths = self.column.map(|column| match column.collapsed {
+            Some(_) => column.widths,
+            None => (frame.min.x, frame.max.map_or(f32::INFINITY, |max| max.x)),
+        });
+        let held = self.held_rect().zip(widths);
         let mut overlay = Overlay::floating().movable(true).resizable(!self.minimized).opacity(self.opacity).body_scroll(false);
-        overlay = if let Some((shown, (least, most))) = collapsed {
-            // The sides resize a collapsed column's width; its height is its icons'.
+        overlay = if let Some((shown, (least, most))) = held {
+            // The sides resize the column's width; its content fixes its height.
             let height = shown.height();
             let edges = if self.minimized { ResizeEdges::NONE } else { ResizeEdges::LEFT.union(ResizeEdges::RIGHT) };
             overlay.placed(shown).resize_edges(edges).size_limits(SizeLimits::new(Vec2::new(least, height), Vec2::new(most.max(least), height)))
@@ -399,9 +425,9 @@ impl<'a> FloatingGroup<'a> {
         }
     }
 
-    /// Where the group shows while its column is collapsed: the collapsed column under the chrome, at the top of the
-    /// rect and against its edge the window keeps to. `None` while the column is expanded.
-    fn collapsed_rect(&self) -> Option<Rect> {
+    /// Where the group shows while its column's content fixes its height ([`WindowColumn::shown`]). `None` while the
+    /// rect gives the height.
+    fn held_rect(&self) -> Option<Rect> {
         self.column?.shown(self.rect, self.chrome, self.rtl)
     }
 
@@ -524,14 +550,15 @@ impl Container for FloatingGroup<'_> {
     fn placement_changed(&mut self, change: &PlacementChange) {
         let mut change = *change;
         let fitted = self.column.is_some_and(|column| column.fitted.is_some());
-        if let Some(column) = self.column.filter(|column| column.collapsed.is_some()) {
-            // A resize of the collapsed window sets the column's width; the rect keeps its expanded size.
+        if let Some(column) = self.column.filter(|column| column.held.is_some()) {
+            // A resize of the collapsed window sets the column's width; the rect keeps its expanded size. A minimized
+            // window's rect takes the width and keeps its height.
             let resized = match change.kind {
                 PlacementKind::Size(_) => true,
-                PlacementKind::Keyboard => self.collapsed_rect().is_some_and(|shown| change.rect.width() != shown.width()),
+                PlacementKind::Keyboard => self.held_rect().is_some_and(|shown| change.rect.width() != shown.width()),
                 _ => false,
             };
-            if resized {
+            if resized && column.collapsed.is_some() {
                 self.collapsed_width = Some(change.rect.width());
             }
             change.rect = column.kept(change.rect, self.rect, self.chrome, self.rtl);
