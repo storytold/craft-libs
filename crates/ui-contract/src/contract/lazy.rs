@@ -88,6 +88,7 @@ impl Lazy {
             _ => None,
         };
         let available = cap.map_or_else(|| flow_region(ui), |cap| at_most(flow_region(ui), rtl, cap.width));
+        let available = if memo { on_row_line(ui, id, available) } else { available };
         let sizing = ui.is_sizing_pass();
         // The child is not part of its body's transcript: in a real run it counts there by its extent, whether it
         // runs or not, so what scrolls into reach does not change the body's content.
@@ -123,6 +124,7 @@ impl Lazy {
             layout,
             pixels_per_point: ctx.pixels_per_point(),
             atlas: ctx.fonts(|fonts| fonts.atlas_generation()),
+            opacity: ui.opacity(),
             env: Env::of(ui).key,
             fits: Env::of(ui).view_fits(),
         };
@@ -302,6 +304,24 @@ fn place_view(ui: &mut Ui, rect: Rect) -> Rect {
         alloc::advance_past(ui, rect);
     }
     rect
+}
+
+/// The room of the memoized view `id` in the flow region `room` of `ui`. Its content starts a layout room of its own
+/// (`Env::start_room`), so it would sit at the top of the unwrapped `Row` around it; as a child placed in flow
+/// (`place_in_cell`), a view of one line sits with its centre on the row's line instead: its room moves down by the
+/// whole pixels that put the centre of the extent it took (in this pass's measuring run, else its last run) there. A
+/// view taller than that reaches, and a view no run showed yet, stays at the row's top. The room keeps its size, so a
+/// kept run replays moved with it.
+fn on_row_line(ui: &Ui, id: egui::Id, room: Rect) -> Rect {
+    let Some(centre) = Env::of(ui).row_line.and_then(|line| line.centre) else {
+        return room;
+    };
+    let Some(size) = lazy::last_extent(ui.ctx(), id) else {
+        return room;
+    };
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let above = ((centre - size.y / 2.0) * pixels_per_point).round() / pixels_per_point;
+    if above.is_finite() && above > 0.0 { room.translate(Vec2::new(0.0, above)) } else { room }
 }
 
 /// What a child came to in a pass.

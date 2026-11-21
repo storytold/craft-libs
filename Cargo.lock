@@ -4252,6 +4252,7 @@ name = "craft-tracked"
 version = "0.1.0"
 dependencies = [
  "craft-ui-macros",
+ "serde",
 ]
 
 [[package]]

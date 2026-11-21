@@ -203,6 +203,8 @@ struct OwnerRecord {
     viewport: ViewportId,
     pass: u64,
     at: f64,
+    /// The pass of the owner's registration before `pass`, in the same viewport.
+    before: Option<u64>,
 }
 
 /// One entry the runtime keeps for a component, and the owner that is tested for its eviction.
@@ -270,9 +272,26 @@ pub(crate) fn register_owner(ctx: &Context, owner: Id) {
     crate::runtime::replay::note_owner(ctx, owner);
     let facts = frame::facts(ctx);
     pass_state::with::<Registry, _>(ctx, |reg| {
-        reg.owners.insert(owner, OwnerRecord { viewport: facts.viewport, pass: facts.pass_nr, at: facts.now });
+        let before = match reg.owners.get(&owner) {
+            Some(last) if last.viewport == facts.viewport && last.pass == facts.pass_nr => last.before,
+            Some(last) if last.viewport == facts.viewport => Some(last.pass),
+            _ => None,
+        };
+        reg.owners.insert(owner, OwnerRecord { viewport: facts.viewport, pass: facts.pass_nr, at: facts.now, before });
         reg.ended.remove(&owner);
     });
+}
+
+/// Whether `owner` was registered in the pass before the running one of its viewport, by a run or a replay: its
+/// component was shown there.
+pub(crate) fn shown_last_pass(ctx: &Context, owner: Id) -> bool {
+    let facts = frame::facts(ctx);
+    pass_state::with::<Registry, _>(ctx, |reg| {
+        reg.owners.get(&owner).filter(|last| last.viewport == facts.viewport).is_some_and(|last| {
+            let shown = if last.pass == facts.pass_nr { last.before } else { Some(last.pass) };
+            shown.is_some_and(|shown| shown + 1 >= facts.pass_nr)
+        })
+    })
 }
 
 /// The generation of ended shown lives now: a kept run stores it, and `ended_since` compares with it.

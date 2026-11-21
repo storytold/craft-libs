@@ -181,7 +181,12 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     };
     let parent = overlay::drawing_parent(ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting };
+    let mut spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting, root: None };
+    // A popup's or a modal's layer, and any layer while it fades out, has a root node, made before its `Area` shows so
+    // egui hangs the layer's content below it. A sizing pass of the `Area` reports nothing.
+    if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
+        spec.root = areas::content_rect(ctx, &spec).map(|rect| access::report_layer(ctx, layer.id, rect, layer.exiting));
+    }
     // The opener of the layer's scope is the stop focused when the layer first appears: egui's modal gate takes focus
     // from the widgets below a modal layer by the first pass that shows the layer. A dropdown that keeps its anchor's key
     // focus belongs to the component that opened it: a press moves the key focus onto that component only at the end of
@@ -208,8 +213,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         // from the opener's inherited env with the layer-local fields fresh, and outside the opener's scopes.
         let installed = Env::install_for(ui, layer.env.capture().env());
         let real = !ui.is_sizing_pass();
-        if real && (layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. })) {
-            access::report_layer(ctx, layer.id, ui.unique_id(), ui.max_rect(), overlay.rank.is_modal(), layer.exiting);
+        if spec.root.is_some() && layer.exiting {
+            access::hide_exiting_content(ctx, ui.unique_id());
         }
         // Every layer is a focus scope, one without a policy (`FocusPolicy::NONE`) included: its stops are the layer's,
         // not those of the scope it was opened in, so a trap around it leaves them out (a menu's companion bar).
@@ -226,6 +231,9 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         // checks them. Without the boundary a tooltip's text was checked against the body's kept transcript, which
         // asked for a discard pass every other frame while the tooltip showed.
         access::scope::outside(ctx, || layout_memory::boundary(ctx, true, || body(ui)));
+        if real && overlay.rank.is_modal() {
+            access::report_modal(ctx, layer.id);
+        }
         if real {
             focus::pop_scope(ctx);
         }
@@ -246,6 +254,10 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
     overlay::record(ctx, entry);
     let dismissed = if layer.exiting { None } else { dismissal(ctx, layer, shown.rect, anchor, scope, &mut memory) };
+    // The layer closes after its body ran: the run shows it open, so a record of the run is not replayed.
+    if dismissed.is_some() {
+        crate::runtime::replay::note_unsettled(ctx);
+    }
     if let Some(nudge) = &nudge {
         // `dismissal` above records the press beside the layer (`dismissal.rs`, `note_pressed_outside`), so the nudge
         // starts after it and moves the layer from the next pass on.
@@ -359,14 +371,18 @@ fn show_in_popup(
     // The layer's content starts from its opener's env, on the popup window's own root: its scale and window facts.
     let opener = layer.env.capture().env();
     let env = Env::root_of(&ctx).map_or_else(|| opener.clone(), |root| opener.rebase(&root));
-    let spec = LayerSpec { id: area, tier, at: window.min, interactable: overlay.rank != Rank::Tooltip && !layer.exiting };
+    let mut spec = LayerSpec { id: area, tier, at: window.min, interactable: overlay.rank != Rank::Tooltip && !layer.exiting, root: None };
+    // The layer's root node, made before its `Area` shows, as in `host`.
+    if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
+        spec.root = areas::content_rect(&ctx, &spec).map(|rect| access::report_layer(&ctx, layer.id, rect, layer.exiting));
+    }
     overlay::begin_layer(&ctx, layer.id, tier, layer.exiting, placed.side);
     let shown = areas::show_layer(&ctx, &spec, |ui| {
         areas::fade(ui, layer.fade * overlay.opacity);
         let installed = Env::install_for(ui, env.clone());
         let real = !ui.is_sizing_pass();
-        if real && (layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. })) {
-            access::report_layer(&ctx, layer.id, ui.unique_id(), ui.max_rect(), overlay.rank.is_modal(), layer.exiting);
+        if spec.root.is_some() && layer.exiting {
+            access::hide_exiting_content(&ctx, ui.unique_id());
         }
         // The focused stop the scope returns to is in the opener's window; the opener's window takes the OS focus
         // back when the popup closes (`windows::close_popup`).
@@ -379,6 +395,9 @@ fn show_in_popup(
             ui.set_min_size(overlay.size_limits.min.min(placed.room));
         }
         access::scope::outside(&ctx, || layout_memory::boundary(&ctx, true, || body(ui)));
+        if real && overlay.rank.is_modal() {
+            access::report_modal(&ctx, layer.id);
+        }
         if real {
             focus::pop_scope(&ctx);
         }
@@ -489,6 +508,8 @@ impl Nudge {
 /// The layer-stack side of an OS-window mount: records the window as an entry of its viewport's stack (rank, key
 /// class, scope; no egui layer) and decides its dismissal after the body ran. `rect` is the window's inner rect.
 pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> LayerOut {
+    // The entry stands for a window of another viewport, whose pass no record of this one holds.
+    crate::runtime::replay::block(ctx);
     let overlay = layer.overlay;
     let mut memory = recall(layer, ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);

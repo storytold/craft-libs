@@ -409,14 +409,19 @@ impl Scoped {
         self.offered = None;
     }
 
-    /// Starts the layout room of a memoized view's content (`start_room`). Where a leaf shown here would fit its room
-    /// (`view_fits`), the leaves of the view's content fit the room the view is given (`Shrink::Fit`). A view that is a
-    /// unit of a shrinking `Row` sizes from its content along x, as the row counted it: a child that fills there takes
-    /// its measured width, not the row's flow region a view the row does not narrow is shown in.
+    /// Starts the layout room of a memoized view's content (`start_room`), keeping whether the enclosing body is a
+    /// content-sized or a given column, as `start_room` keeps the content axes. The view's content then measures and
+    /// fills as it would shown without the view: a child that fills takes its measured size where the body sizes from
+    /// content, never the open room. Where a leaf shown here would fit its room (`view_fits`), the leaves of the view's
+    /// content fit the room the view is given (`Shrink::Fit`). A view that is a unit of a shrinking `Row` sizes from its
+    /// content along x, as the row counted it: a child that fills there takes its measured width, not the row's flow
+    /// region a view the row does not narrow is shown in.
     pub(crate) fn start_view_room(&mut self) {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
+        let (content_column, given_column) = (self.content_column, self.given_column);
         self.start_room();
+        (self.content_column, self.given_column) = (content_column, given_column);
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
@@ -435,15 +440,17 @@ impl Scoped {
     /// The key of everything a memoized view shown in this scope inherits beyond `key` (the style inputs, which its
     /// place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface, wheel, directions), the
     /// containers around it (arena, roving group, transform, collection item and row, inside label, footer slot, line
-    /// length, scroll owner and axes), the command chain, motion, the host's formats and date, and every app value. The
-    /// flow fields of the enclosing body are not in it: a memoized view's content starts a layout room of its own
-    /// (`start_room`). Computed once per scope, on the first view that asks; the bytes it fed are counted then.
+    /// length, scroll owner and axes), the command chain, motion, the host's formats and date, and every app value. Of
+    /// the flow fields of the enclosing body only how it sizes from its content is in it: a memoized view's content
+    /// starts a layout room of its own (`start_view_room`) that keeps those facts. Computed once per scope, on the
+    /// first view that asks; the bytes it fed are counted then.
     pub(crate) fn scope_key(&self) -> u128 {
         *self.scope_key.get_or_init(|| {
             use crate::contract::{MemoKey, MemoProps as _};
             let mut key = MemoKey::of_view(&self.ctx);
             key.feed_hash(&(self.enabled, self.read_only, self.size, self.glyphs, self.ink, self.surface, self.wheel));
             key.feed_hash(&(self.direction, self.text_direction, self.ids_stable, self.cell_fills, self.least, self.unbounded, self.content));
+            key.feed_hash(&(self.content_column, self.given_column));
             key.feed_hash(&(self.arena, self.roving, self.item, self.row, self.scroll_owner.map(|owner| (owner.id, owner.view))));
             self.transform.map(|transform| (transform.scale, transform.offset)).key(&mut key);
             self.footer_slot.map(|slot| (slot.owner, slot.size)).key(&mut key);
@@ -540,8 +547,9 @@ impl Env {
         let shell = Arc::new(windows::shell_of(ctx, pass::current_viewport(ctx)));
         let active = shell.window.active;
         let keyboard = Arc::new(crate::runtime::keys::layout_of(ctx));
-        // The window facts and the layout are tracked inputs: a view that read them runs when they change.
-        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Shell, (*shell).clone());
+        // The window facts, the safe rect and the layout are tracked inputs: a view that read them runs when they change.
+        let safe = crate::runtime::egui::areas::safe_rect_raw(ctx);
+        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Shell, ((*shell).clone(), safe));
         crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Keyboard, (*keyboard).clone());
         let words = host_words(ctx, host.as_ref());
         let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash())

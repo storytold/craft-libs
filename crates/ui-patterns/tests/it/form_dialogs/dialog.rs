@@ -9,7 +9,7 @@ use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{
     DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult,
 };
-use craft_ui::patterns::presets::PresetRow;
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -18,7 +18,6 @@ use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Key, Modifiers, TextureId, Vec2, vec2};
 use serde_json::json;
-use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -477,12 +476,11 @@ fn filter_params(narrow: bool) -> Vec<Param> {
 
 /// A remembering filter dialog; `narrow` offers fewer patterns.
 fn filter(fields: &mut DialogFields, narrow: bool) -> ParamDialog<'_> {
-    let ids: &[&str] = if narrow { &["dots"] } else { &["dots", "stripes"] };
-    let patterns: Vec<PresetRow<String>> = ids.iter().map(|id| PresetRow::item((*id).to_owned(), *id, 0)).collect();
+    let ids: &'static [&'static str] = if narrow { &["dots"] } else { &["dots", "stripes"] };
     ParamDialog::new("filter", "Filter", filter_params(narrow))
         .values(Bind::bound(fields))
         .remember(SaveKey::new("trial.filter"))
-        .patterns(Cow::Owned(patterns))
+        .patterns(PresetSource::new(ids, PresetFns::new(|ids, _| ids.iter().map(|id| PresetRow::item((*id).to_owned(), *id, 0)).collect())))
 }
 
 fn wide_filter(fields: &mut DialogFields) -> ParamDialog<'_> {
