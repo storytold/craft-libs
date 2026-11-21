@@ -121,8 +121,8 @@ pub enum ComponentSet {
     /// The look the creative apps' users expect.
     #[default]
     Creative,
-    /// The look the office apps' users expect.
-    Office,
+    /// The look the productivity apps' users expect.
+    Productivity,
 }
 
 /// What the user picked, every field concrete (after defaults are filled in).
@@ -215,7 +215,7 @@ impl From<Selection> for SuiteChoice {
 /// What an app shows for every field the suite hasn't chosen.
 ///
 /// Each app states its own, normally [`crate::SUITE_DEFAULT`] in both slots with the mode and
-/// size that suit it (the creative apps Dark and Compact; office apps may ship Light).
+/// size that suit it (the creative apps Dark and Compact; productivity apps may ship Light).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppDefaults {
     /// The theme for each mode.

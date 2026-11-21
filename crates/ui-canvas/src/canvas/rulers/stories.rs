@@ -140,7 +140,7 @@ fn edge_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     in_face(ui, data, RulerFace::Edge)
 }
 
-/// The centred face (the office set's): a bar inset in each strip, ticks centred on it, labels in place of the major
+/// The centred face (the productivity set's): a bar inset in each strip, ticks centred on it, labels in place of the major
 /// ticks and none over the shaded margins.
 #[story(Rulers<'static>, covers = [], drive = Drive::Never)]
 fn centred_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

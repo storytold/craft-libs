@@ -337,7 +337,7 @@ fn tick_marks(shapes: &[egui::Shape], strip: egui::Rect) -> Vec<egui::Rect> {
 }
 
 /// A page-wide ruler in inches, shown with `face` when given, in a fixture whose root takes `set`; `popup` shows it in
-/// an open popover inside a scope that sets the office set.
+/// an open popover inside a scope that sets the productivity set.
 fn page_ruler(set: ComponentSet, face: Option<RulerFace>, popup: bool) -> (Fixture, Rc<RefCell<Option<egui::Rect>>>) {
     let values = Rc::new(RefCell::new(RulerValues::default()));
     let strip_at: Rc<RefCell<Option<egui::Rect>>> = Rc::new(RefCell::new(None));
@@ -362,7 +362,7 @@ fn page_ruler(set: ComponentSet, face: Option<RulerFace>, popup: bool) -> (Fixtu
             with_env(
                 ui,
                 |env| {
-                    env.values.set(ComponentSet::Office);
+                    env.values.set(ComponentSet::Productivity);
                 },
                 |ui| {
                     Popover::new("Card", Bind::given(true)).show(ui, |ui, _| ruler(ui));
@@ -400,13 +400,18 @@ fn edge(p: &Painted) -> bool {
     !p.ticks.is_empty() && p.ticks.iter().all(|tick| (tick.max.y - p.strip.max.y).abs() < 1.0)
 }
 
-/// With no face given, the component set picks it: the office set's ruler centres its marks on a bar and puts numbers
+/// With no face given, the component set picks it: the productivity set's ruler centres its marks on a bar and puts numbers
 /// in place of the whole-unit ticks, the creative set's hangs them from the strip's bottom edge.
 #[trial]
 fn the_component_set_picks_the_ruler_face() {
-    let (mut fixture, strip) = page_ruler(ComponentSet::Office, None, false);
-    let office = painted(&mut fixture, &strip);
-    assert!(centred(&office), "the office set paints the centred face: ticks {:?}, numbers {:?}", office.ticks, office.numbers);
+    let (mut fixture, strip) = page_ruler(ComponentSet::Productivity, None, false);
+    let productivity = painted(&mut fixture, &strip);
+    assert!(
+        centred(&productivity),
+        "the productivity set paints the centred face: ticks {:?}, numbers {:?}",
+        productivity.ticks,
+        productivity.numbers
+    );
     let (mut fixture, strip) = page_ruler(ComponentSet::Creative, None, false);
     let creative = painted(&mut fixture, &strip);
     assert!(edge(&creative), "the creative set paints the edge face: ticks {:?}", creative.ticks);
@@ -415,9 +420,9 @@ fn the_component_set_picks_the_ruler_face() {
 /// A face given on the ruler wins over the component set.
 #[trial]
 fn a_given_face_wins_over_the_component_set() {
-    let (mut fixture, strip) = page_ruler(ComponentSet::Office, Some(RulerFace::Edge), false);
+    let (mut fixture, strip) = page_ruler(ComponentSet::Productivity, Some(RulerFace::Edge), false);
     let given_edge = painted(&mut fixture, &strip);
-    assert!(edge(&given_edge), "the edge face under the office set: ticks {:?}", given_edge.ticks);
+    assert!(edge(&given_edge), "the edge face under the productivity set: ticks {:?}", given_edge.ticks);
     let (mut fixture, strip) = page_ruler(ComponentSet::Creative, Some(RulerFace::Centred), false);
     let given_centred = painted(&mut fixture, &strip);
     assert!(centred(&given_centred), "the centred face under the creative set: ticks {:?}", given_centred.ticks);
@@ -428,7 +433,7 @@ fn a_given_face_wins_over_the_component_set() {
 fn a_scopes_component_set_reaches_a_popup_opened_inside_it() {
     let (mut fixture, strip) = page_ruler(ComponentSet::Creative, None, true);
     let in_popup = painted(&mut fixture, &strip);
-    assert!(centred(&in_popup), "the popup's ruler takes the scope's office set: ticks {:?}", in_popup.ticks);
+    assert!(centred(&in_popup), "the popup's ruler takes the scope's productivity set: ticks {:?}", in_popup.ticks);
 }
 
 /// A set change restyles the ruler in the frame it arrives in, in one pass, and the frame after asks for nothing more.
@@ -436,9 +441,9 @@ fn a_scopes_component_set_reaches_a_popup_opened_inside_it() {
 fn a_component_set_change_restyles_the_ruler_in_one_pass_and_then_rests() {
     let (mut fixture, strip) = page_ruler(ComponentSet::Creative, None, false);
     assert!(edge(&painted(&mut fixture, &strip)));
-    fixture.set(ComponentSet::Office);
+    fixture.set(ComponentSet::Productivity);
     let changed = painted(&mut fixture, &strip);
-    assert!(centred(&changed), "the frame of the change paints the office face");
+    assert!(centred(&changed), "the frame of the change paints the productivity face");
     assert_eq!(fixture.passes(), 1, "the change takes one pass");
     fixture.idle(1);
     assert_eq!(fixture.passes(), 1);

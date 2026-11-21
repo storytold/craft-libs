@@ -66,7 +66,7 @@ choices!(TEXT_SIZES: TextSize = [
     (TextSize::Large, "large", "Large"),
 ]);
 choices!(DENSITIES: Size = [(Size::Compact, "compact", "Compact"), (Size::Comfortable, "comfortable", "Comfortable")]);
-choices!(SETS: ComponentSet = [(ComponentSet::Creative, "creative", "Creative"), (ComponentSet::Office, "office", "Office")]);
+choices!(SETS: ComponentSet = [(ComponentSet::Creative, "creative", "Creative"), (ComponentSet::Productivity, "productivity", "Productivity")]);
 choices!(MOTIONS: MotionChoice = [
     (MotionChoice::Full, "full", "Off"),
     (MotionChoice::Reduced, "reduced", "On"),
@@ -92,7 +92,7 @@ pub enum VariantAxis {
     Contrast,
     /// Compact and comfortable density.
     Size,
-    /// The creative and the office component set.
+    /// The creative and the productivity component set.
     Set,
     /// Left to right and right to left.
     Direction,
@@ -122,7 +122,7 @@ impl VariantAxis {
             VariantAxis::Mode => "Every mode (light, dark)",
             VariantAxis::Contrast => "Every contrast (standard, high)",
             VariantAxis::Size => "Every size (compact, comfortable)",
-            VariantAxis::Set => "Every set (creative, office)",
+            VariantAxis::Set => "Every set (creative, productivity)",
             VariantAxis::Direction => "Every direction (LTR, RTL)",
             VariantAxis::ControlSize => "Every control size (Sm, Md)",
             VariantAxis::DirectionAndControlSize => "Every direction and control size",

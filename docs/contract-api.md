@@ -3034,7 +3034,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn edge(look: &RuleLook, rect: Rect, side: RectSide, pixels_per_point: f32) -> Vec<Shape>`. The line along the `side` edge of `rect`, on the physical pixels just inside it: a row's bottom rule or a
 - `craft_ui::primitives::RuleKind`: `pub enum RuleKind { Divider, Edge, Grid, DropMark }`. Which rule a look is for.
 - `craft_ui::primitives::RulerFace`: `pub enum RulerFace { Edge, Centred }`. How a ruler lays out its marks and numbers. A ruler takes a face from its `face` prop, else from the scope's
-  - `pub const fn of(set: craft_theme::ComponentSet) -> Self`. The face the component set `set` shows: the creative set the edge face, the office set the centred one.
+  - `pub const fn of(set: craft_theme::ComponentSet) -> Self`. The face the component set `set` shows: the creative set the edge face, the productivity set the centred one.
   - `pub fn bar(self, strip: Rect, edge: TickEdge) -> Rect`. Where the marks of a strip along `edge` sit: the whole strip for the edge face, the strip inset across its
   - `pub fn beside_numbers(self, edge: TickEdge, origin: f32, marks: Vec<Tick>, numbers: &[Rect], pad: f32) -> Vec<Tick>`. The marks of `marks` this face shows beside the numbers in `numbers` (screen boxes): the edge face shows every
   - `pub fn centred_number(bar: Rect, edge: TickEdge, at: f32, size: Vec2) -> Rect`. The box a centred number of `size` takes for the mark at `at` (a screen position along `edge`'s axis): centred

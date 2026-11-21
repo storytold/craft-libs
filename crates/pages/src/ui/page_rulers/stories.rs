@@ -69,7 +69,7 @@ fn vertical_edge_face(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     vertical(ui, &ROWS, Some(Rangef::new(TEXT.0, TEXT.1)), Some(RulerFace::Edge))
 }
 
-/// The centred face (the office set's): a bar inset in the strip, ticks centred on it, numbers in place of the
+/// The centred face (the productivity set's): a bar inset in the strip, ticks centred on it, numbers in place of the
 /// whole-unit ticks over the text range only.
 #[story(VerticalRuler<'static>, covers = [], drive = Drive::Never)]
 fn vertical_centred_face(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -121,7 +121,7 @@ fn page_edge_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     single_page(ui, data, None, Some(RulerFace::Edge))
 }
 
-/// Both rulers in the centred face (the office set's).
+/// Both rulers in the centred face (the productivity set's).
 #[story(PageRulers<'static>, covers = [], drive = Drive::Never)]
 fn page_centred_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     single_page(ui, data, None, Some(RulerFace::Centred))

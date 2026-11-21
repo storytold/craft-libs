@@ -31,7 +31,7 @@
 //!
 //! let artcraft = ThemeId::parse("craft.artcraft").unwrap();
 //! let defaults =
-//!     AppDefaults { theme: ThemePair::same(artcraft), mode: ModeChoice::Dark, size: Size::Compact, sizes: Default::default(), set: ComponentSet::Office };
+//!     AppDefaults { theme: ThemePair::same(artcraft), mode: ModeChoice::Dark, size: Size::Compact, sizes: Default::default(), set: ComponentSet::Productivity };
 //! let selection = accepted.suite.with_defaults(&defaults);
 //! assert_eq!((selection.theme.light, selection.mode), (graphite.id, ModeChoice::Dark));
 //! ```
