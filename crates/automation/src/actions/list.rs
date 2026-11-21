@@ -409,6 +409,17 @@ impl ActionList {
         Ok(())
     }
 
+    /// Replaces the app's own options of the action at `index` ([`Action::options`]). Setting the options it holds
+    /// changes nothing, so the revision stays.
+    pub fn set_options(&mut self, index: usize, options: serde_json::Map<String, serde_json::Value>) -> Result<(), ActionListError> {
+        let action = self.actions.get_mut(index).ok_or(ActionListError::NoSuchAction(index))?;
+        if action.options != options {
+            action.options = options;
+            self.touch();
+        }
+        Ok(())
+    }
+
     /// Appends a whole action and returns its index; an empty or taken name is refused.
     pub fn push(&mut self, action: Action) -> Result<usize, ActionListError> {
         if action.name.trim().is_empty() {

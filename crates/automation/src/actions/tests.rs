@@ -332,3 +332,20 @@ fn app_options_ride_with_an_action_through_edits_and_files() {
     merged.merge_file(ActionsFile::from_json(&text).unwrap(), false, |_, _| {});
     assert!(merged.actions().iter().all(|action| action.options.get("key") == Some(&json!(3))));
 }
+
+// An action's options are set in the list, kept through a duplicate and the file, and the same options or an unknown
+// action change nothing.
+#[trial]
+fn an_actions_options_are_set_and_kept_through_a_duplicate_and_the_file() {
+    let mut list = list_of(vec![action("a", &["one"])]);
+    let options = json!({"key": "F5", "automaticAlignTo": "artboard"}).as_object().cloned().unwrap();
+    list.set_options(0, options.clone()).unwrap();
+    assert_eq!(list.action(0).unwrap().options, options);
+    let revision = list.revision();
+    list.set_options(0, options.clone()).unwrap();
+    assert_eq!(list.revision(), revision, "the options it holds change nothing");
+    assert_eq!(list.set_options(7, serde_json::Map::new()), Err(ActionListError::NoSuchAction(7)));
+    let copy = list.duplicate_action(0, |_, _, _| {}).unwrap();
+    assert_eq!(list.action(copy).unwrap().options, options, "a duplicate keeps them");
+    assert_eq!(ActionList::from_file(list.to_file()).action(0).unwrap().options, options, "the file keeps them");
+}
