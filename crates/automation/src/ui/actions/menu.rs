@@ -276,7 +276,7 @@ pub fn panel_rows(facts: ActionsMenuFacts, offered: &dyn Fn(ActionsPanelCommands
 /// The shortcut as the context menu has made it so far.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PendingShortcut {
-    /// 0 for none, else 1..=12.
+    /// 0 for none, else 1..=15.
     key: u8,
     shift: bool,
     command: bool,
@@ -319,7 +319,7 @@ impl OpenMenu {
 
 /// Shows the menu the last request chose, hanging from `opener` (the list), and reports what its
 /// rows ran:
-/// - On an action: Keyboard Shortcuts (a caption), None and F1 to F12 as radio rows, then Shift and
+/// - On an action: Keyboard Shortcuts (a caption), None and F1 to F15 as radio rows, then Shift and
 ///   Command (Ctrl off macOS) check rows, enabled only with a key; the check rows keep the menu
 ///   open so both can be ticked, and each tick is reported as it is made with the shortcut as it
 ///   stands. A separator, then Color: a submenu of None, Red, Orange, Yellow, Green, Blue, Violet
@@ -345,7 +345,7 @@ pub(super) fn show_menu(ui: &mut Ui, body: &Body<'_>, opener: &Response, session
                     shortcut.key = 0;
                     events.push(ActionsEvent::AssignShortcut { action, choice: shortcut.choice() });
                 }
-                for key in 1..=12u8 {
+                for key in 1..=15u8 {
                     if MenuItem::new(format!("F{key}")).radio_mark(shortcut.key == key).show(ui).ran {
                         shortcut.key = key;
                         events.push(ActionsEvent::AssignShortcut { action, choice: shortcut.choice() });

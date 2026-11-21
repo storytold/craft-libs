@@ -118,7 +118,7 @@ pub enum StepCells {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ShortcutChoice {
-    /// F1 to F12: 1..=12.
+    /// F1 to F15: 1..=15.
     pub key: u8,
     /// Shift is part of the shortcut.
     pub shift: bool,
@@ -127,7 +127,7 @@ pub struct ShortcutChoice {
 }
 
 impl ShortcutChoice {
-    /// Function key `key` (1 to 12) with the given modifiers.
+    /// Function key `key` (1 to 15) with the given modifiers.
     pub const fn new(key: u8, shift: bool, command: bool) -> Self {
         Self { key, shift, command }
     }
@@ -138,7 +138,7 @@ impl ShortcutChoice {
         self.chord().display(Platform::current())
     }
 
-    /// The shortcut as a keymap chord; a key above 12 is taken as F12.
+    /// The shortcut as a keymap chord; a key outside 1..=15 is taken as F12.
     fn chord(&self) -> Chord {
         let key = match self.key {
             1 => Key::F1,
@@ -152,6 +152,9 @@ impl ShortcutChoice {
             9 => Key::F9,
             10 => Key::F10,
             11 => Key::F11,
+            13 => Key::F13,
+            14 => Key::F14,
+            15 => Key::F15,
             _ => Key::F12,
         };
         Chord::new(Mods { cmd: self.command, shift: self.shift, ..Mods::NONE }, key)
@@ -390,12 +393,13 @@ pub struct ActionsPanel<'a> {
     host: Option<&'a dyn ActionsHost>,
     rename: Option<usize>,
     enabled: bool,
+    step_cells: StepCells,
 }
 
 impl<'a> ActionsPanel<'a> {
     /// A panel over `list` with `state`.
     pub fn new(state: &'a mut ActionsPanelState, list: &'a ActionList) -> Self {
-        Self { state, list, host: None, rename: None, enabled: true }
+        Self { state, list, host: None, rename: None, enabled: true, step_cells: StepCells::default() }
     }
 
     /// The app's side; without one, steps show their command ids and nothing records or plays.
@@ -413,9 +417,9 @@ impl<'a> ActionsPanel<'a> {
 
     /// Which step cells the rows show.
     #[must_use]
-    pub fn step_cells(self, cells: StepCells) -> Self {
-        let _ = cells;
-        todo!("mn.M40")
+    pub fn step_cells(mut self, cells: StepCells) -> Self {
+        self.step_cells = cells;
+        self
     }
 
     /// Whether the panel takes input (default true).
@@ -427,7 +431,7 @@ impl<'a> ActionsPanel<'a> {
     /// Draws the tree (or the buttons) and the footer, and reports this pass's events in order:
     /// the list's, the cells', the context menu's, the footer's.
     pub fn show(self, ui: &mut Ui) -> ActionsPanelOutput {
-        let ActionsPanel { state, list, host, rename, enabled } = self;
+        let ActionsPanel { state, list, host, rename, enabled, step_cells } = self;
         let env = Env::of(ui);
         let words = env.words::<ActionsWords>();
         let list_words = env.words::<ListWords>();
@@ -435,7 +439,7 @@ impl<'a> ActionsPanel<'a> {
         let settings_before = state.settings.clone();
         let events = RefCell::new(Vec::new());
         let state = RefCell::new(state);
-        let body = Body { list, host, words: &words, list_words: &list_words, env: &env, list_id };
+        let body = Body { list, host, words: &words, list_words: &list_words, env: &env, list_id, step_cells };
 
         let shown = Stack::new()
             .fill()
@@ -457,8 +461,10 @@ impl<'a> ActionsPanel<'a> {
         let mut reported = Vec::new();
         if let Some((body_events, selected)) = shown.inner {
             reported = body_events;
-            if let Some(selected) = selected {
-                state.borrow_mut().selected = selected;
+            if let Some((row, sets)) = selected {
+                let mut state = state.borrow_mut();
+                state.selected = row;
+                state.selected_sets = sets;
             }
         }
         reported.extend(events.into_inner());

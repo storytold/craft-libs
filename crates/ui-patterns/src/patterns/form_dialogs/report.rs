@@ -18,6 +18,8 @@ use serde_json::{Value, json};
 
 #[cfg(feature = "testing")]
 mod stories;
+#[cfg(feature = "testing")]
+mod trials;
 
 craft_ui::words! {
     /// The words of the report dialog beside the common OK.
@@ -58,15 +60,13 @@ impl ReportNote {
     /// A muted second part after the text.
     #[must_use]
     pub fn detail(self, detail: impl Into<Label>) -> Self {
-        let _ = (self, detail);
-        todo!("mn.M53")
+        ReportNote { detail: Some(detail.into()), ..self }
     }
 
     /// Shows the text in the mono type role.
     #[must_use]
     pub fn code(self) -> Self {
-        let _ = self;
-        todo!("mn.M54")
+        ReportNote { code: true, ..self }
     }
 }
 
@@ -133,28 +133,33 @@ impl<'a> ReportDialog<'a> {
         ReportDialog { title: title.into(), summary: summary.into(), notes, lines: Vec::new(), groups: Vec::new(), open: None }
     }
 
-    /// The notes as the Copy button hands them back, one per line with the tone's word first; plain
-    /// [`lines`](ReportDialog::lines) one per line as they are.
+    /// The notes as the Copy button hands them back, one per line with the tone's word first (a note with a detail
+    /// ends with it in brackets); plain [`lines`](ReportDialog::lines) one per line as they are. Each group follows
+    /// with its heading line, then its notes.
     pub fn as_text(&self, env: &Env) -> String {
         let view = env.view();
-        if !self.lines.is_empty() {
-            return self.lines.iter().map(|line| view.resolve(line).as_str().to_owned()).collect::<Vec<_>>().join("\n");
-        }
         let words = env.words::<ReportWords>();
-        self.notes
-            .iter()
-            .map(|note| {
-                let word = match note.tone {
-                    Tone::Info => &words.info,
-                    Tone::Warn => &words.warning,
-                    Tone::Bad => &words.error,
-                    Tone::Good => &words.success,
-                    _ => &words.note,
-                };
-                words.line.fill(&[("tone", view.resolve(word).as_str()), ("text", view.resolve(&note.text).as_str())])
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let text = |label: &Label| view.resolve(label).as_str().to_owned();
+        let line = |note: &ReportNote| {
+            let word = match note.tone {
+                Tone::Info => &words.info,
+                Tone::Warn => &words.warning,
+                Tone::Bad => &words.error,
+                Tone::Good => &words.success,
+                _ => &words.note,
+            };
+            let (tone, body) = (text(word), text(&note.text));
+            match &note.detail {
+                Some(detail) => words.line_detail.fill(&[("tone", tone.as_str()), ("text", body.as_str()), ("detail", text(detail).as_str())]),
+                None => words.line.fill(&[("tone", tone.as_str()), ("text", body.as_str())]),
+            }
+        };
+        let mut out: Vec<String> = if self.lines.is_empty() { self.notes.iter().map(&line).collect() } else { self.lines.iter().map(&text).collect() };
+        for group in &self.groups {
+            out.push(text(&group.heading));
+            out.extend(group.notes.iter().map(&line));
+        }
+        out.join("\n")
     }
 
     /// Shows the report.
@@ -163,14 +168,15 @@ impl<'a> ReportDialog<'a> {
         let words = env.words::<ReportWords>();
         let common = env.words::<CommonWords>();
         let text = self.as_text(&env);
-        let ReportDialog { title, summary, notes, lines, groups: _, open } = self;
+        let ReportDialog { title, summary, notes, lines, groups, open } = self;
         let accept = FooterButton::new(common.ok.clone(), DialogRole::Accept);
         let copy = FooterButton::new(words.copy.clone(), DialogRole::Other).stays_open(true);
         let mut dialog = Dialog::new(title).buttons([accept, copy]);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
-        let shown_count = if lines.is_empty() { notes.len() } else { lines.len() };
+        let grouped: usize = groups.iter().map(|group| group.notes.len()).sum();
+        let shown_count = (if lines.is_empty() { notes.len() } else { lines.len() }) + grouped;
         let count = (shown_count > 0).then(|| {
             let n = shown_count as u64;
             words.count.text(n, &env.format().integer(n))
@@ -183,9 +189,18 @@ impl<'a> ReportDialog<'a> {
                 if let Some(count) = &count {
                     Text::new(count.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
                 }
+                let mut at = 0;
                 if lines.is_empty() {
-                    for (at, note) in notes.iter().enumerate() {
-                        Notice::new(note.tone, note.text.clone()).layout(NoticeLayout::Inline).id_salt(at).show(ui);
+                    for note in &notes {
+                        show_note(ui, note, at);
+                        at += 1;
+                    }
+                }
+                for group in &groups {
+                    Text::new(group.heading.clone()).role(TypeRole::Heading).show(ui);
+                    for note in &group.notes {
+                        show_note(ui, note, at);
+                        at += 1;
                     }
                 }
                 for (at, line) in lines.iter().enumerate() {
@@ -198,13 +213,32 @@ impl<'a> ReportDialog<'a> {
     }
 }
 
-/// A [`ReportDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: a title, a summary and plain lines. The text
-/// of the Copy button waits in [`take_copied`](HostedReport::take_copied) until the app puts it on the clipboard.
+/// Shows `note`: a notice of its tone, with a detail as a line under the text. `at` tells the notes of one dialog apart.
+fn show_note(ui: &mut Ui, note: &ReportNote, at: usize) {
+    if note.code {
+        // PLAN: Notice has no type-role slot, so a code note shows its text in the mono role without the tone icon.
+        Text::new(note.text.clone()).role(TypeRole::Mono).show(ui);
+        if let Some(detail) = &note.detail {
+            Text::new(detail.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        }
+        return;
+    }
+    let mut notice = Notice::new(note.tone, note.text.clone()).layout(NoticeLayout::Inline).id_salt(at);
+    if let Some(detail) = &note.detail {
+        notice = notice.lines([detail.clone()]);
+    }
+    notice.show(ui);
+}
+
+/// A [`ReportDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: a title, a summary, plain lines and groups of
+/// notes. The text of the Copy button waits in [`take_copied`](HostedReport::take_copied) until the app puts it on the
+/// clipboard.
 pub struct HostedReport {
     id: crate::dialog::DialogId,
     title: Label,
     summary: Label,
     lines: Vec<String>,
+    groups: Vec<ReportGroup>,
     open: bool,
     copied: Option<String>,
 }
@@ -212,14 +246,22 @@ pub struct HostedReport {
 impl HostedReport {
     /// A report titled `title` with one `summary` line and the `lines`.
     pub fn new(title: impl Into<Label>, summary: impl Into<Label>, lines: Vec<String>) -> Self {
-        HostedReport { id: crate::dialog::dialog_id("report"), title: title.into(), summary: summary.into(), lines, open: true, copied: None }
+        HostedReport {
+            id: crate::dialog::dialog_id("report"),
+            title: title.into(),
+            summary: summary.into(),
+            lines,
+            groups: Vec::new(),
+            open: true,
+            copied: None,
+        }
     }
 
     /// Shows and copies `groups` after the lines; `json_fields` lists their headings and note texts.
     #[must_use]
-    pub fn groups(self, groups: Vec<ReportGroup>) -> Self {
-        let _ = (self, groups);
-        todo!("mn.M58")
+    pub fn groups(mut self, groups: Vec<ReportGroup>) -> Self {
+        self.groups = groups;
+        self
     }
 
     /// The text the Copy button copied since the last call, once. The app puts it on the clipboard.
@@ -242,7 +284,7 @@ impl crate::dialog::StackDialog for HostedReport {
             summary: self.summary.clone(),
             notes: Vec::new(),
             lines,
-            groups: Vec::new(),
+            groups: self.groups.clone(),
             open: Some(Bind::bound(&mut self.open)),
         }
         .show(ui);
@@ -257,7 +299,12 @@ impl crate::dialog::StackDialog for HostedReport {
     }
 
     fn json_fields(&self) -> Option<Value> {
-        Some(json!({ "lines": self.lines }))
+        let groups: Vec<Value> = self
+            .groups
+            .iter()
+            .map(|group| json!({ "heading": group.heading.as_str(), "notes": group.notes.iter().map(|note| note.text.as_str()).collect::<Vec<_>>() }))
+            .collect();
+        Some(json!({ "lines": self.lines, "groups": groups }))
     }
 }
 
