@@ -7,65 +7,54 @@
   "variants": "both",
   "contrast_intent": "standard",
   "seeds": {
-    "accent": "#378ef0",
-    "neutral": "#323232",
+    "accent": "#f06a52",
+    "neutral": "#181b22",
     "status": {
-      "bad": "#ec5b62",
-      "good": "#85dc6a",
-      "info": "#378ef0",
-      "warn": "#e8b046"
+      "bad": "#e34850",
+      "good": "#45af63",
+      "info": "#6f788a",
+      "warn": "#f0a330"
     }
   },
   "shape": null,
   "light": {
-    "accent.soft": "#d6d6d6",
-    "accent.solid": "#378ef0",
-    "accent.text": "#1062c4",
+    "accent.solid": "#d9472f",
     "caption.close_hover": "#c42b1c",
     "caption.close_text": "#ffffff",
-    "line.border": "#d6d6d6",
-    "line.control_edge": "#bababa",
-    "line.divider": "#d6d6d6",
-    "line.knob_edge": "#282828",
+    "line.border": "#d0d5dd",
+    "line.control_edge": "#c3c9d3",
+    "line.divider": "#dde1e8",
     "seeds": {
-      "neutral": "#f0f0f0",
-      "status": {
-        "good": "#4e712e"
-      }
+      "accent": "#d9472f",
+      "neutral": "#f3f5f8"
     },
-    "state.hover": "#e2e2e2",
-    "state.pressed": "#cecece",
-    "state.selected": "#cccccc",
-    "surface.background": "#e2e2e2",
-    "surface.canvas": "#d6d6d6",
+    "state.hover": "#e3e7ed",
+    "state.pressed": "#d5dbe3",
+    "state.selected": "#f8d9d2",
+    "surface.background": "#e6e9ee",
+    "surface.canvas": "#dfe3e9",
     "surface.panel": "#f3f5f8",
     "surface.sunken": "#ffffff",
-    "text.faint": "#787878",
-    "text.muted": "#404040",
-    "text.normal": "#141414",
-    "text.on_accent": "#ffffff"
+    "text.faint": "#9aa1ad",
+    "text.muted": "#58606e",
+    "text.normal": "#1b1f27"
   },
   "dark": {
-    "accent.soft": "#4e4e4e",
-    "accent.solid": "#378ef0",
+    "accent.solid": "#f06a52",
     "caption.close_hover": "#c42b1c",
     "caption.close_text": "#ffffff",
-    "line.border": "#1e1e1e",
-    "line.control_edge": "#4a4a4a",
-    "line.divider": "#1e1e1e",
-    "line.knob_edge": "#282828",
-    "state.hover": "#424242",
-    "state.pressed": "#4e4e4e",
-    "state.selected": "#525252",
-    "status.bad.fg": "#ec5b62",
-    "status.warn.fg": "#e8b046",
-    "surface.background": "#1e1e1e",
-    "surface.canvas": "#282828",
+    "line.border": "#06070a",
+    "line.control_edge": "#2c323e",
+    "line.divider": "#232832",
+    "state.hover": "#262b35",
+    "state.pressed": "#2f3541",
+    "state.selected": "#3a2a2c",
+    "surface.background": "#0b0d12",
+    "surface.canvas": "#101217",
     "surface.panel": "#181b22",
-    "surface.sunken": "#242424",
-    "text.faint": "#808080",
-    "text.muted": "#b2b2b2",
-    "text.normal": "#dedede",
-    "text.on_accent": "#ffffff"
+    "surface.sunken": "#0f1116",
+    "text.faint": "#5a6271",
+    "text.muted": "#969faf",
+    "text.normal": "#dfe4ec"
   }
 }
