@@ -3012,6 +3012,7 @@ dependencies = [
 name = "craft-prc"
 version = "0.1.0"
 dependencies = [
+ "craft-mesh",
  "flate2",
  "proptest",
  "thiserror 2.0.21",
