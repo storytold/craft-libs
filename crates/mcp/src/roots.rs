@@ -283,7 +283,7 @@ const MAX_LINKS: usize = 40;
 /// resolved, so the error does not tell what exists outside the roots. The leading parts of the
 /// path are resolved one at a time, and the walk stops at the first part that resolves neither
 /// inside a root nor to a folder that holds one. Leading parts whose text holds a root's text, as
-/// given or as resolved, are skipped until the first `..`. A part that is a link to nothing is
+/// given or as resolved, without being that text, are skipped until the first `..`. A part that is a link to nothing is
 /// followed to its target, which is walked the same way, up to [`MAX_LINKS`] links. Any other part
 /// that cannot be resolved leaves the roots unless the part before it is a root or lies inside one.
 fn leaves_the_roots(path: &Path, roots: &[PathBuf], texts: &[PathBuf]) -> bool {
@@ -311,8 +311,10 @@ fn leaves_after_links(path: &Path, roots: &[PathBuf], texts: &[PathBuf], links: 
         }
         let text = lexical(&at);
         leading = leading && c != Component::ParentDir && text.as_ref().is_ok_and(|a| texts.iter().any(|t| lexically_inside(t, a)));
-        if leading {
-            parent_inside = text.is_ok_and(|a| texts.iter().any(|t| lexically_inside(&a, t)));
+        // A part whose text is a root's text, or lies inside one, is resolved below like any other,
+        // so a root given as a link that now leads out of the roots is not trusted from its text.
+        if leading && !text.is_ok_and(|a| texts.iter().any(|t| lexically_inside(&a, t))) {
+            parent_inside = false;
             continue;
         }
         let Ok(found) = std::fs::canonicalize(&at) else {
@@ -701,6 +703,24 @@ mod tests {
         let below_missing = base.join("outside/in-link/nothing/../show.json");
         assert!(matches!(linked.check(&below_missing, Access::Read), Err(AccessError::ParentOfMissing { .. })));
         assert!(linked.check(&base.join("outside/in-link/show.json"), Access::Read).is_ok());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A root given as a link that is changed to lead out of the roots after the roots are set up
+    /// gives `Outside` below it, whether or not the folder before a `..` exists there.
+    #[cfg(unix)]
+    #[test]
+    fn a_root_link_changed_to_lead_out_of_the_roots_is_outside() {
+        let (base, _) = folders("retarget");
+        std::os::unix::fs::symlink(base.join("in"), base.join("alias")).unwrap();
+        let roots = Roots::new(&[base.join("alias")], &[]).unwrap();
+        std::fs::remove_file(base.join("alias")).unwrap();
+        std::os::unix::fs::symlink(base.join("outside"), base.join("alias")).unwrap();
+        std::fs::create_dir(base.join("outside/probe")).unwrap();
+        for probe in [base.join("alias/probe/../secret.json"), base.join("alias/missing/../secret.json")] {
+            let e = roots.check(&probe, Access::Read);
+            assert_eq!(e, Err(AccessError::Outside { access: Access::Read, path: probe.clone(), roots: list(roots.read()) }), "{}", probe.display());
+        }
         let _ = std::fs::remove_dir_all(base);
     }
 
