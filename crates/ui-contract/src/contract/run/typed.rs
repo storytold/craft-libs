@@ -546,6 +546,7 @@ pub(crate) fn show_container_taking<C: Container, R>(
     body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Inner<C::Output, R> {
     let shown = show_container(slot, ui, ShowAt::Rect(rect), body, None);
+    crate::layout::close_flow_start_in(ui);
     crate::runtime::egui::alloc::advance_past(ui, rect);
     shown
 }

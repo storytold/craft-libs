@@ -9,6 +9,7 @@ use crate::runtime::egui::pass;
 use crate::runtime::frame::{PassStep, PerViewport, Stamped};
 use crate::runtime::pass_state;
 use crate::runtime::pointer;
+use crate::runtime::shift::Shift;
 use craft_behavior::OwnerClass;
 use craft_behavior::overlay::Side;
 use egui::emath::TSTransform;
@@ -75,7 +76,7 @@ impl Rank {
 
     /// Whether a layer of this rank takes keys without a focus scope. Modal chrome takes none: Cancel and Enter stay
     /// with the modal under it.
-    const fn takes_keys(self) -> bool {
+    pub(crate) const fn takes_keys(self) -> bool {
         matches!(self, Rank::Popup | Rank::Modal { .. })
     }
 
@@ -120,7 +121,7 @@ pub enum OpenFilter {
 }
 
 /// One shown egui layer.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[doc(hidden)]
 pub struct OpenEntry {
     /// The layer's id.
@@ -152,12 +153,39 @@ pub struct OpenEntry {
     /// The entry is an OS window of the integration: it takes its place in the stack's order and facts, and no egui
     /// layer is shown for it.
     pub(crate) window: bool,
+    /// The entry stands in its opener's stack for a layer shown in a popup window of its own (with `window`): the
+    /// family, the anchor and the presses in the opener's window are judged here, and the popup's own stack holds the
+    /// layer, so the entry blocks nothing here.
+    pub(crate) popup: bool,
     /// The screen rect the layer is contained in: its scrim, placement, clip and input blocking stop at it.
     pub(crate) region: Option<Rect>,
     /// The layer's place on its dialog stack (`stack_place`): the modal families of one stack stack in its order.
     pub(crate) place: Option<usize>,
     /// The dialog of a dialog host the layer shows for (`stack_place`).
     dialog: Option<Id>,
+}
+
+/// A replay moves the entry's screen rects with its record; the rest stays.
+impl Shift for OpenEntry {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        OpenEntry {
+            anchor: self.anchor.shifted(by),
+            peers: self.peers.shifted(by),
+            rect: self.rect.shifted(by),
+            region: self.region.shifted(by),
+            ..self.clone()
+        }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        OpenEntry {
+            anchor: self.anchor.snapped(&to.anchor, within),
+            peers: self.peers.snapped(&to.peers, within),
+            rect: self.rect.snapped(&to.rect, within),
+            region: self.region.snapped(&to.region, within),
+            ..self.clone()
+        }
+    }
 }
 
 impl OpenEntry {
@@ -178,6 +206,7 @@ impl OpenEntry {
             scoped: false,
             absorbs: false,
             window: false,
+            popup: false,
             region: None,
             place: None,
             dialog: None,
@@ -187,7 +216,7 @@ impl OpenEntry {
     /// Whether the layer is a modal over its whole window: a modal contained in a region blocks only inside it, and the
     /// window's keys, commands and hits stay with the rest.
     pub(crate) fn blocks_window(&self) -> bool {
-        self.rank.is_modal() && self.region.is_none()
+        self.rank.is_modal() && self.region.is_none() && !self.popup
     }
 
     /// Whether the layer takes keys: the layers `top` can name. A layer with a focus scope takes keys whatever its rank.
@@ -479,7 +508,8 @@ pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
 /// its anchor it was placed on. A layer shown again while it fades out opens anew: it appears in this frame and pass.
 pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side: Option<Side>) {
-    crate::runtime::replay::block(ctx);
+    // Which layers a press opened reads the presses and releases.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
     let reopened = reopened(ctx, id, exiting);
     with_pass(ctx, |pass| {
         pass.drawing.push((id, tier));
@@ -535,9 +565,36 @@ pub fn opening(ctx: &Context, id: Id) -> bool {
 /// not outlive it. The closes are carried: with no motion the layer's body hides in the same frame, so the owner of
 /// a popup in it runs again only when the layer reopens, and takes the close then.
 pub(crate) fn close_descendants(ctx: &Context, id: Id) {
-    for descendant in family(ctx, id).into_iter().filter(|member| *member != id) {
+    let mut members: Vec<Id> = family(ctx, id).into_vec();
+    // A member shown in a popup window keeps the layers opened from inside it in that window's stack.
+    let mut at = 0;
+    while at < members.len() {
+        let member = members[at];
+        for inner in family_in(ctx, crate::runtime::egui::viewports::viewport_id(member), member) {
+            if !members.contains(&inner) {
+                members.push(inner);
+            }
+        }
+        at += 1;
+    }
+    for descendant in members.into_iter().filter(|member| *member != id) {
         push_close(ctx, descendant, CloseReason::Requested, true);
     }
+}
+
+/// `id` and everything opened from inside it, as `viewport`'s latest pass showed them (a popup window's: its pass of
+/// this frame, or its last one once it is no longer shown); none for a viewport that has no stack.
+fn family_in(ctx: &Context, viewport: ViewportId, id: Id) -> Vec<Id> {
+    let Some(last) = PerViewport::<Stamped<Pass>>::with_existing(ctx, viewport, |pass| pass.value().current.clone()) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Id> = last.iter().filter(|entry| entry.id == id).map(|entry| entry.id).collect();
+    for entry in &last {
+        if entry.parent.is_some_and(|parent| out.contains(&parent)) && !out.contains(&entry.id) {
+            out.push(entry.id);
+        }
+    }
+    out
 }
 
 /// Records that a primary press landed outside the layer `id`, its anchor and its family in this pass.
@@ -617,13 +674,27 @@ pub(crate) fn absorb_presses(ctx: &Context, input: &mut crate::runtime::egui::in
     input.events.len() != before
 }
 
-/// The outside press the input hook removed for the running pass.
+/// The outside press the input hook removed for the running pass. A tracked input (`Input::Press`).
 pub(crate) fn absorbed_press(ctx: &Context) -> Option<Pos2> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Press);
+    absorbed_press_raw(ctx)
+}
+
+/// `absorbed_press` without noting the read: for the pointer's begin hook, which moves `Input::Press` by it.
+pub(crate) fn absorbed_press_raw(ctx: &Context) -> Option<Pos2> {
     with_persist(ctx, pass::current_viewport(ctx), |persist| persist.outside_press)
 }
 
-/// Records the toggling parts that sit beside the anchor of the layer `id` shown in this pass.
+/// Whether a close is queued for one of the layers `ids`: only a run of the layer's owner takes it, so a memoized view
+/// that showed one of them runs while it waits.
+pub(crate) fn close_queued(ctx: &Context, ids: &[Id]) -> bool {
+    !ids.is_empty() && pass_state::with::<Closes, _>(ctx, |closes| closes.0.iter().any(|(closed, ..)| ids.contains(closed)))
+}
+
+/// Records the toggling parts that sit beside the anchor of the layer `id` shown in this pass. A replay of the run
+/// that showed the layer records them again.
 pub(crate) fn note_peers(ctx: &Context, id: Id, peers: Vec<Rect>) {
+    crate::runtime::replay::journal(ctx, || (id, peers.clone()), |ctx, (id, peers)| note_peers(ctx, *id, peers.clone()));
     with_pass(ctx, |pass| {
         if let Some(entry) = pass.current.iter_mut().find(|entry| entry.id == id) {
             entry.peers = peers;
@@ -665,12 +736,16 @@ pub fn end_stack_dialog(ctx: &Context, dialog: Id) {
 
 /// Records the layer shown in this pass, parent first: a layer is recorded once its body ran, after the layers opened
 /// from inside it, so it goes in front of them, and every layer then stacks above the layer it was opened from. A
-/// layer shown again in a discarded pass replaces its entry.
+/// layer shown again in a discarded pass replaces its entry. A replay of the run that showed the layer records the
+/// entry again, its stack place and dialog filled, and the records open around it note the layer as one they show.
 pub(crate) fn record(ctx: &Context, mut entry: OpenEntry) {
-    crate::runtime::replay::block(ctx);
     with_pass(ctx, |pass| {
         entry.place = entry.place.or(pass.place);
         entry.dialog = entry.dialog.or(pass.dialog);
+    });
+    crate::runtime::replay::note_layer(ctx, entry.id);
+    crate::runtime::replay::journal(ctx, || entry.clone(), |ctx, entry| record(ctx, entry.clone()));
+    with_pass(ctx, |pass| {
         if let Some(at) = pass.current.iter().position(|recorded| recorded.id == entry.id) {
             pass.current[at] = entry;
             return;
@@ -810,7 +885,7 @@ pub(crate) fn end_pass(ctx: &Context) {
 }
 
 fn modal_in_other_viewports(ctx: &Context, running: ViewportId) -> bool {
-    pass::live_viewports(ctx).into_iter().filter(|viewport| *viewport != running).any(|viewport| with_persist(ctx, viewport, |persist| persist.modal))
+    modal_viewport(ctx, running).is_some()
 }
 
 /// Whether a modal layer is open in a viewport other than `viewport`: the global open-modal fact the input hook
@@ -886,9 +961,19 @@ pub(crate) fn beneath(ctx: &Context, layer: Id) -> (bool, Option<Id>) {
     (root.is_some() || modal_in_other_viewports(ctx, viewport), root)
 }
 
+/// The live viewports with a modal layer open as of their last finished pass.
+fn modal_viewports(ctx: &Context) -> impl Iterator<Item = ViewportId> + '_ {
+    pass::live_viewports(ctx).into_iter().filter(|viewport| with_persist(ctx, *viewport, |persist| persist.modal))
+}
+
 /// A viewport other than `viewport` that has a modal layer open: the window a blocked press raises.
 pub(crate) fn modal_viewport(ctx: &Context, viewport: ViewportId) -> Option<ViewportId> {
-    pass::live_viewports(ctx).into_iter().filter(|other| *other != viewport).find(|other| with_persist(ctx, *other, |persist| persist.modal))
+    modal_viewports(ctx).find(|other| *other != viewport)
+}
+
+/// A viewport that has a modal layer open: the window that blocks the app's other windows.
+pub(crate) fn app_modal_viewport(ctx: &Context) -> Option<ViewportId> {
+    modal_viewports(ctx).next()
 }
 
 /// Whether a layer of key class `class` that is not fading out was shown last frame and the screen point `at` lies in

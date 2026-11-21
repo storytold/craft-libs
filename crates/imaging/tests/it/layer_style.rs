@@ -10,9 +10,9 @@ use craft_imaging::layer_style::{
     EffectField, EffectId, EffectInstance, EffectKind, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams,
     StyleValue,
 };
-use craft_imaging::ui::layer_style::{LayerStyleDialog, StylePresets};
+use craft_imaging::ui::layer_style::LayerStyleDialog;
 use craft_ui::contract::Role;
-use craft_ui::patterns::presets::PresetRow;
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::testing::access::{NodeKey, name};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Target, trial};
@@ -26,7 +26,6 @@ struct Host {
     draft: LayerStyleDraft,
     specs: Vec<EffectSpec>,
     channels: Vec<String>,
-    patterns: Vec<PresetRow<String>>,
     edits: Vec<EditEvent<LayerStyle>>,
     made: Vec<StyleParams>,
 }
@@ -40,26 +39,24 @@ fn instance(id: u32, kind: EffectKind, on: bool) -> EffectInstance {
 }
 
 fn host(draft: LayerStyleDraft, specs: Vec<EffectSpec>) -> Host {
-    Host { draft, specs, channels: ["R", "G", "B"].map(String::from).to_vec(), patterns: Vec::new(), edits: Vec::new(), made: Vec::new() }
+    Host { draft, specs, channels: ["R", "G", "B"].map(String::from).to_vec(), edits: Vec::new(), made: Vec::new() }
 }
 
 fn rig_of(host: Host) -> (Fixture, Rc<RefCell<Host>>) {
     let host = Rc::new(RefCell::new(host));
     let shown = host.clone();
-    let rows = vec![
-        PresetRow::group("g".to_owned(), "Basics", 0),
-        PresetRow::item("Soft".to_owned(), "Soft", 1),
-        PresetRow::item("Hard".to_owned(), "Hard", 1),
-    ];
+    let rows = |_: &(), _: &_| {
+        vec![
+            PresetRow::group("g".to_owned(), "Basics", 0),
+            PresetRow::item("Soft".to_owned(), "Soft", 1),
+            PresetRow::item("Hard".to_owned(), "Hard", 1),
+        ]
+    };
+    let presets = PresetSource::new((), PresetFns::new(rows).thumb(|_, cx, rect, _| cx.checker(rect)));
     let mut fixture = Fixture::new(move |ui| {
         let mut guard = shown.borrow_mut();
         let host = &mut *guard;
-        let presets = StylePresets::new(&rows, |cx, rect, _| cx.checker(rect));
-        let out = LayerStyleDialog::new("Layer Style", &host.draft, &host.channels)
-            .specs(&host.specs)
-            .patterns(&host.patterns)
-            .style_presets(presets)
-            .show(ui);
+        let out = LayerStyleDialog::new("Layer Style", &host.draft, &host.channels).specs(&host.specs).style_presets(&presets).show(ui);
         out.apply_view(&mut host.draft);
         for event in out.edit {
             if let Some(value) = event.value() {

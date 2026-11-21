@@ -96,38 +96,45 @@ impl DockPanels<usize> for Demo {
 }
 
 /// A canvas between a start dock, a toolbar column one step wide and a column of panels, and an iconic column at the
-/// end, with one floating group and one floating window collapsed to icons.
-fn workspace() -> Arc<Workspace<usize>> {
+/// end, with one floating group, `minimized` or not, and one floating window collapsed to icons.
+fn workspace(minimized: bool) -> Arc<Workspace<usize>> {
     let tools = Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1);
     let side = Column::new(vec![Group::new(vec![LAYERS, CHANNELS], 0), Group::new(vec![PROPERTIES], 0)]).with_width(SIDE);
     let mut icons = Column::new(vec![Group::new(vec![SWATCHES], 0)]).with_width(SIDE);
     icons.iconic = true;
     let centre = Node::split(Axis::X, SplitSize::Ratio(0.8), Node::tabs(vec![CANVAS], 0), Node::dock(DockEdge::End, vec![icons]));
     let root = Node::split(Axis::X, SplitSize::FixedFirst(SIDE), Node::dock(DockEdge::Start, vec![tools, side]), centre);
-    let window = Floating::single(1, vec![HISTORY], 0, WINDOW);
+    let mut window = Floating::single(1, vec![HISTORY], 0, WINDOW);
+    window.column.groups[0].minimized = minimized;
     let mut collapsed = Floating::single(2, vec![NAVIGATOR], 0, COLLAPSED_WINDOW);
     collapsed.column.iconic = true;
     Arc::new(Workspace::new(Layout::new(Some(root), vec![window, collapsed])))
 }
 
-fn dock(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo) -> StoryOutput {
+fn dock(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo, minimized: bool) -> StoryOutput {
     /// One spec model for every story, so its revision stays put across frames.
     static SPECS: LazyLock<Tracked<DemoSpecs>> = LazyLock::new(|| Tracked::new(DemoSpecs));
-    let (workspace, workspace_at) = data.value_at("workspace", workspace());
+    let (workspace, workspace_at) = data.value_at("workspace", workspace(minimized));
     DockArea::new("Dock", workspace_at.bind(&mut *workspace), &*SPECS, demo, DockConfig::default()).show(ui).into()
 }
 
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn docked_columns_a_floating_group_and_a_flyout(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    dock(ui, data, &mut Demo { canvas_view: false, host_rows: false })
+    dock(ui, data, &mut Demo { canvas_view: false, host_rows: false }, false)
 }
 
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn a_canvas_group_the_host_draws(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    dock(ui, data, &mut Demo { canvas_view: true, host_rows: false })
+    dock(ui, data, &mut Demo { canvas_view: true, host_rows: false }, false)
 }
 
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn host_rows_above_the_dock_rows_in_a_panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    dock(ui, data, &mut Demo { canvas_view: false, host_rows: true })
+    dock(ui, data, &mut Demo { canvas_view: false, host_rows: true }, false)
+}
+
+/// The floating group minimized: its window shows the title row and the tab strip at its width.
+#[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
+fn a_minimized_floating_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    dock(ui, data, &mut Demo { canvas_view: false, host_rows: false }, true)
 }

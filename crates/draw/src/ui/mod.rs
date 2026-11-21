@@ -79,7 +79,7 @@ pub use crop::{
 pub use crop::{PerspectiveCropQuad, PerspectiveQuad};
 pub use gradient::{
     FocusOutline, GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput, GradientOverlay, GradientPalette,
-    GradientRef, GradientSwatch, GradientTile, LineGradient, LinePart,
+    GradientRef, GradientSwatch, GradientTile, LineGradient, LinePart, RampSampler,
 };
 pub use gradient::{GradientFill, GradientFillEditor, GradientFillEditorOutput, GradientFillWords, GradientStyle};
 pub use measure::{
@@ -89,9 +89,7 @@ pub use paint_bar::{
     EraserMode, MIXER_COMBINATIONS, MIXER_GROUP_STARTS, MixerValues, PaintBar, PaintBarOutput, PaintBarWords, PaintTool, PaintValues, Smoothing,
 };
 pub use paths::{PathKind, PathRow, PathsCommands, PathsEvent, PathsFooterButton, PathsOutput, PathsPanel, PathsWords};
-pub use pattern::{
-    PatternColors, PatternFillDialog, PatternFillEditor, PatternFillOptions, PatternFillOutput, PatternSwatch, PatternWords, SwatchPainter,
-};
+pub use pattern::{PatternColors, PatternFillDialog, PatternFillEditor, PatternFillOptions, PatternFillOutput, PatternSwatch, PatternWords};
 pub use pen::{AnchorDelete, AnchorTool, PenEnd};
 pub use pen::{AnchorsShown, HitMark, PATH_OPTIONS_COLOR_KEY, PathMode, PathOptionsPopover, PathOptionsSettings, PathTool, PenMode, SegmentMark};
 pub use pen::{
