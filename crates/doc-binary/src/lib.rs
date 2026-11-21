@@ -376,7 +376,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     note_links.sort_by_key(|l| l.cp);
     let mut marks = notes::parse_bookmarks(&table, &fib);
     let atn_base = hdd_base.saturating_add(fib.ccp.hdd);
-    let comments = comments::parse(&table, &fib, comments::Layout::Word97);
+    let comments = comments::in_main_text(comments::parse(&table, &fib, comments::Layout::Word97), fib.ccp.text);
     comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp.atn), &mut marks, &mut pics, max_paragraphs)?;
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
@@ -462,7 +462,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     note_links.sort_by_key(|l| l.cp);
     let mut marks = Vec::new();
     let atn_base = hdd_base.saturating_add(fib.ccp_hdd).saturating_add(fib.ccp_mcr);
-    let comments = comments::parse(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page()));
+    let comments = comments::in_main_text(comments::parse(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page())), fib.ccp_text);
     comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp_atn), &mut marks, &mut pics, max_paragraphs)?;
     let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
     sect_ends.sort_unstable();
