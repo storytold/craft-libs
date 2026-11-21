@@ -10,11 +10,15 @@ mod stories;
 
 use craft_behavior::{EditEvent, IconId, Mixed, SelectionChange};
 use craft_theme::{ControlSize, LabelColor};
-use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::buttons::{Button, IconButton, ToggleButton};
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, Entry, NoValue, Outcome, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
 use craft_ui::list::{ListWords, label_color_label};
 use craft_ui::pickers::Select;
+use craft_ui::popover::Popover;
+use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::runtime::memory::Remember as _;
@@ -183,6 +187,33 @@ impl FilterObject {
             FilterObject::Guides => "guides",
         }
     }
+
+    /// Whether `info`'s row is of this kind.
+    fn matches(self, info: &LayerInfo) -> bool {
+        match self {
+            FilterObject::Paths => info.kind == LayerKind::Path,
+            FilterObject::Shapes => info.kind == LayerKind::Shape,
+            FilterObject::Text => info.kind == LayerKind::Text,
+            FilterObject::Images => info.kind == LayerKind::Image,
+            FilterObject::Effects => info.has_effects,
+            FilterObject::Groups => matches!(info.kind, LayerKind::Group | LayerKind::Layer),
+            FilterObject::LinkedFiles => info.smart == Some(SmartSource::Linked),
+            FilterObject::Guides => info.kind == LayerKind::Guide,
+        }
+    }
+
+    fn label(self, words: &LayerFilterWords) -> &Label {
+        match self {
+            FilterObject::Paths => &words.object_paths,
+            FilterObject::Shapes => &words.object_shapes,
+            FilterObject::Text => &words.object_text,
+            FilterObject::Images => &words.object_images,
+            FilterObject::Effects => &words.object_effects,
+            FilterObject::Groups => &words.object_groups,
+            FilterObject::LinkedFiles => &words.object_linked_files,
+            FilterObject::Guides => &words.object_guides,
+        }
+    }
 }
 
 /// A row state the Objects filter ticks.
@@ -205,6 +236,21 @@ impl FilterState {
         match self {
             FilterState::Locked => "locked",
             FilterState::Hidden => "hidden",
+        }
+    }
+
+    /// Whether `info`'s row is in this state.
+    fn matches(self, info: &LayerInfo) -> bool {
+        match self {
+            FilterState::Locked => info.locks.any(),
+            FilterState::Hidden => !info.visible,
+        }
+    }
+
+    fn label(self, words: &LayerFilterWords) -> &Label {
+        match self {
+            FilterState::Locked => &words.state_locked,
+            FilterState::Hidden => &words.state_hidden,
         }
     }
 }
@@ -472,7 +518,8 @@ impl Default for LayerFilter {
 impl LayerFilter {
     /// Whether the panel is filtered. As Photoshop, Effect, Mode, Attribute, Color, Artboard and
     /// Group always filter (by Bevel & Emboss, Normal, Visible and no colour at first); Kind and
-    /// Smart Object only once a toggle is on, Name only once the trimmed text is not empty.
+    /// Smart Object only once a toggle is on, Name only once the trimmed text is not empty, Objects once
+    /// something is ticked or the name is not blank.
     /// Artboard lists every layer while no artboard holds the selection ([`LayerFilter::lists`]).
     pub fn active(&self) -> bool {
         // pc: crates/ui-egui/src/panels/layer_filter_ui.rs `Filter::active`.
@@ -481,13 +528,13 @@ impl LayerFilter {
             FilterBy::Name => !self.name.trim().is_empty(),
             FilterBy::SmartObject => !self.smart.is_empty(),
             FilterBy::Effect | FilterBy::Mode | FilterBy::Attribute | FilterBy::Color | FilterBy::Artboard | FilterBy::Group => true,
-            FilterBy::Objects => todo!("dp.F3"),
+            FilterBy::Objects => !self.objects.is_empty() || !self.states.is_empty() || !self.name.trim().is_empty(),
         }
     }
 
     /// Whether a row that holds a listed row stays listed at its own depth: true for Objects.
     pub fn keeps_holders(&self) -> bool {
-        todo!("dp.F4")
+        matches!(self.by, FilterBy::Objects)
     }
 
     /// Whether the filtered panel lists the contents of closed groups, so a match inside one shows:
@@ -504,7 +551,8 @@ impl LayerFilter {
     /// `info.blend_key == mode`. Attribute: [`LayerAttribute::shows`]. Color: its label is
     /// `color`. Smart Object: its [`smart`](LayerInfo::smart) source is toggled on (Missing lists
     /// none here). Artboard and Group read the tree, so this lists every layer for them; use
-    /// [`LayerFilter::lists`].
+    /// [`LayerFilter::lists`]. Objects: one of the ticked `objects` and one of the ticked `states` (each
+    /// group takes every row while nothing is ticked in it) and the name, all AND-ed.
     pub fn shows(&self, info: &LayerInfo) -> bool {
         // pc: crates/ui-egui/src/panels/layer_filter_ui.rs `Filter::shows`.
         if !self.active() {
@@ -523,7 +571,11 @@ impl LayerFilter {
                 None => false,
             },
             FilterBy::Artboard | FilterBy::Group => true,
-            FilterBy::Objects => todo!("dp.F3"),
+            FilterBy::Objects => {
+                (self.objects.is_empty() || self.objects.iter().any(|object| object.matches(info)))
+                    && (self.states.is_empty() || self.states.iter().any(|state| state.matches(info)))
+                    && info.name.to_lowercase().contains(&self.name.trim().to_lowercase())
+            }
         }
     }
 
@@ -561,9 +613,10 @@ impl LayerFilter {
     /// deselected, the listed ones stay selected and the active one stays active while listed (else the last listed
     /// becomes active); `Clear` when none stays listed. `None` when the filter is off or lists every selected layer.
     /// The panel calls it when its filter bar edits the filter; an app that sets the filter itself (a control
-    /// channel) calls it there. A layer selected later, while the filter hides it, stays selected.
+    /// channel) calls it there. A layer selected later, while the filter hides it, stays selected. Objects never
+    /// changes the selection.
     pub fn deselect_hidden<T: LayerTree>(&self, tree: &T) -> Option<LayerSelect<T::Id>> {
-        if !self.active() {
+        if !self.active() || self.by == FilterBy::Objects {
             return None;
         }
         let selection = tree.selection();
@@ -634,6 +687,7 @@ craft_ui::words! {
         smart_objects: "layerFilterBar.smartObjects" = "Smart Object";
         artboard: "layerFilterBar.artboard" = "Artboard";
         group: "layerFilterBar.group" = "Group";
+        objects: "layerFilterBar.objects" = "Objects";
         /// The kind toggles' tooltips and names.
         pixel: "layerFilterBar.pixel" = "Filter for pixel layers";
         adjustment: "layerFilterBar.adjustment" = "Filter for adjustment layers";
@@ -727,6 +781,8 @@ craft_ui::words! {
 ///   to Pass Through is never listed by Mode).
 /// - **Smart Object**: three icon toggle buttons in [`SmartKind::ALL`] order, as Kind's.
 /// - **Artboard**, **Group**: no controls.
+/// - **Objects**: a search field and a Filter button whose popover ticks object kinds and row states;
+///   Clear All unticks both. The type select shows only when more than one type is offered.
 /// - **Keyboard**: each control is its own Tab stop; a select opens with Space or Alt+Down.
 #[must_use = "show the filter bar with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
@@ -763,6 +819,13 @@ impl Outcome for LayerFilterOutput {
     fn response(&self) -> &Response {
         &self.response
     }
+}
+
+/// Whether the Objects filter's popover is open: the bar's memory, so it stays open across passes until a
+/// click outside or Escape closes it.
+#[derive(Clone, Default)]
+struct FilterPopup {
+    open: bool,
 }
 
 /// Whether the Name field selects its text as it takes focus: set in the pass of a find, for the
@@ -806,11 +869,13 @@ impl<'a> LayerFilterBar<'a> {
             if focus_name {
                 next.by = FilterBy::Name.among(&offered);
             }
-            let types: Vec<Entry<FilterBy>> = offered.iter().copied().map(|by| Entry::new(by, type_label(by, &words).clone())).collect();
-            // The type select fits its widest type, so the controls after it keep their room.
-            let picked = Select::new(words.filter_type.clone(), Bind::given(next.by), &types).sizing(Sizing::Content).show(ui);
-            if let Some(by) = picked.value() {
-                next.by = *by;
+            if offered.len() > 1 {
+                let types: Vec<Entry<FilterBy>> = offered.iter().copied().map(|by| Entry::new(by, type_label(by, &words).clone())).collect();
+                // The type select fits its widest type, so the controls after it keep their room.
+                let picked = Select::new(words.filter_type.clone(), Bind::given(next.by), &types).sizing(Sizing::Content).show(ui);
+                if let Some(by) = picked.value() {
+                    next.by = *by;
+                }
             }
             // Controls follow the type picked before this pass; a find shows the Name field at once.
             let shown = if focus_name { next.by } else { current.by };
@@ -882,7 +947,46 @@ impl<'a> LayerFilterBar<'a> {
                 }
                 // The selected layers pick the artboards; Group lists every group.
                 FilterBy::Artboard | FilterBy::Group => {}
-                FilterBy::Objects => todo!("dp.F6"),
+                FilterBy::Objects => {
+                    let typed = TextField::search(words.search_layers.clone(), Bind::given(current.name.clone()))
+                        .placeholder(words.search_all.clone())
+                        .show(ui);
+                    if let Some(text) = typed.value() {
+                        next.name.clone_from(text);
+                    }
+                    let ticked = !current.objects.is_empty() || !current.states.is_empty();
+                    let button = IconButton::new(IconSpec::svg(IconId::new("funnel")))
+                        .label(words.filter.clone())
+                        .selected(ticked)
+                        .popup(PopupKind::Menu)
+                        .show(ui);
+                    let mut open = cx.memory::<FilterPopup>().open;
+                    if button.clicked() {
+                        open = !open;
+                    }
+                    Popover::new(words.filter.clone(), Bind::bound(&mut open)).opened_by(&button).show(ui, |ui, _| {
+                        if Button::new(words.clear_all.clone()).enabled(ticked).show(ui).clicked() {
+                            next.objects.clear();
+                            next.states.clear();
+                        }
+                        let _ = Text::new(words.by_object.clone()).shade(Shade::Muted).show(ui);
+                        for object in FilterObject::ALL {
+                            let checked =
+                                Checkbox::new(Bind::given(current.objects.contains(&object))).label(object.label(&words).clone()).show(ui);
+                            if let Some(on) = checked.value() {
+                                tick(&mut next.objects, object, *on);
+                            }
+                        }
+                        let _ = Text::new(words.by_layer.clone()).shade(Shade::Muted).show(ui);
+                        for state in FilterState::ALL {
+                            let checked = Checkbox::new(Bind::given(current.states.contains(&state))).label(state.label(&words).clone()).show(ui);
+                            if let Some(on) = checked.value() {
+                                tick(&mut next.states, state, *on);
+                            }
+                        }
+                    });
+                    cx.memory::<FilterPopup>().open = open;
+                }
             }
             if next != stored {
                 let name: std::sync::Arc<str> = std::sync::Arc::from(words.filter_type.as_str());
@@ -906,7 +1010,7 @@ fn type_label(by: FilterBy, words: &LayerFilterWords) -> &Label {
         FilterBy::SmartObject => &words.smart_objects,
         FilterBy::Artboard => &words.artboard,
         FilterBy::Group => &words.group,
-        FilterBy::Objects => todo!("dp.F6"),
+        FilterBy::Objects => &words.objects,
     }
 }
 
@@ -929,10 +1033,16 @@ fn toggles<K: Copy + PartialEq>(ui: &mut Ui, buttons: &[(K, &'static str, &Label
             .size(ControlSize::Sm)
             .id_salt(salt(value))
             .show(ui);
-        match toggled.value() {
-            Some(true) => on.push(value),
-            Some(false) => on.retain(|held| *held != value),
-            None => {}
+        if let Some(ticked) = toggled.value() {
+            tick(on, value, *ticked);
         }
+    }
+}
+
+/// Puts `value` in `on` or takes it out, so each value is held at most once and a new one comes last.
+fn tick<K: PartialEq>(on: &mut Vec<K>, value: K, ticked: bool) {
+    on.retain(|held| *held != value);
+    if ticked {
+        on.push(value);
     }
 }
