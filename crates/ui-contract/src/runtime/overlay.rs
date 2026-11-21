@@ -810,7 +810,7 @@ pub(crate) fn end_pass(ctx: &Context) {
 }
 
 fn modal_in_other_viewports(ctx: &Context, running: ViewportId) -> bool {
-    pass::live_viewports(ctx).into_iter().filter(|viewport| *viewport != running).any(|viewport| with_persist(ctx, viewport, |persist| persist.modal))
+    modal_viewport(ctx, running).is_some()
 }
 
 /// Whether a modal layer is open in a viewport other than `viewport`: the global open-modal fact the input hook
@@ -886,9 +886,19 @@ pub(crate) fn beneath(ctx: &Context, layer: Id) -> (bool, Option<Id>) {
     (root.is_some() || modal_in_other_viewports(ctx, viewport), root)
 }
 
+/// The live viewports with a modal layer open as of their last finished pass.
+fn modal_viewports(ctx: &Context) -> impl Iterator<Item = ViewportId> + '_ {
+    pass::live_viewports(ctx).into_iter().filter(|viewport| with_persist(ctx, *viewport, |persist| persist.modal))
+}
+
 /// A viewport other than `viewport` that has a modal layer open: the window a blocked press raises.
 pub(crate) fn modal_viewport(ctx: &Context, viewport: ViewportId) -> Option<ViewportId> {
-    pass::live_viewports(ctx).into_iter().filter(|other| *other != viewport).find(|other| with_persist(ctx, *other, |persist| persist.modal))
+    modal_viewports(ctx).find(|other| *other != viewport)
+}
+
+/// A viewport that has a modal layer open: the window that blocks the app's other windows.
+pub(crate) fn app_modal_viewport(ctx: &Context) -> Option<ViewportId> {
+    modal_viewports(ctx).next()
 }
 
 /// Whether a layer of key class `class` that is not fading out was shown last frame and the screen point `at` lies in

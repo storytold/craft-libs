@@ -74,9 +74,9 @@ pub(crate) fn show_immediate<T>(ctx: &Context, id: ViewportId, spec: &Spec<'_>, 
     ctx.show_viewport_immediate(id, builder, |ui, _| body(ui))
 }
 
-/// Makes the hidden viewport `id` visible.
-pub(crate) fn show(ctx: &Context, id: ViewportId) {
-    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(true));
+/// Shows or hides the window of viewport `id`.
+pub(crate) fn set_visible(ctx: &Context, id: ViewportId, visible: bool) {
+    ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(visible));
 }
 
 /// The viewport id of the container `id`.
@@ -165,6 +165,16 @@ pub(crate) fn raise(ctx: &Context, viewport: ViewportId) {
     } else {
         command(ctx, viewport, ViewportCommand::Focus);
     }
+    ctx.request_repaint_of(viewport);
+}
+
+/// Brings `viewport`'s window in front of the app's other windows without giving it focus, by standing it above every
+/// window and then back at `level`, its own level. egui-winit ignores `Focus` for a window that has focus, and the
+/// window holding a modal usually has it; on Windows the level change also puts the window in front of the ordinary
+/// windows that were made ordinary before it. A Wayland compositor gives clients no stacking control.
+pub(crate) fn raise_above(ctx: &Context, viewport: ViewportId, level: WindowLevel) {
+    command(ctx, viewport, ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+    command(ctx, viewport, ViewportCommand::WindowLevel(level));
     ctx.request_repaint_of(viewport);
 }
 

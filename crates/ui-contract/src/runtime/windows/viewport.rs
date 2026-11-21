@@ -54,10 +54,10 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
     let spec = open.spec;
-    let active = !shared(ctx, |shared| shared.away);
+    let state = shared(ctx, |shared| shared.app);
     let os = os_of(ctx);
     let (chrome, captions) = frame_of_spec(ctx, spec);
-    let level = PerViewport::<Record>::with(ctx, viewport, |record| {
+    let standing = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.kind = Some(spec.kind);
         record.chrome = Some(chrome);
         record.captions = captions.clone();
@@ -73,8 +73,11 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
                 record.searched = None;
             }
         }
-        record.level.get_or_insert(spec.level).for_egui(active, os)
+        record.level.get_or_insert(spec.level).standing(viewport, state, os)
     });
+    if standing.lowered {
+        shared(ctx, |shared| shared.lowered = true);
+    }
     let app = app_id(ctx);
     let opens = viewports::Spec {
         title: open.title,
@@ -88,7 +91,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         // egui sends a limit only when it has one: an open window always carries its maximum, unbounded when the
         // caller has none, so a lifted maximum reaches the OS.
         max_size: open.limits.1.or(opened.then_some(Vec2::INFINITY)),
-        level,
+        level: standing.level,
         resizable: open.resizable,
         taskbar: spec.taskbar,
         hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint),
@@ -115,8 +118,18 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
             record_placement(&ctx, viewport, key, &at_known(&ctx, viewport, viewports::current(&ctx)));
         }
     });
-    if PerViewport::<Record>::with(ctx, viewport, |record| std::mem::take(&mut record.awaiting_first_paint)) {
-        viewports::show(ctx, viewport);
+    // A window opened hidden appears once its first pass ran; a window the app's state hides goes and comes back with
+    // it. The builder's visibility only opens the window: egui sends no change of it once the window is open.
+    let hidden = !standing.shown;
+    let (reveal, changed) = PerViewport::<Record>::with(ctx, viewport, |record| {
+        let first = std::mem::take(&mut record.awaiting_first_paint);
+        let changed = std::mem::replace(&mut record.hidden, hidden) != hidden;
+        (first || changed, changed)
+    });
+    if hidden && changed {
+        viewports::set_visible(ctx, viewport, false);
+    } else if !hidden && reveal {
+        viewports::set_visible(ctx, viewport, true);
     }
 }
 

@@ -48,7 +48,7 @@ pub use shell::shell_of;
 use shell::{refresh, window_info};
 #[cfg(feature = "testing")]
 pub(crate) use shell::{set_chrome, set_os};
-use spec::chrome_of;
+use spec::{AppState, chrome_of};
 pub use spec::{WindowLevel, WindowSpec};
 pub(crate) use viewport::{ViewportOpen, show_viewport, take_close_request, unplaced};
 
@@ -86,8 +86,12 @@ pub(crate) struct Shared {
     desktop: Option<Desktop>,
     /// Whether the root window had focus in the last root pass.
     root_focused: bool,
-    /// Whether no window of the app had focus when the last frame's windows had all reported.
-    away: bool,
+    /// The app's state when the last frame's windows had all reported, which its palettes follow.
+    app: AppState,
+    /// Whether a palette window stood lowered under an app-modal layer in this frame.
+    lowered: bool,
+    /// Where the raise of the modal's window above the palettes it lowered stands.
+    raise: Raise,
     /// The app's windows from the one focused longest ago to the one focused last: the stacking order of
     /// overlapping windows.
     stacking: Vec<ViewportId>,
@@ -105,8 +109,10 @@ pub(crate) struct Record {
     chrome: Option<WindowChrome>,
     /// The caption buttons the app draws in this window.
     captions: Option<Captions>,
-    /// The level the window was opened with or last set to; a palette's egui level follows the app's activity.
+    /// The level the window was opened with or last set to; a palette's egui level follows the app's state.
     level: Option<WindowLevel>,
+    /// Whether the window is hidden because the app's state hides it (a palette while the main window is minimized).
+    hidden: bool,
     /// H4: whether the primary button is down as the viewport's events left the input hook.
     primary_down: bool,
     /// Whether the user can resize the window; unknown for a window not opened by `show_viewport`.
@@ -146,6 +152,20 @@ pub(crate) struct Record {
     seen: Option<Rect>,
     /// The smallest inner size its caller asks for, as the window's builder carries it.
     min_size: Option<Vec2>,
+}
+
+/// The raise of the window holding an app-modal layer above the palettes the modal lowered. The raise goes out in the
+/// frame after a palette was built lowered: a raise in the same frame may reach the OS before the palette's new level
+/// does, and the palette, made an ordinary window after it, would stand in front again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Raise {
+    /// No palette has stood lowered under the open modal yet, or no modal is open.
+    #[default]
+    Waiting,
+    /// A palette stood lowered in the last frame: the modal's window is raised in this one.
+    Due,
+    /// The modal's window was raised.
+    Done,
 }
 
 /// Passes between searches for an OS window that was not found.
@@ -465,12 +485,14 @@ fn flush_store(ctx: &Context) {
     }
 }
 
-/// Keeps the app's activity and the stacking order of its windows current from the windows' focus. A palette's
-/// window level follows the activity: the mounts build their viewports with the level of the moment, and a change
+/// Keeps the app's state and the stacking order of its windows current from the windows' facts. A palette's window
+/// level and visibility follow the state: the mounts build their viewports with the state of the moment, and a change
 /// asks for the next frame. Runs at the end of the root pass, inside which every child window's pass of the frame
 /// has run, so each window's focus is the one its own pass reported after its input batch. The root input's list of
 /// windows holds each child as of its previous pass, so it is not read for focus. The app is inactive when no
 /// window reports focus: the batch that took focus from one window gave it to no other.
+///
+/// Once a palette has stood lowered under an app-modal layer, the modal's window is raised above it, once per modal.
 fn follow_activity(ctx: &Context) {
     let windows = viewports::reported(ctx);
     let focused: Vec<ViewportId> = windows
@@ -478,13 +500,27 @@ fn follow_activity(ctx: &Context) {
         .map(|(viewport, _)| *viewport)
         .filter(|viewport| PerViewport::<Record>::with(ctx, *viewport, |record| record.facts.is_some_and(|facts| facts.focused)))
         .collect();
-    let changed = shared(ctx, |shared| {
+    let modal = overlay::app_modal_viewport(ctx);
+    let minimized = viewports::current(ctx).minimized;
+    let (repaint, raise) = shared(ctx, |shared| {
         shared.stacking.retain(|viewport| windows.iter().any(|(open, _)| open == viewport) && !focused.contains(viewport));
         shared.stacking.extend(&focused);
-        let away = focused.is_empty();
-        std::mem::replace(&mut shared.away, away) != away
+        let app = AppState { away: focused.is_empty(), modal, minimized };
+        let lowered = std::mem::take(&mut shared.lowered);
+        let (step, raise) = match shared.raise {
+            _ if app.modal != shared.app.modal => (Raise::Waiting, None),
+            Raise::Waiting if lowered => (Raise::Due, None),
+            Raise::Due => (Raise::Done, app.modal),
+            step => (step, None),
+        };
+        shared.raise = step;
+        let changed = std::mem::replace(&mut shared.app, app) != app;
+        (changed || step == Raise::Due, raise)
     });
-    if changed {
+    if let Some(modal) = raise {
+        act(ctx, modal, WindowAction::Raise);
+    }
+    if repaint {
         ctx.request_repaint();
     }
 }
