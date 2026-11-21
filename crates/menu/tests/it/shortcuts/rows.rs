@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use craft_host::{AppInfo, Host};
 use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Platform, Policy, Scope, Scopes};
+use craft_menu::shortcuts::{HoldSetting, Outcome};
 use craft_ui::contract::Role;
 use craft_ui::testing::trial;
 
@@ -57,4 +58,33 @@ fn the_search_folds_dotted_capitals() {
     };
     assert_eq!(listed("ŞƏKİL ÖLÇÜSÜ"), (true, false), "capitals with the dotted İ");
     assert_eq!(listed("IMAGE SIZE"), (true, false), "the English alias");
+}
+
+/// With holds on, Summarize… writes a hold binding in its command's line as its trigger text; with holds off the
+/// summary leaves it out.
+#[trial]
+fn the_summary_lists_hold_bindings() {
+    let mut km = fixture::keymap(Platform::Mac);
+    km.set_holds(true);
+    km.assign(&CommandRef::from("file.save"), Binding::parse("Hold K").expect("a hold"), Policy::Keep).expect("assigns");
+    let mut rig = Rig::with_holds(km, fixture::options(), HoldSetting { on: true, delay: 0.5, range: 0.2..=2.0 });
+    let summarize = |rig: &mut Rig| {
+        rig.click("Summarize…");
+        rig.outcomes()
+            .into_iter()
+            .rev()
+            .find_map(|o| match o {
+                Outcome::Summary { text, html, .. } => Some((text, html)),
+                _ => None,
+            })
+            .expect("a summary")
+    };
+
+    let (text, html) = summarize(&mut rig);
+    assert!(text.lines().any(|line| line.contains("Save") && line.contains("Hold K")), "Save's line has its hold: {text}");
+    assert!(html.contains("Hold K"), "the HTML has the hold: {html}");
+
+    rig.click("Hold Shortcuts");
+    let (text, html) = summarize(&mut rig);
+    assert!(!text.contains("Hold K") && !html.contains("Hold K"), "with holds off the summary has no hold: {text}");
 }

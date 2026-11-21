@@ -119,7 +119,7 @@ mod words;
 
 pub use codec::ChordCodec;
 pub use import_offer::{ImportOffer, ImportOfferWords, NoOffer, OfferAnswer, OfferRecord};
-pub use pages::{DialogSnapshot, DialogTab};
+pub use pages::{DialogSnapshot, DialogTab, ReviewCode, ReviewEntry, ReviewSnapshot};
 pub use state::DialogState;
 pub use words::{ShortcutWords, kys_error_text, trigger_text};
 
@@ -287,7 +287,7 @@ pub struct Options {
     pub double_press: bool,
     /// false: Backspace or Delete without modifiers removes the binding being recorded over.
     pub backspace_clears: bool,
-    /// false: Enter when idle is OK.
+    /// false: Enter closes nothing; true: Enter when idle is OK.
     pub enter_is_ok: bool,
     /// false: rows sort by translated label instead of catalog order.
     pub sort_by_label: bool,
@@ -387,19 +387,20 @@ pub struct ShortcutsDialog<'a> {
     sets: Option<(&'a mut Profiles, &'a Builtins<'a>)>,
     options: Option<&'a Options>,
     tabs: Option<Box<dyn pages::TabSet + 'a>>,
+    holds: Option<&'a mut HoldSetting>,
 }
 
 impl<'a> ShortcutsDialog<'a> {
     /// Shows the Hold Shortcuts switch, its delay and the explanation, and a Hold column recorded like the
     /// shortcut column. Cancel restores the setting; the app saves it on [`Outcome::Ok`].
-    pub fn holds(self, holds: &'a mut HoldSetting) -> Self {
-        let _ = holds;
-        todo!("kb.C16a")
+    pub fn holds(mut self, holds: &'a mut HoldSetting) -> Self {
+        self.holds = Some(holds);
+        self
     }
 
     /// A dialog editing `keymap`; without further builder calls it has no sets and default options.
     pub fn new(keymap: &'a mut Keymap) -> Self {
-        ShortcutsDialog { keymap, sets: None, options: None, tabs: None }
+        ShortcutsDialog { keymap, sets: None, options: None, tabs: None, holds: None }
     }
 
     /// Shows and edits named sets.
@@ -423,7 +424,8 @@ impl<'a> ShortcutsDialog<'a> {
                 &fallback
             }
         };
-        let mut env = Env { keymap: self.keymap, sets: self.sets, options, tabs: self.tabs.as_deref_mut().map(pages::shorten), text: say };
+        let mut env =
+            Env { keymap: self.keymap, sets: self.sets, options, tabs: self.tabs.as_deref_mut().map(pages::shorten), text: say, holds: self.holds };
         f(&mut env)
     }
 

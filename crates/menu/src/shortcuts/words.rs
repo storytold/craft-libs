@@ -34,6 +34,13 @@ craft_ui::words! {
         label_cycles: template "keyboardShortcuts.labelCycles" = "{label} (cycles)";
         shares_a_shortcut: "keyboardShortcuts.sharesAShortcut" = "Shares a shortcut with another command";
         label_changed: template "keyboardShortcuts.labelChanged" = "{label} (Changed)";
+        // Hold shortcuts.
+        hold_shortcuts: "keyboardShortcuts.holdShortcuts" = "Hold Shortcuts";
+        hold_delay: "keyboardShortcuts.holdDelay" = "Hold delay (seconds):";
+        hold_explanation: "keyboardShortcuts.holdExplanation" = "Hold down a key that types a character to use its command while the key is down; releasing the key goes back.";
+        hold_column: "keyboardShortcuts.holdColumn" = "Hold";
+        add_a_hold_shortcut_to_label: template "keyboardShortcuts.addAHoldShortcutToLabel" = "Add a hold shortcut to {label}";
+        not_holdable: template "keyboardShortcuts.notHoldable" = "{chord}: only a key that types a character, alone or with Shift, can be held";
         // Table and detail pane.
         command: "keyboardShortcuts.command" = "Command";
         commands: "keyboardShortcuts.commands" = "Commands";
@@ -188,6 +195,23 @@ craft_ui::words! {
         the_shortcuts_could_not_be_removed: "keyboardShortcuts.theShortcutsCouldNotBeRemoved" = "the shortcuts could not be removed";
         copy_report: "keyboardShortcuts.copyReport" = "Copy Report";
         done: "keyboardShortcuts.done" = "Done";
+        start_current: "keyboardShortcuts.startCurrent" = "Start from the current shortcuts";
+        start_defaults: "keyboardShortcuts.startDefaults" = "Start from the defaults";
+        include_entry: template "keyboardShortcuts.includeEntry" = "Import {item}";
+        search_entries: "keyboardShortcuts.searchEntries" = "Search entries";
+        no_equivalent: "keyboardShortcuts.noEquivalent" = "No equivalent";
+        not_read: "keyboardShortcuts.notRead" = "Not read";
+        keys_section: "keyboardShortcuts.keysSection" = "Keys";
+        record_a_key: "keyboardShortcuts.recordAKey" = "Record a Key";
+        press_a_key_without_modifiers: "keyboardShortcuts.pressAKeyWithoutModifiers" = "Press a key without modifiers";
+        undecided_key: template "keyboardShortcuts.undecidedKey" = "key code {n} is not known";
+        undecided_modifier: template "keyboardShortcuts.undecidedModifier" = "modifier code {n} is not known";
+        // The parts of a modifier combination the review composes.
+        mod_none: "keyboardShortcuts.modNone" = "No modifier";
+        mod_cmd: "keyboardShortcuts.modCmd" = "Cmd";
+        mod_ctrl: "keyboardShortcuts.modCtrl" = "Ctrl";
+        mod_alt: "keyboardShortcuts.modAlt" = "Alt";
+        mod_shift: "keyboardShortcuts.modShift" = "Shift";
         // Why a `.kys` file is refused (`KysError`), and the tooltip of a saved text that is not a shortcut.
         the_file_is_larger_than_a: "keyboardShortcuts.theFileIsLargerThanA" = "The file is larger than a keyboard shortcut set can be.";
         the_file_is_not_a_photoshop: template "keyboardShortcuts.theFileIsNotAPhotoshop" = "The file is not a Photoshop keyboard shortcut set: {message}";
