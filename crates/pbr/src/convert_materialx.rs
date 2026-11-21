@@ -222,7 +222,9 @@ impl Inputs {
 ///   texture, and reported as unshaded. The displacement is kept the same way.
 /// - An image becomes a [`TextureBinding`] with the file path, the UV tiling as its transform's
 ///   scale, and an encoding from its color space for a color input (linear for data); the core
-///   holds 1 times any weight in its place, and an IOR texture leaves the default IOR, reported
+///   holds 1 times any weight in its place; Standard Surface's color `opacity` binds as
+///   [`TextureInput::OpacityRgb`] and the float opacities as [`TextureInput::Opacity`]; an IOR
+///   texture leaves the default IOR, reported
 ///   as approximated. The inputs and textures of a layer that is off (the coat's roughness,
 ///   color, IOR and normal among them) are dropped and reported.
 /// - Color constants are decoded to linear Rec.709 from the color space in effect, as the
@@ -419,6 +421,7 @@ fn image_binding(f: &Field, file: &str, space: Option<&str>, tiling: Option<[f32
         Role::Normal => TextureInput::Normal,
         Role::Occlusion => TextureInput::Occlusion,
         Role::EmissionColor => TextureInput::Emissive,
+        Role::Opacity if matches!(f.kind, Kind::Color(_)) => TextureInput::OpacityRgb,
         Role::Opacity => TextureInput::Opacity,
         Role::CoatWeight => TextureInput::Clearcoat,
         Role::CoatRoughness => TextureInput::ClearcoatRoughnessFirst,

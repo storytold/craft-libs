@@ -528,6 +528,13 @@ fn materialx_standard_surface_opacity_color_gives_its_luminance() {
     for v in [f32::NAN, f32::INFINITY, -0.01, 1.01] {
         bad_value(standard(&[0.5, v, 0.5]), "opacity");
     }
+    // An image on the color opacity binds as RGB; the float opacities bind their first channel.
+    let textured = try_from_materialx(&mx(Shader::StandardSurface, &[("opacity", img("o.png", None, None))])).unwrap();
+    assert_eq!(textured.surface.textures[0].input, TextureInput::OpacityRgb);
+    for (shader, name) in [(Shader::OpenPbr, "geometry_opacity"), (Shader::GltfPbr, "alpha")] {
+        let c = try_from_materialx(&mx(shader, &[(name, img("o.png", None, None))])).unwrap();
+        assert_eq!(c.surface.textures[0].input, TextureInput::Opacity, "{name}");
+    }
     // OpenPBR's geometry_opacity is a float in its node definition.
     assert_eq!(
         try_from_materialx(&mx(Shader::OpenPbr, &[("geometry_opacity", k(&[0.5; 3]))])).unwrap_err(),

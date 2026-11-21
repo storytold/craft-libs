@@ -85,8 +85,11 @@ pub enum TextureInput {
     Occlusion,
     /// Emission color in RGB.
     Emissive,
-    /// Opacity: alpha in the first channel, or RGB for a colored opacity.
+    /// Opacity: alpha in the first channel.
     Opacity,
+    /// A colored opacity in RGB, such as Standard Surface's `opacity`; the alpha is its Rec.709
+    /// luminance.
+    OpacityRgb,
     /// Clearcoat weight in R.
     Clearcoat,
     /// glTF's clearcoat roughness texture: roughness in G.
