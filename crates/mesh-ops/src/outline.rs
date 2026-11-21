@@ -10,7 +10,7 @@
 //! in the outline's own coordinates.
 
 use crate::triangulate::{
-    MAX_OUTLINE_EXTENT, Work, checked_polygon, on_edge, point_in, segments_cross, signed_area, triangulate_counted, try_collect,
+    MAX_OUTLINE_EXTENT, Work, checked_polygon, cross, on_edge, point_in, segments_cross, signed_area, triangulate_counted, try_collect,
 };
 use crate::{Limits, MeshOpsError, Result, check_limit, try_filled, try_vec};
 
@@ -192,9 +192,9 @@ struct Nest {
 impl Nest {
     /// The larger contours that hold all of contour `i` and that `only` accepts: every point of
     /// `i` lies inside or on the larger contour, no edge of `i` crosses one of its edges, and
-    /// each edge of `i`, cut at the larger contour's points that lie on it, has the middle of every
-    /// piece inside or on the larger contour. None of these tests depends on where `i` starts. The
-    /// larger contour's bounding box has to hold `i`'s bounding box first.
+    /// each edge of `i`, cut at the larger contour's points that lie on it, has every piece inside
+    /// the larger contour or along one of its edges. None of these tests depends on where `i`
+    /// starts. The larger contour's bounding box has to hold `i`'s bounding box first.
     fn containers(&self, i: usize, only: impl Fn(usize) -> bool, work: &mut Work) -> Result<Vec<usize>> {
         let c = &self.cs[i];
         let [ilo, ihi] = self.bounds[i];
@@ -225,11 +225,37 @@ fn inside_or_on(p: P, c: &[P]) -> bool {
     point_in(p, c) || (0..n).any(|k| on_edge(c[k], c[(k + 1) % n], p))
 }
 
+/// Whether the points of segment `p`-`q` just past `p` lie inside the closed contour `c`, by the
+/// rule of [`point_in`] applied to `p + t (q - p)` for every `t` above 0 small enough. No point is
+/// rounded: a vertex at `p`'s height counts as above when `q` is lower, and an edge whose line
+/// passes through `p` takes the side of `q`. An edge whose line holds both `p` and `q` is not
+/// counted.
+fn leaves_inside(p: P, q: P, c: &[P]) -> bool {
+    let n = c.len();
+    let down = q[1] < p[1];
+    let above = |v: P| if v[1] != p[1] { v[1] > p[1] } else { down };
+    let mut inside = false;
+    let mut j = n.wrapping_sub(1);
+    for i in 0..n {
+        let (a, b) = (c[i], c[j]);
+        if above(a) != above(b) {
+            let (lo, hi) = if a[1] < b[1] { (a, b) } else { (b, a) };
+            let s = cross(lo, hi, p);
+            if (if s == 0.0 { cross(lo, hi, q) } else { s }) > 0.0 {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
 /// Whether contour `outer` holds all of contour `inner`, as [`Nest::containers`] tests it. An edge
 /// of `inner` may meet `outer` at its vertices and run along its edges. Between two such contacts
-/// the edge lies wholly inside `outer`, wholly outside it or along one of its edges, so the middle
-/// of each piece decides; a piece whose ends lie on one edge of `outer` runs along that edge.
-/// `cuts` is scratch space for the contacts along one edge.
+/// the edge lies wholly inside `outer`, wholly outside it or along one of its edges. A piece whose
+/// ends lie on one edge of `outer` runs along that edge; any other piece is tested just past its
+/// first end ([`leaves_inside`]) without rounding a point onto it. `cuts` is scratch space for the
+/// contacts along one edge.
 fn holds(outer: &[P], inner: &[P], cuts: &mut Vec<(f64, P)>, work: &mut Work) -> Result<bool> {
     let (n, m) = (inner.len(), outer.len());
     let on_one_edge = |p: P, q: P| (0..m).any(|e| on_edge(outer[e], outer[(e + 1) % m], p) && on_edge(outer[e], outer[(e + 1) % m], q));
@@ -253,7 +279,7 @@ fn holds(outer: &[P], inner: &[P], cuts: &mut Vec<(f64, P)>, work: &mut Work) ->
             if p == q {
                 continue;
             }
-            if !inside_or_on([p[0] * 0.5 + q[0] * 0.5, p[1] * 0.5 + q[1] * 0.5], outer) && !on_one_edge(p, q) {
+            if !on_one_edge(p, q) && !leaves_inside(p, q, outer) {
                 return Ok(false);
             }
         }
@@ -1138,6 +1164,37 @@ mod tests {
         assert_eq!(g.iter().map(|o| o.holes.len()).collect::<Vec<_>>(), [1]);
         // Extrusion rejects a hole that touches its outer contour, as the grouping docs say.
         assert!(matches!(extrude(&g, &ExtrudeParams::default(), &Limits::default()), Err(MeshOpsError::Invalid(_))));
+    }
+
+    #[test]
+    fn a_piece_between_adjacent_coordinates_is_tested_without_its_rounded_middle() {
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+        // A notch one coordinate step wide: the middle of the candidate's edge across it rounds onto
+        // a vertex of the outer contour, at 2^53 and near 1.
+        let big = 2f64.powi(53);
+        let near_one = 1.0 + f64::EPSILON;
+        let cases = [(1.0, near_one, [0.0, 0.0, 3.0, 3.0], [1.0, 2.0]), (big, big + 2.0, [big - 4.0, 0.0, big + 12.0, 10.0], [4.0, 6.0])];
+        for (x0, x1, [left, top, right, bottom], [y0, y1]) in cases {
+            let outer =
+                vec![[left, top], [right, top], [right, bottom], [x1, bottom], [x1, y1], [x1, y0], [x0, y0], [x0, y1], [x0, bottom], [left, bottom]];
+            assert_eq!([x0 * 0.5 + x1 * 0.5, y1], [x0, y1], "the middle rounds onto a vertex");
+            let (in_left, in_right) = ((left + x0) * 0.5, (x1 + right) * 0.5);
+            // The edge at y1 crosses the notch: not held, wherever the candidate starts.
+            let crossing = rect(in_left, top + (y0 - top) * 0.5, in_right, y1);
+            // The edge at y0 runs along the notch's bottom and touches its two corners: held.
+            let touching = rect(in_left, top + (y0 - top) * 0.5, in_right, y0);
+            for start in 0..4 {
+                let mut rotated = crossing.clone();
+                rotated.rotate_left(start);
+                let g = group_contours(&[outer.clone(), rotated], &Limits::default()).unwrap();
+                assert_eq!(g.len(), 2, "x0 {x0}, start {start}");
+                assert!(g.iter().all(|o| o.holes.is_empty()), "x0 {x0}, start {start}");
+                let mut rotated = touching.clone();
+                rotated.rotate_left(start);
+                let g = group_contours(&[outer.clone(), rotated.clone()], &Limits::default()).unwrap();
+                assert_eq!(g, [Outline { outer: outer.clone(), holes: vec![rotated] }], "x0 {x0}, start {start}");
+            }
+        }
     }
 
     #[test]
