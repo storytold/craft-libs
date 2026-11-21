@@ -61,11 +61,13 @@ pub fn try_from_mesh(m: &MeshMaterial) -> Result<Conversion, ConvertError> {
     let mut bind =
         |name: &str, slot: &Option<TextureRef>, input: TextureInput, encoding: TextureEncoding, scale: f32, dropped: Option<&'static str>| {
             let Some(t) = slot else { return Ok(()) };
+            // The texture is checked before a layer that is off drops it.
+            let b = binding(name, t, input, encoding, scale)?;
             if let Some(why) = dropped {
                 report.items.push(ReportItem::Dropped { input: name.to_owned(), why });
                 return Ok(());
             }
-            textures.push(binding(name, t, input, encoding, scale)?);
+            textures.push(b);
             report.items.push(ReportItem::Unshaded { input: name.to_owned() });
             Ok::<(), ConvertError>(())
         };

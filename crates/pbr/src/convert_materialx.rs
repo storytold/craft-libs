@@ -223,8 +223,8 @@ impl Inputs {
 /// - An image becomes a [`TextureBinding`] with the file path, the UV tiling as its transform's
 ///   scale, and an encoding from its color space for a color input (linear for data); the core
 ///   holds 1 times any weight in its place, and an IOR texture leaves the default IOR, reported
-///   as approximated. The inputs and textures of a layer that is off (the coat's color, IOR and
-///   normal among them) are dropped and reported.
+///   as approximated. The inputs and textures of a layer that is off (the coat's roughness,
+///   color, IOR and normal among them) are dropped and reported.
 /// - Color constants are decoded to linear Rec.709 from the color space in effect, as the
 ///   MaterialX specification asks
 ///   (<https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.Specification.md#color-spaces-and-color-management-systems>):
@@ -287,6 +287,18 @@ pub fn try_from_materialx(m: &MxMaterial) -> Result<Conversion, ConvertError> {
         Role::SheenWeight | Role::SheenColor | Role::SheenRoughness if sheen.is_none() => Some(SHEEN_OFF),
         _ => None,
     };
+    // Authored constants of a layer that is off, except the weight or color that turns it off.
+    for (f, got) in table.iter().zip(&inputs.got) {
+        let Got::Constant(v) = got else { continue };
+        let turns_it_off = match f.role {
+            Role::CoatWeight => true,
+            Role::SheenWeight | Role::SheenColor => v.iter().all(|c| *c == 0.0),
+            _ => false,
+        };
+        if let Some(why) = off(f.role).filter(|_| !turns_it_off) {
+            report.items.push(ReportItem::Dropped { input: f.name.to_owned(), why });
+        }
+    }
     let mut other_inputs = Vec::new();
     for (role, input, values) in others {
         match off(role) {

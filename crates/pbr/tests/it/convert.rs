@@ -9,7 +9,13 @@ use craft_pbr::{
 };
 
 fn close(a: f32, b: f32) -> bool {
-    (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)
+    a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)
+}
+
+#[test]
+fn close_is_false_for_values_that_are_not_finite() {
+    assert!(close(1.0, 1.0 + 1e-7));
+    assert!(!close(f32::INFINITY, 1.0) && !close(f32::INFINITY, f32::INFINITY) && !close(f32::NAN, 1.0));
 }
 
 #[track_caller]
@@ -161,6 +167,16 @@ fn mesh_clearcoat_and_sheen_are_kept_and_layers_that_are_off_drop_their_textures
         assert!(dropped(&c, name), "{name}");
     }
     assert!(!unshaded(&c, "clearcoat") && !unshaded(&c, "sheen"));
+}
+
+#[test]
+fn mesh_textures_of_a_layer_that_is_off_are_checked_before_they_are_dropped() {
+    let t = TextureRef { transform: Some(MeshUv { rotation: f32::NAN, ..MeshUv::default() }), ..TextureRef::default() };
+    bad_value(try_from_mesh(&Mesh { clearcoat_roughness_texture: Some(t), ..Mesh::default() }), "clearcoat_roughness_texture transform");
+    bad_value(try_from_mesh(&Mesh { sheen_color_texture: Some(t), ..Mesh::default() }), "sheen_color_texture transform");
+    let fine = TextureRef { transform: Some(MeshUv { rotation: 0.5, ..MeshUv::default() }), ..TextureRef::default() };
+    let c = try_from_mesh(&Mesh { clearcoat_texture: Some(fine), ..Mesh::default() }).unwrap();
+    assert!(c.surface.textures.is_empty() && dropped(&c, "clearcoat_texture"));
 }
 
 #[test]
@@ -456,6 +472,27 @@ fn materialx_coat_only_inputs_are_dropped_while_the_coat_is_off() {
     }
     let gltf = try_from_materialx(&mx(Shader::GltfPbr, &[("clearcoat_normal", img("cc_n.png", None, None))])).unwrap();
     assert!(gltf.surface.textures.is_empty() && dropped(&gltf, "clearcoat_normal"));
+}
+
+#[test]
+fn materialx_constants_of_a_layer_that_is_off_are_dropped() {
+    // The coat weight defaults to 0, so the coat is off and its roughness is dropped.
+    let coat = try_from_materialx(&mx(Shader::OpenPbr, &[("coat_roughness", k(&[0.4]))])).unwrap();
+    assert_eq!(coat.surface.clearcoat, None);
+    assert!(dropped(&coat, "coat_roughness"), "{:?}", coat.report);
+    // The weight that turns the layer off is not reported as dropped.
+    let zero = try_from_materialx(&mx(Shader::OpenPbr, &[("coat_weight", k(&[0.0])), ("coat_roughness", k(&[0.4]))])).unwrap();
+    assert!(dropped(&zero, "coat_roughness") && !dropped(&zero, "coat_weight"), "{:?}", zero.report);
+    let on = try_from_materialx(&mx(Shader::OpenPbr, &[("coat_weight", k(&[0.5])), ("coat_roughness", k(&[0.4]))])).unwrap();
+    assert!(!dropped(&on, "coat_roughness"));
+    // fuzz_weight defaults to 0: the fuzz color and roughness are dropped.
+    let fuzz = try_from_materialx(&mx(Shader::OpenPbr, &[("fuzz_color", k(&[1.0, 0.5, 0.0])), ("fuzz_roughness", k(&[0.2]))])).unwrap();
+    assert!(dropped(&fuzz, "fuzz_color") && dropped(&fuzz, "fuzz_roughness"), "{:?}", fuzz.report);
+    // A black color turns the sheen off, so its weight is dropped and the color is not.
+    let black = try_from_materialx(&mx(Shader::StandardSurface, &[("sheen", k(&[0.5])), ("sheen_color", k(&[0.0; 3]))])).unwrap();
+    assert!(dropped(&black, "sheen") && !dropped(&black, "sheen_color"), "{:?}", black.report);
+    let gltf = try_from_materialx(&mx(Shader::GltfPbr, &[("sheen_roughness", k(&[0.3]))])).unwrap();
+    assert!(dropped(&gltf, "sheen_roughness"), "{:?}", gltf.report);
 }
 
 #[test]

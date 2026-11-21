@@ -7,7 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use craft_xml::{Doctype, El, Error as XmlError, Limits, Options, UnknownEntity};
 
@@ -58,14 +58,17 @@ pub enum Shader {
 /// The value connected to a shader input.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    /// One to four finite numbers, kept in the source color space. `colorspace` is the color
+    /// One to four finite numbers, kept in the source color space. The numbers may be separated
+    /// by commas, spaces or both, and a `boolean` input's `true` and `false` are 1 and 0. A
+    /// `convert` node's output holds the converted channels. `colorspace` is the color
     /// space in effect where the value is written: the input's own `colorspace`, else that of the
     /// nearest enclosing element (the node, then its nodegraph), else the document's.
     Constant { values: Vec<f32>, colorspace: Option<String> },
-    /// A file from an image node, with the effective file prefix applied. `colorspace` is the
+    /// A file from an image node, with the file prefix in effect applied: the `file` input's
+    /// `fileprefix`, else the node's, its nodegraph's or the document's. `colorspace` is the
     /// color space in effect on the node's `file` input, found the same way as for a constant,
-    /// and `uv_tiling` is the node's `uvtiling` when it holds two positive numbers, kept in
-    /// `0.001..=1000`.
+    /// and `uv_tiling` is the node's `uvtiling` as written. A `uvtiling` value that is not two
+    /// finite numbers is [`Error::Malformed`].
     Image { file: String, colorspace: Option<String>, uv_tiling: Option<[f32; 2]> },
 }
 
@@ -80,7 +83,7 @@ pub struct Material {
     pub inputs: Vec<(String, Value)>,
     /// Resolved displacement input, if present.
     pub displacement: Option<Value>,
-    /// First valid image tiling value, or `[1, 1]`.
+    /// First image tiling of two positive numbers, kept in `0.001..=1000`, or `[1, 1]`.
     pub uv_tiling: [f32; 2],
     /// Unsupported or ignored constructs encountered while resolving values, and shader inputs
     /// that are not in the shader's table and so are not read.
@@ -318,12 +321,11 @@ impl Document {
                 .is_some_and(|i| i.attr("value").is_none_or(|v| parse_numbers(v).and_then(|n| n.first().copied()).is_some_and(|v| v > 0.0)))
         });
         let mut warnings = Vec::new();
-        let mut seen: Vec<&str> = Vec::new();
+        let mut seen = HashSet::new();
         for name in shader.children("input").filter_map(|i| i.attr("name")) {
-            if seen.contains(&name) {
+            if !seen.insert(name) {
                 return Err(Error::Malformed(format!("the shader has more than one {name} input")));
             }
-            seen.push(name);
             if !inputs.contains(&name) {
                 warnings.push(format!("input {name} is not read"));
             }
@@ -336,6 +338,8 @@ impl Document {
             let Some(input) = shader.children("input").find(|i| i.attr("name") == Some(*name)) else { continue };
             let is_emission = matches!((kind, *name), (Shader::OpenPbr, "emission_color") | (Shader::StandardSurface, "emission_color"));
             if is_emission && !emission_enabled {
+                // The color is still read, so a malformed value is an error with any strength.
+                resolver.value(input, None, shader_space, 0, &mut Vec::new())?;
                 warnings.push(format!("{name} was skipped: the shader's emission is 0"));
                 continue;
             }
@@ -373,14 +377,77 @@ impl Document {
 
 fn image_tiling(value: &Value) -> Option<[f32; 2]> {
     match value {
-        Value::Image { uv_tiling, .. } => *uv_tiling,
+        Value::Image { uv_tiling, .. } => {
+            uv_tiling.filter(|n| n.iter().all(|v| *v > 0.0)).map(|n| [n[0].clamp(0.001, 1000.0), n[1].clamp(0.001, 1000.0)])
+        }
         Value::Constant { .. } => None,
     }
 }
 
+/// One to four finite numbers separated by commas, spaces or both, as MaterialX's own value
+/// reader splits vector and color values.
 fn parse_numbers(text: &str) -> Option<Vec<f32>> {
-    let nums: Option<Vec<f32>> = text.split(',').map(|part| part.trim().parse::<f32>().ok().filter(|v| v.is_finite())).collect();
+    let nums: Option<Vec<f32>> = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<f32>().ok().filter(|v| v.is_finite()))
+        .collect();
     nums.filter(|v| !v.is_empty() && v.len() <= 4)
+}
+
+/// The value of the input `input`, read as a `boolean` (`true` or `false`, as 1 or 0) when its
+/// type says so, and as numbers otherwise.
+fn input_numbers(input: &El, text: &str) -> Option<Vec<f32>> {
+    if input.attr("type") == Some("boolean") {
+        return match text.trim() {
+            "true" => Some(vec![1.0]),
+            "false" => Some(vec![0.0]),
+            _ => None,
+        };
+    }
+    parse_numbers(text)
+}
+
+/// The number of channels of a MaterialX numeric type.
+fn channels(ty: &str) -> Option<usize> {
+    match ty {
+        "float" | "integer" | "boolean" => Some(1),
+        "vector2" => Some(2),
+        "color3" | "vector3" => Some(3),
+        "color4" | "vector4" => Some(4),
+        _ => None,
+    }
+}
+
+/// The type of `count` numbers whose type is not written: a float, or a vector.
+fn untyped(count: usize) -> &'static str {
+    match count {
+        1 => "float",
+        2 => "vector2",
+        3 => "vector3",
+        _ => "vector4",
+    }
+}
+
+/// `values` of type `from` converted to type `to` by the `convert` node's rules in the MaterialX
+/// Standard Nodes: a boolean becomes a float or integer of 0 or 1, an integer becomes a float or
+/// a boolean (1 for any value that is not 0), a boolean, float or integer is copied to every
+/// channel of a color or vector, and a color or vector keeps its first channels and fills
+/// missing ones with 0 (1 in the fourth). `None` for a pair the node does not define, such as a
+/// float to an integer or a color to a float, and for values that do not fit `from`.
+fn converted(values: &[f32], from: &str, to: &str) -> Option<Vec<f32>> {
+    if channels(from)? != values.len() {
+        return None;
+    }
+    let out = channels(to)?;
+    match (from, to) {
+        _ if from == to => Some(values.to_vec()),
+        ("boolean", "float" | "integer") | ("integer", "float") => Some(values.to_vec()),
+        ("integer", "boolean") => Some(vec![if values[0] != 0.0 { 1.0 } else { 0.0 }]),
+        ("boolean" | "float" | "integer", _) if out > 1 => Some(vec![values[0]; out]),
+        _ if values.len() > 1 && out > 1 => Some((0..out).map(|c| values.get(c).copied().unwrap_or(if c == 3 { 1.0 } else { 0.0 })).collect()),
+        _ => None,
+    }
 }
 
 /// The document's nodes, nodegraphs and graph outputs, for following input connections.
@@ -417,14 +484,92 @@ impl<'a> Resolver<'a> {
             return Ok(None);
         }
         if let Some(value) = input.attr("value") {
-            let Some(values) = parse_numbers(value) else {
+            let Some(values) = input_numbers(input, value) else {
                 let name = input.attr("name").unwrap_or("");
                 return Err(Error::Malformed(format!("input {name} has a value that is not one to four finite numbers")));
             };
             let colorspace = input.attr("colorspace").or(space).map(str::to_owned);
             return Ok(Some(Value::Constant { values, colorspace }));
         }
-        let target = if let Some(graph) = input.attr("nodegraph") {
+        let target = self.target(input, scope);
+        let Some(node) = target.as_ref().and_then(|t| self.nodes.get(t).copied()) else { return Ok(None) };
+        let node_scope = target.as_deref().and_then(|t| t.split_once('/')).map(|(g, _)| g);
+        let node_space = self.space_of(node, node_scope);
+        let child = |name: &str| node.children("input").find(|i| i.attr("name") == Some(name));
+        let node_name = node.attr("name").unwrap_or("");
+        match node.name.as_str() {
+            "image" | "tiledimage" => {
+                let Some(file_input) = child("file") else { return Ok(None) };
+                let Some(file) = file_input.attr("value") else { return Ok(None) };
+                let prefix = file_input
+                    .attr("fileprefix")
+                    .or_else(|| node.attr("fileprefix"))
+                    .or_else(|| node_scope.and_then(|g| self.graphs.get(g)).and_then(|g| g.attr("fileprefix")))
+                    .or_else(|| self.root.attr("fileprefix"))
+                    .unwrap_or("");
+                let uv_tiling = match child("uvtiling").and_then(|i| i.attr("value")) {
+                    None => None,
+                    Some(text) => match parse_numbers(text) {
+                        Some(n) if n.len() == 2 => Some([n[0], n[1]]),
+                        _ => return Err(Error::Malformed(format!("the uvtiling of image {node_name:?} is not two finite numbers"))),
+                    },
+                };
+                let colorspace = file_input.attr("colorspace").or(node_space).map(str::to_owned);
+                Ok(Some(Value::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
+            }
+            "normalmap" => match child("in") {
+                Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
+                None => Ok(None),
+            },
+            "convert" => {
+                let Some(i) = child("in") else { return Ok(None) };
+                let Some(value) = self.value(i, node_scope, node_space, hops + 1, warnings)? else { return Ok(None) };
+                let to = node.attr("type").unwrap_or("");
+                let from =
+                    i.attr("type").or_else(|| self.target(i, node_scope).and_then(|t| self.nodes.get(&t).copied()).and_then(|n| n.attr("type")));
+                match value {
+                    Value::Constant { values, colorspace } => {
+                        let from = from.unwrap_or_else(|| untyped(values.len()));
+                        match converted(&values, from, to) {
+                            Some(values) => Ok(Some(Value::Constant { values, colorspace })),
+                            None => {
+                                warnings.push(format!(
+                                    "a convert node ({node_name:?}) from type {from:?} to type {to:?} is not supported; its input was skipped"
+                                ));
+                                Ok(None)
+                            }
+                        }
+                    }
+                    // An image keeps its own channels, so only a convert that copies every
+                    // channel as it is passes it on.
+                    image @ Value::Image { .. } => {
+                        let copies = from.is_some_and(|from| from == to || channels(from).is_some_and(|n| n > 1 && channels(to) == Some(n)));
+                        if copies {
+                            Ok(Some(image))
+                        } else {
+                            warnings.push(format!(
+                                "a convert node ({node_name:?}) changes an image's channels to type {to:?}, which is not supported; its input was skipped"
+                            ));
+                            Ok(None)
+                        }
+                    }
+                }
+            }
+            "constant" => match child("value") {
+                Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
+                None => Ok(None),
+            },
+            other => {
+                warnings.push(format!("a {other} node ({node_name:?}) is not supported; its input was skipped"));
+                Ok(None)
+            }
+        }
+    }
+
+    /// The key in `nodes` of the node that `input`, an input of an element in nodegraph `scope`
+    /// (or at the top level), connects to.
+    fn target(&self, input: &El, scope: Option<&str>) -> Option<String> {
+        if let Some(graph) = input.attr("nodegraph") {
             let selected = match input.attr("output") {
                 Some(output) => self.outputs.iter().rev().find(|(k, _)| k == &format!("{graph}/{output}")),
                 None => self.outputs.iter().find(|(k, _)| k.starts_with(&format!("{graph}/"))),
@@ -435,36 +580,6 @@ impl<'a> Resolver<'a> {
             qualified.filter(|q| self.nodes.contains_key(q)).or_else(|| Some(name.to_owned()))
         } else {
             None
-        };
-        let Some(node) = target.as_ref().and_then(|t| self.nodes.get(t).copied()) else { return Ok(None) };
-        let node_scope = target.as_deref().and_then(|t| t.split_once('/')).map(|(g, _)| g);
-        let node_space = self.space_of(node, node_scope);
-        let child = |name: &str| node.children("input").find(|i| i.attr("name") == Some(name));
-        match node.name.as_str() {
-            "image" | "tiledimage" => {
-                let Some(file_input) = child("file") else { return Ok(None) };
-                let Some(file) = file_input.attr("value") else { return Ok(None) };
-                let prefix = file_input.attr("fileprefix").or_else(|| node.attr("fileprefix")).or_else(|| self.root.attr("fileprefix")).unwrap_or("");
-                let uv_tiling = child("uvtiling")
-                    .and_then(|i| i.attr("value"))
-                    .and_then(parse_numbers)
-                    .filter(|n| n.len() == 2 && n.iter().all(|v| *v > 0.0))
-                    .map(|n| [n[0].clamp(0.001, 1000.0), n[1].clamp(0.001, 1000.0)]);
-                let colorspace = file_input.attr("colorspace").or(node_space).map(str::to_owned);
-                Ok(Some(Value::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
-            }
-            "normalmap" | "convert" => match child("in") {
-                Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
-                None => Ok(None),
-            },
-            "constant" => match child("value") {
-                Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
-                None => Ok(None),
-            },
-            other => {
-                warnings.push(format!("a {other} node ({:?}) is not supported; its input was skipped", node.attr("name").unwrap_or("")));
-                Ok(None)
-            }
         }
     }
 }
@@ -790,5 +905,139 @@ mod tests {
         .unwrap();
         assert_eq!(m.warnings, vec!["input thin_film_weight is not read".to_owned()]);
         assert_eq!(input(&m, "base_metalness"), Some(&constant(&[1.0], None)));
+    }
+
+    fn open_pbr(inputs: &str, rest: &str) -> String {
+        format!(
+            r#"<materialx><open_pbr_surface name="S">{inputs}</open_pbr_surface>{rest}<surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>"#
+        )
+    }
+
+    #[test]
+    fn vector_values_may_be_separated_by_commas_spaces_or_both() {
+        // MaterialX's value reader splits vector and color values on commas and spaces
+        // (ARRAY_VALID_SEPARATORS, ", ", in source/MaterialXCore/Types.cpp).
+        for text in ["0.5 0.25 0.125", "0.5, 0.25, 0.125", "0.5,0.25,0.125", " 0.5  0.25 ,0.125 "] {
+            let m = read(&open_pbr(&format!(r#"<input name="base_color" type="color3" value="{text}"/>"#), "")).unwrap();
+            assert_eq!(input(&m, "base_color"), Some(&constant(&[0.5, 0.25, 0.125], None)), "{text:?}");
+        }
+        for bad in ["0.5 x 1", "0.5 0.25 0.125 1 2", " "] {
+            let r = read(&open_pbr(&format!(r#"<input name="base_color" type="color3" value="{bad}"/>"#), ""));
+            assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("base_color")), "{bad:?}: {r:?}");
+        }
+    }
+
+    #[test]
+    fn a_nodegraph_file_prefix_applies_to_the_images_inside_it() {
+        // The nearest enclosing fileprefix applies (MaterialX specification, File Prefixes).
+        let m = read(&open_pbr(
+            r#"<input name="base_color" nodegraph="g" output="c"/><input name="specular_roughness" nodegraph="g" output="r"/><input name="base_metalness" nodename="T"/>"#,
+            r#"<nodegraph name="g" fileprefix="stone/">
+                 <tiledimage name="a" type="color3"><input name="file" type="filename" value="albedo.png"/></tiledimage>
+                 <tiledimage name="b" type="float" fileprefix="own/"><input name="file" type="filename" value="rough.png"/></tiledimage>
+                 <output name="c" nodename="a"/><output name="r" nodename="b"/>
+               </nodegraph>
+               <tiledimage name="T" type="float"><input name="file" type="filename" value="metal.png"/></tiledimage>"#,
+        )
+        .replacen("<materialx>", r#"<materialx fileprefix="shared/">"#, 1))
+        .unwrap();
+        let file = |name: &str| match input(&m, name) {
+            Some(Value::Image { file, .. }) => file.clone(),
+            other => panic!("{name}: {other:?}"),
+        };
+        assert_eq!(
+            (file("base_color"), file("specular_roughness"), file("base_metalness")),
+            ("stone/albedo.png".into(), "own/rough.png".into(), "shared/metal.png".into())
+        );
+    }
+
+    #[test]
+    fn uv_tiling_is_kept_as_written_and_malformed_tiling_is_an_error() {
+        let tiled = |tiling: &str| {
+            read(&open_pbr(
+                r#"<input name="base_color" nodename="T"/>"#,
+                &format!(
+                    r#"<tiledimage name="T" type="color3"><input name="file" value="a.png"/><input name="uvtiling" type="vector2" value="{tiling}"/></tiledimage>"#
+                ),
+            ))
+        };
+        let tiling_of = |m: &Material| match input(m, "base_color") {
+            Some(Value::Image { uv_tiling, .. }) => *uv_tiling,
+            other => panic!("{other:?}"),
+        };
+        let wide = tiled("2000, 2").unwrap();
+        assert_eq!((tiling_of(&wide), wide.uv_tiling), (Some([2000.0, 2.0]), [1000.0, 2.0]));
+        let flat = tiled("0 2").unwrap();
+        assert_eq!((tiling_of(&flat), flat.uv_tiling), (Some([0.0, 2.0]), [1.0, 1.0]));
+        for bad in ["x", "1", "1,2,3", "nan,1"] {
+            let r = tiled(bad);
+            assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("uvtiling")), "{bad:?}: {r:?}");
+        }
+    }
+
+    #[test]
+    fn convert_nodes_change_the_number_of_channels() {
+        // The convert node's rules in the MaterialX Standard Nodes: a float is copied to every
+        // channel, a shorter color or vector is filled with 0 (1 in the fourth channel), a
+        // longer one keeps its first channels, and a boolean is 0 or 1.
+        let via = |ty: &str, in_ty: &str, value: &str| {
+            read(&open_pbr(
+                r#"<input name="base_color" nodename="C"/>"#,
+                &format!(r#"<convert name="C" type="{ty}"><input name="in" type="{in_ty}" value="{value}"/></convert>"#),
+            ))
+            .unwrap()
+        };
+        assert_eq!(input(&via("color3", "float", "0.25"), "base_color"), Some(&constant(&[0.25; 3], None)));
+        assert_eq!(input(&via("color4", "color3", "0.1,0.2,0.3"), "base_color"), Some(&constant(&[0.1, 0.2, 0.3, 1.0], None)));
+        assert_eq!(input(&via("color3", "color4", "0.1,0.2,0.3,0.4"), "base_color"), Some(&constant(&[0.1, 0.2, 0.3], None)));
+        assert_eq!(input(&via("vector3", "vector2", "0.1,0.2"), "base_color"), Some(&constant(&[0.1, 0.2, 0.0], None)));
+        assert_eq!(input(&via("float", "boolean", "true"), "base_color"), Some(&constant(&[1.0], None)));
+        assert_eq!(input(&via("float", "integer", "3"), "base_color"), Some(&constant(&[3.0], None)));
+        assert_eq!(input(&via("boolean", "integer", "2"), "base_color"), Some(&constant(&[1.0], None)));
+        // An input with no type is a float or a vector by its count.
+        let untyped = read(&open_pbr(
+            r#"<input name="base_color" nodename="C"/>"#,
+            r#"<convert name="C" type="color3"><input name="in" value="0.5"/></convert>"#,
+        ))
+        .unwrap();
+        assert_eq!(input(&untyped, "base_color"), Some(&constant(&[0.5; 3], None)));
+        // A color to a float and a float to an integer are not conversions the node defines.
+        for (ty, in_ty, value) in [("float", "color3", "0.1,0.2,0.3"), ("integer", "float", "0.5"), ("boolean", "float", "1")] {
+            let unsupported = via(ty, in_ty, value);
+            assert_eq!(input(&unsupported, "base_color"), None, "{in_ty} to {ty}");
+            assert!(unsupported.warnings.iter().any(|w| w.contains("convert node")), "{:?}", unsupported.warnings);
+        }
+        let image = |ty: &str, image_ty: &str| {
+            read(&open_pbr(
+                r#"<input name="base_color" nodename="C"/>"#,
+                &format!(
+                    r#"<convert name="C" type="{ty}"><input name="in" nodename="T"/></convert><image name="T" type="{image_ty}"><input name="file" value="g.png"/></image>"#
+                ),
+            ))
+            .unwrap()
+        };
+        let g = Value::Image { file: "g.png".into(), colorspace: None, uv_tiling: None };
+        assert_eq!(input(&image("float", "float"), "base_color"), Some(&g));
+        assert_eq!(input(&image("vector3", "color3"), "base_color"), Some(&g));
+        for (ty, image_ty) in [("color3", "float"), ("color3", "color4")] {
+            let changed = image(ty, image_ty);
+            assert_eq!(input(&changed, "base_color"), None, "{image_ty} to {ty}");
+            assert!(changed.warnings.iter().any(|w| w.contains("convert node")), "{:?}", changed.warnings);
+        }
+    }
+
+    #[test]
+    fn an_emission_color_is_checked_while_the_emission_is_0() {
+        let standard = |color: &str| {
+            read(&format!(
+                r#"<materialx><standard_surface name="S"><input name="emission" value="0"/><input name="emission_color" value="{color}"/></standard_surface>
+                <surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial></materialx>"#
+            ))
+        };
+        let r = standard("0.5,x,1");
+        assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("emission_color")), "{r:?}");
+        let m = standard("0.5,0.5,1").unwrap();
+        assert_eq!(input(&m, "emission_color"), None);
+        assert_eq!(m.warnings, vec!["emission_color was skipped: the shader's emission is 0".to_owned()]);
     }
 }
