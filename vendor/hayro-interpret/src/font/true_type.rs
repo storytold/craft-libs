@@ -1,5 +1,6 @@
 use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
 use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win_ansi};
+use crate::font::facts::{DictFacts, FontFacts, FontKind, GlyphFacts};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
     Encoding, FallbackFontQuery, FontFlags, glyph_name_to_text, glyph_name_to_unicode,
@@ -30,6 +31,8 @@ pub(crate) struct TrueTypeFont {
     cache_key: u128,
     kind: Kind,
     to_unicode: Option<CMap>,
+    /// PdfCraft patch (107): what the font's facts read from its dictionary.
+    dict_facts: DictFacts,
 }
 
 #[derive(Debug)]
@@ -52,6 +55,7 @@ impl TrueTypeFont {
                 cache_key,
                 kind: Kind::Embedded(embedded),
                 to_unicode,
+                dict_facts: DictFacts::new(dict, None),
             });
         }
 
@@ -76,6 +80,7 @@ impl TrueTypeFont {
                     font_resolver,
                 )?),
                 to_unicode: to_unicode.clone(),
+                dict_facts: DictFacts::new(dict, None),
             })
         };
 
@@ -84,6 +89,7 @@ impl TrueTypeFont {
                 cache_key,
                 kind: Kind::Standard(standard),
                 to_unicode,
+                dict_facts: DictFacts::new(dict, None),
             })
         } else {
             fallback()
@@ -181,6 +187,42 @@ impl TrueTypeFont {
             Kind::Embedded(e) => e.glyph_width(code),
             Kind::Standard(s) => s.glyph_width(code).unwrap_or(0.0),
         }
+    }
+
+    /// PdfCraft patch (107): what the font's facts read from its dictionary.
+    pub(crate) fn dict_facts(&self) -> &DictFacts {
+        &self.dict_facts
+    }
+
+    /// PdfCraft patch (107): `f` called with the font's facts and those of `code`, drawn as
+    /// glyph `gid` ([`crate::font::Glyph::with_facts`]).
+    pub(crate) fn with_facts<R>(
+        &self,
+        code: u32,
+        gid: GlyphId,
+        f: impl FnOnce(&FontFacts<'_>, &GlyphFacts<'_>) -> R,
+    ) -> R {
+        let names = |c: u8| match &self.kind {
+            Kind::Embedded(e) => e.code_to_name(c),
+            Kind::Standard(s) => s.code_to_ps_name(c),
+        };
+        let code_glyph = |c: u8| (self.map_code(c), self.char_code_to_unicode(u32::from(c)));
+        let font = FontFacts {
+            has_to_unicode: self.to_unicode.is_some(),
+            names: Some(&names),
+            program: match &self.kind {
+                Kind::Embedded(e) => Some(e.base_font.font_ref()),
+                Kind::Standard(_) => None,
+            },
+            code_glyph: Some(&code_glyph),
+            ..self.dict_facts.facts(FontKind::TrueType)
+        };
+        let glyph = GlyphFacts {
+            gid,
+            name: u8::try_from(code).ok().and_then(names),
+            id: None,
+        };
+        f(&font, &glyph)
     }
 
     pub(crate) fn char_code_to_unicode(&self, code: u32) -> Option<BfString> {
