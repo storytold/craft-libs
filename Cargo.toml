@@ -39,6 +39,7 @@ craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
+craft-cdr = { path = "crates/cdr" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
