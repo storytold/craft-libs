@@ -2,7 +2,7 @@
 
 use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, StackDialog as _};
-use craft_ui::patterns::form_dialogs::{AboutDialog, AboutInfo, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use craft_ui::patterns::form_dialogs::{AboutDialog, AboutInfo, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
 use craft_ui::testing::{Fixture, trial};
 use egui::Vec2;
 use serde_json::json;
@@ -21,6 +21,21 @@ static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
         52,
     )
 });
+
+#[trial]
+fn icon_links_leave_room_for_their_visible_labels() {
+    let info = AboutInfo::new("App", "An app", "1").links([
+        AboutLink::new("A much longer community link", "https://example.org").icon(craft_behavior::IconId::new("globe")),
+        AboutLink::new("Go", "https://example.org").icon(craft_behavior::IconId::new("globe")),
+    ]);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&info, &CREDITS).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let long = fixture.by_label("A much longer community link").expect("long link").rect;
+    let short = fixture.by_label("Go").expect("short link").rect;
+    assert!(long.width() > short.width(), "the icon link must show its label");
+}
 
 #[trial]
 fn a_click_on_a_name_in_the_grab_bag_reports_its_profile() {
