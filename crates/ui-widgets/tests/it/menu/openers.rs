@@ -206,3 +206,20 @@ fn a_menu_button_hangs_its_arrow_under_the_end_of_its_glyph() {
         }
     }
 }
+
+/// Both click and press openers accept a screen reader's activation, not only a pointer press.
+#[trial]
+fn a_menu_opener_accepts_accessibility_activation() {
+    for trigger in [Trigger::Click, Trigger::Press] {
+        let mut fixture = Fixture::new(move |ui| {
+            let opener = IconButton::new(IconId::new("settings")).label("Options").popup(PopupKind::Menu).show(ui);
+            Menu::new("Options menu").opened_by(&opener.response, trigger).show(ui, |ui, _| {
+                MenuItem::new("An option").show(ui);
+            });
+        });
+        fixture.settle();
+        let opener = fixture.by_label("Options").expect("the opener");
+        fixture.access(craft_ui::testing::focus::AccessActionKind::Click, &opener).settle();
+        assert!(fixture.by_label("An option").is_some(), "{trigger:?} opens through accessibility");
+    }
+}

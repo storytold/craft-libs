@@ -18,7 +18,7 @@ pub enum Trigger {
     /// completes the click is part of that opening.
     Click,
     /// A primary press on the opener toggles, and a secondary click inside it toggles too, hanging the layer from the
-    /// opener as a press does (a pop-up menu button).
+    /// opener as a press does (a pop-up menu button). Keyboard and accessibility activation toggle it too.
     Press,
     /// A context request (right click, the Menu key, AccessKit `ShowContextMenu`) opens.
     Context,
@@ -96,6 +96,9 @@ impl Opener {
             let clicked = trigger == Trigger::Click && frame.release == Some(PointerButton::Primary) && response::pointer_clicked(anchor);
             (fired, opening, pressed_on && pass.primary_down, clicked)
         });
+        // Keyboard and accessibility clicks have no pointer press; their activation must still open the layer.
+        let activated = anchor.enabled() && response::clicked(anchor) && !response::pointer_clicked(anchor);
+        let fired = fired || (activated && matches!(trigger, Trigger::Click | Trigger::Press));
         Opener {
             id: anchor.id,
             rect: anchor.rect,

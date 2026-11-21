@@ -382,3 +382,53 @@ fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses
     assert!(iconic(), "the icon of the panel in front collapses the column");
     assert!(!shown(&fixture, "Alpha body"), "and its panel no longer shows");
 }
+
+struct RailWithMenu;
+
+impl DockPanels<u32> for RailWithMenu {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn rail_footer(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        use craft_ui::buttons::IconButton;
+        use craft_ui::contract::{PopupKind, Props as _, ShowContainer as _, Trigger};
+        use craft_ui::menu::{Menu, MenuItem};
+        let opener = IconButton::new(craft_behavior::IconId::new("settings")).label("Rail menu").popup(PopupKind::Menu).show(ui);
+        Menu::new("Rail options").opened_by(&opener.response, Trigger::Press).show(ui, |ui, _| {
+            MenuItem::new("Rail option").show(ui);
+        });
+    }
+}
+
+/// A popup opened from the fixed rail footer remains interactive at the edge of the window.
+#[trial]
+fn a_menu_opens_from_the_rail_footer() {
+    let side = Column::new(vec![Group::new(vec![10, 11], 0)]).with_iconic(true);
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, vec![side]));
+    let workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut RailWithMenu, DockConfig::default().iconic_mode(IconicMode::Rail))
+            .rail_footer(10)
+            .show(ui);
+    });
+    fixture.room(Vec2::new(900.0, 500.0)).settle();
+    let opener = fixture.by_label("Rail menu").expect("the rail menu button");
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Click, &opener).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "the footer button opens its menu through accessibility");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    assert!(fixture.by_label("Rail option").is_none(), "Escape closes the menu");
+    fixture.click(&opener).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "a pointer press still opens it");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &opener).settle();
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "Enter opens the focused menu");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    let at = opener.center();
+    fixture.frame(vec![pointer::moved(egui::pos2(100.0, 100.0))]);
+    fixture.frame(vec![pointer::moved(at), pointer::press(at), pointer::release(at)]).settle();
+    assert!(fixture.by_label("Rail option").is_some(), "a same-frame click opens the menu");
+}
