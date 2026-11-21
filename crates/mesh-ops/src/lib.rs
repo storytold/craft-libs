@@ -142,10 +142,11 @@ pub fn bounds(positions: &[[f32; 3]]) -> Result<Option<([f32; 3], [f32; 3])>> {
 }
 
 /// Area-weighted smooth normals, one per vertex, as [`Mesh::try_compute_normals`] computes them.
-/// Vertices are told apart by index, so two vertices at one position keep their own normals; to
-/// share one normal across a UV seam, give the triangles the ids [`weld`] returns and copy each
-/// id's normal back to its vertices. A vertex no triangle uses, or whose triangles' products sum
-/// to zero, gets +Y.
+/// Vertices are told apart by index, so two vertices at one position keep their own normals. To
+/// share one normal across a UV seam, take the ids [`weld`] returns, which are dense: build one
+/// position per id (the position of the first vertex with that id), pass those positions with
+/// each triangle index replaced by its vertex's id, and copy each id's normal back to its
+/// vertices. A vertex no triangle uses, or whose triangles' products sum to zero, gets +Y.
 pub fn smooth_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) -> Result<Vec<[f32; 3]>> {
     let mut mesh = Mesh::from_slices(positions, None, None, indices, limits)?;
     mesh.try_compute_normals()?;
@@ -175,6 +176,8 @@ pub struct FlatNormals {
 /// [`Limits::max_vertices`] as well as the input's.
 pub fn flat_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) -> Result<FlatNormals> {
     check_limit("vertex count", positions.len(), limits.max_vertices)?;
+    check_limit("triangle count", indices.len() / 3, limits.max_triangles)?;
+    check_limit("vertex count", indices.len(), limits.max_vertices)?;
     let mut input = try_vec(positions.len(), "positions")?;
     input.extend(positions.iter().map(|p| Vec3::from_array(*p)));
     let corners = mesh::flat_corners(&input, indices, limits)?;

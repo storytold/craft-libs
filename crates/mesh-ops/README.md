@@ -14,16 +14,21 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   product of its edges, twice its area times its unit normal, to its three vertices, and each sum
   is brought to unit length, the weighting described in Caltech's CS 171 notes
   (<https://courses.cms.caltech.edu/cs171/assignments/hw5/hw5-notes/notes-hw5.html>). Vertices are
-  told apart by index, so the two copies of a vertex on a UV seam keep their own normals; a caller
-  that wants one normal across the seam passes the ids `weld` returns as the triangles' vertices
-  and copies each id's normal back. A vertex no triangle uses, or whose sum is zero, gets +Y.
+  told apart by index, so the two copies of a vertex on a UV seam keep their own normals. The ids
+  `weld` returns are dense, so a caller that wants one normal across the seam builds one position
+  per id (the position of the first vertex with that id), passes those positions with each
+  triangle index replaced by its vertex's id, and copies each id's normal back. A vertex no
+  triangle uses, or whose sum is zero, gets +Y.
   `flat_normals` and `Mesh::try_flat_normals` give every triangle corner its own vertex with the
   triangle's unit normal, which glTF 2.0 asks a loader to compute when a mesh has no normals; a
   triangle without area gets +Z. `flat_normals` returns the input vertex each output vertex
   copies, so a caller can carry UVs, colors, joints and weights over; `Mesh::try_flat_normals`
   carries UVs and colors, keeps submeshes and polygon diagonals, and computes the tangents again
-  when the mesh had them. Both builders take the cross products in `f64`, so a triangle with a
-  side of 1e-15 or 1e20 keeps its normal. `Mesh::try_compute_normals` and `try_flat_normals`
+  when the mesh had them. `Mesh::wire_edges` matches a diagonal's twin by position and UV, so the
+  diagonals stay hidden after `try_flat_normals` gives each triangle its own vertices. Both
+  builders take the cross products in `f64`, from the corner opposite the longest edge, so a
+  triangle with a side of 1e-15 or 1e20, or a short side next to corners 2^80 apart, keeps its
+  normal. `Mesh::try_compute_normals` and `try_flat_normals`
   return `Invalid` for an index count that is not a multiple of 3, an index past the last vertex
   or a non-finite position, with the mesh unchanged; `compute_normals` skips a triangle with an
   index out of range. Tangents come from MikkTSpace, which

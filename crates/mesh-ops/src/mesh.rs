@@ -6,6 +6,10 @@ use crate::{Limits, MeshOpsError, Result, check_limit, reserved, try_filled, try
 
 /// An edge by the bits of its two end positions, the lower one first
 type EdgePositions = ([u32; 3], [u32; 3]);
+/// The position and UV bits of a corner [`Mesh::wire_edges`] matches twins by.
+type WireCorner = (Option<[u32; 3]>, Option<[u32; 2]>);
+/// The two corners of an edge, smaller first.
+type WireEnds = (WireCorner, WireCorner);
 
 /// A contiguous index range drawn with one material.
 #[derive(Clone, Debug, PartialEq)]
@@ -232,12 +236,30 @@ pub(crate) fn check_triangles(positions: &[Vec3], indices: &[u32]) -> Result<()>
     Ok(())
 }
 
+/// The cross product of the edges of the triangle `a, b, c` in `f64`: twice its area times its
+/// unit normal, on the side from which its corners run counterclockwise. The edges are taken from
+/// the corner opposite the longest edge, so the two shorter edges keep their direction when a
+/// difference of corners far apart rounds: for corners `(2^80, 2^80, 0)`, `(0, 0, 0)` and
+/// `(0, 1, 0)` the edges from the first corner round to one direction, and the edges from the
+/// third corner give -Z.
+pub(crate) fn face_cross(a: DVec3, b: DVec3, c: DVec3) -> DVec3 {
+    let (ab, bc, ca) = (b - a, c - b, a - c);
+    let (ab2, bc2, ca2) = (ab.length_squared(), bc.length_squared(), ca.length_squared());
+    if ab2 >= bc2 && ab2 >= ca2 {
+        ca.cross(-bc)
+    } else if bc2 >= ca2 {
+        ab.cross(-ca)
+    } else {
+        bc.cross(-ab)
+    }
+}
+
 /// The unit normal of the triangle `a, b, c`, on the side from which its corners run
 /// counterclockwise, or +Z when the triangle has no area. The cross product of its edges is
-/// taken in `f64`, where it neither overflows nor rounds to zero for finite `f32` corners.
+/// taken in `f64` with [`face_cross`], where it neither overflows nor rounds to zero for finite
+/// `f32` corners.
 pub(crate) fn face_normal(a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
-    let (a, b, c) = (a.as_dvec3(), b.as_dvec3(), c.as_dvec3());
-    (b - a).cross(c - a).try_normalize().map_or(Vec3::Z, |n| n.as_vec3())
+    face_cross(a.as_dvec3(), b.as_dvec3(), c.as_dvec3()).try_normalize().map_or(Vec3::Z, |n| n.as_vec3())
 }
 
 /// A mesh with one vertex per triangle corner, as [`flat_corners`] makes it.
@@ -329,18 +351,29 @@ impl Mesh {
     }
 
     /// The edges wireframes draw: each vertex pair once (smaller index first), leaving out
-    /// polygon diagonals ([`Mesh::diagonals`]) unless only one triangle has the edge (a UV seam
-    /// split it from its twin), per material in `0..materials.len().max(1)`. A triangle that
+    /// polygon diagonals ([`Mesh::diagonals`]) unless only one triangle hides an edge between
+    /// corners at those positions with those UVs (a UV seam split it from its twin), per material
+    /// in `0..materials.len().max(1)`. Twins are matched by position and UV, so a diagonal stays
+    /// hidden when each of its triangles has its own copies of the vertices, as after
+    /// [`Mesh::try_flat_normals`]; two coincident polygons whose diagonals have no twin of their
+    /// own, at the same positions with the same UVs, hide each other's diagonal. A triangle that
     /// several submeshes of one material list counts once for an edge. The triangles the
     /// submeshes list (a triangle counts again for each submesh that lists it) over
     /// [`Limits::max_triangles`] are `TooLarge`.
     pub fn wire_edges(&self, limits: &Limits) -> Result<Vec<Vec<(u32, u32)>>> {
+        // Signed zero is the same position or UV on either side of a split vertex.
+        let bits = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+        let corner = |index: u32| -> WireCorner {
+            (self.positions.get(index as usize).map(|p| p.to_array().map(bits)), self.uvs.get(index as usize).map(|uv| uv.to_array().map(bits)))
+        };
         let groups = self.ranges_by_material(limits)?;
         let mut out = try_vec(groups.len(), "wire edges")?;
         for ranges in &groups {
-            // Edge → (real in some triangle, triangles using it), in first-seen order.
-            let mut edges: Vec<((u32, u32), bool, u8)> = Vec::new();
+            // Edge → (real in some triangle, its corners), in first-seen order.
+            let mut edges: Vec<((u32, u32), bool, WireEnds)> = Vec::new();
             let mut at: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::new();
+            // Corners of a diagonal → triangles that hide an edge between such corners.
+            let mut twins: std::collections::HashMap<WireEnds, u8> = std::collections::HashMap::new();
             // Each listed triangle once, where its first submesh lists it.
             for r in first_listings(ranges)? {
                 for t in r {
@@ -349,25 +382,31 @@ impl Mesh {
                     for (i, (a, b)) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])].into_iter().enumerate() {
                         let key = (a.min(b), a.max(b));
                         let real = hidden >> i & 1 == 0;
+                        let (ca, cb) = (corner(a), corner(b));
+                        let ends = if ca <= cb { (ca, cb) } else { (cb, ca) };
                         let e = match at.get(&key) {
                             Some(&e) => e,
                             None => {
                                 reserved(edges.try_reserve(1), "wire edges")?;
                                 reserved(at.try_reserve(1), "wire edges")?;
-                                edges.push((key, false, 0));
+                                edges.push((key, false, ends));
                                 at.insert(key, edges.len() - 1);
                                 edges.len() - 1
                             }
                         };
-                        if let Some((_, r, n)) = edges.get_mut(e) {
+                        if let Some((_, r, _)) = edges.get_mut(e) {
                             *r |= real;
+                        }
+                        if !real {
+                            reserved(twins.try_reserve(1), "wire edges")?;
+                            let n = twins.entry(ends).or_insert(0);
                             *n = n.saturating_add(1);
                         }
                     }
                 }
             }
             let mut kept = try_vec(edges.len(), "wire edges")?;
-            kept.extend(edges.into_iter().filter(|(_, real, n)| *real || *n == 1).map(|(k, ..)| k));
+            kept.extend(edges.into_iter().filter(|(_, real, ends)| *real || twins.get(ends).copied() == Some(1)).map(|(k, ..)| k));
             out.push(kept);
         }
         Ok(out)
@@ -622,16 +661,15 @@ impl Mesh {
         Ok(())
     }
 
-    /// The normals [`Mesh::compute_normals`] stores. The face products are summed in `f64`, where
-    /// the cross product of any two `f32` edges neither overflows nor rounds to zero, so a small
-    /// face far from the origin keeps its normal.
+    /// The normals [`Mesh::compute_normals`] stores. The face products ([`face_cross`]) are
+    /// summed in `f64`, where the cross product of any two `f32` edges neither overflows nor
+    /// rounds to zero, so a small face far from the origin keeps its normal.
     pub(crate) fn smooth_normals(&self) -> Result<Vec<Vec3>> {
         let mut sums = try_filled(self.positions.len(), DVec3::ZERO, "normals")?;
         for &[a, b, c] in self.indices.as_chunks::<3>().0 {
             let (a, b, c) = (a as usize, b as usize, c as usize);
             let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let (pa, pb, pc) = (pa.as_dvec3(), pb.as_dvec3(), pc.as_dvec3());
-            let face = (pb - pa).cross(pc - pa);
+            let face = face_cross(pa.as_dvec3(), pb.as_dvec3(), pc.as_dvec3());
             for v in [a, b, c] {
                 if let Some(x) = sums.get_mut(v) {
                     *x += face;
@@ -1846,19 +1884,22 @@ mod tests {
         assert_eq!(edges, vec![vec![(0, 1), (1, 2), (0, 2)]], "a hidden edge with one triangle stays");
         assert_eq!(twice.wire_edges(&at_most(2)).unwrap(), edges);
 
-        // A quad whose diagonal a seam split (vertex 4 copies vertex 0): each half keeps its
-        // diagonal, also when a second submesh lists the second half again.
+        // A quad whose diagonal a seam split (vertex 4 copies vertex 0 with another UV): each half
+        // keeps its diagonal, also when a second submesh lists the second half again.
         let mut seam = quad();
         seam.positions.push(seam.positions[0]);
         seam.normals.push(seam.normals[0]);
         seam.tangents.push(seam.tangents[0]);
-        seam.uvs.push(seam.uvs[0]);
+        seam.uvs.push(Vec2::new(0.9, 0.9));
         seam.indices[3] = 4;
         seam.diagonals = vec![0b100, 0b001];
         let edges = seam.wire_edges(&at_most(2)).unwrap();
         assert_eq!(edges[0].len(), 6, "{edges:?}");
         seam.submeshes.push(SubMesh { name: "again".into(), material: 0, start: 3, count: 3 });
         assert_eq!(seam.wire_edges(&at_most(3)).unwrap(), edges);
+        // A copy with the same UV is not a seam, so the diagonal stays hidden.
+        seam.uvs[4] = seam.uvs[0];
+        assert_eq!(seam.wire_edges(&at_most(3)).unwrap()[0].len(), 4);
     }
 
     #[test]
@@ -2247,6 +2288,58 @@ mod tests {
         let mut no_uvs = Mesh { uvs: Vec::new(), ..before };
         no_uvs.try_flat_normals(&Limits::default()).unwrap();
         assert_eq!((no_uvs.uvs.len(), no_uvs.tangents.len()), (0, 6));
+    }
+
+    #[test]
+    fn flat_normals_keep_polygon_diagonals_hidden_in_wireframes() {
+        let l = Limits::default();
+        let mut m = quad();
+        m.diagonals = vec![0b100, 0b001];
+        assert_eq!(m.wire_edges(&l).unwrap()[0].len(), 4);
+        m.try_flat_normals(&l).unwrap();
+        // Vertices 3 and 4 copy the diagonal's corners 0 and 2; the four sides are drawn once each.
+        assert_eq!(m.wire_edges(&l).unwrap(), vec![vec![(0, 1), (1, 2), (4, 5), (3, 5)]]);
+        // A diagonal whose copies have other UVs on one side is a seam and is drawn on both sides.
+        let mut seam = m.clone();
+        seam.uvs[3] = Vec2::new(0.9, 0.9);
+        assert_eq!(seam.wire_edges(&l).unwrap(), vec![vec![(0, 1), (1, 2), (0, 2), (3, 4), (4, 5), (3, 5)]]);
+        // A drawn edge of another triangle is no twin: only the first triangle hides the edge.
+        let mut lone = m.clone();
+        lone.diagonals = vec![0b100, 0];
+        assert_eq!(lone.wire_edges(&l).unwrap()[0].len(), 6);
+    }
+
+    #[test]
+    fn a_normal_shared_across_a_seam_comes_from_the_welded_positions() {
+        // Vertices 0 and 1 share a position; only vertex 1 is on the triangle, which faces +Z.
+        let l = Limits::default();
+        let positions = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let indices = [1, 2, 3];
+        let ids = crate::weld(&positions, &l).unwrap();
+        assert_eq!(ids, vec![0, 0, 1, 2]);
+        let mut welded = Vec::new();
+        for (v, &id) in ids.iter().enumerate() {
+            if id as usize == welded.len() {
+                welded.push(positions[v]);
+            }
+        }
+        let welded_indices = indices.map(|i| ids[i as usize]);
+        let normals = crate::smooth_normals(&welded, &welded_indices, &l).unwrap();
+        let shared = ids.iter().map(|&id| normals[id as usize]).collect::<Vec<_>>();
+        assert_eq!(shared, vec![[0.0, 0.0, 1.0]; 4]);
+        // The original positions with the ids as indices read the wrong corners.
+        assert_eq!(crate::smooth_normals(&positions, &welded_indices, &l).unwrap()[0], [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn normals_keep_a_short_side_next_to_far_corners() {
+        // The edges from the first corner both round to (-2^80, -2^80, 0) in f64.
+        let far = 2.0f32.powi(80);
+        let positions = [[far, far, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        for indices in [[0, 1, 2], [1, 2, 0], [2, 0, 1]] {
+            assert_eq!(flat(&positions, &indices).normals, vec![[0.0, 0.0, -1.0]; 3], "{indices:?}");
+            assert_eq!(smooth(&positions, &indices), vec![-Vec3::Z; 3], "{indices:?}");
+        }
     }
 
     #[test]
