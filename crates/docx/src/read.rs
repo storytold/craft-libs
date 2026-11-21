@@ -124,6 +124,10 @@ pub(crate) struct Reader<'p> {
     /// Word then gives tables no cell margins rather than its Normal Table's 0.08". Set by
     /// `read_styles`, which runs before any story with tables is read.
     pub no_default_table_style: bool,
+    /// The styles part has no quick style (a producer that never writes `w:qFormat`): Word's
+    /// usual gallery is added once the stories are read, so a `w:matchSrc` chunk read in them
+    /// meets only the styles the file has, as in Word. Set by `read_styles`.
+    pub gallery_pending: bool,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -203,6 +207,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         group_fill: None,
         chunks,
         no_default_table_style: true,
+        gallery_pending: false,
     };
     r.doc.missing_pictures.main = main.clone();
     r.pc.major_font = r.doc.settings.major_font.clone();
@@ -372,6 +377,11 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     link_text_boxes(&mut r.doc, links);
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
+    }
+    // Not in a chunk's package: a style it doesn't define stays undefined there (its Normal),
+    // as in Word; the document the chunk lands in gets the gallery.
+    if r.gallery_pending && r.chunks.nesting == 0 {
+        Arc::make_mut(&mut r.doc.styles).add_default_gallery();
     }
     let (left, bytes, graphic, elements) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic, pkg.elements_left());
     let mut doc = r.doc;

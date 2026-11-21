@@ -331,7 +331,11 @@ impl PropCtx {
                         self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
                 }
                 "w:bdr" => c.border = Some(self.border(k)),
-                "w:shd" => c.shading = self.shd_fill(k),
+                "w:shd" => {
+                    c.shading = self.shd_fill(k);
+                    // Without a colour (`auto`, `nil`) it takes off any shading the styles give.
+                    c.shading_auto = c.shading.is_none().then_some(true);
+                }
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
                         "superscript" => VertAlign::Superscript,

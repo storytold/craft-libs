@@ -273,4 +273,111 @@ mod tests {
         assert_eq!(changed.sym_font.as_deref(), Some("Wingdings"));
         assert_eq!(p.cleared().sym_font.as_deref(), Some("Wingdings"));
     }
+
+    /// What a style sets and the other style leaves unset comes back at the value an unset field
+    /// resolves to, the documented defaults included.
+    #[test]
+    fn against_gives_unset_fields_their_defaults() {
+        let base = CharProps {
+            web_hidden: Some(true),
+            snap_to_grid: Some(false),
+            ligatures: Some(Ligatures { standard: false, contextual: false, historical: true, discretional: true }),
+            border: Some(Border::single(0.5)),
+            bold: Some(true),
+            ..Default::default()
+        };
+        let out = CharProps::default().against(&base);
+        assert_eq!(out.web_hidden, Some(false));
+        assert_eq!(out.snap_to_grid, Some(true));
+        assert_eq!(out.ligatures, Some(Ligatures { standard: true, contextual: true, historical: false, discretional: false }));
+        assert_eq!(out.border.map(|b| b.style), Some(BorderStyle::None));
+        assert_eq!(out.bold, Some(false));
+        // Already at the default: nothing to say.
+        let quiet = CharProps { web_hidden: Some(false), snap_to_grid: Some(true), ..Default::default() };
+        let out = CharProps::default().against(&quiet);
+        assert_eq!((out.web_hidden, out.snap_to_grid), (None, None));
+    }
+
+    /// Whether the text is complex script or right to left stays the base's, as Word keeps it on a
+    /// chunk's last paragraph: a base `w:cs` isn't turned off (so Arabic and Thai keep the
+    /// complex-script size), and a chunk style's own `w:cs` or `w:rtl`, set or off, doesn't come.
+    #[test]
+    fn against_leaves_complex_script_and_direction_to_the_base() {
+        let base = CharProps { cs: Some(true), rtl: Some(true), size: Some(11.0), size_cs: Some(24.0), ..Default::default() };
+        let out = CharProps { size: Some(11.0), size_cs: Some(24.0), ..Default::default() }.against(&base);
+        assert_eq!((out.cs, out.rtl), (None, None));
+        let look = base.clone().overlaid(&out);
+        let sheet = crate::styles::StyleSheet::default();
+        let rc = sheet.resolve_char(None, &look);
+        assert!(rc.uses_complex('\u{0633}') && rc.uses_complex('A'), "drawn complex script as under the base");
+        assert_eq!(rc.complex().size, 24.0);
+        // Unset in the base, an Arabic letter still takes the complex-script size.
+        let plain = CharProps { size: Some(11.0), size_cs: Some(24.0), ..Default::default() };
+        let rc = sheet.resolve_char(None, &plain.clone().overlaid(&CharProps::default().against(&plain)));
+        assert!(rc.uses_complex('\u{0633}'));
+        // The chunk style's own values, set or off, don't come along.
+        for (cs, rtl) in [(Some(true), Some(true)), (Some(false), Some(false))] {
+            let out = CharProps { cs, rtl, ..Default::default() }.against(&CharProps::default());
+            assert_eq!((out.cs, out.rtl), (None, None), "cs {cs:?} rtl {rtl:?}");
+            let out = CharProps { cs, rtl, ..Default::default() }.against(&base);
+            assert_eq!((out.cs, out.rtl), (None, None), "over the base: cs {cs:?} rtl {rtl:?}");
+        }
+    }
+
+    /// Shading and text effects the base gives and the run doesn't are taken off, as Word takes
+    /// them off a chunk's last paragraph: overlaid on the base, nothing of them is drawn.
+    #[test]
+    fn against_takes_off_the_shading_and_effects_only_the_base_gives() {
+        use crate::effects::{Glow, Shadow};
+        use crate::wordart::{Reflection, TextEffects, TextFill, TextOutline};
+        let fx = TextEffects {
+            fill: Some(TextFill::Solid { color: Rgb(0xFF, 0, 0), transparency: 0.0 }),
+            outline: Some(TextOutline::default()),
+            shadow: Some(Shadow::default()),
+            glow: Some(Glow::default()),
+            reflection: Some(Reflection::default()),
+        };
+        let base = CharProps { shading: Some(Rgb(0, 0, 0xFF)), text_effects: Some(Box::new(fx)), ..Default::default() };
+        let out = CharProps::default().against(&base);
+        assert_eq!(out.shading_auto, Some(true));
+        assert_eq!(out.color, Some(TextColor::Auto), "the text fill goes by the text's colour");
+        let look = base.clone().overlaid(&out);
+        assert_eq!((look.shading, look.shading_auto), (None, Some(true)));
+        assert!(look.text_effects.as_deref().is_none_or(|t| t.sanitized().visible().is_empty()), "{:?}", look.text_effects);
+        // What the run gives itself stays.
+        let own = CharProps {
+            shading: Some(Rgb(0, 0xFF, 0)),
+            text_effects: Some(Box::new(TextEffects { glow: Some(Glow::default()), ..Default::default() })),
+            ..Default::default()
+        };
+        let look = base.clone().overlaid(&own.against(&base));
+        assert_eq!(look.shading, Some(Rgb(0, 0xFF, 0)));
+        assert_eq!(look.text_effects.as_deref().map(|t| t.sanitized().visible().glow.is_some()), Some(true));
+    }
+
+    /// A run's own colour takes a text fill its styles give off, as Word draws it; a colour and a
+    /// fill set together keep the fill.
+    #[test]
+    fn a_colour_takes_off_the_text_fill_below() {
+        use crate::wordart::{TextEffects, TextFill};
+        let red = TextEffects { fill: Some(TextFill::Solid { color: Rgb(0xFF, 0, 0), transparency: 0.0 }), ..Default::default() };
+        let style = CharProps { text_effects: Some(Box::new(red.clone())), ..Default::default() };
+        let blue = CharProps { color: Some(TextColor::Rgb(Rgb(0, 0, 0xFF))), ..Default::default() };
+        assert_eq!(style.clone().overlaid(&blue).text_effects, None);
+        let both = CharProps { text_effects: Some(Box::new(red.clone())), ..blue.clone() };
+        assert_eq!(style.overlaid(&both).text_effects.map(|t| t.fill), Some(red.fill.clone()));
+        // What a colour equal to the base's does over the base's fill is kept by `minus`: overlaid
+        // again, the difference takes the fill off as the colour did.
+        let base = CharProps { text_effects: Some(Box::new(red.clone())), ..blue.clone() };
+        let diff = blue.clone().minus(&base);
+        assert_eq!(diff.color, blue.color);
+        assert_eq!(base.clone().overlaid(&diff).text_effects, None);
+        // Without a fill below, an equal colour has nothing to say.
+        assert_eq!(blue.clone().minus(&blue).color, None);
+        // A shading and "no shading" replace each other.
+        let shaded = CharProps { shading: Some(Rgb(1, 2, 3)), ..Default::default() };
+        let none = CharProps { shading_auto: Some(true), ..Default::default() };
+        assert_eq!(shaded.clone().overlaid(&none).shading, None);
+        assert_eq!(none.overlaid(&shaded).shading_auto, None);
+    }
 }
