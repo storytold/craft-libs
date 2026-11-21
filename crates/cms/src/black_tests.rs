@@ -71,10 +71,7 @@ fn the_destination_black_matches_the_source_lightness() {
             let o = TransformOptions { intent, bpc, ..opts() };
             let coated_lab = Transform::with_options(coated(), Builtin::LabD50.profile(), o).unwrap();
             let fogra_lab = Transform::with_options(fogra(), Builtin::LabD50.profile(), o).unwrap();
-            for (src, dst, src_lab, dst_lab) in [
-                (coated(), fogra(), &coated_lab, &fogra_lab),
-                (fogra(), coated(), &fogra_lab, &coated_lab),
-            ] {
+            for (src, dst, src_lab, dst_lab) in [(coated(), fogra(), &coated_lab, &fogra_lab), (fogra(), coated(), &fogra_lab, &coated_lab)] {
                 let bp = BlackPreserving::new(src, dst, o).unwrap();
                 let dst_black = lightness(dst_lab, [0.0, 0.0, 0.0, 1.0]);
                 for k in [0.1f32, 0.3, 0.5, 0.7, 0.9, 1.0] {
