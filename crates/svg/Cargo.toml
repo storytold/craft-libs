@@ -19,7 +19,7 @@ reads = [
 
 [dependencies]
 craft-xml = { workspace = true }
-quick-xml = { version = "0.41", default-features = false }
+quick-xml = { version = "0.42", default-features = false }
 # Probing and bounding raster images embedded in a parsed tree (`tree`).
 craft-image-codecs = { workspace = true, optional = true }
 # SVGZ (gzip), pure-Rust backend.
