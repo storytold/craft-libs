@@ -1,7 +1,7 @@
 //! The input hook's key steps (H3): what it strips from each raw key event and records.
 
 use super::route::layout_of;
-use super::{AltTrack, Batch, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
+use super::{AltTrack, Batch, EscapePress, LastPress, MenuKey, NavKeys, Press, Shortcut, Stage, TabPress, Typed, current, with};
 use crate::runtime::commands::{self, EditCommands, FirePhase, NavCommand, WindowShortcut};
 use crate::runtime::egui::input::{self as raw_input, Arrived, KeyEvent, RawInput};
 use crate::runtime::env::Env;
@@ -47,6 +47,8 @@ struct Strip<'a> {
     no_stops: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
+    /// A tool host claimed the lone Alt tap: it goes to the claimer on every OS, not to the menu bar.
+    alt_claimed: bool,
 }
 
 impl Strip<'_> {
@@ -62,9 +64,6 @@ impl Strip<'_> {
         match event {
             KeyEvent::Press { key, input, repeat } => {
                 alt.other_key = true;
-                if key == Key::Enter {
-                    batch.enter_down = Some(true);
-                }
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
                 let kept = self.press(batch, key, &input, repeat, at);
@@ -75,11 +74,14 @@ impl Strip<'_> {
                     pressed: (batch.presses.len() > pushed).then_some(pushed),
                     claimed: batch.claimed.len() > claims || canvas,
                 });
-                if kept {
-                    if let Some(press) = batch.presses.get_mut(pushed) {
+                // The release key is kept for withheld presses too: the held-over rule matches repeats by it.
+                if let Some(press) = batch.presses.get_mut(pushed) {
+                    press.release = input.physical.or(input.typed);
+                    if kept {
                         press.in_egui = Some(batch.egui_presses);
-                        press.release = input.physical.or(input.typed);
                     }
+                }
+                if kept {
                     batch.egui_presses += 1;
                 }
                 // The canvas's Space is a momentary chord: its release ends the command, so it stays readable.
@@ -102,9 +104,6 @@ impl Strip<'_> {
                     consumed.swap_remove(at);
                     return false;
                 }
-                if key == Some(Key::Enter) {
-                    batch.enter_down = Some(false);
-                }
                 batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at });
                 true
             }
@@ -125,7 +124,6 @@ impl Strip<'_> {
                 batch.egui_texts += 1;
                 true
             }
-            // P3(shortcuts-w2): kb.C10a
             KeyEvent::Clip { command, text, .. } if (self.edits)(command) => {
                 batch.clips.push(command);
                 if text.is_some() {
@@ -136,19 +134,21 @@ impl Strip<'_> {
             KeyEvent::Clip { .. } if self.foreign => true,
             KeyEvent::Clip { command, .. } if self.canvas.is_some_and(|canvas| canvas.edits.contains(command)) => true,
             KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
-            KeyEvent::Clip { command, .. } => {
-                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
-                // web sends the chord's press as well.
+            KeyEvent::Clip { command, mods, .. } => {
+                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord, with the
+                // modifiers held beside Cmd (Cmd+Shift+V pastes in place). The web sends the chord's press as well.
                 let key = match command {
                     EditCommand::Cut => Key::X,
                     EditCommand::Paste => Key::V,
                     _ => Key::C,
                 };
-                let input = KeyInput::new(Mods::CMD).with_typed(key);
+                let mut chord_mods = mods;
+                chord_mods.cmd = true;
+                let input = KeyInput::new(chord_mods).with_typed(key);
                 let sent = batch
                     .shortcuts
                     .iter()
-                    .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == Mods::CMD && shortcut.input.typed == Some(key));
+                    .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == chord_mods && shortcut.input.typed == Some(key));
                 if !sent && self.records {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
                     self.press(batch, key, &input, false, at);
@@ -168,7 +168,12 @@ impl Strip<'_> {
                 true
             }
             KeyEvent::Modifiers(held) => {
-                self.alt_change(batch, alt, held.alt);
+                let last = alt.last.unwrap_or(Mods::NONE);
+                if (held.cmd, held.ctrl, held.alt) != (last.cmd, last.ctrl, last.alt) {
+                    batch.mods.push((batch.shortcuts.len(), held));
+                }
+                self.alt_change(batch, alt, held);
+                alt.last = Some(held);
                 true
             }
             KeyEvent::Access(request) => {
@@ -179,20 +184,27 @@ impl Strip<'_> {
         }
     }
 
-    /// A lone Alt press, pressed and released with no other key between, focuses the menu bar (9.7). In a field that
+    /// A lone Alt press, pressed and released with no other key, pointer press, wheel turn, touch or Shift, Ctrl or Cmd
+    /// between, goes to the tool that claims it on every OS, else focuses the menu bar off a Mac (9.7). In a field that
     /// holds drafts it only alerts, so the draft keeps its focus (L-52).
-    fn alt_change(&self, batch: &mut Batch, alt: &mut AltTrack, held: bool) {
-        if held && !alt.down {
+    fn alt_change(&self, batch: &mut Batch, alt: &mut AltTrack, held: Mods) {
+        if held.alt && !alt.down {
             alt.other_key = false;
         }
-        if !held && alt.down && !alt.other_key && self.os != Os::Mac {
+        // Alt with Shift, Ctrl or Cmd is a chord (Windows reads Alt+Shift as the input-language switch).
+        if held.alt && (held.shift || held.ctrl || held.cmd) {
+            alt.other_key = true;
+        }
+        if !held.alt && alt.down && !alt.other_key && (self.alt_claimed || self.os != Os::Mac) {
             if self.holds_drafts {
                 batch.refused = true;
+            } else if self.alt_claimed {
+                batch.alt_tap = true;
             } else if self.menu_bar {
                 batch.menu.push(MenuKey::Focus);
             }
         }
-        alt.down = held;
+        alt.down = held.alt;
     }
 
     /// What the key stage makes of a press of `key` with `input`.
@@ -287,7 +299,7 @@ impl Strip<'_> {
                 false
             }
             PressUse::Escape => {
-                batch.escapes += 1;
+                batch.escapes.push(EscapePress { mods, repeat });
                 false
             }
             PressUse::MenuBar => {
@@ -320,7 +332,7 @@ impl Strip<'_> {
     /// reads what came before the move, and the move and what follows it apply in the order they arrived.
     fn ends_pass(&self, batch: &Batch, event: &KeyEvent) -> bool {
         let KeyEvent::Press { key, input, .. } = event else { return false };
-        let typed = !batch.texts.is_empty() || !batch.presses.is_empty() || !batch.clips.is_empty() || !batch.claimed.is_empty() || batch.escapes > 0;
+        let typed = !batch.texts.is_empty() || !batch.presses.is_empty() || !batch.clips.is_empty() || !batch.claimed.is_empty() || !batch.escapes.is_empty();
         typed && matches!(self.use_of(*key, input), PressUse::Tab | PressUse::Pane(_))
     }
 }
@@ -467,6 +479,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             canvas,
             no_stops,
             label_selection: record.label_selection,
+            alt_claimed: !stage.alt_claims.is_empty(),
         };
         let mut batch = Batch::default();
         let mut visible = None;
@@ -478,6 +491,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
                 later.push(arrived.clone());
                 return false;
             }
+            // Read from the event the pass applies, so a held-back one is not read twice.
+            batch.focus_lost |= matches!(arrived.event, egui::Event::WindowFocused(false));
             note_down(&mut stage.down, &read);
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
             visible = match &read {
@@ -519,19 +534,19 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
     }
 }
 
-/// The keys down in the running viewport this pass, withheld presses included (a key a component claimed is still
-/// down).
-#[doc(hidden)]
-pub fn down(ctx: &Context) -> Vec<Key> {
-    current(ctx, |stage| stage.down.clone())
-}
-
 /// The keys down in the running viewport this pass: the key stage's `down` (withheld presses included), plus each key
 /// automation holds there that is not already listed. It gives the same answer on every pass of a frame, and is a
 /// guard, never an event.
-pub fn held(ctx: &egui::Context) -> Vec<egui::Key> {
-    let _ = ctx;
-    todo!("pl.F1")
+// PLAN: the contract says `Vec<egui::Key>`, but the stage and `injected_holds` use `craft_keymap::Key`.
+pub fn held(ctx: &Context) -> Vec<Key> {
+    let viewport = crate::runtime::egui::pass::current_viewport(ctx);
+    let mut down = current(ctx, |stage| stage.down.clone());
+    for key in crate::runtime::windows::WindowHost::of(ctx).injected_holds(viewport) {
+        if !down.contains(&key) {
+            down.push(key);
+        }
+    }
+    down
 }
 
 /// Whether the running viewport's input hook read a key press, typed text or a clipboard event in this pass, the ones

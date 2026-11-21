@@ -30,7 +30,7 @@ pub use claims::{claim_alt_tap, take_alt_tap};
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 pub use input::held;
 #[doc(hidden)]
-pub use input::{down, keyed};
+pub use input::keyed;
 pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
@@ -47,14 +47,9 @@ pub(crate) use intents::{
     take_window_cancel,
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
-pub use route::focus_holds;
+pub use route::{escape_mods, focus_holds};
 pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
 
-/// The Alt and Shift held at the press of the pass's last Escape that became a `Cancel`; `None` when the pass had none.
-pub fn escape_mods(ctx: &Context) -> Option<Mods> {
-    let _ = ctx;
-    todo!("kb.C6")
-}
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,11 +120,9 @@ pub(crate) struct Shortcuts {
     pub(crate) dialog: bool,
     /// The layout that reads the presses.
     pub(crate) layout: Layout,
-    /// Each change of Cmd, Ctrl or Alt in the pass, with the index into `keys` of the first entry after it.
-    #[allow(dead_code)] // P3(shortcuts-w2): kb.C8
-    pub(crate) mods: Vec<(usize, craft_keymap::Mods)>,
+    /// Each change of Cmd, Ctrl or Alt in the pass, with the index into `keys` (the kept list) of the first entry after it.
+    pub(crate) mods: Vec<(usize, Mods)>,
     /// The pass's input had `WindowFocused(false)`.
-    #[allow(dead_code)] // P3(shortcuts-w2): kb.C8
     pub(crate) focus_lost: bool,
 }
 
@@ -148,12 +141,16 @@ struct Batch {
     egui_texts: usize,
     clips: Vec<EditCommand>,
     access: Vec<Action>,
-    escapes: usize,
+    escapes: Vec<EscapePress>,
     claimed: Vec<Chord>,
     nav: NavKeys,
     menu: Vec<MenuKey>,
-    /// Whether the last Enter event of the pass was a press (`true`) or a release, `None` when there was none.
-    enter_down: Option<bool>,
+    /// A lone Alt tap ended in this pass and a tool claimed it.
+    alt_tap: bool,
+    /// Each change of Cmd, Ctrl or Alt in the pass, with the index into `shortcuts` of the first entry after it.
+    mods: Vec<(usize, Mods)>,
+    /// The pass's input had `WindowFocused(false)`.
+    focus_lost: bool,
     /// The latest key press of the pass, which a following text event was typed by; its release or a clipboard event
     /// ends it.
     last_press: Option<LastPress>,
@@ -182,6 +179,13 @@ struct LastPress {
     pressed: Option<usize>,
     /// A claim took it: its text is the claim's too, so it reaches no field.
     claimed: bool,
+}
+
+/// An Escape press the strip took as a scope escape.
+struct EscapePress {
+    mods: Mods,
+    /// An auto-repeat of a key that is still held.
+    repeat: bool,
 }
 
 /// A bare Tab or Shift+Tab press.
@@ -221,6 +225,8 @@ struct Node {
 #[derive(Default)]
 struct AltTrack {
     down: bool,
+    /// The modifiers of the last `Modifiers` event, `None` before the first.
+    last: Option<Mods>,
     other_key: bool,
     /// The right Alt key is down: text typed with it (AltGr) teaches the layout nothing.
     right: bool,
@@ -232,6 +238,10 @@ pub(crate) struct Stage {
     routed: HashMap<Option<Id>, Routed>,
     claimed: Vec<(Id, Chord)>,
     claims: Vec<(Id, Chord)>,
+    /// The tool hosts that claim the next lone Alt tap, from the pass that registered them.
+    alt_claims: Vec<Id>,
+    /// The claimer of the lone Alt tap that ended in this pass.
+    alt_tapped: Option<Id>,
     /// Chords a container holds for itself while focus is anywhere in the viewport (a window mode), from the
     /// pass that registered them.
     captures: Vec<(Id, Chord)>,
@@ -257,12 +267,13 @@ pub(crate) struct Stage {
     /// Components with an open edit run this pass: Escape cancels the run before it leaves a row's child.
     open_edits: Vec<Id>,
     last_open_edits: Vec<Id>,
-    /// Enter is held down: its last event was a press.
-    enter_down: bool,
     /// A modal layer was open at the previous pass.
     modal_open: bool,
-    /// The held Enter began before the open modal layer: its repeats reach nobody until a fresh press.
-    enter_stale: bool,
+    /// The keys that were down when a modal layer opened or closed: their repeats reach neither layer until a fresh
+    /// press or the release.
+    held_over: Vec<Key>,
+    /// The modifiers of the last Escape of the pass that became a `Cancel`.
+    escape_mods: Option<Mods>,
     /// How many lent keys session members have taken (`lend`), counted over the viewport's life.
     lent_taken: u64,
     /// The pane moves that menu, palette or automation fires of `NavCommand` asked for: `true` is forward.

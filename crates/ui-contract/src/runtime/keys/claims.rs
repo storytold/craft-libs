@@ -35,15 +35,16 @@ pub fn claim(ctx: &Context, owner: Id, chord: Chord) {
 /// The tool host claims the next pass's lone Alt tap for `owner` at the end of a pass, as it claims chords.
 #[doc(hidden)]
 pub fn claim_alt_tap(ctx: &Context, owner: Id) {
-    let _ = (ctx, owner);
-    todo!("kb.C11c")
+    current(ctx, |stage| stage.alt_claims.push(owner));
 }
 
 /// Reads this pass's lone Alt tap for the claimer `owner`.
 #[doc(hidden)]
 pub fn take_alt_tap(ctx: &Context, owner: Id) -> bool {
-    let _ = (ctx, owner);
-    todo!("kb.C11c")
+    if crate::runtime::measure::active(ctx) {
+        return false;
+    }
+    current(ctx, |stage| (stage.alt_tapped == Some(owner)).then(|| stage.alt_tapped = None).is_some())
 }
 
 /// Holds `chord` for `owner` from the next input hook on, whichever component has focus: the key stage withholds

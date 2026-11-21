@@ -1,7 +1,7 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, Item, MenuKey, Node, Press, Routed, Shortcuts, Taken, current, with};
+use super::{Batch, EscapePress, Item, MenuKey, Node, Press, Routed, Shortcuts, Taken, current, with};
 use crate::runtime::commands::{self, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let os = crate::runtime::windows::os_of(ctx);
     let target = focus::focused_rec(ctx);
-    let (batch, nodes, captures, held_claims) = current(ctx, |stage| {
+    let (batch, nodes, captures, held_claims, alt_claims) = current(ctx, |stage| {
         stage.routed.clear();
         stage.contexts.clear();
         stage.claimed.clear();
@@ -30,22 +30,26 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         let held_claims = std::mem::take(&mut stage.claims);
         stage.last_open_edits = std::mem::take(&mut stage.open_edits);
         stage.last_nodes = std::mem::take(&mut stage.nodes);
-        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims)
+        let alt_claims = std::mem::take(&mut stage.alt_claims);
+        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims, alt_claims)
     });
+    let alt_tapped = alt_claims.first().copied().filter(|_| batch.alt_tap);
     let modal = overlay::any_open(ctx, overlay::OpenFilter::Modal);
-    let stale_repeat = |stale: &mut bool, press: &Press| {
-        if press.key != Key::Enter || !press.mods.is_none() {
-            return false;
+    // A key down when a modal layer opens or closes (the field's Enter that raised an alert, and its repeats) answers
+    // nothing in either layer: it is held over until its release or a fresh press. `down` already holds this pass's
+    // presses, so a key pressed fresh in this pass is not held over.
+    let held_over = current(ctx, |stage| {
+        let fresh = |key: Key| {
+            batch.presses.iter().any(|press| press.release == Some(key) && !press.repeat)
+                || (key == Key::Escape && batch.escapes.iter().any(|escape| !escape.repeat))
+        };
+        if modal != stage.modal_open {
+            stage.held_over = stage.down.clone();
         }
-        *stale &= press.repeat;
-        *stale
-    };
-    // An Enter that began before the modal layer opened (the field's Enter that raised it, and its repeats)
-    // answers nothing in the layer; only a fresh press does.
-    let mut stale = current(ctx, |stage| {
-        stage.enter_stale = modal && (stage.enter_stale || (!stage.modal_open && stage.enter_down));
-        stage.enter_stale
+        stage.held_over.retain(|key| stage.down.contains(key) && !fresh(*key));
+        stage.held_over.clone()
     });
+    let held_press = |press: &Press| press.repeat && press.release.is_some_and(|key| held_over.contains(&key));
     let mut routed: HashMap<Option<Id>, Routed> = HashMap::new();
     let mut activated = IdMap::default();
     let mut consumed = vec![Taken::No; batch.presses.len()];
@@ -54,10 +58,18 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
     // it from egui's input, so no egui text widget reads it in this pass (`withdraw_taken`).
     let mut taken_texts = vec![false; batch.texts.len()];
-    let mut withdrawn_texts: Vec<usize> = batch.texts.iter().enumerate().filter(|(_, typed)| typed.claimed).map(|(at, _)| at).collect();
+    // A held-over repeat's text is withdrawn as a claim's is: no field types it.
+    let mut withdrawn_texts: Vec<usize> = batch
+        .texts
+        .iter()
+        .enumerate()
+        .filter(|(_, typed)| typed.claimed)
+        .map(|(at, _)| at)
+        .chain(batch.presses.iter().filter(|press| held_press(press)).filter_map(|press| press.text))
+        .collect();
     if let Some(rec) = &target {
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
-            *taken = if stale_repeat(&mut stale, press) {
+            *taken = if held_press(press) {
                 Taken::Yes
             } else {
                 let route = press_route(ctx, os, rec, press, driven.or(field_list));
@@ -68,7 +80,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
         let reads_egui = rec.stop.host || rec.stop.keys.owner == OwnerClass::Text;
         for (at, (typed, taken)) in batch.texts.iter().zip(&mut taken_texts).enumerate() {
-            if typed.claimed {
+            if withdrawn_texts.contains(&at) {
                 *taken = true;
                 continue;
             }
@@ -111,8 +123,12 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts);
     withdraw_taken(ctx, target.as_ref(), &batch, &held, &withdrawn_texts);
     let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
-    let escapes = craft_behavior::focus::route_escapes(batch.escapes, press_captured);
-    for _ in 0..escapes.to_components {
+    // PLAN: a repeat Tab of a held-over key is not gated; `take_nav` reads `batch.tabs` before this hook runs (owner: focus).
+    let kept: Vec<&EscapePress> = batch.escapes.iter().filter(|escape| !(escape.repeat && held_over.contains(&Key::Escape))).collect();
+    let escapes = craft_behavior::focus::route_escapes(kept.len(), press_captured);
+    let mut cancel_mods = None;
+    // With a captured press the first kept Escape is the press's; the others are the components' cancels.
+    for escape in kept.iter().skip(usize::from(escapes.cancels_press)) {
         // A row's child that claims Escape keeps it; any other returns focus to its row.
         let claims_escape = target.as_ref().is_some_and(|rec| {
             rec.stop.keys.claims.iter().any(|chord| chord.key == Key::Escape) || current(ctx, |stage| stage.last_open_edits.contains(&rec.stop.id))
@@ -121,6 +137,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             continue;
         }
         push(&mut routed, focused, Intent::Cancel, false);
+        cancel_mods = Some(escape.mods);
     }
     // A text opener's list keys arrive as claimed chords, withheld from its text part: they go to the list.
     let mut claimed = Vec::new();
@@ -152,11 +169,9 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             stage.shortcuts.layout = stage.layout.clone();
         }
         stage.pasted = pasted;
-        stage.enter_stale = stale;
         stage.modal_open = modal;
-        if let Some(down) = batch.enter_down {
-            stage.enter_down = down;
-        }
+        stage.escape_mods = cancel_mods;
+        stage.alt_tapped = alt_tapped;
         if let (Some(_), Some(rec)) = (driven.filter(|driven| driven.text), &target) {
             stage.claims.extend(
                 LIST_KEYS
@@ -167,6 +182,16 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         }
     });
     escapes
+}
+
+/// The Alt and Shift held at the press of the pass's last Escape that became a `Cancel`; `None` when the pass had none.
+pub fn escape_mods(ctx: &Context) -> Option<Mods> {
+    current(ctx, |stage| stage.escape_mods)
+}
+
+/// Rewrites the indices of `mods`, which count the entries of a list, to count only the entries `kept` says stay.
+fn remap_mods(mods: &[(usize, Mods)], kept: &[bool]) -> Vec<(usize, Mods)> {
+    mods.iter().map(|(at, held)| (kept.get(..*at).unwrap_or(kept).iter().filter(|stays| **stays).count(), *held)).collect()
 }
 
 pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>, intent: Intent, horizontal: bool) {
@@ -205,16 +230,17 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         .collect();
     // A shortcut without a press of its own (a release, or the clipboard event that stands for ⌘C) follows the owner by
     // its modifiers, as its press would.
-    let keys = batch
+    let kept: Vec<bool> = batch
         .shortcuts
         .iter()
-        .filter(|shortcut| {
+        .map(|shortcut| {
             let key = shortcut.input.typed.or(shortcut.input.physical);
             !keeps_key(owner, key, shortcut.input.mods) && !shortcut.press.is_some_and(|at| held[at])
         })
-        .copied()
         .collect();
-    (Shortcuts { keys, typing, dialog, layout: Layout::default(), mods: Vec::new(), focus_lost: false }, held) // P3(shortcuts-w2): kb.C8
+    let keys = batch.shortcuts.iter().zip(&kept).filter(|(_, stays)| **stays).map(|(shortcut, _)| *shortcut).collect();
+    let mods = remap_mods(&batch.mods, &kept);
+    (Shortcuts { keys, typing, dialog, layout: Layout::default(), mods, focus_lost: batch.focus_lost }, held)
 }
 
 /// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither
@@ -354,10 +380,17 @@ pub(crate) fn layout_of(ctx: &Context) -> Layout {
 pub(crate) fn take_shortcuts(ctx: &Context) -> Shortcuts {
     let mut shortcuts = current(ctx, |stage| std::mem::take(&mut stage.shortcuts));
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
-    shortcuts.keys.retain(|shortcut| {
-        let toggle = (shortcut.phase == FirePhase::Press).then(|| chrome_toggle_of(ctx, &shortcut.input)).flatten();
-        toggle.inspect(|toggle| request_chrome_toggle(ctx, viewport, *toggle)).is_none()
-    });
+    let kept: Vec<bool> = shortcuts
+        .keys
+        .iter()
+        .map(|shortcut| {
+            let toggle = (shortcut.phase == FirePhase::Press).then(|| chrome_toggle_of(ctx, &shortcut.input)).flatten();
+            toggle.inspect(|toggle| request_chrome_toggle(ctx, viewport, *toggle)).is_none()
+        })
+        .collect();
+    shortcuts.mods = remap_mods(&shortcuts.mods, &kept);
+    let mut stays = kept.iter().copied();
+    shortcuts.keys.retain(|_| stays.next().unwrap_or(true));
     shortcuts
 }
 

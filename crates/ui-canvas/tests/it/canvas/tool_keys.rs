@@ -96,13 +96,18 @@ fn a_tool_whose_release_opens_an_outline_takes_alt_backspace_in_the_next_frame()
     assert_eq!(canvas.tool().seen, [Seen::Delete { forward: false }], "the outline the release opened takes Alt+Backspace");
 }
 
-/// A tool that takes every key the host offers it.
+/// A tool that takes every key the host offers it, and the lone Alt tap while `taps`.
 #[derive(Default)]
 struct Taker {
     seen: Vec<ToolKey>,
+    taps: bool,
 }
 
 impl CanvasTool for Taker {
+    fn claims(&self) -> ToolClaims {
+        if self.taps { ToolClaims::NONE.alt_tap() } else { ToolClaims::NONE }
+    }
+
     fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
         ToolAction::Ignored
     }
@@ -171,6 +176,22 @@ fn with_no_session_control_the_arrows_and_enter_reach_the_tool_with_nothing_focu
     canvas.fixture().key(Key::ArrowRight, Modifiers::NONE).key(Key::Enter, Modifiers::NONE).settle();
     let seen = &canvas.tool().seen;
     assert!(matches!(seen[..], [ToolKey::Nudge { .. }, ToolKey::Submit]), "{seen:?}");
+}
+
+#[trial]
+fn a_tool_that_claims_the_alt_tap_gets_it() {
+    let (mut canvas, ..) = session(false);
+    canvas.fixture().settle();
+    let tap = |canvas: &mut ToolFixture<Taker>| {
+        canvas.fixture().frame(vec![egui::Event::ModifiersChanged(Modifiers::ALT)]).frame(vec![egui::Event::ModifiersChanged(Modifiers::NONE)]).settle();
+    };
+    tap(&mut canvas);
+    assert!(canvas.tool().seen.is_empty(), "a tool that does not claim the tap gets none: {:?}", canvas.tool().seen);
+    canvas.tool_mut().taps = true;
+    canvas.fixture().settle();
+    tap(&mut canvas);
+    let seen = &canvas.tool().seen;
+    assert!(matches!(seen[..], [ToolKey::AltTap]), "{seen:?}");
 }
 
 /// The chords `Claimer` takes through `ToolClaims::keys`.
