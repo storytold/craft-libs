@@ -47,17 +47,18 @@ impl Image {
     /// Interleaved RGBA, 8 bits per sample, in the colors of the `display` profile, which must be
     /// an RGB profile. The colors are converted from [`Image::source_profile`] with `opts` (the
     /// rendering intent and black point compensation). An image with no source profile is taken
-    /// as sRGB: its [`Image::to_rgba8`] values are returned unchanged for an sRGB display and
-    /// converted from sRGB for any other. PQ and HLG samples are decoded to linear light first,
-    /// and light above diffuse white is clipped. Alpha is copied, and an image without alpha
-    /// gets opaque alpha.
+    /// as sRGB: its [`Image::to_rgba8`] values are returned unchanged for an sRGB display. For any
+    /// other display, an untagged RGB image is converted from its own samples, the same as with an
+    /// sRGB profile, and a gray, CMYK or Lab image from its [`Image::to_rgba8`] values. PQ and
+    /// HLG samples are decoded to linear light first, and light above diffuse white is clipped.
+    /// Alpha is copied, and an image without alpha gets opaque alpha.
     ///
     /// The output buffer is checked against `limits` and reserved before any pixel is converted;
     /// a size over the limits, or a reservation the allocator refuses, returns
-    /// [`CodecError::LimitExceeded`]. An 8-bit image with a source profile is converted straight
-    /// into the output; any other is converted a band of pixels at a time, so the temporary
-    /// buffers do not grow with the image. An image with no pixels gives
-    /// an empty vector. The errors of [`Image::source_profile`] are returned as they are, and a
+    /// [`CodecError::LimitExceeded`]. An 8-bit image with a source profile, or an untagged
+    /// 8-bit RGB image for a display other than sRGB, is converted straight into the output; any
+    /// other is converted a band of pixels at a time, so the temporary buffers do not grow with
+    /// the image. An image with no pixels gives an empty vector. The errors of [`Image::source_profile`] are returned as they are, and a
     /// display profile that is not RGB, or a transform `craft-cms` cannot build, returns
     /// [`CodecError::InvalidImage`].
     pub fn to_display_rgba8(&self, display: &Profile, opts: TransformOptions, limits: &Limits) -> Result<Vec<u8>, CodecError> {
@@ -75,27 +76,13 @@ impl Image {
         let channels = self.layout().channels();
         let band = BAND_PIXELS.min(self.pixel_count());
 
-        let Some(source) = source else {
-            let pixel_bytes = channels * self.sample_type().bytes();
-            for chunk in self.data().chunks(band * pixel_bytes) {
-                let pixels =
-                    u32::try_from(chunk.len() / pixel_bytes).map_err(|_| CodecError::LimitExceeded("conversion band is too large".into()))?;
-                out.extend_from_slice(&convert_samples(
-                    chunk,
-                    pixels,
-                    1,
-                    (self.layout(), self.sample_type()),
-                    (ChannelLayout::Rgba, SampleType::U8),
-                )?);
-            }
-            let srgb = builtin::srgb();
-            if !display.same_bytes(srgb) {
-                convert_rgba8_in_place(&mut out, srgb, display, opts)?;
-            }
-            return Ok(out);
+        let source = match &source {
+            Some(profile) => profile,
+            None if self.layout().is_rgb() && !display.same_bytes(builtin::srgb()) => builtin::srgb(),
+            None => return self.untagged_rgba8(out, band, display, opts),
         };
 
-        let transform = cached(&source, display, opts).map_err(|e| CodecError::InvalidImage(format!("color transform: {e}")))?;
+        let transform = cached(source, display, opts).map_err(|e| CodecError::InvalidImage(format!("color transform: {e}")))?;
         let hdr = self.cicp.filter(|c| self.icc.is_none() && c.is_hdr() && self.layout().is_rgb());
         out.resize(len, u8::MAX);
         if self.sample_type() == SampleType::U8 && hdr.is_none() {
@@ -125,6 +112,22 @@ impl Image {
             for (o, v) in out_band.iter_mut().zip(&dst) {
                 *o = quantize8(*v);
             }
+        }
+        Ok(out)
+    }
+
+    /// An image with no source profile for an sRGB display, or a gray, CMYK or Lab one for any
+    /// display: its [`Image::to_rgba8`] values, a band at a time, converted from sRGB into
+    /// `display` when that is not sRGB.
+    fn untagged_rgba8(&self, mut out: Vec<u8>, band: usize, display: &Profile, opts: TransformOptions) -> Result<Vec<u8>, CodecError> {
+        let pixel_bytes = self.layout().channels() * self.sample_type().bytes();
+        for chunk in self.data().chunks(band * pixel_bytes) {
+            let pixels = u32::try_from(chunk.len() / pixel_bytes).map_err(|_| CodecError::LimitExceeded("conversion band is too large".into()))?;
+            out.extend_from_slice(&convert_samples(chunk, pixels, 1, (self.layout(), self.sample_type()), (ChannelLayout::Rgba, SampleType::U8))?);
+        }
+        let srgb = builtin::srgb();
+        if !display.same_bytes(srgb) {
+            convert_rgba8_in_place(&mut out, srgb, display, opts)?;
         }
         Ok(out)
     }
@@ -233,6 +236,23 @@ mod tests {
             .to_display_rgba8(Builtin::DisplayP3.profile(), opts(), &Limits::default())
             .unwrap_or_else(|e| panic!("{e}"));
         assert!(close(&tagged, &want, 2), "{tagged:?} {want:?}");
+    }
+
+    #[test]
+    fn untagged_high_depth_converts_like_srgb_tagged() {
+        // A 16-bit and a float ramp into a P3 display: the untagged image gives what the same
+        // samples tagged with sRGB give, without first rounding them to 8 bits.
+        let n = 4096;
+        let vals: Vec<f32> = (0..n).flat_map(|i| [i as f32 / (n - 1) as f32, 0.3, 0.7]).collect();
+        let srgb = builtin::srgb().to_bytes().to_vec();
+        for sample in [SampleType::U16, SampleType::F32] {
+            let img = Image::from_normalized(n as u32, 1, ChannelLayout::Rgb, sample, &vals).unwrap_or_else(|e| panic!("{e}"));
+            let to_p3 =
+                |img: &Image| img.to_display_rgba8(Builtin::DisplayP3.profile(), opts(), &Limits::default()).unwrap_or_else(|e| panic!("{e}"));
+            let untagged = to_p3(&img);
+            let tagged = to_p3(&img.clone().with_icc(Some(srgb.clone())));
+            assert_eq!(untagged, tagged, "{sample:?}");
+        }
     }
 
     #[test]
