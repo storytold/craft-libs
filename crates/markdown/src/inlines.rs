@@ -1,5 +1,5 @@
 use super::blocks::{MAX_NEST, Refs, ref_label};
-use super::{Arc, Fmt, HashMap, Inline, decode_entity, make_img, model};
+use super::{Arc, Fmt, HashMap, Images, Inline, decode_entity, make_img, model};
 
 // ---- inlines ----
 
@@ -22,7 +22,12 @@ pub(super) fn is_punct(c: char) -> bool {
 
 /// Parse inline Markdown into formatted spans (on top of `base`).
 pub fn parse_inlines(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Inline> {
-    let nodes = tokenize(s, base, depth, refs);
+    parse_inlines_with(s, base, depth, refs, None)
+}
+
+/// [`parse_inlines`], loading the pictures images name with `images` (see `import_with`).
+pub(crate) fn parse_inlines_with(s: &str, base: &Fmt, depth: usize, refs: &Refs, images: Images<'_>) -> Vec<Inline> {
+    let nodes = tokenize(s, base, depth, refs, images);
     emit(nodes)
 }
 
@@ -268,7 +273,7 @@ fn tag_attr(tag: &str, name: &str) -> Option<String> {
     None
 }
 
-fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
+fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs, images: Images<'_>) -> Vec<Node> {
     let mut nodes: Vec<Node> = Vec::new();
     // Bytes the link/image scans and reference-label lookups may read in total. Unmatched
     // brackets and nested undefined references would otherwise rescan the rest of the text,
@@ -337,11 +342,26 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                 match parsed {
                     Some((inner, dest, end)) if img => {
                         flush!();
-                        let alt: String = parse_inlines(inner, &Fmt::default(), depth + 1, refs)
+                        // The description is plain text: an image inside it gives its own alt
+                        // text, and no picture is loaded for it.
+                        let alt: String = parse_inlines_with(inner, &Fmt::default(), depth + 1, refs, None)
                             .iter()
-                            .filter_map(|x| if let Inline::Text(t, _) = x { Some(t.as_str()) } else { None })
+                            .filter_map(|x| match x {
+                                Inline::Text(t, _) => Some(t.as_str()),
+                                Inline::Image(im) => Some(im.alt.as_str()),
+                                _ => None,
+                            })
                             .collect();
-                        match model::data_uri(&dest).and_then(|d| make_img(d, None, None, &alt)) {
+                        // A `data:` URI (the scheme in any case) carries its picture; another
+                        // destination is loaded by `images`, when the caller gave one (a path
+                        // beside the Markdown file), and kept only if it can be measured, so a
+                        // truncated file stays its alt text.
+                        let trimmed = dest.trim_start();
+                        let data = match trimmed.get(..5).filter(|p| p.eq_ignore_ascii_case("data:")) {
+                            Some(_) => trimmed.get(5..).and_then(|rest| model::data_uri(&format!("data:{rest}"))).map(Arc::new),
+                            None => images.and_then(|load| load(&dest)).filter(|d| model::image_px(d).is_some()),
+                        };
+                        match data.and_then(|d| make_img(d, None, None, &alt)) {
                             Some(im) => nodes.push(Node::Inl(Inline::Image(im))),
                             None => push_text(&mut nodes, &alt, base),
                         }
@@ -356,7 +376,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                         if f.link.is_none() {
                             model::dropped(model::Dropped::Link);
                         }
-                        for x in parse_inlines(inner, &f, depth + 1, refs) {
+                        for x in parse_inlines_with(inner, &f, depth + 1, refs, images) {
                             nodes.push(Node::Inl(x));
                         }
                         i = end;

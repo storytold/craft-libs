@@ -793,3 +793,79 @@ fn heading_trailing_hash_survives_round_trip() {
         assert_eq!(export(&import(&md)), want, "second export of {src:?}");
     }
 }
+
+/// A 1 × 1 PNG.
+const PNG: [u8; 67] = [
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+/// Each paragraph's pictures (alt text) and text, in order.
+fn pictures(f: &model::Flow) -> Vec<(Vec<String>, String)> {
+    f.blocks
+        .iter()
+        .filter_map(|b| match b {
+            FBlock::Para(p) => {
+                Some((p.inlines.iter().filter_map(|i| if let Inline::Image(im) = i { Some(im.alt.clone()) } else { None }).collect(), p.text()))
+            }
+            FBlock::Table(_) => None,
+        })
+        .collect()
+}
+
+/// wordcraft#6993: with a loader, `![alt](path)` is a picture with its alt text, also through a
+/// reference and inside a link; a path the loader can't read, or bytes that aren't a picture, stay
+/// the alt text, and a `data:` URI never asks the loader. Without one, nothing changes.
+#[test]
+fn images_load_through_the_loader_the_caller_gives() {
+    let asked = std::cell::RefCell::new(Vec::new());
+    let load = |src: &str| -> Option<Arc<Vec<u8>>> {
+        asked.borrow_mut().push(src.to_string());
+        match src {
+            "img.png" | "sub/ref.png" => Some(Arc::new(PNG.to_vec())),
+            "text.txt" => Some(Arc::new(b"not a picture".to_vec())),
+            _ => None,
+        }
+    };
+    let text = "Some text.\n\n![A red rectangle](img.png)\n\n![missing](gone.png) and ![junk](text.txt)\n\n![by ref][r] in [![linked](img.png)](https://example.com)\n\n![inline](data:image/png;base64,iVBORw0KGgo=)\n\n[r]: sub/ref.png\n";
+    let with = pictures(&parse_with(text, Some(&load)));
+    assert_eq!(with[1], (vec!["A red rectangle".to_string()], String::new()), "{with:?}");
+    assert_eq!(with[2].0, Vec::<String>::new(), "{with:?}");
+    assert_eq!(with[2].1, "missing and junk", "unread and not a picture stay their alt text");
+    assert_eq!(with[3].0, vec!["by ref".to_string(), "linked".to_string()], "{with:?}");
+    assert_eq!(*asked.borrow(), ["img.png", "gone.png", "text.txt", "sub/ref.png", "img.png"], "a data: URI isn't asked for");
+    assert_eq!(with[4].0, vec!["inline".to_string()], "a data: URI is a picture as before");
+    // Without a loader, as before: the alt text (and the data: URI's picture).
+    let without = pictures(&parse(text));
+    assert!(without[..4].iter().all(|(images, _)| images.is_empty()), "{without:?}");
+    assert_eq!(without[1].1, "A red rectangle");
+    assert_eq!(without[4].0, vec!["inline".to_string()]);
+    // The document importers place it too: written back, it is a picture again, not text.
+    let md = export(&import_with("![A red rectangle](img.png)\n", &load));
+    assert!(md.contains("![A red rectangle]("), "{md}");
+    assert!(!export(&import("![A red rectangle](img.png)\n")).contains("!["), "without a loader, the alt text");
+}
+
+/// An image description is plain text, so an image inside it is its alt text and is not
+/// loaded; a `data:` scheme in capitals is still a data URI, not a path to load; and bytes the
+/// loader returns that only start like a picture (a truncated file) stay the alt text.
+#[test]
+fn image_descriptions_data_schemes_and_truncated_files() {
+    let asked = std::cell::RefCell::new(Vec::new());
+    let load = |src: &str| -> Option<Arc<Vec<u8>>> {
+        asked.borrow_mut().push(src.to_string());
+        match src {
+            "img.png" => Some(Arc::new(PNG.to_vec())),
+            "cut.png" => Some(Arc::new(PNG[..8].to_vec())),
+            _ => None,
+        }
+    };
+    let upper = format!("![upper](DATA:image/png;base64,{})", model::base64_encode(&PNG));
+    let text = format!("![foo ![bar](img.png)](gone.png)\n\n{upper}\n\n![cut](cut.png)\n");
+    let got = pictures(&parse_with(&text, Some(&load)));
+    assert_eq!(got[0], (Vec::<String>::new(), "foo bar".to_string()), "the inner image's alt text is in the description");
+    assert_eq!(got[1].0, vec!["upper".to_string()], "{got:?}");
+    assert_eq!(got[2], (Vec::<String>::new(), "cut".to_string()), "a truncated picture stays its alt text");
+    assert_eq!(*asked.borrow(), ["gone.png", "cut.png"], "neither the inner image nor the DATA: URI is asked for");
+}
