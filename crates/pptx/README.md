@@ -6,7 +6,7 @@ comes from `craft-drawingml`.
 
 | Item | What | Markup |
 |---|---|---|
-| `Presentation` | slide size, masters, slides, sections, custom shows, show settings, header and footer, properties, media, embedded fonts, table styles, tags, kept parts, drawing guides | `p:presentation`, `docProps/*`, `p:viewPr` |
+| `Presentation` | slide size, masters, slides, sections, custom shows, show settings, header and footer, properties, media, embedded fonts and whether a save embeds them, table styles, tags, kept parts, drawing guides | `p:presentation`, `docProps/*`, `p:viewPr` |
 | `Master`, `Layout` | theme, shapes, background, title/body/other text styles, colour map | `p:sldMaster`, `p:sldLayout` |
 | `Slide` | shapes, background, transition, animations, notes, comments, colour map override | `p:sld`, `p:notes`, comments parts |
 | `Shape`, `ShapeKind` | shapes, pictures, groups, connectors, tables, charts, media, ink, 3-D models, and objects kept as XML | `p:sp`, `p:pic`, `p:grpSp`, `p:cxnSp`, `p:graphicFrame`, `p:contentPart` |
