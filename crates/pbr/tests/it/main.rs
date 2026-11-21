@@ -4,12 +4,14 @@
 
 mod bench;
 mod bounds;
+mod brdf;
 mod differential;
 mod moved;
 mod numeric;
 
-/// Verbatim copies of the apps' previous code, run by `differential`.
+/// Verbatim copies of the apps' previous code, run by `differential` and `brdf`.
 mod reference {
+    pub mod effectcraft;
     pub mod materialcraft;
     pub mod texturecraft;
 }

@@ -3,8 +3,9 @@
 Image-based lighting for physically based rendering, computed on the CPU. An `EnvImage` is a linear
 RGB equirect (latitude-longitude) environment, row-major with the top row first. The crate turns it
 into a GGX-prefiltered chain for specular light and nine spherical-harmonics coefficients for
-diffuse light, and renders six procedural environments with no image assets. It has no UI, does no
-file or network I/O and has no `unsafe` code.
+diffuse light, and renders six procedural environments with no image assets. It also evaluates the
+glTF 2.0 metallic-roughness BRDF for direct light and the environment BRDF term of the split sum.
+It has no UI, does no file or network I/O and has no `unsafe` code.
 
 - **Frame.** +Y is up. Column `u = φ / 2π` and row `v = θ / π` map to the direction
   `(sin θ cos φ, cos θ, sin θ sin φ)`: row 0 is straight up, `u = 0` points to +X and `u` increases
@@ -32,8 +33,40 @@ file or network I/O and has no `unsafe` code.
   `ggx_distribution` evaluates the distribution as section B.3.2 writes it
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specular-brdf>). Samples read a box-filtered pyramid of the source at a level chosen from each
   sample's density plus `lod_bias` (default 1). `firefly_cap` caps source radiance before
-  filtering when set (default off); level 0 is never capped. The environment BRDF term of the
-  split sum is not in this crate.
+  filtering when set (default off); level 0 is never capped.
+- **Environment BRDF.** `try_environment_brdf(n_dot_v, roughness)` returns the `[scale, bias]` of
+  the split sum's second term: specular light is a prefiltered level's radiance times
+  `f0 × scale + bias`. The values are Karis's analytic fit for mobile
+  (<https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile>), with `scale` and
+  `bias` kept at least 0 and their sum at most 1. `n_dot_v` is clamped to `0..=1`.
+- **Direct light.** `Material::try_new(base_color, metallic, roughness)` takes linear base color,
+  metallic and perceptual roughness, each from 0 to 1 as glTF 2.0 defines them, and
+  `try_with_weights(specular, diffuse)` sets two weights for direct light: `specular` (0 to
+  `MAX_SPECULAR`, 25) scales the dielectric reflectance at normal incidence, 0.04, and `diffuse`
+  (0 to 1) scales the diffuse lobe. Both are 1 for a glTF material. Other values, NaN and
+  infinity give `PbrError::BadMaterial`. `try_direct(n, v, l)` returns the BRDF times `n·l` times
+  π, the fraction of a light's irradiance reflected toward the viewer, per RGB channel. The BRDF
+  is the final form of glTF 2.0 section B.3.5
+  (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metal-brdf-and-dielectric-brdf>):
+  `f0` is 0.04 mixed toward the base color by metallic, `F` is Schlick's approximation at `v·h`
+  (section B.3.4), the diffuse lobe is `(1 − F) (1 − metallic) base / π`, and the specular lobe
+  is `F D G / (4 (n·v) (n·l))` with the `D` of `ggx_distribution`.
+  - `G` is the Smith-Schlick term with `k = (roughness + 1)² / 8`, which Karis gives for analytic
+    lights in the 2013 notes above. Section B.3.2 writes the separable Smith
+    form. The two are equal at roughness 1; on smoother surfaces this `G` is darker at grazing
+    angles.
+  - Roughness is shaded as at least `MIN_DIRECT_ROUGHNESS` (0.032, `α` = 0.001024).
+  - `n·v` is taken as at least `1e-4`, so a view at or below the surface sees it as at a
+    grazing angle. A light at or below the surface, or a view straight opposite the light, gives
+    0. Directions are normalized; one that is not finite or has zero length gives
+    `PbrError::BadDirection`.
+  - A white metal reflects at most the light it receives. As section B.3.6.3 notes, the Fresnel
+    coupling of the two lobes does not conserve energy: a smooth white dielectric seen about 80
+    degrees from the normal reflects about 9.8% more light than it receives.
+- **Default environment.** `default_environment()` is an 8 × 4 gray studio gradient for an
+  environment light that has no image: radiance proportional to `0.15 + 1.2 max(0, d·key)` with
+  the key `(0.66, 0.75, 0)`, up and toward +X, scaled to a mean of 0.3 over the pixels weighted
+  by `sin θ` at their centers.
 - **Diffuse.** `try_sh9` projects every pixel of the source onto the nine real SH basis functions
   of `sh_basis`, each integrated over the area of each pixel. The coefficients are convolved with
   the clamped cosine lobe (band factors `π`, `2π/3`, `π/4`, Ramamoorthi and Hanrahan 2001,
@@ -79,6 +112,26 @@ prefiltered levels match theirs for sources with even sides. Changes from those 
   rows (3.2e-4 on 64).
 - Rows run on several threads only with the `parallel` feature.
 
+The BRDF, the environment BRDF and the default environment come from EffectCraft's
+`crates/render/src/three_d/adv/shade.rs` and `adv/scene.rs`. Changes from those files:
+
+- Material values, weights and directions are checked; NaN, infinity, values out of range and
+  zero-length directions give an error instead of a NaN or negative color. Directions are
+  normalized.
+- The distribution is `ggx_distribution`, evaluated in `f64`. EffectCraft evaluated it in `f32`,
+  which loses the narrow peak of smooth surfaces. From roughness 0.25 up, the direct light matches
+  within `1e-4` of `max(1, value)`.
+- Roughness is shaded as at least 0.032 instead of 0.03, so `α` stays above the 0.001 floor of
+  `ggx_distribution`.
+- A view straight opposite the light gives 0 instead of using a fallback half vector.
+- The environment BRDF keeps `scale` and `bias` at least 0 with a sum of at most 1. The fit gives
+  a negative scale for smooth surfaces at grazing angles (-0.044 with a bias of 1.044 at
+  `n·v` = 0 and roughness 0), which made `f0 × scale + bias` greater than 1 and the diffuse
+  weight `1 − fs` negative, and a negative bias of -0.0024 for rough surfaces at grazing angles.
+- The default environment is in this crate's frame. An EffectCraft direction `(x, y, z)`, with +Y
+  down and the image center at +Z, is `(−z, −y, −x)` here, so the key `(0, −0.75, −0.66)`
+  becomes `(0.66, 0.75, 0)` and the pixels are the same within `1e-6`.
+
 ## Migration
 
 - **TextureCraft.** Replace `texturecraft_render::ibl` with `craft_pbr`. Pass
@@ -93,3 +146,8 @@ prefiltered levels match theirs for sources with even sides. Changes from those 
 - **MaterialCraft.** Replace `materialcraft_render::ibl` with `craft_pbr`, with the same
   `firefly_cap`. `by_id` stays in the app and maps view ids to `Environment::from_name`.
   `hammersley` returns `None` when `i` is not below `n`.
+- **EffectCraft.** Replace `shade::brdf` with `Material::try_new(...)?.try_with_weights(specular_k,
+  diffuse_k)?.try_direct(n, v, l)`, and `shade::env_brdf` with `try_environment_brdf`. The
+  adapter keeps layer policy, texture sampling, lights, shadows and its box-filtered environment
+  chain, and maps a material error to a render failure. `default_environment` replaces
+  `scene::default_environment` once the adapter converts directions to this crate's frame.
