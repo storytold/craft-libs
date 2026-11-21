@@ -1171,6 +1171,17 @@ fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
     first.filter(|first| (2.0 * first - height).abs() <= ONE_LINE_SLACK)
 }
 
+/// The offset of a child whose first line is `first` below its top, on the row line whose centre is `centre` below
+/// the flow's top: its first line's centre lands on the line.
+fn centre_on_line(centre: f32, first: f32) -> f32 {
+    (centre - first).max(0.0)
+}
+
+/// The offset of a child in `spare` room left over beside it: half of it.
+fn centred(spare: f32) -> f32 {
+    spare.max(0.0) / 2.0
+}
+
 /// Where a labelled control's row of `height` sits below the top of the flow, as `place_in_cell` places any other
 /// one-line child: `(offset, taken)`. On the line of the unwrapped `Row` around it the row's centre is on the line, and
 /// it takes the offset with its height, as the line does. Else, in a horizontal layout that does not wrap, it is
@@ -1183,10 +1194,10 @@ pub(crate) fn labelled_above(ui: &Ui, room: f32, height: f32) -> (f32, f32) {
     let layout = ui.layout();
     match env.row_line.and_then(|line| line.centre) {
         Some(centre) => {
-            let above = (centre - height / 2.0).max(0.0);
+            let above = centre_on_line(centre, height / 2.0);
             (above, above)
         }
-        None if layout.is_horizontal() && !layout.main_wrap && !env.grid_top && room.is_finite() => (((room - height) / 2.0).max(0.0), 0.0),
+        None if layout.is_horizontal() && !layout.main_wrap && !env.grid_top && room.is_finite() => (centred(room - height), 0.0),
         None => (0.0, 0.0),
     }
 }
@@ -1215,7 +1226,7 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
         Some((line.body, took.centre().map(|centre| centre - ui.available_rect_before_wrap().top())))
     });
     let centre = bracket.and_then(|(_, centre)| centre).or_else(|| line.and_then(|line| line.centre));
-    let above = centre.zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
+    let above = centre.zip(child.first).map_or(0.0, |(centre, first)| centre_on_line(centre, first));
     let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
     let (rect, in_cell) = take_in(ui, &env, slot);
     let placed = if child.fill && in_cell {
@@ -1225,7 +1236,7 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
             Some(_) => (above, (rect.height() - above - size.y).max(0.0)),
             None => {
                 let spare = (rect.height() - size.y).max(0.0);
-                if env.grid_top { (0.0, spare) } else { (spare / 2.0, spare / 2.0) }
+                if env.grid_top { (0.0, spare) } else { (centred(spare), spare / 2.0) }
             }
         };
         Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
