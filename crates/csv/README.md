@@ -23,7 +23,8 @@ string per field. The delimiter between fields and the line end are the writer's
 
 `sylk::read(bytes)` gives a `sylk::Sheet`: cells by (row, column) with a value, the formula in A1
 notation (the file's R1C1 text with its references rewritten, not checked for syntax) and the
-number format code; column widths in characters; and the number of cell records skipped because
+number format code; column widths in characters; whether the options record puts the file's
+date serials on the 1904 date system (`date_1904`); and the number of cell records skipped because
 their position is outside the grid. `sylk::r1c1_formula_to_a1` is the rewrite on its own.
 
 Files over 512 MB are refused, positions outside 1,048,576 rows by 16,384 columns are skipped,
