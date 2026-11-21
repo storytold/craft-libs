@@ -3,7 +3,7 @@
 
 use super::FormDialog;
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use crate::dialog::{DialogResult, FieldRefusal, HeldAnswer};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -465,6 +465,7 @@ impl Kit {
                 .range(range.clone())
                 .unit_label(unit_name.clone())
                 .number_enabled(editable)
+                .sizing(Sizing::Content)
                 .id_salt("field")
                 .show(ui);
             if let Some(number) = shown.edit.value().copied().flatten() {
