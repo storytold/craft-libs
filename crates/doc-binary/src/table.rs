@@ -502,9 +502,10 @@ fn apply_row_edges(rows: &mut [Row], row_edges: &[Vec<f32>], grid: &mut Vec<f32>
     // The table indent refers to the first source row. Leading grid columns
     // now account for part of that offset when a later row starts further left.
     let shift = edges[0] - row_edges[0][0];
-    if shift != 0.0 {
-        props.indent = Some(props.indent.unwrap_or_default() + shift);
-    }
+    props.indent = match props.indent {
+        Some(indent) => Some(indent + shift),
+        None => (edges[0] != 0.0).then_some(edges[0]),
+    };
     for (row, boundaries) in rows.iter_mut().zip(row_edges) {
         let index = |edge: f32| edges.partition_point(|&x| x < edge);
         let mut col = 0;

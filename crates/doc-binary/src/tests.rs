@@ -3279,3 +3279,32 @@ fn doc_preserves_offset_rows_and_edge_widths_through_save() {
     check(&doc);
     check(&read(&crate::write(&doc).expect("write DOC")).expect("reopen DOC"));
 }
+
+#[test]
+fn doc_missing_indent_uses_source_edges() {
+    for (later_start, expected_indent, skipped) in [(0, 0.0, 1), (100, 5.0, 0)] {
+        let doc = word_table_doc(
+            t_def_edges(&[100, 200, 300, 400, 500, 600]),
+            t_def_edges(&[later_start, 200, 300, 400, 500, 600]),
+            t_def_edges(&[later_start, 600]),
+        );
+        let table = doc.body[0].as_table().expect("table");
+        assert_eq!(table.props.indent.unwrap_or_default(), expected_indent);
+        assert_eq!(table.rows[0].props.grid_before, skipped);
+    }
+}
+
+#[test]
+fn doc_full_colour_cell_border_survives_save() {
+    let mut row = t_def_edges(&[0, 100, 200, 300, 400, 500]);
+    row.extend(sprm_cb(0xD62F, &[1, 2, 4, 12, 34, 56, 0, 16, 1, 0, 0]));
+    let source = word_table_doc(row, vec![], vec![]);
+    let reopened = read(&crate::write(&source).expect("write DOC")).expect("reopen DOC");
+    for doc in [&source, &reopened] {
+        let cells = &doc.body[0].as_table().expect("table").rows[0].cells;
+        let bottom = cells[1].props.borders.and_then(|b| b.bottom).expect("bottom border");
+        assert_eq!(bottom.color, Some(craft_wordmodel::Rgb(12, 34, 56)));
+        assert_eq!(bottom.width, 2.0);
+        assert_ne!(cells[0].props.borders.and_then(|b| b.bottom).and_then(|b| b.color), bottom.color);
+    }
+}
