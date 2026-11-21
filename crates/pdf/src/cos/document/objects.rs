@@ -389,11 +389,12 @@ impl Document {
         Cow::Owned(s)
     }
 
-    /// [`Document::with_direct_parms`] for decoding alone: where that copies `s`, this makes a
-    /// stream of `s`'s data, shared, and a dictionary of its `/Filter` and the parameters made
-    /// direct, all its filters read. A stream named again and again, as a page's `/Contents` may
-    /// list one, isn't copied whole each time.
-    pub(crate) fn decoding_view<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
+    /// [`Document::with_direct_parms`] for decoding alone: where that copies `s`'s whole
+    /// dictionary, this gives `s`'s data, shared, under a dictionary of only its `/Filter` and the
+    /// parameters made direct, all its filters read; `s` itself where that keeps `s`. A stream
+    /// named again and again, as a page's `/Contents` may list one, doesn't have its dictionary
+    /// copied each time.
+    pub fn decoding_view<'s>(&self, s: &'s Stream) -> Cow<'s, Stream> {
         let Some(made) = self.direct_parms(s) else { return Cow::Borrowed(s) };
         let mut dict = Dict::new();
         if let Some(f) = s.dict.get(b"Filter") {

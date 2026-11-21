@@ -155,14 +155,17 @@ interpretation needs.
   reaches and, by default, packs objects into object streams. Both return the bytes.
 - `Document` is cheap to clone: the bytes, index and caches are shared, so a clone is a
   snapshot for undo or a background job.
+- `Document::decoding_view` gives a stream to decode with its `/DecodeParms` made direct,
+  sharing its data and copying no more of its dictionary than `/Filter` and the parameters
+  (made public for storytold/pdfcraft#6821).
 - Images: `ImageBudget::decode` gives an image's samples after its filters, CCITT fax and JBIG2
   included, all images of one operation spending from one allowance. DCT and JPX are not decoded
   here.
 - Not here: streaming files larger than memory, linearized output.
 
 The code comes from PdfCraft's `pdfcraft-cos` crate (revision
-`1d2af9907ba772b368f6b54811359805fa5428e9`), unchanged apart from module paths and doc
-comments. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
+`1d2af9907ba772b368f6b54811359805fa5428e9`), unchanged apart from module paths, doc comments
+and the changes noted above. Its test helpers come along: `src/cos/testkit.rs` (synthetic files, from
 `pdfcraft-testkit`) and `tests/cos/oracle.rs` (qpdf runs, from `pdfcraft-oracle`; a missing
 `qpdf` skips those tests, or fails them when `CRAFT_PDF_ORACLES_REQUIRED` is set). Tests:
 `cargo test -p craft-pdf --no-default-features --features cos`. Other crates' tests use the

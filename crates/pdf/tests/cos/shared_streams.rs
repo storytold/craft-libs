@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use craft_pdf::cos::{Document, ObjRef, Object, SaveOptions, write_full, write_incremental};
 
+use crate::testkit::Pdf;
+
 const CONTENT: &[u8] = b"0 0 1 rg 10 10 30 20 re f";
 
 fn fixture() -> Vec<u8> {
@@ -75,4 +77,30 @@ fn streams_moved_to_another_document_get_their_own_bytes() {
     // The target keeps just the stream's bytes, not the whole source file.
     assert_eq!(Arc::strong_count(&file), 1);
     assert_eq!(stream_bytes(&target, r).0, CONTENT);
+}
+
+/// A stream whose `/DecodeParms` is given by reference decodes through `decoding_view` as through
+/// `with_direct_parms`, which `decoded` alone can't (it reads only parameters given directly); the
+/// view shares the stream's data, as a copy would too, and carries no more of its dictionary than
+/// `/Filter` and `/DecodeParms`.
+#[test]
+fn a_decoding_view_reads_parameters_by_reference_and_shares_the_data() {
+    // Two rows of two bytes, each behind a PNG predictor tag of 0 (None).
+    let packed = craft_pdf::filters::encode_flate(&[0, 1, 2, 0, 3, 4]);
+    let file = Pdf::new()
+        .version("1.4")
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [] /Count 0 >>")
+        .obj("<< /Predictor 12 /Columns 2 >>")
+        .stream("/Filter /FlateDecode /DecodeParms 3 0 R", packed)
+        .build();
+    let doc = Document::open(Arc::new(file)).unwrap();
+    let held = doc.get(ObjRef { num: 4, generation: 0 });
+    let Object::Stream(s) = &*held else { panic!("{held:?}") };
+    let view = doc.decoding_view(s);
+    assert_eq!(view.decoded().unwrap(), [1, 2, 3, 4]);
+    assert_eq!(view.decoded().unwrap(), doc.with_direct_parms(s).decoded().unwrap());
+    assert_eq!(s.decoded().unwrap(), [0, 1, 2, 0, 3, 4], "decoded alone takes no parameters by reference");
+    assert_eq!(view.raw.as_ptr(), s.raw.as_ptr(), "the view shares the stream's data");
+    assert_eq!(view.dict.len(), 2, "only /Filter and /DecodeParms, not /Length: {:?}", view.dict);
 }
