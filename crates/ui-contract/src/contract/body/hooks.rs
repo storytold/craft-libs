@@ -416,10 +416,15 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         layout_memory::measured(ctx, sub(id, "first")).map(|found| found.took.y)
     }
 
-    /// A container with no header whose body is an unwrapped row reports that row's line as its first line.
+    /// A container with no header whose body is an unwrapped row reports that row's line as its first line, and one
+    /// labelled above its body the line of its body's first control: it sits on a row's line by that control, as a
+    /// control labelled above does.
     fn first_is_row_line(&self, comp: &C) -> bool {
         let props = comp.props(Internal::new());
-        props.header.is_none() && super::size::unwrapped_row(props)
+        let above = props.label.as_ref().is_some_and(|side| {
+            matches!(side.layout, label::FieldLayout::Above | label::FieldLayout::Caption(_)) && side.kind != label::LabelKind::Hidden
+        });
+        props.header.is_none() && (above || super::size::unwrapped_row(props))
     }
 
     fn member(&self, comp: &C) -> bool {

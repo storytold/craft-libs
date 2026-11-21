@@ -97,8 +97,8 @@ pub(crate) type TakeBack = Box<dyn FnOnce(&Context) + Send + Sync>;
 #[derive(Clone, Debug, PartialEq)]
 enum Recorded {
     Measured(Measured),
-    /// The width a row's shrink step gave a unit, as a measure, and whether the unit dropped out of the row.
-    Shrink(Measured, bool),
+    /// The width a row's shrink step gave a unit, as a measure, and whether it narrowed the unit or dropped it.
+    Shrink(Measured, ShrinkGiven),
     Text(Option<Arc<str>>),
 }
 
@@ -499,10 +499,18 @@ pub(crate) fn emit_record(ctx: &Context, id: Id, measured: Measured) {
     emit(ctx, id, Recorded::Measured(measured));
 }
 
-/// Hands forward what a row's shrink step gave a unit under `id`: its width as `measured` and whether it `dropped`
-/// out of the row. It serves as [`emit_record`]'s measure does.
-pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, dropped: bool) {
-    emit(ctx, id, Recorded::Shrink(measured, dropped));
+/// Whether a row's shrink step narrowed a unit below what it asks for in no room, and whether it dropped the unit out
+/// of the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ShrinkGiven {
+    pub dropped: bool,
+    pub narrowed: bool,
+}
+
+/// Hands forward what a row's shrink step gave a unit under `id`: its width as `measured` and what else it `given`.
+/// It serves as [`emit_record`]'s measure does.
+pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, given: ShrinkGiven) {
+    emit(ctx, id, Recorded::Shrink(measured, given));
 }
 
 /// Hands forward a text a run found under `id` that content outside the body it runs in shows, as `emit_record`
@@ -565,7 +573,7 @@ fn kept_differs(last: &Found, now: &Recorded, pass: u64, tolerance: f32) -> Opti
     };
     let differs = match (was, now) {
         (Recorded::Measured(was), Recorded::Measured(now)) => measures(was, now, false),
-        (Recorded::Shrink(was, was_dropped), Recorded::Shrink(now, now_dropped)) => measures(was, now, was_dropped != now_dropped),
+        (Recorded::Shrink(was, was_given), Recorded::Shrink(now, now_given)) => measures(was, now, was_given != now_given),
         (was, now) => was != now,
     };
     if *at != pass || !differs {
@@ -922,12 +930,12 @@ pub(crate) fn measured(ctx: &Context, id: Id) -> Option<Measured> {
 }
 
 /// What a row's shrink step of this pass gave the unit under `id` ([`emit_shrink`]): its width as a measure and
-/// whether it dropped out of the row.
-pub(crate) fn shrink(ctx: &Context, id: Id) -> Option<(Measured, bool)> {
+/// whether it narrowed or dropped the unit.
+pub(crate) fn shrink(ctx: &Context, id: Id) -> Option<(Measured, ShrinkGiven)> {
     let moment = Moment::of(ctx);
     let pass = ctx.cumulative_pass_nr();
     with(ctx, &moment, |memory| match memory.measured.get(&id).filter(|found| found.pass == pass && !memory.probing()) {
-        Some(Found { recorded: Recorded::Shrink(measured, dropped), .. }) => Some((*measured, *dropped)),
+        Some(Found { recorded: Recorded::Shrink(measured, given), .. }) => Some((*measured, *given)),
         _ => None,
     })
 }
