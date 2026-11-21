@@ -148,11 +148,11 @@ fn resized_flyout_survives_reopening_and_workspace_restore() {
     d.settle();
     let grown = flyout_rect(&d);
     assert!(grown.height() > 160.0);
-    assert_eq!(first_column(&d.layout).groups[0].height, Some(grown.height()));
+    assert_eq!(first_column(&d.layout).groups[0].flyout_height, Some(grown.height()));
     assert_eq!(first_column(&d.layout).groups[0].flyout_width, Some(grown.width()));
     assert_eq!(first_column(&d.layout).width, 240.0);
     assert_eq!(first_column(&d.layout).groups[1].flyout_width, None);
-    assert_eq!(first_column(&d.layout).groups[1].height, None);
+    assert_eq!(first_column(&d.layout).groups[1].flyout_height, None);
     d.click(d.hit(&Hit::Icon(2)).unwrap().center());
     d.settle();
     assert_eq!(flyout_rect(&d).size(), grown.size());
@@ -178,13 +178,41 @@ fn resized_flyout_survives_reopening_and_workspace_restore() {
     }
 }
 
+/// A group docked short, or resized in its column, opens its flyout as it would any other: the
+/// flyout fits its content, and resizing it leaves the docked height alone (and the other way
+/// round). VectorCraft#6855: a flyout opened from the icons came up as short as the docked group.
+#[test]
+fn a_flyout_does_not_take_the_docked_height_of_its_group() {
+    let opened = |docked_height: Option<f32>| {
+        let mut d = DockDriver::new(docked(&[&[1]], true), Content);
+        d.layout.apply(Action::ResizeGroup { panel: 1, height: docked_height }).unwrap();
+        d.click(hit(&d, Hit::Icon(1)).center());
+        d.settle();
+        d
+    };
+    let plain = flyout_rect(&opened(None));
+    let mut short = opened(Some(40.0));
+    assert_eq!(flyout_rect(&short).height(), plain.height(), "the docked height of 40 does not shrink the flyout");
+    let before = flyout_rect(&short);
+    let from = before.right_bottom() - vec2(2.0, 2.0);
+    short.drag(from, from + vec2(0.0, 60.0));
+    short.settle();
+    let group = first_column(&short.layout).groups[0].clone();
+    assert!((flyout_rect(&short).height() - before.height() - 60.0).abs() < 1.0);
+    assert_eq!(group.flyout_height, Some(flyout_rect(&short).height()), "the flyout keeps its own height");
+    assert_eq!(group.height, Some(40.0), "the docked height is untouched");
+    short.layout.apply(Action::ResizeGroup { panel: 1, height: Some(300.0) }).unwrap();
+    short.settle();
+    assert_eq!(group.flyout_height, first_column(&short.layout).groups[0].flyout_height, "and the docked one doesn't move it");
+}
+
 /// Horizontal dragging must not pin an automatic height or overwrite a saved height
 /// temporarily clamped by a smaller viewport. Minimums, float bounds and locks still apply.
 #[test]
 fn flyout_resize_respects_limits_and_preserves_height_on_width_only_drags() {
     for height in [None, Some(480.0)] {
         let mut d = DockDriver::new(docked(&[&[1]], true), Content);
-        d.layout.apply(Action::ResizeGroup { panel: 1, height }).unwrap();
+        d.layout.apply(Action::ResizeFlyoutHeight { panel: 1, height }).unwrap();
         d.float_bounds = Some(Rect::from_min_max(pos2(0.0, 30.0), pos2(800.0, 330.0)));
         d.click(hit(&d, Hit::Icon(1)).center());
         d.settle();
@@ -193,7 +221,7 @@ fn flyout_resize_respects_limits_and_preserves_height_on_width_only_drags() {
         d.drag(from, from + vec2(70.0, 0.0));
         d.settle();
         assert!((flyout_rect(&d).width() - before.width() - 70.0).abs() < 1.0);
-        assert_eq!(first_column(&d.layout).groups[0].height, height);
+        assert_eq!(first_column(&d.layout).groups[0].flyout_height, height);
         d.float_bounds = None;
         d.settle();
         if let Some(height) = height {
@@ -258,7 +286,7 @@ fn flyout_top_edge_and_free_top_corner_grow_it_upward() {
         assert_eq!(raised.bottom(), before.bottom());
         assert_eq!(raised.width(), before.width());
         let group = dock_column(&d.layout).groups[1].clone();
-        assert_eq!(group.height, Some(raised.height()));
+        assert_eq!(group.flyout_height, Some(raised.height()));
         assert!((group.flyout_offset.unwrap() + 30.0).abs() < 1.0, "{:?}", group.flyout_offset);
         assert_eq!(group.flyout_width, None, "a vertical drag leaves the width automatic");
         assert_eq!(dock_column(&d.layout).groups[0].flyout_offset, None);
@@ -365,7 +393,7 @@ fn a_top_edge_drag_down_stops_at_the_minimum_height() {
     assert_eq!(small.bottom(), before.bottom());
     let group = first_column(&d.layout).groups[1].clone();
     assert_eq!(group.flyout_offset, Some(small.top() - hit(&d, Hit::Icon(3)).top()));
-    assert_eq!(group.height, Some(small.height()));
+    assert_eq!(group.flyout_height, Some(small.height()));
     d.click(hit(&d, Hit::Icon(1)).center());
     d.click(icon);
     d.settle();
@@ -454,7 +482,7 @@ fn a_flyout_constrained_below_minimum_height_can_still_resize_its_width() {
         d.drag(from, from + vec2(60.0, 0.0));
         d.settle();
         assert_eq!(first_column(&d.layout).groups[0].flyout_width, Some(300.0));
-        assert_eq!(first_column(&d.layout).groups[0].height, None);
+        assert_eq!(first_column(&d.layout).groups[0].flyout_height, None);
     }
 }
 
@@ -467,7 +495,7 @@ fn custom_small_flyouts_resize_within_their_configured_limits() {
             style.min_pane = 20.0;
             style.tab_height = 10.0;
         });
-        d.layout.apply(Action::ResizeGroup { panel: 1, height: Some(30.0) }).unwrap();
+        d.layout.apply(Action::ResizeFlyoutHeight { panel: 1, height: Some(30.0) }).unwrap();
         d.layout.apply(Action::ResizeFlyoutWidth { panel: 1, width: Some(32.0) }).unwrap();
         d.click(hit(&d, Hit::Icon(1)).center());
         d.settle();
@@ -484,14 +512,14 @@ fn custom_small_flyouts_resize_within_their_configured_limits() {
         d.drag(before.center(), before.center() + vec2(direction * 20.0, 0.0));
         d.settle();
         assert_eq!(saved(&d).flyout_width, Some(52.0), "right={right}");
-        assert_eq!(saved(&d).height, Some(30.0));
+        assert_eq!(saved(&d).flyout_height, Some(30.0));
         let after = handle(&d, side);
         assert_eq!(if right { after.left() + 52.0 } else { after.right() - 52.0 }, anchor);
 
         let bottom = handle(&d, "resize-bottom");
         d.drag(bottom.center(), bottom.center() + vec2(0.0, 20.0));
         d.settle();
-        assert_eq!(saved(&d).height, Some(50.0));
+        assert_eq!(saved(&d).flyout_height, Some(50.0));
         assert_eq!(saved(&d).flyout_width, Some(52.0));
         assert_eq!(handle(&d, side).top() - 12.0, top);
 
@@ -499,7 +527,7 @@ fn custom_small_flyouts_resize_within_their_configured_limits() {
         d.drag(from, from - vec2(direction * 1000.0, 1000.0));
         d.settle();
         assert_eq!(saved(&d).flyout_width, Some(20.0));
-        assert_eq!(saved(&d).height, Some(30.0));
+        assert_eq!(saved(&d).flyout_height, Some(30.0));
 
         let from = handle(&d, corner).center();
         d.drag(from, from + vec2(direction * 2000.0, 2000.0));
@@ -878,4 +906,24 @@ fn floating_windows_stay_inside_the_float_bounds() {
     d.settle();
     let title = hit(&d, Hit::Title(5));
     assert!(title.top() >= 30.0, "{title:?}");
+}
+
+/// Size-only changes must not turn a geometrically identical drop into a move.
+#[test]
+fn arrangement_ignores_flyout_geometry_without_forgetting_saved_sizes() {
+    let original = docked(&[&[1], &[2]], true);
+    for action in [
+        Action::ResizeFlyoutHeight { panel: 1, height: Some(320.0) },
+        Action::ResizeFlyoutWidth { panel: 1, width: Some(260.0) },
+        Action::MoveFlyoutTop { panel: 1, offset: Some(-30.0) },
+        Action::ResizeGroup { panel: 1, height: Some(80.0) },
+    ] {
+        let mut resized = original.clone();
+        resized.apply(action).unwrap();
+        let saved = first_column(&resized);
+        assert!(original.same_arrangement(&resized));
+        assert!(resized.same_arrangement(&original));
+        assert_eq!(first_column(&resized), saved);
+        assert!(!resized.same_arrangement(&docked(&[&[2], &[1]], true)));
+    }
 }
