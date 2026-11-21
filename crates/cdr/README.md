@@ -77,6 +77,23 @@ arrowheads and lenses are not read; the drawing's `warnings` name each kind it h
 path is left out and the objects it clips are read without it. Files in big-endian byte order and
 files with 16-bit coordinates are refused.
 
+`write_cmx` writes a drawing as a `.cmx` file with 32-bit coordinates in the layouts `read_cmx`
+reads: pages with their sizes, layers with their names, groups, and curves with uniform fills and
+outlines. Rectangles and ellipses are written as curves, and a clipping container as a group of its
+fill, the objects it clips (unclipped) and its outline. Hidden layers, groups and shapes, guide and
+grid layers, guidelines and master layers are left out; opacity, blend modes, fill rules and locked
+states are not written, desktop layers are written as drawing layers, and a spot color with no
+name opens as a process color; every use of a named spot color takes the look of its use at the
+strongest tint. A coordinate
+past the 32-bit range, or more than 65,535 pages, layers on a page or different colors, pens or
+outlines, is an error. The returned `Written` reports paths split or cut into several curves,
+dashes rounded to whole outline widths, nonzero fills that may fill differently, names that open
+shortened, spot colors at a 0% tint, with no name or with no known look (written black), and what
+was left out or written opaque,
+unclipped or unlocked. The header's index offsets and the index chunks (`LIST indx`) are not
+written, so a reader must find the chunks by their ids, as `read_cmx` does. `PROVENANCE.md`'s
+"Written fields" table lists every field it sets.
+
 ## Provenance
 
 `PROVENANCE.md` lists every record layout the reader relies on, with its public source and status.

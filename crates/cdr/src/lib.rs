@@ -7,7 +7,8 @@
 //!
 //! Every record layout the reader relies on is listed in `PROVENANCE.md` with its public source
 //! and status; code cites the row ids (R1 ...). Reading is bounded by [`Limits`], never recurses and does not
-//! panic. Nothing here writes `.cdr` or `.cmx` files.
+//! panic. [`write_cmx`] writes `.cmx` files in the layouts the reader reads; nothing here writes
+//! `.cdr` files.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -16,6 +17,7 @@ use std::fmt;
 mod build;
 mod bytes;
 mod cmx;
+mod cmx_write;
 mod geometry;
 mod inline;
 mod layout;
@@ -32,6 +34,7 @@ pub mod synth_cmx;
 mod wl;
 mod zip;
 
+pub use cmx_write::{MAX_CURVE_POINTS, Written};
 pub use limits::Limits;
 pub use model::{Drawing, Warning};
 
@@ -107,4 +110,16 @@ pub fn read_cmx(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
     }
     let mut budget = limits::Budget::new(limits);
     cmx::drawing(bytes, &mut budget)
+}
+
+/// Write `drawing` as a `.cmx` exchange file with 32-bit coordinates, in the layouts
+/// [`read_cmx`] reads: its pages, layers, groups and shapes (as curves) with uniform fills and
+/// outlines. A coordinate past the 32-bit range, a page side that rounds to 0, more than 65,535
+/// pages, layers on a page or different colors, pens or outlines, a dash pattern of more than
+/// 32,765 lengths, groups nested deeper than [`Limits`]' default depth, or a chunk past its 32-bit
+/// size, is an [`Error::Limit`]. [`Written`] reports what the file could not hold as it was. The
+/// header's index offsets and the index chunks are not written, so a reader must find the chunks
+/// by their ids, as [`read_cmx`] does.
+pub fn write_cmx(drawing: &Drawing) -> Result<Written, Error> {
+    cmx_write::write(drawing)
 }
