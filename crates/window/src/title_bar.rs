@@ -17,7 +17,8 @@
 
 use std::sync::{Once, OnceLock};
 
-/// System Settings › Desktop & Dock › "Double-click a window's title bar to".
+/// System Settings › Desktop & Dock › "Double-click a window's title bar to" on macOS, and GNOME's
+/// `action-double-click-titlebar` on GNOME.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DoubleClick {
     Zoom,
@@ -36,10 +37,35 @@ pub fn parse(defaults_output: &str) -> DoubleClick {
     }
 }
 
+/// The value of GNOME's `org.gnome.desktop.wm.preferences action-double-click-titlebar`, as
+/// `gsettings get` prints it (single-quoted). `toggle-maximize`, the GNOME default, and its
+/// `-horizontally` and `-vertically` forms zoom; `minimize` minimizes; `none`, `lower`, `menu` and
+/// `toggle-shade` do nothing, since an egui window cannot be lowered, shaded or given the window
+/// menu. Anything else zooms.
+pub fn parse_gnome(gsettings_output: &str) -> DoubleClick {
+    match gsettings_output.trim().trim_matches(|c| c == '\'' || c == '"') {
+        "minimize" => DoubleClick::Minimize,
+        "none" | "lower" | "menu" | "toggle-shade" => DoubleClick::Nothing,
+        _ => DoubleClick::Zoom,
+    }
+}
+
+/// The action on desktop `kind` of Linux or a BSD: on GNOME (Budgie included), GNOME's setting as
+/// `read` returns it, and zoom when `read` returns nothing. Other desktops zoom, and `read` is not
+/// called, so a GNOME setting saved on the same machine does not apply on KDE or Xfce.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+fn desktop_action(kind: crate::policy::DesktopKind, read: impl FnOnce() -> Option<String>) -> DoubleClick {
+    if kind != crate::policy::DesktopKind::Gnome {
+        return DoubleClick::Zoom;
+    }
+    read().map_or(DoubleClick::Zoom, |v| parse_gnome(&v))
+}
+
 static ACTION: OnceLock<DoubleClick> = OnceLock::new();
 static READ: Once = Once::new();
 
-/// Starts reading the system setting on a background thread, once per run (macOS only).
+/// Starts reading the system setting on a background thread, once per run (macOS, Linux and the
+/// BSDs).
 fn prefetch() {
     READ.call_once(|| {
         #[cfg(all(target_os = "macos", not(test)))]
@@ -54,10 +80,20 @@ fn prefetch() {
                 let _ = ACTION.set(action);
             });
         }
+        #[cfg(all(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"), not(test)))]
+        {
+            // No thread, no setting: the strip zooms.
+            let _ = std::thread::Builder::new().name("title-bar-setting".into()).spawn(|| {
+                let kind = crate::desktop::kind_from_env(&|k: &str| std::env::var(k).ok());
+                // No `gsettings`, no GNOME schema or no answer in time: the GNOME default.
+                let action = desktop_action(kind, || crate::platform::gsettings_wm_preference("action-double-click-titlebar"));
+                let _ = ACTION.set(action);
+            });
+        }
     });
 }
 
-/// The system setting; zoom until it has been read, and always zoom outside macOS.
+/// The system setting; zoom until it has been read, and always zoom outside macOS and GNOME.
 pub fn action() -> DoubleClick {
     ACTION.get().copied().unwrap_or(DoubleClick::Zoom)
 }
@@ -184,6 +220,31 @@ mod tests {
         assert_eq!(parse("None\n"), DoubleClick::Nothing);
         for junk in ["", "Fill", "minimize", "1", "The domain/default pair of (kCFPreferencesAnyApplication, X) does not exist"] {
             assert_eq!(parse(junk), DoubleClick::Zoom, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn parses_the_gnome_setting() {
+        assert_eq!(parse_gnome("'toggle-maximize'\n"), DoubleClick::Zoom);
+        assert_eq!(parse_gnome("'toggle-maximize-horizontally'\n"), DoubleClick::Zoom);
+        assert_eq!(parse_gnome("'toggle-maximize-vertically'\n"), DoubleClick::Zoom);
+        assert_eq!(parse_gnome("'minimize'\n"), DoubleClick::Minimize);
+        for nothing in ["'none'\n", "'lower'\n", "'menu'\n", "'toggle-shade'\n", "none"] {
+            assert_eq!(parse_gnome(nothing), DoubleClick::Nothing, "{nothing:?}");
+        }
+        for junk in ["", "''", "'Minimize'", "'maximize'", "No such key"] {
+            assert_eq!(parse_gnome(junk), DoubleClick::Zoom, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn only_gnome_reads_the_gnome_setting() {
+        use crate::policy::DesktopKind;
+        assert_eq!(desktop_action(DesktopKind::Gnome, || Some("'minimize'\n".into())), DoubleClick::Minimize);
+        assert_eq!(desktop_action(DesktopKind::Gnome, || None), DoubleClick::Zoom);
+        for kind in [DesktopKind::Kde, DesktopKind::Tiling, DesktopKind::Other] {
+            let read = || -> Option<String> { panic!("read the GNOME setting on {kind:?}") };
+            assert_eq!(desktop_action(kind, read), DoubleClick::Zoom, "{kind:?}");
         }
     }
 

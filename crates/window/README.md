@@ -78,7 +78,7 @@ An app that draws over the title bar — a hidden macOS title bar with a full-si
 
 | Where the drag or double-click starts | What happens |
 | --- | --- |
-| The strip's empty part | A drag moves the window (`ViewportCommand::StartDrag`); a double-click follows the system setting (macOS `AppleActionOnDoubleClick`: zoom, minimize or nothing; zoom elsewhere) |
+| The strip's empty part | A drag moves the window (`ViewportCommand::StartDrag`); a double-click follows the system setting (macOS `AppleActionOnDoubleClick`, or `action-double-click-titlebar` on GNOME: zoom, minimize or nothing; zoom elsewhere) |
 | A control on the strip | The control gets it; the window stays put |
 | An in-window panel over the strip (an `Order::Middle` layer: a floating dock, an `egui::Window`) | The panel gets it; the window stays put |
 | A modal's backdrop or a tooltip (`Foreground`/`Tooltip`) | The window moves, as under AppKit's own title bar |
