@@ -174,18 +174,18 @@ fn a_labelled_check_box_sits_with_its_box_on_a_buttons_line_in_a_row_and_a_grid_
 fn check_boxes_in_an_egui_grid_in_a_row_keep_their_own_rows() {
     const ROWS: usize = 3;
     let shown = |in_row: bool| {
-        let seen = Rc::new(Cell::new(([Rect::NOTHING; ROWS], Rect::NOTHING)));
+        let seen = Rc::new(Cell::new(([(Rect::NOTHING, Rect::NOTHING); ROWS], Rect::NOTHING)));
         let out = Rc::clone(&seen);
         let _fixture = settled(move |ui| {
             let room = Rect::from_min_size(ui.available_rect_before_wrap().min, egui::vec2(300.0, 600.0));
             let out = Rc::clone(&out);
             Stack::new().fill().show_at(ui, room, move |ui, _| {
-                let mut boxes = [Rect::NOTHING; ROWS];
+                let mut boxes = [(Rect::NOTHING, Rect::NOTHING); ROWS];
                 let mut grid = |ui: &mut egui::Ui| {
                     egui::Grid::new("boxes").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
                         for (row, rect) in boxes.iter_mut().enumerate() {
-                            *rect = Checkbox::new(Bind::given(true)).label(format!("Left {row}")).show(ui).response.rect;
-                            Checkbox::new(Bind::given(false)).label(format!("Right {row}")).show(ui);
+                            rect.0 = Checkbox::new(Bind::given(true)).label(format!("Left {row}")).show(ui).response.rect;
+                            rect.1 = Checkbox::new(Bind::given(false)).label(format!("Right {row}")).show(ui).response.rect;
                             ui.end_row();
                         }
                     });
@@ -203,9 +203,12 @@ fn check_boxes_in_an_egui_grid_in_a_row_keep_their_own_rows() {
     };
     let (alone, _) = shown(false);
     let (boxes, after) = shown(true);
-    let pitch = |boxes: &[Rect; ROWS]| boxes[1].top() - boxes[0].top();
+    for (left, right) in boxes {
+        assert!((left.center().y - right.center().y).abs() <= ROUNDING, "the two columns share each row: {left:?} {right:?}");
+    }
+    let pitch = |boxes: &[(Rect, Rect); ROWS]| boxes[1].0.top() - boxes[0].0.top();
     assert!((pitch(&boxes) - pitch(&alone)).abs() <= ROUNDING, "the grid rows in a row {boxes:?} are as high as outside one {alone:?}");
-    assert!(after.top() >= boxes[ROWS - 1].bottom() - ROUNDING, "the button {after:?} is under the grid {boxes:?}");
+    assert!(after.top() >= boxes[ROWS - 1].0.bottom() - ROUNDING, "the button {after:?} is under the grid {boxes:?}");
 }
 
 /// Check boxes in a `ui.horizontal` an app shows in a `Grid` body are laid out by it: side by side on one line, taking
@@ -231,4 +234,31 @@ fn check_boxes_in_an_egui_container_in_a_grid_take_no_cells() {
     });
     let (one, two) = seen.get();
     assert!((one.center().y - two.center().y).abs() <= ROUNDING && two.left() >= one.right() - ROUNDING, "One {one:?}, then Two {two:?} on its line");
+}
+
+/// Under right-to-left, a check box in a `ui.horizontal` too narrow for its label keeps the label on one line: the
+/// row is as wide as its box and label, and the label runs on from its box towards the left, past the room's end.
+#[trial]
+fn a_check_box_in_a_narrow_horizontal_keeps_its_label_on_one_line_under_rtl() {
+    const LONG: &str = "Second option with a long name";
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = Rc::clone(&out);
+        Stack::new().fill().show(ui, move |ui, _| {
+            let pair = ui.horizontal(|ui| {
+                let one = Checkbox::new(Bind::given(true)).label("One").show(ui).response.rect;
+                let two = Checkbox::new(Bind::given(false)).label(LONG).show(ui).response.rect;
+                (one, two)
+            });
+            out.set(pair.inner);
+        });
+    });
+    fixture.direction(craft_i18n::Direction::Rtl).room(egui::vec2(160.0, 200.0)).settle();
+    fixture.idle(3);
+    let (one, two) = seen.get();
+    let label = text(&fixture, LONG);
+    assert!(two.right() <= one.left() + ROUNDING, "Two {two:?} follows One {one:?} towards the left");
+    assert!(label.height() < two.height() * 1.5, "the label {label:?} stays on one line beside its box {two:?}");
+    assert!(label.right() <= two.left() + ROUNDING, "the label {label:?} runs on from its box {two:?} towards the left");
 }

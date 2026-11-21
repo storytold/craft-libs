@@ -163,7 +163,7 @@ impl PaintUi<'_> {
         let env = Env::of(self.ui);
         let mut child = child;
         let under = label::leaf_under(&env, &side, &child, (self.enabled, self.size));
-        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, text: &label, side: &side, under: &under };
+        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, unbounded: false, text: &label, side: &side, under: &under };
         let ctx = self.ui.ctx().clone();
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));

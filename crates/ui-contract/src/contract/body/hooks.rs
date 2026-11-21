@@ -1288,6 +1288,7 @@ impl BodyHooks<'_> {
                     plan.regions.body.width()
                 },
                 content_row: false,
+                unbounded: false,
                 text: resolved.label_value,
                 side,
                 help: props.help.as_ref(),

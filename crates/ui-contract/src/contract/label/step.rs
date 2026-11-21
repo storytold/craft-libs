@@ -32,6 +32,9 @@ pub(crate) struct LabelIn<'a> {
     /// The row sits in a column that takes its width from its content: a beside label never stacks for want of room,
     /// since the column is as wide as the label, the gap and the control need.
     pub content_row: bool,
+    /// The row's flow sets no end to it (`LeafLabel::unbounded`): the row is as wide as its label and control need, so
+    /// the label neither wraps nor stacks for want of room.
+    pub unbounded: bool,
     pub text: &'a Label,
     pub side: &'a SideLabel,
     /// The help line the container's footer shows; it joins the control's description with the label's detail.
@@ -82,6 +85,9 @@ pub(crate) struct LeafLabel<'a> {
     pub parent: Option<Id>,
     /// The row the label and the child share.
     pub row: Rect,
+    /// The row's flow sets no end to it: egui lays it out and extends text there (an `egui::Grid` row, `ui.horizontal`).
+    /// `row` then gives only the row's start edge, top and height.
+    pub unbounded: bool,
     pub text: &'a Label,
     pub side: &'a SideLabel,
     /// What the child inherits (`leaf_under`).
@@ -148,6 +154,7 @@ fn leaf_input<'a>(env: &Env, at: &LeafLabel<'a>, row: Rect, facts: LeafFacts, tr
         row,
         room: row.width(),
         content_row: env.content.0,
+        unbounded: at.unbounded,
         text: at.text,
         side: at.side,
         help: None,
@@ -392,7 +399,12 @@ fn flow_leaf_row<C: Show>(
     // grid's cell or a horizontal layout. The row spans the room's own edges: a room that scrolls along x is unbounded
     // at its start edge, the left one under RTL.
     let row = Rect::from_min_max(avail.min, egui::pos2(avail.max.x, avail.min.y + ideal.y));
-    let at = LeafLabel { id, owner, parent: None, row, text: &label, side: &side, under: &under };
+    // A flow egui lays out (no body installed its env for `ui`) in which egui extends text rather than wrapping it
+    // (`ui.horizontal`, an `egui::Grid` without a max column width) offers the row no end: the label is decided at
+    // its own width. An `egui::Grid` offers a column with no width from the last frame its least cell width, where
+    // the label would wrap and keep the column that narrow.
+    let unbounded = !Env::installed_for(ui) && ui.wrap_mode() == egui::TextWrapMode::Extend;
+    let at = LeafLabel { id, owner, parent: None, row, unbounded, text: &label, side: &side, under: &under };
     let decided = decide_leaf(ui, &env, &at, &mut child, trailing.as_ref().map_or(Vec2::ZERO, |trailing| trailing.size));
     // In a column that sizes from its content the row is the label plus the control, never the room around them.
     // A row of a horizontal flow is as wide as its label and control: the room it has there is unbounded.
