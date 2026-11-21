@@ -173,6 +173,12 @@ impl SuiteStore {
         SuiteStore { store: self.store.with_default_preview_service(url) }
     }
 
+    /// Uses `network` for "Allow font downloads" while the user hasn't chosen; see
+    /// [`FontStore::with_default_network`]. Never saved.
+    pub fn with_default_network(self, network: Network) -> SuiteStore {
+        SuiteStore { store: self.store.with_default_network(network) }
+    }
+
     /// The store's HTTP client. Clones share the preview service's down state with installs;
     /// [`Previews::new`](crate::remote::Previews::new) takes it through [`Installer::http_client`].
     pub fn client(&self) -> Client {

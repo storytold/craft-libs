@@ -925,6 +925,27 @@ mod store {
     }
 
     #[test]
+    fn saved_network_choice_beats_the_host_default_which_beats_off() {
+        let dir = temp("network-default");
+        let host = |network| FontStore::new(dir.clone(), Caller::User).with_default_network(network);
+        assert_eq!(FontStore::new(dir.clone(), Caller::User).network(), Network::Off);
+        assert_eq!(host(Network::On).network(), Network::On);
+        assert_eq!(FontStore::new(dir.clone(), Caller::Agent).with_default_network(Network::On).network(), Network::Off);
+        // Another setting saved meanwhile is not a network choice.
+        host(Network::On).set_previews_enabled(false).unwrap();
+        assert_eq!(host(Network::On).network(), Network::On);
+        assert!(!std::fs::read_to_string(dir.join("settings.json")).unwrap().contains("network"));
+        host(Network::On).disable_network().unwrap();
+        assert_eq!(host(Network::On).network(), Network::Off);
+        host(Network::Off).enable_network().unwrap();
+        assert_eq!(host(Network::Off).network(), Network::On);
+        // A file from before the choice could be absent: its "off" is the user's.
+        std::fs::write(dir.join("settings.json"), br#"{"network":"off","user_sources":[]}"#).unwrap();
+        assert_eq!(host(Network::On).network(), Network::Off);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn install_verify_and_remove_a_family() {
         let server = Server::start();
         let f = fixture();

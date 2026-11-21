@@ -199,8 +199,10 @@ pub struct UserSource {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Settings {
-    #[serde(default)]
-    network: Network,
+    /// `None` until the user chooses. Files written before this field could be absent always
+    /// hold a value, so an `off` there counts as the user's choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<Network>,
     #[serde(default)]
     user_sources: Vec<UserSource>,
     #[serde(default)]
@@ -215,7 +217,7 @@ fn on() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { network: Network::default(), user_sources: Vec::new(), preview_service: None, previews: true }
+        Self { network: None, user_sources: Vec::new(), preview_service: None, previews: true }
     }
 }
 
@@ -263,6 +265,8 @@ pub struct FontStore {
     /// The host's preview service, used while neither the environment nor the setting names one.
     /// Never saved.
     default_preview_service: Option<String>,
+    /// The host's network setting, used while the user hasn't chosen. Never saved.
+    default_network: Option<Network>,
     /// Tests: stands in for the environment variable.
     #[cfg(test)]
     preview_env: Option<Option<String>>,
@@ -296,6 +300,7 @@ impl FontStore {
             pack_removal_cursor: AtomicUsize::new(0),
             pack_removal_round_end: AtomicUsize::new(0),
             default_preview_service: None,
+            default_network: None,
             #[cfg(test)]
             preview_env: None,
         }
@@ -321,6 +326,17 @@ impl FontStore {
     pub fn with_default_preview_service(mut self, url: &str) -> Self {
         self.default_preview_service = normalize_service_url(url);
         debug_assert!(self.default_preview_service.is_some(), "unusable preview service URL {url:?}");
+        self
+    }
+
+    /// Uses `network` while the user hasn't chosen (no saved choice in `settings.json`). The
+    /// host's default is never saved: the user's [`FontStore::enable_network`] or
+    /// [`FontStore::disable_network`] beats it from then on, and other apps sharing the store
+    /// don't see it. An agent's store ignores it, as an agent can never turn the network on.
+    pub fn with_default_network(mut self, network: Network) -> Self {
+        if self.caller == Caller::User {
+            self.default_network = Some(network);
+        }
         self
     }
 
@@ -355,9 +371,10 @@ impl FontStore {
 
     // ----- consent
 
-    /// The user's setting; [`Network::Off`] when it was never set or can't be read.
+    /// The user's saved choice, else the host's default ([`FontStore::with_default_network`]),
+    /// else [`Network::Off`]. A file that can't be read counts as no choice.
     pub fn network(&self) -> Network {
-        self.settings().network
+        self.settings().network.or(self.default_network).unwrap_or_default()
     }
 
     fn settings(&self) -> Settings {
@@ -370,7 +387,7 @@ impl FontStore {
         if self.caller != Caller::User {
             return Err(Error::NotAllowed);
         }
-        self.change_settings(|s| s.network = Network::On)
+        self.change_settings(|s| s.network = Some(Network::On))
     }
 
     /// The preview service's base URL, or `None` while there is none: [`PREVIEW_SERVICE_ENV`]
@@ -413,7 +430,7 @@ impl FontStore {
 
     /// Turns downloading off. Anyone may.
     pub fn disable_network(&self) -> Result<(), Error> {
-        self.change_settings(|s| s.network = Network::Off)
+        self.change_settings(|s| s.network = Some(Network::Off))
     }
 
     /// Whether the app may fetch font previews from the preview service. On unless the user
