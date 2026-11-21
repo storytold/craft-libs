@@ -836,3 +836,49 @@ fn a_headings_text_sizes_are_measured_against_the_heading() {
     std::sync::Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(24.0);
     assert_eq!(sizes(&d), want(24.0));
 }
+
+/// An ODT whose default style and Standard style state the text properties `default` and
+/// `standard`, with one Japanese paragraph in an automatic style on Standard (#1836).
+fn standard_over_default(default: &str, standard: &str) -> Vec<u8> {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties {default}/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties {standard}/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">今日は月曜日なのです。</text:p></office:text></office:body></office:document-content>"#
+    );
+    package(&content, Some(&styles))
+}
+
+/// The document's default Western, East Asian and complex-script languages.
+fn document_langs(d: &Document) -> (Option<&str>, Option<&str>, Option<&str>) {
+    let c = &d.styles.default_chr;
+    (c.lang.as_deref(), c.lang_ea.as_deref(), c.lang_bidi.as_deref())
+}
+
+const LIBREOFFICE_DEFAULT: &str =
+    r#"fo:language="en" fo:country="US" style:language-asian="zh" style:country-asian="CN" style:language-complex="hi" style:country-complex="IN""#;
+
+/// #1836: the Standard style's East Asian and complex-script languages override the default
+/// style's, as its Western language does: LibreOffice keeps its untouched default (zh-CN, hi-IN)
+/// on the default style and the user's choice on Standard.
+#[test]
+fn the_standard_styles_asian_and_complex_languages_override_the_default_styles() {
+    let standard = r#"fo:language="de" fo:country="DE" style:language-asian="ja" style:country-asian="JP" style:language-complex="ar" style:country-complex="EG""#;
+    let d = import(&standard_over_default(LIBREOFFICE_DEFAULT, standard)).unwrap();
+    assert_eq!(document_langs(&d), (Some("de-DE"), Some("ja-JP"), Some("ar-EG")));
+    // Saved and opened again, the languages are kept.
+    let saved = export(&d).unwrap();
+    assert_eq!(document_langs(&import(&saved).unwrap()), (Some("de-DE"), Some("ja-JP"), Some("ar-EG")));
+    // A Standard that states only some of them takes the rest from the default style.
+    let d = import(&standard_over_default(LIBREOFFICE_DEFAULT, r#"style:language-asian="ko" style:country-asian="KR""#)).unwrap();
+    assert_eq!(document_langs(&d), (Some("en-US"), Some("ko-KR"), Some("hi-IN")));
+}
+
+/// A Standard style without languages leaves the default style's, as before.
+#[test]
+fn a_standard_style_without_languages_keeps_the_default_styles() {
+    let d = import(&standard_over_default(LIBREOFFICE_DEFAULT, r#"fo:font-size="12pt""#)).unwrap();
+    assert_eq!(document_langs(&d), (Some("en-US"), Some("zh-CN"), Some("hi-IN")));
+    let d = import(&standard_over_default(r#"fo:font-size="12pt""#, r#"fo:font-size="12pt""#)).unwrap();
+    assert_eq!(document_langs(&d), (None, None, None));
+}
