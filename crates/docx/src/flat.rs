@@ -116,6 +116,10 @@ fn room(total: u64) -> u64 {
 /// Unpack a Flat OPC file into its parts, with a `[Content_Types].xml` made from the parts'
 /// content types (unless the file carries one).
 pub(crate) fn unpack(bytes: &[u8]) -> Result<Package, DocxError> {
+    unpack_within(bytes, MAX_PART_ELEMENTS)
+}
+
+fn unpack_within(bytes: &[u8], part_elements: usize) -> Result<Package, DocxError> {
     let text = utf8_text(bytes);
     let src: &[u8] = text.as_ref();
     let mut r = NsReader::from_reader(src);
@@ -150,7 +154,7 @@ pub(crate) fn unpack(bytes: &[u8]) -> Result<Package, DocxError> {
                     }
                 }
                 elements += 1;
-                if elements > MAX_PART_ELEMENTS {
+                if elements > part_elements {
                     return Err(DocxError::Limit("too many XML elements".into()));
                 }
                 let local = e.local_name().as_ref().to_vec();
@@ -550,6 +554,27 @@ mod tests {
         let out = with_scope(frag.as_bytes(), &scope);
         let out = String::from_utf8(out).unwrap();
         assert_eq!(out.matches("xmlns:p").count(), 256);
+    }
+
+    #[test]
+    fn part_element_budget_counts_parts_that_are_not_read() {
+        assert_eq!(MAX_PART_ELEMENTS, 8_000_002);
+        let cap = 100;
+        let inline = |children| format!("<r>{}</r>", "<y/>".repeat(children));
+        let part = |name: &str, xml: &str| format!("<pkg:part pkg:name=\"{name}\"><pkg:xmlData>{xml}</pkg:xmlData></pkg:part>");
+        let package = |parts: &str| format!("<pkg:package xmlns:pkg=\"{PKG_NS}\">{parts}</pkg:package>");
+        // The part, xmlData and r wrappers count too: 97 children make exactly 100.
+        let xml = inline(97);
+        let first = part("/word/unused.xml", &xml);
+        let at_cap = unpack_within(package(&first).as_bytes(), cap).unwrap();
+        assert_eq!(at_cap.get("word/unused.xml"), Some(xml.as_bytes()));
+        let over = part("/word/unused.xml", &inline(98));
+        assert!(matches!(unpack_within(package(&over).as_bytes(), cap), Err(DocxError::Limit(_))));
+        // Each package child has its own allowance, even though neither part is read.
+        let two = format!("{first}{}", part("/word/also-unused.xml", &xml));
+        let reset = unpack_within(package(&two).as_bytes(), cap).unwrap();
+        assert_eq!(reset.get("word/unused.xml"), Some(xml.as_bytes()));
+        assert_eq!(reset.get("word/also-unused.xml"), Some(xml.as_bytes()));
     }
 
     #[test]
