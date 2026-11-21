@@ -1044,7 +1044,7 @@ fn a_comment_referenced_past_the_main_text_is_not_read() {
     let doc = read(&word6_file(&d)).expect("opens");
     let anchored =
         doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).filter(|o| matches!(o, InlineObject::CommentStart { .. })).count();
-    assert_eq!(doc.comments.len(), anchored, "every comment read has its place in the text: {:?}", doc.comments);
+    assert!(doc.comments.is_empty() && anchored == 0, "no comment and no anchor: {:?}", doc.comments);
 }
 
 #[test]
