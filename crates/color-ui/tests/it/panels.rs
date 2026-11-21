@@ -7,8 +7,8 @@ use std::rc::Rc;
 use craft_behavior::{EditEvent, Selection};
 use craft_color_ui::palette::{SwatchColor, SwatchGroup};
 use craft_color_ui::ui::{
-    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand,
-    SwatchesMenu, SwatchesPanel, SwatchesState,
+    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary,
+    SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState,
 };
 use craft_theme::Srgba;
 use craft_ui::choice::SwatchTable;
@@ -174,6 +174,66 @@ fn the_slider_modes_show_a_channel_on_one_line() {
     assert!(k(&rig).bottom() <= short.y + 0.5 && k(&rig).top() >= 0.0, "CMYK in {short:?}: the K row scrolls into view ({:?})", k(&rig));
 }
 
+/// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.
+fn spectrum_rect(color: Srgba) -> egui::Rect {
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = ColorPanelState { mode: ColorPanelMode::WebColorSliders, ..Default::default() };
+        let _ = ColorPanel::new(Bind::bound(&mut state), [color, BLUE]).layout(ColorPanelLayout::FillStroke).show(ui);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    for tip in ["Out of gamut for printing: click for the nearest printable color", "Not a web color: click for the nearest web color"] {
+        assert_eq!(fixture.by_label(tip).is_some(), color != Srgba::rgb(0.0, 0.0, 0.0), "{tip} for {color:?}");
+    }
+    fixture.by_label("Color Ramp").expect("the spectrum").rect
+}
+
+/// The warnings of the FillStroke layout keep their room: the spectrum is where it was whether the colour has no
+/// warning (black) or both (a printable-out, non-web teal), so a drag across white and black does not move it.
+#[trial]
+fn a_fill_stroke_panels_warnings_keep_their_room_so_the_spectrum_holds_still() {
+    let (clean, warned) = (spectrum_rect(Srgba::rgb(0.0, 0.0, 0.0)), spectrum_rect(Srgba::rgb(0.07, 0.65, 0.58)));
+    assert_eq!(clean, warned, "the spectrum with no warning and with both");
+}
+
+/// The spectrum's tooltip is the shown mode's name, and a Shift click on it moves the state to the next mode without
+/// editing a paint.
+#[trial]
+fn the_fill_stroke_spectrums_tooltip_names_the_shown_mode_and_shift_click_cycles_the_mode() {
+    let state = Rc::new(RefCell::new(ColorPanelState::default()));
+    let edits: Edits = Default::default();
+    let mode = Rc::new(Cell::new(ColorPanelMode::RgbSliders));
+    let (held, seen, shown) = (Rc::clone(&state), Rc::clone(&edits), Rc::clone(&mode));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = *held.borrow();
+        let out = ColorPanel::new(Bind::bound(&mut current), [RED, BLUE])
+            .layout(ColorPanelLayout::FillStroke)
+            .shown(ColorPanelShown::Mode(shown.get()))
+            .show(ui);
+        *held.borrow_mut() = current;
+        seen.borrow_mut().extend(out.edits);
+    });
+    fixture.room(COLOR_ROOM).settle();
+    let tip_of = |fixture: &mut Fixture| {
+        let ramp = fixture.by_label("Color Ramp").expect("the spectrum");
+        fixture.frame(vec![moved(egui::pos2(1.0, 1.0))]);
+        fixture.frame(vec![moved(ramp.center())]);
+        fixture.advance(DELAY);
+        fixture.settle();
+        ["RGB Sliders", "HSB Sliders"].map(|name| fixture.texts().iter().any(|run| run.text == name))
+    };
+    assert_eq!(tip_of(&mut fixture), [true, false], "the RGB mode's name");
+    mode.set(ColorPanelMode::HsbSliders);
+    fixture.settle();
+    assert_eq!(tip_of(&mut fixture), [false, true], "the HSB mode's name");
+
+    let ramp = fixture.by_label("Color Ramp").expect("the spectrum");
+    fixture.hold(Modifiers::SHIFT);
+    fixture.click(&ramp).settle();
+    fixture.hold(Modifiers::NONE).settle();
+    assert_eq!(state.borrow().mode, ColorPanelMode::HsbSliders.fill_stroke_next(), "the next mode of the shown one");
+    assert!(edits.borrow().is_empty(), "a Shift click picks nothing: {:?}", edits.borrow());
+}
+
 const SWATCHES: [(&str, [f32; 3]); 6] = [
     ("Red", [0.90, 0.28, 0.30]),
     ("Orange", [0.97, 0.42, 0.08]),
@@ -288,7 +348,7 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     assert!(library.find("Red").is_some_and(|at| library.groups[at.group].name == "Other"), "Red is in Other");
 
     let mut state = SwatchesState::default();
-    state.selected = Some(SwatchKey::Swatch("Red".to_owned()));
+    state.selection = Selection::single(SwatchKey::Swatch("Red".to_owned()));
     let made = SwatchesMenu::run_command(&groups, &mut state, SwatchesCommand::NewSwatch, RED, &Default::default());
     assert_eq!(
         made.edit,
