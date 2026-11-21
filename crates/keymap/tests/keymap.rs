@@ -281,3 +281,18 @@ fn tools_sharing_a_chord_show_it_as_the_lookup_runs_them() {
     // A command with empty parameters is the same command.
     assert_eq!(km.shown_chord(&CommandRef::with_params("tool.move", serde_json::json!({}))), Some(chord("V")));
 }
+
+/// A command's description is written only when it has one, so a definition without one reads and writes as before,
+/// and one with it round-trips.
+#[test]
+fn a_command_description_is_written_only_when_set_and_round_trips() {
+    let plain = CommandDef::new("tool.brush", "Brush", Scope::app());
+    let text = serde_json::to_value(&plain).unwrap();
+    assert!(text.get("description").is_none(), "{text}");
+    assert_eq!(serde_json::from_value::<CommandDef>(text).unwrap(), plain);
+
+    let described = plain.with_description("Paints with the brush tip.");
+    let text = serde_json::to_value(&described).unwrap();
+    assert_eq!(text["description"], json!("Paints with the brush tip."));
+    assert_eq!(serde_json::from_value::<CommandDef>(text).unwrap().description.as_deref(), Some("Paints with the brush tip."));
+}
