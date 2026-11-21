@@ -36,8 +36,9 @@
 //! Lookups never panic: stems sit in one string, found through an open-addressing hash table, and
 //! a probe allocates only small scratch strings for the candidate roots it tries.
 
-use std::collections::HashMap;
-use std::hash::Hasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
+use std::rc::Rc;
 
 use crate::patterns::{FxHasher, FxMap};
 
@@ -659,6 +660,55 @@ fn split_fields(line: &str) -> impl Iterator<Item = &str> {
 /// A rule as parsed from text, before flags get ids: `(flag, cross, strip, add, cont, cond)`.
 type RawRule = (FlagKey, bool, String, String, String, String);
 
+/// Parsed continuation flags used only while building the dictionary. Final AF aliases share
+/// their strict parse; literal continuations keep their own flags.
+enum ContinuationFlags {
+    Literal(Vec<FlagKey>),
+    Alias { index: usize, flags: Rc<[FlagKey]> },
+}
+
+impl ContinuationFlags {
+    fn read(rules: &Rules, written: &str, aliases: &mut FxMap<usize, Rc<[FlagKey]>>) -> Result<Self, String> {
+        if let Some(index) = rules.alias_index(written) {
+            if let Some(flags) = aliases.get(&index) {
+                return Ok(Self::Alias { index, flags: Rc::clone(flags) });
+            }
+            let flags: Rc<[FlagKey]> = rules.mode.parse(rules.flags(written))?.into();
+            aliases.insert(index, Rc::clone(&flags));
+            Ok(Self::Alias { index, flags })
+        } else {
+            rules.mode.parse(rules.flags(written)).map(Self::Literal)
+        }
+    }
+
+    fn as_slice(&self) -> &[FlagKey] {
+        match self {
+            Self::Literal(flags) => flags.as_slice(),
+            Self::Alias { flags, .. } => flags.as_ref(),
+        }
+    }
+
+    fn interned_id(
+        &self,
+        ids: &FxMap<FlagKey, u16>,
+        d: &mut AffixDict,
+        set_ids: &mut FxMap<Vec<u16>, u32>,
+        alias_ids: &mut FxMap<usize, u32>,
+    ) -> Result<u32, String> {
+        if let Self::Alias { index, .. } = self
+            && let Some(&id) = alias_ids.get(index)
+        {
+            return Ok(id);
+        }
+        let mut flags: Vec<u16> = self.as_slice().iter().filter_map(|k| ids.get(k).copied()).collect();
+        let id = d.intern(set_ids, &mut flags)?;
+        if let Self::Alias { index, .. } = self {
+            alias_ids.insert(*index, id);
+        }
+        Ok(id)
+    }
+}
+
 /// Most distinct `TRY` characters kept; a hostile `.aff` could otherwise make every suggestion
 /// round cost time and memory proportional to the file size.
 const MAX_TRY_CHARS: usize = 128;
@@ -1177,12 +1227,11 @@ fn parse_aff(aff: &str, english: bool) -> Result<Rules, String> {
             }
         }
     }
-    // Aliases may be declared after the rules that use them; resolve once all are read.
+    // Continuation aliases are resolved by build after every directive has been read.
     // Hunspell removes `IGNORE` characters from the appended text only: a stripped text that
     // holds one never matches a stem (stems lose them too), so the rule never applies.
     let resolve = |rules: &mut Vec<RawRule>, r: &Rules| {
         for rule in rules.iter_mut() {
-            rule.4 = r.flags(&rule.4).to_string();
             rule.3 = r.strip_ignored(&rule.3);
         }
     };
@@ -1327,12 +1376,25 @@ impl AffixDict {
         let mode = rules.mode;
         let exclusion_keys = [rules.forbidden, rules.no_suggest, rules.substandard];
         let (mut stems, stem_keys) = AffixDict::read_stem_flags(&rules, stems, entry_cap, max_flags)?;
-        let conts = |rs: &[RawRule]| rs.iter().map(|r| mode.parse(&r.4)).collect::<Result<Vec<_>, _>>();
-        let (pfx_cont, sfx_cont) = (conts(&rules.prefixes)?, conts(&rules.suffixes)?);
+        // This strict cache is separate from the stem reader's lenient alias ranges.
+        let mut aliases: FxMap<usize, Rc<[FlagKey]>> = FxMap::default();
+        let mut conts = |rs: &[RawRule]| rs.iter().map(|r| ContinuationFlags::read(&rules, &r.4, &mut aliases)).collect::<Result<Vec<_>, _>>();
+        let pfx_cont = conts(&rules.prefixes)?;
+        let sfx_cont = conts(&rules.suffixes)?;
         // Flags: every one a rule, a stem or a directive uses gets an id, in key order.
         let mut distinct: FxMap<FlagKey, u16> = FxMap::default();
         let all = rules.prefixes.iter().chain(&rules.suffixes).map(|r| r.0);
-        let all = all.chain(pfx_cont.iter().chain(&sfx_cont).flatten().copied()).chain(stem_keys.iter().copied());
+        let mut seen_aliases: HashSet<usize, BuildHasherDefault<FxHasher>> = HashSet::default();
+        let continuation_keys = pfx_cont
+            .iter()
+            .chain(&sfx_cont)
+            .filter(|cont| match cont {
+                ContinuationFlags::Literal(_) => true,
+                ContinuationFlags::Alias { index, .. } => seen_aliases.insert(*index),
+            })
+            .flat_map(ContinuationFlags::as_slice)
+            .copied();
+        let all = all.chain(continuation_keys).chain(stem_keys.iter().copied());
         // NEEDAFFIX and CIRCUMFIX flags may only ever appear in rules' continuation classes.
         let directives =
             [rules.forbidden, rules.no_suggest, rules.substandard, rules.keepcase, rules.only_in_compound, rules.need_affix, rules.circumfix];
@@ -1534,12 +1596,14 @@ impl AffixDict {
         if dropped > 0 {
             log::debug!("affix dictionary: {dropped} homonym entries past {MAX_FLAGS_PER_STEM} merged flags kept only their exclusions");
         }
-        let mut build_rules = |raw: Vec<RawRule>, conts: Vec<Vec<FlagKey>>, d: &mut AffixDict| -> Result<Vec<Rule>, String> {
+        // Cache only after the first actual rule use, preserving the pool's insertion order.
+        let mut alias_ids: FxMap<usize, u32> = FxMap::default();
+        let mut build_rules = |raw: Vec<RawRule>, conts: Vec<ContinuationFlags>, d: &mut AffixDict| -> Result<Vec<Rule>, String> {
             raw.into_iter()
                 .zip(conts)
                 .map(|((flag, cross, strip, add, _, cond), cont)| {
                     let flag = id_of(flag).ok_or("affix flag without an id")?;
-                    let cont = d.intern(&mut set_ids, &mut cont.iter().filter_map(|&k| id_of(k)).collect())?;
+                    let cont = cont.interned_id(&distinct, d, &mut set_ids, &mut alias_ids)?;
                     Ok(Rule { flag, cross, strip: strip.into(), add: add.into(), cont, cond: parse_cond(&cond)?, cond_text: cond.into() })
                 })
                 .collect()
@@ -3219,6 +3283,34 @@ pub(crate) mod tests {
         assert!(undefined.check("kertok"), "the other entries keep their aliases");
         let back = AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap();
         assert!(back.contains("házokban") && !back.contains("házban"), "aliases are expanded in the compact format");
+
+        // Rule continuations bind the final AF table, even when its declared count is smaller.
+        let late = "SET UTF-8\nFLAG num\nCIRCUMFIX 30\nPFX 7 Y 1\nPFX 7 0 ne/2 .\nSFX 12 Y 1\nSFX 12 0 a/2 .\nAF 1\nAF 7,12\nAF 30\n";
+        let d = AffixDict::from_hunspell(late, "1\ngrad/1\n", &[]).unwrap();
+        assert!(d.contains("grad") && d.contains("negrada"));
+        assert!(!d.contains("negrad") && !d.contains("grada"), "both late continuation aliases carry the circumfix");
+        let bytes = d.to_bytes().unwrap();
+        assert!(miniz_oxide::inflate::decompress_to_vec(&bytes).unwrap().starts_with(b"WCAFF2\nFLAG num\n"));
+        let back = AffixDict::from_bytes(&bytes).unwrap();
+        assert!(back.contains("grad") && back.contains("negrada"));
+        assert!(!back.contains("negrad") && !back.contains("grada"));
+
+        // Repeated aliases across both directions share their final sets, including one already
+        // interned for a stem. Distinct alias indices may name the same continuation flags.
+        let shared = "FLAG num\nAF 3\nAF 7,12\nAF 12\nAF 12\nPFX 7 Y 2\nPFX 7 0 ne/2 .\nPFX 7 0 na/3 .\nSFX 12 Y 2\nSFX 12 0 a/3 .\nSFX 12 0 i/2 .\n";
+        let literal = "FLAG num\nPFX 7 Y 2\nPFX 7 0 ne/12 .\nPFX 7 0 na/12 .\nSFX 12 Y 2\nSFX 12 0 a/12 .\nSFX 12 0 i/12 .\n";
+        let shared = AffixDict::from_hunspell(shared, "2\ngrad/1\nother/2\n", &[]).unwrap();
+        let literal = AffixDict::from_hunspell(literal, "2\ngrad/7,12\nother/12\n", &[]).unwrap();
+        for word in ["grad", "other", "negrad", "nagrad", "grada", "gradi", "othera", "otheri", "negrada", "negradi", "nagrada", "nagradi"] {
+            assert!(shared.contains(word) && literal.contains(word), "{word}");
+        }
+        for word in ["neother", "naother", "gradz"] {
+            assert!(!shared.contains(word) && !literal.contains(word), "{word}");
+        }
+        let bytes = shared.to_bytes().unwrap();
+        assert_eq!(bytes, literal.to_bytes().unwrap(), "alias identity does not change the compact bytes");
+        let back = AffixDict::from_bytes(&bytes).unwrap();
+        assert_eq!(back.to_bytes().unwrap(), bytes, "the shared continuation sets survive compact reloading");
     }
 
     #[test]
@@ -4253,6 +4345,42 @@ pub(crate) mod tests {
         assert!(AffixDict::from_hunspell(&format!("FLAG num\nAF {}\n{many}", MAX_ALIASES + 1), "0\n", &[]).is_err());
         let big = format!("AF {}\n", "1,".repeat(MAX_ALIAS_BYTES / 2 + 1));
         assert!(AffixDict::from_hunspell(&format!("FLAG num\nAF 1\n{big}"), "0\n", &[]).is_err());
+
+        // AF text uses the final numeric mode; an unused malformed alias is not read strictly.
+        let aff = "AF 2\nAF 1,2\nAF x2\nFLAG num\nSFX 1 Y 1\nSFX 1 0 a/1 .\nSFX 2 Y 1\nSFX 2 0 b .\n";
+        let d = AffixDict::from_hunspell(aff, "1\nw/1\n", &[]).unwrap();
+        assert!(d.check("wa") && d.check("wab"));
+        let dic = "2\nw/1\nodd/2\n";
+        let d = AffixDict::from_hunspell(aff, dic, &[]).unwrap();
+        assert!(d.check("odd") && !d.check("odda") && !d.check("oddb"), "the stem's malformed alias is read leniently");
+        let strict = format!("{aff}SFX 3 Y 1\nSFX 3 0 c/2 .\n");
+        let without_stem = AffixDict::from_hunspell(&strict, "1\nw/1\n", &[]).unwrap_err();
+        assert!(without_stem.contains("`x2` is not a flag number"), "{without_stem}");
+        assert_eq!(
+            AffixDict::from_hunspell(&strict, dic, &[]).unwrap_err(),
+            without_stem,
+            "the lenient stem cache cannot validate a strict continuation"
+        );
+    }
+
+    #[test]
+    fn continuation_alias_errors_keep_the_existing_precedence() {
+        let aliases = "FLAG num\nAF 3\nAF 1,2,3\nAF prefix_bad\nAF suffix_bad\n";
+        let prefix = "PFX 1 Y 1\nPFX 1 0 pre/2 .\n";
+        let suffix = "SFX 2 Y 1\nSFX 2 0 s/3 .\n";
+        let prefix_error = AffixDict::from_hunspell(&format!("{aliases}{prefix}"), "0\n", &[]).unwrap_err();
+        let suffix_error = AffixDict::from_hunspell(&format!("{aliases}{suffix}"), "0\n", &[]).unwrap_err();
+        assert_ne!(prefix_error, suffix_error);
+        let both = format!("{aliases}{suffix}{prefix}");
+        assert_eq!(AffixDict::from_hunspell(&both, "0\n", &[]).unwrap_err(), prefix_error, "prefix errors precede input-earlier suffix errors");
+        let dic = "1\nword/1\n";
+        let stem_error = AffixDict::from_hunspell_capped(aliases, dic, &[], false, 2).unwrap_err();
+        assert!(stem_error.contains("stems carry more than 2 flags"), "{stem_error}");
+        assert_eq!(
+            AffixDict::from_hunspell_capped(&both, dic, &[], false, 2).unwrap_err(),
+            stem_error,
+            "stem aggregate limits precede either continuation error"
+        );
     }
 
     /// ONLYINCOMPOUND survives the compact format without compound rules too, and with them it
