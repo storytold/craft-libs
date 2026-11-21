@@ -204,7 +204,9 @@ fn an_invalid_capture_ends_the_pick_with_a_status() {
 
     // A valid profile of another colour space: a CMYK monitor profile is not an RGB profile.
     let mut odd = monitor([0, 0], [4, 4], 1);
-    odd.icc_profile = Some(craft_cms::synth::coated_cmyk().expect("the synthetic CMYK profile").to_bytes());
+    let profile = craft_cms::Profile::parse(craft_cms::builtin::COATED_CMYK_ICC).expect("the shipped CMYK profile");
+    assert_eq!(profile.color_space, craft_cms::ColorSpace::Cmyk);
+    odd.icc_profile = Some(profile.to_bytes());
     let mut pick = ScreenPick::new();
     pick.start("a");
     pick.tick_with(&ctx, 1, &|| images(vec![odd.clone()]));
