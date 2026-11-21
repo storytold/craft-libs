@@ -245,8 +245,8 @@ fn a_cmyk_document_is_unsupported() {
 
 #[test]
 fn a_zstd_bomb_is_refused() {
-    // 64 MiB of zeros compresses to a few kilobytes; the tile holds 256 KiB.
-    let bomb = vec![0; 64 << 20];
+    // 512 KiB of zeros still expands beyond the 256 KiB tile.
+    let bomb = vec![0; 512 << 10];
     let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &hash(&bomb))]);
     let file = bundle(4, 4, "Rgb", &[layer(&raster(&s), None)], &[&bomb]);
     assert!(file.len() < 1 << 20);
@@ -255,6 +255,23 @@ fn a_zstd_bomb_is_refused() {
     let short = vec![0; 100];
     let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &hash(&short))]);
     malformed(&bundle(4, 4, "Rgb", &[layer(&raster(&s), None)], &[&short]));
+
+    // An exact-size RGBA8 tile is retained in full, including its last pixel.
+    let mut tile = solid(&[0; 4]);
+    let end = tile.len();
+    tile[end - 4..].copy_from_slice(&[1, 2, 3, 4]);
+    let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &hash(&tile))]);
+    let file = bundle(256, 256, "Rgb", &[layer(&raster(&s), None)], &[&tile]);
+    let pixels = read(&file, &[0]);
+    assert_eq!((pixels.width, pixels.height), (256, 256));
+    assert_eq!(pixels.rgba, Samples::U8(tile.clone()));
+    assert_eq!(pixels.mask, None);
+
+    // One extra decoded byte must be refused by the decoder, before tile-size validation.
+    tile.push(0);
+    let s = surface("Rgb", "U8", true, &[0; 4], &[(0, 0, &hash(&tile))]);
+    let file = bundle(256, 256, "Rgb", &[layer(&raster(&s), None)], &[&tile]);
+    assert!(malformed(&file).contains("more than 262144 bytes"));
 }
 
 #[test]
