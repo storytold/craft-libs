@@ -5,7 +5,8 @@ use crate::values::kit::Scrub;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, CollectionEvent, MemoProps, MemoView, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Tracked, request_rename,
+    Bind, BodyCx, CollectionEvent, Common, Component, Container, ContainerProps, Cx, HeaderRegion, MemoProps, MemoView, Props as _, Role, Show as _,
+    ShowCollection as _, ShowContainer as _, Tracked, request_rename,
 };
 use craft_ui::display::{Elide, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -16,6 +17,7 @@ use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::runtime::overlay::{Backdrop, Rank};
 use craft_ui::runtime::{frame, inspect};
+use craft_ui::style::StyleCx;
 use craft_ui::testing::access::{NodeKey, layer_root};
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::input::key_press;
@@ -26,7 +28,8 @@ use craft_ui::testing::{
     last_pass_text_layouts, measuring_run, trial,
 };
 use craft_ui::text::TextField;
-use egui::{Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
+use craft_ui_test_kit::contract::PlainStyle;
+use egui::{Id, Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::Cell;
 
 thread_local! {
@@ -706,6 +709,71 @@ fn a_changed_view_its_container_measures_first_runs_in_the_sizing_pass_and_the_r
     assert_eq!(title_runs(), 2, "and nothing else ran the view");
     stack_frame_in(&mut frames, wider, "Label", "A much longer heading");
     assert_eq!(title_runs(), 0, "then the view replays in every run");
+}
+
+/// A content-sized container whose header shows the memoized view `title`.
+#[derive(Component)]
+#[component(container)]
+struct Headed {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+}
+
+impl Component for Headed {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: HeadedStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Headed {
+    fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        let _ = MemoView::new("heading", Title { title: "Heading".to_owned() }, title).show(ui);
+    }
+}
+
+/// One frame of `Headed` with the body text `label`; returns how many sizing passes its body ran in.
+fn headed_frame(frames: &mut Frames, label: &str) -> usize {
+    let sizing = Cell::new(0);
+    frames.frame(vec![], |ui| {
+        in_region(ui, STACK_ROOM, |ui| {
+            let headed = Headed { common: Common::new(), props: ContainerProps::new().header(HeaderRegion::new()) };
+            headed.show(ui, |ui, _| {
+                if ui.is_sizing_pass() {
+                    sizing.set(sizing.get() + 1);
+                }
+                Text::new(label.to_owned()).show(ui);
+            });
+        });
+    });
+    sizing.get()
+}
+
+/// A view in the header of a content-sized container replays when the container measures its regions again: its
+/// measuring run lays the header out as a content column and the real run does not, and that is a fact of the place,
+/// not of the view's inputs.
+#[trial]
+fn a_view_in_a_measured_header_replays_in_the_sizing_pass_and_the_real_run() {
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        headed_frame(&mut frames, "Short");
+    }
+    title_runs();
+    headed_frame(&mut frames, "Short");
+    assert_eq!(title_runs(), 0, "settled: an idle frame replays the header's view");
+    // A second line, no wider than the first: the container's width, and with it the header's room, stays.
+    let sizing = headed_frame(&mut frames, "Short\nShort");
+    assert!(sizing > 0, "the taller label made the container measure its regions again");
+    assert_eq!(title_runs(), 0, "the unchanged view replayed in every call: {:?}", last_frame_memo_runs(&frames.ctx));
 }
 
 /// A paragraph that wraps at its room's width.
