@@ -19,6 +19,6 @@ pub use modifier_keys::ModifierKeysPanel;
 pub(crate) mod palette;
 pub(crate) mod tour;
 
-pub use palette::{CommandPalette, PaletteFace, PaletteOutput};
+pub use palette::{CommandPalette, PaletteFace, PaletteOutput, RESULTS};
 pub use tour::{Tour, TourEvent, TourOutput, TourStep};
 pub use words::PanelWords;
