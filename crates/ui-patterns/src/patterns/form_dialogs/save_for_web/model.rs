@@ -12,7 +12,6 @@ use craft_behavior::{Selection, SelectionChange, SelectionModel};
 use egui::Context;
 use egui::load::SizedTexture;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// The formats of Save for Web.
@@ -181,6 +180,8 @@ pub enum ColorTableEdit {
     Shift([u8; 3]),
     /// Unshifts the colours.
     Unshift,
+    /// Shifts the colour to this colour.
+    Shift([u8; 3]),
     /// Unshifts every colour.
     UnshiftAll,
     /// Deletes the colours.
@@ -256,7 +257,8 @@ pub struct OptimizeRequest {
 }
 
 /// Where an optimize search starts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum OptimizeStart {
     /// The current settings.
@@ -267,7 +269,8 @@ pub enum OptimizeStart {
 }
 
 /// Which slices an optimize search covers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum OptimizeScope {
     /// Every slice, together.
@@ -371,9 +374,6 @@ pub struct SaveForWebOptions {
     pub percent: f64,
     /// How the pixels are made when the size differs from the document's.
     pub resample: Resample,
-    /// The palette colours the user edited, by index, as red, green and blue.
-    #[serde(default)]
-    pub palette_edits: BTreeMap<u16, [u8; 3]>,
     /// Which slices of the document the file holds.
     #[serde(default)]
     pub slices: WebSlices,
@@ -465,7 +465,6 @@ impl Default for SaveForWebOptions {
             metadata: WebMetadata::Copyright,
             percent: 100.0,
             resample: Resample::Bicubic,
-            palette_edits: BTreeMap::new(),
             slices: WebSlices::All,
             html: true,
         }
@@ -473,10 +472,15 @@ impl Default for SaveForWebOptions {
 }
 
 impl SaveForWebOptions {
-    /// The options as the next open remembers them: the slices and palette edits belong to one document, so they
+    /// The options as the next open remembers them: the slices and the artboard belong to one document, so they
     /// are left at their defaults.
     pub(super) fn without_document_fields(&self) -> Self {
-        SaveForWebOptions { slices: WebSlices::default(), palette_edits: BTreeMap::new(), ..self.clone() }
+        SaveForWebOptions { slices: WebSlices::default(), artboard: None, ..self.clone() }
+    }
+
+    /// What decides the palette the encoder generates: a change of it drops the host's edits of the generated table.
+    pub(super) fn reduction(&self) -> (WebFormat, ColorTable, u16) {
+        (self.format, self.color_table, self.colors)
     }
 
     /// Whether the matte row shows: the matte fills the transparency of formats that cannot keep it.
@@ -512,10 +516,17 @@ impl WebPreset {
         WebPreset { name: name.into(), options, built_in: false }
     }
 
-    /// Whether the preset is what `current` shows apart from the size, the slices and the palette edits.
+    /// Whether the preset is what `current` shows apart from what belongs to the document: the size, the resample
+    /// method, the slices and the artboard.
     pub fn is_set_in(&self, current: &SaveForWebOptions) -> bool {
         let own = &self.options;
-        own == &SaveForWebOptions { percent: own.percent, slices: own.slices.clone(), palette_edits: own.palette_edits.clone(), ..current.clone() }
+        own == &SaveForWebOptions {
+            percent: own.percent,
+            resample: own.resample,
+            slices: own.slices.clone(),
+            artboard: own.artboard,
+            ..current.clone()
+        }
     }
 }
 
