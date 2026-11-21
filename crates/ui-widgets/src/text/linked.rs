@@ -100,6 +100,8 @@ pub struct LinkedOutput<const N: usize> {
     pub edit: EditResponse<Parts<N>>,
     /// The link toggle's edits.
     pub link: EditEvents<bool>,
+    /// The field whose caption link was clicked in this pass (`caption_with` with a `Link` press), if any.
+    pub caption_link: Option<usize>,
 }
 
 impl<const N: usize> Outcome for LinkedOutput<N> {
@@ -144,6 +146,10 @@ pub struct LinkedFields<'a, const N: usize> {
     /// The link child's event of this pass and the state it showed, kept from `paint` to `finish`.
     link_event: EditEvents<bool>,
     link_shown: Option<bool>,
+    /// The field whose caption link was clicked, kept from `paint` to `finish`.
+    caption_link: Option<usize>,
+    /// What each caption takes besides its layout's side label (`caption_with`).
+    sides: [Option<SideLabel>; N],
     /// What the link keeps.
     #[prop]
     mode: LinkMode,
@@ -161,7 +167,6 @@ pub struct LinkedFields<'a, const N: usize> {
     /// Every field without `lengths` shows its numbers in this unit (`NumberField::unit_kind`); `lengths` wins when both
     /// are set.
     #[prop]
-    #[allow(dead_code)] // P3(widgets-w2): ap.AP16
     unit_kind: Option<crate::runtime::env::UnitKind>,
 }
 
@@ -174,6 +179,8 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
             link,
             link_event: EditEvents::new(),
             link_shown: None,
+            caption_link: None,
+            sides: std::array::from_fn(|_| None),
             mode: LinkMode::Ratio,
             layout: LinkedLayout::Row,
             captions: None,
@@ -189,6 +196,18 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
     #[must_use]
     pub fn captions(mut self, captions: [impl Into<Label>; N]) -> Self {
         self.captions = Some(captions.map(Into::into));
+        self
+    }
+
+    /// Gives caption `i` the press and tooltip of `side`; its kind, layout and scrub stay those of the layout. A
+    /// `Link` press needs the `Column` or `Columns` layout: in `Row` the caption is a glyph inside the field with no
+    /// label of its own to click. `LinkedOutput::caption_link` reports the click. An index past the last field is
+    /// ignored.
+    #[must_use]
+    pub fn caption_with(mut self, i: usize, side: SideLabel) -> Self {
+        if let Some(slot) = self.sides.get_mut(i) {
+            *slot = Some(side);
+        }
         self
     }
 
@@ -211,8 +230,12 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
     }
 
     /// The side label of field `i`'s caption: a glyph inside the field in the `Row` layout, beside it in the others.
-    fn caption_side(&self, caption: &Label) -> SideLabel {
-        let side = SideLabel::new().scrub(true);
+    fn caption_side(&self, i: usize, caption: &Label) -> SideLabel {
+        let mut side = SideLabel::new().scrub(true);
+        if let Some(given) = &self.sides[i] {
+            side.press = given.press;
+            side.tooltip = given.tooltip.clone();
+        }
         match self.layout {
             LinkedLayout::Row => side.kind(LabelKind::Glyph(GlyphLabel::text(caption.clone()))).layout(FieldLayout::Inside),
             LinkedLayout::Column | LinkedLayout::Columns => side,
@@ -221,9 +244,10 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
 
     fn field(&self, i: usize, group: &Label, words: &LinkedWords, format: &Format, value: Mixed<Option<f64>>) -> NumberField<'static> {
         let name = self.name(i, group, words, format);
-        let field = match self.lengths {
-            Some(units) => NumberField::length(name, Bind::given(value), units),
-            None => NumberField::new(name, Bind::given(value)),
+        let field = match (self.lengths, self.unit_kind) {
+            (Some(units), _) => NumberField::length(name, Bind::given(value), units),
+            (None, Some(kind)) => NumberField::new(name, Bind::given(value)).unit_kind(kind),
+            (None, None) => NumberField::new(name, Bind::given(value)),
         };
         field.range(self.range_of(i))
     }
@@ -257,7 +281,7 @@ impl<const N: usize> Component for LinkedFields<'_, N> {
             // A caption inside the field is part of the field's measure; one beside it adds its own room.
             let (size, caption) = match &self.captions {
                 Some(captions) => {
-                    let side = self.caption_side(&captions[i]);
+                    let side = self.caption_side(i, &captions[i]);
                     let size = cx.labelled(("field", i), &side, &mut field, Proposal::Ideal);
                     let beside = side.layout != FieldLayout::Inside;
                     (size, if beside { cx.layout(&TextRun::new(captions[i].as_str())).size().x + colon + gap } else { 0.0 })
@@ -322,7 +346,7 @@ impl<const N: usize> Component for LinkedFields<'_, N> {
                 let field = self.field(i, &group, &words, cx.format(), shown[i]);
                 match &self.captions {
                     Some(captions) => {
-                        ui.labelled(("field", i), place(cell), captions[i].clone(), self.caption_side(&captions[i]), field.scrub_by_label())
+                        ui.labelled(("field", i), place(cell), captions[i].clone(), self.caption_side(i, &captions[i]), field.scrub_by_label())
                     }
                     None => ui.child(("field", i), place(cell), field),
                 }
@@ -333,6 +357,7 @@ impl<const N: usize> Component for LinkedFields<'_, N> {
         let linked = link.shown.as_ref().is_some_and(is_on);
         self.link_shown = link.shown.as_ref().map(is_on);
         self.link_event = link.events;
+        self.caption_link = children.iter().position(|child| child.link);
         for (i, child) in children.iter().enumerate() {
             cx.adopt(child, &base, |value, mine| *mine = follow(mode, linked, base, i, *value, &ranges));
         }
@@ -340,7 +365,7 @@ impl<const N: usize> Component for LinkedFields<'_, N> {
 
     fn finish(self, mut cx: Cx<'_, Self>) -> LinkedOutput<N> {
         cx.memory::<Memo<N>>().seen = self.link_shown;
-        LinkedOutput { edit: cx.edit_response(), link: self.link_event }
+        LinkedOutput { edit: cx.edit_response(), link: self.link_event, caption_link: self.caption_link }
     }
 }
 

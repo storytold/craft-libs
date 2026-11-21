@@ -17,10 +17,12 @@ use crate::contract::{
 };
 use crate::primitives::{TextOptions, TextRun};
 use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
+use crate::runtime::frame;
 use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
-    Codec, ColumnKey, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
+    Codec, ColumnKey, Granularity, HitLevel, HitPriority, HoldRepeat, Metrics, MoveMods, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag,
+    decimals_for_step, wheel_step,
 };
 use craft_theme::{Stateful, States};
 use egui::{Rect, Vec2};
@@ -89,6 +91,10 @@ fn content_sized<C: Component>(cx: &MeasureCx<'_, C>) -> bool {
 const PRESETS: PartKey = PartKey::new("presets");
 /// The chevron that opens the popup slider.
 const SLIDER: PartKey = PartKey::new("slider");
+/// The up half of the step arrows.
+const STEP_UP: PartKey = PartKey::new("step_up");
+/// The down half of the step arrows.
+const STEP_DOWN: PartKey = PartKey::new("step_down");
 
 /// The style of a number field: the field look, which the chevrons are laid out by, and the unit's text.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -142,7 +148,6 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     unit_placement: UnitPlacement,
     /// Up and down step halves at the start edge: a press steps once, a held press repeats; no Tab stop.
     #[prop]
-    #[allow(dead_code)] // P3(widgets-w2): wg.W27
     step_arrows: StepArrows,
     /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
     #[prop]
@@ -166,7 +171,7 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The number the held name stands for: while the value is a name, the field shows this number in parentheses in
     /// place of the name's label; the presets row keeps the label.
     #[prop]
-    #[allow(dead_code)] // P3(widgets-w2): ty.NN1
+    #[allow(dead_code)] // PLAN: `Ruled::format`'s named arm (rule.rs, appearance-w3) must show this number; the field passes it on once `Ruled` carries it
     name_number: Option<f64>,
     /// The lengths a length field keeps and shows (`NumberField::length`).
     lengths: Option<LengthUnits>,
@@ -384,15 +389,42 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         unit.into_iter().chain(chevrons).collect()
     }
 
-    /// The inside label's glyph, measured: what sits before the text.
-    fn before_text(cx: &MeasureCx<'_, Self>) -> Vec<Adornment> {
-        let Some(inside) = cx.env.inside_label() else { return Vec::new() };
-        let glyph = match (inside.icon(), inside.text()) {
-            (Some(icon), _) => Adornment::glyph(icon.clone()),
-            (None, Some(text)) => Adornment::text(text.clone(), TypeRole::Body).apart().measured(cx),
-            (None, None) => return Vec::new(),
+    /// The step strip, then the inside label's glyph, measured: what sits before the text. The glyph stays last, next
+    /// to the text.
+    fn before_text(cx: &MeasureCx<'_, Self>, arrows: StepArrows) -> Vec<Adornment> {
+        let mut before = Vec::new();
+        if arrows == StepArrows::Leading {
+            before.push(Adornment::steps(STEP_UP, STEP_DOWN));
+        }
+        if let Some(inside) = cx.env.inside_label() {
+            match (inside.icon(), inside.text()) {
+                (Some(icon), _) => before.push(Adornment::glyph(icon.clone())),
+                (None, Some(text)) => before.push(Adornment::text(text.clone(), TypeRole::Body).apart().measured(cx)),
+                (None, None) => {}
+            }
+        }
+        before
+    }
+
+    /// The leading adornment that is the step strip (`steps`) or the inside label's glyph, with its rect.
+    fn leading_at(&self, placed: &Placed, steps: bool) -> Option<(&Adornment, Rect)> {
+        self.leading.iter().zip(&placed.leading).find(|(adornment, _)| adornment.is_steps() == steps).map(|(adornment, at)| (adornment, *at))
+    }
+
+    /// One step of `notches` (up positive) scaled by `scale`, from the applied value or from blank, by the stepper when
+    /// the field has one and by the rule otherwise. A wheel run commits first and the step starts from the value it
+    /// showed.
+    fn step(&self, cx: &mut Cx<'_, Self>, notches: i32, scale: f64) {
+        if cx.in_wheel_run() {
+            cx.commit();
+        }
+        let rule = self.rule();
+        let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
+        let next = match &self.stepper {
+            Some(stepper) => rule.settle(stepper.next(from, notches, scale)),
+            None => rule.stepped(from, notches, scale),
         };
-        vec![glyph]
+        cx.set(V::of_number(self.to_stored(next)));
     }
 
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
@@ -463,7 +495,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
         let chevrons = self.chevrons(&cx.words::<TextWords>());
-        self.leading = Self::before_text(cx);
+        self.leading = Self::before_text(cx, self.step_arrows);
         self.trailing = self.after_text(cx, &chevrons);
         let unit = &self.trailing[..self.trailing.len() - chevrons.len()];
         let value = text.x + reserve(&cx.style.field, &[], unit);
@@ -481,11 +513,16 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.track = cx.tokens.size.length.track;
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
-        self.leading = Self::before_text(cx);
+        self.leading = Self::before_text(cx, self.step_arrows);
         self.trailing = self.after_text(cx, &chevrons);
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
-        if let Some(slot) = placed.leading.first() {
-            cx.label_part(*slot);
+        if let Some((_, slot)) = self.leading_at(&placed, false) {
+            cx.label_part(slot);
+        }
+        // The halves take a press without the focus: ArrowUp and ArrowDown in the field step the same way.
+        let halves = self.leading_at(&placed, true).and_then(|(strip, at)| strip.halves(at));
+        for (key, half) in halves.into_iter().flatten() {
+            cx.part(key, half).sense(Sense::CLICK | Sense::KEEP_FOCUS).pointer_only("ArrowUp and ArrowDown step the value");
         }
         let text = placed.text;
         self.options.centred = true;
@@ -564,6 +601,27 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
         let rule = self.rule();
         let fine_shows = self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS);
+        // A press on a half steps in the pass it goes down; while it is held the steps due since the last pass
+        // repeat, from the press's own start time and the pass's time, so a rerun pass (no time elapsed) steps none.
+        for (key, notches) in [(STEP_UP, 1), (STEP_DOWN, -1)] {
+            let Some(press) = cx.part_if_declared(key).map(|part| part.press) else { continue };
+            let (start, first) = match press.phase {
+                PressPhase::Down { start } => (start, true),
+                PressPhase::Held { start, .. } => (start, false),
+                _ => continue,
+            };
+            if cx.resolved.read_only || !cx.resolved.enabled {
+                continue;
+            }
+            let ctx = cx.response.ctx.clone();
+            let hold = HoldRepeat::new(start.time);
+            let (now, elapsed) = frame::running(&ctx).map_or((start.time, 0.0), |facts| (facts.now, facts.elapsed));
+            let scale = key_scale(MoveMods::new(press.mods.shift, false, Granularity::Unit).fine(press.mods.alt), fine_shows);
+            for _ in 0..if first { 1 } else { hold.due(now, elapsed) } {
+                self.step(cx, notches, scale);
+            }
+            frame::request_repaint_after(&ctx, hold.next_repeat(now) - now);
+        }
         while let Some((mv, mods)) = cx.intents().take_move() {
             let (notches, scale) = match mv {
                 NavMove::Up => (1, key_scale(mods, fine_shows)),
@@ -575,15 +633,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
                 NavMove::Back => (-1, 1.0),
                 _ => continue,
             };
-            if cx.in_wheel_run() {
-                cx.commit();
-            }
-            let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
-            let next = match &self.stepper {
-                Some(stepper) => rule.settle(stepper.next(from, notches)),
-                None => rule.stepped(from, notches, scale),
-            };
-            cx.set(V::of_number(self.to_stored(next)));
+            self.step(cx, notches, scale);
         }
         if let Some(wheel) = cx.take_wheel() {
             let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
@@ -593,7 +643,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             let next = match wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
                 StepResult::Set(next) => {
                     let next = match &self.stepper {
-                        Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }),
+                        Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }, 1.0),
                         _ => round_to(next, decimals_for_step(rule.step / LARGE_STEPS)),
                     };
                     let next = rule.settle(next);
@@ -649,8 +699,10 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         {
             unit.paint(ui, *at, cx.resolve(&cx.style.unit.color), self.options.role);
         }
-        if let (Some(glyph), Some(at)) = (self.leading.first(), placed.leading.first()) {
-            glyph.paint(ui, *at, cx.resolve(&cx.style.handle), self.options.role);
+        for steps in [true, false] {
+            if let Some((adornment, at)) = self.leading_at(&placed, steps) {
+                adornment.paint(ui, at, cx.resolve(&cx.style.handle), self.options.role);
+            }
         }
         for (key, name) in chevrons {
             ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
@@ -675,7 +727,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             typed_unit: committed.and_then(|note| note.unit).and_then(UnitKind::from_tag),
             out_of_range,
             cut: committed.is_some_and(|note| note.cut),
-            link: false, // P3(widgets-w2): wg.W29
+            link: cx.link_activated(),
         }
     }
 }

@@ -1,13 +1,13 @@
 //! Stories of `NumberField`.
 
-use super::{NumberField, NumberPick, UnitPlacement};
+use super::{NumberField, NumberPick, STEP_UP, StepArrows, UnitPlacement};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, Message, UnitKind};
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
-use craft_behavior::{Mixed, NumberCodec, Reader};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, story};
+use craft_behavior::{HoldRepeat, Mixed, NumberCodec, Reader};
 use craft_theme::ControlSize;
 use egui::{Key, Modifiers, Ui};
 
@@ -27,8 +27,9 @@ fn row(label: &'static str) -> Field {
 /// The zoom stops of the old PhotoCraft zoom field.
 const ZOOM_STOPS: [f64; 11] = [12.5, 25.0, 50.0, 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0, 12_800.0];
 
-/// The next zoom stop above `value` for a positive `direction`, the previous one below it otherwise.
-fn zoom_step(value: f64, direction: i32) -> f64 {
+/// The next zoom stop above `value` for a positive `direction`, the previous one below it otherwise; the stops do not
+/// scale with a modifier.
+fn zoom_step(value: f64, direction: i32, _scale: f64) -> f64 {
     let mut stops = ZOOM_STOPS.into_iter();
     match direction > 0 {
         true => stops.find(|stop| *stop > value).unwrap_or(value),
@@ -87,8 +88,7 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             NumberField::new("Zoom", Bind::bound(data.value("zoom", Some(100.0))))
                 .range(0.1..=12_800.0)
                 .unit("%")
-                // P3(widgets-w2): ap.AP15
-                .stepper(|value, direction, _scale| zoom_step(value, direction))
+                .stepper(zoom_step)
                 .size(size)
                 .show(ui);
         });
@@ -146,6 +146,33 @@ fn number_field_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(NumberField<'static>, covers = [], drive = Drive::Custom(open_popup))]
 fn number_field_popup_slider(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NumberField::new("Size", Bind::bound(data.value("slider", Some(SIZE)))).range(RANGE).popup_slider(RANGE).show(ui).edit.into()
+}
+
+#[story(NumberField<'static>, covers = [], drive = Drive::Never)]
+fn number_field_step_arrows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    NumberField::new("Size", Bind::bound(data.value("arrows", Some(SIZE)))).step_arrows(StepArrows::Leading).show(ui).edit.into()
+}
+
+/// Presses the up arrow and holds it past the repeat delay.
+fn hold_up(fixture: &mut Fixture) {
+    fixture.settle();
+    let at = fixture.root_id().and_then(|root| fixture.part_rect(root, STEP_UP)).map(|rect| rect.center());
+    if let Some(at) = at {
+        fixture.frame(vec![pointer::moved(at)]);
+        fixture.frame(vec![pointer::press(at)]);
+        fixture.advance(HoldRepeat::DELAY);
+        fixture.idle(2);
+    }
+}
+
+#[story(NumberField<'static>, covers = [], drive = Drive::Custom(hold_up))]
+fn number_field_step_arrows_held(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    NumberField::new("Size", Bind::bound(data.value("held", Some(SIZE)))).step_arrows(StepArrows::Leading).show(ui).edit.into()
+}
+
+#[story(NumberField<'static>, covers = [], drive = Drive::Never)]
+fn number_field_step_arrows_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    NumberField::new("Size", Bind::bound(&mut Some(SIZE))).step_arrows(StepArrows::Leading).enabled(false).show(ui).edit.into()
 }
 
 #[story(NumberField<'static>, covers = [], drive = Drive::Type("Auto"))]

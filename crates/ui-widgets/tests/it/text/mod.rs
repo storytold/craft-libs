@@ -9,6 +9,7 @@ mod mixed_blank;
 mod number;
 mod number_length;
 mod selectable;
+mod step_arrows;
 mod text_field;
 mod widths;
 mod zoom_field;
