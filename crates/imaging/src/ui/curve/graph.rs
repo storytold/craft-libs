@@ -297,6 +297,8 @@ pub struct CurveGraphOutput {
     pub edit: EditResponse<Curve>,
     /// The selected point after the pass.
     pub selected: Option<usize>,
+    /// The input level under the pointer this pass, in whole levels, while the pointer is over the plot.
+    pub hover: Option<f32>,
 }
 
 impl Outcome for CurveGraphOutput {
@@ -366,6 +368,8 @@ pub struct CurveGraph<'a> {
     selection: Option<usize>,
     /// The selection after `update`, for the output.
     chosen: Option<usize>,
+    /// The input under the pointer after `update`, for the output.
+    hovered: Option<f32>,
 }
 
 impl<'a> CurveGraph<'a> {
@@ -387,6 +391,7 @@ impl<'a> CurveGraph<'a> {
             overlays: &[],
             selection: None,
             chosen: None,
+            hovered: None,
         }
         .label(label)
     }
@@ -545,9 +550,11 @@ impl Component for CurveGraph<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(mut curve) = cx.value().cloned() else {
             self.chosen = None;
+            self.hovered = None;
             return;
         };
         let frame = self.frame(cx.rect, cx.style);
+        self.hovered = cx.hover_pos(PLOT).map(|pos| frame.map.value_at(pos)[0].round());
         let mut selected = self.selection;
         if self.pencil {
             self.pencil_update(cx, &frame, &curve);
@@ -720,7 +727,7 @@ impl Component for CurveGraph<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CurveGraphOutput {
-        CurveGraphOutput { selected: self.chosen, edit: cx.edit_response() }
+        CurveGraphOutput { selected: self.chosen, hover: self.hovered, edit: cx.edit_response() }
     }
 }
 
