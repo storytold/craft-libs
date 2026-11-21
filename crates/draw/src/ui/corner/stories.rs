@@ -7,10 +7,12 @@ use std::f64::consts::{PI, TAU};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
 use crate::geometry::fillet::fillet;
+use crate::ui::transform::TransformReach;
 use craft_behavior::kurbo::{BezPath, Point, Vec2};
 use craft_ui::canvas::RasterSource as _;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::env::Env;
+use craft_ui::style::DataColor;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
 use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryOutput, story};
 use egui::{Color32, Ui, vec2};
@@ -183,4 +185,14 @@ fn edit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn cycling_kinds_and_a_wide_angle_limit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let targets = data.value("kinds", targets());
     on_canvas(ui, targets, |ui, at, targets| CornerWidgets::new("Corner radius", Bind::bound(targets)).kinds(true).hide_above(120.0).show_at(ui, at))
+}
+
+/// The widgets of a layer the tool does not edit: drawn in the layer's colour, taking no press and no key.
+#[story(CornerWidgets<'static>, covers = [], drive = Drive::Never)]
+fn display_only_in_a_layer_colour(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let color = DataColor::new(accent(ui, 1.0));
+    let targets = data.value("targets", targets());
+    on_canvas(ui, targets, |ui, at, targets| {
+        CornerWidgets::new("Corner radius", Bind::bound(targets)).reach(TransformReach::Shown).color(color).show_at(ui, at)
+    })
 }

@@ -1,14 +1,16 @@
 //! The corner widgets' drag reports its edit on the pass that commits it.
 
+use super::presses::Presses;
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_draw::ui::corner::{CornerPoint, CornerTarget};
+use craft_draw::ui::transform::TransformReach;
 use craft_draw::ui::{CornerEdit, CornerKind, CornerWidgets};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
-use craft_ui::testing::{EditKind, Fixture, trial};
+use craft_ui::testing::{EditKind, Fixture, ToolFixture, trial};
 use egui::vec2;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const START_RADIUS: f64 = 4.0;
@@ -83,6 +85,28 @@ fn apex_radius_after_drag(down: f32) -> f64 {
     let widget = fixture.by_label("Corner 1 of 3").expect("the apex has a widget");
     fixture.drag(&widget, vec2(0.0, down));
     host.borrow()[0].corners[0].radius
+}
+
+/// A press on a widget of a shown set reaches what lies under the widgets, the Selection tool: the widgets declare no
+/// part and show no node, and no radius changes.
+#[trial]
+fn shown_corner_widgets_leave_a_press_on_a_widget_to_the_canvas_background() {
+    let targets = Rc::new(RefCell::new(vec![square()]));
+    let reach = Rc::new(Cell::new(TransformReach::Box));
+    let (shown, mode) = (Rc::clone(&targets), Rc::clone(&reach));
+    let view = |room: egui::Rect| CanvasView::new(room, Point::new(210.0, 200.0), 1.0);
+    let mut fixture = ToolFixture::with_view("Document", Presses::default(), view, move |ui, body| {
+        let mut targets = shown.borrow_mut();
+        let _ = CornerWidgets::new("Corner radius", Bind::bound(&mut *targets)).reach(mode.get()).show_at(ui, body.rect);
+    });
+    // Where the widget is while it takes presses.
+    let at = fixture.fixture().by_label("Corner 1 of 4").expect("the first corner has a widget").center();
+    reach.set(TransformReach::Shown);
+    fixture.fixture().settle();
+    assert!(fixture.fixture().by_label("Corner 1 of 4").is_none(), "a shown widget has no node");
+    fixture.drag_from(at, vec2(30.0, 30.0));
+    assert_eq!(fixture.tool().count, 1, "the press reached the tool");
+    assert_eq!(targets.borrow()[0].corners[0].radius, START_RADIUS, "no radius changed");
 }
 
 /// The apex of a triangle is a corner like any other: pulling its widget inward rounds it, and the further the
