@@ -5,7 +5,7 @@ use crate::runtime::egui::memory;
 use crate::runtime::egui::text_layout;
 pub use crate::style::Span;
 use crate::style::text_measure::{paragraph_job, span_format};
-use crate::style::{StyleColor, TypeRole, UiTokens};
+use crate::style::{LetterCase, StyleColor, TypeRole, UiTokens};
 use craft_i18n::Direction;
 use egui::epaint::text::FontCacheRevision;
 use egui::text::{LayoutJob, TextWrapping};
@@ -118,6 +118,11 @@ impl<'a> TextRun<'a> {
     /// Sets the type role.
     pub fn role(mut self, role: TypeRole) -> Self {
         self.role = role;
+        if role.letter_case() == LetterCase::Upper {
+            for span in &mut self.spans {
+                span.text = Cow::Owned(span.text.to_uppercase());
+            }
+        }
         self
     }
 

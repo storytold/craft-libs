@@ -155,7 +155,7 @@ pub struct ImageSize<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
-    /// The methods the list offers, in the order of [`Resample::ALL`]; all of them when empty.
+    /// The methods the list offers, in the order given; all of them when empty.
     #[prop]
     methods: Vec<Resample>,
     /// The bytes one pixel of the flat image takes, for the file size readout: the mode's colour channels at the

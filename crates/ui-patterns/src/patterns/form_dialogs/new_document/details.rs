@@ -123,16 +123,28 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
         PIXEL_ASPECTS.iter().map(|(id, _)| Entry::new((*id).to_owned(), pixel_aspect_label(words, id).clone())).collect();
     pixel_aspects.extend(setup.custom_pixel_aspects.iter().map(|(id, name)| Entry::new(id.clone(), name.clone())));
 
-    Text::new(Env::of(ui).view().resolve(&words.preset_details).as_str().to_uppercase()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+    Text::new(words.preset_details.clone()).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
     FieldGroup::new(words.preset_details.clone()).gap(Gap::Tight).show(ui, |ui, _| {
         Field::new(words.name.clone()).layout(FieldLayout::Above).id_salt("name").show(ui, |ui, _| {
-            let shown = TextField::new(words.name.clone(), Bind::given(values.name.clone())).limit(MAX_NAME).select_on_focus().show(ui);
-            if let Some(name) = shown.value().cloned() {
-                values.name = name;
-            }
-            if std::mem::take(&mut session.focus_name) {
-                focus::request(ui.ctx(), FocusTarget::Id(shown.response.id));
-            }
+            Row::new().show(ui, |ui, _| {
+                let shown = TextField::new(words.name.clone(), Bind::given(values.name.clone()))
+                    .limit(MAX_NAME)
+                    .select_on_focus()
+                    .sizing(Sizing::FillWidth)
+                    .show(ui);
+                if let Some(name) = shown.value().cloned() {
+                    values.name = name;
+                }
+                if std::mem::take(&mut session.focus_name) {
+                    focus::request(ui.ctx(), FocusTarget::Id(shown.response.id));
+                }
+                let save = Button::new(words.save_preset_title.clone()).painted(words.save_preset.clone()).id_salt("save-preset").show(ui);
+                if clicked(&save) {
+                    session.naming = Some(proposed_name(read));
+                    session.name_tried = false;
+                    session.focus_preset_name = true;
+                }
+            });
         });
 
         let dimension = |ui: &mut Ui, session: &mut Session, side: Side| {
@@ -229,22 +241,6 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
                 }
             });
         });
-        Field::new(words.profile.clone()).layout(FieldLayout::Above).id_salt("profile").show(ui, |ui, _| {
-            let current = values.profile.clone().filter(|profile| others.contains(&profile));
-            let shown = Select::new(words.profile.clone(), Bind::given(current), &profiles).sizing(Sizing::FillWidth).show(ui);
-            if let Some(profile) = shown.value().cloned() {
-                values.profile = profile;
-            }
-        });
-        Field::new(words.pixel_aspect.clone()).layout(FieldLayout::Above).id_salt("pixel-aspect").show(ui, |ui, _| {
-            let listed = pixel_aspects.iter().any(|entry| entry.value() == Some(&values.pixel_aspect));
-            let current = if listed { values.pixel_aspect.clone() } else { SQUARE_PIXELS.to_owned() };
-            let shown = Select::new(words.pixel_aspect.clone(), Bind::given(current), &pixel_aspects).sizing(Sizing::FillWidth).show(ui);
-            if let Some(id) = shown.value().cloned() {
-                values.pixel_aspect = id;
-            }
-        });
-
         Field::new(words.background.clone()).layout(FieldLayout::Above).id_salt("background").show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 let kind = BackgroundKind::of(values.background);
@@ -265,14 +261,22 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
                 }
             });
         });
+        Field::new(words.profile.clone()).layout(FieldLayout::Above).id_salt("profile").show(ui, |ui, _| {
+            let current = values.profile.clone().filter(|profile| others.contains(&profile));
+            let shown = Select::new(words.profile.clone(), Bind::given(current), &profiles).sizing(Sizing::FillWidth).show(ui);
+            if let Some(profile) = shown.value().cloned() {
+                values.profile = profile;
+            }
+        });
+        Field::new(words.pixel_aspect.clone()).layout(FieldLayout::Above).id_salt("pixel-aspect").show(ui, |ui, _| {
+            let listed = pixel_aspects.iter().any(|entry| entry.value() == Some(&values.pixel_aspect));
+            let current = if listed { values.pixel_aspect.clone() } else { SQUARE_PIXELS.to_owned() };
+            let shown = Select::new(words.pixel_aspect.clone(), Bind::given(current), &pixel_aspects).sizing(Sizing::FillWidth).show(ui);
+            if let Some(id) = shown.value().cloned() {
+                values.pixel_aspect = id;
+            }
+        });
     });
-
-    let save = Button::new(words.save_preset_title.clone()).painted(words.save_preset.clone()).id_salt("save-preset").show(ui);
-    if clicked(&save) {
-        session.naming = Some(proposed_name(read));
-        session.name_tried = false;
-        session.focus_preset_name = true;
-    }
 
     let fitted = values.clone().fitted();
     if fitted != *values {
