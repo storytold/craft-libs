@@ -2,13 +2,13 @@
 
 use std::cell::{Cell, RefCell};
 
-use craft_behavior::IconId;
+use craft_behavior::{ColumnWidth, IconId};
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Held, Pad, Pattern, Props as _, RowAlign, Show as _, ShowContainer as _, Sizing, clicked};
 use craft_ui::display::Text;
-use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::pickers::{DatePicker, PickedDate, Select};
 use craft_ui::primitives::IconSpec;
@@ -18,8 +18,8 @@ use craft_ui::style::SurfaceKind;
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The builder's words, English by default.
@@ -34,6 +34,9 @@ craft_ui::words! {
         operator: "conditions.operator" = "Operator";
         value: "conditions.value" = "Value";
         and: "conditions.and" = "and";
+        join_and: "conditions.joinAnd" = "And";
+        join_or: "conditions.joinOr" = "Or";
+        join: "conditions.join" = "Join";
         add_rule: "conditions.addRule" = "+ Rule";
         add_group: "conditions.addGroup" = "+ Group";
         add_rule_tip: "conditions.addRuleTip" = "Add a rule (⌥-click: a group)";
@@ -111,6 +114,28 @@ impl ConditionValue {
     }
 }
 
+/// How a rule joins the rule before it in a [`ConditionLayout::Joined`] list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Join {
+    /// Both rules must hold.
+    #[default]
+    And,
+    /// Either rule may hold.
+    Or,
+}
+
+/// How the builder arranges its rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ConditionLayout {
+    /// Groups with a Match row, as the builder always showed them.
+    #[default]
+    Grouped,
+    /// One list of rules, each joined to the one before by And or Or: Word's joined filter rules.
+    Joined,
+}
+
 /// One rule.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -121,12 +146,14 @@ pub struct Condition {
     pub operator: String,
     /// The value the operator compares against.
     pub value: ConditionValue,
+    /// How the rule joins the rule before it; read only in [`ConditionLayout::Joined`].
+    pub join: Join,
 }
 
 impl Condition {
     /// A rule of `field` and `operator` comparing against `value`.
     pub fn new(field: impl Into<String>, operator: impl Into<String>, value: ConditionValue) -> Self {
-        Condition { field: field.into(), operator: operator.into(), value }
+        Condition { field: field.into(), operator: operator.into(), value, join: Join::default() }
     }
 }
 
@@ -200,35 +227,53 @@ impl craft_ui::contract::Outcome for ConditionBuilderOutput {
     }
 }
 
-/// The rules editor: "Match `all` of the following rules:", then a row per rule: field menu, operator menu, the value
+/// The rules editor in [`ConditionLayout::Grouped`]: "Match `all` of the following rules:", then a row per rule: field menu, operator menu, the value
 /// editor for the field's kind ("and" between two values of a range), − (remove) and + (add a rule after it;
 /// Alt-click: a group). Nested groups indent with their own Match row and −, up to depth 3; "+ Rule" and "+ Group"
-/// at the bottom. Changing a field resets the operator and the value to the defaults. The builder reads `group` and
+/// at the bottom. In [`ConditionLayout::Joined`] one list of rules shows, each after the first starting with its And or
+/// Or join, and a single "+ Rule" at the bottom. Changing a field resets the operator and the value to the defaults. The builder reads `group` and
 /// writes the edited group back as one edit a pass. Every menu, field and button is a Tab stop in reading order.
 #[derive(Pattern)]
 pub struct ConditionBuilder<'a> {
     label: Label,
     group: Bind<'a, ConditionGroup>,
     fields: &'a dyn ConditionFields,
+    layout: ConditionLayout,
+    max_rules: Option<usize>,
 }
 
 impl<'a> ConditionBuilder<'a> {
     /// A builder named `label` that edits `group`, offering `fields`.
     pub fn new(label: impl Into<Label>, group: Bind<'a, ConditionGroup>, fields: &'a dyn ConditionFields) -> Self {
-        ConditionBuilder { label: label.into(), group, fields }
+        ConditionBuilder { label: label.into(), group, fields, layout: ConditionLayout::default(), max_rules: None }
+    }
+
+    /// How the builder arranges its rules; [`ConditionLayout::Grouped`] by default.
+    pub fn layout(mut self, layout: ConditionLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    /// The most rules the list may hold: in [`ConditionLayout::Joined`] "+ Rule" is disabled at the limit.
+    pub fn max_rules(mut self, n: usize) -> Self {
+        self.max_rules = Some(n);
+        self
     }
 
     /// Shows the builder across the width offered.
     pub fn show(self, ui: &mut Ui) -> ConditionBuilderOutput {
-        let ConditionBuilder { label, group, fields } = self;
+        let ConditionBuilder { label, group, fields, layout, max_rules } = self;
         let words = Env::of(ui).words::<ConditionWords>();
         let held = RefCell::new(Held::new(group));
         let changed = Cell::new(false);
         let shown = Stack::new().label(label.clone()).show(ui, |ui, cx| {
             let Some(before) = held.borrow_mut().read(cx) else { return };
             let mut edited = before.clone();
-            let rows = Rows { fields, words: &words };
-            rows.group(ui, &mut edited, &mut Vec::new());
+            let rows = Rows { fields, words: &words, max_rules };
+            match layout {
+                ConditionLayout::Grouped => rows.group(ui, &mut edited, &mut Vec::new()),
+                ConditionLayout::Joined => rows.joined(ui, &mut edited),
+            }
             if edited != before {
                 held.borrow_mut().write(cx, &before, edited, label.as_str());
                 changed.set(true);
@@ -241,19 +286,70 @@ impl<'a> ConditionBuilder<'a> {
 /// How deep groups nest: a group inside a group at this depth can't be added.
 const MAX_DEPTH: usize = 3;
 
+/// The joined list's columns: the join, the rule, the remove button.
+const JOINED_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content];
+
 /// What every row of a pass reads.
 struct Rows<'a> {
     fields: &'a dyn ConditionFields,
     words: &'a ConditionWords,
+    /// The most rules a joined list holds.
+    max_rules: Option<usize>,
 }
 
 impl Rows<'_> {
+    /// The joined list: every rule after the first starts with its join to the rule before; nested groups an
+    /// input carries stay as they are.
+    fn joined(&self, ui: &mut Ui, group: &mut ConditionGroup) {
+        let words = self.words;
+        let mut remove = None;
+        let mut path = Vec::new();
+        // The join and remove columns size to their content, so the first row's empty join cell keeps the field menus aligned.
+        Grid::new(&JOINED_COLUMNS).show(ui, |ui, _| {
+            let mut rule_no = 0usize;
+            for (at, item) in group.items.iter_mut().enumerate() {
+                let ConditionItem::Rule(rule) = item else { continue };
+                path.clear();
+                path.push(at);
+                if rule_no > 0 {
+                    let joins = [Entry::new(Join::And, words.join_and.clone()), Entry::new(Join::Or, words.join_or.clone())];
+                    Select::new(words.join.clone(), Bind::bound(&mut rule.join), &joins)
+                        .id_salt((path.clone(), "join"))
+                        .sizing(Sizing::Content)
+                        .show(ui);
+                } else {
+                    Stack::new().show(ui, |_, _| {});
+                }
+                Stack::new().show(ui, |ui, _| {
+                    self.rule_fields(ui, rule, &path);
+                    self.rule_problem(ui, rule);
+                });
+                if self.remove_button(ui, &path) {
+                    remove = Some(at);
+                }
+                rule_no += 1;
+            }
+        });
+        if let Some(at) = remove {
+            group.items.remove(at);
+        }
+        if let Some(problem) = self.fields.group_problem(&[], group) {
+            Notice::new(Tone::Warn, problem).layout(NoticeLayout::Inline).show(ui);
+        }
+        let rules = group.items.iter().filter(|item| matches!(item, ConditionItem::Rule(_))).count();
+        let full = self.max_rules.is_some_and(|max| rules >= max);
+        let add = Button::new(words.add_rule.clone()).id_salt((Vec::<usize>::new(), "add-rule")).enabled(!full).show(ui);
+        if clicked(&add) {
+            group.items.push(ConditionItem::Rule(self.new_rule()));
+        }
+    }
+
     /// A new rule: the first field, its first operator and their default value.
     fn new_rule(&self) -> Condition {
         let Some((field, ..)) = self.fields.fields().into_iter().next() else { return Condition::default() };
         let operator = self.fields.operators(&field).into_iter().next().map(|(id, _)| id).unwrap_or_default();
         let value = self.fields.default_value(&field, &operator);
-        Condition { field, operator, value }
+        Condition { field, operator, value, join: Join::default() }
     }
 
     fn new_group(&self) -> ConditionGroup {
@@ -338,19 +434,9 @@ impl Rows<'_> {
     fn rule(&self, ui: &mut Ui, rule: &mut Condition, path: &[usize], depth: usize, (at, remove, insert): Pending<'_>) {
         let words = self.words;
         Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
-            // Field and operator keep their labels whole; what does not fit on the line goes to the next one.
-            Row::new().wrap(true).show(ui, |ui, _| {
-                self.pick_field(ui, rule, path);
-                self.pick_operator(ui, rule, path);
-                self.edit_value(ui, rule, path);
-            });
+            self.rule_fields(ui, rule, path);
             Row::new().show(ui, |ui, _| {
-                let minus = IconButton::new(IconSpec::svg(IconId::new("minus")))
-                    .label(words.remove_rule.clone())
-                    .tooltip(words.remove_rule.as_str().to_owned())
-                    .id_salt((path.to_vec(), "remove"))
-                    .show(ui);
-                if clicked(&minus) {
+                if self.remove_button(ui, path) {
                     *remove = Some(at);
                 }
                 let plus = IconButton::new(IconSpec::svg(IconId::new("plus")))
@@ -365,6 +451,31 @@ impl Rows<'_> {
                 }
             });
         });
+        self.rule_problem(ui, rule);
+    }
+
+    /// Field, operator and value editor; what does not fit on the line goes to the next one, labels whole.
+    fn rule_fields(&self, ui: &mut Ui, rule: &mut Condition, path: &[usize]) {
+        Row::new().wrap(true).show(ui, |ui, _| {
+            self.pick_field(ui, rule, path);
+            self.pick_operator(ui, rule, path);
+            self.edit_value(ui, rule, path);
+        });
+    }
+
+    /// The − button of the rule at `path`; whether it was clicked.
+    fn remove_button(&self, ui: &mut Ui, path: &[usize]) -> bool {
+        let words = self.words;
+        let minus = IconButton::new(IconSpec::svg(IconId::new("minus")))
+            .label(words.remove_rule.clone())
+            .tooltip(words.remove_rule.as_str().to_owned())
+            .id_salt((path.to_vec(), "remove"))
+            .show(ui);
+        clicked(&minus)
+    }
+
+    /// Why the rule can't apply, under it.
+    fn rule_problem(&self, ui: &mut Ui, rule: &Condition) {
         if let Some(problem) = self.fields.problem(rule) {
             Notice::new(Tone::Warn, problem).layout(NoticeLayout::Inline).show(ui);
         }

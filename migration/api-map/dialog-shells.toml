@@ -308,7 +308,7 @@ note = "Removed: the dialog centres in the window or opens at `first_place`."
 [[setter]]
 type = "Dialog"
 old = "first_place(|ctx| Option<Vec2>)"
-new = "first_place(Pos2)"
+new = "first_place(Pos2, Align2)"
 note = "A screen position, not an offset from the window's corner."
 
 [[setter]]

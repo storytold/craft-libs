@@ -34,6 +34,11 @@ pub fn current_viewport(ctx: &Context) -> ViewportId {
     }
 }
 
+/// The running pass's window content, in its own points: the rect the pass lays out in.
+pub(crate) fn content_rect(ctx: &Context) -> egui::Rect {
+    ctx.content_rect()
+}
+
 /// The viewports egui reports for the running pass.
 pub(crate) fn live_viewports(ctx: &Context) -> Vec<ViewportId> {
     ctx.input(|input| input.raw.viewports.keys().copied().collect())

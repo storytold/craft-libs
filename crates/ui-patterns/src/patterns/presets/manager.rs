@@ -1,8 +1,8 @@
 //! `PresetManager`: a dialog body for managing the presets of several kinds: a kind select over the presets of that
 //! kind, with rename and delete, and the host's own action buttons.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::browser::PresetBrowser;
 use super::event::PresetEvent;

@@ -30,6 +30,8 @@ pub struct TypeStyle {
 pub enum TypeRole {
     /// Small print, badges.
     Caption,
+    /// A heading over a group of fields or cards: the caption's size and font, set in capitals.
+    SectionCaption,
     /// Control labels.
     Label,
     /// Body text.
@@ -46,6 +48,26 @@ pub enum TypeRole {
     Mono,
     /// A brand title: the app's name on its start screen.
     Display,
+}
+
+/// How a type role sets its letters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LetterCase {
+    /// As written.
+    #[default]
+    AsWritten,
+    /// In capitals; the stored text stays as written.
+    Upper,
+}
+
+impl TypeRole {
+    /// How the role sets its letters.
+    pub fn letter_case(self) -> LetterCase {
+        match self {
+            TypeRole::SectionCaption => LetterCase::Upper,
+            _ => LetterCase::AsWritten,
+        }
+    }
 }
 
 /// Every type role.
@@ -75,7 +97,7 @@ impl TypeTokens {
     /// The style of `role`.
     pub fn get(&self, role: TypeRole) -> TypeStyle {
         match role {
-            TypeRole::Caption => self.caption,
+            TypeRole::Caption | TypeRole::SectionCaption => self.caption,
             TypeRole::Label => self.label,
             TypeRole::Body => self.body,
             TypeRole::BodyStrong => self.body_strong,
@@ -138,6 +160,10 @@ pub struct MotionTokens {
     pub caret: Motion,
     /// A selection outline gliding to its new cells (`motion.outline`).
     pub outline: Motion,
+    /// How far content that a switch brings in (a ribbon's group row on a tab change) travels as it slides into place,
+    /// in whole points (`motion.slide`). Whole points keep the group `Eq` and `Hash`; reduced motion zeroes the time,
+    /// not the distance.
+    pub slide: u32,
     /// The appearance asks for reduced motion: every duration above is zero.
     pub reduced: bool,
 }

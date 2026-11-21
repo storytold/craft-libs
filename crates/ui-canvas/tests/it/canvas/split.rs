@@ -3,7 +3,7 @@
 
 use craft_behavior::PartKey;
 use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews};
-use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Pos2, Rect, Vec2};
 
@@ -41,8 +41,8 @@ fn widths(panes: &[Rect]) -> Vec<f32> {
 }
 
 fn show(ui: &mut egui::Ui, data: &mut StoryData, layout: SplitLayout, count: usize) -> StoryOutput {
-    let at = data.value("split", SplitAt::default());
-    SplitViews::new("Views", layout, Bind::bound(at)).count(count).show(ui, |_, _| ()).output.into()
+    let (at, at_at) = data.value_at("split", SplitAt::default());
+    SplitViews::new("Views", layout, at_at.bind(at)).count(count).show(ui, |_, _| ()).output.into()
 }
 
 fn tiled(ui: &mut egui::Ui, data: &mut StoryData) -> StoryOutput {

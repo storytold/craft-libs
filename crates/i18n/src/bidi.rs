@@ -2,6 +2,8 @@
 
 use unicode_bidi::{BidiClass, bidi_class};
 
+use crate::scripts::Direction;
+
 pub(super) const LRI: char = '\u{2066}';
 pub(super) const RLI: char = '\u{2067}';
 pub(super) const FSI: char = '\u{2068}';
@@ -28,6 +30,43 @@ pub fn isolate(value: &str) -> String {
 /// again in text with no right-to-left letter.
 pub fn ltr(value: &str) -> String {
     wrap(LRI, value)
+}
+
+/// A file name for display in an interface of `direction`: unchanged for left-to-right, an
+/// isolate with a left-to-right mark before a short extension for right-to-left.
+pub fn file_name(name: &str, direction: Direction) -> String {
+    if direction.is_rtl() { isolate(&mark_extension(name)) } else { name.to_string() }
+}
+
+/// A path for display in an interface of `direction`: unchanged for left-to-right, a left-to-right
+/// isolate with marks after every separator and before a short extension for right-to-left.
+pub fn path(value: &str, direction: Direction) -> String {
+    if !direction.is_rtl() {
+        return value.to_string();
+    }
+    let marked = mark_extension(value);
+    let mut out = String::with_capacity(marked.len() + 8);
+    for c in marked.chars() {
+        out.push(c);
+        // Keeps two right-to-left folder names from joining into one run that swaps them.
+        if matches!(c, '/' | '\\') {
+            out.push(LRM);
+        }
+    }
+    ltr(&out)
+}
+
+/// `name` with a left-to-right mark before its extension (the text after the last `.`, not at the start, 1 to 8 ASCII
+/// letters or digits), which a right-to-left line would otherwise draw as `docx.2` for `2.docx`.
+fn mark_extension(name: &str) -> String {
+    if let Some(dot) = name.rfind('.')
+        && dot > 0
+        && name.get(dot + 1..).is_some_and(|ext| !ext.is_empty() && ext.len() <= 8 && ext.bytes().all(|b| b.is_ascii_alphanumeric()))
+        && let (Some(stem), Some(ext)) = (name.get(..dot), name.get(dot..))
+    {
+        return format!("{stem}{LRM}{ext}");
+    }
+    name.to_string()
 }
 
 /// `text` without isolate marks (LRI, RLI, FSI, PDI): a [`crate::fmt`] or [`crate::I18n::trn`] result made fit

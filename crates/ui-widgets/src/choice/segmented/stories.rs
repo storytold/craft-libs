@@ -1,7 +1,7 @@
 //! Stories of `Segmented`.
 
 use super::Segmented;
-use crate::contract::{Bind, Entry, Props as _, Show as _, Validity};
+use crate::contract::{Entry, Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Mixed};
@@ -29,16 +29,16 @@ fn tools(count: u8) -> Vec<Entry<u8>> {
 /// The text row of the first `count` modes at `size`, starting on mode `first`, over its "Selected" readout.
 fn text_row(ui: &mut Ui, data: &mut StoryData, count: u8, first: u8, size: ControlSize) -> StoryOutput {
     let entries = modes(count);
-    let picked = data.value("mode", first);
-    let shown: StoryOutput = Segmented::new(format!("Combine ({count})"), Bind::bound(&mut *picked), &entries).size(size).show(ui).into();
+    let (picked, picked_at) = data.value_at("mode", first);
+    let shown: StoryOutput = Segmented::new(format!("Combine ({count})"), picked_at.bind(&mut *picked), &entries).size(size).show(ui).into();
     shown.readout(format!("Selected: {}", MODES[usize::from(*picked)]))
 }
 
 /// The icon row of the first `count` tools, starting on tool `first`, over its "Selected" readout.
 fn icon_row(ui: &mut Ui, data: &mut StoryData, count: u8, first: u8) -> StoryOutput {
     let entries = tools(count);
-    let picked = data.value("tool", first);
-    let shown: StoryOutput = Segmented::new(format!("Tool ({count})"), Bind::bound(&mut *picked), &entries).show(ui).into();
+    let (picked, picked_at) = data.value_at("tool", first);
+    let shown: StoryOutput = Segmented::new(format!("Tool ({count})"), picked_at.bind(&mut *picked), &entries).show(ui).into();
     shown.readout(format!("Selected: {}", TOOLS[usize::from(*picked)].1))
 }
 
@@ -65,19 +65,19 @@ fn segmented_small(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Segmented<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn segmented_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Segmented::new("Size", Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), &sizes()).show(ui).into()
+    Segmented::new("Size", data.bind_mixed("mixed", Mixed::Mixed), &sizes()).show(ui).into()
 }
 
 #[story(Segmented<'static, u8>, covers = [Invalid], drive = Drive::Never)]
 fn segmented_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_large = |size: &u8| if *size == 3 { Validity::Refuse(Message::new("Too large")) } else { Validity::Ok };
-    Segmented::new("Size", Bind::bound(data.value("large", 3u8)).check(refuse_large), &sizes()).show(ui).into()
+    Segmented::new("Size", data.bind("large", 3u8).check(refuse_large), &sizes()).show(ui).into()
 }
 
 #[story(Segmented<'static, u8>, covers = [], disabled_text = "Pick a layer first")]
 fn segmented_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tooltip = data.tooltip("The size of the brush");
-    Segmented::new("Size", Bind::bound(data.value("size", 1u8)), &sizes()).tooltip(tooltip).show(ui).into()
+    Segmented::new("Size", data.bind("size", 1u8), &sizes()).tooltip(tooltip).show(ui).into()
 }
 
 #[story(Segmented<'static, u8>, covers = [], drive = Drive::Never, group = "Icons", title = "Three icons")]

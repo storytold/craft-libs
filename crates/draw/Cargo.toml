@@ -17,6 +17,7 @@ harness = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite", "craft-color-ui/suite"]
 default = []
 # The tool widgets (`craft_draw::ui`).
 ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:craft-color-ui", "craft-color-ui/ui", "dep:craft-settings", "dep:serde_json"]
@@ -38,5 +39,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }

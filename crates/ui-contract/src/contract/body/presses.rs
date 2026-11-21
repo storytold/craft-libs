@@ -3,7 +3,7 @@
 use super::BodyHooks;
 use super::window::MOVE_BAND;
 use crate::contract::cx::BodyCx;
-use crate::contract::{Container, Cx};
+use crate::contract::cx::CxCore;
 use crate::runtime::egui::areas;
 use crate::runtime::memory::sub;
 use crate::runtime::pointer;
@@ -69,30 +69,30 @@ impl BodyHooks<'_> {
     /// (`BodyCx::surface_pressed`): no shape of last pass under the press takes it, and the press lies in the
     /// container's rect on its layer; and whether that press is the second of a double click
     /// (`BodyCx::surface_double_pressed`), read from the same press's click count.
-    pub(super) fn surface_press<C: Container>(&self, sensed: bool, cx: &mut Cx<'_, C>) {
-        let ctx = cx.core.ctx.clone();
+    pub(super) fn surface_press(&self, sensed: bool, core: &mut CxCore<'_>) {
+        let ctx = core.ctx.clone();
         let surface = if sensed {
             let pass = pointer::pass_pointer(&ctx);
             pass.frame.as_ref().and_then(|frame| frame.press).filter(|press| press.button == craft_behavior::PointerButton::Primary).filter(|press| {
-                let layer = cx.core.response.layer_id;
+                let layer = core.response.layer_id;
                 let at = areas::layer_map(&ctx, layer).map_or(press.origin, |map| map.to_layer(press.origin));
                 areas::layer_at(&ctx, press.origin) == Some(layer)
-                    && cx.core.rect.contains(at)
+                    && core.rect.contains(at)
                     && pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none()
             })
         } else {
             None
         };
-        let shown = cx.core.memory.shown::<SurfacePress>(sub(sub(cx.core.id, "body"), "surface_press"));
+        let shown = core.memory.shown::<SurfacePress>(sub(sub(core.id, "body"), "surface_press"));
         shown.pressed = surface.is_some();
         shown.double = surface.is_some_and(|press| press.clicks >= 2);
     }
 
     /// Records for the container's header hooks whether the second press of a double click went down on the move
     /// band in this pass (`BodyCx::band_double_pressed`).
-    pub(super) fn band_double<C: Container>(&self, cx: &mut Cx<'_, C>) {
-        let Some(band) = cx.core.results.get(&(MOVE_BAND, None)) else { return };
+    pub(super) fn band_double(&self, core: &mut CxCore<'_>) {
+        let Some(band) = core.results.get(&(MOVE_BAND, None)) else { return };
         let double = band.press.double_pressed();
-        cx.core.memory.shown::<BandDouble>(sub(sub(cx.core.id, "body"), "band_double")).0 = double;
+        core.memory.shown::<BandDouble>(sub(sub(core.id, "body"), "band_double")).0 = double;
     }
 }

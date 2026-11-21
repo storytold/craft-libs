@@ -5,7 +5,6 @@ use super::LevelsPanel;
 use crate::ui::adjust::{AdjustContext, Levels, ToneChannel, ToneChannels, TonePicker, ToneSpace};
 use crate::ui::curve::stories::story_bins;
 use crate::ui::histogram::ChannelColor;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -26,10 +25,10 @@ fn counts(shift: f32) -> [u32; 256] {
 
 /// The panel over `channels` with the point pickers, in `context`.
 fn panel(ui: &mut Ui, data: &mut StoryData, channels: ToneChannels, context: AdjustContext, histograms: &[[u32; 256]], start: Rig) -> StoryOutput {
-    let rig = data.value("rig", start);
-    LevelsPanel::new("Levels", Bind::bound(&mut rig.levels), channels)
+    let (rig, rig_at) = data.value_at("rig", start);
+    LevelsPanel::new("Levels", rig_at.bind(&mut rig.levels), channels)
         .histograms(histograms)
-        .pickers(Bind::bound(&mut rig.armed))
+        .pickers(rig_at.bind(&mut rig.armed))
         .context(context)
         .show(ui)
         .into()
@@ -65,7 +64,7 @@ fn levels_panel_gray(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(LevelsPanel<'static>, covers = [], drive = Drive::Never, group = "Channels", title = "One isolated mask channel")]
 fn levels_panel_isolated_mask(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let levels = data.value("mask", vec![Levels::identity(0.0..=255.0)]);
+    let (levels, levels_at) = data.value_at("mask", vec![Levels::identity(0.0..=255.0)]);
     let channels = ToneChannels::isolated(ToneChannel::Named { name: "Layer mask".to_owned(), color: ChannelColor::Neutral });
-    LevelsPanel::new("Levels", Bind::bound(levels), channels).histograms(&[counts(0.0)]).show(ui).into()
+    LevelsPanel::new("Levels", levels_at.bind(levels), channels).histograms(&[counts(0.0)]).show(ui).into()
 }

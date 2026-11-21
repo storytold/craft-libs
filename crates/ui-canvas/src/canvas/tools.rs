@@ -24,10 +24,10 @@ const ROTATE_STEP_DEG: f64 = 15.0;
 
 /// The room Fit Artboard on Screen leaves around the board, in points: at the sides, and above and below (the board's
 /// name sits above it).
-const ARTBOARD_MARGIN: Vec2 = Vec2::new(30.0, 40.0); // design: allow[literal-size/vec2](view-fit room in screen points, not a look)
+const ARTBOARD_MARGIN: Vec2 = Vec2::new(30.0, 40.0);
 
 /// The room Fit Layers on Screen leaves around the layers' bounds, in points.
-const LAYERS_MARGIN: Vec2 = Vec2::new(20.0, 20.0); // design: allow[literal-size/vec2](view-fit room in screen points, not a look)
+const LAYERS_MARGIN: Vec2 = Vec2::new(20.0, 20.0);
 
 /// The room Fit on Screen leaves around the document on each side, in points.
 const FIT_MARGIN: f64 = 20.0;
@@ -117,6 +117,9 @@ fn with_area(rect: Option<Rect>) -> Option<Rect> {
 /// each can run. The commands are scoped: a canvas container and a full-window dialog can be instances of the
 /// `canvasView` scope, and a fired command goes to the instance that holds the key focus, else the one that held it
 /// last, so a chord acts on the dialog's view while the dialog is open. The zoom commands also fire inside a dialog.
+/// Their chords are defaults: a command the canvas does not offer now leaves its chord to the next binding, and an app
+/// whose own command owns one of them (a word processor's Ctrl+= Subscript) drops or replaces it with
+/// `AppCatalog::replace_defaults`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "canvasView", scope = "canvasView")]
 #[non_exhaustive]

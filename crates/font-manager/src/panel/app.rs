@@ -1,8 +1,8 @@
 //! The panel's model, what the host calls, and the view: the tabs and search across the top, the filters at the
 //! reading start, the family cards, the details sheet and the download consent.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,7 +42,7 @@ pub fn install_interface_fonts(ctx: &Context, language: &str, craft_faces: &[Emb
 }
 
 /// The filters column takes the width of its widest section; the list and toolbar take the rest.
-static PANES: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
+const PANES: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
 /// Preview downloads: at most this much per file, and this many faces in a session.
 const PREVIEW_LIMITS: Limits = Limits { max_file_bytes: 64 << 20, max_faces_per_file: 512, max_added_faces: 20_000 };

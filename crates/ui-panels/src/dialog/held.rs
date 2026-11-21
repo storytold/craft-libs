@@ -21,7 +21,7 @@ pub enum HeldOk {
 /// hands the answer to the app once ([`take`](HeldAnswer::take)), and closes with [`finish`](HeldAnswer::finish) once
 /// the app accepted it; a refusal keeps the refused answer beside its reason, so the dialog can show the reason until
 /// its values change.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HeldAnswer<T> {
     filed: Option<T>,
     /// `take` has not handed out `filed` yet.

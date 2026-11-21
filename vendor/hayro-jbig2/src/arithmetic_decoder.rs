@@ -22,13 +22,7 @@ pub(crate) struct ArithmeticDecoder<'a> {
 
 impl<'a> ArithmeticDecoder<'a> {
     pub(crate) fn new(data: &'a [u8]) -> Self {
-        let mut decoder = ArithmeticDecoder {
-            data,
-            c: 0,
-            a: 0,
-            base_pointer: 0,
-            shift_count: 0,
-        };
+        let mut decoder = ArithmeticDecoder { data, c: 0, a: 0, base_pointer: 0, shift_count: 0 };
 
         decoder.initialize();
 
@@ -65,18 +59,12 @@ impl<'a> ArithmeticDecoder<'a> {
                 self.shift_count = 8;
             } else {
                 self.base_pointer += 1;
-                self.c = self
-                    .c
-                    .wrapping_add(0xfe00)
-                    .wrapping_sub((self.current_byte() as u32) << 9);
+                self.c = self.c.wrapping_add(0xfe00).wrapping_sub((self.current_byte() as u32) << 9);
                 self.shift_count = 7;
             }
         } else {
             self.base_pointer += 1;
-            self.c = self
-                .c
-                .wrapping_add(0xff00)
-                .wrapping_sub((self.current_byte() as u32) << 8);
+            self.c = self.c.wrapping_add(0xff00).wrapping_sub((self.current_byte() as u32) << 8);
             self.shift_count = 8;
         }
     }
@@ -285,10 +273,7 @@ impl<'a> ArithmeticDecoder<'a> {
 
     #[inline(always)]
     fn next_byte(&self) -> u8 {
-        self.data
-            .get((self.base_pointer + 1) as usize)
-            .copied()
-            .unwrap_or(0xFF)
+        self.data.get((self.base_pointer + 1) as usize).copied().unwrap_or(0xFF)
     }
 }
 

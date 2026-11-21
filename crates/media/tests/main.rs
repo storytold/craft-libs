@@ -6,6 +6,12 @@ mod common;
 mod fuzz;
 #[cfg(feature = "matroska")]
 mod fuzz_matroska;
+#[cfg(feature = "mpegts")]
+mod mpegts_mux;
+#[cfg(feature = "mpegts")]
+mod mpegts_mux_fuzz;
+#[cfg(feature = "mpegts")]
+mod mpegts_mux_readback;
 #[cfg(feature = "avi")]
 mod oracle_avi;
 #[cfg(feature = "avi")]

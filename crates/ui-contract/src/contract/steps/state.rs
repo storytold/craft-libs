@@ -2,7 +2,7 @@
 
 use super::paint::surface_ink;
 use crate::contract::run::ErasedPass;
-use crate::contract::{Component, Cx, Validity};
+use crate::contract::{Component, Cx, Hover, Validity};
 use crate::runtime::access::scope;
 use crate::runtime::motion::{Drives as _, spec};
 use crate::style::{Flags, Ink, StateSet, StyleView};
@@ -98,7 +98,20 @@ pub(crate) fn state(p: &mut dyn ErasedPass<'_>, style: &dyn StyleView, open: boo
     } else {
         State::Rest
     };
-    p.shown_state().last_state = (hovered, visible);
+    let clicked = crate::runtime::egui::response::pointer_clicked(&core.response);
+    let face = core.face_mode;
+    let shown = p.shown_state();
+    let was = shown.last_state.0;
+    shown.last_state = (hovered, visible);
+    // The click is held while the pointer stays over the control and dropped in the pass it leaves. A pass that sees
+    // no click (a second pass of a frame gets no input) keeps what the first pass held.
+    shown.clicked_over = hovered && (clicked || shown.clicked_over);
+    let report = Hover { over: hovered, entered: hovered && !was, left: was && !hovered, clicked: shown.clicked_over };
+    // A face shows a look, not a stay of the pointer: it keeps no report.
+    if !face {
+        let core = p.core();
+        *core.memory.shown::<Hover>(super::ShownState::hover_slot(core.id)) = report;
+    }
     let t = ease(p, [hovered, pressed, flags.intersects(Flags::ON)]);
     let core = p.core();
     core.state = StateSet::new(state, flags, t);

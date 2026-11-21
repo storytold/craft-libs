@@ -311,13 +311,11 @@ impl Component for PrintPreview<'_> {
         }
         // The description and the labels are text of the printed page; the preview shows where each stands.
         if marks.description {
-            // design: allow[literal-size/vec2](printer's marks are page geometry in points, not UI sizes)
             let from = paper.left_bottom() + vec2(MARK_GAP, -MARK_GAP);
             // design: allow[literal-size/vec2](printer's marks are page geometry in points, not UI sizes)
             rule(RuleKind::Edge, from, from + vec2(MARK_LEN * 3.0, 0.0));
         }
         if marks.labels {
-            // design: allow[literal-size/vec2](printer's marks are page geometry in points, not UI sizes)
             let from = paper.left_top() + vec2(MARK_GAP, MARK_GAP);
             // design: allow[literal-size/vec2](printer's marks are page geometry in points, not UI sizes)
             rule(RuleKind::Edge, from, from + vec2(MARK_LEN * 3.0, 0.0));

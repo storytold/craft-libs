@@ -503,6 +503,13 @@ impl Updater {
         &self.status
     }
 
+    /// The newest release a check or an offer found, whether or not its prompt is open. `None`
+    /// until one is found. A requested check that finds a release leaves [`Self::status`] at
+    /// [`Status::Idle`] and opens the prompt, so this is how an app reads what was found.
+    pub fn available(&self) -> Option<&Release> {
+        self.known.as_ref().map(|(release, _)| release)
+    }
+
     /// Dismisses the outcome of a requested check. One still running carries on, and reports
     /// like the check at start (a prompt if there is a release, otherwise nothing).
     pub fn dismiss_status(&mut self) {
@@ -1132,4 +1139,4 @@ pub fn download_action(app: &App, release: &Release) -> Action {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -16,8 +16,8 @@ use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx};
 use egui::{Color32, Mesh, Pos2, Response, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The disc: a press on it grabs the nearest marker within reach.
 const DISC: PartKey = PartKey::new("disc");

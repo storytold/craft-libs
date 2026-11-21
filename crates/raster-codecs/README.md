@@ -11,7 +11,7 @@ craft-raster-codecs = { git = "https://github.com/storytold/craft-libs", rev = "
 
 | Module | Format | Read | Write |
 |---|---|---|---|
-| `dds` | DirectDraw Surface: uncompressed masks, luminance, BC1/BC2/BC3 (DXT1/3/5), unsigned BC4/BC5 (ATI1/2, as gray and as RGB with blue 0), legacy and DX10 headers; top mip level | yes | uncompressed and BC1-BC3, optional mip chain |
+| `dds` | DirectDraw Surface: uncompressed masks, luminance, BC1/BC2/BC3 (DXT1/3/5), unsigned BC4/BC5 (ATI1/2, as gray and as RGB with blue 0), 16-bit `R16`, `R16G16` (as RGB with blue 0) and `R16G16B16A16` at 16 bits, legacy and DX10 headers; top mip level | yes | uncompressed and BC1-BC3, optional mip chain |
 | `dicom` | DICOM Part 10, uncompressed transfer syntaxes: MONOCHROME1/2, RGB, YBR_FULL, 8 and 16 bits | yes | no |
 | `fits` | FITS primary HDU or first `IMAGE` extension, every `BITPIX`, `BSCALE`/`BZERO`, header cards as text | yes | gray or RGB; 8-bit, 16-bit, float |
 | `iff` | IFF ILBM (1 to 8 planes with a palette, 24 planes, mask plane or transparent colour) and PBM, stored or ByteRun1; HAM and EHB are refused | yes | 24-plane ILBM with an optional mask plane |
@@ -55,7 +55,7 @@ formats (plain PNM, XPM) reserve from the bytes present, not from the header.
 
 ## Tests
 
-`cargo test -p craft-raster-codecs`. `tests/roundtrip.rs` writes every layout and depth each
+`cargo test -p craft-raster-codecs`. `tests/it/roundtrip.rs` writes every layout and depth each
 writer stores and reads it back exactly, then truncates, bit-flips and overwrites header bytes of
 a valid file of every format: a reader may refuse, never panic. Two tests are ignored by default:
 a DDS encode timing, and a PNM peak-memory check that reads the process's RSS.

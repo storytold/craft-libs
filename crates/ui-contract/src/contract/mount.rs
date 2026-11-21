@@ -26,7 +26,8 @@ pub(super) struct Mounted {
 }
 
 /// The host for `props.mount`. A layer-like mount of a closed container shows nothing once its exit fade ended.
-pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &Label) -> Mounted {
+/// `moving` is the rect a running drag of the container's move band puts its layer at in this pass.
+pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &Label, moving: Option<Rect>) -> Mounted {
     let ctx = at.ui.ctx();
     let layer = |overlay: &Overlay| {
         let presence = if at.ui.is_sizing_pass() {
@@ -46,7 +47,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
         Mount::Pane(pane) => Mounted { host: Box::new(PaneHost(*pane)), exiting: false },
         Mount::Window { .. } => Mounted { host: Box::new(WindowContentHost), exiting: false },
         Mount::Layer(overlay) => match layer(overlay) {
-            (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(overlay.clone(), props, exiting, fade, at.size)), exiting },
+            (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(overlay.clone(), props, exiting, fade, at.size, moving)), exiting },
             (None, _) => closed(),
         },
         Mount::FullWindow => full_window(props.focus),
@@ -57,7 +58,9 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
                 full_window(fallback.focus)
             } else if !viewports {
                 match layer(fallback) {
-                    (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(fallback.clone(), props, exiting, fade, at.size)), exiting },
+                    (Some(fade), exiting) => {
+                        Mounted { host: Box::new(LayerHost::new(fallback.clone(), props, exiting, fade, at.size, moving)), exiting }
+                    }
                     (None, _) => closed(),
                 }
             } else if open {
@@ -196,12 +199,14 @@ struct LayerHost {
     fade: f32,
     /// The size the container measured for this pass.
     size: Vec2,
+    /// The rect a running drag of the move band puts the layer at in this pass, in screen space.
+    moving: Option<Rect>,
     dismissed: Option<CloseReason>,
 }
 
 impl LayerHost {
-    fn new(overlay: Overlay, props: &ContainerProps, exiting: bool, fade: f32, size: Vec2) -> Self {
-        LayerHost { overlay, save: props.save.clone(), owner: props.owner, exiting, fade, size, dismissed: None }
+    fn new(overlay: Overlay, props: &ContainerProps, exiting: bool, fade: f32, size: Vec2, moving: Option<Rect>) -> Self {
+        LayerHost { overlay, save: props.save.clone(), owner: props.owner, exiting, fade, size, moving, dismissed: None }
     }
 }
 
@@ -227,7 +232,7 @@ impl Host for LayerHost {
             overlay = mapped;
         }
         let screen = overlay::screen_for(&ctx, env, &overlay);
-        let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, screen, env.tokens.space.inset.screen);
+        let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, self.moving, screen, env.tokens.space.inset.screen);
         // An anchored resizable layer has no position to seed: its default size is held as its minimum until the
         // user resizes it.
         if overlay.fit == overlay::OverlayFit::Resizable
@@ -373,6 +378,7 @@ impl Host for ViewportHost {
             // The full-window overlay has no grips (it covers the window), but its OS window is one the user sizes. A
             // window its caller sizes takes no resize from the OS: the app runs its grips.
             resizable: full_window || (self.overlay.resize.edges != ResizeEdges::NONE && !self.overlay.resize.by_caller),
+            moved_by_app: self.overlay.moved_by_app,
         };
         let dismissed = &mut self.dismissed;
         windows::show_viewport(&ctx, &open, |ui| {

@@ -21,10 +21,10 @@ use egui::Ui;
 pub use hosted::{FullWindowWorkspace, HostedWorkspace, WorkspaceCx, WorkspacePass};
 
 mod hosted;
-#[cfg(feature = "testing")]
-mod stories;
-#[cfg(feature = "testing")]
-mod trials;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod trials;
 
 /// The style of a full-window dialog: the surface comes from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]

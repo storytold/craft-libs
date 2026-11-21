@@ -7,11 +7,3 @@ rule = "raw-colour/const"
 path = "crates/draw/src/ui/artboard/stories.rs"
 reason = "The artboard background is document data in a story, not a UI colour."
 count = 2
-
-[[exception]]
-name = "convert-point-cursor-tip"
-kind = "marker"
-rule = "literal-size/vec2"
-path = "crates/draw/src/ui/pen/anchor_tool.rs"
-reason = "The cursor art's hot spot offset is in icon units, not a layout size."
-count = 1

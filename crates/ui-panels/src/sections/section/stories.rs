@@ -1,7 +1,7 @@
 //! Stories of `Section`.
 
 use super::Section;
-use crate::contract::{Bind, Role, Show as _, ShowContainer as _};
+use crate::contract::{Role, Show as _, ShowContainer as _};
 use crate::display::Text;
 use crate::sections::sample::body;
 use crate::sections::{HeaderAction, HeaderStrength};
@@ -17,13 +17,13 @@ fn toggle_disclosure(fixture: &mut Fixture) {
 
 #[story(Section<'static>, covers = [Default], drive = Drive::Custom(toggle_disclosure))]
 fn section(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = Section::new("Layers").open(Bind::bound(data.value("open", true))).show(ui, |ui, _| body(ui));
+    let shown = Section::new("Layers").open(data.bind("open", true)).show(ui, |ui, _| body(ui));
     shown.output.into()
 }
 
 #[story(Section<'static>, covers = [], drive = Drive::Never)]
 fn section_closed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = Section::new("Layers").open(Bind::bound(data.value("open", false))).show(ui, |ui, _| body(ui));
+    let shown = Section::new("Layers").open(data.bind("open", false)).show(ui, |ui, _| body(ui));
     shown.output.into()
 }
 
@@ -41,15 +41,14 @@ fn section_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(Section<'static>, covers = [], drive = Drive::Never)]
 fn section_with_menu_and_reorder(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown =
-        Section::new("Layers").open(Bind::bound(data.value("open", true))).actions([HeaderAction::Menu]).reorder(true).show(ui, |ui, _| body(ui));
+    let shown = Section::new("Layers").open(data.bind("open", true)).actions([HeaderAction::Menu]).reorder(true).show(ui, |ui, _| body(ui));
     shown.output.into()
 }
 
 #[story(Section<'static>, covers = [], drive = Drive::Never)]
 fn section_with_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Section::new("Recent")
-        .open(Bind::bound(data.value("open", true)))
+        .open(data.bind("open", true))
         .controls(|ui, _| {
             Text::new("12 items").show(ui);
         })

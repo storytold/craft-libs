@@ -60,7 +60,8 @@ impl Outcome for PopoverOutput {
 /// editor, a settings form).
 ///
 /// - Open state: the caller's binding. Escape, a press outside, the focus leaving and the other close rules write
-///   `false`, and the output's `closed` says which one.
+///   `false`, and the output's `closed` says which one. A [kept](Bind::kept) binding leaves it to the popover: its
+///   opener's trigger opens and closes it.
 /// - Opener: [`opened_by`](Popover::opened_by) names the control it hangs from; a press on it is not outside, and
 ///   focus returns to it on a close by key.
 /// - Focus moves into the popover on open, to [`initial_focus`](Popover::initial_focus) or the first stop.
@@ -206,5 +207,5 @@ impl Container for Popover<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
