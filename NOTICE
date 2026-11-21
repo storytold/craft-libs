@@ -433,6 +433,11 @@ MIT License) and its fork by Zach Wolfe (https://github.com/filestar/coreldraw_c
 new_stuff, MIT License) describe. No part of either specification is copied into the crate; the
 license text is in crates/cdr/LICENSE-kaitai.txt.
 
+The Y4M range-backed source in crates/media-source/src/y4m.rs adapts FilmCraft's
+original implementation (3f137a7ed420cac79b32145f5243b7f98b31f71c), licensed
+MIT OR Apache-2.0. Source notice retained:
+Copyright (c) 2026 ArtCraft Team and the FilmCraft contributors.
+
 The CPU renderer in crates/raster3d (rasterizer, shading, shadow maps, resolve and encoding) and
 the copy of it in crates/raster3d/tests/it/reference/ are moved from:
 - EffectCraft, crates/render/src/three_d/adv.rs, adv/raster.rs, adv/shade.rs and adv/scene.rs,
