@@ -181,7 +181,7 @@ impl Default for CharacterRows {
 }
 
 /// The Set Font Height Reference values.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum FontHeightReference {
     /// The em box.

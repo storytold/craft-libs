@@ -44,6 +44,16 @@ impl Hash for FacePaint {
     }
 }
 
+/// By its key: two faces with one key are the same value.
+impl crate::contract::MemoProps for FacePaint {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        crate::contract::MemoProps::key(&self.key, key);
+    }
+}
+
+/// A face is replaced, never written: its painter is shared and its key names what it paints.
+impl crate::contract::PlainData for FacePaint {}
+
 impl fmt::Debug for FacePaint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("FacePaint").field(&self.key).finish()

@@ -389,6 +389,7 @@ pub(crate) fn agree<T: Clone + PartialEq>(a: &Option<T>, b: &Option<T>) -> Optio
 const STROKE_SHARE: f32 = 0.2;
 
 /// The mark of a Font Height Reference value: the box or the guide lines the value measures from.
+#[derive(craft_ui::contract::MemoProps)]
 struct FontHeightGlyph(FontHeightReference);
 
 static EM_BOX: FontHeightGlyph = FontHeightGlyph(FontHeightReference::EmBox);

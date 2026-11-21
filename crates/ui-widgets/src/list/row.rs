@@ -71,7 +71,7 @@ pub enum RowRun {
 }
 
 /// The line under a row's label.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub enum LabelUnderline {
     /// No line.

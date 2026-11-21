@@ -4,7 +4,7 @@ use crate::runtime::commands::CommandRef;
 use craft_keymap::Mods;
 
 /// The command a row runs while `mods` are held as it is chosen (Alt on Merge Visible runs Stamp Visible).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct Alternate {
     /// The modifiers that select the alternate.
