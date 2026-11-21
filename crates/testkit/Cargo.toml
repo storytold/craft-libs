@@ -8,7 +8,18 @@ repository.workspace = true
 description = "Source-level platform regression guards and verification utilities for the Craft application suite"
 publish = false
 
+[features]
+# `prop::config`: a proptest configuration with a pinned seed and no failure persistence.
+prop = ["dep:proptest"]
+
 [dependencies]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+proptest = { workspace = true, optional = true }
+
+[[test]]
+name = "prop"
+required-features = ["prop"]
 
 [lints]
 workspace = true

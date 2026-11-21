@@ -25,6 +25,10 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! With the `prop` feature, on targets other than `wasm32`, `prop::config` returns a proptest
+//! configuration with a pinned seed and failure persistence off. `PROPTEST_CASES` and
+//! `PROPTEST_RNG_SEED` override the case count and the seed.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -39,6 +43,8 @@
 pub mod deadline;
 pub mod guards;
 pub mod hostile;
+#[cfg(all(feature = "prop", not(target_arch = "wasm32")))]
+pub mod prop;
 pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]

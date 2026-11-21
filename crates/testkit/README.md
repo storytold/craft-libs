@@ -216,6 +216,37 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## prop
+
+The `prop` feature adds the `prop` module and the `proptest` dependency. The module is not built for
+`wasm32`.
+
+`prop::config(cases)` returns a `proptest::test_runner::Config` with failure persistence off. It
+reads proptest's own variables:
+
+| Variable | Not set | Set |
+|---|---|---|
+| `PROPTEST_CASES` | `cases` | The value proptest parsed as a `u32`. For a value it cannot parse, proptest prints a warning and uses 256. |
+| `PROPTEST_RNG_SEED` | `prop::SEED` (`0x5eed_9a7f`) | The value proptest parsed as a `u64`. For a value it cannot parse, proptest prints a warning and uses a random seed. |
+
+A suite under `prop::config` repeats the same cases on every run. To run it with random seeds, set
+`PROPTEST_RNG_SEED` to a value that is not a number. No file under `proptest-regressions/` is read
+or written, so a minimal failure found with other seeds or counts is kept as a named regression test
+in the suite.
+
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(craft_testkit::prop::config(64))]
+
+    #[test]
+    fn parse_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+        let _ = my_crate::parse(&bytes);
+    }
+}
+```
+
 ## Origin
 
 ### guards
@@ -242,6 +273,12 @@ Changes from `craft-media-testkit`'s `hammer`:
 | Code | Repository | Path | SHA |
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
+
+### prop
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `config` and `SEED` | storytold/vectorcraft | `crates/pathops/tests/common/mod.rs:3-20` | `34627134` |
 
 ## Migration
 
@@ -276,3 +313,14 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### prop
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| VectorCraft `pathops` | the `Config` of `tests/props.rs` and `tests/prop_pathops.rs` | Pending |
+| craft-libs | the 34 `Config` values that set `cases` directly, and the seven committed `proptest-regressions` files outside `vendor/` | Pending |
+| LightCraft, FilmCraft | the property suites that set their case count | Pending |
+
+Each adoption names every suite whose seed changes from random to pinned, and turns committed
+regression cases into named tests.
