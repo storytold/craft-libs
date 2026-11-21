@@ -609,6 +609,29 @@ fn source_whitespace_and_image_fallback_compose() {
 }
 
 #[test]
+fn source_whitespace_keeps_adjacent_link_identity_including_image_alt() {
+    let html = "<p><a href='#x'>a<b>b</b>c</a><a href='#x'>d<img src='missing' alt='e'/>f</a></p>";
+    craft_flow::begin_import();
+    let flow = parse_with_source_whitespace_and_image_fallback(html, &|_| None, &|_, _, _, _, _| None);
+    let paragraphs = paras(&flow);
+    let links: Vec<_> = paragraphs[0]
+        .inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            Inline::Text(text, fmt) => fmt.link.as_ref().map(|link| (text.as_str(), link)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(links.iter().map(|(text, _)| *text).collect::<String>(), "abcdef");
+    assert_eq!(links.len(), 4);
+    assert!(Arc::ptr_eq(links[0].1, links[1].1));
+    assert!(Arc::ptr_eq(links[1].1, links[2].1));
+    assert!(!Arc::ptr_eq(links[2].1, links[3].1));
+    assert_eq!(links[3].0, "def");
+    assert!(craft_flow::Dropped::HtmlImage.reported());
+}
+
+#[test]
 fn image_fallback_can_retain_unrecognized_bytes_without_changing_default_import() {
     let bytes = Arc::new(b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec());
     let loader = |_: &str| Some(bytes.clone());

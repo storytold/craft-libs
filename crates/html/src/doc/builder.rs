@@ -5,6 +5,25 @@ use super::{
     parse_color,
 };
 
+/// Keep text from distinct links separate, even when their targets and styling
+/// match. A link's cloned `Arc` is shared by all its nested formatting spans.
+fn push_html_text(para: &mut Para, text: &str, fmt: &Fmt) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(Inline::Text(previous, prior_fmt)) = para.inlines.last_mut()
+        && prior_fmt == fmt
+        && match (&prior_fmt.link, &fmt.link) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => true,
+        }
+    {
+        previous.push_str(text);
+    } else {
+        para.inlines.push(Inline::Text(text.to_string(), fmt.clone()));
+    }
+}
+
 /// Open elements kept at most (deeper start tags are ignored).
 const MAX_STACK: usize = 256;
 
@@ -827,7 +846,7 @@ impl<'r> Builder<'r> {
         let f = self.fmt();
         if self.source_whitespace {
             self.note_edge(true);
-            self.start_para().push_text(t, &f);
+            push_html_text(self.start_para(), t, &f);
             return;
         }
         if code {
@@ -844,7 +863,7 @@ impl<'r> Builder<'r> {
                 first = false;
                 let line = line.trim_end_matches('\r');
                 if !line.is_empty() {
-                    self.start_para().push_text(line, &Fmt { code: false, ..f.clone() });
+                    push_html_text(self.start_para(), line, &Fmt { code: false, ..f.clone() });
                     self.mark_pre_used();
                 }
             }
@@ -852,7 +871,7 @@ impl<'r> Builder<'r> {
         }
         if self.preserve() {
             self.note_edge(true);
-            self.start_para().push_text(t, &f);
+            push_html_text(self.start_para(), t, &f);
             return;
         }
         // Collapse whitespace.
@@ -877,7 +896,7 @@ impl<'r> Builder<'r> {
             return;
         }
         self.note_edge(false);
-        self.start_para().push_text(&s, &f);
+        push_html_text(self.start_para(), &s, &f);
     }
 
     /// Record whether text about to be added keeps its white space (see `pre_lead`).
@@ -897,7 +916,7 @@ impl<'r> Builder<'r> {
         let (base, ruby) = (text(base), text(ruby));
         let f = self.fmt();
         if base.is_empty() || ruby.is_empty() {
-            self.start_para().push_text(if base.is_empty() { &ruby } else { &base }, &f);
+            push_html_text(self.start_para(), if base.is_empty() { &ruby } else { &base }, &f);
             return;
         }
         self.start_para().inlines.push(Inline::Ruby { base, ruby, fmt: f });
@@ -1125,7 +1144,7 @@ impl<'r> Builder<'r> {
                     self.flush();
                 } else {
                     let fmt = self.fmt();
-                    self.start_para().push_text("\n", &fmt);
+                    push_html_text(self.start_para(), "\n", &fmt);
                 }
             }
             "hr" => {
@@ -1134,7 +1153,7 @@ impl<'r> Builder<'r> {
             }
             "wbr" => {
                 let fmt = self.fmt();
-                self.start_para().push_text("\u{200B}", &fmt);
+                push_html_text(self.start_para(), "\u{200B}", &fmt);
             }
             "col" => {
                 let css = self.css_of(name, attrs);
@@ -1191,7 +1210,7 @@ impl<'r> Builder<'r> {
                     None => {
                         model::dropped(model::Dropped::HtmlImage);
                         if !alt.is_empty() {
-                            self.start_para().push_text(&alt, &fmt);
+                            push_html_text(self.start_para(), &alt, &fmt);
                         }
                     }
                 }
