@@ -5,7 +5,7 @@
 
 use std::io::Write;
 
-/// Disposal behavior to write for every frame.
+/// Disposal behavior for a frame, or the default for every frame in [`Options`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disposal {
     /// Leave the encoded disposal method unspecified (`0`).
@@ -14,6 +14,32 @@ pub enum Disposal {
     Keep,
     /// Restore the logical screen to the background after each frame.
     Background,
+}
+
+/// How many times the entire animation plays.
+///
+/// GIF stores repetitions after the first play, so three total plays are encoded as two
+/// repetitions. The stored zero means forever rather than zero plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Loops {
+    Once,
+    Forever,
+    /// Total plays, from 1 through 65536. One is equivalent to [`Loops::Once`].
+    /// Invalid counts are rejected before the writer emits any bytes.
+    Times(u32),
+}
+
+impl Loops {
+    fn repeat(self) -> Result<gif::Repeat, Error> {
+        match self {
+            Self::Once | Self::Times(1) => Ok(gif::Repeat::Finite(0)),
+            Self::Forever => Ok(gif::Repeat::Infinite),
+            Self::Times(plays @ 2..=65_536) => {
+                u16::try_from(plays - 1).map(gif::Repeat::Finite).map_err(|_| Error::Encode("GIF total play count must be 1..=65536".into()))
+            }
+            Self::Times(_) => Err(Error::Encode("GIF total play count must be 1..=65536".into())),
+        }
+    }
 }
 
 /// GIF encoding options.
@@ -124,21 +150,40 @@ pub struct AnimationWriter<W: Write> {
 impl<W: Write> AnimationWriter<W> {
     /// Start an animation on `output`; subsequent calls write one frame at a time.
     pub fn new(output: W, width: u32, height: u32, options: Options) -> Result<Self, Error> {
+        let loops = if options.loop_forever { Loops::Forever } else { Loops::Once };
+        Self::new_with_loops(output, width, height, options, loops)
+    }
+
+    /// Start an animation with an explicit total play count.
+    ///
+    /// `loops` takes precedence over [`Options::loop_forever`]. Existing callers can keep using
+    /// [`Self::new`] and their existing `Options` values without changing behavior.
+    pub fn new_with_loops(output: W, width: u32, height: u32, options: Options, loops: Loops) -> Result<Self, Error> {
         if width == 0 || height == 0 || width > u32::from(u16::MAX) || height > u32::from(u16::MAX) {
             return Err(Error::Dimensions { width, height });
         }
         if !(1..=30).contains(&options.speed) {
             return Err(Error::InvalidSpeed(options.speed));
         }
+        let repeat = loops.repeat()?;
         let width = width as u16;
         let height = height as u16;
         let mut encoder = gif::Encoder::new(output, width, height, &[]).map_err(Error::from)?;
-        encoder.set_repeat(if options.loop_forever { gif::Repeat::Infinite } else { gif::Repeat::Finite(0) }).map_err(Error::from)?;
+        encoder.set_repeat(repeat).map_err(Error::from)?;
         Ok(Self { encoder, width, height, options, frames_written: 0 })
     }
 
     /// Encode and append one full-canvas RGBA8 frame.
     pub fn write_frame(&mut self, frame: RgbaFrame<'_>) -> Result<(), Error> {
+        self.write_frame_with_disposal(frame, self.options.disposal)
+    }
+
+    /// Append a full-canvas RGBA8 frame with disposal overridden for this frame only.
+    ///
+    /// Disposal happens after this frame is displayed. To prevent an opaque frame showing
+    /// through transparent pixels in the next frame, the caller can select
+    /// [`Disposal::Background`] for the preceding frame as well. No look-ahead is buffered.
+    pub fn write_frame_with_disposal(&mut self, frame: RgbaFrame<'_>, disposal: Disposal) -> Result<(), Error> {
         let expected = rgba_len(self.width, self.height)?;
         if frame.pixels.len() != expected {
             return Err(Error::FrameLength { index: self.frames_written, actual: frame.pixels.len(), expected });
@@ -148,11 +193,19 @@ impl<W: Write> AnimationWriter<W> {
                 Error::FrameLength { actual, expected, .. } => Error::FrameLength { index: self.frames_written, actual, expected },
                 error => error,
             })?;
-        self.write_prepared_frame(prepared, frame.delay_cs)
+        self.write_prepared_frame_with_disposal(prepared, frame.delay_cs, disposal)
     }
 
     /// Append a previously quantized frame without copying its pixel buffer.
-    pub fn write_prepared_frame(&mut self, mut prepared: PreparedFrame, delay_cs: u16) -> Result<(), Error> {
+    pub fn write_prepared_frame(&mut self, prepared: PreparedFrame, delay_cs: u16) -> Result<(), Error> {
+        self.write_prepared_frame_with_disposal(prepared, delay_cs, self.options.disposal)
+    }
+
+    /// Append a quantized frame with disposal overridden for this frame only.
+    ///
+    /// This keeps the compact prepared-frame path available to parallel renderers. The
+    /// override does not change the default used by subsequent frames.
+    pub fn write_prepared_frame_with_disposal(&mut self, mut prepared: PreparedFrame, delay_cs: u16, disposal: Disposal) -> Result<(), Error> {
         if prepared.width != self.width || prepared.height != self.height {
             return Err(Error::PreparedDimensions {
                 actual_width: prepared.width,
@@ -162,7 +215,7 @@ impl<W: Write> AnimationWriter<W> {
             });
         }
         prepared.frame.delay = delay_cs;
-        prepared.frame.dispose = match self.options.disposal {
+        prepared.frame.dispose = match disposal {
             Disposal::Unspecified => gif::DisposalMethod::Any,
             Disposal::Keep => gif::DisposalMethod::Keep,
             Disposal::Background => gif::DisposalMethod::Background,
@@ -184,10 +237,19 @@ impl<W: Write> AnimationWriter<W> {
 /// At most one mutable frame copy is made at a time for the quantizer. This is intentionally a
 /// streaming writer so callers can render and encode frames incrementally.
 pub fn animation(width: u32, height: u32, frames: &[RgbaFrame<'_>], options: Options) -> Result<Vec<u8>, Error> {
+    let loops = if options.loop_forever { Loops::Forever } else { Loops::Once };
+    animation_with_loops(width, height, frames, options, loops)
+}
+
+/// Encode full-canvas frames with an explicit total play count.
+///
+/// Like [`AnimationWriter::new_with_loops`], `loops` overrides [`Options::loop_forever`].
+/// Pixel validation, quantization and the default disposal are the same as [`animation`].
+pub fn animation_with_loops(width: u32, height: u32, frames: &[RgbaFrame<'_>], options: Options, loops: Loops) -> Result<Vec<u8>, Error> {
     if frames.is_empty() {
         return Err(Error::NoFrames);
     }
-    let mut writer = AnimationWriter::new(Vec::new(), width, height, options)?;
+    let mut writer = AnimationWriter::new_with_loops(Vec::new(), width, height, options, loops)?;
     for frame in frames {
         writer.write_frame(*frame)?;
     }

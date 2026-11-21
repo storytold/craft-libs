@@ -16,6 +16,9 @@
 //! timing, loop and disposal metadata. Parallel producers can quantize frames with
 //! [`write::prepare_frame`] and pass the compact results to
 //! [`write::AnimationWriter::write_prepared_frame`].
+//! [`write::Loops`] selects finite total play counts with [`write::animation_with_loops`] or
+//! [`write::AnimationWriter::new_with_loops`]. The streaming writer also accepts explicit
+//! disposal overrides for individual RGBA or prepared frames.
 //!
 //! Input is treated as hostile: every read is bounds-checked, and the number of frames recorded
 //! is capped by the caller.
