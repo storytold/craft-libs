@@ -124,6 +124,19 @@ impl Packets<'_> {
         }
     }
 
+    /// Where the next packet's decoded audio starts on the decoded timeline, for Ogg: a packet
+    /// after a lost page is placed by its page's granule position, after a gap. `None` for the
+    /// other containers and at the end.
+    fn next_start(&self) -> Option<u64> {
+        match self {
+            Packets::Ogg { next, starts, .. } => {
+                let base = starts.first().copied()?;
+                starts.get(*next).map(|&s| u64::try_from(s.saturating_sub(base)).unwrap_or(0))
+            }
+            _ => None,
+        }
+    }
+
     /// Position the source at the latest packet whose decoded audio starts at or before output
     /// frame `frame` (counted from the track's first decoded sample) and return where that packet
     /// starts.
@@ -424,6 +437,21 @@ impl<'a> Native<'a> {
         loop {
             if self.limit.is_some_and(|l| self.pos >= l.saturating_add(self.skip)) {
                 return Ok(None);
+            }
+            // The frames of a lost Ogg page are silence, so the packets after it keep the places
+            // their granule positions give them; a long gap is filled a block at a time, and its
+            // part before a seek target is passed over.
+            if let Some(s) = self.packets.next_start().filter(|&s| s > self.pos && self.info.channels > 0) {
+                if self.pos < self.from {
+                    self.pos = s.min(self.from);
+                    continue;
+                }
+                let n = usize::try_from((s - self.pos).min(PCM_PACKET_FRAMES)).unwrap_or(0);
+                let block = AudioBuffer { sample_rate: self.info.sample_rate, channels: crate::pcm::silence(usize::from(self.info.channels), n)? };
+                if let Some(out) = self.present(block, 0) {
+                    return Ok(Some(out));
+                }
+                continue;
             }
             let Some(next) = self.packets.next() else {
                 // A track that declares no frames (an empty WAV or AIFF) is empty, not broken.

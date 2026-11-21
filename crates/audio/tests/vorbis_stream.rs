@@ -224,6 +224,47 @@ fn a_seek_past_damaged_packets_keeps_the_audio_in_place() {
     }
 }
 
+/// A lost page leaves silence in its place: the packets after it keep the places their granule
+/// positions give them, the decoded length is the declared one, and a seek past the gap lands
+/// where asked.
+#[test]
+fn a_lost_page_is_silence_and_the_audio_after_it_stays_in_place() {
+    let ogg = encode(44_100, 2, 60_000, 5.0);
+    let p = parts(&ogg);
+    let clean = decode_ogg(&ogg).expect("decode_ogg").channels;
+    // eight packets to a page: the page of packets 16 to 23 is lost
+    let (lost, per_page) = (16..24, 8);
+    let mut w = PageWriter::new(7).with_page_target(1 << 20, per_page);
+    let mut file = Vec::new();
+    for h in &p.headers {
+        file.extend(w.header(h));
+    }
+    let mut end = 0i64;
+    for (k, (packet, &n)) in p.packets.iter().zip(&p.frames).enumerate() {
+        end += n as i64;
+        if !lost.contains(&k) {
+            file.extend(w.packet(packet, end));
+        }
+    }
+    file.extend(w.finish(Some(p.last_granule)));
+    let (info, buf) = decode(&file, None).expect("decode");
+    assert_eq!(info.frames, p.last_granule as u64);
+    assert_eq!(buf.frames(), clean[0].len());
+    // the audio before the lost page, and from the second packet after it on (the first overlaps
+    // the block before the gap), is the clean decode's
+    let before: usize = p.frames[..lost.start].iter().sum();
+    let after: usize = p.frames[..lost.end + 1].iter().sum();
+    for (ours, theirs) in buf.channels.iter().zip(&clean) {
+        assert_eq!(ours[..before], theirs[..before]);
+        assert_eq!(ours[after..], theirs[after..]);
+    }
+    let mut dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).expect("open");
+    for target in [before + 100, after + 100] {
+        assert_eq!(dec.seek(target as u64).expect("seek"), target as u64);
+        assert_eq!(drain(&mut dec), buf.channels.iter().map(|c| c[target..].to_vec()).collect::<Vec<_>>(), "after a seek to {target}");
+    }
+}
+
 #[test]
 fn damaged_and_cut_files_are_errors_or_results() {
     let ogg = encode(44_100, 2, 20_000, 3.0);
