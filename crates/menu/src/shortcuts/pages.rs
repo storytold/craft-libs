@@ -126,6 +126,10 @@ pub struct DialogSnapshot {
     pub set: Option<String>,
     /// Whether there is an edit to undo.
     pub can_undo: bool,
+    /// Whether Hold Shortcuts is on, with the hold setting shown.
+    pub holds: Option<bool>,
+    /// The command a hold is being recorded for.
+    pub recording_hold: Option<CommandRef>,
 }
 
 impl DialogState {
@@ -149,6 +153,8 @@ impl DialogState {
             }),
             set: self.set.clone(),
             can_undo: self.can_undo(),
+            holds: None,
+            recording_hold: None,
         })
     }
 }

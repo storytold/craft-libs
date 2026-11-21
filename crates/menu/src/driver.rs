@@ -27,6 +27,8 @@ pub enum Event {
     /// A click the app's [`NativeMenu::on_command`] hook ran; [`NativeMenu::take_clicks`] leaves it
     /// out.
     Handled(CommandRef),
+    /// The platform began tracking a native menu.
+    Opened,
 }
 
 /// How ⌘C, ⌘X and ⌘V reach egui when the native menu takes them as key equivalents (an Edit
@@ -222,6 +224,9 @@ pub struct NativeMenu {
     /// The commands whose items were check items in a layout so far: they stay check items, so
     /// that `checked` going from `Some` to `None` doesn't rebuild the menus.
     checkable: HashSet<String>,
+    /// A backend reported [`Event::Opened`] since [`NativeMenu::take_opened`] last answered.
+    #[allow(dead_code)] // P3(menus-w1): mn.M10
+    opened: bool,
 }
 
 impl NativeMenu {
@@ -244,6 +249,7 @@ impl NativeMenu {
             bar: None,
             synced_gate: None,
             checkable: HashSet::new(),
+            opened: false,
         }
     }
 
@@ -338,9 +344,15 @@ impl NativeMenu {
                 Event::Tap(chord) => self.add_key(&host, &chord, true),
                 Event::Click(command) => self.clicks.push(command),
                 Event::Handled(_) => {}
+                Event::Opened => todo!("mn.M10"),
             }
             self.dirty = true;
         }
+    }
+
+    /// Whether a backend reported [`Event::Opened`] since the last call; reports it once and clears it.
+    pub fn take_opened(&mut self) -> bool {
+        todo!("mn.M10")
     }
 
     /// `tap`: a press and its release, for a click that stands for the key (no key-up follows).

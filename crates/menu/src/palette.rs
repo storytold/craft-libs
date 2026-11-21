@@ -53,7 +53,7 @@ fn collect(nodes: &[Node], path: &mut Vec<String>, english_of: &dyn Fn(Labeled<'
                 collect(children, path, english_of, entries);
                 path.pop();
             }
-            Node::Item(_) | Node::Separator | Node::Standard { .. } => {}
+            Node::Item(_) | Node::Separator | Node::Heading(_) | Node::Standard { .. } => {}
         }
     }
 }

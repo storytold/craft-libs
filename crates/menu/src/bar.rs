@@ -63,6 +63,9 @@ pub struct MenuBarOutput {
     /// The menu titles alone, without the room the bar leaves after them
     /// ([`craft_ui::menu::MenuBarOutput::titles`]).
     pub titles: Rect,
+    /// True in the one pass where a menu of the bar opened while none was open
+    /// ([`craft_ui::menu::MenuBarOutput::opened`]).
+    pub opened: bool,
 }
 
 /// The bar for one frame: `MenuBarUi::new(&bar).show(ui)`. Draw it at the top of the window, in a top panel.
@@ -143,6 +146,6 @@ impl<'a> MenuBarUi<'a> {
         if let Some(menu) = help {
             bar = bar.help(MenuHelp::new(menu, &entries));
         }
-        MenuBarOutput { titles: bar.show(ui).titles }
+        MenuBarOutput { titles: bar.show(ui).titles, opened: false } // P3(menus-w3): mn.M26
     }
 }

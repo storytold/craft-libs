@@ -136,6 +136,7 @@ impl<'a> Rows<'a> {
                         Menu::submenu_row(ui, label, |ui, _| self.show(ui, children));
                     }
                 }
+                Node::Heading(_) => todo!("mn.M7"),
                 Node::Standard { .. } => {}
             }
         }
@@ -213,7 +214,7 @@ fn is_dead(nodes: &[Node]) -> bool {
     !nodes.iter().any(|node| match node {
         Node::Item(item) => item.enabled,
         Node::Submenu { children, .. } => !is_dead(children),
-        Node::Separator | Node::Standard { .. } => false,
+        Node::Separator | Node::Heading(_) | Node::Standard { .. } => false,
     })
 }
 

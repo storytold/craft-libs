@@ -174,6 +174,7 @@ fn lower_nodes(nodes: &[Node], targets: &mut HashMap<String, Target>) -> Vec<nat
         .map(|n| match n {
             Node::Separator => native::Node::Separator,
             Node::Submenu { label, children, .. } => native::Node::Submenu { label: label.clone(), children: lower_nodes(children, targets) },
+            Node::Heading(_) => todo!("mn.M9"),
             Node::Standard { kind, label } => native::Node::Platform {
                 kind: match kind {
                     Standard::Services => native::Platform::Services,

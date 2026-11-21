@@ -410,8 +410,8 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
 fn a_point_that_is_not_finite_is_refused() {
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0))] {
-            assert_eq!(at.resolve(&|p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
+            assert_eq!(at.resolve(&|p| Some(p), None), Err(NOT_FINITE.to_owned()), "{at:?}"); // P3(widgets-w8): wg.W53
         }
     }
-    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None), Ok(pos2(3.0, 4.0)));
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None, None), Ok(pos2(3.0, 4.0))); // P3(widgets-w8): wg.W53
 }

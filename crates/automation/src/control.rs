@@ -14,11 +14,11 @@
 //! two happened, once, between the UI thread and the transport.
 
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
 
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use serde_json::{Value, json};
+use web_time::Instant;
 
 use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotRequest, screenshot_reply};
 use crate::synthetic::TARGET_CHANGED;
