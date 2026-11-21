@@ -480,3 +480,9 @@ SIMD-capable decoders. `craft-pdf/read` depends on it with `default-features = f
 features = ["std"]`, so the feature stays off; a review of the resolved graph should keep it
 that way. The CI check for that resolved feature set is a CI change under AGENTS.md rule 11 and
 is proposed separately rather than in a fix pull request.
+
+## Overdeep dictionary entries (PdfCraft #5320)
+
+Ported PdfCraft hayro-syntax patch 29 from approved head `656e07aeedd9a215740b9f08f930c8a2d456b8a4` of #5320 (MIT OR Apache-2.0). Only an object’s outermost dictionary can omit a wholly unparsed value after a nesting refusal; malformed or unclosed values still fail. The shared 64-level cap, reader cancellation checkpoints and decode limits stay in effect. The iterative skip records delimiter kinds in a bit vector bounded by the input length and continues to read through the cancellable reader. Unit regressions cover arrays, dictionaries and mixed containers at 10,000 levels, whole direct-resource omission versus independently parsed resource objects, rotation/appearance omission, matching parse/skip acceptance, malformed values, strings/comments and the existing cap. Synthetic data only. Recovery rejects unmatched closing delimiters. Duplicate keys follow last-entry semantics in eager and lazy indexes, including when the last value is omitted.
+
+Related open #2538 separately repairs content arrays and tracks nesting refusal for that purpose. Neither PR depends on the other; when combining, reconcile the refusal flag/accessors so both recovery paths see depth failures without accepting malformed content.

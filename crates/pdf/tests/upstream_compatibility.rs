@@ -52,11 +52,24 @@ fn assert_nested_leaf(mut value: Object<'_>, depth: usize) {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn direct_objects_accept_64_containers_and_reject_65() {
+fn direct_objects_keep_the_64_container_boundary_with_whole_dictionary_recovery() {
     for kind in 0..3 {
         let accepted = nested_object(64, kind);
         assert_nested_leaf(Object::from_bytes(&accepted).unwrap(), 64);
-        assert!(Object::from_bytes(&nested_object(65, kind)).is_none(), "container kind {kind}");
+        let overdeep = nested_object(65, kind);
+        assert_overdeep_entry_absent(Object::from_bytes(&overdeep), kind);
+    }
+}
+
+fn assert_overdeep_entry_absent(value: Option<Object<'_>>, kind: usize) {
+    if kind == 1 {
+        let Some(Object::Dict(dict)) = value else {
+            panic!("the outer dictionary survives");
+        };
+        assert!(!dict.contains_key(b"V"), "the whole overdeep value is absent, not truncated");
+        assert!(dict.get::<Object<'_>>(b"V").is_none(), "nothing past the cap is reachable");
+    } else {
+        assert!(value.is_none(), "an overdeep outer array still fails: container kind {kind}");
     }
 }
 
@@ -103,7 +116,7 @@ fn decoded_object_streams_keep_the_same_64_container_boundary() {
         let accepted = craft_pdf::open_slice(&compressed_object(&nested_object(64, kind)), None).unwrap();
         assert_nested_leaf(accepted.xref().get::<Object<'_>>(ObjRef::new(6, 0).into()).unwrap(), 64);
         let rejected = craft_pdf::open_slice(&compressed_object(&nested_object(65, kind)), None).unwrap();
-        assert!(rejected.xref().get::<Object<'_>>(ObjRef::new(6, 0).into()).is_none(), "container kind {kind}");
+        assert_overdeep_entry_absent(rejected.xref().get::<Object<'_>>(ObjRef::new(6, 0).into()), kind);
     }
 }
 

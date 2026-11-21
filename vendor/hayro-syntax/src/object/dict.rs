@@ -147,8 +147,8 @@ impl<'a> Dict<'a> {
                 } else {
                     (Some(b"<<"), b">>")
                 };
-                let _ = parse_dict_with(&mut reader, &repr.ctx, start, end, |name, offset, _| {
-                    offsets.insert(name.into_owned(), offset);
+                let _ = parse_dict_with(&mut reader, &repr.ctx, start, end, |name, offset| {
+                    update_index(&mut offsets, name, offset);
                     Some(())
                 });
                 offsets
@@ -199,11 +199,9 @@ impl Skippable for Dict<'_> {
 
                 r.skip_white_spaces_and_comments();
 
-                if is_content_stream {
-                    r.skip::<Object<'_>>(is_content_stream)?;
-                } else {
-                    r.skip::<MaybeRef<Object<'_>>>(is_content_stream)?;
-                }
+                // PdfCraft patch (29): skipped like a value of `parse_dict_with`, so a skip
+                // accepts exactly the dictionaries a parse reads.
+                skip_value(r, is_content_stream)?;
             }
         })();
         r.leave_container();
@@ -300,9 +298,9 @@ fn read_inner<'a>(
         start_tag,
         end_tag,
         #[inline]
-        |name, offset, _| {
+        |name, offset| {
             if let Some(index) = &mut offsets {
-                index.insert(name.into_owned(), offset);
+                update_index(index, name, offset);
                 if index.len() > EAGER_DICT_ENTRIES {
                     offsets = None;
                 }
@@ -329,6 +327,15 @@ fn read_inner<'a>(
     }))))
 }
 
+/// Apply the last occurrence of a dictionary key, including an omitted value.
+fn update_index(index: &mut FxHashMap<Name<'static>, usize>, name: Name<'_>, offset: Option<usize>) {
+    if let Some(offset) = offset {
+        index.insert(name.into_owned(), offset);
+    } else {
+        index.remove(name.as_ref());
+    }
+}
+
 pub(crate) struct DictProbe<'a> {
     pub(crate) data: &'a [u8],
     pub(crate) has_root: bool,
@@ -353,11 +360,11 @@ pub(crate) fn probe_dict<'a>(
         start_tag,
         end_tag,
         #[inline]
-        |name, _, _value_reader| {
+        |name, offset| {
             if name.as_ref() == keys::ROOT {
-                has_root = true;
+                has_root = offset.is_some();
             } else if name.as_ref() == keys::TYPE {
-                has_type = true;
+                has_type = offset.is_some();
             }
 
             Some(())
@@ -382,7 +389,7 @@ fn parse_dict_with<'a, F>(
     on_entry: F,
 ) -> Option<(&'a [u8], bool)>
 where
-    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
+    F: FnMut(Name<'a>, Option<usize>) -> Option<()>,
 {
     // An inline image dictionary has no enclosing << >> pair; count only actual
     // containers. Its array/dictionary operands still enter the same depth guard.
@@ -407,7 +414,7 @@ fn parse_dict_with_inner<'a, F>(
     mut on_entry: F,
 ) -> Option<(&'a [u8], bool)>
 where
-    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
+    F: FnMut(Name<'a>, Option<usize>) -> Option<()>,
 {
     let dict_data = r.tail()?;
     let start_offset = r.offset();
@@ -450,14 +457,64 @@ where
             // whether the object is `null` before inserting it, but that caused problems
             // in some test cases where encryption + object streams are involved (as we would
             // attempt to read an object stream before having resolved the encryption dictionary).
-            on_entry(name, offset, r)?;
-
-            if ctx.in_content_stream() {
-                r.skip::<Object<'_>>(ctx.in_content_stream())?;
-            } else {
-                r.skip::<MaybeRef<Object<'_>>>(ctx.in_content_stream())?;
+            // PdfCraft patch (29): a value nested past the cap (`enter_container`) no longer
+            // fails the outermost dictionary of its object, which lost a page for an unused
+            // entry of its dictionary 10,000 arrays deep. The entry of that dictionary holding
+            // it is stepped over unparsed and left out, so it reads as absent, nothing deeper
+            // than the cap is ever parsed, and no value is read with a part of it missing.
+            // Any other value that can't be read still fails the dictionary, as before.
+            match skip_value(r, ctx.in_content_stream())? {
+                Skipped::Read => on_entry(name, Some(offset))?,
+                Skipped::SteppedOver => {
+                    warn!(
+                        "dictionary entry /{} nests past {} levels and was left out",
+                        name.as_str(),
+                        crate::byte_reader::MAX_CONTAINER_DEPTH
+                    );
+                    on_entry(name, None)?;
+                    repaired = true;
+                }
             }
         }
+    }
+}
+
+/// PdfCraft patch (29): how [`skip_value`] got past a dictionary value.
+enum Skipped {
+    /// It was read (skipped as an object), within the nesting cap.
+    Read,
+    /// It nested past the cap and was stepped over unparsed.
+    SteppedOver,
+}
+
+/// PdfCraft patch (29): skips the dictionary value at the reader's offset. A value nested past
+/// the cap (`Reader::enter_container` refused a level in it) is stepped over unparsed with
+/// `Reader::skip_unparsed_container` when the dictionary holding it is the outermost one of
+/// its object, so that dictionary keeps its other entries and the refusal is not seen further
+/// out. A dictionary nested in another one doesn't step over: the refusal fails it, and so
+/// every container up to the outermost dictionary, which leaves out its whole entry. A value
+/// read is therefore never missing a part, like an array, which never steps over an element.
+/// `None` when the value can't be read for another reason, nests past the cap in a dictionary
+/// that isn't the outermost one, or doesn't close (the refusal is then passed on).
+fn skip_value(r: &mut Reader<'_>, is_content_stream: bool) -> Option<Skipped> {
+    let refused_earlier = r.take_depth_refused();
+    let skipped = if is_content_stream {
+        r.skip::<Object<'_>>(is_content_stream)
+    } else {
+        r.skip::<MaybeRef<Object<'_>>>(is_content_stream)
+    };
+    let refused = r.take_depth_refused();
+    r.set_depth_refused(refused_earlier);
+    match skipped {
+        Some(_) => Some(Skipped::Read),
+        None if refused => {
+            if !r.in_outermost_container() || r.skip_unparsed_container().is_none() {
+                r.set_depth_refused(true);
+                return None;
+            }
+            Some(Skipped::SteppedOver)
+        }
+        None => None,
     }
 }
 
@@ -1446,4 +1503,124 @@ mod tests {
             );
         }
     }
+
+    // Adapted from storytold/pdfcraft#5320 (MIT OR Apache-2.0), using this tree's 64-level cap.
+    fn overdeep_value(depth: usize, kind: &str) -> alloc::string::String {
+        let (open, close) = match kind {
+            "array" => ("[", "]"),
+            "dict" => ("<< /N ", ">>"),
+            _ => ("[ << /N ", ">> ]"),
+        };
+        alloc::format!("{}null{}", open.repeat(depth), close.repeat(depth))
+    }
+
+    #[test]
+    fn overdeep_values_are_absent_and_the_outer_dictionary_survives() {
+        for kind in ["array", "dict", "mixed"] {
+            for depth in [65, 10_000] {
+                let deep = overdeep_value(depth, kind);
+                for data in [
+                    alloc::format!("<< /Unused {deep} /Rotate 90 /After 17 >>"),
+                    alloc::format!("<< /Rotate 90 /Unused {deep} /After 17 >>"),
+                ] {
+                    let dict = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+                    assert!(!dict.contains_key("Unused"), "{kind}, {depth}: no partial value");
+                    assert_eq!(dict.get::<i32>("Rotate"), Some(90));
+                    assert_eq!(dict.get::<i32>("After"), Some(17));
+                    let mut reader = Reader::new(data.as_bytes());
+                    assert!(reader.skip::<Dict<'_>>(false).is_some(), "skip agrees with parse");
+                    assert_eq!(reader.offset(), data.len());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_dictionary_entry_still_wins_when_a_value_is_omitted() {
+        let deep = overdeep_value(crate::byte_reader::MAX_CONTAINER_DEPTH + 1, "array");
+        let padding: alloc::string::String = (0..=super::EAGER_DICT_ENTRIES)
+            .map(|i| alloc::format!("/Padding{i} {i} "))
+            .collect();
+        for prefix in ["", padding.as_str()] {
+            let data = alloc::format!("<< {prefix}/Choice 1 /Choice {deep} /Other 2 >>");
+            let dict = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+            assert!(!dict.contains_key("Choice"));
+            assert_eq!(dict.get::<i32>("Other"), Some(2));
+
+            let data = alloc::format!("<< {prefix}/Choice {deep} /Choice 1 >>");
+            let dict = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+            assert_eq!(dict.get::<i32>("Choice"), Some(1));
+        }
+    }
+
+    #[test]
+    fn overdeep_direct_resources_are_wholly_absent_but_indirect_resources_keep_other_entries() {
+        for kind in ["array", "dict", "mixed"] {
+            let deep = overdeep_value(10_000, kind);
+            let resources = alloc::format!("<< /Unused {deep} /Font << /F1 7 0 R >> /ExtGState << >> >>");
+            let page = alloc::format!("<< /Type /Page /Resources {resources} /Rotate 90 >>");
+            let dict = Dict::from_bytes(page.as_bytes()).expect("page survives");
+            assert!(!dict.contains_key("Resources"), "direct resources cannot be read partially");
+            assert_eq!(dict.get::<i32>("Rotate"), Some(90));
+            // An indirect resource object is parsed as its own outer dictionary.
+            let dict = Dict::from_bytes(resources.as_bytes()).expect("resource object survives");
+            assert!(!dict.contains_key("Unused"));
+            assert!(dict.get::<Dict<'_>>("Font").is_some_and(|font| font.contains_key("F1")));
+            assert!(dict.contains_key("ExtGState"));
+            for key in ["Rotate", "AS"] {
+                let data = alloc::format!("<< /{key} {deep} /Type /Page >>");
+                let dict = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+                assert!(!dict.contains_key(key), "no partially read rotation or appearance state");
+            }
+        }
+    }
+
+    #[test]
+    fn unparsed_recovery_does_not_accept_malformed_or_unclosed_values() {
+        let opens = "[".repeat(10_000);
+        let closes = "]".repeat(10_000);
+        for deep in [
+            alloc::format!("{opens}null"),
+            alloc::format!("{opens}null>>{closes}"),
+            alloc::format!("{opens}<not-hex>{closes}"),
+            alloc::format!("{opens}(unclosed{closes}"),
+        ] {
+            let data = alloc::format!("<< /Unused {deep} /After 17 >>");
+            assert!(Dict::from_bytes(data.as_bytes()).is_none());
+            let mut reader = Reader::new(data.as_bytes());
+            assert!(reader.skip::<Dict<'_>>(false).is_none());
+        }
+        let deep = overdeep_value(10_000, "array");
+        let data = alloc::format!("[ << /Unused {deep} >> ]");
+        assert!(Object::from_bytes(data.as_bytes()).is_none(), "nested in a top-level array still fails");
+    }
+
+    #[test]
+    fn unparsed_recovery_ignores_delimiters_inside_strings_and_comments() {
+        let deep = alloc::format!("{}(\\) [ >>) <5b3e> % ] >>\n null{}", "[".repeat(10_000), "]".repeat(10_000));
+        let data = alloc::format!("<< /Unused {deep} /After 17 >>");
+        let dict = Dict::from_bytes(data.as_bytes()).expect("strings and comments are skipped");
+        assert!(!dict.contains_key("Unused"));
+        assert_eq!(dict.get::<i32>("After"), Some(17));
+        let at_cap = overdeep_value(crate::byte_reader::MAX_CONTAINER_DEPTH - 1, "array");
+        let data = alloc::format!("<< /Kept {at_cap} >>");
+        assert!(Dict::from_bytes(data.as_bytes()).expect("within cap").contains_key("Kept"));
+    }
+
+
+    #[test]
+    fn a_page_with_an_overdeep_unused_entry_stays_in_the_page_tree() {
+        for kind in ["array", "dict", "mixed"] {
+            let deep = overdeep_value(10_000, kind);
+            let data = alloc::format!(
+                "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /PieceInfo {deep} >> endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF"
+            );
+            let pdf = crate::Pdf::new(data.into_bytes()).expect("the page remains readable");
+            assert_eq!(pdf.pages().len(), 1, "{kind}");
+        }
+    }
+
 }
