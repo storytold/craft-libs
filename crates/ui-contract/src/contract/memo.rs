@@ -958,6 +958,13 @@ impl MemoProps for craft_theme::variant::Tone {
     }
 }
 
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::LabelColor {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 /// Derived `Hash`.
 impl MemoProps for craft_theme::ComponentSet {
     fn key(&self, key: &mut MemoKey) {
@@ -1015,6 +1022,13 @@ impl MemoProps for craft_behavior::PixelSize {
 }
 
 impl MemoProps for craft_behavior::fit::FitKeep {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_host::target::Os {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }

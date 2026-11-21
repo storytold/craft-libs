@@ -16,6 +16,7 @@ pub(crate) mod pick_focus;
 
 pub(crate) mod rows;
 
+pub(crate) mod runs_per_row;
 pub(crate) mod search;
 
 pub(crate) mod submenus;

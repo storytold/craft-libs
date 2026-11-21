@@ -335,6 +335,20 @@ impl Store {
     }
 }
 
+/// The memo rule for absent entries, shared by every memo store (memoized views, `runtime::derived`): an entry
+/// outlives its absence while the absent ones are at most twice as many as the shown ones, the longest absent dropped
+/// first. Takes the absent entries as (frame last touched, id) and returns the ones to drop.
+pub(crate) fn absent_past_room(shown: usize, absent: impl IntoIterator<Item = (u64, Id)>) -> Vec<Id> {
+    let mut absent: Vec<(u64, Id)> = absent.into_iter().collect();
+    let room = 2 * shown;
+    if absent.len() <= room {
+        return Vec::new();
+    }
+    absent.sort_unstable_by_key(|(touched, _)| *touched);
+    absent.truncate(absent.len() - room);
+    absent.into_iter().map(|(_, id)| id).collect()
+}
+
 fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
     let (pass_nr, frame) = (pass::pass_nr(ctx, viewport), pass::frame_nr(ctx, viewport));
@@ -345,16 +359,12 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
             store.pruned = frame;
             let reached = &store.reached;
             store.entries.retain(|_, entry| entry.memo() || entry.live(frame, reached));
-            // A memoized view's entry outlives its absence while the absent ones are at most twice as many as the shown
-            // ones, the longest absent dropped first: a view shown again with the same props replays.
+            // A memoized view's entry outlives its absence by the memo rule: a view shown again with the same props
+            // replays.
             let shown = store.entries.values().filter(|entry| entry.memo() && entry.live(frame, reached)).count();
-            let mut absent: Vec<(u64, Id)> =
-                store.entries.iter().filter(|(_, entry)| !entry.live(frame, reached)).map(|(id, entry)| (entry.touched, *id)).collect();
-            if absent.len() > 2 * shown {
-                absent.sort_unstable_by_key(|(touched, _)| *touched);
-                for (_, id) in &absent[..absent.len() - 2 * shown] {
-                    store.entries.remove(id);
-                }
+            let absent = store.entries.iter().filter(|(_, entry)| !entry.live(frame, reached)).map(|(id, entry)| (entry.touched, *id));
+            for id in absent_past_room(shown, absent) {
+                store.entries.remove(&id);
             }
             let owners: IdSet = store.entries.values().filter_map(|entry| entry.owner).collect();
             store.reached.retain(|owner, _| owners.contains(owner));

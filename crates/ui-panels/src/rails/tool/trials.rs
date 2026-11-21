@@ -1,14 +1,21 @@
 //! Trials of `ToolRail`: its columns for a width, its measure, a short room and its glyph role.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
+use super::super::FlyoutButton;
 use super::stories::tools;
 use super::{LastUsed, ToolRail, ToolSlot};
 use crate::buttons::Button;
 use crate::contract::Props as _;
 use crate::contract::Show as _;
+use crate::contract::ShowContainer as _;
+use crate::contract::Tracked;
+use crate::docking::{DockGrid, DockSizes};
+use crate::layout_components::Stack;
+use crate::runtime::env::ThemeScope;
+use crate::testing::pointer::secondary;
 use crate::testing::pointer::{moved, wheel};
 use crate::testing::relations::{above, grows_with};
-use crate::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
+use crate::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_key_bytes, trial};
 use egui::{Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -42,9 +49,8 @@ fn columns_of(fixture: &Fixture) -> usize {
 fn rail_in(width: f32, height: f32) -> (Fixture, Rc<Cell<Vec2>>) {
     let measured = Rc::new(Cell::new(Vec2::ZERO));
     let report = Rc::clone(&measured);
+    let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
     let mut fixture = Fixture::new(move |ui| {
-        let slots = slots();
-        let last = LastUsed::default();
         let size = ToolRail::new("Tools", &slots, &0, &last).measure_rail(ui, width, |ui, _| {
             Button::new("Foot").show(ui);
         });
@@ -61,7 +67,7 @@ fn rail_in(width: f32, height: f32) -> (Fixture, Rc<Cell<Vec2>>) {
 /// of them one fewer, and a wider one no more columns than the rail has cells.
 #[trial]
 fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
     for steps in 1..=3_u16 {
         let (fixture, _) = rail_in(grid.width(steps), 800.0);
         assert_eq!(columns_of(&fixture), usize::from(steps), "a width of {steps} steps shows {steps} columns");
@@ -80,7 +86,7 @@ fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
 /// and fewer columns need more rows.
 #[trial]
 fn a_tool_rail_measures_its_rows_plus_its_footer_at_a_width() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
     let mut heights = Vec::new();
     for steps in [1_u16, 2] {
         let (fixture, measured) = rail_in(grid.width(steps), 800.0);
@@ -99,7 +105,7 @@ fn a_tool_rail_measures_its_rows_plus_its_footer_at_a_width() {
 /// above it, down to a room smaller than one scroll region's usual least height.
 #[trial]
 fn in_a_short_room_the_rows_scroll_above_the_footer_that_stays_in_view() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
     for height in [160.0, 100.0] {
         let (mut fixture, measured) = rail_in(grid.width(1), height);
         let foot = rect(&fixture, "Foot");
@@ -131,10 +137,10 @@ fn the_tool_rail_shows_its_buttons_icons_in_its_glyph_role() {
     use crate::buttons::IconButton;
     use craft_behavior::IconId;
     let glyphs = |rail: bool| {
+        let (slots, last) = (Tracked::new(vec![ToolSlot::new(0, tools(&[0, 1]))]), Tracked::new(LastUsed::default()));
         let mut fixture = Fixture::new(move |ui| {
             if rail {
-                let slots = vec![ToolSlot::new(0, tools(&[0, 1]))];
-                ToolRail::new("Tools", &slots, &0, &LastUsed::default()).show_rail(ui, |_, _| {});
+                ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |_, _| {});
             } else {
                 IconButton::new(IconId::new("move")).label("Alone").show(ui);
             }
@@ -162,9 +168,8 @@ struct Seen {
 fn memo_rail() -> (Fixture, Rc<RefCell<Seen>>) {
     let seen = Rc::new(RefCell::new(Seen::default()));
     let shared = Rc::clone(&seen);
+    let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
     let mut fixture = Fixture::new(move |ui| {
-        let slots = slots();
-        let last = LastUsed::default();
         let current = shared.borrow().current;
         let footer = &shared;
         let out = ToolRail::new("Tools", &slots, &current, &last).edit_toolbar("Edit Toolbar").show_rail(ui, |ui, _| {
@@ -226,4 +231,81 @@ fn a_click_on_a_slot_selects_its_tool_once() {
 
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 1.0
+}
+
+/// A rail in a scope whose density differs from the root's counts its columns in that scope's style, the style its dock
+/// column is stepped in: under a comfortable root, a compact scope two rail steps wide shows two columns, where the
+/// root's rail would fit one.
+#[trial]
+fn a_rail_in_another_density_counts_its_columns_in_that_density() {
+    let scoped: Rc<Cell<Option<DockGrid>>> = Rc::default();
+    let seen = Rc::clone(&scoped);
+    let compact = || ThemeScope::new().density(craft_theme::Size::Compact);
+    let mut probe = Fixture::new(move |ui| {
+        Stack::new().theme(compact()).show(ui, |ui, _| {
+            seen.set(Some(DockGrid::rail(LABELS.len()).resolved(&DockSizes::of_scope(ui))));
+        });
+    });
+    probe.density(craft_theme::Size::Comfortable).settle();
+    let grid = scoped.get().expect("the scope ran");
+    let root = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(probe.ctx()));
+    let width = grid.width(2);
+    assert_eq!(root.steps_within(width), 1, "the root's rail fits one column in two compact steps: {grid:?}, root {root:?}");
+
+    let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().theme(compact()).show(ui, |ui, _| {
+            ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |ui, _| {
+                Button::new("Foot").show(ui);
+            });
+        });
+    });
+    let tall = 800.0;
+    fixture.density(craft_theme::Size::Comfortable).room(Vec2::new(width, tall)).settle();
+    assert_eq!(columns_of(&fixture), 2, "two rail steps of the scope's style show two columns");
+}
+
+/// A flyout resolves its rows through the command board, so an open flyout builds no derived value in any frame.
+#[trial]
+fn an_open_flyout_builds_no_derived_values() {
+    let tools = tools(&[1, 2]);
+    let shown = 1_u8;
+    let mut fixture = Fixture::new(move |ui| {
+        FlyoutButton::new(&tools, &shown).show(ui);
+    });
+    fixture.room(Vec2::new(200.0, 200.0)).settle();
+    let button = rect(&fixture, "Brush").center();
+    fixture.frame(vec![secondary(button, true), secondary(button, false)]);
+    fixture.settle();
+    assert!(fixture.by_label("Pencil").is_some(), "the right click opened the flyout");
+    for _ in 0..3 {
+        fixture.frame(vec![]);
+        assert!(last_frame_derived_builds(fixture.ctx()).iter().all(|(_, builds)| *builds == 0), "no derived value is built per pass");
+    }
+}
+
+/// The room of the key-byte trial.
+const KEY_BYTES_ROOM: Vec2 = Vec2::new(120.0, 400.0);
+
+/// The key bytes of an idle pass of a rail of `count` slots, a quarter of whose tools are hidden and half remembered.
+fn idle_key_bytes(count: u8) -> usize {
+    let slots = Tracked::new((0..count).map(|id| ToolSlot::new(u32::from(id), tools(&[id]))).collect::<Vec<_>>());
+    let hidden = Tracked::new((0..count / 4).collect::<Vec<u8>>());
+    let mut last = LastUsed::default();
+    for id in 0..count / 2 {
+        last.set(u32::from(id), id);
+    }
+    let last = Tracked::new(last);
+    let mut fixture = Fixture::new(move |ui| {
+        ToolRail::new("Tools", &slots, &0, &last).hidden(&hidden).show_rail(ui, |_, _| {});
+    });
+    fixture.room(KEY_BYTES_ROOM).settle().idle(1);
+    assert_eq!(last_frame_derived_builds(fixture.ctx()), Vec::new(), "an idle rail builds no derived value");
+    last_pass_memo_key_bytes(fixture.ctx())
+}
+
+/// An idle rail feeds the same key bytes whatever its number of slots, with hidden and remembered tools in proportion.
+#[trial]
+fn a_tool_rails_idle_key_bytes_do_not_grow_with_its_slots() {
+    assert_eq!(idle_key_bytes(10), idle_key_bytes(100), "the key follows revisions, not the slots, the hidden or the remembered tools");
 }

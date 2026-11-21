@@ -133,11 +133,11 @@ pub(super) fn run() {
     };
     assert!(new_enabled(&main), "no dialog: New is enabled");
     menu.set_gate(Gate::default().modal(true));
-    menu.sync_with(1, || layout(1));
+    menu.sync_with(&1_u64, || layout(1));
     assert!(Retained::as_ptr(&main) == Retained::as_ptr(&main_menu()), "the gate updated the menu, not rebuilt it");
     assert!(!new_enabled(&main_menu()), "a dialog greys New");
     menu.set_gate(Gate::default());
-    menu.sync_with(1, || layout(1));
+    menu.sync_with(&1_u64, || layout(1));
     assert!(new_enabled(&main_menu()), "New is enabled again");
 
     // A key equivalent: ⌘R reaches egui as the key press ⌘R, once, and is no click.
@@ -179,7 +179,7 @@ pub(super) fn run() {
 
     // Window ends with the open documents. Opening one rebuilds only the Window menu, which AppKit still knows as
     // its Window menu; choosing a row brings that document forward.
-    menu.sync_with(2, || layout(2));
+    menu.sync_with(&2_u64, || layout(2));
     assert!(Retained::as_ptr(&main) == Retained::as_ptr(&main_menu()), "a new document rebuilt only the Window menu");
     let window = submenu(&main_menu(), "Window");
     assert!(nsapp.windowsMenu().is_some_and(|w| Retained::as_ptr(&w) == Retained::as_ptr(&window)), "AppKit knows the new Window menu");

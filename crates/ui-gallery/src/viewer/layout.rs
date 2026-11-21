@@ -167,7 +167,7 @@ pub fn reconciled(mut saved: Dock<PanelId>, workspace: Workspace, catalog: &Cata
             }
     };
     saved.reconcile(registered, PanelId::permissions, &default_for(workspace));
-    saved.hidden.retain(|(panel, _)| registered(panel));
+    saved.forget_hidden(|panel| !registered(panel));
     saved
 }
 
@@ -185,7 +185,7 @@ pub fn load(text: &str, workspace: Workspace, catalog: &Catalog) -> Dock<PanelId
 /// The component tabs `layout` holds, in layout order.
 pub fn open_tabs(layout: &Dock<PanelId>) -> Vec<TabName> {
     layout
-        .layout
+        .layout()
         .panels()
         .into_iter()
         .filter_map(|panel| match panel {

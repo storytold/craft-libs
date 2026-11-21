@@ -5,7 +5,7 @@ use super::commands::DockCommands;
 use super::drop::{self, DragUnit, start_group_drag};
 use super::targets::{DockSizes, DockSpot, DockTargets, ZoneRule};
 use super::words::DockWords;
-use super::{PanelDrag, PanelKey, PanelTitle};
+use super::{PanelDrag, PanelKey, PanelTitle, Titles};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
@@ -245,7 +245,7 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     #[container]
     props: ContainerProps,
     anchor: P,
-    panels: &'a [PanelTitle],
+    panels: Titles,
     active: PanelKey,
     /// Only the header shows; the body and its drop spots are left out.
     #[prop(flag)]
@@ -292,10 +292,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
 impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<'a, P> {
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
-    pub fn new(anchor: P, panels: &'a [PanelTitle], active: PanelKey) -> Self {
+    pub fn new(anchor: P, panels: Titles, active: PanelKey) -> Self {
         let props =
             ContainerProps::new().sizing(Sizing::Fill).header(HeaderRegion::new().fill(SurfaceKind::Background)).command_scope(DockCommands::SCOPE);
-        let title = panels.iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
+        let title = panels.as_slice().iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
         DockGroup {
             common: Common::new(),
             props,
@@ -445,7 +445,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         let Some(dock) = self.dock else { return };
         let (rect, rtl, header) = (cx.rect, cx.flow.is_rtl(), cx.style.header);
         let strip = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header));
-        DockTargets::<P>::register(&cx.core.ctx, dock, DockSpot::tab(self.anchor.clone(), self.panels.len()), strip);
+        DockTargets::<P>::register(&cx.core.ctx, dock, DockSpot::tab(self.anchor.clone(), self.panels.as_slice().len()), strip);
         if self.minimized {
             return;
         }
@@ -518,7 +518,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                 }
                 let row = TabRow {
                     anchor: self.anchor.clone(),
-                    panels: self.panels,
+                    panels: self.panels.clone(),
                     active: self.active,
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
@@ -585,7 +585,8 @@ struct TabRow<'a, P> {
     /// The group's anchor panel, which names its drop spots.
     #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
     anchor: P,
-    panels: &'a [PanelTitle],
+    #[memo_props(hash = "its Hash is the content key taken when the titles were made")]
+    panels: Titles,
     active: PanelKey,
     closable: bool,
     wheel_selects: bool,
@@ -598,7 +599,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
-    let (panels, active, closable) = (row.panels, row.active, row.closable);
+    let (panels, active, closable) = (row.panels.as_slice(), row.active, row.closable);
     let from = PanelKey::of(&row.anchor);
     let drags = crate::runtime::drag::started(ui.ctx());
     let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));

@@ -2,6 +2,7 @@
 
 #[cfg(target_os = "macos")]
 mod appkit;
+pub(crate) mod from_items;
 pub(crate) mod keytips;
 pub(crate) mod layout;
 pub(crate) mod memo;
