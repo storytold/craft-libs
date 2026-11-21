@@ -3733,6 +3733,7 @@ name = "craft-xtask"
 version = "0.1.0"
 dependencies = [
  "craft-atomic",
+ "libc",
  "serde_json",
  "tempfile",
 ]
