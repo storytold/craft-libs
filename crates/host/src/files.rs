@@ -5,7 +5,8 @@
 //! arrives on a later pass through [`Files::take_answer`]. One picker shows at a time; later
 //! requests wait in order. A request starts in its own [`PickRequest::directory`] when it names
 //! one; otherwise the service starts it in the last folder it remembers for the
-//! [`PickRequest::purpose`]. It applies the extension policy to a saved name before the app sees it.
+//! [`PickRequest::purpose`]. It applies the extension policy to a saved name before the app sees it,
+//! and a Save answer ([`Picked::Saved`]) reports the file type picked in the panel.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -150,10 +151,10 @@ pub struct PickId(pub u64);
 pub enum Picked {
     /// The user cancelled.
     Cancelled,
-    /// One or more paths. For [`PickKind::Save`] the extension policy has been applied, and the
-    /// service has already asked about replacing an existing file the OS panel did not check.
+    /// One or more existing paths, the answer of an Open or Folder pick.
     Paths(Vec<PathBuf>),
-    /// Every [`PickKind::Save`] answer. `file_type` is the index into the request's `filters` of the
+    /// Every [`PickKind::Save`] answer: the extension policy has been applied, and the service has
+    /// already asked about replacing an existing file the OS panel did not check. `file_type` is the index into the request's `filters` of the
     /// type picked in the panel, when the panel reports one.
     Saved {
         /// The path chosen.
@@ -260,8 +261,6 @@ pub trait Files: Send + Sync {
     /// Drops ticket `id`: its answer, if it has come, and the answer that has yet to come. An
     /// owner that closes with a pick outstanding calls it.
     fn forget(&self, id: PickId);
-    /// Whether a picker is on screen or waiting.
-    fn pick_pending(&self) -> bool;
     /// The oldest pick not yet answered (the one on screen), including one waiting on the service's
     /// Replace question; `None` when none.
     fn pending_pick(&self) -> Option<PendingPick>;
@@ -298,10 +297,6 @@ impl Files for NoPickFiles {
 
     fn forget(&self, id: PickId) {
         self.answered.lock().unwrap_or_else(|e| e.into_inner()).retain(|a| a.id != id);
-    }
-
-    fn pick_pending(&self) -> bool {
-        false
     }
 
     fn pending_pick(&self) -> Option<PendingPick> {
@@ -359,7 +354,6 @@ struct ScriptState {
     /// A Save is answered with the suggested name in the suggested folder.
     save_suggested: bool,
     /// Picks report `sheet: true` in [`PendingPick`].
-    #[allow(dead_code)] // P3(files-w1): fl.F4
     sheets: bool,
     /// Picks the test has not answered yet, oldest first.
     open: Vec<(PickId, PickRequest)>,
@@ -398,8 +392,8 @@ impl ScriptedFiles {
 
     /// Scripted picks report `sheet: on`.
     pub fn sheets(self, on: bool) -> Self {
-        let _ = on;
-        todo!("fl.F4")
+        self.state().sheets = on;
+        self
     }
 
     /// Puts a file in memory, for [`Files::read`].
@@ -452,7 +446,7 @@ impl ScriptedFiles {
     /// The suggested name of a Save in its suggested folder.
     fn suggested(request: &PickRequest) -> Picked {
         let name = PathBuf::from(request.file_name.clone().unwrap_or_default());
-        Picked::Paths(vec![request.directory.as_ref().map_or_else(|| name.clone(), |dir| dir.join(&name))])
+        Picked::Saved { path: request.directory.as_ref().map_or_else(|| name.clone(), |dir| dir.join(&name)), file_type: None }
     }
 }
 
@@ -484,12 +478,9 @@ impl Files for ScriptedFiles {
         state.open.retain(|(open, _)| *open != id);
     }
 
-    fn pick_pending(&self) -> bool {
-        !self.state().open.is_empty()
-    }
-
     fn pending_pick(&self) -> Option<PendingPick> {
-        todo!("fl.F2")
+        let state = self.state();
+        state.open.first().map(|(_, request)| PendingPick { request: request.clone(), sheet: state.sheets })
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError> {

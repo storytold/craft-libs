@@ -218,7 +218,7 @@ pub enum Request {
 pub enum Answer {
     /// The user closed a file dialog without choosing.
     Cancelled,
-    /// The chosen files, folder or save path.
+    /// The chosen files or folder.
     Paths(Vec<PathBuf>),
     /// A Save panel's answer: the name as typed and the file type picked, when the panel reports it (the portal's
     /// current filter; rfd reports `None`).

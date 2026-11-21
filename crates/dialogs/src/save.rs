@@ -5,7 +5,8 @@
 //! (on a job when large) and reports back. One save runs at a time per flow. The guards:
 //!
 //! - **No file, or Save As**: the save picker opens in the document's own folder
-//!   ([`save_dialog_folder`]), with the document's name and extension suggested. The file
+//!   ([`save_dialog_folder`], or [`SaveDocument::directory`] when the app names one), with the
+//!   document's name and extension suggested. The file
 //!   service applies the extension policy and asks about replacing a file the panel didn't ask
 //!   about.
 //! - **An email attachment's temporary copy** ([`is_mail_temp_copy`]): Save asks where to keep
@@ -24,7 +25,7 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use craft_host::{FileFilter, Files, PickId, PickRequest};
+use craft_host::{FileFilter, Files, PickId, PickRequest, Picked};
 use craft_platform::PlatformText;
 use craft_platform::watch::FileWatch;
 
@@ -115,7 +116,7 @@ enum Pending<D> {
 /// ```ignore
 /// // File › Save
 /// match saves.start(host.files(), &watch, document(doc), SaveTarget::InPlace) {
-///     SaveStep::Write { key, path, target, .. } => write_on_a_job(key, path, target),
+///     SaveStep::Write { key, path, target, file_type } => write_on_a_job(key, path, target, file_type),
 ///     SaveStep::AskChangedOnDisk { key, path } => { dialogs.open(StandardPrompt::changed_on_disk(name(key)).tag(key)); }
 ///     SaveStep::Busy => status(SAVE_IN_PROGRESS),
 ///     SaveStep::Picking | SaveStep::Cancelled { .. } => {}
@@ -168,12 +169,12 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
         let Some(Pending::Picking { ticket, .. }) = &self.pending else { return None };
         let picked = files.take_answer(*ticket)?;
         let Some(Pending::Picking { document, target, .. }) = self.pending.take() else { return None };
-        let Some(path) = picked.first_path() else { return Some(SaveStep::Cancelled { key: document.key }) };
+        let Picked::Saved { path, file_type } = picked else { return Some(SaveStep::Cancelled { key: document.key }) };
         if document.path.as_deref() == Some(path.as_path()) {
             return Some(self.confirm(watch, document, target, path));
         }
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        Some(SaveStep::Write { key: document.key, path, target, file_type: None }) // P3(files-w1): fl.F10
+        Some(SaveStep::Write { key: document.key, path, target, file_type })
     }
 
     /// The changed-on-disk question's Replace: write over the changed file. [`SaveStep::Busy`]
@@ -182,7 +183,7 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
     pub fn replace(&mut self) -> SaveStep<D> {
         let Some(Pending::Asking { document, target, path }) = self.pending.take() else { return SaveStep::Busy };
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        SaveStep::Write { key: document.key, path, target, file_type: None } // P3(files-w1): fl.F10
+        SaveStep::Write { key: document.key, path, target, file_type: None }
     }
 
     /// The changed-on-disk question's Save As: leave the file on disk as it is and ask where to
@@ -252,14 +253,14 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
             return SaveStep::AskChangedOnDisk { key, path };
         }
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        SaveStep::Write { key: document.key, path, target, file_type: None } // P3(files-w1): fl.F10
+        SaveStep::Write { key: document.key, path, target, file_type: None }
     }
 
     fn open_picker(&mut self, files: &dyn Files, document: SaveDocument<D>, target: SaveTarget) -> SaveStep<D> {
         let mut request =
             PickRequest::save(document.purpose.clone()).file_name(suggested_name(&document)).suggested_extension(document.extension.clone());
         request.filters = document.filters.clone();
-        request.directory = save_dialog_folder(document.path.as_deref());
+        request.directory = document.directory.clone().or_else(|| save_dialog_folder(document.path.as_deref()));
         let ticket = files.pick(request);
         self.pending = Some(Pending::Picking { document, target, ticket });
         SaveStep::Picking

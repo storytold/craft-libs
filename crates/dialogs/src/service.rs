@@ -12,15 +12,17 @@
 //! OS panel did not ask about gets the Replace question (PhotoCraft `file_dialog.rs:193
 //! replaces_unasked`), a native message box from [`FilePanels::pump`] or, with the `ui` feature, a
 //! prompt on the app's `DialogHost` from `FilePanels::pump_with`; a typed name without an extension gets the suggested one and a new file's
-//! uppercase extension is lowercased, while an existing file keeps its spelling (`file_dialog.rs:210 lowercased_extension`, `:365 saved_path`); the two
-//! steps are separate settings of the [`ExtensionPolicy`].
+//! uppercase extension is lowercased, while an existing file keeps its spelling (`file_dialog.rs:210 lowercased_extension`, `:365 saved_path`); the
+//! steps are separate settings of the [`ExtensionPolicy`]. A name the panel left alone takes the
+//! extension of the file type picked in the panel ([`with_chosen_type`]): the GTK file chooser keeps
+//! the typed name when another type is picked, and the format follows the extension.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use craft_host::{FileError, Files, PickAnswer, PickId, PickRequest, Wake};
+use craft_host::{FileError, FileFilter, Files, PendingPick, PickAnswer, PickId, PickRequest, Wake};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use craft_host::{PickKind, Picked};
@@ -135,20 +137,52 @@ impl Default for ExtensionPolicy {
     }
 }
 
-/// `path` with the extension of the file type picked in the Save panel (`chosen`, its extensions without the dot),
-/// where the panel left the name alone; an extension of the picked type, or one that any of `filters` lists, stays.
-#[allow(dead_code)] // P3(files-w1): fl.F9
-pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String], filters: &[Filter]) -> PathBuf {
-    let _ = (path, opened_with, chosen, filters);
-    todo!("fl.F9")
+/// An extension as compared: without the dot, in lower case.
+pub(crate) fn normal(ext: &str) -> String {
+    ext.trim_start_matches('.').to_ascii_lowercase()
 }
 
-/// Which file type's extensions belong on the name the panel returned: the one it reported, or the only one it
-/// offered; `None` when the answer names no type the panel offered.
-#[allow(dead_code)] // P3(files-w1): fl.F9
-fn chosen_type(filters: &[Filter], picked: Option<usize>) -> Option<usize> {
-    let _ = (filters, picked);
-    todo!("fl.F9")
+/// `path` with the extension of the file type picked in the Save panel (`chosen`, its extensions
+/// without the dot), where the panel left the name alone: the format follows the extension, and
+/// the GTK file chooser keeps the typed name when another type is picked. Only a name that still
+/// has the extension the panel opened with (`opened_with`, `Untitled-1.psd` with PNG picked) or
+/// none gets the type's first extension, as PolyMeilex/rfd#341 does. An extension of the picked
+/// type stays (`.psb` for PSD), and so does one that any of the request's `filters` lists
+/// (`art.png` with the PSD type untouched): the user typed a type the app saves. Any other
+/// extension (`scan.2024`) is part of the name, and the type's extension is added after it. With
+/// no type picked the path is as typed. Extensions compare in any letter case.
+// PLAN: fl.F9 says `&[Filter]`; `settled_save_path` holds a `PickRequest`, whose filters are `FileFilter`s
+// pc: apps/photocraft/src/services.rs:161 with_chosen_type
+pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String], filters: &[FileFilter]) -> PathBuf {
+    let Some(first) = chosen.first() else { return path.to_path_buf() };
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let first = normal(first);
+    let lists = |ext: &str| filters.iter().any(|f| f.extensions.iter().any(|e| normal(e) == ext));
+    match ext {
+        Some(ext) if chosen.iter().any(|e| normal(e) == ext) => path.to_path_buf(),
+        Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),
+        Some(ext) if lists(&ext) => path.to_path_buf(),
+        _ => {
+            let mut name = path.as_os_str().to_owned();
+            name.push(".");
+            name.push(first);
+            PathBuf::from(name)
+        }
+    }
+}
+
+/// Which file type's extensions belong on the name the panel returned: the one it reported, or,
+/// when the panel offered only one type, that one. It reports no pick then, and the name it was
+/// given is the stem, so a bare `Swatches` has to come back as `Swatches.aco`. `None` when the
+/// answer names no type the panel offered.
+// pc: apps/photocraft/src/portal_save.rs:163 chosen_type
+fn chosen_type(filters: &[FileFilter], picked: Option<usize>) -> Option<usize> {
+    match picked {
+        Some(i) if i < filters.len() => Some(i),
+        None if filters.len() == 1 => Some(0),
+        _ => None,
+    }
 }
 
 /// Where a Save answer that would overwrite goes next: the panel already asked (macOS, Windows,
@@ -167,6 +201,9 @@ pub enum ReplaceGuard {
 /// answer (the replace question).
 struct Pending {
     request: PickRequest,
+    /// The owner dropped the ticket while its panel may still be on screen: the entry stays so the
+    /// window stays held, and the panel's answer is dropped.
+    forgotten: bool,
     /// The Save path waiting on the replace question's answer.
     awaiting_replace: Option<ReplaceQuestion>,
 }
@@ -177,7 +214,7 @@ struct Pending {
 struct ReplaceQuestion {
     answered: PathBuf,
     settled: PathBuf,
-    #[allow(dead_code)] // P3(files-w1): fl.F7
+    /// The file type the panel reported, handed back with the settled path.
     file_type: Option<usize>,
 }
 
@@ -219,8 +256,6 @@ struct Inner {
     pending: HashMap<PickId, Pending>,
     answered: VecDeque<PickAnswer>,
     last_folder: HashMap<String, PathBuf>,
-    /// A panel is on screen or queued (mirrored from the panels each pump).
-    panel_busy: bool,
 }
 
 impl FileService {
@@ -233,7 +268,6 @@ impl FileService {
             pending: HashMap::new(),
             answered: VecDeque::new(),
             last_folder: HashMap::new(),
-            panel_busy: false,
         }));
         let (to_panels, requests) = std::sync::mpsc::channel();
         let panels = FilePanels {
@@ -335,7 +369,6 @@ impl FilePanels {
                 }
             }
         }
-        self.mark_busy();
     }
 
     /// [`pump`](FilePanels::pump) with the replace question on the app's own dialog host: the
@@ -363,7 +396,6 @@ impl FilePanels {
             }
         }
         self.open_prompts(dialogs);
-        self.mark_busy();
     }
 
     /// The dialog ids of the Replace questions open on the app's dialog host, for an app that lists
@@ -425,9 +457,6 @@ impl FilePanels {
         }
     }
 
-    fn mark_busy(&self) {
-        lock(&self.inner).panel_busy = self.dialogs.is_open() || self.dialogs.queued() > 0;
-    }
 
     /// Translates a request into the panel builder: kind, title, filters, `request.directory`
     /// (else the remembered folder, else `request.default_directory`) and the suggested name with
@@ -450,7 +479,9 @@ impl FilePanels {
         dialog
     }
 
-    /// The saved path after the extension policy: `"Photo"` becomes `"Photo.png"` with a
+    /// The saved path after the extension policy. First a name the panel left alone takes the
+    /// extension of the picked type (`file_type`, an index into `request.filters`; when
+    /// `picked_type`). Then `"Photo"` becomes `"Photo.png"` with a
     /// suggested `png` (when `add_suggested`); `"Photo.PNG"` becomes `"Photo.png"` (when
     /// `lowercase`) unless a file named `"Photo.PNG"` already exists; a path with another known
     /// extension is kept.
@@ -460,24 +491,28 @@ impl FilePanels {
     /// letter case apart is a second file, so the one the user picked would be left unchanged.
     // pc: crates/ui-egui/src/file_dialog.rs:210 lowercased_extension, :365 saved_path
     pub fn settled_save_path(policy: ExtensionPolicy, answered: &Path, request: &PickRequest, file_type: Option<usize>) -> PathBuf {
-        // P3(files-w1): fl.F7
+        let typed = if policy.picked_type {
+            let chosen = chosen_type(&request.filters, file_type).and_then(|at| request.filters.get(at)).map_or(&[][..], |f| f.extensions.as_slice());
+            with_chosen_type(answered, request.file_name.as_deref(), chosen, &request.filters)
+        } else {
+            answered.to_path_buf()
+        };
         let suggested = request.suggested_extension.as_deref();
-        let _ = file_type;
-        match answered.extension().and_then(|e| e.to_str()) {
-            Some(ext) if policy.lowercase && ext.bytes().any(|b| b.is_ascii_uppercase()) && !answered.exists() => {
-                answered.with_extension(ext.to_ascii_lowercase())
+        match typed.extension().and_then(|e| e.to_str()) {
+            Some(ext) if policy.lowercase && ext.bytes().any(|b| b.is_ascii_uppercase()) && !typed.exists() => {
+                typed.with_extension(ext.to_ascii_lowercase())
             }
-            Some(_) => answered.to_path_buf(),
+            Some(_) => typed,
             None => match suggested {
-                Some(ext) if policy.add_suggested => answered.with_extension(ext),
-                _ => answered.to_path_buf(),
+                Some(ext) if policy.add_suggested => typed.with_extension(ext),
+                _ => typed,
             },
         }
     }
 
     /// Whether the settled path names an existing file the panel did not ask about: the panel
-    /// asked when the settled path equals the answered path, so only an extension change can
-    /// make a new collision.
+    /// asked when the settled path equals the answered path, so only an extension change (the
+    /// policy's or the picked type's) can make a new collision.
     // pc: crates/ui-egui/src/file_dialog.rs:193 replaces_unasked
     pub fn replaces_unasked(answered: &Path, settled: &Path) -> bool {
         answered != settled && settled.exists() && !same_entry(answered, settled)
@@ -496,34 +531,36 @@ impl FilePanels {
         }
     }
 
-    /// Turns a panel answer into the pick's answer: `Cancelled` stays, `Paths` for Save go through
+    /// Turns a panel answer into the pick's answer: `Cancelled` stays, `Saved` goes through
     /// the policy and guard, `Unavailable` stays `Unavailable` with the cause, and a `Cancelled` on a
     /// system where the probe found no dialog backend becomes `Unavailable` with the probe's
     /// cause. A Save that needs the replace
-    /// question stays pending and returns the question for the caller to ask.
+    /// question stays pending and returns the question for the caller to ask. The answer of a
+    /// forgotten pick is dropped.
     fn finish(&mut self, id: PickId, answer: Answer) -> Option<ReplaceQuestion> {
         let pending = lock(&self.inner).pending.remove(&id)?;
+        if pending.forgotten {
+            return None;
+        }
         let picked = match (answer, pending.awaiting_replace) {
             (Answer::Message(result), Some(question)) => {
                 let replace =
                     matches!(&result, MessageResult::Ok) || matches!(&result, MessageResult::Custom(label) if *label == self.replace_words.replace);
-                if replace { Picked::Paths(vec![question.settled]) } else { Picked::Cancelled }
+                if replace { Picked::Saved { path: question.settled, file_type: question.file_type } } else { Picked::Cancelled }
             }
-            (Answer::Saved { .. }, _) => todo!("fl.F7"),
-            (Answer::Paths(paths), _) if paths.is_empty() => Picked::Cancelled,
-            (Answer::Paths(mut paths), _) => {
-                if pending.request.kind == PickKind::Save {
-                    let answered = paths.swap_remove(0);
-                    let settled = Self::settled_save_path(self.extension_policy, &answered, &pending.request, None); // P3(files-w1): fl.F7
-                    if self.replace_guard == ReplaceGuard::AskWhenUnasked && Self::replaces_unasked(&answered, &settled) {
-                        let question = ReplaceQuestion { answered, settled, file_type: None };
-                        lock(&self.inner).pending.insert(id, Pending { request: pending.request, awaiting_replace: Some(question.clone()) });
-                        return Some(question);
-                    }
-                    paths = vec![settled];
+            (Answer::Saved { path, filter }, _) => {
+                let settled = Self::settled_save_path(self.extension_policy, &path, &pending.request, filter);
+                if self.replace_guard == ReplaceGuard::AskWhenUnasked && Self::replaces_unasked(&path, &settled) {
+                    let question = ReplaceQuestion { answered: path, settled, file_type: filter };
+                    lock(&self.inner)
+                        .pending
+                        .insert(id, Pending { request: pending.request, awaiting_replace: Some(question.clone()), forgotten: false });
+                    return Some(question);
                 }
-                Picked::Paths(paths)
+                Picked::Saved { path: settled, file_type: filter }
             }
+            (Answer::Paths(paths), _) if paths.is_empty() => Picked::Cancelled,
+            (Answer::Paths(paths), _) => Picked::Paths(paths),
             (Answer::Unavailable(why), _) => Picked::Unavailable(why),
             // A panel that answers nothing on a system without a dialog backend did not get
             // cancelled; the probe knows why.
@@ -538,15 +575,16 @@ impl FilePanels {
     /// `Cancelled` otherwise. A forgotten pick has nothing to settle.
     #[cfg(feature = "ui")]
     fn settle_replace(&mut self, id: PickId, replace: bool) {
-        let Some(Pending { request, awaiting_replace: Some(question) }) = lock(&self.inner).pending.remove(&id) else { return };
-        self.complete(id, request, if replace { Picked::Paths(vec![question.settled]) } else { Picked::Cancelled });
+        let Some(Pending { request, awaiting_replace: Some(question), forgotten: false }) = lock(&self.inner).pending.remove(&id) else { return };
+        let picked = if replace { Picked::Saved { path: question.settled, file_type: question.file_type } } else { Picked::Cancelled };
+        self.complete(id, request, picked);
     }
 
     /// Remembers the folder of a chosen path and queues the answer.
     fn complete(&self, id: PickId, request: PickRequest, picked: Picked) {
         let mut inner = lock(&self.inner);
-        if let Picked::Paths(paths) = &picked
-            && let Some(first) = paths.first()
+        if matches!(picked, Picked::Paths(_) | Picked::Saved { .. })
+            && let Some(first) = picked.first_path()
         {
             let folder = if request.kind == PickKind::Folder { Some(first.as_path()) } else { first.parent() };
             if let Some(folder) = folder.filter(|f| !f.as_os_str().is_empty()) {
@@ -564,7 +602,7 @@ impl Files for FileService {
             let mut inner = lock(&self.inner);
             inner.next += 1;
             let id = PickId(inner.next);
-            inner.pending.insert(id, Pending { request: request.clone(), awaiting_replace: None });
+            inner.pending.insert(id, Pending { request: request.clone(), awaiting_replace: None, forgotten: false });
             id
         };
         // The panels gone (the app is shutting down) leaves the ticket unanswered.
@@ -579,20 +617,20 @@ impl Files for FileService {
         inner.answered.remove(at).map(|a| a.picked)
     }
 
-    // A ticket still pending leaves `pending`, so the answer the panel gives later is dropped by `finish`.
+    // A ticket still pending stays in `pending`, marked: its panel may be on screen, and `finish` drops the answer it gives later.
     fn forget(&self, id: PickId) {
         let mut inner = lock(&self.inner);
-        inner.pending.remove(&id);
+        if let Some(pending) = inner.pending.get_mut(&id) {
+            pending.forgotten = true;
+        }
         inner.answered.retain(|a| a.id != id);
     }
 
-    fn pick_pending(&self) -> bool {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.panel_busy || !inner.pending.is_empty()
-    }
-
-    fn pending_pick(&self) -> Option<craft_host::PendingPick> {
-        todo!("fl.F7")
+    // Tickets count up, so the smallest id is the oldest: the pick on screen.
+    fn pending_pick(&self) -> Option<PendingPick> {
+        let inner = lock(&self.inner);
+        let (_, pending) = inner.pending.iter().min_by_key(|(id, _)| **id)?;
+        Some(PendingPick { request: pending.request.clone(), sheet: cfg!(target_os = "macos") && pending.request.kind == PickKind::Save })
     }
 
     // pc: apps/photocraft/src/services.rs:359 write_atomic (read is plain `std::fs::read`)
@@ -688,7 +726,7 @@ mod service_tests {
     // is kept, and a policy that does neither keeps the typed name.
     #[trial]
     fn a_saved_path_is_settled_by_the_extension_policy() {
-        let typed = |name: &str| Answer::Paths(vec![PathBuf::from(name)]);
+        let typed = |name: &str| Answer::Saved { path: PathBuf::from(name), filter: None };
         let (service, mut panels, _) = service_with(vec![
             typed("/x/Photo.PNG"),
             typed("/x/Photo"),
@@ -698,15 +736,15 @@ mod service_tests {
             typed("/x/Photo.PNG"),
             typed("/x/Photo"),
         ]);
-        let path = |p: &str| Picked::Paths(vec![PathBuf::from(p)]);
-        let both = ExtensionPolicy { lowercase: true, add_suggested: true, picked_type: false }; // P3(files-w1): fl.F6
+        let path = |p: &str| Picked::Saved { path: PathBuf::from(p), file_type: None };
+        let both = ExtensionPolicy { lowercase: true, add_suggested: true, picked_type: false };
         assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.png"), "only the extension is lowercased");
         assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.png"), "a bare name gets the suggested extension");
         assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.jpg"), "another known extension is kept, lowercased");
         let neither = ExtensionPolicy::AS_TYPED;
         assert_eq!(saved_as(&service, &mut panels, neither), path("/x/Photo.PNG"));
         assert_eq!(saved_as(&service, &mut panels, neither), path("/x/Photo"));
-        let add_only = ExtensionPolicy { lowercase: false, add_suggested: true, picked_type: false }; // P3(files-w1): fl.F6
+        let add_only = ExtensionPolicy { lowercase: false, add_suggested: true, picked_type: false };
         assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.PNG"), "adding does not lowercase");
         assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.png"));
     }
@@ -719,8 +757,10 @@ mod service_tests {
         let dir = std::env::temp_dir().join(format!("craft-dialogs-replace-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         std::fs::write(dir.join("Photo.png"), b"old").expect("existing file");
-        let typed = |name: &str| Answer::Paths(vec![dir.join(name)]);
-        let (service, mut panels, log) = service_with(vec![typed("Photo"), Answer::Message(MessageResult::Cancel), typed("Photo.png")]);
+        let typed = |name: &str| Answer::Saved { path: dir.join(name), filter: None };
+        let typed_as_png = Answer::Saved { path: dir.join("Photo"), filter: Some(0) };
+        let (service, mut panels, log) =
+            service_with(vec![typed("Photo"), Answer::Message(MessageResult::Cancel), typed("Photo.png"), typed_as_png, Answer::Message(MessageResult::Ok)]);
 
         let bare = service.pick(PickRequest::save("export").suggested_extension("png"));
         panels.pump(NONE);
@@ -729,8 +769,17 @@ mod service_tests {
 
         let asked = service.pick(PickRequest::save("export").suggested_extension("png"));
         panels.pump(NONE);
-        assert_eq!(answered(&service, asked), Picked::Paths(vec![dir.join("Photo.png")]));
+        assert_eq!(answered(&service, asked), Picked::Saved { path: dir.join("Photo.png"), file_type: None });
         assert_eq!(log.borrow().len(), 3, "no question for a path the panel asked about");
+
+        let by_type = service.pick(PickRequest::save("export").filter("PNG", &["png"]));
+        panels.pump(NONE);
+        assert_eq!(
+            answered(&service, by_type),
+            Picked::Saved { path: dir.join("Photo.png"), file_type: Some(0) },
+            "the picked type's rename names an existing file: asked, and the type is kept"
+        );
+        assert_eq!(log.borrow().len(), 5, "the save panel, then the question");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -742,13 +791,100 @@ mod service_tests {
         let dir = std::env::temp_dir().join(format!("craft-dialogs-existing-case-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         std::fs::write(dir.join("PHOTO.PNG"), b"old").expect("existing file");
-        let typed = |name: &str| Answer::Paths(vec![dir.join(name)]);
+        let typed = |name: &str| Answer::Saved { path: dir.join(name), filter: None };
         let (service, mut panels, log) = service_with(vec![typed("PHOTO.PNG"), typed("Other.PNG")]);
         let lowercase = ExtensionPolicy::default();
+        let saved = |name: &str| Picked::Saved { path: dir.join(name), file_type: None };
 
-        assert_eq!(saved_as(&service, &mut panels, lowercase), Picked::Paths(vec![dir.join("PHOTO.PNG")]), "the existing file is replaced");
+        assert_eq!(saved_as(&service, &mut panels, lowercase), saved("PHOTO.PNG"), "the existing file is replaced");
         assert_eq!(log.borrow().len(), 1, "no second question: the panel asked about this file");
-        assert_eq!(saved_as(&service, &mut panels, lowercase), Picked::Paths(vec![dir.join("Other.png")]), "a new file is lowercased");
+        assert_eq!(saved_as(&service, &mut panels, lowercase), saved("Other.png"), "a new file is lowercased");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The rename rule: the picked type decides a bare name's extension, and a typed extension wins
+    // unless it is the one the panel opened with.
+    #[trial]
+    fn the_picked_file_type_gives_a_bare_name_its_extension_and_a_typed_extension_wins() {
+        let two = [FileFilter::new("Photoshop", &["psd", "psb"]), FileFilter::new("PNG", &["png"])];
+        let only = [FileFilter::new("Swatches", &["aco"])];
+        // (path, opened with, filters, picked type, expected path)
+        type Case<'a> = (&'a str, Option<&'a str>, &'a [FileFilter], Option<usize>, &'a str);
+        let table: [Case; 8] = [
+            ("/s/Untitled", Some("Untitled.psd"), &two, Some(1), "/s/Untitled.png"),
+            ("/s/Untitled.psd", Some("Untitled.psd"), &two, Some(1), "/s/Untitled.png"),
+            ("/s/art.png", Some("art.psd"), &two, Some(0), "/s/art.png"),
+            ("/s/art.PSB", Some("art.psd"), &two, Some(0), "/s/art.PSB"),
+            ("/s/scan.2024", None, &two, Some(1), "/s/scan.2024.png"),
+            ("/s/Swatches", None, &only, None, "/s/Swatches.aco"),
+            ("/s/Swatches.aco", None, &only, None, "/s/Swatches.aco"),
+            ("/s/free", None, &two, None, "/s/free"),
+        ];
+        for (path, opened, filters, picked, expected) in table {
+            let chosen: &[String] = match chosen_type(filters, picked) {
+                Some(at) => &filters[at].extensions,
+                None => &[],
+            };
+            assert_eq!(with_chosen_type(Path::new(path), opened, chosen, filters), PathBuf::from(expected), "{path} with type {picked:?}");
+        }
+    }
+
+    // A panel that reports the picked type gets its extension under the default policy; AS_TYPED keeps
+    // the typed name, and the type is reported either way.
+    #[trial]
+    fn a_save_answer_reports_the_picked_type_and_as_typed_keeps_the_typed_name() {
+        let answer = || Answer::Saved { path: PathBuf::from("/x/Photo"), filter: Some(1) };
+        let (service, mut panels, _) = service_with(vec![answer(), answer()]);
+        let request = || PickRequest::save("export").filter("Photoshop", &["psd"]).filter("PNG", &["png"]);
+        let mut save = |policy: ExtensionPolicy| {
+            panels.set_extension_policy(policy);
+            let id = service.pick(request());
+            panels.pump(NONE);
+            answered(&service, id)
+        };
+        assert_eq!(save(ExtensionPolicy::default()), Picked::Saved { path: PathBuf::from("/x/Photo.png"), file_type: Some(1) });
+        assert_eq!(save(ExtensionPolicy::AS_TYPED), Picked::Saved { path: PathBuf::from("/x/Photo"), file_type: Some(1) });
+    }
+
+    // The close gate reads `pending_pick`: the oldest ticket (a forgotten one while its panel may
+    // still show), and still `Some` while the Replace question is open.
+    #[trial]
+    fn the_pending_pick_is_the_oldest_until_answered_and_holds_through_the_replace_question() {
+        let (service, mut panels, _) = service_with(vec![]);
+        assert!(service.pending_pick().is_none(), "nothing asked");
+        let first = service.pick(PickRequest::open("a"));
+        let second = service.pick(PickRequest::save("b"));
+        let oldest = service.pending_pick().expect("a pick is pending");
+        assert_eq!((oldest.request.purpose.as_str(), oldest.sheet), ("a", false), "the oldest ticket, an Open pick: no sheet");
+        service.forget(first);
+        assert_eq!(service.pending_pick().expect("still pending").request.purpose, "a", "a forgotten pick holds until its panel answers");
+        panels.pump(NONE);
+        assert!(service.pending_pick().is_none(), "both panels answered");
+        assert!(service.take_answer(first).is_none(), "the forgotten answer is dropped");
+        assert_eq!(answered(&service, second), Picked::Cancelled);
+
+        let dir = std::env::temp_dir().join(format!("craft-dialogs-pending-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        std::fs::write(dir.join("Photo.png"), b"old").expect("existing file");
+        let (service, mut panels) = FileService::new(Wake::none());
+        panels.backend_problem = || None;
+        let service = Rc::new(service);
+        let during: Rc<RefCell<Option<Option<PendingPick>>>> = Rc::default();
+        let (reader, slot) = (service.clone(), during.clone());
+        let mut files = vec![Answer::Saved { path: dir.join("Photo"), filter: None }].into_iter();
+        panels.dialogs.set_override(Some(Box::new(move |request| match request {
+            Request::Message(_) => {
+                *slot.borrow_mut() = Some(reader.pending_pick());
+                Answer::Message(MessageResult::Cancel)
+            }
+            Request::File(_) => files.next().unwrap_or(Answer::Cancelled),
+        })));
+        let id = service.pick(PickRequest::save("export").suggested_extension("png"));
+        panels.pump(NONE);
+        let asked = during.borrow().clone().expect("the Replace question was asked").expect("the pick is still pending during it");
+        assert_eq!((asked.request.kind, asked.sheet), (PickKind::Save, cfg!(target_os = "macos")), "a Save is a sheet on macOS only");
+        assert!(service.pending_pick().is_none(), "answered");
+        assert_eq!(answered(&service, id), Picked::Cancelled);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

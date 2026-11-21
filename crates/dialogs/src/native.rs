@@ -74,6 +74,7 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
     // The worker first, so a dialog once shown always has somewhere to answer.
     let worker = worker(reply)?;
     let one = |file: Option<rfd::FileHandle>| file.map_or(Answer::Cancelled, |f| Answer::Paths(vec![f.path().to_path_buf()]));
+    let saved = |file: Option<rfd::FileHandle>| file.map_or(Answer::Cancelled, |f| Answer::Saved { path: f.path().to_path_buf(), filter: None });
     let pending: Pending = match d.kind {
         Kind::Open { multiple: false } => {
             let picked = dialog.pick_file();
@@ -100,11 +101,11 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
             let request = crate::portal::SaveRequest::new(&d, parent_id);
             Box::pin(async move {
                 match crate::portal::save_as(request) {
-                    Ok(Some((path, _))) => Answer::Paths(vec![path]), // P3(files-w1): fl.F8
+                    Ok(Some((path, filter))) => Answer::Saved { path, filter },
                     Ok(None) => Answer::Cancelled,
                     Err(e) => {
                         log::info!("portal save dialog unavailable ({e}), using rfd");
-                        one(dialog.save_file().await)
+                        saved(dialog.save_file().await)
                     }
                 }
             })
@@ -112,7 +113,7 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
         #[cfg(not(target_os = "linux"))]
         Kind::Save => {
             let picked = dialog.save_file();
-            Box::pin(async move { one(picked.await) })
+            Box::pin(async move { saved(picked.await) })
         }
     };
     // The worker can't be gone: it waits for this. If it were, its reply answers Unavailable.

@@ -3,9 +3,10 @@
 //! The GTK file chooser behind the portal keeps the typed name when the user picks another file
 //! type, and rfd 0.17 reads only the file name from the portal's answer, so `image.psd` with PNG
 //! picked came back as `image.psd`. The answer does say which type was picked (`current_filter`),
-//! so Save asks the portal itself and gives a name the dialog left alone that type's extension
-//! ([`with_chosen_type`]). rfd stays the fallback (zenity, or no portal), and this can go once an
-//! rfd release reads the picked type (PolyMeilex/rfd#341).
+//! so Save asks the portal itself and reports that type with the typed path; the service gives a
+//! name the dialog left alone the type's extension ([`crate::service::with_chosen_type`]). rfd stays
+//! the fallback (zenity, or no portal), and this can go once an rfd release reads the picked type
+//! (PolyMeilex/rfd#341).
 //!
 //! The dialog is attached to the window on X11. On Wayland it has no parent: naming the window to
 //! the portal needs an xdg-foreign handle, which takes `unsafe` code the workspace forbids.
@@ -16,6 +17,7 @@ use std::path::{Path, PathBuf};
 use raw_window_handle::RawWindowHandle;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
+use crate::service::normal;
 use crate::{FileDialog, Filter};
 
 /// A Save dialog to show.
@@ -26,9 +28,7 @@ pub(crate) struct SaveRequest {
     /// The name the dialog shows: the stem of the suggested file (`test`), see
     /// [`crate::service::dialog_file_name`].
     pub name: Option<String>,
-    /// The suggested file's name (`test.psd`): a name that comes back with its extension still
-    /// takes the extension of the type picked ([`with_chosen_type`]).
-    pub suggested: Option<String>,
+
     /// The folder the dialog opens in.
     pub folder: Option<PathBuf>,
     /// The file types offered.
@@ -49,7 +49,6 @@ impl SaveRequest {
         Self {
             parent,
             name: dialog.file_name.as_deref().and_then(|n| crate::service::dialog_file_name(n, true)),
-            suggested,
             folder: dialog.directory.clone(),
             filters: dialog.filters.clone(),
             current: current.filter(|_| !dialog.filters.is_empty()),
@@ -64,10 +63,6 @@ struct Saved {
     filter: Option<String>,
 }
 
-/// An extension as compared: without the dot, in lower case.
-fn normal(ext: &str) -> String {
-    ext.trim_start_matches('.').to_ascii_lowercase()
-}
 
 /// The portal's parent window identifier for `window`: `x11:<xid>` on X11, empty elsewhere.
 // pc: apps/photocraft/src/portal_save.rs:47 parent_id
@@ -192,72 +187,15 @@ fn file_uri_path(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsString::from_vec(out)))
 }
 
-/// Which file type's extensions belong on the name the dialog returned: the one it reported, or,
-/// when the dialog offered only one type, that one. It reports no pick then, and the name it was
-/// given is the stem, so a bare `Swatches` has to come back as `Swatches.aco`. `None` when the
-/// answer names no type this dialog offered.
-// pc: apps/photocraft/src/portal_save.rs:163 chosen_type
-fn chosen_type(filters: &[Filter], picked: Option<usize>) -> Option<usize> {
-    match picked {
-        Some(i) if i < filters.len() => Some(i),
-        None if filters.len() == 1 => Some(0),
-        _ => None,
-    }
-}
-
-/// `path` with the extension of the file type picked in the Save dialog (`chosen`, its extensions
-/// without the dot), where the dialog left the name alone: the format follows the extension, and
-/// the GTK file chooser keeps the typed name when another type is picked. Only a name that still
-/// has the extension the dialog opened with (`opened_with`, `Untitled-1.psd` with PNG picked) or
-/// none gets the type's first extension, as PolyMeilex/rfd#341 does. An extension of the picked
-/// type stays (`.psb` for PSD), and so does one that any of the request's `filters` lists
-/// (`art.png` with the PSD type untouched): the user typed a type the app saves. Any other
-/// extension (`scan.2024`) is part of the name, and the type's extension is added after it. With
-/// no type picked the path is as typed. Extensions compare in any letter case.
-// pc: apps/photocraft/src/services.rs:161 with_chosen_type
-pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String], filters: &[Filter]) -> PathBuf {
-    let Some(first) = chosen.first() else { return path.to_path_buf() };
-    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    let first = normal(first);
-    let lists = |ext: &str| filters.iter().any(|f| f.extensions.iter().any(|e| normal(e) == ext));
-    match ext {
-        Some(ext) if chosen.iter().any(|e| normal(e) == ext) => path.to_path_buf(),
-        Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),
-        Some(ext) if lists(&ext) => path.to_path_buf(),
-        _ => {
-            let mut name = path.as_os_str().to_owned();
-            name.push(".");
-            name.push(first);
-            PathBuf::from(name)
-        }
-    }
-}
-
-/// Save on Linux: the portal's dialog, with the name given the extension of the file type picked.
-/// When that changes the name to one that already exists, the dialog opens again under the new
-/// name, so the portal asks before replacing it (it asked only about the typed name). Connects to
-/// the session bus; `Err` when the portal can't be reached, and the caller shows rfd's dialog.
+/// Save on Linux: the portal's dialog, answering the typed path and the index of the file type
+/// picked (into `req.filters`). The service settles the name from them. Connects to the session
+/// bus; `Err` when the portal can't be reached, and the caller shows rfd's dialog.
 // pc: apps/photocraft/src/portal_save.rs:174 save_as, services.rs:244-280
-pub(crate) fn save_as(mut req: SaveRequest) -> Result<Option<(PathBuf, Option<usize>)>, String> {
+pub(crate) fn save_as(req: SaveRequest) -> Result<Option<(PathBuf, Option<usize>)>, String> {
     let conn = zbus::blocking::connection::Builder::session().and_then(|b| b.build()).map_err(|e| e.to_string())?;
-    loop {
-        let Some(saved) = save_file(&conn, &req)? else { return Ok(None) };
-        let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|f| f.name == label));
-        // A typed extension is the user's own: `with_chosen_type` keeps one it recognises.
-        let exts: &[String] = match chosen_type(&req.filters, picked) {
-            Some(i) => &req.filters[i].extensions,
-            None => &[],
-        };
-        let path = with_chosen_type(&saved.path, req.suggested.as_deref(), exts, &req.filters);
-        if path == saved.path || !path.exists() {
-            return Ok(Some((path, picked))); // P3(files-w1): fl.F8
-        }
-        req.name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-        req.suggested = req.name.clone();
-        req.folder = path.parent().map(Path::to_path_buf);
-        req.current = picked;
-    }
+    let Some(saved) = save_file(&conn, &req)? else { return Ok(None) };
+    let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|f| f.name == label));
+    Ok(Some((saved.path, picked)))
 }
 
 #[cfg(test)]
