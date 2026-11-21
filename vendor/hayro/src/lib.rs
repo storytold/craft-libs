@@ -61,6 +61,8 @@ use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
 #[cfg(test)]
+mod clip_edge_tests;
+#[cfg(test)]
 mod coverage_budget_tests;
 #[cfg(test)]
 mod no_zoom_tests;
