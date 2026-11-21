@@ -7,7 +7,7 @@ use crate::runtime::env::{Env, Label, UnitKind};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
 use craft_behavior::{CanvasView, EditEvents, ZoomLadder};
-use egui::{Response, Ui};
+use egui::{Rect, Response, Ui};
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -93,6 +93,15 @@ impl ZoomField {
 
     /// Shows the field and reports the view changes it made.
     pub fn show(self, ui: &mut Ui) -> ZoomFieldOutput {
+        self.show_in(ui, None)
+    }
+
+    /// Shows the field in a caller-allocated rectangle, including narrow slots such as a rail.
+    pub fn show_at(self, ui: &mut Ui, rect: Rect) -> ZoomFieldOutput {
+        self.show_in(ui, Some(rect))
+    }
+
+    fn show_in(self, ui: &mut Ui, rect: Option<Rect>) -> ZoomFieldOutput {
         let env = Env::of(ui);
         let pixels_per_point = self.scale.pixels_per_unit(env.scale.0);
         let document = self.document;
@@ -113,7 +122,10 @@ impl ZoomField {
         if self.scrub {
             field = field.scrub_by_label();
         }
-        let shown = field.show(ui);
+        let shown = match rect {
+            Some(rect) => field.show_at(ui, rect),
+            None => field.show(ui),
+        };
         let invalid_zoom = range.filter(|_| shown.cut).map(|range| InvalidZoom { low: *range.start(), high: *range.end() });
         let view = match self.view {
             Some(current) => shown

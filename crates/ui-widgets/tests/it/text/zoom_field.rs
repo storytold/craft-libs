@@ -333,3 +333,28 @@ fn cut_copy_and_delete_with_a_caret_never_reach_the_app() {
     assert_eq!(text(&fixture), "", "with a selection, Cmd+X cuts the field's text");
     assert_eq!(app_edits_fired(&fixture), Vec::<String>::new(), "and the app's Cut stays unfired");
 }
+
+/// A host with a narrow fixed slot can keep the zoom field and its editable text inside it.
+#[trial]
+fn zoom_field_fits_a_narrow_host_slot() {
+    let slot = Rc::new(Cell::new(Rect::NOTHING));
+    let held = slot.clone();
+    let kept = Kept::new();
+    let app = kept.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(40.0, 24.0), egui::Sense::hover());
+        held.set(rect);
+        let out = ZoomField::new(ZOOM, Some(app.view.get()), DOCUMENT).show_at(ui, rect);
+        if let Some(view) = out.view.committed() {
+            app.view.set(*view);
+        }
+    });
+    fixture.settle();
+    let field = fixture.by_label(ZOOM).expect("the zoom field");
+    assert!(slot.get().contains_rect(field.rect), "zoom field {:?} fits its host slot {:?}", field.rect, slot.get());
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.type_text("200");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!((kept.zoom() - 200.0).abs() < 0.01, "the field remains editable");
+}
