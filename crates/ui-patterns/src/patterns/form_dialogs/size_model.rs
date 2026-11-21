@@ -101,6 +101,20 @@ fn resolution_per_inch(unit: UnitKind) -> Option<f64> {
     }
 }
 
+/// The width or height the user typed last in a [`LinkedSize`], while the size it made stands: what a recorded step
+/// keeps of an edit, so that played on an image of another size it does what the user asked for, not the size this
+/// image got (a width alone keeps the other image's proportions, a percentage scales it by that much).
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TypedSide {
+    /// Whether the width was typed; else the height.
+    pub width: bool,
+    /// The value as typed, in `unit` (the change in size, in a relative size).
+    pub value: f64,
+    /// The unit it was typed in: the shared unit, or Columns for a width in columns.
+    pub unit: UnitKind,
+}
+
 /// A value typed in a width or height field, with the state it produced.
 #[derive(Clone, Debug, PartialEq)]
 struct Typed {
@@ -320,6 +334,19 @@ impl LinkedSize {
     /// The resolution being edited, in pixels per inch.
     pub fn pixels_per_inch(&self) -> f64 {
         self.ppi
+    }
+
+    /// The width or height typed last, while the pixel size it made stands and its field still shows the unit it was
+    /// typed in. A value typed in a physical unit also needs the resolution it was typed at; one in pixels or percent
+    /// stands through a resolution change, which leaves the pixels. `None` once another field, the unit, Resample or
+    /// Reset changed the size since.
+    pub fn typed(&self) -> Option<TypedSide> {
+        let typed = self.typed.as_ref()?;
+        let stands = typed.unit == self.side_unit(typed.side)
+            && typed.relative == self.relative
+            && typed.size == self.current
+            && (is_pixel_unit(typed.unit) || typed.ppi == self.ppi);
+        stands.then_some(TypedSide { width: typed.side == Side::Width, value: typed.value, unit: typed.unit })
     }
 
     /// Puts back the opening size and resolution.

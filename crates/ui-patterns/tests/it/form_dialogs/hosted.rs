@@ -137,8 +137,16 @@ fn hosted_forms_answer_ok_with_their_values() {
 
     // PatternFillDialog and CreateShapeDialog live in craft-draw, which depends on this crate; their automation is
     // driven in craft-draw's tests/it (shape_drag.rs, pattern_fill.rs).
-    let image = automate(image_size(), "width", json!(800.0)).map(|result| result.size);
-    assert_eq!(image, Some(PixelSize::new(800, 450)), "Image Size answers the set width, the height following the lock");
+    let image = automate(image_size(), "width", json!(800.0));
+    assert_eq!(
+        image.as_ref().map(|result| result.size),
+        Some(PixelSize::new(800, 450)),
+        "Image Size answers the set width, the height following the lock"
+    );
+    // PhotoCraft #11722: it also says which side was typed, and that the lock linked the other to it.
+    let typed = image.as_ref().and_then(|result| result.typed).map(|typed| (typed.width, typed.value, typed.unit));
+    assert_eq!(typed, Some((true, 800.0, UnitKind::Pixels)), "the typed width");
+    assert_eq!(image.map(|result| result.linked), Some(true), "Constrain Proportions linked the sides");
     let canvas = automate(canvas_size(), "width", json!(2000.0)).map(|result| result.size);
     assert_eq!(canvas, Some(PixelSize::new(2000, 900)), "Canvas Size answers the set width; its sides are not linked");
     let layout = automate(guide_layout(), "centerColumns", json!(true)).map(|result| (result.options.center_columns, result.guides.is_empty()));
