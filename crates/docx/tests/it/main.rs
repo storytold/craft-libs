@@ -18,6 +18,7 @@ mod east_asian_lang;
 mod east_asian_layout;
 mod element_budget;
 mod emphasis_marks;
+mod field_result_limit;
 mod fixtures;
 mod font_table;
 mod glossary;
