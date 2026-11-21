@@ -79,7 +79,7 @@ pub use half::f16;
 use crate::codecs::sgi;
 #[cfg(feature = "sunraster")]
 use crate::codecs::sunraster;
-use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{bmp, dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, pixar, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -138,6 +138,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
                 Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
             }
         }
+        Format::Pixar => pixar::decode(bytes, l),
         Format::JpegLs => jpegls::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
@@ -575,6 +576,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
                 Err(CodecError::unsupported(format, "SGI support requires the sgi feature"))
             }
         }
+        Format::Pixar => Err(CodecError::unsupported(format, "Pixar is import-only; save as PNG instead")),
         Format::JpegLs => jpegls::encode(image, plan),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
