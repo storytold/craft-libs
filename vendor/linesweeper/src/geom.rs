@@ -492,6 +492,11 @@ impl Segment {
         let end_y = (y + eps).min(self.end().y);
 
         match self.inner {
+            // Craft patch (horizontal line bounds): a horizontal line is bounded by both
+            // endpoints. `at_y` returns only its right end.
+            SegmentInner::Line { p0, p1 } if self.is_horizontal() => {
+                kurbo::Rect::from_points((p0.x, p0.y), (p1.x, p1.y))
+            }
             SegmentInner::Line { .. } => {
                 let start_x = self.at_y(start_y);
                 let end_x = self.at_y(end_y);
@@ -538,5 +543,18 @@ impl Segment {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Craft patch (horizontal line bounds)
+    #[test]
+    fn horizontal_line_bounds_cover_both_endpoints() {
+        let s = Segment::straight(Point::new(0.0, 0.0), Point::new(10.0, 0.0));
+        assert_eq!(s.lower(0.0, 0.25), -0.25);
+        assert_eq!(s.upper(0.0, 0.25), 10.25);
     }
 }
