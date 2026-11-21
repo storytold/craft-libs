@@ -61,6 +61,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
             .enumerate()
             .flat_map(|(n, c)| c.iter().enumerate().map(move |(seq, id)| (*id, (n as u32 + 1, seq as u32))))
             .collect(),
+        box_del: None,
     };
     (wr.z, wr.zmap) = super::stacking(doc);
     wr.assign_media();
