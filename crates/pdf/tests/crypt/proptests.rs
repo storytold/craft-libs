@@ -102,9 +102,10 @@ fn make(algorithm: Algorithm, user: &str, owner: &str) -> SecurityHandler {
 
 proptest! {
     /// Encrypting then decrypting returns the input at every length, as a string and as each kind
-    /// of stream — and is byte-for-byte reproducible, because re-running a save must not silently
-    /// produce different bytes. Payloads of at least one block must come back changed: RC4 would
-    /// need an all-zero keystream to leave them alone, and CBC cannot shrink a padded block.
+    /// of stream. RC4 is byte-for-byte reproducible; AES takes a random initialization vector
+    /// every time (ISO 32000-2, 7.6.3), so it never repeats. Payloads of at least one block must
+    /// come back changed: RC4 would need an all-zero keystream to leave them alone, and CBC cannot
+    /// shrink a padded block.
     #[test]
     fn content_survives_the_trip_at_every_length(alg in algorithms(), data in payloads()) {
         let h = make(alg, "user", "owner");
@@ -122,12 +123,13 @@ proptest! {
 
             let enc = h.encrypt_string(num, generation, &data);
             prop_assert_eq!(h.decrypt_string(num, generation, &enc), &data[..], "string round trip at {} bytes ({:?})", data.len(), alg);
-            prop_assert_eq!(h.encrypt_string(num, generation, &data), enc, "string encryption must be reproducible ({:?})", alg);
+            let repeats = !matches!(alg, Algorithm::Aes128 | Algorithm::Aes256);
+            prop_assert_eq!(h.encrypt_string(num, generation, &data) == enc, repeats, "string encryption repeats only for RC4 ({:?})", alg);
 
             for kind in [StreamKind::Normal, StreamKind::EmbeddedFile, StreamKind::Named(b"StdCF")] {
                 let enc = h.encrypt_stream(num, generation, &data, kind);
                 prop_assert_eq!(h.decrypt_stream(num, generation, &enc, kind), &data[..], "stream round trip at {} bytes ({:?}, {:?})", data.len(), alg, kind);
-                prop_assert_eq!(h.encrypt_stream(num, generation, &data, kind), enc, "{:?} {:?} encryption must be reproducible", alg, kind);
+                prop_assert_eq!(h.encrypt_stream(num, generation, &data, kind) == enc, repeats, "{:?} {:?} encryption repeats only for RC4", alg, kind);
             }
 
             if data.len() >= 16 {

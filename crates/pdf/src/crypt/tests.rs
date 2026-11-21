@@ -158,9 +158,46 @@ fn strings_and_streams_round_trip_and_are_scrambled() {
         let data: Vec<u8> = (0..1000u32).map(|i| (i * 7) as u8).collect();
         let enc = h.encrypt_stream(5, 0, &data, StreamKind::Normal);
         assert_eq!(h.decrypt_stream(5, 0, &enc, StreamKind::Normal), data, "{alg:?}");
-        // Deterministic: the same object encrypts to the same bytes (reproducible saves).
-        assert_eq!(h.encrypt_stream(5, 0, &data, StreamKind::Normal), enc);
+        // RC4 has no initialization vector, so the same object encrypts to the same bytes. AES
+        // takes a new one every time.
+        let repeats = !matches!(alg, Algorithm::Aes128 | Algorithm::Aes256);
+        assert_eq!(h.encrypt_stream(5, 0, &data, StreamKind::Normal) == enc, repeats, "{alg:?}");
     }
+}
+
+/// AES strings and streams start with a random 16-byte initialization vector (ISO 32000-2,
+/// 7.6.3), so an object that did not change is stored as different bytes in every save. Two
+/// copies of a file encrypted under one file key then don't show which objects are the same.
+#[test]
+fn aes_encrypts_the_same_object_to_different_bytes_each_time() {
+    let data = b"Quarterly numbers, unchanged since the last save".to_vec();
+    for alg in [Algorithm::Aes128, Algorithm::Aes256] {
+        let h = new(alg, "", "o", -1);
+        let (a, b) = (h.encrypt_stream(5, 0, &data, StreamKind::Normal), h.encrypt_stream(5, 0, &data, StreamKind::Normal));
+        assert_ne!(a[..16], b[..16], "{alg:?}: the stream's initialization vector repeated");
+        assert_eq!(h.decrypt_stream(5, 0, &a, StreamKind::Normal), data, "{alg:?}");
+        assert_eq!(h.decrypt_stream(5, 0, &b, StreamKind::Normal), data, "{alg:?}");
+
+        let (a, b) = (h.encrypt_string(5, 0, &data), h.encrypt_string(5, 0, &data));
+        assert_ne!(a[..16], b[..16], "{alg:?}: the string's initialization vector repeated");
+        assert_eq!(h.decrypt_string(5, 0, &a), data, "{alg:?}");
+        assert_eq!(h.decrypt_string(5, 0, &b), data, "{alg:?}");
+    }
+}
+
+/// Should the random source fail, the vector is derived from the key, the object and its content:
+/// the same content in the same object repeats it, another object or other content does not.
+#[test]
+fn without_a_random_source_the_vector_is_derived_from_the_object() {
+    let iv = |num, data: &[u8]| initialization_vector(|_| Err(getrandom::Error::UNSUPPORTED), b"key", num, 0, data);
+    assert_eq!(iv(5, b"same"), iv(5, b"same"));
+    assert_ne!(iv(5, b"same"), iv(6, b"same"));
+    assert_ne!(iv(5, b"same"), iv(5, b"other"));
+    let drawn = |out: &mut [u8]| {
+        out.fill(7);
+        Ok(())
+    };
+    assert_eq!(initialization_vector(drawn, b"key", 5, 0, b"same"), [7; 16], "a working source gives the vector");
 }
 
 thread_local! {
