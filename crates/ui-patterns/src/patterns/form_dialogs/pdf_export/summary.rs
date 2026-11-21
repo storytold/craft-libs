@@ -3,7 +3,7 @@
 use super::PdfSection;
 use super::words::PdfExportWords;
 use crate::runtime::env::Label;
-use craft_pdf::settings::{Choice, ImageCompression, PdfSettings};
+use craft_pdf::settings::{Choice, ImageCompression, PdfSettings, UNSET_CHOICE};
 
 /// The value of one setting as the Summary compares and words it.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,8 +22,12 @@ enum Shown {
 /// The Summary's lines for `settings` against `base`, then the `warnings`, with LF line breaks (CR and CRLF in values
 /// become LF) and a final LF: what the Summary section shows and Save Summary… writes.
 pub fn summary_text(words: &PdfExportWords, settings: &PdfSettings, base: &PdfSettings, warnings: &[String]) -> String {
-    let _ = (words, settings, base, warnings);
-    todo!("ex.P14")
+    let mut text = String::new();
+    for line in differences(words, settings, base).iter().chain(warnings) {
+        text.push_str(&line.replace("\r\n", "\n").replace('\r', "\n"));
+        text.push('\n');
+    }
+    text
 }
 
 fn choice<T: Choice + PartialEq>(kind: &'static str, value: T) -> Shown {
@@ -107,7 +111,12 @@ fn leaves(settings: &PdfSettings) -> Vec<(&'static str, Shown)> {
     out.extend([
         ("output.conversion", choice("colorConversion", output.conversion)),
         ("output.destination", Shown::Text(output.destination.clone())),
-        ("output.profiles", choice("profileInclusion", output.profiles.unwrap_or_default())), // P3(export-w5): ex.P2
+        (
+            "output.profiles",
+            output.profiles.map_or(Shown::Choice { kind: "profileInclusion", id: UNSET_CHOICE, label: "Default" }, |profiles| {
+                choice("profileInclusion", profiles)
+            }),
+        ),
         ("output.outputIntent", Shown::Text(output.output_intent.clone())),
         ("output.outputCondition", Shown::Text(output.output_condition.clone())),
         ("output.outputConditionId", Shown::Text(output.output_condition_id.clone())),

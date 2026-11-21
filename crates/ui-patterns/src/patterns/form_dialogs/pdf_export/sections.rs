@@ -208,13 +208,7 @@ impl Sections<'_> {
             destinations.extend(profiles.iter().map(|name| (name.clone(), Label::from(name.clone()))));
             name_row(ui, "destination", &words.destination, &mut output.destination, destinations, converting);
             // A standard decides whether colours are tagged.
-            // P3(export-w5): ex.P2 -- an unset `profiles` shows the default choice and stays unset until picked.
-            let before = output.profiles.unwrap_or_default();
-            let mut profile_choice = before;
-            pick(ui, "profiles", "profileInclusion", &words.profile_inclusion, words, &mut profile_choice, standard == Standard::None);
-            if profile_choice != before {
-                output.profiles = Some(profile_choice);
-            }
+            pick_or_unset(ui, "profiles", "profileInclusion", &words.profile_inclusion, words, &mut output.profiles, standard == Standard::None);
             if cmyk_only {
                 note(ui, &words.note_cmyk_only);
             } else if standard != Standard::None {
@@ -401,8 +395,13 @@ fn flag(ui: &mut Ui, id: &'static str, label: &Label, value: &mut bool, enabled:
     }
 }
 
+/// Every choice of `T` with its words.
+fn entries<T: Choice + Copy>(kind: &str, words: &PdfExportWords) -> Vec<(T, Label)> {
+    T::ALL.iter().zip(T::IDS).zip(T::LABELS).map(|((choice, choice_id), choice_label)| (*choice, words.choice(kind, choice_id, choice_label))).collect()
+}
+
 /// A list of the choices of `T`, worded through `words`.
-fn pick<T: Choice + PartialEq + Send + Sync>(
+fn pick<T: Choice + Copy + PartialEq + Send + Sync>(
     ui: &mut Ui,
     id: &'static str,
     kind: &str,
@@ -411,12 +410,7 @@ fn pick<T: Choice + PartialEq + Send + Sync>(
     value: &mut T,
     enabled: bool,
 ) {
-    let entries: Vec<Entry<T>> = T::ALL
-        .iter()
-        .zip(T::IDS)
-        .zip(T::LABELS)
-        .map(|((choice, choice_id), choice_label)| Entry::new(*choice, words.choice(kind, choice_id, choice_label)))
-        .collect();
+    let entries: Vec<Entry<T>> = entries::<T>(kind, words).into_iter().map(|(choice, text)| Entry::new(choice, text)).collect();
     field(ui, id, label, enabled, |ui| {
         let chosen = Select::new(label.clone(), Bind::given(*value), &entries).show(ui);
         if let Some(next) = chosen.value().cloned() {
@@ -425,20 +419,25 @@ fn pick<T: Choice + PartialEq + Send + Sync>(
     });
 }
 
-/// A list of the choices of `T` with a first entry `unset` that stands for `None`.
-#[allow(dead_code, clippy::too_many_arguments)] // P3(export-w5): ex.P13
-fn pick_or_unset<T: Choice + PartialEq + Send + Sync>(
+/// A list of the choices of `T` with a first entry, `words.profile_default`, that stands for `None`.
+// PLAN: the contract's `unset: &Label` argument is dropped (it only ever is `words.profile_default`); it kept the fn over clippy's argument limit.
+fn pick_or_unset<T: Choice + Copy + PartialEq + Send + Sync>(
     ui: &mut Ui,
     id: &'static str,
     kind: &str,
     label: &Label,
     words: &PdfExportWords,
     value: &mut Option<T>,
-    unset: &Label,
     enabled: bool,
 ) {
-    let _ = (ui, id, kind, label, words, value, unset, enabled);
-    todo!("ex.P13")
+    let mut entries = vec![Entry::new(None, words.profile_default.clone())];
+    entries.extend(entries::<T>(kind, words).into_iter().map(|(choice, text)| Entry::new(Some(choice), text)));
+    field(ui, id, label, enabled, |ui| {
+        let chosen = Select::new(label.clone(), Bind::given(*value), &entries).show(ui);
+        if let Some(next) = chosen.value().cloned() {
+            *value = next;
+        }
+    });
 }
 
 /// A list of names (`value`, `label`); a current value that is not among them is added.
