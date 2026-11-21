@@ -2,6 +2,31 @@
 
 All crates share the workspace version. See [the versioning policy](docs/versioning.md).
 
+## [v1.0.3] — 2026-11-22
+
+- **Release Notes:** [GitHub Release v1.0.3](https://github.com/ussoewwin/craft-libs/releases/tag/v1.0.3)
+
+### Architectural Harmonization & Upstream Overlap Resolution
+
+- **Title Bar & Menu Bar Layout Alignment (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`):**
+  - Upstream (`storytold/craft-libs:next`) modernized the title bar layout pipeline via `TitleBar::show_titled`, making title width allocation automatic within the layout container.
+  - Retired custom fork methods (`TitleBar::leading_width`, `MenuBar::own_width`, `MenuBarUi::width`) and obsolete regression test `menu_bar_room.rs`, restoring 100% code parity with upstream layout contracts and eliminating merge conflicts.
+- **Content-Sized Container Inline Header Sizing (`craft-ui-contract`):**
+  - Reverted custom inline header reservation hooks in `body/size.rs`, `body/regions.rs`, and `body/hooks.rs` to clean upstream baseline, utilizing upstream's unified container sizing pass.
+- **Tool Rail Localization Architecture Evolution (`craft-ui-panels`):**
+  - Downstream PhotoCraft transitioned tool command translation directly to the official `CommandState::title` system in `framework.rs`.
+  - Retired custom `RailLabels` closures (`ToolRail::labels`, `FlyoutButton::labels`) in `craft-ui-panels`.
+  - Preserved critical keyboard policy: `FlyoutButton` retains explicit `with_space_activation()`, keeping the `Space` key strictly dedicated to the canvas Hand/Pan tool while allowing focused buttons to activate cleanly.
+- **Consolidated CJK Font Classification Single Source of Truth (`craft-font-manager`):**
+  - Redundant classification heuristics formerly maintained in `photocraft/crates/text` (`font_class.rs`) were completely consolidated into `craft-font-manager/rank.rs`.
+  - Added `localized_families` fallback: automatically evaluates native Japanese font names (e.g. `ＭＳ 明朝`, `游ゴシック`) when ASCII family names do not trigger classification rules.
+  - Ensures workspace-wide single source of truth for CJK classification (Mincho, Gothic, Maru Gothic, Kaisho, Pop) with Photoshop 1:1 Japanese name parity.
+- **Upstream Synchronization & Verification:**
+  - Synchronized latest upstream changes (including PRs #2756, #2838).
+  - All test suites passing with zero warnings: `craft-font-manager` (60 passed), `craft-print` (51 passed), `craft-ui-contract` (396 passed), `craft-ui-shell` (128 passed), `craft-menu` (3 passed), `craft-ui-panels` (234 passed).
+
+---
+
 ## v0.1.0 — 2026-10-12
 
 First coordinated Git release of craft-libs. Applications can pin a named baseline instead of
