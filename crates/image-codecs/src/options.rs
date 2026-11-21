@@ -160,6 +160,11 @@ pub enum TiffCompression {
     Lzw,
     Deflate,
     PackBits,
+    /// Lossy JPEG strips (compression 7, TIFF Technical Note #2), with
+    /// [`EncodeOptions::jpeg_quality`] and [`EncodeOptions::jpeg_chroma_subsampling`]. Only 8-bit
+    /// gray and RGB images without alpha or extra channels can be written this way; any other
+    /// image is an error, not a silent conversion.
+    Jpeg,
 }
 
 /// JPEG scan layout: Photoshop's JPEG Options › Format Options.
