@@ -380,21 +380,28 @@ pub enum DialogRole {
     Destructive,
     /// Leaves without an outcome.
     Cancel,
+    /// Another answer that closes the question: No, Don't Save, Discard. It stands with the other outcomes on macOS
+    /// and Linux and next to the accepting button on Windows.
+    Alternate,
     /// Any other outcome.
     Other,
 }
 
 impl DialogRole {
     /// The position in the row: later roles stand nearer the end. Windows puts the accepting button first and the
-    /// others after it; macOS and Linux put it last.
+    /// answers that close the question after it, before Cancel; macOS and Linux put the accepting button last.
     fn rank(self, windows: bool) -> u8 {
-        let rank = match self {
-            DialogRole::Other => 0,
-            DialogRole::Destructive => 1,
-            DialogRole::Cancel => 2,
-            DialogRole::Accept => 3,
-        };
-        if windows { 3 - rank } else { rank }
+        match (windows, self) {
+            (false, DialogRole::Other | DialogRole::Alternate) => 0,
+            (false, DialogRole::Destructive) => 1,
+            (false, DialogRole::Cancel) => 2,
+            (false, DialogRole::Accept) => 3,
+            (true, DialogRole::Accept) => 0,
+            (true, DialogRole::Alternate) => 1,
+            (true, DialogRole::Cancel) => 2,
+            (true, DialogRole::Destructive) => 3,
+            (true, DialogRole::Other) => 4,
+        }
     }
 }
 
@@ -515,14 +522,15 @@ enum Content {
 }
 
 /// The indexes of `roles` in display order: by role rank, and in the given order within a rank. A column puts
-/// `Accept` on top and `Cancel` under it on every platform, then the others.
+/// `Accept` on top, `Alternate` and `Cancel` under it on every platform, then the others.
 pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..roles.len()).collect();
     if column {
         order.sort_by_key(|&at| match roles[at] {
             DialogRole::Accept => 0,
-            DialogRole::Cancel => 1,
-            DialogRole::Destructive | DialogRole::Other => 2,
+            DialogRole::Alternate => 1,
+            DialogRole::Cancel => 2,
+            DialogRole::Destructive | DialogRole::Other => 3,
         });
     } else {
         order.sort_by_key(|&at| roles[at].rank(windows));
@@ -633,7 +641,7 @@ impl FooterBar {
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
-                            DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
+                            DialogRole::Cancel | DialogRole::Alternate | DialogRole::Other => Variant::SECONDARY,
                         };
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                         if column {
