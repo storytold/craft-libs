@@ -209,7 +209,7 @@ fn a_square_wheel_hands_the_inner_press_to_the_square_and_its_markers_pick() {
     let square = rig.fixture.by_label("Saturation and brightness").expect("the square").rect;
     rig.fixture.click_at(pos2(square.right() + 2.0, square.center().y));
     rig.fixture.idle(2);
-    let [hue, saturation, brightness] = rig.values.get().values;
+    let [hue, saturation, brightness, _] = rig.values.get().values;
     assert_eq!(hue, 200.0, "the square leaves the hue");
     assert_eq!(saturation, 100.0, "beside the square's right edge is full saturation");
     assert!((brightness - 50.0).abs() < 4.0, "level with the square's middle is half brightness: {brightness}");

@@ -3,7 +3,7 @@
 use craft_color_ui::AreaMode;
 use craft_color_ui::ui::{AreaShape, ColorArea, Gamut};
 use craft_theme::{ColorModel, HsbModel, Srgba};
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Color32, Pos2, Rect, Shape, Ui, Vec2};
 

@@ -383,7 +383,7 @@ fn the_color_picker_dialogs_swatch_view_marks_the_current_colour_and_a_pick_is_a
     fixture.click(&toggle).idle(4);
     let selected = |fixture: &Fixture, name: &str| {
         let cell = fixture.by_label(name).unwrap_or_else(|| panic!("the swatch view shows {name}"));
-        fixture.tree().data_of(cell.node).and_then(|data| data.is_selected()).unwrap_or(false)
+        fixture.tree().selected_of(cell.node).unwrap_or(false)
     };
     assert!(selected(&fixture, "Red"), "the cell equal to the current colour is marked");
     assert!(!selected(&fixture, "Blue"), "and no other");

@@ -82,7 +82,7 @@ fn a_pair_well_drags_its_payload_and_takes_a_drop_a_mixed_well_does_neither() {
     fixture.settle();
     let wells = fixture.by_role(Role::RADIO_BUTTON);
     let [a_primary, a_secondary, b_primary, b_secondary] = [0, 1, 2, 3].map(|i| wells[i].rect);
-    let mut drag = |fixture: &mut Fixture, from: egui::Pos2, to: egui::Pos2| {
+    let drag = |fixture: &mut Fixture, from: egui::Pos2, to: egui::Pos2| {
         *log.borrow_mut() = Log::default();
         fixture.drag_at(from, to - from);
     };
