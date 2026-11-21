@@ -80,13 +80,9 @@ mod tests {
         assert_eq!(result.unmapped_fields, ["contrast"]);
 
         // JSON cannot represent a non-finite number; serde_json serializes it to null.
-        for invalid in [
-            json!([]),
-            json!({ "exposure": null }),
-            json!({ "exposure": "NaN" }),
-            json!({ "exposure": f64::INFINITY }),
-            json!({ "exposure": 5.1 }),
-        ] {
+        for invalid in
+            [json!([]), json!({ "exposure": null }), json!({ "exposure": "NaN" }), json!({ "exposure": f64::INFINITY }), json!({ "exposure": 5.1 })]
+        {
             assert!(migrate_camera_raw(&base, &invalid).is_err());
         }
         Ok(())
