@@ -161,8 +161,10 @@ pub(crate) enum KeyEvent {
     Access(Action),
     /// The held modifiers changed.
     Modifiers(craft_keymap::Mods),
-    /// The right Alt key (AltGr on layouts that have it) went down or up, or the window lost focus (up).
+    /// The right Alt key (AltGr on layouts that have it) went down or up.
     RightAlt(bool),
+    /// The window lost focus, so held keys may be released elsewhere.
+    FocusLost,
     /// Anything else.
     Other,
 }
@@ -178,7 +180,7 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> K
     };
     match event {
         Event::Key { physical_key: Some(egui::Key::AltRight), pressed, .. } => KeyEvent::RightAlt(*pressed),
-        Event::WindowFocused(false) => KeyEvent::RightAlt(false),
+        Event::WindowFocused(false) => KeyEvent::FocusLost,
         Event::Key { pressed: true, repeat, .. } => match read(event) {
             Some(input) => input.typed.map_or(KeyEvent::Other, |key| KeyEvent::Press { key, input, repeat: *repeat }),
             None => KeyEvent::Other,
@@ -672,12 +674,63 @@ pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
     });
 }
 
-/// The raw-input state of one viewport that `prepare` keeps: the legacy pinch's run and the Control-click remap.
+/// Windows can return from Alt+Tab with Alt in its modifier report, without a new Alt key press.
+/// Ignore that report until Alt comes up or the window receives a fresh press.
+#[derive(Default, PartialEq, Eq)]
+enum WindowsAlt {
+    #[default]
+    Live,
+    Unfocused,
+    AwaitingPress,
+}
+
+
+impl WindowsAlt {
+    fn normalize(&mut self, input: &mut RawInput) {
+        let mut at = 0;
+        while at < input.events.len() {
+            let event = &mut input.events[at];
+            match event {
+                Event::WindowFocused(false) => *self = Self::Unfocused,
+                Event::WindowFocused(true) if *self == Self::Unfocused => *self = Self::AwaitingPress,
+                Event::ModifiersChanged(modifiers) if *self == Self::AwaitingPress && !modifiers.alt => {
+                    *self = Self::Live;
+                }
+                Event::Key { physical_key: Some(Key::AltLeft | Key::AltRight), pressed: true, repeat: false, modifiers, .. }
+                    if *self == Self::AwaitingPress =>
+                {
+                    *self = Self::Live;
+                    // The modifier report may have arrived just before this press and been suppressed.
+                    let held = egui::Modifiers { alt: true, ..*modifiers };
+                    input.events.insert(at, Event::ModifiersChanged(held));
+                    at += 1;
+                }
+                Event::ModifiersChanged(modifiers)
+                | Event::Key { modifiers, .. }
+                | Event::PointerButton { modifiers, .. }
+                | Event::MouseWheel { modifiers, .. }
+                    if *self != Self::Live =>
+                {
+                    modifiers.alt = false;
+                }
+                _ => {}
+            }
+            at += 1;
+        }
+        if *self != Self::Live {
+            input.modifiers.alt = false;
+        }
+    }
+}
+
+
+/// The raw-input state `prepare` keeps for one viewport.
 #[derive(Default)]
 pub(crate) struct RawState {
     /// The input time of the last Ctrl+wheel folded into a pinch step.
     last_pinch: Option<f64>,
     control_click: ControlClick,
+    windows_alt: WindowsAlt,
     /// The Alt+numpad entry in progress.
     alt_code: super::alt_code::AltCodeEntry,
     /// An Alt release in this hook's input ended an Alt code: the key stage takes it (`take_alt_code_ended`) in the
@@ -693,12 +746,15 @@ pub(crate) struct RawState {
 /// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel delta is scaled
 /// once and each digit folded once, with nothing to replay or remember between passes.
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
+    let os = crate::runtime::windows::os_of(ctx);
+    if os == Os::Windows {
+        PerViewport::<RawState>::with(ctx, input.viewport_id, |state| state.windows_alt.normalize(input));
+    }
     fold_legacy_pinch(ctx, input);
     // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
     // PLAN: assumed `pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages)` in `runtime/frame.rs` (platform-w3).
     let (wheel, pages) = crate::runtime::frame::root_input(ctx);
     scale_wheel(&mut input.events, wheel);
-    let os = crate::runtime::windows::os_of(ctx);
     let macos = os == Os::Mac;
     // A chord a component claims or a capture holds goes to its owner before Alt-code entry.
     let claimed = crate::runtime::keys::claims_press(ctx, input);
