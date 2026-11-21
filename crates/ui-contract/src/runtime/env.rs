@@ -293,6 +293,10 @@ pub(crate) struct RowLine {
     /// container that fills its height take the line (`line_height`). While the row is measured, the line it shares
     /// gives `centre` and `height` but is not settled.
     pub(crate) settled: bool,
+    /// Whether the children placed in flow under the line take their slots on it and report their lines to the row:
+    /// the row's direct children. The content of a levelled unit stands on the line only to fill it (`fill_size`,
+    /// `line_height`).
+    pub(crate) places: bool,
 }
 
 /// What a collection records for one of its items in a pass: the row flags the item folds into its state (step 12)

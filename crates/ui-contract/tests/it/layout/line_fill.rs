@@ -1,7 +1,7 @@
-//! Filling the line of a row that takes its height from its content: a levelled unit stands on the row's line, a
-//! container that fills its height there runs its body in the line's height from the first frame and measures its
-//! content while the row measures, and a centred row in a unit of a row that scrolls centres across its own column, not
-//! in the view.
+//! Filling the line of a row that takes its height from its content: a levelled unit stands on the row's line and its
+//! children take no slots on it, a container that fills its height there runs its body in the line's height from the
+//! first frame and measures its content while the row measures, and a centred row in a unit of a row that scrolls
+//! centres across its own column, not in the view.
 
 use craft_ui::contract::{ContainerProps, HeaderRegion, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::{BodyLayout, RowAlign, levelled_unit};
@@ -48,6 +48,29 @@ fn a_levelled_unit_stands_on_its_rows_line() {
             "{when}: the unit's filling child {fill:?} spans the row's line {row:?}"
         );
     }
+}
+
+/// A levelled unit of two controls stays one line high: its children sit in the unit's own column, not each on a slot
+/// as tall as the row's line.
+#[trial]
+fn a_levelled_unit_of_two_controls_stays_one_line_high() {
+    let second = RefCell::new(Seen::default());
+    let seen = line_and_fill(|ui, top| {
+        levelled_unit(ui, Id::new("unit"), 1, |ui, _| {
+            Probe::new(top).id_salt("first").show(ui);
+            Probe::new(&second).id_salt("second").show(ui);
+        });
+    });
+    let second = second.borrow().rect;
+    for ((row, top), when) in seen.into_iter().zip(["in the first frame", "once settled"]) {
+        assert!((row.height() - TALL).abs() <= SNAP, "{when}: the row {row:?} stays as tall as its tall member");
+        assert!(
+            top.top() >= row.top() - SNAP && top.bottom() <= row.bottom() + SNAP,
+            "{when}: the unit's first control {top:?} lies in the row {row:?}"
+        );
+    }
+    let row = seen[1].0;
+    assert!(second.bottom() <= row.bottom() + SNAP, "the unit's second control {second:?} lies in the row {row:?}");
 }
 
 /// A container that fills its height, on a row that shares its line with an inline header, measures its content while

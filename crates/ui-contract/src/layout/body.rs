@@ -400,14 +400,16 @@ pub fn plan_levels(units: &[Vec<f32>], room: f32) -> Vec<usize> {
 /// at its kept level. Outside a shrinking row the unit shows at level 0.
 ///
 /// The unit shows on the row's line: a child of it that fills its height takes the line's height, as a direct child of
-/// the row does (`fill_size`). At its level it runs in the width the shrink step gave that level, a bounded room even
-/// in a row that scrolls, so its content lays out as in any room of that width: a centred row in it centres across
-/// its column, not in the view the row scrolls in.
+/// the row does (`fill_size`). Its children are placed in the unit's own flow, not on slots of the line, and report no
+/// line to the row: a unit of two controls stays one line high. At its level it runs in the width the shrink step gave
+/// that level, a bounded room even in a row that scrolls, so its content lays out as in any room of that width: a
+/// centred row in it centres across its column, not in the view the row scrolls in.
 pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&mut Ui, usize)) {
     let ctx = ui.ctx().clone();
     let shrink = Env::of(ui).shrink;
-    // The unit's content is no unit of the row: it runs in a room of its own, on the row's line.
-    let line = Env::of(ui).row_line;
+    // The unit's content is no unit of the row: it runs in a room of its own, on the row's line only to fill it. Its
+    // children take no slots on the line and report nothing to the row: the unit's block is what stands in the row.
+    let line = Env::of(ui).row_line.map(|line| RowLine { places: false, ..line });
     let own_room = Env::of(ui).derive_local(|scoped| {
         scoped.start_room();
         scoped.row_line = line;
@@ -1143,7 +1145,7 @@ pub fn place_in_flow(ui: &mut Ui, size: Vec2) -> Rect {
 /// and its first line to the container whose header or body it starts.
 pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     let env = Env::of(ui);
-    let (line, target) = (env.row_line, env.first_line);
+    let (line, target) = (env.row_line.filter(|line| line.places), env.first_line);
     let child = InFlow { first: if child.line { child.first } else { one_line(child.first, size.y) }, ..child };
     let above = line.and_then(|line| line.centre).zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
     let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
@@ -1536,6 +1538,7 @@ pub(crate) fn members_line(ctx: &egui::Context, body: Id) -> Option<RowLine> {
         centre: Some(took.x),
         height: Some(took.y),
         settled: true,
+        places: true,
     })
 }
 
@@ -1552,7 +1555,7 @@ fn on_line(body: Id, own: Option<(f32, f32)>, shared: Option<f32>) -> RowLine {
         (None, Some(shared)) => (Some(shared / 2.0), Some(shared)),
         (None, None) => (None, None),
     };
-    RowLine { body, centre, height, settled: own.is_some() }
+    RowLine { body, centre, height, settled: own.is_some(), places: true }
 }
 
 /// Starts a sweep of a body's children in a measuring run: the body's first-line `target` and, for the unwrapped
