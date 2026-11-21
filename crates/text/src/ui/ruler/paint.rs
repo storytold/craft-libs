@@ -1,7 +1,7 @@
 //! The ruler's drawing.
 
 use super::geometry::glyph;
-use super::items::Item;
+use super::items::{Item, SELECTOR};
 use super::run::{Held, ruler_text};
 use super::{TextRuler, TextRulerStyle};
 use craft_ui::canvas::{RulerTick, Rulers, TickRule};
@@ -95,18 +95,23 @@ impl TextRuler<'_> {
         let end = shapes.right(g.strip, right);
         triangle(end.left_bottom(), end.right_bottom(), pos2(right, end.min.y), Item::Right);
 
-        if let Some(kind) = self.kind {
-            let corner = layout.corner;
-            draw.fill(&rect(corner), style.fill);
-            let side = style.thickness.min(corner.width()).min(corner.height());
-            let boxed = Rect::from_center_size(corner.center(), vec2(side, side));
-            draw.stroke(&rect(boxed), StrokeWidth::Thin, style.tick);
-            let (segments, dot) = glyph(&shapes, boxed.center().x, boxed.max.y - (boxed.height() - style.stem) / 2.0, kind, false);
+        if let (Some(kind), Some(corner)) = (self.kind, layout.corner) {
+            // The corner continues the strip round it, the box is the column's colour.
+            let surround = if style.face == RulerFace::Centred { style.strip } else { style.margin };
+            draw.fill(&rect(corner), surround);
+            let side = style.selector_side.min(corner.width()).min(corner.height());
+            let boxed = PaintShape::Rect(Rect::from_center_size(corner.center(), vec2(side, side)), style.selector_radius);
+            draw.fill(&boxed, cx.resolve_part(SELECTOR, &style.selector));
+            draw.stroke(&boxed, StrokeWidth::Thin, style.tick);
+            // The glyph is centred on the box by its own bounds: a left or right stop's foot runs to one side of its stem.
+            let (segments, dot) = glyph(&shapes, 0.0, 0.0, kind, false);
+            let bounds = Rect::from_points(&segments.iter().flatten().copied().chain(dot).collect::<Vec<_>>());
+            let shift = corner.center() - bounds.center();
             for [a, b] in segments {
-                draw.stroke(&path(a, b), StrokeWidth::Thin, cx.resolve(&style.marker));
+                draw.stroke(&path(a + shift, b + shift), StrokeWidth::Thin, cx.resolve(&style.marker));
             }
             if let Some(centre) = dot {
-                draw.fill(&PaintShape::Circle(centre, style.dot), cx.resolve(&style.marker));
+                draw.fill(&PaintShape::Circle(centre + shift, style.dot), cx.resolve(&style.marker));
             }
         }
     }

@@ -488,7 +488,7 @@ impl<'a> PageRulers<'a> {
         self
     }
 
-    /// Shows the tab selector in the corner, with the kind a click sets.
+    /// Shows the tab selector in the canvas's corner, with the kind a click sets.
     pub fn kind(mut self, kind: Option<TabAlign>) -> Self {
         self.kind = kind;
         self
@@ -554,7 +554,7 @@ impl<'a> PageRulers<'a> {
             let env = Env::of(ui);
             (env.words::<PageRulersWords>(), env.view().direction().is_rtl())
         };
-        let (top_strip, left_strip) = Rulers::strips(ui, canvas_rect);
+        let (top_strip, left_strip, corner) = Rulers::strips(ui, canvas_rect);
         let page_size = (f64::from(page.rect.width()) / page.scale, f64::from(page.rect.height()) / page.scale);
         let shown = edges.reborrow().get().and_then(|edges| edges.same().copied()).unwrap_or_default();
         let rules = MarginRules::new(page_size, shown).gutter(gutter).mirrored_even(mirrored_even);
@@ -565,8 +565,8 @@ impl<'a> PageRulers<'a> {
         let scale = (page.scale as f32).max(f32::EPSILON);
 
         let rtl = right_to_left.unwrap_or(interface_rtl);
-        // The ruler counts from the column's start edge and covers the page's width; both are given as screen x, and the
-        // ruler places its own corner square.
+        // The ruler counts from the column's start edge and covers the page's width; both are given as screen x. With the
+        // tab selector it lies along the top strip and the canvas's corner, which holds the selector.
         let origin = page.rect.min.x + (if rtl { column.1 } else { column.0 }) * scale;
         let extent = Rangef::new(page.rect.min.x, page.rect.max.x);
         let mut horizontal = TextRuler::new(label.clone(), ruler, (column.1 - column.0).max(0.0))
@@ -579,13 +579,15 @@ impl<'a> PageRulers<'a> {
             .scale(scale)
             .right_to_left(rtl)
             .id_source(id);
+        let mut band = top_strip;
         if let Some(kind) = kind {
-            horizontal = horizontal.kind(kind);
+            horizontal = horizontal.kind(kind).corner(corner);
+            band = top_strip.union(corner);
         }
         if let Some(face) = face {
             horizontal = horizontal.face(face);
         }
-        let ruler_out = horizontal.show_at(ui, top_strip);
+        let ruler_out = horizontal.show_at(ui, band);
 
         let vertical_label = Label::from(words.vertical.fill(&[("name", label.as_str())]));
         let mut vertical = VerticalRuler::new(vertical_label, page).text(Rangef::new(top as f32, bottom as f32)).unit(unit).rows(rows);

@@ -464,7 +464,7 @@ impl<'a> PageView<'a> {
         // (`ContainerProps::scroll_owner`), so the app's body runs with the clip opened over the strips again, where
         // its `PageRulers` show. The canvas's own `with_rulers` would show the general rulers there instead.
         let (canvas_rect, strips_clip) = if rulers {
-            let (top, left) = Rulers::strips(ui, rect);
+            let (top, left, _) = Rulers::strips(ui, rect);
             let inner = Rect::from_min_max(pos2(left.max.x.min(rect.max.x), top.max.y.min(rect.max.y)), rect.max);
             (inner, Some(ui.clip_rect().intersect(rect)))
         } else {
