@@ -248,6 +248,10 @@ impl<'a> MenuBarUi<'a> {
                     if keys.focus == Some(k) {
                         // The title the keyboard is on is lit like a hovered one.
                         button = button.fill(ui.visuals().widgets.hovered.weak_bg_fill);
+                    } else if egui::Popup::is_id_open(&ctx, ui.next_auto_id().with("popup")) {
+                        // The title of the open menu stays lit once the pointer has moved into the
+                        // menu, where the title is no longer hovered.
+                        button = button.fill(ui.visuals().widgets.open.weak_bg_fill);
                     }
                     let title = ui.add(button);
                     let open_now = egui::Popup::is_id_open(&ctx, egui::Popup::default_response_id(&title));
