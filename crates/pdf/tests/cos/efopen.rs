@@ -26,13 +26,18 @@ fn fixture(algorithm: Algorithm, auth_event: &str) -> Vec<u8> {
 /// [`fixture`], the attachment naming `/StdCF` in a `/Crypt` filter of its own when `named`, with
 /// no `/EFF` (ISO 32000-2 §7.4.10).
 fn fixture_with(algorithm: Algorithm, auth_event: &str, named: bool) -> Vec<u8> {
+    fixture_stored(algorithm, auth_event, named, |cipher| cipher)
+}
+
+/// [`fixture_with`], the attachment's encrypted data stored as `store` leaves it.
+fn fixture_stored(algorithm: Algorithm, auth_event: &str, named: bool, store: impl Fn(Vec<u8>) -> Vec<u8>) -> Vec<u8> {
     let id0 = [7u8; 16];
     let params =
         NewEncryption { algorithm, user_password: PASSWORD, owner_password: "owner pw", permissions: -4, encrypt_metadata: true, seed: [3; 32] };
     let handler = craft_pdf::crypt::create(&params, &id0).unwrap();
     let d = handler.dict();
     let kind = if named { StreamKind::Named(b"StdCF") } else { StreamKind::EmbeddedFile };
-    let cipher = handler.encrypt_stream(EMBEDDED.num, 0, ATTACHED, kind);
+    let cipher = store(handler.encrypt_stream(EMBEDDED.num, 0, ATTACHED, kind));
     let (eff, crypt) = if named { ("", " /Filter [/Crypt] /DecodeParms [<< /Name /StdCF >>]") } else { (" /EFF /StdCF", "") };
     let (version, cfm, r6) = match algorithm {
         Algorithm::Aes256 => ("/V 5 /R 6", "/AESV3 /Length 32", format!("/OE <{}> /UE <{}> /Perms <{}>", hex(&d.oe), hex(&d.ue), hex(&d.perms))),
@@ -220,5 +225,57 @@ fn the_password_given_later_unlocks_the_embedded_files() {
     let mut doc = Document::open(Arc::new(fixture(Algorithm::Aes256, "EFOpen"))).unwrap();
     let edited = stream(&doc, EMBEDDED);
     doc.set(EMBEDDED, Object::Stream(edited));
-    assert!(matches!(doc.unlock(PASSWORD), Err(CosError::Security(_))));
+    let Err(CosError::Security(refused)) = doc.unlock(PASSWORD) else { panic!("unlocked over an edit read as stored") };
+    // From the review of the EFOpen change: the refusal sends the reader to undo the edit, not
+    // to save it, since that save is refused as well.
+    assert!(write_incremental(&doc, &SaveOptions::default()).is_err(), "the edit can't be saved either");
+    assert!(refused.contains("undo") && !refused.contains("save or"), "{refused}");
+    assert!(doc.embedded_files_locked());
+}
+
+/// AES stream data is a 16-byte initialization vector followed by whole blocks (ISO 32000-2
+/// §7.6.3.2). Data cut short decrypts to its whole blocks only, so the document records it once the
+/// stream is read, for callers that need the data whole (an attachment saved as a file). Intact
+/// data, a stream not yet read and an edited stream are not recorded.
+#[test]
+fn aes_stream_data_cut_short_is_recorded_once_read() {
+    for algorithm in [Algorithm::Aes128, Algorithm::Aes256] {
+        let whole = Document::open_with_password(Arc::new(fixture(algorithm, "DocOpen")), Some(PASSWORD)).unwrap();
+        assert_eq!(stream(&whole, EMBEDDED).decoded().unwrap(), ATTACHED, "{algorithm:?}");
+        assert!(!whole.ciphertext_damaged(EMBEDDED), "{algorithm:?}");
+        for cut in [1, 17] {
+            let bytes = fixture_stored(algorithm, "DocOpen", false, |mut cipher| {
+                cipher.truncate(cipher.len() - cut);
+                cipher
+            });
+            let mut doc = Document::open_with_password(Arc::new(bytes), Some(PASSWORD)).unwrap();
+            assert!(!doc.ciphertext_damaged(EMBEDDED), "not read yet: {algorithm:?} {cut}");
+            let read = stream(&doc, EMBEDDED);
+            assert!(doc.ciphertext_damaged(EMBEDDED), "{algorithm:?} {cut}");
+            assert!(!doc.ciphertext_damaged(CONTENT), "a stream in the clear: {algorithm:?} {cut}");
+            doc.set(EMBEDDED, Object::Stream(read));
+            assert!(!doc.ciphertext_damaged(EMBEDDED), "an edit is the document's own: {algorithm:?} {cut}");
+        }
+    }
+}
+
+/// From the review of the AES change: a stream read through a damaged xref row is decrypted with
+/// its header's generation and recorded so, and the reference that reached it, by the row's
+/// generation, asks about the same stream. A generation nothing accepts still names nothing.
+#[test]
+fn damaged_aes_data_is_known_by_the_reference_that_read_it() {
+    let mut bytes = fixture_stored(Algorithm::Aes128, "DocOpen", false, |mut cipher| {
+        cipher.truncate(cipher.len() - 1);
+        cipher
+    });
+    let header = format!("\n{} 0 obj\n", EMBEDDED.num).into_bytes();
+    let at = bytes.windows(header.len()).position(|w| w == header.as_slice()).unwrap();
+    assert_eq!(bytes.windows(header.len()).filter(|w| *w == header.as_slice()).count(), 1);
+    // The header says generation 1, the xref row 0: the same length, so every offset stays.
+    bytes[at + header.len() - 6] = b'1';
+    let doc = Document::open_with_password(Arc::new(bytes), Some(PASSWORD)).unwrap();
+    let _ = stream(&doc, EMBEDDED);
+    assert!(doc.ciphertext_damaged(EMBEDDED), "asked by the row's generation");
+    assert!(doc.ciphertext_damaged(ObjRef { generation: 1, ..EMBEDDED }), "asked by the header's generation");
+    assert!(!doc.ciphertext_damaged(ObjRef { generation: 2, ..EMBEDDED }), "a generation nothing accepts");
 }

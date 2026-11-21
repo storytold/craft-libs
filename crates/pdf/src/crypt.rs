@@ -480,6 +480,14 @@ impl SecurityHandler {
         self.apply(self.method(None), num, generation, data, true)
     }
 
+    /// Whether `data`, stored stream data of `kind` that this handler decrypts with AES, is not a
+    /// 16-byte initialization vector followed by whole blocks, at least one (ISO 32000-2 §7.6.3.2:
+    /// CBC mode with PKCS#5 padding, which always adds a block's worth or less): it was cut short
+    /// or damaged, and decrypting it keeps only the whole blocks. No data at all is an empty stream.
+    pub fn stream_ciphertext_damaged(&self, data: &[u8], kind: StreamKind) -> bool {
+        matches!(self.method(Some(kind)), Method::Aes128 | Method::Aes256) && !data.is_empty() && (data.len() < 32 || !data.len().is_multiple_of(16))
+    }
+
     pub fn decrypt_stream(&self, num: u32, generation: u16, data: &[u8], kind: StreamKind) -> Vec<u8> {
         self.apply(self.method(Some(kind)), num, generation, data, false)
     }

@@ -61,6 +61,9 @@ pub struct Document {
     /// See [`Self::unreadable_objects`] and [`Self::repaired_objects`]. Shared by clones, like
     /// the caches: it describes the source, and is reset wherever they are.
     object_notes: Arc<Mutex<ObjectNotes>>,
+    /// See [`Self::ciphertext_damaged`]: the streams read so far whose stored AES data is not whole.
+    /// Shared by clones and reset with the cache, like [`Self::unreadable_objects`].
+    damaged_ciphertext: Arc<Mutex<HashSet<ObjRef>>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
     jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,
