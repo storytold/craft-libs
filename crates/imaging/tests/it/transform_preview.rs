@@ -66,6 +66,20 @@ fn unit_quad() -> [Point; 4] {
     [pt(0.0, 0.0), pt(100.0, 0.0), pt(100.0, 100.0), pt(0.0, 100.0)]
 }
 
+#[trial]
+fn source_clip_moves_with_the_preview_and_preserves_texture_coordinates() {
+    let clip = [pt(0.0, 0.0), pt(1.0, 0.0), pt(1.0, 0.5), pt(0.0, 0.5)];
+    let moved = [pt(20.0, 40.0), pt(120.0, 40.0), pt(120.0, 140.0), pt(20.0, 140.0)];
+    let mesh = PreviewMap::quad(moved).build(1.0, [0.8, 0.6]).clipped_to_source(clip, [0.8, 0.6]);
+    assert!(!mesh.indices.is_empty());
+    for &index in &mesh.indices {
+        let p = mesh.points[index as usize];
+        let uv = mesh.uv[index as usize];
+        assert!(p.y <= 90.001, "{p:?}");
+        assert!((f64::from(uv[1]) / 0.6 - (p.y - 40.0) / 100.0).abs() < 1e-5);
+    }
+}
+
 /// A clipped preview retains texture coordinates where its frame cuts the image.
 #[trial]
 fn a_preview_clipped_to_a_frame_keeps_its_texture_coordinates() {

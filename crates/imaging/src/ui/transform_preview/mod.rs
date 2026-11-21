@@ -118,6 +118,11 @@ pub struct TransformPreview<'a> {
     /// A convex quadrilateral in document space limiting the visible preview.
     #[prop]
     clip_quad: Option<[Point; 4]>,
+    /// A convex quadrilateral in normalized source coordinates, clipped before transformation.
+    /// With a source clip the plain mesh is shown, since the styled composite includes effects
+    /// outside the source and cannot be clipped in source space after compositing.
+    #[prop]
+    source_clip: Option<[Point; 4]>,
     /// The monitor conversion of the displayed upload; the mip levels stay raw.
     #[prop]
     display: Option<&'a PreviewDisplay>,
@@ -145,6 +150,7 @@ impl<'a> TransformPreview<'a> {
             nearest: false,
             clip: None,
             clip_quad: None,
+            source_clip: None,
             display: None,
             styled: None,
             dragging: false,
@@ -195,8 +201,8 @@ impl Component for TransformPreview<'_> {
         let scale = map.source_scale(self.textures.size());
         let tint = Color32::from_white_alpha((self.opacity.clamp(0.0, 1.0) * 255.0).round() as u8);
 
-        let styled = match (&self.styled, &map, self.clip) {
-            (Some((preview, source)), PreviewMap::Quad(quad), Some(canvas)) => {
+        let styled = match (&self.styled, &map, self.clip, self.source_clip) {
+            (Some((preview, source)), PreviewMap::Quad(quad), Some(canvas), None) => {
                 let mut frame = StyledFrame::new(self.textures, *quad, canvas, zoom);
                 frame.quad_scale = scale;
                 frame.nearest = self.nearest;
@@ -219,6 +225,10 @@ impl Component for TransformPreview<'_> {
             let choice = PreviewTextures::choose(zoom, scale, self.nearest);
             let Some((texture, uv)) = self.textures.pick(&ctx, choice, self.display) else { return };
             let mesh = map.build(view.zoom * f64::from(device), uv);
+            let mesh = match self.source_clip {
+                Some(clip) => mesh.clipped_to_source(clip, uv),
+                None => mesh,
+            };
             add_mesh(&painter, mesh, texture, tint, self.clip, self.clip_quad, &view);
         }
         if let Some(first) = first {
