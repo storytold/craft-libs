@@ -289,12 +289,18 @@ pub struct Dialogs<T> {
     open: Option<Open<T>>,
     answers: Vec<(T, Answer)>,
     show: Show,
+    hook: Option<ShowHook>,
 }
 
 impl<T> Dialogs<T> {
     /// A dialog queue that calls `wake` when an answer arrives.
     pub fn new(wake: Wake) -> Self {
-        Self { wake, queue: VecDeque::new(), open: None, answers: Vec::new(), show: Show::Native }
+        Self { wake, queue: VecDeque::new(), open: None, answers: Vec::new(), show: Show::Native, hook: None }
+    }
+
+    /// Runs `hook` around every native dialog's blocking show.
+    pub fn set_show_hook(&mut self, hook: ShowHook) {
+        self.hook = Some(hook);
     }
 
     /// Queues a file dialog. It shows at the next [`Self::show_pending`] once the dialogs asked
@@ -328,7 +334,19 @@ impl<T> Dialogs<T> {
             // A panic while showing (rfd's own checks) must not unwind into winit's handler.
             let shown = match &mut self.show {
                 Show::Override(answer_with) => catch_unwind(AssertUnwindSafe(|| reply.send(answer_with(&request)))).map(|()| None),
-                Show::Native => catch_unwind(AssertUnwindSafe(|| native::show(request, parent, reply))),
+                Show::Native => catch_unwind(AssertUnwindSafe(|| {
+                    let (mut asked, mut shown) = (Some((request, reply)), None);
+                    let mut run = || {
+                        if let Some((request, reply)) = asked.take() {
+                            shown = Some(native::show(request, parent, reply));
+                        }
+                    };
+                    match &mut self.hook {
+                        Some(hook) => hook(&mut run),
+                        None => run(),
+                    }
+                    shown.flatten()
+                })),
                 #[cfg(test)]
                 Show::Custom(show) => catch_unwind(AssertUnwindSafe(|| show(request, reply))).map(|()| None),
             };

@@ -319,9 +319,9 @@ impl FilePanels {
     }
 
     /// Runs `hook` around every native dialog's blocking show, so the app can mark the wait as waiting for the user.
-    pub fn show_hook(self, hook: crate::ShowHook) -> Self {
-        let _ = hook;
-        todo!("q348")
+    pub fn show_hook(mut self, hook: crate::ShowHook) -> Self {
+        self.dialogs.set_show_hook(hook);
+        self
     }
 
     /// Sets whether the panels ask the Replace question when the native panel did not.
