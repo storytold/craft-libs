@@ -1,17 +1,30 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+changes listed under Local changes and Local patches. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs` and `docs/sweep.typ`.
-
-Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+Every file here except this one, `SOURCE.json` and the files named below is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes each local patch.
+holds `upstream_revision`. `local_patches` describes each local change.
+
+The files with local changes are `src/sweep/sweep_line.rs` (the doc comment patch under Local patches
+and the sweep position change), `src/order.rs`, `src/curve/mod.rs`, `src/curve/line.rs`, `src/topology.rs` and `docs/sweep.typ` (the three document fixes under Local patches).
+
+## Local changes
+
+| Change | Code comment label | Touches | Tests |
+|---|---|---|---|
+| `SegmentOrder::position` finds a segment by binary search over a key on each sweep-line entry | `Craft patch (sweep position)` | `src/sweep/sweep_line.rs` | `position_after_edits`, `position_after_repeated_insertion`, `position_after_insertion_next_to_the_extreme_keys`, `position_after_moving_a_contour_continuation`, `position_on_a_wide_sweep_line` |
+| `ComparisonCache` skips the curve comparison for segments whose horizontal bounds are far apart | `Craft patch (far-apart comparison)` | `src/order.rs`, `src/curve/mod.rs` | `far_apart_order`, `far_apart_curves_compare_like_the_full_comparison`, `far_apart_steep_curves_never_reverse`, `far_apart_steep_curves_skip_the_full_comparison` |
+| `Metrics::entries` holds two entries inline, as a `SmallVec` | `Craft patch (inline metrics)` | `src/curve/mod.rs` | `cargo check --example curve_metrics` |
+
+Every change here updates this table and `SOURCE.json` in the same commit. To take a new linesweeper
+release, unpack the crates.io package, carry these changes over, regenerate `SOURCE.json`, and run the
+tests below.
 
 ## Local patches
 
@@ -50,13 +63,15 @@ linesweeper = { git = "https://github.com/storytold/craft-libs", rev = "<rev>" }
 
 ## Tests
 
-`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests. The `craft-prepress`
+`scripts/test-pdf-backends.sh` runs the package's unit, regression and doc tests, and runs the unit
+and regression tests again with the `slow-asserts` feature. The `craft-prepress`
 tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter lists this directory,
 so a pull request that changes files here starts `pdf.yml`. No workflow runs clippy on this copy. Run
 the tests and clippy from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
+cargo test --locked --lib --test regression --features slow-asserts
 cargo test --locked --doc
 cargo clippy --locked --all-features --lib --test regression -- -D warnings
 cargo clippy --locked --all-features --lib --profile test -- -D warnings
