@@ -480,3 +480,7 @@ SIMD-capable decoders. `craft-pdf/read` depends on it with `default-features = f
 features = ["std"]`, so the feature stays off; a review of the resolved graph should keep it
 that way. The CI check for that resolved feature set is a CI change under AGENTS.md rule 11 and
 is proposed separately rather than in a fix pull request.
+
+## Paint-time tiling opacity (PdfCraft #5318)
+
+Ported from approved PdfCraft head `8b1d5f96a8f293e7280169b2d57fbbc8d93c7e41` (MIT OR Apache-2.0). `hayro-interpret` patch 107 stores `ca`/`CA` at paint time; `hayro` patch 79 fades the rendered cell and keys its cache by opacity, including the single-cell path. Stencil and knockout shape paints clear the opacity. Two synthetic renderer regressions in `hayro/src/lib.rs` preserve the original fill/stroke, differing `ca`/`CA`, ordering and single-cell checks; no external fixture was added.

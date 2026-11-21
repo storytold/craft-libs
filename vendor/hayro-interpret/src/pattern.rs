@@ -79,6 +79,7 @@ impl<'a> Pattern<'a> {
             Self::Tiling(p) => {
                 p.non_stroking_paint = p.non_stroking_paint.clone().opaque();
                 p.stroke_paint = p.stroke_paint.clone().opaque();
+                p.opacity = 1.0;
             }
         }
         self
@@ -88,8 +89,9 @@ impl<'a> Pattern<'a> {
     /// painted. A `gs` can come after `scn`/`SCN`, so the alpha must not be captured when the
     /// pattern is selected.
     pub(crate) fn set_alpha(&mut self, alpha: f32) {
-        if let Self::Shading(p) = self {
-            p.opacity = alpha;
+        match self {
+            Self::Shading(p) => p.opacity = alpha,
+            Self::Tiling(p) => p.opacity = alpha,
         }
     }
 
@@ -182,6 +184,8 @@ pub struct TilingPattern<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
     nesting_depth: u32,
+    /// PdfCraft patch (107), #5318: fill or stroke opacity at paint time, applied to the whole cell.
+    pub opacity: f32,
 }
 
 impl TilingPattern<'_> {
@@ -254,12 +258,12 @@ impl<'a> TilingPattern<'a> {
         let non_stroking_paint = Color::new(
             fill_cs,
             state.graphics_state.non_stroke_color.clone(),
-            state.graphics_state.non_stroke_alpha,
+            1.0,
         );
         let stroke_paint = Color::new(
             stroke_cs,
             state.graphics_state.stroke_color.clone(),
-            state.graphics_state.stroke_alpha,
+            1.0,
         );
         let nesting_depth = ctx.nesting_depth() + 1;
 
@@ -280,6 +284,7 @@ impl<'a> TilingPattern<'a> {
             cache: ctx.interpreter_cache.clone(),
             xref: ctx.xref,
             nesting_depth,
+            opacity: 1.0,
         })
     }
 
