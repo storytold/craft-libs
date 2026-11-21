@@ -671,6 +671,9 @@ fn apply_frame(p: &mut ParaProps, prl: &Prl) {
             f.wrap = match v {
                 1 => "notBeside",
                 2 => "around",
+                3 => "none",
+                4 => "tight",
+                5 => "through",
                 _ => "auto",
             }
             .into();
