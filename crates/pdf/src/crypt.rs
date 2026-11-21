@@ -790,8 +790,13 @@ fn key_r6(d: &EncryptDict, pw: &[u8], owner: bool) -> Result<Option<Zeroizing<Ve
 pub enum Algorithm {
     /// R2, 40-bit RC4 (legacy: [`create`] refuses it, [`create_legacy`] writes it).
     Rc4_40,
-    /// R3, 128-bit RC4 (legacy: [`create`] refuses it, [`create_legacy`] writes it).
+    /// R3, 128-bit RC4 (`/V 2`, PDF 1.4; legacy: [`create`] refuses it, [`create_legacy`] writes
+    /// it). Asked to leave the metadata unencrypted, which only crypt filters can say (Table 21
+    /// `EncryptMetadata`), it is written as [`Rc4_128CryptFilter`](Algorithm::Rc4_128CryptFilter).
     Rc4_128,
+    /// R4, 128-bit RC4 through a crypt filter (`/V 4`, `/CFM /V2`, Table 25; PDF 1.5), which can
+    /// leave the metadata unencrypted (legacy: [`create`] refuses it, [`create_legacy`] writes it).
+    Rc4_128CryptFilter,
     /// R4, AES-128 crypt filters.
     Aes128,
     /// R6, AES-256 (PDF 2.0; the default for new documents).
@@ -802,7 +807,18 @@ impl Algorithm {
     /// Whether this is one of the broken legacy ciphers: read for compatibility, and refused for
     /// new encryption by [`create`].
     pub fn is_legacy(self) -> bool {
-        matches!(self, Algorithm::Rc4_40 | Algorithm::Rc4_128)
+        matches!(self, Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Rc4_128CryptFilter)
+    }
+
+    /// Whether this encryption can leave the metadata unencrypted: every one but 40-bit RC4,
+    /// which has no crypt filters and keeps a 40-bit key (Table 20 `V 1`; `V 4` uses 128 bits).
+    pub fn can_leave_metadata_unencrypted(self) -> bool {
+        self != Algorithm::Rc4_40
+    }
+
+    /// Whether this encryption goes through crypt filters (`/V 4` or `/V 5`) whatever is asked.
+    pub fn has_crypt_filters(self) -> bool {
+        matches!(self, Algorithm::Rc4_128CryptFilter | Algorithm::Aes128 | Algorithm::Aes256)
     }
 }
 
@@ -812,7 +828,7 @@ impl Algorithm {
 /// at most 127 bytes.
 fn prepared_password(algorithm: Algorithm, password: &str) -> Zeroizing<Vec<u8>> {
     match algorithm {
-        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => legacy_password(password),
+        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Rc4_128CryptFilter | Algorithm::Aes128 => legacy_password(password),
         Algorithm::Aes256 => sasl_password(password),
     }
 }
@@ -827,7 +843,7 @@ fn prepared_password(algorithm: Algorithm, password: &str) -> Zeroizing<Vec<u8>>
 pub fn effective_password(algorithm: Algorithm, password: &str) -> Vec<u8> {
     let prepared = prepared_password(algorithm, password);
     match algorithm {
-        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => pad(&prepared).to_vec(),
+        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Rc4_128CryptFilter | Algorithm::Aes128 => pad(&prepared).to_vec(),
         Algorithm::Aes256 => prepared.to_vec(),
     }
 }
@@ -895,14 +911,19 @@ fn create_any(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
     let user = prepared_password(params.algorithm, params.user_password);
     let owner = prepared_password(params.algorithm, params.owner_password);
     match params.algorithm {
-        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => {
+        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Rc4_128CryptFilter | Algorithm::Aes128 => {
+            // 128-bit RC4 through a crypt filter (`/V 4`): asked for, or needed to leave the
+            // metadata unencrypted.
+            let rc4_filter =
+                params.algorithm == Algorithm::Rc4_128CryptFilter || (params.algorithm == Algorithm::Rc4_128 && !params.encrypt_metadata);
             (d.v, d.r, d.length_bits) = match params.algorithm {
                 Algorithm::Rc4_40 => (1, 2, 40),
-                Algorithm::Rc4_128 => (2, 3, 128),
+                Algorithm::Rc4_128 if !rc4_filter => (2, 3, 128),
                 _ => (4, 4, 128),
             };
-            if params.algorithm == Algorithm::Aes128 {
-                d.crypt_filters = vec![(b"StdCF".to_vec(), Method::Aes128)];
+            if params.algorithm == Algorithm::Aes128 || rc4_filter {
+                let method = if rc4_filter { Method::Rc4 } else { Method::Aes128 };
+                d.crypt_filters = vec![(b"StdCF".to_vec(), method)];
                 d.stm_f = b"StdCF".to_vec();
                 d.str_f = b"StdCF".to_vec();
             } else {
