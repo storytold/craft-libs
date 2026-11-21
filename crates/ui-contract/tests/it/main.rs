@@ -14,6 +14,7 @@ pub(crate) mod fonts;
 pub(crate) mod icon_ids;
 pub(crate) mod keys_consumed;
 pub(crate) mod layout;
+pub(crate) mod modal_cover;
 pub(crate) mod motion;
 pub(crate) mod paint;
 

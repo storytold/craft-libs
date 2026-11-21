@@ -393,6 +393,18 @@ pub(crate) fn press_captured(ctx: &Context) -> bool {
     probe.is_some_and(|probe| probe(ctx))
 }
 
+/// The egui widgets the viewport's last primary press resolved to: what its click decides on when the release
+/// reaches them.
+pub(crate) fn last_press_targets(ctx: &Context, viewport: ViewportId) -> PressTargets {
+    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.press_targets)
+}
+
+/// Forgets the viewport's last press: a press re-tapped for a modal's late content is that tap's first click,
+/// not the second click of the press it replaces.
+pub(crate) fn forget_last_press(ctx: &Context, viewport: ViewportId) {
+    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.last_press = None);
+}
+
 /// Why captured presses end in the running pass: a cancel a service requested, else the window losing focus.
 pub(crate) fn cancel_of_pass(ctx: &Context) -> Option<PressCancel> {
     let viewport = pass::current_viewport(ctx);

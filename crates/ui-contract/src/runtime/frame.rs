@@ -616,6 +616,24 @@ pub(crate) fn holds_input(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.holds())
 }
 
+/// Whether the input hook holds the primary release that ends a tap whose press went down at `at`: the
+/// one-press rule holds a single-frame tap's release for the next frame.
+pub(crate) fn holds_tap_release(ctx: &Context, viewport: ViewportId, at: egui::Pos2) -> bool {
+    PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.holds_release_at(at))
+}
+
+/// Re-taps a press whose pass could not see the widget under it: behind the release the one-press rule holds
+/// for the next frame, `at` is pressed and released again. The first press's click dies as it does today, and
+/// the re-tap is decided against the record the pass that saw `at` completed, as any later tap is.
+pub(crate) fn retap_under_modal(ctx: &Context, viewport: ViewportId, at: egui::Pos2) {
+    let modifiers = ctx.input(|input| input.modifiers);
+    let button =
+        |pressed| Arrived { event: egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers }, at: None };
+    PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.hold_behind([button(true), button(false)]));
+    pointer::forget_last_press(ctx, viewport);
+    raw_input::request_repaint_of(ctx, viewport);
+}
+
 /// The input hook: egui runs it before it pushes the viewport, so every step reads only `RawInput` and
 /// records keyed by `input.viewport_id`.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {

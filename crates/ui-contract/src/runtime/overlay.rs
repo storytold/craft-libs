@@ -6,7 +6,7 @@
 use crate::runtime::commands;
 use crate::runtime::egui::areas::{self, Layer, Tier};
 use crate::runtime::egui::pass;
-use crate::runtime::frame::{PassStep, PerViewport, Stamped};
+use crate::runtime::frame::{self, PassStep, PerViewport, Stamped};
 use crate::runtime::pass_state;
 use crate::runtime::pointer;
 use craft_behavior::OwnerClass;
@@ -729,8 +729,11 @@ fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (current, last_ids) = with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>()));
-    let pressed = pointer::frame_raw(ctx).press.map(|press| press.origin);
-    let order = with_persist(ctx, viewport, |persist| {
+    let press_start = pointer::frame_raw(ctx).press;
+    let pressed = press_start.map(|press| press.origin);
+    let (order, retap) = with_persist(ctx, viewport, |persist| {
+        // What the last pass left as the open-modal fact and gate: read before this pass overwrites them.
+        let prior_modal = persist.modal;
         let stamp = |id: Id, persist: &mut Persist| {
             persist.counter += 1;
             persist.raised.insert(id, persist.counter);
@@ -792,9 +795,55 @@ pub(crate) fn end_pass(ctx: &Context) {
             .map(|(_, members)| {
                 members.iter().flat_map(|member| std::iter::once(member.rect).chain(member.anchor).chain(member.peers.iter().copied())).collect()
             });
-        order
+        // A tap that presses and releases in one frame inside a modal family can lose its click: egui decides the
+        // press against the last pass's widget record, so while the family's content is a pass behind its layer -
+        // what a host's own egui widgets shown in a modal do, and what photocraft measured at the pin (a kittest
+        // click absorbed in the first 1-2 passes after open, landing at 3-6; a reopen shifts the window) - the
+        // press names the layer's own widget, its cover, or something under the modal, and the release, which the
+        // one-press rule holds for the next frame, finds the modal gate closed. The press arrives nowhere. A
+        // contract component takes its press by the gate and not by the target, and is not caught. When the widget
+        // this pass shows under the tap is not the one the press named, and what the press named stands on the
+        // family itself or nowhere live, re-tap the press for the next frame: the tap then decides as any later
+        // tap does. The press that opened the layer keeps its click - it named a live widget outside the family -
+        // and presses beside the family's rect keep being absorbed by the cover.
+        let retap = press_start
+            .filter(|press| press.button == craft_behavior::PointerButton::Primary)
+            .filter(|press| frame::holds_tap_release(ctx, viewport, press.origin))
+            .and_then(|press| {
+                let top = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting && !entry.window)?;
+                let members = families.iter().find(|members| members.iter().any(|member| member.id == top.id))?;
+                let member = members.iter().find(|member| member.rect.contains(press.origin))?;
+                let decided = pointer::last_press_targets(ctx, viewport).click;
+                let named_the_family = match decided.map(|id| ctx.read_response(id).map(|response| response.layer_id)) {
+                    // The press named a widget this pass shows: only the family's own layers are suspect.
+                    Some(Some(layer)) => layer == member.layer || member.cover == Some(layer),
+                    // The press named a widget this pass shows nowhere: nothing can answer its release.
+                    Some(None) => true,
+                    // The press named nothing: re-tap once a modal already held the window.
+                    None => prior_modal,
+                };
+                if !named_the_family {
+                    return None;
+                }
+                // The widget that would take the click when the tap lands: the top one this pass registered on the
+                // family's own layer under the tap point.
+                let live = ctx.viewport(|viewport| {
+                    viewport
+                        .this_pass
+                        .widgets
+                        .get_layer(member.layer)
+                        .filter(|widget| widget.sense.senses_click() && widget.interact_rect.contains(press.origin))
+                        .last()
+                        .map(|widget| widget.id)
+                });
+                (live != decided).then_some(press.origin)
+            });
+        (order, retap)
     });
     areas::set_layer_order(ctx, &order);
+    if let Some(at) = retap {
+        frame::retap_under_modal(ctx, viewport, at);
+    }
     // An owner takes a close in the frame after the request at the latest; one nobody took is for a layer that is not shown.
     let now = pass::root_frame_nr(ctx);
     pass_state::with::<Closes, _>(ctx, |closes| closes.0.retain(|(.., queued, carried)| *carried || queued + 1 >= now));
