@@ -645,6 +645,7 @@ mod tests {
 
     #[test]
     fn a_frame_that_expands_past_the_tile_is_refused() {
+        assert_eq!(TILE, 256);
         let frame = ruzstd::encoding::compress_to_vec(&[7u8; 100][..], ruzstd::encoding::CompressionLevel::Fastest);
         assert_eq!(unzstd(&frame, 100, "t").ok(), Some(vec![7u8; 100]));
         assert!(matches!(unzstd(&frame, 99, "t"), Err(Error::Malformed(m)) if m.contains("more than 99 bytes")));
