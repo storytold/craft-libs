@@ -228,11 +228,18 @@ impl Converter<'_> {
             self.add_page_number();
         }
         self.sec.title_pg = self.sec.hide_first.is_some_and(|h| h.header || h.footer || h.pagenum);
-        self.section_backgrounds();
+        self.background_header();
+        // this section's own headers and footers, as later sections may inherit them
+        for h in &self.sec.hf {
+            if let Some(blocks) = &h.blocks {
+                self.carry.inherited_hf.insert((h.kind, h.which), (h.name.clone(), blocks.clone()));
+            }
+        }
+        self.master_page();
         if self.sec.title_pg {
             self.first_page_parts();
         }
-        self.section_backgrounds_in_headers();
+        self.backgrounds_in_headers();
         let hf = std::mem::take(&mut self.sec.hf);
         for h in hf.iter() {
             if let Some(blocks) = &h.blocks {
@@ -247,18 +254,6 @@ impl Converter<'_> {
             set_ref(&mut self.carry.inherited_refs, k, v);
         }
     }
-
-    /// The section's master page and background (drawings: read with the pictures).
-    fn section_backgrounds(&mut self) {
-        // this section's own headers and footers, as later sections may inherit them
-        for h in &self.sec.hf {
-            if let Some(blocks) = &h.blocks {
-                self.carry.inherited_hf.insert((h.kind, h.which), (h.name.clone(), blocks.clone()));
-            }
-        }
-    }
-
-    fn section_backgrounds_in_headers(&mut self) {}
 
     fn add_page_number(&mut self) {
         let Some((pos, fmt, side)) = self.sec.page_num.clone() else { return };

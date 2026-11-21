@@ -21,15 +21,12 @@ const LIMITS: craft_zip::Limits = craft_zip::Limits { max_entries: MAX_ENTRIES, 
 pub struct Entry {
     pub name: String,
     pub data: Vec<u8>,
-    /// Stored (not deflated) in the original: `mimetype` must stay so.
-    pub stored: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct Item {
     pub id: String,
     pub href: String,
-    pub media_type: String,
 }
 
 /// An opened HWPX document.
@@ -75,7 +72,6 @@ impl Package {
         let mut pkg = Package::default();
         for i in 0..z.len() {
             let (Some(name), Some(false)) = (z.entry_name(i).map_err(Error::format)?, z.entry_is_dir(i).map_err(Error::format)?) else { continue };
-            let stored = z.is_stored(&name).unwrap_or(false);
             // Reads within the part and archive limits, counting what really arrives.
             let data = match z.read(&name, MAX_PART_BYTES) {
                 Ok(Some(data)) => data,
@@ -84,7 +80,7 @@ impl Package {
                 Err(craft_zip::Error::BudgetSpent { .. }) => return Err(Error::TooLarge("archive")),
                 Err(e) => return Err(Error::format(e)),
             };
-            pkg.add_entry(Entry { name, data, stored });
+            pkg.add_entry(Entry { name, data });
         }
         pkg.rootfile = pkg.find_rootfile();
         if let Some(rf) = pkg.rootfile.clone() {
@@ -152,7 +148,7 @@ impl Package {
         for it in root.iter("opf:item") {
             if let Some(href) = self.resolve(it.get("href").unwrap_or("")) {
                 let id = it.get("id").map(str::to_string).unwrap_or_else(|| href.clone());
-                items.push(Item { id, href, media_type: it.get("media-type").unwrap_or("").to_string() });
+                items.push(Item { id, href });
             }
         }
         self.set_items(items);
@@ -264,10 +260,6 @@ impl Package {
         let i = *self.index.get(name)?;
         let e = self.entries.get(i)?;
         Some((e.name.as_str(), e.data.as_slice()))
-    }
-
-    pub fn mimetype(&self) -> String {
-        self.read("mimetype").map(|d| String::from_utf8_lossy(d).trim().to_string()).unwrap_or_default()
     }
 }
 

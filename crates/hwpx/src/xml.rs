@@ -61,10 +61,6 @@ pub struct Element {
 }
 
 impl Element {
-    pub fn new(tag: &str) -> Self {
-        Element { tag: tag.to_string(), ..Default::default() }
-    }
-
     pub fn get(&self, key: &str) -> Option<&str> {
         self.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
@@ -95,40 +91,6 @@ impl Element {
     /// [`Self::iter_all`] named `tag`.
     pub fn iter<'a>(&'a self, tag: &'a str) -> impl Iterator<Item = &'a Element> + 'a {
         self.iter_all().filter(move |e| e.tag == tag)
-    }
-
-    /// The element as XML text (its tail not included), `extra` added to its start tag (namespace
-    /// declarations for a root). Elements nested deeper than the parser follows are left out.
-    pub fn to_xml(&self, extra: &str) -> String {
-        let mut out = String::new();
-        self.write_xml(&mut out, extra, 0);
-        out
-    }
-
-    fn write_xml(&self, out: &mut String, extra: &str, depth: usize) {
-        if depth > MAX_DEPTH {
-            return;
-        }
-        out.push('<');
-        out.push_str(&self.tag);
-        if !extra.is_empty() {
-            out.push(' ');
-            out.push_str(extra);
-        }
-        for (k, v) in &self.attrs {
-            out.push_str(&format!(" {k}={}", attr(v)));
-        }
-        if self.text.is_empty() && self.children.is_empty() {
-            out.push_str("/>");
-            return;
-        }
-        out.push('>');
-        out.push_str(&esc(&self.text));
-        for c in &self.children {
-            c.write_xml(out, "", depth + 1);
-            out.push_str(&esc(&c.tail));
-        }
-        out.push_str(&format!("</{}>", self.tag));
     }
 }
 
@@ -293,34 +255,5 @@ fn resolve_switches(el: &mut Element, depth: usize) {
     }
     for c in &mut el.children {
         resolve_switches(c, depth + 1);
-    }
-}
-
-/// XML text escaping (& < >), as Python's `xml.sax.saxutils.escape`.
-pub(crate) fn esc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            _ => o.push(c),
-        }
-    }
-    o
-}
-
-/// A quoted attribute value, as Python's `quoteattr` (double quotes unless the value has some).
-pub(crate) fn attr(s: &str) -> String {
-    let mut v = esc(s).replace('\n', "&#10;").replace('\r', "&#13;").replace('\t', "&#9;");
-    if v.contains('"') {
-        if v.contains('\'') {
-            v = v.replace('"', "&quot;");
-            format!("\"{v}\"")
-        } else {
-            format!("'{v}'")
-        }
-    } else {
-        format!("\"{v}\"")
     }
 }

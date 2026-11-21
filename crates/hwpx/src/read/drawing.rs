@@ -394,7 +394,7 @@ impl Converter<'_> {
     }
 
     /// The picture's bytes stored under a media key (the same entry once).
-    fn media(&mut self, name: &str, data: &[u8]) -> String {
+    pub(crate) fn media(&mut self, name: &str, data: &[u8]) -> String {
         if let Some(k) = self.media_keys.get(name) {
             return k.clone();
         }
