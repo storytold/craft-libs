@@ -13,12 +13,14 @@ type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 struct Tracked {
     prefix: Vec<u8>,
     length: u64,
+    fail_at: Option<u64>,
+    shrink_after: Option<(usize, u64)>,
     reads: Mutex<Vec<(u64, usize)>>,
 }
 
 impl Tracked {
     fn new(bytes: Vec<u8>, length: u64) -> Arc<Self> {
-        Arc::new(Self { prefix: bytes, length, reads: Mutex::new(Vec::new()) })
+        Arc::new(Self { prefix: bytes, length, fail_at: None, shrink_after: None, reads: Mutex::new(Vec::new()) })
     }
 
     fn take_reads(&self) -> Vec<(u64, usize)> {
@@ -28,11 +30,19 @@ impl Tracked {
 
 impl ByteSource for Tracked {
     fn len(&self) -> u64 {
+        if let Some((reads, length)) = self.shrink_after
+            && self.reads.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len() >= reads
+        {
+            return length;
+        }
         self.length
     }
 
     fn read_at(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
         self.reads.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((offset, out.len()));
+        if self.fail_at.is_some_and(|at| offset <= at && at < offset.saturating_add(out.len() as u64)) {
+            return Err(io::Error::other("injected second Y4M delimiter read failure"));
+        }
         let start = usize::try_from(offset).map_err(io::Error::other)?;
         let available = self.prefix.get(start..).unwrap_or_default();
         let n = out.len().min(available.len());
@@ -133,4 +143,63 @@ fn declines_unknown_and_oversize_without_reading_payloads() {
     assert!(matches!(Y4mSource::open("large.y4m", input), Err(MediaError::Unsupported(_))));
     let reads = reader.take_reads();
     assert!(!reads.is_empty() && reads.into_iter().all(|(_, len)| len <= 128));
+}
+
+fn sparse_mono_pair() -> (Vec<u8>, u64, u64, u64) {
+    let header = b"YUV4MPEG2 W16 H16 Cmono\n";
+    let mut prefix = header.to_vec();
+    prefix.extend_from_slice(b"FRAME\n");
+    prefix.resize(prefix.len() + 256, 0);
+    let at_second = prefix.len() as u64;
+    prefix.extend_from_slice(b"FRAME\n");
+    let length = prefix.len() as u64 + 256;
+    (prefix, header.len() as u64, at_second, length)
+}
+
+#[test]
+fn index_preserves_second_frame_delimiter_io_error() -> TestResult<()> {
+    let (prefix, first, second, length) = sparse_mono_pair();
+    // Only the read starting at the second delimiter fails; the payload was in bounds.
+    let reader = Arc::new(Tracked { prefix, length, fail_at: Some(second), shrink_after: None, reads: Mutex::new(Vec::new()) });
+    let input: SharedBytes = reader.clone();
+    let result = Y4mSource::open("unreadable.y4m", input);
+    assert_eq!(reader.take_reads(), vec![(0, 128), (first, 128), (second, 128)]);
+    let Err(MediaError::Io(message)) = result else {
+        return Err("a second delimiter read failure must not silently shorten the video".into());
+    };
+    assert!(message.contains("injected second Y4M delimiter read failure"));
+    Ok(())
+}
+
+#[test]
+fn index_reports_short_read_when_source_shrinks_mid_open() -> TestResult<()> {
+    let (prefix, first, second, length) = sparse_mono_pair();
+    // The opener and the first two range reads see the original extent. The allocator
+    // observes the shrink on the next range, just two bytes into the second delimiter.
+    let reader = Arc::new(Tracked { prefix, length, fail_at: None, shrink_after: Some((2, second + 2)), reads: Mutex::new(Vec::new()) });
+    let input: SharedBytes = reader.clone();
+    let result = Y4mSource::open("shrunk.y4m", input);
+    assert_eq!(reader.take_reads(), vec![(0, 128), (first, 128), (second, 2)]);
+    let Err(MediaError::Io(message)) = result else {
+        return Err("a short read from a changing source must not silently shorten the video".into());
+    };
+    assert!(message.contains("short read while indexing Y4M"));
+    Ok(())
+}
+
+#[test]
+fn nonintegral_tick_pts_selects_the_frame_it_labels() -> TestResult<()> {
+    let bytes: Arc<[u8]> = b"YUV4MPEG2 W1 H1 F31:1 Cmono\nFRAME\n\x11FRAME\n\x22".as_slice().into();
+    let source = Y4mSource::open("fractional-ticks.y4m", Arc::new(bytes))?;
+    let second_tick = Tick(8_194_064_517);
+    assert_eq!(source.info().duration, Tick(16_388_129_033));
+    for (ask, pts, luma) in [(Tick(second_tick.0 - 1), Tick::ZERO, 0x11), (second_tick, second_tick, 0x22)] {
+        let frame = source.video_frame(FrameRequest::full(ask))?;
+        let PixelData::Yuv8 { planes, .. } = &frame.data else {
+            return Err("expected YUV8".into());
+        };
+        assert_eq!(frame.pts, pts);
+        assert_eq!(planes[0].as_slice(), &[luma]);
+    }
+    Ok(())
 }

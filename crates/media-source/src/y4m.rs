@@ -28,7 +28,28 @@ impl Y4mSource {
     /// byte-reader allocation ceiling is reported as unsupported before this source is returned.
     pub fn open(name: &str, source: SharedBytes) -> Result<Self> {
         let len = source.len();
-        let stream = Stream::open(len, |offset, len| read_range(&*source, offset, len).ok(), &Limits::default()).map_err(|err| match err {
+        let mut read_error = None;
+        let stream = Stream::open(
+            len,
+            |offset, len| match read_range(&*source, offset, len) {
+                Ok(bytes) if bytes.len() == len => Some(bytes),
+                Ok(_) => {
+                    // The parser already clips requests to the length snapshotted at open.
+                    // A shorter read here is an I/O failure, not a known incomplete tail.
+                    read_error = Some(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "short read while indexing Y4M"));
+                    None
+                }
+                Err(err) => {
+                    read_error = Some(err);
+                    None
+                }
+            },
+            &Limits::default(),
+        );
+        if let Some(err) = read_error {
+            return Err(MediaError::Io(format!("{name}: Y4M: {err}")));
+        }
+        let stream = stream.map_err(|err| match err {
             Error::UnsupportedColourSpace(c) => MediaError::Unsupported(format!("{name}: Y4M colour space {c}")),
             Error::LimitExceeded(limit) => MediaError::Unsupported(format!("{name}: Y4M exceeds its {limit} limit")),
             Error::Malformed(reason) => MediaError::Decode(format!("{name}: Y4M: {reason}")),
@@ -129,7 +150,8 @@ impl MediaSource for Y4mSource {
 
 fn picture_time(index: usize, rate: FrameRate) -> Tick {
     // The parser's default frame-count cap is below i64::MAX on every target.
-    Tick::from_rational(index as i64, rate.den, rate.num)
+    // Round up to the same boundary used by frame_at, within Tick resolution and range.
+    rate.tick_of(index as i64)
 }
 
 fn chroma(chroma: craft_y4m::Chroma) -> Chroma {
