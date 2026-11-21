@@ -17,7 +17,9 @@ pub fn float_in_range(
     }
     let num: u32 = u.arbitrary()?;
     let t = num as f64 / u32::MAX as f64;
-    Ok((start + t * (end - start)).clamp(start, end))
+    // Craft patch (wide float range): `end - start` overflows for a range wider
+    // than `f64::MAX`, so the value is interpolated from each end.
+    Ok((start * (1.0 - t) + end * t).clamp(start, end))
 }
 
 fn float(u: &mut Unstructured<'_>) -> Result<f64, arbitrary::Error> {
@@ -130,5 +132,31 @@ pub fn quadratic(size: f64, u: &mut Unstructured<'_>) -> Result<Quadratic, arbit
         let scale = float_in_range(-size, size, u)?;
 
         Ok(Quadratic::new([scale * r1 * r2, -scale * (r1 + r2), scale]))
+    }
+}
+
+// Craft patch (wide float range).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn float_in_range_handles_a_range_wider_than_f64_max() {
+        let (start, end) = (-1e308, 1e308);
+        for bytes in [[0u8; 4], [0x80, 0, 0, 0], [0, 0, 0, 0x80], [0xff; 4]] {
+            let x = float_in_range(start, end, &mut Unstructured::new(&bytes)).unwrap();
+            assert!(
+                x.is_finite() && (start..=end).contains(&x),
+                "{x} for {bytes:?}"
+            );
+        }
+        assert_eq!(
+            float_in_range(start, end, &mut Unstructured::new(&[0u8; 4])).unwrap(),
+            start
+        );
+        assert_eq!(
+            float_in_range(start, end, &mut Unstructured::new(&[0xff; 4])).unwrap(),
+            end
+        );
     }
 }
