@@ -871,9 +871,9 @@ fn appkit_click(dock: &mut NativeDock, system: &FakeSystem, window: &mut AppKitW
     let desktop = window.rect.min + at.to_vec2();
     system.set_pointer(Some([desktop.x, desktop.y]));
     let mut actions = appkit_frame(dock, window, vec![moved(at)]).0;
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     actions.extend(appkit_frame(dock, window, vec![press(at)]).0);
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     actions.extend(appkit_frame(dock, window, vec![release(at)]).0);
     for _ in 0..3 {
         actions.extend(appkit_frame(dock, window, vec![]).0);
@@ -933,7 +933,7 @@ fn docks(actions: &[Action<u32>]) -> bool {
 fn appkit_drag_over_group(dock: &mut NativeDock, system: &FakeSystem, window: &mut AppKitWindow, from: Pos2) -> (Vec<ViewportCommand>, bool) {
     let pressed_at = window.rect.min + from.to_vec2();
     system.set_pointer(Some([pressed_at.x, pressed_at.y]));
-    system.set_primary_held(Some(true));
+    system.set_buttons_held(Some(HeldButtons::PRIMARY));
     appkit_frame(dock, window, vec![moved(from)]);
     let (actions, pressed) = appkit_frame(dock, window, vec![press(from)]);
     let mut docked = docks(&actions);
@@ -972,7 +972,7 @@ fn dragging_a_collapsed_native_palette_by_its_title_row_docks_it_on_macos() {
     assert!(pressed.contains(&ViewportCommand::StartDrag), "the press hands the move to the OS: {pressed:?}");
     assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the system pointer shows the drop mark");
     assert!(!docked, "nothing docks while the system holds the button");
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     let mut docked = false;
     for _ in 0..3 {
         docked |= docks(&appkit_frame(&mut dock, &mut window, vec![]).0);
@@ -992,7 +992,7 @@ fn dragging_the_group_grip_of_a_collapsed_native_palette_docks_it_on_macos() {
     assert!(drag::mark(&dock.windows.ctx).is_some(), "the group under the pointer shows the drop mark");
     assert!(!docked, "nothing docks while the button is held");
     let release_at = OVER_GROUP - window.rect.min.to_vec2();
-    system.set_primary_held(Some(false));
+    system.set_buttons_held(Some(HeldButtons::NONE));
     let mut docked = docks(&appkit_frame(&mut dock, &mut window, vec![release(release_at)]).0);
     for _ in 0..2 {
         docked |= docks(&appkit_frame(&mut dock, &mut window, vec![]).0);
