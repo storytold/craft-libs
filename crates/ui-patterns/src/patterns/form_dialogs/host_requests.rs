@@ -39,6 +39,7 @@ pub struct HostRequests {
     preview_click: Option<Pos2>,
     footer_action: Option<String>,
     help_link: Option<String>,
+    sampling_ended: bool,
     /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
     previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
@@ -67,11 +68,17 @@ impl HostRequests {
         if let Some(link) = rows.help_link.take() {
             self.help_link = Some(link);
         }
+        self.sampling_ended |= std::mem::take(&mut rows.sampling_ended);
     }
 
     /// The help link a row's button reported, once.
     pub fn take_help_link(&mut self) -> Option<String> {
         self.help_link.take()
+    }
+
+    /// Whether an Escape ended a row's sampling since the last call, once.
+    pub fn take_sampling_ended(&mut self) -> bool {
+        std::mem::take(&mut self.sampling_ended)
     }
 
     /// Files a colour request; it replaces one not taken yet.
@@ -138,7 +145,8 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, help_link, previews, answers } = other;
+        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, help_link, sampling_ended, previews, answers } = other;
+        self.sampling_ended |= sampling_ended;
         self.help_link = help_link.or(self.help_link.take());
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());

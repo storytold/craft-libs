@@ -370,7 +370,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
                 }
             });
         let form = match reset_with.as_deref() {
-            Some(target) => form.reset_with(|current, opened, _| target(current, opened)), // P3(forms-w1): ex.P11
+            Some(target) => form.reset_with(|current, opened, _| target(current, opened)),
             None => form,
         };
         let shown = form.show(ui, |ui, form, value| {

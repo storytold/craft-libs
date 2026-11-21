@@ -7,13 +7,14 @@ use crate::patterns::presets::{PresetKind, PresetPicker, PresetRow};
 use crate::runtime::commands::{CommandState, Commands as _};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, ListingRequest, PathRequest};
 
-use super::param::{CustomContext, Param, ParamKind, fill_defaults, path_list, rounded};
+use super::param::{CustomContext, Head, Lifted, Param, ParamKind, fill_defaults, path_list, rounded};
 use super::path_row::PathRow;
 use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
+    Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
+    SideLabel, clicked,
 };
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
@@ -28,11 +29,13 @@ use crate::text::{NumberField, RangeAlert, SelectableText, TextField};
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
 
-use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec};
+use craft_behavior::{CancelReason, EditEvent, EditEvents, GesturePhase, IconId, Mixed, NumberCodec};
 use craft_host::PickRequest;
+use craft_keymap::{Chord, Key};
 
 use craft_theme::Srgba;
 use egui::{Id, Response, Ui};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
@@ -49,6 +52,8 @@ const PERCENT: RangeInclusive<f64> = 0.0..=100.0;
 const RANDOM_HIGH: i64 = i32::MAX as i64;
 /// The first state of the Random button's sequence when the caller gives no seed.
 const SEED_START: u64 = 0x9E37_79B9_7F4A_7C15;
+/// The chord that ends a row's sampling: held by the rows while one samples, so the dialog does not cancel.
+const ESCAPE: Chord = Chord::plain(Key::Escape);
 
 /// What a [`ParamRows`] reports.
 #[derive(Debug)]
@@ -81,6 +86,8 @@ pub struct ParamRowsOutput {
     pub unparsed: bool,
     /// The help link a row's button (`Param::help_link`) reported in this pass.
     pub help_link: Option<String>,
+    /// An Escape ended a row's sampling in this pass: the dialog stays open, and the next Escape cancels as usual.
+    pub sampling_ended: bool,
 }
 
 impl Outcome for ParamRowsOutput {
@@ -205,15 +212,30 @@ impl<'a> ParamRows<'a> {
                     pass.blend_keys(cx, params);
                 }
                 pass.rows(ui, params);
-                if let Some(canvas) = canvas.filter(|_| pass.sampling && !read_only) {
+                // While a row samples the rows hold Escape from every component, renewed each pass; the held press is
+                // consumed here, so a second pass of the frame ends nothing new. The capture lapses once sampling stops.
+                let escaped = pass.sampling && !read_only && !ui.is_sizing_pass() && {
+                    crate::runtime::keys::capture(ui.ctx(), cx.id, ESCAPE);
+                    crate::runtime::keys::take_claimed(ui.ctx(), cx.id, ESCAPE)
+                };
+                if escaped {
+                    pass.memo.armed = None;
+                    pass.memo.ended = true;
+                    pass.sampling_ended = true;
+                }
+                if let Some(canvas) = canvas.filter(|_| pass.sampling && !escaped && !read_only) {
                     cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
                 *cx.keep::<Memo>() = pass.memo.clone();
                 changed = pass.work != filled;
                 values = (pass.work != before).then(|| pass.work.clone());
                 if let Some(after) = &values {
-                    let event = EditEvent::set(Mixed::Same(before), after.clone(), name.clone(), None);
+                    let event = EditEvent::set(Mixed::Same(before.clone()), after.clone(), name.clone(), None);
                     let _ = fields.reborrow().write(cx, &event);
+                    // A gesture's own events stand for the edit; a change no control lifted is one set.
+                    if pass.events.is_empty() {
+                        pass.events.push(event);
+                    }
                 }
                 if let (Some(bind), Some(next)) = (seed.as_mut(), pass.seed) {
                     let held = Mixed::Same(state.unwrap_or(SEED_START));
@@ -222,8 +244,11 @@ impl<'a> ParamRows<'a> {
             })
         };
         let shown = if read_only { with_env(ui, |scope| scope.read_only = Some(true), group) } else { group(ui) };
-        let (pick_color, path, eyedropper, listing, out_of_range) =
-            if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range) };
+        let (pick_color, path, eyedropper, listing, out_of_range, help_link) = if read_only {
+            Default::default()
+        } else {
+            (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range, pass.help_link)
+        };
         ParamRowsOutput {
             response: shown.output,
             changed,
@@ -233,9 +258,10 @@ impl<'a> ParamRows<'a> {
             eyedropper,
             listing,
             out_of_range,
-            events: EditEvents::default(),
-            unparsed: false,
-            help_link: None,
+            events: pass.events,
+            unparsed: pass.unparsed,
+            help_link,
+            sampling_ended: pass.sampling_ended,
         }
     }
 }
@@ -253,6 +279,8 @@ struct Memo {
     sequence: Option<u64>,
     /// The selected file of each files row: the selection belongs to the list's view, not to the row's values.
     selected: BTreeMap<String, PathBuf>,
+    /// An Escape ended sampling in the pass that kept this memo; the next pass tells its custom rows.
+    ended: bool,
 }
 
 /// One pass over the rows: the working values, what the rows ask of the host, and what the pass reads.
@@ -282,6 +310,20 @@ struct Pass<'p> {
     previews: &'p [(String, Srgba)],
     /// How range rows arrange their slider and number field (`ParamRows::sliders`).
     sliders: SliderFieldLayout,
+    /// The pass's edits of the whole values, lifted from the rows' controls.
+    events: EditEvents<DialogFields>,
+    /// A number or length field holds text that does not parse.
+    unparsed: bool,
+    /// The help link a row's button reported.
+    help_link: Option<String>,
+    /// An Escape ended sampling in this pass.
+    sampling_ended: bool,
+    /// An Escape ended sampling in the previous pass.
+    ended_prev: bool,
+    /// The edits of the row being shown, until `lift` makes them edits of the whole values.
+    pending: EditEvents<FieldValue>,
+    /// The rows take no input: they stand under a check head that is off.
+    locked: bool,
 }
 
 /// A parameter as the pass shows it: its key, its label without the colon, and whether it takes input.
@@ -290,16 +332,48 @@ struct Line<'r> {
     key: &'r str,
     name: Label,
     enabled: bool,
+    /// The key is marked mixed: the row shows it blank until an edit.
+    mixed: bool,
+    /// The row's help button was pressed in this pass.
+    helped: Cell<bool>,
 }
 
 impl Line<'_> {
-    /// Shows `body` in a field named by the row: its label beside the control, its tooltip over both.
+    /// Shows `body` in a field named by the row: its label beside the control, its tooltip over both, the reset dot
+    /// after the label of a resettable row.
     fn show(&self, ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
         let mut field = Field::new(self.name.clone()).id_salt(self.key).enabled(self.enabled);
         if let Some(tip) = self.param.tooltip_text() {
             field = field.tooltip(tip.clone());
         }
-        field.show(ui, |ui, _| body(ui));
+        if self.param.option().resettable() {
+            field = field.side(SideLabel::new().reset_dot(true));
+        }
+        field.show(ui, |ui, _| match self.param.option().help_link() {
+            None => body(ui),
+            Some(_) => beside(ui, |ui| {
+                body(ui);
+                self.help_button(ui);
+            }),
+        });
+    }
+
+    /// The help button after a row's control: a press is noted for the pass, which reports the row's link.
+    fn help_button(&self, ui: &mut Ui) {
+        let help = Env::of(ui).words::<ParamWords>().help.clone();
+        if clicked(&Button::new(help).icon(IconId::new("help")).icon_only().id_salt("help").show(ui)) {
+            self.helped.set(true);
+        }
+    }
+
+    /// The binding of a control that shows `value` (blank while the key is mixed); a resettable row's carries the
+    /// row's default, which its reset dot restores.
+    fn bind<T: Clone + PartialEq + Send + Sync + 'static>(&self, value: T, default: Option<T>) -> Bind<'static, T> {
+        let bind = if self.mixed { Bind::given(Mixed::<T>::Mixed) } else { Bind::given(value) };
+        match default {
+            Some(default) if self.param.option().resettable() => bind.reset(default),
+            _ => bind,
+        }
     }
 
     /// Shows `body` across the form for a full-width row, without a label, or else beside the row's label.
@@ -331,15 +405,29 @@ impl<'p> Pass<'p> {
             canvas,
             previews: &[],
             sliders: SliderFieldLayout::Inline,
+            events: EditEvents::new(),
+            unparsed: false,
+            help_link: None,
+            sampling_ended: false,
+            ended_prev: false,
+            pending: EditEvents::new(),
+            locked: false,
         }
     }
 
     /// Starts a body run over `work`: the body may run more than once in a pass, and each run starts clean.
-    fn begin(&mut self, work: &DialogFields, seed: Option<u64>, memo: Memo) {
+    fn begin(&mut self, work: &DialogFields, seed: Option<u64>, mut memo: Memo) {
         self.work = work.clone();
         self.start = seed.or(memo.sequence).unwrap_or(SEED_START);
         self.seed = None;
+        self.ended_prev = std::mem::take(&mut memo.ended);
         self.memo = memo;
+        self.events = EditEvents::new();
+        self.unparsed = false;
+        self.help_link = None;
+        self.sampling_ended = false;
+        self.pending = EditEvents::new();
+        self.locked = false;
         self.color = None;
         self.path = None;
         self.eyedropper = None;
@@ -383,25 +471,87 @@ impl<'p> Pass<'p> {
         }
     }
 
-    /// The rows of `params`: those before the first section, then each section with the rows up to the next.
+    /// The rows of `params`: those before the first head, then each section with the rows up to the next head.
     fn rows(&mut self, ui: &mut Ui, params: &[Param]) {
-        let is_section = |param: &Param| matches!(param.kind, ParamKind::Section);
-        let first = params.iter().position(is_section).unwrap_or(params.len());
-        for param in &params[..first] {
-            self.row(ui, param);
-        }
+        let first = params.iter().position(Param::is_head).unwrap_or(params.len());
+        self.body(ui, &params[..first]);
+        let mut sections = Vec::new();
         let mut rest = &params[first..];
         while let Some((head, tail)) = rest.split_first() {
-            let end = tail.iter().position(is_section).unwrap_or(tail.len());
+            let end = tail.iter().position(Param::is_head).unwrap_or(tail.len());
             let (body, after) = tail.split_at(end);
             if head.visible(&self.work) {
-                Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
-                    for param in body {
-                        self.row(ui, param);
-                    }
-                });
+                sections.push((head, body));
             }
             rest = after;
+        }
+        self.sides(ui, &sections, |(head, _)| head.option().beside(), |pass, ui, (head, body)| pass.section(ui, head, body));
+    }
+
+    /// The visible rows of `rows` that the body shows: a footer row is drawn by the dialog's footer.
+    fn shown<'a>(&self, rows: &'a [Param]) -> Vec<&'a Param> {
+        rows.iter().filter(|param| param.visible(&self.work) && param.footer_on().is_none()).collect()
+    }
+
+    /// The rows of one section.
+    fn body(&mut self, ui: &mut Ui, rows: &[Param]) {
+        let shown = self.shown(rows);
+        self.sides(ui, &shown, |param| param.option().beside(), |pass, ui, param| pass.row(ui, param));
+    }
+
+    /// Draws `items` in order with `draw`; an item that stands `beside` the one before it shares a wrapping row with
+    /// it, so the pair falls under when the room is short. Values and answers keep the order of `items`.
+    fn sides<T: Copy>(&mut self, ui: &mut Ui, items: &[T], beside: impl Fn(&T) -> bool, mut draw: impl FnMut(&mut Self, &mut Ui, T)) {
+        let mut at = 0;
+        while at < items.len() {
+            let end = at + 1 + items[at + 1..].iter().take_while(|item| beside(item)).count();
+            match &items[at..end] {
+                [one] => draw(self, ui, *one),
+                run => {
+                    Row::new().wrap(true).id_salt(at).show(ui, |ui, _| {
+                        for (place, item) in run.iter().enumerate() {
+                            Stack::new().id_salt(place).show(ui, |ui, _| draw(self, ui, *item));
+                        }
+                    });
+                }
+            }
+            at = end;
+        }
+    }
+
+    /// One section: its head, then its rows.
+    fn section(&mut self, ui: &mut Ui, head: &Param, body: &[Param]) {
+        let title = plain(&head.label);
+        match head.option().head() {
+            Head::Fixed => {
+                Section::fixed(title).id_salt(head.key.as_str()).show(ui, |ui, _| self.body(ui, body));
+            }
+            Head::Group { open } => {
+                Section::new(title).initially_open(open).id_salt(head.key.as_str()).show(ui, |ui, _| self.body(ui, body));
+            }
+            Head::Check => {
+                Stack::new().id_salt(head.key.as_str()).show(ui, |ui, _| {
+                    self.row(ui, head);
+                    // The rows take input only while the head is checked.
+                    let locked = self.locked;
+                    self.locked |= !self.work.bool(&head.key).unwrap_or(false);
+                    self.body(ui, body);
+                    self.locked = locked;
+                });
+            }
+        }
+    }
+
+    /// `param` as the pass shows it.
+    fn line<'r>(&self, param: &'r Param) -> Line<'r> {
+        let key = param.key.as_str();
+        Line {
+            param,
+            key,
+            name: plain(&param.label),
+            enabled: param.enabled(&self.work) && !self.locked,
+            mixed: self.work.is_mixed(key),
+            helped: Cell::new(false),
         }
     }
 
@@ -409,10 +559,40 @@ impl<'p> Pass<'p> {
         if !param.visible(&self.work) {
             return;
         }
-        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work) };
+        let line = self.line(param);
         let held = self.work.get(line.key).cloned();
         self.show_row(ui, &line);
         param.drop_dependents(held.as_ref(), &mut self.work);
+        self.lift(line.key, held);
+        if let Some(link) = param.option().help_link().filter(|_| line.helped.get()) {
+            self.help_link = Some(link.to_owned());
+        }
+    }
+
+    /// Notes the events of a control that edits one value, as edits of the whole values once the row has written it.
+    fn note<T: Clone>(&mut self, events: &EditEvents<T>, to: impl Fn(T) -> Option<FieldValue>) {
+        self.pending.extend(events.clone().filter_map(to));
+    }
+
+    /// Lifts the events the row's control noted to edits of the whole values: each carries the values around the
+    /// row's own, which stood at `held` before the row.
+    fn lift(&mut self, key: &str, held: Option<FieldValue>) {
+        let events = std::mem::take(&mut self.pending);
+        if events.is_empty() {
+            return;
+        }
+        let mut base = self.work.clone();
+        match held {
+            Some(held) => base.set(key, held),
+            None => {
+                base.remove(key);
+            }
+        }
+        self.events.extend(events.map(|value| {
+            let mut fields = base.clone();
+            fields.set(key, value);
+            fields
+        }));
     }
 
     /// Shows `line`'s control, chosen by its kind.
@@ -425,7 +605,7 @@ impl<'p> Pass<'p> {
             ParamKind::Int { min, max, .. } => self.int(ui, line, *min, *max),
             ParamKind::Bool { default } => self.check(ui, line, *default),
             ParamKind::Choice { options, .. } => self.choice(ui, line, options),
-            ParamKind::Radio { options, .. } => self.radio_options(ui, line, options),
+            ParamKind::Radio { options, details, .. } => self.radio_options(ui, line, options, details),
             ParamKind::Angle { default, min, max, decimals } => self.angle(ui, line, *default, *min..=*max, *decimals),
             ParamKind::Color { .. } => self.color(ui, line),
             ParamKind::Grid { cells, .. } => self.grid(ui, line, *cells),
@@ -452,12 +632,17 @@ impl<'p> Pass<'p> {
     /// A range row: inline beside its label in the row's field, or stacked under its own caption across the form.
     fn range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, scale: SliderScale) {
         let value = self.work.number(line.key).unwrap_or(*range.start());
-        let places = line.param.option().range_places();
+        let option = line.param.option();
+        let places = option.range_places();
         let layout = self.sliders;
+        let default = line.param.default_value().and_then(number_of);
         let mut show = |ui: &mut Ui| {
-            let mut slider = SliderField::new(line.name.clone(), Bind::given(value), range.clone()).scale(scale).layout(layout);
+            let mut slider = SliderField::new(line.name.clone(), line.bind(value, default), range.clone()).scale(scale).layout(layout);
             if let Some(places) = places {
                 slider = slider.step(10f64.powi(-(places as i32)));
+            }
+            if !option.marks().is_empty() {
+                slider = slider.marks_labelled(option.marks().iter().cloned());
             }
             if let Some(kind) = line.param.unit {
                 slider = slider.unit_kind(kind);
@@ -470,6 +655,8 @@ impl<'p> Pass<'p> {
             }
             let shown = slider.show(ui);
             let value = shown.value().cloned();
+            self.unparsed |= shown.edit.unparsed;
+            self.note(&shown.edit.events, |v| Some(rounded(v, places)));
             self.alert(shown.out_of_range);
             if let Some(v) = value {
                 self.work.set(line.key, rounded(v, places));
@@ -483,13 +670,23 @@ impl<'p> Pass<'p> {
 
     fn number(&mut self, ui: &mut Ui, line: &Line<'_>, range: Option<RangeInclusive<f64>>, step: f64, decimals: u32) {
         let value = self.work.number(line.key).unwrap_or(0.0);
+        let option = line.param.option();
+        let default = line.param.default_value().and_then(number_of).map(Some);
         line.show(ui, |ui| {
-            let mut field = number_field(self.units, line.name.clone(), Some(value), decimals, line.param.unit).step(step);
+            let mut field = match option.length() {
+                Some(lengths) => NumberField::length(line.name.clone(), line.bind(Some(value), default), lengths).step(step),
+                None => bound_field(self.units, line.name.clone(), line.bind(Some(value), default), decimals, line.param.unit, option.codec()).step(step),
+            };
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }
+            if let Some(arrows) = option.step_arrows() {
+                field = field.step_arrows(arrows);
+            }
             let shown = field.show(ui);
             self.alert(shown.out_of_range);
+            self.unparsed |= shown.edit.unparsed;
+            self.note(&shown.edit.events, |v| v.map(FieldValue::Number));
             if let Some(v) = shown.edit.value().cloned().flatten() {
                 self.work.set(line.key, FieldValue::Number(v));
             }
@@ -510,7 +707,7 @@ impl<'p> Pass<'p> {
         let unit_name = self.words.unit.clone();
         if choices.is_shared() {
             line.show(ui, |ui| {
-                let mut field = number_field(self.units, line.name.clone(), Some(base / factor), *decimals, Some(chosen.kind))
+                let mut field = bound_field(self.units, line.name.clone(), line.bind(Some(base / factor), None), *decimals, Some(chosen.kind), None)
                     .step(*step / factor)
                     .id_salt("field");
                 if let Some(range) = range.clone() {
@@ -518,6 +715,8 @@ impl<'p> Pass<'p> {
                 }
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
+                self.unparsed |= shown.edit.unparsed;
+                self.note(&shown.edit.events, |v| v.map(|v| FieldValue::Number(v * factor)));
                 if let Some(v) = shown.edit.value().cloned().flatten() {
                     self.work.set(line.key, FieldValue::Number(v * factor));
                 }
@@ -525,7 +724,7 @@ impl<'p> Pass<'p> {
             return;
         }
         line.show(ui, |ui| {
-            let mut field = UnitSelect::new(line.name.clone(), Bind::given(Some(base / factor)), Bind::given(chosen.kind), &entries)
+            let mut field = UnitSelect::new(line.name.clone(), line.bind(Some(base / factor), None), Bind::given(chosen.kind), &entries)
                 .unit_label(unit_name.clone())
                 .id_salt("field");
             if let Some(range) = range.clone() {
@@ -533,6 +732,8 @@ impl<'p> Pass<'p> {
             }
             let shown = field.show(ui);
             self.alert(shown.out_of_range);
+            self.unparsed |= shown.edit.unparsed;
+            self.note(&shown.edit.events, |v| v.map(|v| FieldValue::Number(v * factor)));
             if let Some(v) = shown.edit.value().cloned().flatten() {
                 self.work.set(line.key, FieldValue::Number(v * factor));
             }
@@ -547,14 +748,18 @@ impl<'p> Pass<'p> {
         let value = self.work.int(line.key).unwrap_or(0);
         let range = bounds(min.map(|m| m as f64), max.map(|m| m as f64));
         let random = line.param.option().randomize();
+        let default = line.param.default_value().and_then(number_of).map(Some);
         line.show(ui, |ui| {
             beside(ui, |ui| {
-                let mut field = number_field(self.units, line.name.clone(), Some(value as f64), WHOLE, line.param.unit).id_salt("field");
+                let mut field = bound_field(self.units, line.name.clone(), line.bind(Some(value as f64), default), WHOLE, line.param.unit, None)
+                    .id_salt("field");
                 if let Some(range) = range.clone() {
                     field = field.range(range);
                 }
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
+                self.unparsed |= shown.edit.unparsed;
+                self.note(&shown.edit.events, |v| v.map(|v| FieldValue::Int(v.round() as i64)));
                 if let Some(v) = shown.edit.value().cloned().flatten() {
                     self.work.set(line.key, FieldValue::Int(v.round() as i64));
                 }
@@ -571,11 +776,13 @@ impl<'p> Pass<'p> {
 
     fn check(&mut self, ui: &mut Ui, line: &Line<'_>, default: bool) {
         let value = self.work.bool(line.key).unwrap_or(default);
-        let mut check = Checkbox::new(Bind::given(value)).label(line.name.clone()).id_salt(line.key).enabled(line.enabled);
+        let mut check = Checkbox::new(line.bind(value, Some(default))).label(line.name.clone()).id_salt(line.key).enabled(line.enabled);
         if let Some(tip) = line.param.tooltip_text() {
             check = check.tooltip(tip.clone());
         }
-        if let Some(v) = check.show(ui).value().cloned() {
+        let shown = check.show(ui);
+        self.note(&shown.events, |v| Some(FieldValue::Bool(v)));
+        if let Some(v) = shown.value().cloned() {
             self.work.set(line.key, FieldValue::Bool(v));
         }
     }
@@ -585,12 +792,15 @@ impl<'p> Pass<'p> {
         let entries: Vec<Entry<String>> =
             options.iter().map(|(id, label)| Entry::new(id.clone(), label.clone()).enabled(line.param.option_enabled(id))).collect();
         let searchable = line.param.option().searchable();
+        let default = line.param.default_value().and_then(text_of);
         line.show(ui, |ui| {
-            let mut select = Select::new(line.name.clone(), Bind::given(value.clone()), &entries);
+            let mut select = Select::new(line.name.clone(), line.bind(value.clone(), default.clone()), &entries);
             if searchable {
                 select = select.searchable();
             }
-            if let Some(v) = select.show(ui).value().cloned() {
+            let shown = select.show(ui);
+            self.note(&shown.events, |v| Some(FieldValue::Text(v)));
+            if let Some(v) = shown.value().cloned() {
                 self.work.set(line.key, FieldValue::Text(v));
             }
         });
@@ -609,7 +819,9 @@ impl<'p> Pass<'p> {
                 })
                 .collect();
         line.show(ui, |ui| {
-            if let Some(v) = Select::new(line.name.clone(), Bind::given(value.clone()), &entries).show(ui).value().cloned() {
+            let shown = Select::new(line.name.clone(), line.bind(value.clone(), None), &entries).show(ui);
+            self.note(&shown.events, |v| Some(FieldValue::Text(v)));
+            if let Some(v) = shown.value().cloned() {
                 self.work.set(line.key, FieldValue::Text(v));
             }
         });
@@ -628,7 +840,8 @@ impl<'p> Pass<'p> {
             .or_else(|| rows.iter().find(is_pattern))
             .map(|row| row.key.clone());
         // With no pattern to offer the row is disabled and writes nothing.
-        let line = Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some() };
+        let enabled = line.enabled && current.is_some();
+        let line = Line { enabled, name: line.name.clone(), helped: Cell::new(false), ..*line };
         line.show(ui, |ui| {
             let picked = PresetPicker::pattern(line.name.clone(), Bind::given(current.clone()), rows, Bind::kept()).show(ui).picked;
             if let Some(id) = picked.filter(|id| rows.iter().filter(is_pattern).any(|row| row.key == *id)) {
@@ -689,20 +902,32 @@ impl<'p> Pass<'p> {
     }
 
     /// A radio row is its own section: the title shows the row's name once, and the group it names follows.
-    fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
-        let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
+    fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)], details: &[Label]) {
+        let default = line.param.kind.default_value().and_then(text_of);
+        let value = self.work.text(line.key).map(str::to_owned).or_else(|| default.clone()).unwrap_or_default();
         Section::fixed(line.name.clone()).strength(HeaderStrength::Caption).id_salt(line.key).show(ui, |ui, _| {
-            let mut group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled);
+            let mut group = RadioGroup::new(line.name.clone(), line.bind(value.clone(), default.clone())).enabled(line.enabled);
             if let Some(tip) = line.param.tooltip_text() {
                 group = group.tooltip(tip.clone());
             }
-            let group = group.show(ui, |ui, _| {
+            let group = group.show(ui, |ui, cx| {
                 Stack::new().show(ui, |ui, _| {
-                    for (id, label) in options {
-                        Radio::new(id.clone()).label(label.clone()).enabled(line.param.option_enabled(id) && line.enabled).show(ui);
+                    for (at, (id, label)) in options.iter().enumerate() {
+                        let radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled);
+                        match details.get(at) {
+                            // An option with a detail line draws it under its label through the body's label step.
+                            Some(detail) => {
+                                let side = SideLabel::new().layout(FieldLayout::After).detail(detail.clone());
+                                cx.labelled(ui, id, label.clone(), side, radio);
+                            }
+                            None => {
+                                radio.label(label.clone()).show(ui);
+                            }
+                        }
                     }
                 });
             });
+            self.note(&group.output.events, |v| Some(FieldValue::Text(v)));
             if let Some(v) = group.output.value().cloned() {
                 self.work.set(line.key, FieldValue::Text(v));
             }
@@ -714,15 +939,19 @@ impl<'p> Pass<'p> {
     fn angle(&mut self, ui: &mut Ui, line: &Line<'_>, default: f64, range: std::ops::RangeInclusive<f64>, decimals: u32) {
         let value = self.work.number(line.key).unwrap_or(default);
         let field_name = Label::from(self.words.angle_field.fill(&[("name", line.name.as_str())]));
+        let default = Some(default);
         line.show(ui, |ui| {
             beside(ui, |ui| {
-                let dial = AngleDial::new(Bind::given(value)).label(line.name.clone()).range(range.clone()).id_salt("dial").show(ui);
-                let field = number_field(self.units, field_name.clone(), Some(value), decimals, Some(UnitKind::Degrees))
+                let dial = AngleDial::new(line.bind(value, default)).label(line.name.clone()).range(range.clone()).id_salt("dial").show(ui);
+                let field = bound_field(self.units, field_name.clone(), line.bind(Some(value), default.map(Some)), decimals, Some(UnitKind::Degrees), None)
                     .range(range.clone())
                     .commit_decimals(decimals as usize)
                     .id_salt("field");
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
+                self.unparsed |= shown.edit.unparsed;
+                self.note(&dial.events, |v| Some(FieldValue::Number(v)));
+                self.note(&shown.edit.events, |v| v.map(FieldValue::Number));
                 let typed = shown.edit.value().cloned().flatten();
                 if let Some(v) = dial.value().cloned().or(typed) {
                     self.work.set(line.key, FieldValue::Number(v));
@@ -794,7 +1023,9 @@ impl<'p> Pass<'p> {
                                 ("column", (column + 1).to_string().as_str()),
                             ]);
                             let cell = number_field(self.units, Label::from(name), Some(cells[at] as f64), WHOLE, None).id_salt(at);
-                            if let Some(v) = cell.show(ui).edit.value().cloned().flatten() {
+                            let shown = cell.show(ui);
+                            self.unparsed |= shown.edit.unparsed;
+                            if let Some(v) = shown.edit.value().cloned().flatten() {
                                 next[at] = v.round() as i64;
                             }
                         }
@@ -825,6 +1056,7 @@ impl<'p> Pass<'p> {
                     let field = number_field(self.units, name.clone(), Some(point[axis]), 1, Some(UnitKind::Percent)).range(PERCENT).id_salt(axis);
                     let shown = field.show(ui);
                     self.alert(shown.out_of_range);
+                    self.unparsed |= shown.edit.unparsed;
                     if let Some(v) = shown.edit.value().cloned().flatten() {
                         next[axis] = v;
                     }
@@ -840,7 +1072,8 @@ impl<'p> Pass<'p> {
         let value = self.work.int(line.key).and_then(|i| usize::try_from(i).ok()).unwrap_or(default);
         let entries: Vec<Entry<usize>> = names.iter().enumerate().map(|(i, name)| Entry::new(i, Label::from(name.clone()))).collect();
         line.show(ui, |ui| {
-            if let Some(v) = Select::new(line.name.clone(), Bind::given(value), &entries).show(ui).value().cloned() {
+            let shown = Select::new(line.name.clone(), line.bind(value, None), &entries).show(ui);
+            if let Some(v) = shown.value().cloned() {
                 self.work.set(line.key, FieldValue::Int(i64::try_from(v).unwrap_or(0)));
             }
         });
@@ -863,7 +1096,7 @@ impl<'p> Pass<'p> {
                     shown.edit.value().cloned()
                 }
                 None => {
-                    let mut field = TextField::new(line.name.clone(), Bind::given(value.clone())).id_salt("text");
+                    let mut field = TextField::new(line.name.clone(), line.bind(value.clone(), Some(default.to_owned()))).id_salt("text");
                     if let Some(lines) = line.param.option().lines() {
                         field = field.lines(lines);
                     }
@@ -899,6 +1132,7 @@ impl<'p> Pass<'p> {
                 let field = field.id_salt("field").enabled(self.work.number(line.key).is_some());
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
+                self.unparsed |= shown.edit.unparsed;
                 if let Some(v) = shown.edit.value().cloned().flatten() {
                     self.work.set(line.key, FieldValue::Number(v));
                 }
@@ -908,10 +1142,14 @@ impl<'p> Pass<'p> {
 
     fn custom(&mut self, ui: &mut Ui, line: &Line<'_>) {
         let ParamKind::Custom(row) = &line.param.kind else { return };
-        let mut context = CustomContext::new(line.name.clone(), self.canvas);
+        let mut context = CustomContext::new(line.name.clone(), self.canvas, self.ended_prev);
+        let before = self.work.clone();
         line.show_body(ui, |ui| {
             let _ = row.draw(ui, &mut self.work, &mut context);
         });
+        for step in context.take_gestures() {
+            self.events.push(lifted_edit(step, &before, &self.work, &line.name));
+        }
         if let Some(request) = context.take_request() {
             self.color = Some(request);
         }
@@ -929,6 +1167,19 @@ fn read_only_text(ui: &mut Ui, line: &Line<'_>, text: &Label) {
     line.show_body(ui, |ui| {
         SelectableText::new(line.name.clone(), shown.as_str()).multiline().field_inset().show(ui);
     });
+}
+
+/// A custom row's control event as an edit of the whole values: they stood at `before` until the row drew and at
+/// `after` since.
+fn lifted_edit(step: Lifted, before: &DialogFields, after: &DialogFields, label: &Label) -> EditEvent<DialogFields> {
+    let was = Mixed::Same(before.clone());
+    match (step.id, step.phase) {
+        (Some(id), Some(GesturePhase::Begin)) => EditEvent::begin(id, was, label.as_str().into(), None),
+        (Some(id), Some(GesturePhase::Update)) => EditEvent::update(id, after.clone()),
+        (Some(id), Some(GesturePhase::Commit)) => EditEvent::commit(id, was, after.clone()),
+        (Some(id), Some(GesturePhase::Cancel)) => EditEvent::cancel(id, step.reason.unwrap_or(CancelReason::Dismissed), Some(was)),
+        _ => EditEvent::set(was, after.clone(), label.as_str().into(), None),
+    }
 }
 
 /// The mode entries of a Blend row's `modes`, in menu order.
@@ -956,7 +1207,29 @@ fn beside(ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
 
 /// A number field named `name` that reads and writes `decimals` digits and the spellings of `unit`.
 fn number_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>) -> NumberField<'static> {
-    NumberField::new(name, Bind::given(value)).codec(NumberCodec::new(units.reader(unit), decimals as usize))
+    bound_field(units, name, Bind::given(value), decimals, unit, None)
+}
+
+/// [`number_field`] over `value`, read and written with `codec` when the row has one.
+fn bound_field(
+    units: &Units,
+    name: Label,
+    value: Bind<'static, Option<f64>>,
+    decimals: u32,
+    unit: Option<UnitKind>,
+    codec: Option<&NumberCodec>,
+) -> NumberField<'static> {
+    let codec = codec.cloned().unwrap_or_else(|| NumberCodec::new(units.reader(unit), decimals as usize));
+    NumberField::new(name, value).codec(codec)
+}
+
+/// The number `value` holds, an int as a number.
+fn number_of(value: FieldValue) -> Option<f64> {
+    match value {
+        FieldValue::Number(n) => Some(n),
+        FieldValue::Int(i) => Some(i as f64),
+        _ => None,
+    }
 }
 
 /// The range that has the bounds that are set, open on the other side; `None` when neither is.

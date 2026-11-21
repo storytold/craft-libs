@@ -11,7 +11,7 @@ use crate::runtime::env::{Label, LengthUnits, UnitKind};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, ListingRequest, PathKind};
 use crate::text::StepArrows;
 use crate::value_drag::SliderScale;
-use craft_behavior::{EditEvents, NumberCodec};
+use craft_behavior::{CancelReason, EditEvent, EditEvents, GestureId, GesturePhase, NumberCodec};
 use craft_host::PickRequest;
 use craft_theme::Srgba;
 use egui::{Response, Ui};
@@ -219,8 +219,8 @@ impl ParamKind {
 
     /// A group of radio buttons whose options each carry a detail line: `(id, label, detail)`.
     pub fn radio_with_details(options: Vec<(String, Label, Label)>, default: Option<String>) -> Self {
-        let _ = (options, default);
-        todo!("co.K27")
+        let (options, details) = options.into_iter().map(|(id, label, detail)| ((id, label), detail)).unzip();
+        ParamKind::Radio { options, default, details }
     }
 
     /// An angle dial with its field: one turn, -180 to 180, to a tenth of a degree.
@@ -286,7 +286,6 @@ impl ParamKind {
             ParamKind::Int { default, .. } => FieldValue::Int(*default),
             ParamKind::Number { default, .. } => FieldValue::Number(*default),
             ParamKind::Bool { default } => FieldValue::Bool(*default),
-            // P3(forms-w1): co.K27
             ParamKind::Choice { options, default } | ParamKind::Radio { options, default, .. } => {
                 let initial = default.as_deref().or_else(|| options.first().map(|(id, _)| id.as_str()));
                 FieldValue::Text(initial.unwrap_or_default().to_owned())
@@ -403,12 +402,32 @@ pub struct CustomContext {
     canvas: Option<egui::Id>,
     eyedropper: Option<EyedropperRequest>,
     sampling: bool,
+    /// Whether an Escape ended sampling in the previous pass.
+    sampling_ended: bool,
+    /// The gesture steps the row's controls reported ([`CustomContext::gesture`]).
+    gestures: Vec<Lifted>,
+}
+
+/// One edit event of a custom row's control with its value erased.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lifted {
+    /// The gesture, `None` for a one-step set.
+    pub(crate) id: Option<GestureId>,
+    /// Where the gesture stands, `None` for a set.
+    pub(crate) phase: Option<GesturePhase>,
+    /// Why a cancel ended it.
+    pub(crate) reason: Option<CancelReason>,
 }
 
 impl CustomContext {
-    /// The context of a row labelled `title`.
-    pub(crate) fn new(title: Label, canvas: Option<egui::Id>) -> Self {
-        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false }
+    /// The context of a row labelled `title`; `sampling_ended` says an Escape ended sampling in the previous pass.
+    pub(crate) fn new(title: Label, canvas: Option<egui::Id>, sampling_ended: bool) -> Self {
+        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false, sampling_ended, gestures: Vec::new() }
+    }
+
+    /// The gesture steps the row reported, once.
+    pub(crate) fn take_gestures(&mut self) -> Vec<Lifted> {
+        std::mem::take(&mut self.gestures)
     }
 
     /// Asks the host to run the action `id`; the host takes this pass's requests once with
@@ -425,8 +444,7 @@ impl CustomContext {
 
     /// Whether an Escape ended the row's sampling in the previous pass (the dialog claims Escape while a row samples).
     pub fn sampling_ended(&self) -> bool {
-        let _ = self;
-        todo!("ap.AP11")
+        self.sampling_ended
     }
 
     /// Whether the row's dropper samples now: `true` while the row wants canvas presses to pick colours.
@@ -437,8 +455,14 @@ impl CustomContext {
     /// Hands a custom row's control events to the rows, which lift them as a value row's: each event's gesture id,
     /// phase and cancel reason, type-erased.
     pub fn gesture<T>(&mut self, events: &EditEvents<T>) {
-        let _ = (self, events);
-        todo!("ef.F6")
+        self.gestures.extend(events.iter().map(|event| Lifted {
+            id: event.id(),
+            phase: event.phase(),
+            reason: match event {
+                EditEvent::Cancel { reason, .. } => Some(*reason),
+                _ => None,
+            },
+        }));
     }
 
     /// The canvas the dialog's rows work on (`ParamDialog::canvas`), when it has one.
@@ -500,7 +524,6 @@ pub(crate) struct RowOptions {
     eyedropper_armed: bool,
     full_width: bool,
     /// The row or section stands beside the one before it ([`Param::beside`]).
-    #[allow(dead_code)] // P3(forms-w1): od.OD5
     beside: bool,
     not_remembered: bool,
     /// The lines a multi-line text row shows.
@@ -512,14 +535,83 @@ pub(crate) struct RowOptions {
     searchable: bool,
     /// The keys a change of the row's value removes ([`Param::resets`]).
     resets: Vec<String>,
+    /// How a section head draws ([`Param::group`], [`Param::section_check`]).
+    head: Head,
+    /// The row's label shows a reset dot ([`Param::resettable`]).
+    resettable: bool,
+    /// The label a footer row shows while on ([`Param::in_footer`]).
+    footer_on: Option<Label>,
+    /// The lengths a number row keeps and shows ([`Param::length`]).
+    length: Option<LengthUnits>,
+    /// The codec a number row reads and writes with ([`Param::codec`]).
+    codec: Option<NumberCodec>,
+    /// The step arrows of a number row's field.
+    step_arrows: Option<StepArrows>,
+    /// The labelled marks of a range row's slider.
+    marks: Vec<(f64, Label)>,
+    /// The link the row's help button reports ([`Param::help_link`]).
+    help_link: Option<String>,
+}
+
+/// How a section head draws: a fixed title, a disclosure over its rows, or a check box that switches its rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Head {
+    /// A title over a rule.
+    #[default]
+    Fixed,
+    /// A title that opens and closes the rows.
+    Group {
+        /// Whether the disclosure starts open.
+        open: bool,
+    },
+    /// A check box over the rows, which take input only while it is checked.
+    Check,
 }
 
 impl RowOptions {
     /// Whether the row or section stands beside the one before it.
-    #[allow(dead_code)] // P3(forms-w1): od.OD5
     pub(crate) fn beside(&self) -> bool {
-        let _ = self;
-        todo!("od.OD5")
+        self.beside
+    }
+
+    /// How a section head draws.
+    pub(crate) fn head(&self) -> Head {
+        self.head
+    }
+
+    /// Whether the row's label shows a reset dot.
+    pub(crate) fn resettable(&self) -> bool {
+        self.resettable
+    }
+
+    /// The label a footer row shows while on; `Some` for a row drawn in the footer.
+    pub(crate) fn footer_on(&self) -> Option<&Label> {
+        self.footer_on.as_ref()
+    }
+
+    /// The lengths a number row keeps and shows.
+    pub(crate) fn length(&self) -> Option<LengthUnits> {
+        self.length
+    }
+
+    /// The codec a number row reads and writes with.
+    pub(crate) fn codec(&self) -> Option<&NumberCodec> {
+        self.codec.as_ref()
+    }
+
+    /// The step arrows of a number row's field.
+    pub(crate) fn step_arrows(&self) -> Option<StepArrows> {
+        self.step_arrows
+    }
+
+    /// The labelled marks of a range row's slider.
+    pub(crate) fn marks(&self) -> &[(f64, Label)] {
+        &self.marks
+    }
+
+    /// The link the row's help button reports.
+    pub(crate) fn help_link(&self) -> Option<&str> {
+        self.help_link.as_deref()
     }
 }
 
@@ -761,80 +853,94 @@ impl Param {
     /// A section head that is a check box: it holds a `Bool` under `key`, and its rows take input only while it is
     /// checked.
     pub fn section_check(key: impl Into<String>, label: impl Into<Label>, default: bool) -> Self {
-        let _ = (key, label, default);
-        todo!("od.OD6")
+        let mut head = Self::new(key, label, ParamKind::Bool { default });
+        head.options.get_or_insert_default().head = Head::Check;
+        head
     }
 
     /// A section head whose title is a disclosure, open by default: its rows hide while it is closed and keep their
     /// values.
     pub fn group(label: impl Into<Label>) -> Self {
-        let _ = label;
-        todo!("wg.W24")
+        let mut head = Self::section(label);
+        head.options.get_or_insert_default().head = Head::Group { open: true };
+        head
     }
 
     /// Binds the row's control to the value's reset (`Bind::given(value).reset(default)`) and shows the label's reset
     /// dot while the value differs from the default.
     #[must_use]
-    pub fn resettable(self) -> Self {
-        let _ = self;
-        todo!("ef.F2")
+    pub fn resettable(mut self) -> Self {
+        self.options.get_or_insert_default().resettable = true;
+        self
     }
 
     /// On a [`Param::group`]: whether its disclosure starts open (the default is open).
     #[must_use]
-    pub fn initially_open(self, on: bool) -> Self {
-        let _ = (self, on);
-        todo!("ef.F3")
+    pub fn initially_open(mut self, on: bool) -> Self {
+        if let Some(Head::Group { open }) = self.options.as_deref_mut().map(|options| &mut options.head) {
+            *open = on;
+        }
+        self
     }
 
     /// Draws a `Bool` row as a footer button that shows the row's label while off and `on_label` while on; a press
     /// flips the value and the dialog stays open.
     #[must_use]
-    pub fn in_footer(self, on_label: impl Into<Label>) -> Self {
-        let _ = (self, on_label);
-        todo!("ex.E1")
+    pub fn in_footer(mut self, on_label: impl Into<Label>) -> Self {
+        self.options.get_or_insert_default().footer_on = Some(on_label.into());
+        self
     }
 
-    /// The row or section stands beside the one before it; the pair falls under when the form lacks room.
+    /// The row or section stands beside the one before it; the pair falls under when the form lacks room. A custom
+    /// row beside its section's rows spans its width, as [`full_width`](Param::full_width) does.
     #[must_use]
-    pub fn beside(self) -> Self {
-        let _ = self;
-        todo!("od.OD5")
+    pub fn beside(mut self) -> Self {
+        let custom = matches!(self.kind, ParamKind::Custom(_));
+        let options = self.options.get_or_insert_default();
+        options.beside = true;
+        options.full_width |= custom;
+        self
     }
 
     /// Draws a `Number` row as a length: the stored unit in the binding, the shown unit in the field.
     #[must_use]
-    pub fn length(self, lengths: LengthUnits) -> Self {
-        let _ = (self, lengths);
-        todo!("wg.W21")
+    pub fn length(mut self, lengths: LengthUnits) -> Self {
+        self.options.get_or_insert_default().length = Some(lengths);
+        self
     }
 
     /// Sets the `Number` row's codec.
     #[must_use]
-    pub fn codec(self, codec: NumberCodec) -> Self {
-        let _ = (self, codec);
-        todo!("wg.W21")
+    pub fn codec(mut self, codec: NumberCodec) -> Self {
+        self.options.get_or_insert_default().codec = Some(codec);
+        self
     }
 
     /// Passes `arrows` to the `Number` row's field.
     #[must_use]
-    pub fn step_arrows(self, arrows: StepArrows) -> Self {
-        let _ = (self, arrows);
-        todo!("wg.W22")
+    pub fn step_arrows(mut self, arrows: StepArrows) -> Self {
+        self.options.get_or_insert_default().step_arrows = Some(arrows);
+        self
     }
 
     /// Passes labelled `marks` to the `Range` row's slider.
     #[must_use]
-    pub fn marks_labelled<L: Into<Label>>(self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
-        let _ = (self, marks);
-        todo!("wg.W22")
+    pub fn marks_labelled<L: Into<Label>>(mut self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
+        self.options.get_or_insert_default().marks = marks.into_iter().map(|(at, label)| (at, label.into())).collect();
+        self
     }
 
     /// Adds an icon button after the row's control that reports `link` as the help link; a press opens nothing.
     #[must_use]
-    pub fn help_link(self, link: impl Into<String>) -> Self {
-        let _ = (self, link);
-        todo!("wg.W23")
+    pub fn help_link(mut self, link: impl Into<String>) -> Self {
+        self.options.get_or_insert_default().help_link = Some(link.into());
+        self
+    }
+
+    /// Whether the row starts a section: a section head, or a check head ([`Param::section_check`]).
+    pub(crate) fn is_head(&self) -> bool {
+        // A section head and a check head are the two rows that open a section.
+        matches!(self.kind, ParamKind::Section) || matches!(self.options.as_deref(), Some(options) if options.head == Head::Check)
     }
 
     /// A number row with a unit menu after the field. `base` is the value in base units; the field shows
@@ -889,16 +995,15 @@ impl Param {
     /// otherwise it takes no space. Its value stays in the fields and in the result.
     #[must_use]
     pub fn visible_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
-        self.visible_when.push((key.into(), vec![value.into()])); // P3(forms-w1): od.OD4
-        self
+        self.visible_when_in(key, [value])
     }
 
-    /// The row is shown only while `fields[key]` is one of `values`; the one-value case is
-    /// [`visible_when`](Param::visible_when).
+    /// The row is shown only while `fields[key]` is one of `values`, besides the conditions it already has; the
+    /// one-value case is [`visible_when`](Param::visible_when).
     #[must_use]
-    pub fn visible_when_in(self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
-        let _ = (self, key, values);
-        todo!("od.OD4")
+    pub fn visible_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
+        self.visible_when.push((key.into(), values.into_iter().map(Into::into).collect()));
+        self
     }
 
     /// The row takes input only while `fields[key]` equals `value`; otherwise it is shown disabled. The one-value case
@@ -1034,6 +1139,11 @@ impl Param {
         self.texts.as_deref()?.tooltip.as_ref()
     }
 
+    /// The label a [`Param::in_footer`] row shows while on; `None` for a row in the body.
+    pub(crate) fn footer_on(&self) -> Option<Label> {
+        self.options.as_deref()?.footer_on.clone()
+    }
+
     /// Whether the row's value is saved with the form.
     pub fn is_remembered(&self) -> bool {
         !self.option().not_remembered
@@ -1096,7 +1206,6 @@ impl Param {
 
     /// Whether the row is shown with `fields`.
     pub fn visible(&self, fields: &DialogFields) -> bool {
-        // P3(forms-w1): od.OD4
         self.visible_when.iter().all(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
     }
 
@@ -1203,10 +1312,12 @@ pub fn open_fields(params: &[Param], fields: &mut DialogFields) {
     fields.snapshot();
 }
 
-/// Fills the keys `params` have defaults for and `fields` lack, including the unit key of a row with units.
+/// Fills the keys `params` have defaults for and `fields` lack, including the unit key of a row with units. A key
+/// marked mixed stays absent: its row shows it blank.
 pub(crate) fn fill_defaults(params: &[Param], fields: &mut DialogFields) {
     for param in params {
         if !fields.contains(&param.key)
+            && !fields.is_mixed(&param.key)
             && let Some(value) = param.default_value()
         {
             fields.set(param.key.as_str(), value);

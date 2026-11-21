@@ -74,6 +74,119 @@ fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).show(ui).into()
 }
 
+/// The rows of `params` over the story's values, which `setup` may prepare once.
+fn rows_story(ui: &mut Ui, data: &mut StoryData, params: &[Param], setup: impl FnOnce(&mut DialogFields)) -> StoryOutput {
+    let first = data.present::<DialogFields>("fields").is_none();
+    let fields = data.value("fields", DialogFields::new());
+    if first {
+        setup(fields);
+    }
+    ParamRows::new("Filter", params, Bind::bound(fields)).show(ui).into()
+}
+
+/// Rows with a reset dot after their label while the value differs from the default.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_resettable(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, Default::default())).resettable(),
+        Param::new("method", "Method", ParamKind::choice(vec![("spin".to_owned(), "Spin".into()), ("zoom".to_owned(), "Zoom".into())], None)).resettable(),
+        Param::new("smooth", "Smooth", ParamKind::bool(false)).resettable(),
+    ];
+    rows_story(ui, data, &params, |fields| {
+        fields.set("radius", 40.0);
+        fields.set("method", "zoom");
+    })
+}
+
+/// Rows whose keys differ over what is edited: they show blank and stay out of the answer until an edit.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, Default::default())),
+        Param::number("width", "Width", 640.0, 1.0, 0),
+        Param::new("method", "Method", ParamKind::choice(vec![("spin".to_owned(), "Spin".into()), ("zoom".to_owned(), "Zoom".into())], None)),
+        Param::new("smooth", "Smooth", ParamKind::bool(false)),
+    ];
+    rows_story(ui, data, &params, |fields| {
+        for key in ["radius", "width", "method", "smooth"] {
+            fields.set_mixed(key);
+        }
+    })
+}
+
+/// A group that starts closed: its rows hide while it is closed and keep their values.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_closed_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::number("width", "Width", 640.0, 1.0, 0),
+        Param::group("Advanced").initially_open(false),
+        Param::number("height", "Height", 480.0, 1.0, 0),
+        Param::new("smooth", "Smooth", ParamKind::bool(false)),
+    ];
+    rows_story(ui, data, &params, |_| {})
+}
+
+/// Rows with a help button after the control.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_with_help_link(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::number("width", "Width", 640.0, 1.0, 0).help_link("help/width"),
+        Param::new("smooth", "Smooth", ParamKind::bool(false)),
+    ];
+    rows_story(ui, data, &params, |_| {})
+}
+
+/// Two sections side by side: the second stands beside the first and falls under it when the room is short.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_with_sections_side_by_side(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::section("Size"),
+        Param::number("width", "Width", 640.0, 1.0, 0),
+        Param::number("height", "Height", 480.0, 1.0, 0),
+        Param::section("Colour").beside(),
+        Param::new("tint", "Tint", ParamKind::color(Some([0.2, 0.4, 0.6]))),
+        Param::new("smooth", "Smooth", ParamKind::bool(false)),
+    ];
+    rows_story(ui, data, &params, |_| {})
+}
+
+/// A section with a check box head, turned off: its rows take no input.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_with_a_checked_section_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::section_check("rays", "Rays", false),
+        Param::new("count", "Count", ParamKind::range(1.0, 50.0, 12.0, Default::default())),
+        Param::new("soft", "Soft", ParamKind::bool(true)),
+    ];
+    rows_story(ui, data, &params, |_| {})
+}
+
+/// A custom row that draws a picture, beside the three rows it belongs to.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_with_a_picture_beside(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = [
+        Param::number("width", "Width", 640.0, 1.0, 0),
+        Param::number("height", "Height", 480.0, 1.0, 0),
+        Param::new("smooth", "Smooth", ParamKind::bool(false)),
+        Param::custom("picture", "Picture", |ui, _, _| ui.label("Picture")).beside(),
+    ];
+    rows_story(ui, data, &params, |_| {})
+}
+
+/// A radio row whose options carry a detail line.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_with_radio_details(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let kind = ParamKind::radio_with_details(
+        vec![
+            ("fast".to_owned(), "Fast".into(), "Lower quality, smaller file".into()),
+            ("best".to_owned(), "Best".into(), "Full quality, largest file".into()),
+        ],
+        None,
+    );
+    let params = [Param::new("quality", "Quality", kind)];
+    rows_story(ui, data, &params, |_| {})
+}
+
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();

@@ -3,11 +3,12 @@
 
 use craft_behavior::PixelSize;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog};
+use craft_ui::contract::Bind;
 use craft_ui::patterns::form_dialogs::{
-    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
+    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, DialogFields, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
     GuideLayoutValues, GuideRect, GuideUnits, HostedAbout, HostedCanvasSize, HostedExportAs, HostedFormatOptions, HostedGuideLayoutDialog,
-    HostedImageSize, HostedNewDocument, HostedNewGuideDialog, ImageSize, ImageSizeValues, JpegOptions, NewDocumentDialog, NewGuideDialog,
-    NewGuideValues,
+    HostedImageSize, HostedNewDocument, HostedNewGuideDialog, HostedParamDialog, ImageSize, ImageSizeValues, JpegOptions, NewDocumentDialog,
+    NewGuideDialog, NewGuideValues, Param, ParamDialog, ParamKind,
 };
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, trial};
@@ -463,4 +464,29 @@ fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
     assert_eq!(resample(&host), Some(json!("automatic")), "Alt+5 picks nothing when Bicubic Sharper is not listed");
     alt_digit(&mut fixture, Key::Num7, "7", alt);
     assert_eq!(resample(&host), Some(json!("nearestNeighbor")), "Alt+7 picks a listed method");
+}
+
+/// A dialog with one colour row whose dropper opens armed.
+fn dropper(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let tint = Param::new("tint", "Tint", ParamKind::color(Some([0.0, 0.0, 1.0]))).eyedropper().armed(true);
+    ParamDialog::new("dropper", "Dropper", vec![tint]).values(Bind::bound(fields))
+}
+
+// While a colour row samples, Escape ends the sampling and the dialog stays open with its edit; the next Escape cancels.
+#[trial]
+fn escape_ends_a_sampling_row_before_it_cancels_the_dialog() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "dropper", DialogFields::new(), dropper));
+    fixture.idle(10);
+    let ended = || host.borrow_mut().get_mut::<HostedParamDialog>().is_some_and(HostedParamDialog::take_sampling_ended);
+    assert!(!ended(), "nothing ended yet");
+
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_open::<HostedParamDialog>(), "the first Escape leaves the dialog open");
+    assert!(ended(), "and ends the sampling");
+    assert!(!ended(), "once");
+
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_empty(), "the next Escape cancels the dialog");
 }

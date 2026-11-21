@@ -55,6 +55,7 @@ pub use sizing::{
 
 mod new_document;
 
+// PLAN: decisions.md (files-2) asks for a `RasterMemory` re-export here; the type exists in no tree of this set, so files-w3 adds it with its definition.
 pub use new_document::{
     BACKGROUND_COLOR_KEY, BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, ColorProfiles, DetailsCx, DocumentCard, DocumentOptions,
     DocumentPreset, DocumentSettings, HostedNewDocument, NewDocumentDialog, NewDocumentOutput, NewDocumentPresetWords, NewDocumentResult,

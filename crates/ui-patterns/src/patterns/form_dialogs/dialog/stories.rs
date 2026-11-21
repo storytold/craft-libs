@@ -1,10 +1,11 @@
 //! Stories of `ParamDialog`.
 
-use super::{HostedParamDialog, ParamDialog, ParamLayout};
+use super::{HostedParamDialog, ParamDialog, ParamLayout, ParamPresets};
 use crate::contract::Bind;
 use crate::dialog::StackDialog as _;
 use crate::dialog::stories::hosted_with;
-use crate::patterns::form_dialogs::{DialogFields, Param};
+use crate::patterns::form_dialogs::{DialogFields, Param, ParamKind};
+use crate::patterns::presets::PresetRow;
 use crate::primitives::TextureCache;
 use crate::runtime::env::Label;
 use crate::sections::{DialogRole, FooterButton};
@@ -82,7 +83,7 @@ fn param_dialog_with_footer_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryO
         .extra_buttons(vec![
             ("load".to_owned(), FooterButton::new(Label::from("Load…"), DialogRole::Other)),
             ("save".to_owned(), FooterButton::new(Label::from("Save…"), DialogRole::Other)),
-        ]) // P3(forms-w1): q337
+        ])
         .footer_note("About 1.2 MB")
         .show(ui)
         .into()
@@ -111,6 +112,54 @@ fn hosted_param_dialog_with_a_refused_ok(ui: &mut Ui, data: &mut StoryData) -> S
             dialog.answer_ok(Err(Label::from(REFUSAL)));
         }
     })
+}
+
+/// The open state of a story's dialog, which starts closed: a button opens it.
+fn opener<'d>(ui: &mut Ui, data: &'d mut StoryData) -> &'d mut bool {
+    let open = data.value("open", false);
+    if ui.button("Open").clicked() {
+        *open = true;
+    }
+    open
+}
+
+/// A footer toggle: a `Bool` row drawn as a footer button that shows its on label while on.
+#[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
+fn param_dialog_with_a_footer_toggle(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = vec![
+        Param::new("radius", "Radius", ParamKind::range(0.0, 100.0, 10.0, Default::default())),
+        Param::new("grid", "Show Grid", ParamKind::bool(false)).in_footer("Hide Grid"),
+    ];
+    ParamDialog::new("grid", "Grid", params).opened(Bind::bound(opener(ui, data))).show(ui).into()
+}
+
+/// A named presets row above the rows.
+#[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
+fn param_dialog_with_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = [PresetRow::item("soft".to_owned(), "Soft", 0), PresetRow::item("hard".to_owned(), "Hard", 0)];
+    let values = [
+        ("soft".to_owned(), DialogFields::from_pairs([("radius", 2.0)])),
+        ("hard".to_owned(), DialogFields::from_pairs([("radius", 60.0)])),
+    ];
+    let built_in = ["soft".to_owned()];
+    ParamDialog::new("blur", "Blur", Param::parse_list(SPEC))
+        .opened(Bind::bound(opener(ui, data)))
+        .presets(ParamPresets { rows: &rows, values: &values, built_in: &built_in })
+        .show(ui)
+        .into()
+}
+
+/// A dialog whose OK is refused with a reason: OK is off and the reason shows under the rows.
+#[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
+fn param_dialog_with_refused_values(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ParamDialog::new("blur", "Blur", Param::parse_list(SPEC))
+        .opened(Bind::bound(opener(ui, data)))
+        .ok_enabled(false)
+        .ok_reason(Label::from(REFUSAL))
+        .refusal((Label::from(REFUSAL), DialogFields::new()))
+        .refusal_blocks(true)
+        .show(ui)
+        .into()
 }
 
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
