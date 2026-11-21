@@ -90,8 +90,8 @@ pub struct Exp<'a> {
     /// Draws an SVG picture into a PNG, for the raster fallback PowerPoint keeps beside the
     /// vector. The writer has no renderer of its own, so the caller supplies one.
     raster: Option<Raster<'a>>,
-    /// The PNG part written for an SVG picture, by media id.
-    svg_fallbacks: HashMap<MediaId, String>,
+    /// The PNG part written for an SVG picture, by media id; `None` when the rasterizer declined.
+    svg_fallbacks: HashMap<MediaId, Option<String>>,
 }
 
 /// Draws an SVG picture into a PNG: the raster fallback PowerPoint keeps beside the vector, in
@@ -241,17 +241,22 @@ impl<'a> Exp<'a> {
     fn is_svg(&self, id: MediaId) -> bool {
         self.media(id).is_some_and(|m| !m.data.is_empty() && Self::content_type(m) == "image/svg+xml")
     }
-    /// The part written for an SVG picture's raster fallback, made once per media id.
+    /// The part written for an SVG picture's raster fallback, made once per media id. A
+    /// rasterizer that declines is remembered too, so a picture used twice is not drawn twice.
     fn svg_png_part(&mut self, id: MediaId) -> Option<String> {
-        if let Some(name) = self.svg_fallbacks.get(&id) {
-            return Some(name.clone());
+        if let Some(part) = self.svg_fallbacks.get(&id) {
+            return part.clone();
         }
-        let raster = self.raster?;
-        let png = raster(self.media(id)?)?;
+        let raster = self.raster;
+        let png = self.media(id).and_then(|m| raster?(m));
+        let Some(png) = png else {
+            self.svg_fallbacks.insert(id, None);
+            return None;
+        };
         self.n_image += 1;
         let name = format!("ppt/media/image{}.png", self.n_image);
         self.pkg.binary(&name, "image/png", png);
-        self.svg_fallbacks.insert(id, name.clone());
+        self.svg_fallbacks.insert(id, Some(name.clone()));
         Some(name)
     }
     /// A relationship from `o` to a media item (embedded part, or external link).

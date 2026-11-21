@@ -152,6 +152,26 @@ fn without_a_rasterizer_the_vector_stays_in_the_blip() {
 }
 
 #[test]
+fn a_rasterizer_that_declines_is_asked_once_per_picture_source() {
+    // Two pictures share one SVG: a rasterizer that gives up is not called again for the second.
+    let mut p = deck();
+    let svg = add_media(&mut p, "a.svg", "image/svg+xml", SVG);
+    add_picture(&mut p, svg);
+    let slide = Arc::make_mut(p.slides.first_mut().expect("slide"));
+    let mut second = slide.shapes[0].clone();
+    second.id = ShapeId(101);
+    slide.shapes.push(second);
+
+    let calls = std::cell::Cell::new(0u32);
+    craft_pptx::export_with(&p, &Plain, &|_m| {
+        calls.set(calls.get() + 1);
+        None
+    })
+    .expect("export");
+    assert_eq!(calls.get(), 1, "the declined draw is remembered");
+}
+
+#[test]
 fn a_rasterizer_that_declines_leaves_the_vector_alone() {
     let bytes = craft_pptx::export_as_with(&svg_deck(), &Plain, "potx", &|_m| None).expect("export");
     assert!(!part(&bytes, SLIDE).contains("asvg:svgBlip"));
