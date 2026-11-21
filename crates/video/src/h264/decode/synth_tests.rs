@@ -28,12 +28,18 @@ enum PocType {
 }
 
 fn sps(profile: u8, max_refs: u32, gaps: bool, poc: PocType) -> Vec<u8> {
+    sps_frame_num_bits(profile, max_refs, gaps, poc, 4)
+}
+
+/// `sps` with a `frame_num_bits`-bit frame_num (log2_max_frame_num); slices then set
+/// `Pic::frame_num_bits` to the same value.
+fn sps_frame_num_bits(profile: u8, max_refs: u32, gaps: bool, poc: PocType, frame_num_bits: u32) -> Vec<u8> {
     let mut w = BitWriter::new();
     w.write_bits(profile as u32, 8);
     w.write_bits(0, 8);
     w.write_bits(30, 8);
     w.write_ue(0); // sps id
-    w.write_ue(0); // log2_max_frame_num - 4 -> 16
+    w.write_ue(frame_num_bits - 4); // log2_max_frame_num - 4
     match poc {
         PocType::T0 => {
             w.write_ue(0);
@@ -105,6 +111,8 @@ struct Pic {
     wt: Option<[[(i32, i32); 3]; 2]>,
     /// first_mb_in_slice (`mbs` then lists the slice's macroblocks from there).
     first_mb: u32,
+    /// Bits of frame_num (0 = the 4 bits of `sps`).
+    frame_num_bits: u32,
 }
 
 impl Pic {
@@ -126,7 +134,7 @@ fn slice_header(w: &mut BitWriter, p: &Pic, cabac: bool) {
         7
     });
     w.write_ue(0); // pps id
-    w.write_bits(p.frame_num, 4);
+    w.write_bits(p.frame_num, if p.frame_num_bits == 0 { 4 } else { p.frame_num_bits });
     if p.idr {
         w.write_ue(0);
     }
@@ -646,6 +654,7 @@ fn avcc_rejects_a_valid_picture_slice_without_starting_a_picture() {
             poc_delta: None,
             wt: None,
             first_mb: 0,
+            frame_num_bits: 0,
         },
         false,
     );
@@ -733,6 +742,86 @@ fn frame_num_gap_is_filled_when_the_sps_allows_gaps() {
     assert!(dec.take_error().is_none());
     assert_eq!(out.len(), 2);
     assert_eq!(dec.stats().frame_num_gaps, 1);
+}
+
+/// An IDR picture of I_PCM macroblocks (frame_num 0), then reference P pictures with the given
+/// frame_num values, with a `bits`-bit frame_num. A P picture marked `true` carries new I_PCM
+/// content; one marked `false` is all P_Skip and repeats the latest picture (the non-existing
+/// frames of a gap copy it). With `poc_type_0` the pictures carry increasing pic_order_cnt_lsb
+/// values, otherwise the POC type is 2. Either way output order is decoding order. Returns the
+/// stream and the expected output.
+fn gap_frames_stream(bits: u32, poc_type_0: bool, pictures: &[(u32, bool)]) -> (Vec<u8>, Vec<Planes3>) {
+    let mut seed = 5u32;
+    let a: Vec<Option<Vec<u8>>> = (0..NMB).map(|_| Some(random_mb(&mut seed))).collect();
+    let mut want = vec![render(&a, None)];
+    let poc = if poc_type_0 { PocType::T0 } else { PocType::T2 };
+    // 4-bit pic_order_cnt_lsb: steps of 2 keep the POC increasing across its wrap (8.2.1.1)
+    let lsb = |k: u32| if poc_type_0 { Some((2 * k) % 16) } else { None };
+    let mut stream = sps_frame_num_bits(66, 4, true, poc, bits);
+    stream.extend(pps(false, false));
+    stream
+        .extend(slice_nal(&Pic { idr: true, frame_num: 0, ref_idc: 3, mbs: a, frame_num_bits: bits, poc_lsb: lsb(0), ..Default::default() }, false));
+    for (k, &(f, fresh)) in (1u32..).zip(pictures) {
+        let mbs: Vec<Option<Vec<u8>>> = if fresh { (0..NMB).map(|_| Some(random_mb(&mut seed))).collect() } else { vec![None; NMB] };
+        let prev = want.last().cloned();
+        want.push(render(&mbs, prev.as_ref()));
+        stream.extend(slice_nal(&Pic { frame_num: f, ref_idc: 2, mbs, frame_num_bits: bits, poc_lsb: lsb(k), ..Default::default() }, false));
+    }
+    (stream, want)
+}
+
+/// Decodes a `gap_frames_stream` with 1 and 3 threads and checks every output picture and the
+/// number of filled gaps; with `ffmpeg_name`, also ffmpeg's output for the same stream.
+fn check_gap_frames_stream(bits: u32, poc_type_0: bool, pictures: &[(u32, bool)], gaps: u64, ffmpeg_name: Option<&str>) {
+    let (stream, want) = gap_frames_stream(bits, poc_type_0, pictures);
+    if let Some(name) = ffmpeg_name {
+        cross_check_ffmpeg(&stream, &want, name);
+    }
+    for threads in [1, 3] {
+        let mut dec = Decoder::with_threads(threads);
+        let mut out = dec.decode(&stream, 0).unwrap();
+        out.extend(dec.flush());
+        assert!(dec.take_error().is_none(), "threads={threads}");
+        assert_eq!(out.len(), want.len(), "threads={threads}");
+        for (i, p) in out.iter().enumerate() {
+            assert!((&p.y, &p.u, &p.v) == (&want[i].0, &want[i].1, &want[i].2), "picture {i} differs (threads={threads})");
+        }
+        assert_eq!(dec.stats().frame_num_gaps, gaps, "threads={threads}");
+    }
+}
+
+/// gaps_in_frame_num_value_allowed_flag permits gaps of any size (7.4.2.1.1); the conformance
+/// stream MR3_TANDBERG_B has gaps of up to 22 frames with 15 reference frames. A gap longer than
+/// 16 frames was refused, and every later picture was lost with it.
+#[test]
+fn frame_num_gap_longer_than_sixteen_frames_is_filled() {
+    check_gap_frames_stream(8, false, &[(23, false), (24, true)], 1, Some("synth_wide_gap"));
+}
+
+/// The longest possible gap: frame_num 0 straight to 65535 skips 65534 frames, and the next
+/// picture wraps to frame_num 0. The DPB builds at most max_num_ref_frames non-existing frames and
+/// does constant work for the rest (`dpb::tests::longest_frame_num_gap_does_constant_work`).
+#[test]
+fn longest_frame_num_gap_is_filled() {
+    check_gap_frames_stream(16, false, &[(65535, false), (0, true)], 1, Some("synth_longest_gap"));
+}
+
+/// A gap that wraps around: frame_num 250 to 5 with an 8-bit frame_num skips 251..=255 and
+/// 0..=4, and FrameNumOffset grows by MaxFrameNum on the way (8.2.1). With pic_order_cnt_type 2
+/// the output order is the decoding order, which is what is checked. No ffmpeg cross-check:
+/// ffmpeg 9.0 outputs the pictures after such a gap before the picture with frame_num 250
+/// (also with 4-bit frame_num and gaps of 6 frames), against that rule.
+#[test]
+fn wrapping_frame_num_gap_is_filled() {
+    check_gap_frames_stream(8, false, &[(250, true), (5, true), (6, false), (7, true)], 2, None);
+}
+
+/// The same wrapping gap with pic_order_cnt_type 0, where the output order comes from
+/// pic_order_cnt_lsb and not from FrameNumOffset: the filled gap and the pictures after it are
+/// checked against ffmpeg too.
+#[test]
+fn wrapping_frame_num_gap_with_poc_type_0_is_filled() {
+    check_gap_frames_stream(8, true, &[(250, true), (5, true), (6, false), (7, true)], 2, Some("synth_wrapping_gap_poc0"));
 }
 
 /// An IDR picture followed by `pictures` reference P pictures of P_Skip macroblocks.

@@ -406,7 +406,7 @@ impl SliceHeader {
 }
 
 /// POC decoding state carried between pictures (8.2.1).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PocState {
     /// PicOrderCntMsb / pic_order_cnt_lsb of the previous reference picture (type 0).
     prev_ref_msb: i32,
