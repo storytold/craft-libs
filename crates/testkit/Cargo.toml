@@ -5,10 +5,13 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Source-level platform regression guards and verification utilities for the Craft application suite"
+description = "Source-level platform regression guards, skip-or-fail helpers and verification utilities for the Craft application suite"
 publish = false
 
 [dependencies]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+skrifa = { version = "0.47", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true
