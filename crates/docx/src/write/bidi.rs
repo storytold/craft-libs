@@ -12,6 +12,12 @@
 //! Word gives right-to-left text without a bidi language (`w:lang w:bidi`, §17.3.2.20) its
 //! default complex-script language, Arabic, so Hebrew would proof and show as Arabic. The pieces
 //! marked `w:rtl` therefore also say their language, unless the run or its styles already do.
+//!
+//! Word draws a `w:rtl` run bold and italic only by `w:bCs` and `w:iCs`: Hebrew with `<w:b/>
+//! <w:rtl/>` and no `w:bCs` is plain (measured in Word for Windows, storytold/wordcraft#4852),
+//! while WordCraft draws a run with no `w:cs` bold by `w:b` when nothing sets `w:bCs`. The pieces
+//! marked `w:rtl` therefore also say `w:bCs` and `w:iCs` where WordCraft draws them bold or
+//! italic only by borrowing (storytold/craft-libs#2728).
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -63,14 +69,28 @@ fn direct(c: &mut CharProps, lang: Option<&String>) {
     }
 }
 
+/// Add `w:bCs`/`w:iCs` to `c` where `borrowed` says its complex-script text is drawn bold or
+/// italic only by borrowing `w:b`/`w:i`.
+fn carry_complex_toggles(c: &mut CharProps, borrowed: (bool, bool)) {
+    if borrowed.0 && c.bold_cs.is_none() {
+        c.bold_cs = Some(true);
+    }
+    if borrowed.1 && c.italic_cs.is_none() {
+        c.italic_cs = Some(true);
+    }
+}
+
 /// `runs` (byte ranges of `text` with their props), split where the bidi level of `text` in a
 /// paragraph of direction `rtl_para` changes parity; right-to-left pieces get `rtl: Some(true)`
 /// and, unless they have one or `inherits_lang` says it comes from a style, a bidi language.
+/// They also get `w:bCs`/`w:iCs` where `complex_toggles` says the run's complex-script text is
+/// drawn bold or italic only by borrowing `w:b`/`w:i` (its own or its styles').
 pub(super) fn direction_spans<'a>(
     text: &str,
     rtl_para: bool,
     runs: impl Iterator<Item = (Range<usize>, &'a CharProps)>,
     inherits_lang: impl Fn(&CharProps) -> bool,
+    complex_toggles: impl Fn(&CharProps) -> (bool, bool),
 ) -> Vec<(Range<usize>, Cow<'a, CharProps>)> {
     if !craft_wordmodel::bidi::has_rtl(text) {
         return runs.map(|(r, p)| (r, Cow::Borrowed(p))).collect();
@@ -98,10 +118,13 @@ pub(super) fn direction_spans<'a>(
             };
             let mut p = props.clone();
             direct(&mut p, lang.as_ref());
+            carry_complex_toggles(&mut p, complex_toggles(props));
             // A tracked formatting change's "before" copy gets the same, so the change lists
             // nothing the author didn't do.
             if let Some(ch) = p.fmt_change.as_mut() {
+                let before = complex_toggles(&ch.old);
                 direct(&mut ch.old, lang.as_ref());
+                carry_complex_toggles(&mut ch.old, before);
             }
             (r, Cow::Owned(p))
         };
@@ -133,7 +156,7 @@ mod tests {
         let p = CharProps::default();
         let text = "עברית WordCraft";
         let runs = vec![(0..3, &p), (3..1000, &p), (usize::MAX - 1..usize::MAX, &p), (2..text.len(), &p)];
-        let out = direction_spans(text, true, runs.into_iter(), |_| false);
+        let out = direction_spans(text, true, runs.into_iter(), |_| false, |_| (false, false));
         assert_eq!(out.len(), 5, "bad ranges pass through unsplit: {out:?}");
     }
 

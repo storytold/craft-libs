@@ -89,8 +89,7 @@ impl Writer<'_> {
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
-        let rows: Vec<_> = t.rows.iter().filter(|r| !r.cells.is_empty()).collect();
-        if rows.is_empty() {
+        if t.rows.iter().all(|r| r.cells.is_empty()) {
             return;
         }
         w.open("w:tbl", &[]);
@@ -106,7 +105,10 @@ impl Writer<'_> {
         // Controls around rows and cells (repeating sections): opens and closes balanced
         // whatever editing left, the ones still open closed at the end.
         let mut open_rows = 0u32;
-        for r in rows {
+        // A table in a cell: its own style's formatting for its cells, the outer cell's after it.
+        let outer_chr = self.table_chr.take();
+        let chrs = self.doc.styles.table_cells_chr(t);
+        for (ri, r) in t.rows.iter().enumerate().filter(|(_, r)| !r.cells.is_empty()) {
             for c in &r.controls.open {
                 crate::write::sdt::open(w, c);
                 open_rows += 1;
@@ -115,7 +117,7 @@ impl Writer<'_> {
             let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
             trpr(w, &r.props, chg.as_ref());
             let mut open_cells = 0u32;
-            for c in &r.cells {
+            for (ci, c) in r.cells.iter().enumerate() {
                 for ctl in &c.controls.open {
                     crate::write::sdt::open(w, ctl);
                     open_cells += 1;
@@ -123,7 +125,9 @@ impl Writer<'_> {
                 w.open("w:tc", &[]);
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
+                self.table_chr = chrs.as_ref().and_then(|c| c.get(ri)?.get(ci).cloned());
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
+                self.table_chr = None;
                 w.close("w:tc");
                 let n = c.controls.close.min(open_cells);
                 for _ in 0..n {
@@ -145,5 +149,6 @@ impl Writer<'_> {
             crate::write::sdt::close(w);
         }
         w.close("w:tbl");
+        self.table_chr = outer_chr;
     }
 }
