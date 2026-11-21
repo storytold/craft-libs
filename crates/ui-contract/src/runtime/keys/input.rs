@@ -509,6 +509,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
             visible = match &read {
                 KeyEvent::PointerPress => Some(false),
+                // An accessibility activation is not the preceding key: a menu it opens must wait for its own navigation.
+                KeyEvent::Access(action)
+                    if matches!(action.kind(), raw_input::ActionKind::Click | raw_input::ActionKind::ShowContextMenu) => Some(false),
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
                 _ => visible,
             };

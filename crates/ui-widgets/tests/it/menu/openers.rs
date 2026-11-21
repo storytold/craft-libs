@@ -218,8 +218,12 @@ fn a_menu_opener_accepts_accessibility_activation() {
             });
         });
         fixture.settle();
+        fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
         let opener = fixture.by_label("Options").expect("the opener");
         fixture.access(craft_ui::testing::focus::AccessActionKind::Click, &opener).settle();
         assert!(fixture.by_label("An option").is_some(), "{trigger:?} opens through accessibility");
+        assert!(!craft_ui::runtime::focus::keyboard_in_menu(fixture.ctx()), "an accessibility activation does not inherit an earlier key");
+        fixture.key(egui::Key::ArrowDown, egui::Modifiers::NONE).settle();
+        assert!(craft_ui::runtime::focus::keyboard_in_menu(fixture.ctx()), "a later key drives the menu");
     }
 }
