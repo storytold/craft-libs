@@ -4,8 +4,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_host::target::Os;
-use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, Keymap, Overrides, Platform, ProfileError, Profiles, Scope, Scopes};
-use craft_menu::shortcuts::{DialogState, Options, Outcome, ShortcutsDialog};
+use craft_keymap::{
+    Binding, CommandDef, CommandKind, CommandRef, ForeignSet, ImportOptions, Keymap, Overrides, Platform, ProfileError, Profiles, Scope, Scopes,
+};
+use craft_menu::shortcuts::{DialogState, HoldSetting, Options, Outcome, ShortcutsDialog};
 use craft_ui::contract::Role;
 use craft_ui::testing::{Fixture, Target};
 use egui::{Key, Modifiers, Ui};
@@ -51,8 +53,26 @@ pub(crate) struct Shared {
     pub state: DialogState,
     pub options: Options,
     pub sets: Option<(Profiles, Vec<(&'static str, Overrides)>)>,
+    pub holds: Option<HoldSetting>,
     pub outcomes: Vec<Outcome>,
     jobs: Vec<Job>,
+}
+
+/// The dialog over what a pass edits.
+fn dialog<'a>(
+    km: &'a mut Keymap,
+    options: &'a Options,
+    sets: &'a mut Option<(Profiles, Vec<(&'static str, Overrides)>)>,
+    holds: &'a mut Option<HoldSetting>,
+) -> ShortcutsDialog<'a> {
+    let mut dialog = ShortcutsDialog::new(km).options(options);
+    if let Some((p, b)) = sets.as_mut() {
+        dialog = dialog.sets(p, b);
+    }
+    if let Some(h) = holds.as_mut() {
+        dialog = dialog.holds(h);
+    }
+    dialog
 }
 
 /// The dialog shown in a fixture, one pass per frame.
@@ -69,23 +89,24 @@ impl Rig {
 
     /// Like [`Rig::new`], with the built-in sets given too.
     pub(crate) fn with_builtins(km: Keymap, options: Options, sets: Option<(Profiles, Vec<(&'static str, Overrides)>)>) -> Rig {
-        let shared = Rc::new(RefCell::new(Shared { km, state: DialogState::new(), options, sets, outcomes: Vec::new(), jobs: Vec::new() }));
+        Rig::build(km, options, sets, None)
+    }
+
+    /// A dialog without sets whose hold setting is `holds`.
+    pub(crate) fn with_holds(km: Keymap, options: Options, holds: HoldSetting) -> Rig {
+        Rig::build(km, options, None, Some(holds))
+    }
+
+    fn build(km: Keymap, options: Options, sets: Option<(Profiles, Vec<(&'static str, Overrides)>)>, holds: Option<HoldSetting>) -> Rig {
+        let shared = Rc::new(RefCell::new(Shared { km, state: DialogState::new(), options, sets, holds, outcomes: Vec::new(), jobs: Vec::new() }));
         let pass = shared.clone();
         let mut fixture = Fixture::new(move |ui| {
             let mut guard = pass.borrow_mut();
-            let Shared { km, state, options, sets, outcomes, jobs } = &mut *guard;
+            let Shared { km, state, options, sets, holds, outcomes, jobs } = &mut *guard;
             for job in std::mem::take(jobs) {
-                let mut dialog = ShortcutsDialog::new(km).options(options);
-                if let Some((p, b)) = sets.as_mut() {
-                    dialog = dialog.sets(p, b);
-                }
-                job(dialog, ui, state);
+                job(dialog(km, options, sets, holds), ui, state);
             }
-            let mut dialog = ShortcutsDialog::new(km).options(options);
-            if let Some((p, b)) = sets.as_mut() {
-                dialog = dialog.sets(p, b);
-            }
-            outcomes.extend(dialog.show(ui, state).outcome);
+            outcomes.extend(dialog(km, options, sets, holds).show(ui, state).outcome);
         });
         let os = if shared.borrow().km.platform().is_mac() { Os::Mac } else { Os::Windows };
         fixture.os(os).room(egui::vec2(1000.0, 700.0));
@@ -245,5 +266,12 @@ impl Rig {
         self.shared.borrow_mut().jobs.push(job);
         self.fixture.idle(2);
         result.take().unwrap_or_else(|| panic!("the job did not run"))
+    }
+
+    /// Opens the review of `set` in the next pass and shows it.
+    pub(crate) fn review(&mut self, set: ForeignSet, options: ImportOptions) {
+        let job: Job = Box::new(move |dialog, ui, state| dialog.review_import(ui, state, set, options));
+        self.shared.borrow_mut().jobs.push(job);
+        self.fixture.idle(2);
     }
 }
