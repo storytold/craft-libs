@@ -13,6 +13,7 @@ impl Plugin for RuntimePlugin {
     }
 
     fn input_hook(&mut self, ctx: &Context, input: &mut RawInput) {
+        super::input::repair_windows_alt(ctx, input);
         crate::runtime::egui::input_filter::input_hook(ctx, input);
         frame::input_hook(ctx, input);
     }
