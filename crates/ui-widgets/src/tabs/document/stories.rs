@@ -22,6 +22,15 @@ fn document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     out.response.into()
 }
 
+/// Many long document names exercise the strip's overflow behaviour.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
+fn many_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tabs: Vec<_> = (0..12).map(|i| DocumentTab::new(i, format!("Document number {i}, scanned.pdf"))).collect();
+    let shown = *data.value("shown", 0_usize);
+    let out = DocumentTabs::new("Documents", &tabs).selected(shown).reorderable(true).show(ui);
+    out.response.into()
+}
+
 /// Hover text on a tab cut to fit, which shows its full name then the text, and on a short tab, which shows the text
 /// alone. The long title is cut to fit the strip.
 #[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
