@@ -3,7 +3,7 @@
 use super::fields::{DialogFields, FieldValue};
 use super::file_list::{FileList, FileListMode, FileListPicker};
 use crate::patterns::blend_keys::{BlendKeyEntry, BlendKeys, BlendShortcut, BlendStep, blend_entries};
-use crate::patterns::presets::{PresetKind, PresetPicker, PresetRow};
+use crate::patterns::presets::{PresetFns, PresetKind, PresetPicker, PresetSource};
 use crate::runtime::commands::{CommandState, Commands as _};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, ListingRequest, PathRequest};
 
@@ -108,7 +108,7 @@ pub struct ParamRows<'a> {
     seed: Option<Bind<'a, u64>>,
     read_only: bool,
     canvas: Option<Id>,
-    patterns: &'a [PresetRow<String>],
+    patterns: Option<&'a PresetSource<'a, String>>,
     preview_colors: &'a [(String, Srgba)],
     sliders: SliderFieldLayout,
 }
@@ -123,7 +123,7 @@ impl<'a> ParamRows<'a> {
             seed: None,
             read_only: false,
             canvas: None,
-            patterns: &[],
+            patterns: None,
             preview_colors: &[],
             sliders: SliderFieldLayout::Inline,
         }
@@ -159,8 +159,8 @@ impl<'a> ParamRows<'a> {
     }
 
     /// The patterns a [`ParamKind::Pattern`] row offers, by id.
-    pub fn patterns(mut self, rows: &'a [PresetRow<String>]) -> Self {
-        self.patterns = rows;
+    pub fn patterns(mut self, source: &'a PresetSource<'a, String>) -> Self {
+        self.patterns = Some(source);
         self
     }
 
@@ -257,7 +257,7 @@ struct Pass<'p> {
     /// An eyedropper row is armed.
     sampling: bool,
     /// The patterns a pattern row offers.
-    patterns: &'p [PresetRow<String>],
+    patterns: Option<&'p PresetSource<'p, String>>,
     /// The canvas a custom row can ask about.
     canvas: Option<Id>,
     /// The colours shown in colour rows in place of their values (`ParamRows::preview_colors`).
@@ -306,7 +306,7 @@ impl Line<'_> {
 }
 
 impl<'p> Pass<'p> {
-    fn new(words: &'p ParamWords, units: &'p Units, patterns: &'p [PresetRow<String>], canvas: Option<Id>) -> Self {
+    fn new(words: &'p ParamWords, units: &'p Units, patterns: Option<&'p PresetSource<'p, String>>, canvas: Option<Id>) -> Self {
         Pass {
             words,
             units,
@@ -663,21 +663,19 @@ impl<'p> Pass<'p> {
     /// A pattern row: the stored id when the rows have it as a pattern, else the first pattern is shown. A pick writes
     /// the pattern's id; the group headers of the list take no pick.
     fn pattern(&mut self, ui: &mut Ui, line: &Line<'_>) {
-        let rows = self.patterns;
-        let is_pattern = |row: &&PresetRow<String>| matches!(row.kind, PresetKind::Item);
+        let none = PresetSource::new((), PresetFns::new(|_, _| Vec::new()));
+        let source = self.patterns.unwrap_or(&none);
+        let rows = source.rows(ui.ctx(), &Env::of(ui));
+        let mut patterns = rows.iter().filter(|row| matches!(row.kind, PresetKind::Item)).map(|row| &row.key);
         let stored = self.work.text(line.key);
-        let current = rows
-            .iter()
-            .filter(is_pattern)
-            .find(|row| Some(row.key.as_str()) == stored)
-            .or_else(|| rows.iter().find(is_pattern))
-            .map(|row| row.key.clone());
+        let first = patterns.clone().next();
+        let current = patterns.find(|key| Some(key.as_str()) == stored).or(first).cloned();
         // With no pattern to offer the row is disabled and writes nothing.
         let line =
             Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some(), compact: line.compact };
         line.show(ui, |ui| {
-            let picked = PresetPicker::pattern(line.name.clone(), Bind::given(current.clone()), rows, Bind::kept()).show(ui).picked;
-            if let Some(id) = picked.filter(|id| rows.iter().filter(is_pattern).any(|row| row.key == *id)) {
+            let picked = PresetPicker::pattern(line.name.clone(), Bind::given(current.clone()), source, Bind::kept()).show(ui).picked;
+            if let Some(id) = picked.filter(|id| rows.iter().any(|row| matches!(row.kind, PresetKind::Item) && row.key == *id)) {
                 self.work.set(line.key, FieldValue::Text(id));
             }
         });

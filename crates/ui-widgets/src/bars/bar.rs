@@ -11,7 +11,7 @@ use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind};
 use craft_behavior::{IconId, Metrics, NavShape, Roving, Sense};
 use craft_theme::ControlSize;
 use egui::{Response, Ui};
@@ -128,6 +128,9 @@ impl<'a> Bar<'a> {
             .scroll(Scroll::horizontal().overlay());
         if kind == BarKind::Status {
             props = props.live(Politeness::Polite);
+        }
+        if kind == BarKind::Options {
+            props = props.child_glyphs(GlyphRole::Tool);
         }
         Bar { common: Common::new(), props, kind, commit_cancel: None, committed: false, cancelled: false, trailing: None }.label(label)
     }

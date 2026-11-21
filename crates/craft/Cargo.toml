@@ -910,6 +910,7 @@ timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
 
 tracked = ["dep:craft-tracked"]
+tracked-serde = ["tracked", "craft-tracked/serde"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]

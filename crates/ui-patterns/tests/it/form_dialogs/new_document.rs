@@ -391,3 +391,39 @@ fn the_art_tab_shows_the_grids_in_pixels_and_the_postcard_in_inches() {
     assert!(shows(&fixture, "1000 × 1000 px @ 300 ppi"), "the grid's card is in pixels");
     assert!(shows(&fixture, "4 × 6 in @ 300 ppi"), "the postcard's card is in inches");
 }
+
+/// The preset cards fill the left column's width, and each card's title and size line are painted whole and centred
+/// under the page outline.
+#[trial]
+fn the_preset_cards_fill_the_column_and_show_their_size_lines_whole() {
+    use craft_ui::contract::Gap;
+    use craft_ui::runtime::access::Role;
+    use std::cell::Cell;
+
+    let mut options = DocumentOptions::default();
+    let column_gap = Rc::new(Cell::new(0.0f32));
+    let shared = Rc::clone(&column_gap);
+    let mut fixture = Fixture::new(move |ui| {
+        shared.set(Gap::Row.points(ui));
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let photo = fixture.by_label("Photo").expect("the Photo tab");
+    fixture.click(&photo).idle(10);
+    let cards = fixture.by_role(Role::LIST_ITEM);
+    assert!(cards.len() >= 3, "the tab lists presets");
+    let first_row: Vec<_> = cards.iter().filter(|card| (card.rect.top() - cards[0].rect.top()).abs() < 1.0).collect();
+    assert!(first_row.len() >= 2, "a row holds several cards");
+    let details = fixture.by_label("Preset Details").expect("the details column").rect;
+    let column_end = details.left() - column_gap.get();
+    let last = first_row.last().expect("a row has cards").rect;
+    assert!((column_end - last.right()).abs() <= 1.0, "the row's last card ends at the left column's end ({column_end}): {last:?}");
+    for card in &first_row {
+        let lines: Vec<_> = fixture.texts().iter().filter(|text| card.rect.contains_rect(text.rect)).collect();
+        assert!(lines.iter().any(|text| text.text.contains('\u{d7}')), "the card shows its size line: {:?}", card.rect);
+        for line in lines {
+            assert!(!line.elided, "{:?} is painted whole", line.text);
+            assert!((line.rect.center().x - card.rect.center().x).abs() <= 1.0, "{:?} is centred in its card", line.text);
+        }
+    }
+}
