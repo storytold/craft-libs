@@ -132,7 +132,6 @@ impl Session {
             .to_owned()
     }
 
-    /// Handles `initialize` and `ping`. Returns `None` for a request the app should route.
     /// Whether the caller may dispatch a JSON-RPC batch. False in strict mode once a version
     /// without batching (2025-06-18) is negotiated; reject such a batch envelope with
     /// -32600 before dispatching it, since `notification` cannot tell a batched notification apart.
@@ -140,6 +139,7 @@ impl Session {
         self.policy != Policy::Strict || !self.negotiated.as_deref().is_some_and(|v| BATCHLESS_VERSIONS.contains(&v))
     }
 
+    /// Handles `initialize` and `ping`. Returns `None` for a request the app should route.
     /// `in_batch` must describe the outer JSON-RPC envelope. A batched request is rejected
     /// when `accepts_batches` is false.
     pub fn request(&mut self, request: Request<'_>, in_batch: bool) -> Option<Result<Value, RpcError>> {
