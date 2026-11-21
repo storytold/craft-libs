@@ -526,10 +526,11 @@ impl Component for Guides<'_> {
         for guide in guides {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
             let color = if self.selected == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let look = RuleLook { color, width: RuleWidth::Points(style.width) };
             match guide.line {
-                GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(style.width) }, a, b, ppp)),
+                GuideLine::Solid => painter.painter.extend(Rule::shapes(&look, a, b, ppp)),
                 GuideLine::Dashed => painter.dashed(&[a, b], Dashes::new(style.dash, style.gap), StrokeWidth::Thin, color),
-                GuideLine::Dots => painter.dashed(&[a, b], Dashes::new(style.width, style.gap), StrokeWidth::Thin, color),
+                GuideLine::Dots => painter.painter.extend(Rule::dotted(&look, a, b, style.gap, ppp)),
             }
             if focused == Some(guide.key.get()) && (b - a).length() > 0.0 {
                 painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &footprint(&space, a, b, style.width), ppp));
