@@ -449,6 +449,9 @@ fn shrink_in_turns(units: &[ShrinkUnit], whole: &[f32], first: &[bool], fixed: f
 /// to be cut (`first`) drop out from the end, each with one `gap`, until the rest fits at their least. A unit that
 /// drops gets no width and takes no place, so nothing overflows into a neighbour; controls never drop. A row that
 /// scrolls keeps every unit and scrolls instead.
+///
+/// Before those drops, the units that carry a rank (`ranks`) leave whole, scrolling row or not: the lowest rank first,
+/// the last of a rank first, until the kept units fit at their ideal widths. A unit with no rank never leaves by rank.
 fn shrink_or_drop(
     units: &[ShrinkUnit],
     whole: &[f32],
@@ -459,12 +462,19 @@ fn shrink_or_drop(
     order: ShrinkOrder,
     drops: bool,
 ) -> Vec<ShrinkCap> {
-    let _ = ranks; // P3(chrome-w5): ch.K30
     let mut kept = vec![true; units.len()];
     let mut fixed = fixed;
     // Half a point: less than a pixel shows at any scale the box runs.
-    let fits =
-        |kept: &[bool], fixed: f32| fixed + units.iter().zip(kept).filter(|(_, kept)| **kept).map(|(unit, _)| unit.least).sum::<f32>() - room < 0.5;
+    let fits_at = |kept: &[bool], fixed: f32, width: fn(&ShrinkUnit) -> f32| {
+        fixed + units.iter().zip(kept).filter(|(_, kept)| **kept).map(|(unit, _)| width(unit)).sum::<f32>() - room < 0.5
+    };
+    let fits = |kept: &[bool], fixed: f32| fits_at(kept, fixed, |unit| unit.least);
+    while !fits_at(&kept, fixed, |unit| unit.ideal) {
+        let Some(rank) = (0..units.len()).filter(|at| kept[*at]).filter_map(|at| ranks[at]).min() else { break };
+        let Some(at) = (0..units.len()).rev().find(|at| kept[*at] && ranks[*at] == Some(rank)) else { break };
+        kept[at] = false;
+        fixed -= gap;
+    }
     while drops && !fits(&kept, fixed) {
         let Some(at) = (0..units.len()).rev().find(|at| kept[*at] && first[*at]) else { break };
         kept[at] = false;

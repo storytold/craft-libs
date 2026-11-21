@@ -812,6 +812,7 @@ impl ContainerProps {
             && self.sizing == other.sizing
             && self.content_in_bar == other.content_in_bar
             && self.room_height == other.room_height
+            && self.fit_rank == other.fit_rank
             && self.layout == other.layout
             && self.header == other.header
             && self.scroll == other.scroll

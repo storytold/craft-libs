@@ -201,7 +201,7 @@ layout_component!(
     /// Children side by side.
     Row,
     RowStyleKey,
-    []
+    [fit_rank]
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
@@ -301,14 +301,6 @@ impl Row {
     pub fn align(mut self, align: RowAlign) -> Self {
         self.props.layout = std::mem::replace(&mut self.props.layout, BodyLayout::Stack).align(align);
         self
-    }
-
-    /// The rank by which the row leaves a shrinking row whole: the row reports its members' ranks to the shrink
-    /// that drops units, the lowest rank first.
-    #[must_use]
-    pub fn fit_rank(self, rank: u8) -> Self {
-        let _ = rank;
-        todo!("ch.K31")
     }
 }
 

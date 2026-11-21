@@ -259,6 +259,11 @@ pub(crate) trait ShapeHooks<C: Component> {
         None
     }
 
+    /// The rank by which the component leaves a shrinking row whole (`ContainerProps::fit_rank`).
+    fn fit_rank(&self, _comp: &C) -> Option<u8> {
+        None
+    }
+
     /// The component whose memory holds this one's shown memory, when it is another: a popup body's memory belongs to
     /// the component that shows the popup, so it lasts while that component shows, open or closed.
     fn memory_owner(&self, _comp: &C) -> Option<Id> {
@@ -508,6 +513,11 @@ pub(crate) trait Erased {
     fn read(&mut self, stage: &mut MemoryStage, id: Id, env: &Env);
     fn instance_scope(&self) -> Option<commands::CommandScope>;
     fn theme_scope(&self) -> Option<ThemeScope>;
+    /// The rank by which the component leaves a shrinking row whole.
+    fn fit_rank(&self) -> Option<u8> {
+        // PLAN: `typed.rs` (`Erased for Typed`) and `body/hooks.rs` (`ShapeHooks::fit_rank` reading `ContainerProps::fit_rank`) are not in chrome-w5's Files table; their owner must forward the rank, or no body reports one.
+        None
+    }
     fn memory_owner(&self) -> Option<Id>;
     fn in_flow(&self) -> bool;
     /// Whether the shape fills the width of the room it is shown in (a body not sized from its content).
@@ -1560,11 +1570,12 @@ fn room_step(t: &mut dyn Erased, ui: &Ui, at: ShowAt, begun: &Begun) -> Room {
     let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
     let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
     let given = match shrink {
-        Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(ctx, row, id),
+        Some(crate::layout::Shrink::Apply(row)) => crate::layout::shrink_cap(ctx, row, id),
         _ => None,
     };
     let dropped = given.is_some_and(|given| given.dropped);
-    let cap = given.map(|given| given.width);
+    // A body takes its width from its own size step; the cap only tells it whether it was dropped.
+    let cap = given.filter(|_| shape == ShapeKind::Leaf).map(|given| given.width);
     let room = match cap {
         Some(cap) => Some(room.map_or(cap, |room| room.min(cap))),
         None => room,
@@ -1694,9 +1705,9 @@ fn measure_step(
             let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
             let whole = steps::whole(style, content, Vec2::ZERO, resolved);
             let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
-            crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first(), None); // P3(chrome-w5): ch.K30
+            crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first(), None);
         }
-        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false, None), // P3(chrome-w5): ch.K30
+        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false, t.fit_rank()),
         Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(ctx, row, id, size.x),
         _ => {}
     }
@@ -1704,7 +1715,7 @@ fn measure_step(
     // the units narrow to leave it, and it takes what they leave.
     if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
         let content = measured.x + t.overflow();
-        crate::layout::report_shrink(ctx, row, id, size.x.min(content), content, Some((content, content)), false, None); // P3(chrome-w5): ch.K30
+        crate::layout::report_shrink(ctx, row, id, size.x.min(content), content, Some((content, content)), false, t.fit_rank());
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.

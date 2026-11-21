@@ -76,6 +76,8 @@ pub struct Text {
     elide: Elide,
     /// The styled spans that replace the label's text; empty for plain text.
     spans: Vec<DocRun<'static>>,
+    /// The text whose width stands for the label's ideal and least width.
+    sample: Option<Label>,
     /// The label's text is set in italics.
     italic: bool,
 }
@@ -83,7 +85,7 @@ pub struct Text {
 impl Text {
     /// `text`, which is also its accessible name, in body type and the normal shade.
     pub fn new(text: impl Into<Label>) -> Self {
-        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new(), italic: false }
+        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new(), sample: None, italic: false }
             .label(text)
     }
 
@@ -99,9 +101,9 @@ impl Text {
 
     /// Sets the text's ideal and least width to those of `sample`, so a readout keeps its width while its value changes.
     #[must_use]
-    pub fn sample(self, sample: impl Into<Label>) -> Self {
-        let _ = sample;
-        todo!("ch.K33")
+    pub fn sample(mut self, sample: impl Into<Label>) -> Self {
+        self.sample = Some(sample.into());
+        self
     }
 
     /// Sets the text in italics: a value set apart from the words around it.
@@ -161,6 +163,13 @@ impl Component for Text {
             };
         }
         let role = cx.style.text.role;
+        let sample = self.sample.as_ref().map(|sample| cx.layout_at(&self.run(role, sample.as_str()), f32::INFINITY).size().x);
+        if let Some(width) = sample
+            && matches!(cx.proposal, Proposal::Ideal | Proposal::Min)
+        {
+            let height = cx.layout_at(&self.run(role, cx.resolved.label), f32::INFINITY).size().y;
+            return Vec2::new(width, height);
+        }
         // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word.
         let widest =
             || cx.resolved.label.split_whitespace().map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x).fold(0.0, f32::max);
@@ -173,7 +182,8 @@ impl Component for Text {
             let run = self.run(role, cx.resolved.label);
             return Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y);
         }
-        let band = wrap.unwrap_or(f32::INFINITY);
+        // A wrapping text is never narrower than its sample.
+        let band = wrap.unwrap_or(f32::INFINITY).max(if self.elide == Elide::Off { sample.unwrap_or(0.0) } else { 0.0 });
         let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
         // In a row the room is what the earlier siblings left, which can be less than a word; the row's shrink step
         // then makes room for the word.
