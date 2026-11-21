@@ -638,7 +638,7 @@ impl ResetFooter {
     pub fn new(ui: &Ui, cancel: Option<Label>, alt_resets: bool) -> Self {
         let env = Env::of(ui);
         ResetFooter {
-            resetting: alt_resets && crate::runtime::pointer::frame(ui.ctx()).mods.alt,
+            resetting: alt_resets && crate::runtime::pointer::mods(ui.ctx()).alt,
             cancel: cancel.unwrap_or_else(|| env.words::<CommonWords>().cancel.clone()),
             reset: env.words::<ParamDialogWords>().reset.clone(),
             extra: Vec::new(),
