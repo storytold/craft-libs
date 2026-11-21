@@ -6,7 +6,7 @@
 //! that says whose storage this is, a Save As page that picks a folder and
 //! names a file, and a save that refuses to overwrite somebody else's work.
 //!
-//! Three things shape the implementation.
+//! Four things shape the implementation.
 //!
 //! Nothing here opens a socket. Every call goes through [`CloudBackend`]. A
 //! host writes that half. This module never learns what it reaches. That keeps
@@ -20,6 +20,12 @@
 //! drawn only where the service reported the capability behind it. An empty
 //! list under a heading reads to a user as a broken window. A feature the
 //! provider does not have is therefore absent, heading and all.
+//!
+//! Nothing here acts on a stale answer. Every answer carries the account
+//! generation its job was issued in, and [`pump`] drops one whose generation
+//! is no longer current, so a reply that arrives after a sign-out or a new
+//! sign-in is not applied to the session that replaced its own. A new kind of
+//! answer follows the same rule.
 //!
 //! The application supplies [`CloudApp`]. That is what it alone can answer.
 //! What its documents are, how bytes become one and back, and the words it
@@ -178,7 +184,8 @@ pub struct Guest {
 /// exists.
 pub struct CloudFiles {
     backend: Option<Box<dyn CloudBackend>>,
-    events: (Sender<Event>, Receiver<Event>),
+    /// Each answer with the account generation its job was issued in.
+    events: (Sender<backend::Stamped>, Receiver<backend::Stamped>),
     /// The badge and its menu. Signing in is the only way into any of this.
     /// The badge is the only control that offers it. It lives here. An
     /// application declares no field for it.
@@ -215,8 +222,9 @@ pub struct CloudFiles {
     /// stay set after a failed sign-in.
     sign_in_from_menu: bool,
     /// Bumped on sign-out and on a new sign-in. Stamped onto every [`Post`]
-    /// handed out by [`submit`] so a reply to a job issued before the bump is
-    /// dropped rather than applied to the session that replaced it.
+    /// handed out by [`submit`] and onto every answer it queues. [`pump`]
+    /// drops an answer to a job issued before the bump rather than applying
+    /// it to the session that replaced it.
     account_generation: Arc<AtomicU64>,
     /// The document Save As must act on, when it is not the active one.
     ///
@@ -371,8 +379,8 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     cloud.link = None;
     cloud.status = Some(working);
     // A new session. A job the previous one left outstanding may never
-    // answer, and if it does, that answer is not about this account: see
-    // `Post::send`. Busy goes with it, or a stuck read from before this
+    // answer, and if it does, that answer is not about this account: `pump`
+    // drops it. Busy goes with it, or a stuck read from before this
     // sign-in would leave Save refused for a session that never asked for it.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
@@ -396,11 +404,16 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     cloud.status = Some(signed_out);
     // The session this window had ends here. A job it started may never
     // answer, and a reply that does arrive late must not land on whatever
-    // comes next: see `Post::send`. Busy goes with it, so an open or a save
+    // comes next: `pump` drops it. Busy goes with it, so an open or a save
     // that never heard back does not refuse every one after it forever.
     cloud.account_generation.fetch_add(1, Ordering::Relaxed);
     cloud.busy = None;
+    cloud.sharing_save = false;
     cloud.save_as_target = None;
+    // Sharing went with the account: Share is not offered on the old
+    // account's answer, and a sheet open on one of its documents closes. The
+    // next sign-in asks the provider again.
+    app.sharing().signed_out();
     submit(app, Job::SignOut);
 }
 
@@ -636,7 +649,13 @@ pub fn pump<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
     while let Ok(event) = app.cloud().events.1.try_recv() {
         arrived.push(event);
     }
-    for event in arrived {
+    for (issued, event) in arrived {
+        // A worker that sent just before a sign-out or a new sign-in passed
+        // `Post::send`'s check, and its answer waited here while the session
+        // changed. It is about the session that is gone.
+        if issued != app.cloud().account_generation.load(Ordering::Relaxed) {
+            continue;
+        }
         apply(app, event);
     }
     poll_link(app);

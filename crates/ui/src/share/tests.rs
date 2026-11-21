@@ -114,6 +114,24 @@ fn nothing_is_offered_until_the_service_says_sharing_exists() {
 }
 
 #[test]
+fn a_capabilities_answer_asked_before_a_refresh_is_ignored() {
+    let ctx = Context::default();
+    let backend = Silent::default();
+    let mut dialog = ShareDialog::new();
+    dialog.connect(backend.clone());
+    dialog.collect(&ctx);
+    dialog.refresh();
+    dialog.collect(&ctx);
+    assert_eq!(backend.seen(), vec![Request::Capabilities, Request::Capabilities], "the refresh asks again");
+
+    // The first question was about the account before the refresh.
+    dialog.receive(&ctx, 1, Ok(everything()));
+    assert!(!dialog.available(), "the old account's answer must not offer Share");
+    dialog.receive(&ctx, 2, Ok(everything()));
+    assert!(dialog.available());
+}
+
+#[test]
 fn an_unlinked_account_cannot_share_even_where_the_provider_can() {
     let ctx = Context::default();
     let mut dialog = ShareDialog::new();
@@ -238,6 +256,128 @@ fn a_share_reaching_four_of_five_names_the_fifth() {
     let left = dialog.open.as_ref().expect("open");
     assert_eq!(left.chosen.len(), 1);
     assert_eq!(left.chosen.first().map(|c| &c.target), Some(&ShareTarget::Email("nobody@@".into())));
+}
+
+fn copied(ctx: &Context) -> Vec<String> {
+    ctx.output(|o| o.commands.iter().filter_map(|c| if let egui::OutputCommand::CopyText(text) = c { Some(text.clone()) } else { None }).collect())
+}
+
+fn ask_for_link(dialog: &mut ShareDialog) -> u64 {
+    let granting = dialog.issue(Request::Grant(Grant {
+        id: "files/budget.xlsx".into(),
+        password: None,
+        targets: Vec::new(),
+        permission: Permission::View,
+        note: None,
+        notify: false,
+    }));
+    if let Some(sheet) = &mut dialog.open {
+        sheet.granting = Some(granting);
+    }
+    granting
+}
+
+fn link(url: &str) -> Answer {
+    let mut made = share("s1", ShareTarget::Email("anyone@example.com".into()));
+    made.url = Some(url.into());
+    Answer::Granted { shared: vec![made], failed: Vec::new() }
+}
+
+#[test]
+fn a_granted_link_goes_to_the_clipboard() {
+    let (ctx, mut dialog, _) = ready();
+    let granting = ask_for_link(&mut dialog);
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert_eq!(copied(&ctx), ["https://cloud.example/l/budget"]);
+}
+
+#[test]
+fn a_link_granted_after_the_sheet_moved_on_is_not_copied() {
+    let (ctx, mut dialog, _) = ready();
+    let granting = ask_for_link(&mut dialog);
+    dialog.close();
+    dialog.open("files/plan.docx", "Plan");
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert!(copied(&ctx).is_empty(), "the budget's link must not replace the clipboard while the plan is open");
+
+    let (ctx, mut dialog, _) = ready();
+    let granting = ask_for_link(&mut dialog);
+    dialog.close();
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert!(copied(&ctx).is_empty(), "nor after the sheet closed");
+}
+
+fn destinations_asked(backend: &Silent) -> usize {
+    backend.seen().iter().filter(|r| **r == Request::Destinations).count()
+}
+
+fn last_link(dialog: &ShareDialog) -> u64 {
+    dialog.open.as_ref().and_then(|s| s.linking.last().copied()).expect("asked")
+}
+
+#[test]
+fn an_account_linked_for_a_sheet_that_moved_on_asks_for_nothing() {
+    let (ctx, mut dialog, _) = ready();
+    dialog.apply(&ctx, vec![Act::Link("drive".into())]);
+    let first = last_link(&dialog);
+    // A second destination is clicked before the first one answers.
+    dialog.apply(&ctx, vec![Act::Link("mail".into())]);
+    let second = last_link(&dialog);
+    dialog.receive(&ctx, first, Ok(Answer::Linked));
+    let sheet = dialog.open.as_ref().expect("open");
+    assert!(sheet.destinations_seq.is_some(), "the sheet that asked fetches its destinations again");
+    assert_eq!(sheet.linking, [second], "the later link is still in flight");
+    dialog.receive(&ctx, second, Err("no account".into()));
+    let sheet = dialog.open.as_ref().expect("open");
+    assert!(sheet.linking.is_empty());
+    assert_eq!(sheet.save_error.as_deref(), Some("no account"));
+
+    let (ctx, mut dialog, backend) = ready();
+    dialog.apply(&ctx, vec![Act::Link("drive".into())]);
+    let linking = last_link(&dialog);
+    dialog.close();
+    dialog.open("files/plan.docx", "Plan");
+    let before = destinations_asked(&backend);
+    dialog.receive(&ctx, linking, Ok(Answer::Linked));
+    assert_eq!(destinations_asked(&backend), before, "the budget's link answer must not ask anything for the plan");
+
+    let (ctx, mut dialog, backend) = ready();
+    dialog.apply(&ctx, vec![Act::Link("drive".into())]);
+    let linking = last_link(&dialog);
+    dialog.signed_out();
+    let before = destinations_asked(&backend);
+    dialog.receive(&ctx, linking, Ok(Answer::Linked));
+    assert_eq!(destinations_asked(&backend), before, "nothing is asked for an account that signed out");
+}
+
+/// Whether one frame of the sheet offers "Get a link" as a button that can
+/// be pressed, read off the accessibility tree.
+fn link_button_enabled(dialog: &mut ShareDialog) -> Option<bool> {
+    let ctx = Context::default();
+    ctx.enable_accesskit();
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 900.0))), ..Default::default() };
+    let mut output = ctx.run_ui(raw, |ui| dialog.show_in(ui));
+    output.textures_delta.clear();
+    let tree = output.platform_output.accesskit_update?;
+    tree.nodes
+        .iter()
+        .find(|(_, node)| node.role() == egui::accesskit::Role::Button && node.label() == Some("Get a link"))
+        .map(|(_, node)| !node.is_disabled())
+}
+
+#[test]
+fn get_a_link_waits_while_a_grant_is_in_flight() {
+    let ctx = Context::default();
+    let mut dialog = ShareDialog::new();
+    dialog.connect(Silent::default());
+    dialog.collect(&ctx);
+    dialog.receive(&ctx, 1, Ok(can(vec![Capability::Sharing, Capability::LinkShares])));
+    dialog.open("files/budget.xlsx", "Budget");
+    assert_eq!(link_button_enabled(&mut dialog), Some(true));
+    let granting = ask_for_link(&mut dialog);
+    assert_eq!(link_button_enabled(&mut dialog), Some(false), "a second grant would make the first one's link be dropped");
+    dialog.receive(&ctx, granting, Ok(link("https://cloud.example/l/budget")));
+    assert_eq!(link_button_enabled(&mut dialog), Some(true));
 }
 
 #[test]
