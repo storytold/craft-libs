@@ -110,8 +110,8 @@ fn nested_rows_follow_and_unmirrored_rows_do_not() {
 fn positions_and_popups_mirror() {
     let r = Rect::from_min_max(pos2(10.0, 0.0), pos2(50.0, 10.0));
     let (ltr, rtl) = (Direction::Ltr, Direction::Rtl);
-    assert_eq!((start_x(&ltr, r), end_x(&ltr, r), forward(&ltr)), (10.0, 50.0, 1.0));
-    assert_eq!((start_x(&rtl, r), end_x(&rtl, r), forward(&rtl)), (50.0, 10.0, -1.0));
+    assert_eq!((start_x(&ltr, r, 0.0), end_x(&ltr, r, 0.0), forward(&ltr)), (10.0, 50.0, 1.0));
+    assert_eq!((start_x(&rtl, r, 0.0), end_x(&rtl, r, 0.0), forward(&rtl)), (50.0, 10.0, -1.0));
     assert_eq!(start_align(&rtl), Align::Max);
     assert_eq!(column(&rtl).horizontal_align(), Align::Max);
     assert_eq!(align2(&rtl, Align2::LEFT_TOP), Align2::RIGHT_TOP);
@@ -188,9 +188,13 @@ fn every_unmirrored_kind_is_listed_once() {
 
 /// `Style::right_to_left` as egui's `Debug` output shows it: `None` on crates.io egui, which has
 /// no such field, so the test builds against both.
-fn style_rtl(ctx: &Context, theme: egui::Theme) -> Option<bool> {
-    let debug = format!("{:?}", ctx.style_of(theme));
+fn style_flag(style: &egui::Style) -> Option<bool> {
+    let debug = format!("{style:?}");
     debug.contains("right_to_left").then(|| debug.contains("right_to_left: true"))
+}
+
+fn style_rtl(ctx: &Context, theme: egui::Theme) -> Option<bool> {
+    style_flag(&ctx.style_of(theme))
 }
 
 #[test]
