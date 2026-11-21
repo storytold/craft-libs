@@ -35,6 +35,7 @@ pub(super) enum Kind {
     Float { value: f64, range: RangeInclusive<f64>, decimals: u8, step: Option<f64>, unit: Option<UnitKind> },
     Text(String),
     Custom,
+    CustomRows,
 }
 
 impl ShownRow {
@@ -59,6 +60,7 @@ impl ShownRow {
             }
             RowKind::Text(text) => Kind::Text((*text).to_owned()),
             RowKind::Custom => Kind::Custom,
+            RowKind::CustomRows => Kind::CustomRows,
         };
         Self {
             key: row.key.to_owned(),
@@ -176,7 +178,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
                 out.pick_color = ask;
             }
         }
-        Kind::Custom if label.as_str().is_empty() => {
+        Kind::CustomRows => {
             Stack::new().id_salt(key).show(ui, |ui, _| host.custom_row(ui, key));
         }
         Kind::Custom => {
