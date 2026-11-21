@@ -31,10 +31,12 @@ pub(crate) fn to_egui(sense: Sense) -> egui::Sense {
     mapped
 }
 
-/// A root's egui widget over `rect`, clipped by the caller. egui gives a widget of a disabled `Ui` no focus stop and
-/// drops the focus it holds; the sense the pipeline passes decides whether the root is a stop (a disabled control with
-/// a reason is), so the stop and the focus are kept here.
+/// A root's egui widget over `rect`; egui clips its interact rect. egui gives a widget of a disabled `Ui` no focus stop
+/// and drops the focus it holds; the sense the pipeline passes decides whether the root is a stop (a disabled control
+/// with a reason is), so the stop and the focus are kept here. A rect that is not a number is at no place
+/// (`Rect::NOTHING`): egui takes no such rect, and nothing can hit it.
 pub(crate) fn widget(ui: &Ui, id: Id, rect: Rect, sense: Sense) -> Response {
+    let rect = if rect.any_nan() { Rect::NOTHING } else { rect };
     let ctx = ui.ctx();
     let held = ctx.memory(|memory| memory.has_focus(id));
     let response = ui.interact(rect, id, to_egui(sense));
@@ -47,6 +49,22 @@ pub(crate) fn widget(ui: &Ui, id: Id, rect: Rect, sense: Sense) -> Response {
         });
     }
     response
+}
+
+/// Adds `sense` to the egui widget `id` the running pass registered, at its rect: egui ORs the senses of a widget
+/// registered again in a pass. Returns whether the widget took a sense it lacked; nothing for a widget the pass has
+/// not registered, or one with no area inside its clip, which egui's hit test never names.
+pub(crate) fn widen(ctx: &egui::Context, id: Id, sense: egui::Sense) -> bool {
+    let registered = ctx.viewport(|viewport| viewport.this_pass.widgets.get(id).map(|widget| (widget.sense, widget.interact_rect)));
+    let Some((has, rect)) = registered else { return false };
+    if has.contains(sense) || !(rect.is_positive() && rect.is_finite()) {
+        return false;
+    }
+    // `read_response` answers from the running pass for a registered widget with a positive rect.
+    ctx.read_response(id).is_some_and(|response| {
+        let _ = response.interact(sense);
+        true
+    })
 }
 
 /// Whether a pointer button went down on `response`'s widget and is still down.
@@ -150,13 +168,13 @@ pub(crate) fn press_flags(response: &mut Response, view: PressView) {
 
 /// Rewrites the click flags of the root's `Response` at step 17: egui's fake click on Enter, Space or AccessKit
 /// `Click` is cleared, and set again only when the pipeline activated the component by key or by an AccessKit click on a part. A command-bound
-/// component reports no click, because the command fires instead.
-pub(crate) fn rewrite_clicks(response: &mut Response, activated_by_key: bool, command_bound: bool) {
+/// component reports no click on a pass where its command fired, because the command fires instead.
+pub(crate) fn rewrite_clicks(response: &mut Response, activated_by_key: bool, command_fired: bool) {
     response.flags.remove(Flags::FAKE_PRIMARY_CLICKED);
     if activated_by_key {
         response.flags.insert(Flags::FAKE_PRIMARY_CLICKED);
     }
-    if command_bound {
+    if command_fired {
         response.flags.remove(Flags::CLICKED | Flags::FAKE_PRIMARY_CLICKED);
     }
 }

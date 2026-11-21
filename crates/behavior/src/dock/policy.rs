@@ -5,7 +5,7 @@ use std::fmt;
 /// What may happen to a panel. `Layout::apply_with_permissions` enforces these for every
 /// action, whoever issues it. They also decide which gestures and menu items the renderer
 /// offers; a renderer hides the built-in close controls of a panel that stays closable by command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 #[non_exhaustive]
 pub struct Permissions {
     /// The panel may be moved.
@@ -26,6 +26,10 @@ pub struct Permissions {
     /// panels: refused are tab, center, group and seam placements across that boundary in either direction, while a
     /// new column, a new dock and a float stay allowed. A toolbar takes its own column.
     pub shares_column: bool,
+    /// The panel may dock outside a dock column: in a frame of the docked tree, as a split beside another frame or at
+    /// an edge of the docked area, where it can lie across the window. Without it the panel docks only in dock columns
+    /// or floats: refused is any action that leaves it in a frame, so a toolbar is always a vertical strip.
+    pub docks_outside_columns: bool,
 }
 
 impl Default for Permissions {
@@ -35,9 +39,18 @@ impl Default for Permissions {
 }
 
 impl Permissions {
-    /// Every right: the panel moves, floats, closes, takes tabs and splits, collapses and shares its column.
-    pub const ALL: Self =
-        Self { movable: true, floatable: true, closable: true, accepts_tabs: true, accepts_splits: true, collapses: true, shares_column: true };
+    /// Every right: the panel moves, floats, closes, takes tabs and splits, collapses, shares its column and docks
+    /// outside dock columns.
+    pub const ALL: Self = Self {
+        movable: true,
+        floatable: true,
+        closable: true,
+        accepts_tabs: true,
+        accepts_splits: true,
+        collapses: true,
+        shares_column: true,
+        docks_outside_columns: true,
+    };
 
     /// A document canvas: it stays docked and open, and takes neither tabs nor side splits.
     /// A group dropped on it floats there. An application that opens panels beside its canvas
@@ -83,6 +96,12 @@ impl Permissions {
     /// These permissions with [`Self::shares_column`] set to `shares_column`.
     pub const fn shares_column(mut self, shares_column: bool) -> Self {
         self.shares_column = shares_column;
+        self
+    }
+
+    /// These permissions with [`Self::docks_outside_columns`] set to `docks_outside_columns`.
+    pub const fn docks_outside_columns(mut self, docks_outside_columns: bool) -> Self {
+        self.docks_outside_columns = docks_outside_columns;
         self
     }
 

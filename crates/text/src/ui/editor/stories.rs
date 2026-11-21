@@ -262,8 +262,8 @@ fn over_canvas(ui: &mut Ui, text: &mut String, mut bind: Bind<'_, TextSelection>
 /// The editor over `text` with `selection` on a canvas.
 fn on_canvas(ui: &mut Ui, data: &mut StoryData, text: &str, selection: TextSelection) -> StoryOutput {
     let mut host = data.value("text", text.to_owned()).clone();
-    let selection = data.value("selection", selection);
-    let out = over_canvas(ui, &mut host, Bind::bound(&mut *selection));
+    let (selection, selection_at) = data.value_at("selection", selection);
+    let out = over_canvas(ui, &mut host, selection_at.bind(&mut *selection));
     *data.value("text", String::new()) = host;
     out
 }
@@ -297,17 +297,17 @@ fn composing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TextEditor<'static>, covers = [Mixed], drive = Drive::Never)]
 fn selections_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut host = data.value("text", SAMPLE.to_owned()).clone();
-    let selection = data.value("selection", Mixed::<TextSelection>::Mixed);
-    over_canvas(ui, &mut host, Bind::bound_mixed(&mut *selection))
+    let (selection, selection_at) = data.value_at("selection", Mixed::<TextSelection>::Mixed);
+    over_canvas(ui, &mut host, selection_at.bind_mixed(&mut *selection))
 }
 
 #[story(TextEditor<'static>, covers = [Invalid], drive = Drive::Never)]
 fn selection_past_the_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut host = data.value("text", SAMPLE.to_owned()).clone();
     let end = host.chars().count();
-    let selection = data.value("selection", TextSelection::caret_at(end + 1));
-    let inside = move |selection: &TextSelection| {
-        if selection.caret > end { Validity::Refuse(Message::new("The selection is past the text")) } else { Validity::Ok }
+    let (selection, selection_at) = data.value_at("selection", TextSelection::caret_at(end + 1));
+    let inside = |end: &usize, selection: &TextSelection| {
+        if selection.caret > *end { Validity::Refuse(Message::new("The selection is past the text")) } else { Validity::Ok }
     };
-    over_canvas(ui, &mut host, Bind::bound(&mut *selection).check(inside))
+    over_canvas(ui, &mut host, selection_at.bind(&mut *selection).check_with(end, inside))
 }

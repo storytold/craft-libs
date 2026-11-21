@@ -115,9 +115,10 @@ pub(crate) fn surface_style(tokens: &UiTokens, kind: SurfaceKind) -> SurfaceStyl
         K::Knob => c.surface.knob,
         K::Scrim => c.surface.scrim,
         K::Frame => Rgba::TRANSPARENT,
+        K::Brand => c.accent.strong,
     };
     let radius = match kind {
-        K::Background | K::Canvas | K::Chrome | K::Scrim => 0.0,
+        K::Background | K::Canvas | K::Chrome | K::Scrim | K::Brand => 0.0,
         K::Panel | K::Frame => r.panel,
         K::Raised | K::Pressed | K::Sunken | K::Well | K::Knob => r.control,
         K::Popup | K::Dialog => r.surface,
@@ -132,7 +133,7 @@ pub(crate) fn surface_style(tokens: &UiTokens, kind: SurfaceKind) -> SurfaceStyl
     let width = StrokeStep::W1.width(1.0);
     let stroke = |c: Rgba| SurfaceEdge::Border(Stroke::new(width, color(c)));
     let edge = match (tokens.shape.edge, kind) {
-        (_, K::Background | K::Canvas | K::Chrome | K::Panel | K::Scrim) => SurfaceEdge::None,
+        (_, K::Background | K::Canvas | K::Chrome | K::Panel | K::Scrim | K::Brand) => SurfaceEdge::None,
         (_, K::Popup | K::Dialog | K::Floating | K::Frame) => stroke(c.line.border),
         (Edge::Flat, K::Raised) => stroke(c.line.border),
         (Edge::Flat, K::Sunken | K::Pressed | K::Well) => stroke(c.line.control_edge),

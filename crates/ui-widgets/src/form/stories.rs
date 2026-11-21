@@ -3,7 +3,7 @@
 use super::Help;
 use super::{Field, FieldGroup};
 use crate::choice::Swatch;
-use crate::contract::{Bind, FieldLayout, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
+use crate::contract::{FieldLayout, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
 use crate::layout_components::Row;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -17,10 +17,7 @@ const SIZE: f64 = 12.0;
 
 #[story(Field, covers = [Default], drive = Drive::Never)]
 fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Field::new("Size")
-        .help(Help::Text("In points".into()))
-        .show(ui, |ui, _| NumberField::new("Size", Bind::bound(data.value("size", Some(SIZE)))).show(ui))
-        .into()
+    Field::new("Size").help(Help::Text("In points".into())).show(ui, |ui, _| NumberField::new("Size", data.bind("size", Some(SIZE))).show(ui)).into()
 }
 
 #[story(Field, covers = [], drive = Drive::Never)]
@@ -28,7 +25,7 @@ fn field_above_with_status(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("Size")
         .layout(FieldLayout::Above)
         .help(Help::Status(Tone::Warn, "Large sizes slow the preview".into()))
-        .show(ui, |ui, _| NumberField::new("Size", Bind::bound(data.value("above", Some(SIZE)))).show(ui))
+        .show(ui, |ui, _| NumberField::new("Size", data.bind("above", Some(SIZE))).show(ui))
         .into()
 }
 
@@ -36,7 +33,7 @@ fn field_above_with_status(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("A label much longer than the column a form usually gives it")
         .help(Help::Text("A help text much longer than the room under the control, so it wraps onto more than one line".into()))
-        .show(ui, |ui, _| NumberField::new("Size", Bind::bound(data.value("long", Some(SIZE)))).show(ui))
+        .show(ui, |ui, _| NumberField::new("Size", data.bind("long", Some(SIZE))).show(ui))
         .into()
 }
 
@@ -45,7 +42,7 @@ fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn field_icon_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Field::new("Width")
         .side(SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("list")))))
-        .show(ui, |ui, _| NumberField::new("Width", Bind::bound(data.value("width", Some(SIZE)))).show(ui))
+        .show(ui, |ui, _| NumberField::new("Width", data.bind("width", Some(SIZE))).show(ui))
         .into()
 }
 
@@ -57,7 +54,7 @@ fn field_with_refused_value(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     };
     Field::new("Size")
         .help(Help::Text("In points".into()))
-        .show(ui, |ui, _| NumberField::new("Size", Bind::bound(data.value("refused", Some(-SIZE))).check(refuse_negative)).show(ui))
+        .show(ui, |ui, _| NumberField::new("Size", data.bind("refused", Some(-SIZE)).check(refuse_negative)).show(ui))
         .into()
 }
 
@@ -66,16 +63,16 @@ fn field_with_refused_value(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Field, covers = [], drive = Drive::Never)]
 fn field_with_cross_field_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = *data.value("start_day", Some(20.0));
-    let end_before_start = move |end: &Option<f64>| match end {
+    let end_before_start = |start: &Option<f64>, end: &Option<f64>| match end {
         Some(end) if start.is_some_and(|start| *end < start) => Validity::Refuse(Message::new("The end day comes before the start day")),
         _ => Validity::Ok,
     };
     let mut out = None;
     FieldGroup::new("Period").show(ui, |ui, _| {
-        Field::new("Start day").show(ui, |ui, _| NumberField::new("Start day", Bind::bound(data.value("start_day", Some(20.0)))).show(ui));
+        Field::new("Start day").show(ui, |ui, _| NumberField::new("Start day", data.bind("start_day", Some(20.0))).show(ui));
         out = Some(
             Field::new("End day")
-                .show(ui, |ui, _| NumberField::new("End day", Bind::bound(data.value("end_day", Some(5.0))).check(end_before_start)).show(ui)),
+                .show(ui, |ui, _| NumberField::new("End day", data.bind("end_day", Some(5.0)).check_with(start, end_before_start)).show(ui)),
         );
     });
     out.map(StoryOutput::from).unwrap_or_default()
@@ -87,7 +84,7 @@ fn field_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     FieldGroup::new("Shape")
         .show(ui, |ui, _| {
             for (label, name) in rows {
-                Field::new(label).show(ui, |ui, _| NumberField::new(label, Bind::bound(data.value(name, Some(SIZE)))).show(ui));
+                Field::new(label).show(ui, |ui, _| NumberField::new(label, data.bind(name, Some(SIZE))).show(ui));
             }
         })
         .into()
@@ -104,13 +101,11 @@ fn field_inspector_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Row::new().fill_width().show(ui, |ui, _| {
                 for (glyph, name, key, value) in [("W", "Width", "w", 640.0), ("H", "Height", "h", 480.0)] {
                     let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph))).scrub(true);
-                    Field::new(name).side(side).show(ui, |ui, _| NumberField::new(name, Bind::bound(data.value(key, Some(value)))).show(ui));
+                    Field::new(name).side(side).show(ui, |ui, _| NumberField::new(name, data.bind(key, Some(value))).show(ui));
                 }
             });
             for (label, key, value) in [("Opacity", "opacity", 100.0), ("Angle", "angle", 0.0)] {
-                Field::new(label)
-                    .side(SideLabel::new().scrub(true))
-                    .show(ui, |ui, _| NumberField::new(label, Bind::bound(data.value(key, Some(value)))).show(ui));
+                Field::new(label).side(SideLabel::new().scrub(true)).show(ui, |ui, _| NumberField::new(label, data.bind(key, Some(value))).show(ui));
             }
             Field::new("Fill").show(ui, |ui, _| Swatch::new("Fill", FILL).show(ui));
         })

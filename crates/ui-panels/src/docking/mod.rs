@@ -9,20 +9,20 @@ pub mod divider;
 mod drop;
 mod event;
 pub mod frame;
-mod group;
+pub(crate) mod group;
 
-mod floating;
+pub(crate) mod floating;
 mod panels;
 mod placed;
-mod root;
+pub(crate) mod root;
 mod spec;
-mod splitter;
+pub(crate) mod splitter;
 pub mod stack;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 pub mod targets;
 pub mod tree;
-mod window_menu;
+pub(crate) mod window_menu;
 mod words;
 
 mod commands;
@@ -35,10 +35,10 @@ pub use config::{DockConfig, DockSides};
 pub use drop::{Arrangement, end_replaced_drags};
 pub use drop::{DockDrag, DockDropTarget, DockDropped, DragUnit, float_drop, resolve_drop, start_group_drag, start_icon_drag};
 pub use event::{DockEvent, FloatSpace, HidePanels};
-pub use group::{DockGroup, DockGroupOutput, DockGroupStyle, GroupGrip, GroupGripOutput, GroupGripStyle, HeaderHook};
+pub use group::{DockGroup, DockGroupOutput, DockGroupStyle, GroupGrip, GroupGripOutput, GroupGripStyle, HeaderHook, MenuRows};
 
 pub use floating::{FloatingGroup, FloatingGroupOutput, FloatingGroupStyle, WindowColumn};
-pub use panels::{DockPanels, request_actions};
+pub use panels::{DockPanels, PanelSpecs, SpecSource, request_actions};
 #[doc(hidden)]
 pub use panels::{close_requests, open_requests};
 pub use placed::{Placing, placed_rect, with_area_rules};
@@ -53,13 +53,13 @@ pub use commands::{
     dock_states, move_actions, run_workspace, workspace_states,
 };
 
-mod dock_column;
+pub(crate) mod dock_column;
 mod flyout;
-mod iconic;
+pub(crate) mod iconic;
 
 pub use dock_column::{
     ColumnArrow, ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, column_cells, fit_widths, group_heights,
-    group_rects, scale_widths, stacked, stepped, width_bounds,
+    group_rects, scale_widths, stacked, width_bounds,
 };
 pub use flyout::{Flyout, FlyoutOutput, FlyoutShown, FlyoutStyle, GroupAt};
 pub use iconic::{FlyoutResize, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicSizes};
@@ -79,12 +79,13 @@ use divider::{Divider, Drag};
 use egui::{Rect, Response, Vec2};
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 use tree::{FrameRules, SplitHandle};
 
 const HANDLE: PartKey = PartKey::new("handle");
 
 /// The stable key of a panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct PanelKey(pub u64);
 
@@ -103,7 +104,7 @@ impl PanelKey {
 }
 
 /// A panel as its group's strip shows it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PanelTitle {
     /// The panel.
@@ -112,6 +113,34 @@ pub struct PanelTitle {
     pub title: Label,
     /// Whether the panel's tab shows a close button, where the group's tabs close.
     pub closable: bool,
+}
+
+/// The tab titles of one group with their content key, taken once when they are made: a memoized view that holds them
+/// feeds that key, not the titles. A host keeps a group's titles in a derived value so the key is taken only when they
+/// are rebuilt.
+#[derive(Clone, Debug)]
+pub struct Titles {
+    list: Arc<Vec<PanelTitle>>,
+    key: u128,
+}
+
+impl Titles {
+    /// The titles `list`, keyed by their content: this call walks them.
+    pub fn from_content(list: Vec<PanelTitle>) -> Self {
+        Titles { key: crate::contract::MemoKey::of(&list), list: Arc::new(list) }
+    }
+
+    /// The titles in tab order.
+    pub fn as_slice(&self) -> &[PanelTitle] {
+        &self.list
+    }
+}
+
+/// Feeds the content key taken when the titles were made, not the titles.
+impl Hash for Titles {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+    }
 }
 
 impl PanelTitle {

@@ -1,6 +1,6 @@
 //! The data and rules of the presets family.
 
-mod browser;
-mod model;
-mod named;
-mod picker;
+pub(crate) mod browser;
+pub(crate) mod model;
+pub(crate) mod named;
+pub(crate) mod picker;

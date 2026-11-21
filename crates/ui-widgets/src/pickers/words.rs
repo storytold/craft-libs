@@ -35,6 +35,8 @@ craft_ui::words! {
         date_precision: "datePicker.precision" = "Pick by";
         /// The name of the icon picker's search field.
         icon_search: "iconPicker.search" = "Search icons";
+        /// The icon picker's filter row entry that shows every group.
+        all: "iconPicker.all" = "All";
         /// Shown in the icon picker when no icon matches the search.
         icon_no_match: "iconPicker.noMatch" = "No icons match your search.";
         /// The name of the reference point picker's top left point.

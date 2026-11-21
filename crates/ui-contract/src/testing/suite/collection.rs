@@ -334,6 +334,12 @@ pub(super) fn long_collection_builds_rows_within_the_room_only(subject: &Subject
         if ((size.div_ceil(across) - 1) as f32) * row <= room.y {
             continue;
         }
+        // Rows that overlap or differ in length (a honeycomb stacks them at three quarters of a cell, and its rows
+        // grow and shrink) make the estimate above too long. When every item is built and lies within the room, no
+        // row is out of view, so nothing was left to skip.
+        if shown.iter().all(|built| built.rect.max.y <= container.rect.max.y + 0.5) {
+            continue;
+        }
         if shown.len() >= size {
             return Err(format!("{}: all {size} rows are built though the room holds about {}", story.name, (room.y / row) as usize + 1));
         }

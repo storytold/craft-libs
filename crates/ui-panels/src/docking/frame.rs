@@ -1,5 +1,6 @@
 //! What the tree adds around the groups: Maximize Frame, the hidden-panel prune and the outer edge bands.
 
+use super::PanelKey;
 use super::config::DockConfig;
 use super::event::HidePanels;
 use super::targets::{DockSizes, DockSpot, DockTargets};
@@ -9,6 +10,7 @@ use craft_behavior::dock::{Column, Floating, Group, Layout, Node, PanelPlace, Sp
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 /// A layout as it is shown: a maximized frame alone, hidden panels left out.
@@ -26,6 +28,11 @@ pub struct FrameView<'a, P: Clone> {
 }
 
 impl<P: Clone> FrameView<'_, P> {
+    /// The view with its layout owned, to keep it past the layout it was made from.
+    pub fn into_owned(self) -> FrameView<'static, P> {
+        FrameView { layout: Cow::Owned(self.layout.into_owned()), maximized: self.maximized, hidden: self.hidden, paths: self.paths }
+    }
+
     /// Writes the split sizes of `edited`, an edit of the view's layout, into `layout`, the layout the view was made
     /// from. Panels the view left out keep their place; only the docked tree's split sizes change: floating windows
     /// have no splits.
@@ -63,13 +70,13 @@ fn split_sizes<P>(node: &Node<P>, paths: &HashMap<Vec<bool>, Vec<bool>>) -> Vec<
 pub fn maximize<'a, P: Clone + Eq + Hash>(
     layout: &'a Layout<P>,
     maximized: Option<&P>,
-    hide: HidePanels<'_, P>,
+    hide: HidePanels<'_>,
     protected: &dyn Fn(&P) -> bool,
 ) -> FrameView<'a, P> {
     let hidden = |panel: &P| match hide {
         HidePanels::None => false,
         HidePanels::All => !protected(panel),
-        HidePanels::Except(keep) => !protected(panel) && !keep(panel),
+        HidePanels::Except(keep) => !protected(panel) && !keep.contains(&PanelKey::of(panel)),
     };
     // Only a docked panel maximizes its frame.
     let frame = maximized.and_then(|panel| match layout.place(panel)? {
@@ -251,7 +258,7 @@ pub fn edge_bands<P: Clone + Eq + Hash>(
 
 /// Registers the bands as the dock's edge spots, for the next pass's drops; over a tab strip each reaches
 /// `strip_reach` from its edge (`DockSizes::strip_reach`).
-pub fn register_edge_bands<P: Clone + Send + Sync + 'static>(ctx: &Context, dock: Id, bands: &[EdgeBand], strip_reach: f32) {
+pub fn register_edge_bands<P: Clone + PartialEq + Debug + Send + Sync + 'static>(ctx: &Context, dock: Id, bands: &[EdgeBand], strip_reach: f32) {
     for band in bands {
         DockTargets::<P>::register_band(ctx, dock, DockSpot::Edge(band.side), band.band, band.line, strip_reach);
     }

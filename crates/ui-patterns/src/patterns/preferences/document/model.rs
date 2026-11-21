@@ -4,7 +4,7 @@ use super::draft::{SettingsDraft, insert, lookup};
 use super::rules::RuleKind;
 use super::texts::OPEN_RANGE;
 use super::{CustomSettings, SettingsDocument, table_of};
-use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesModel};
+use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesModel};
 use craft_theme::Rgba;
 use egui::{Context, Ui};
 use serde::Serialize;
@@ -116,6 +116,33 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         self.custom.page(ui, page, &mut self.draft);
     }
 
+    fn reset_page(&mut self, page: &str) {
+        if let Some(toml::Value::Table(defaults)) = self.defaults.get(page) {
+            // The page is replaced, so a key the defaults leave out (an `Option` that is `None`) goes too; only the
+            // `keep_on_reset` keys survive.
+            let mut reset = defaults.clone();
+            if let Some(toml::Value::Table(current)) = self.draft.table.get(page) {
+                for (key, value) in current {
+                    if self.rules.get(&format!("{page}.{key}")).is_some_and(|rule| rule.keep_on_reset) {
+                        reset.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            self.draft.table.insert(page.to_owned(), toml::Value::Table(reset));
+        }
+        self.custom.reset_page(page);
+    }
+
+    fn nested(&mut self, ctx: &Context) {
+        self.custom.nested(ctx, &mut self.draft);
+    }
+
+    fn nested_open(&self) -> bool {
+        self.custom.nested_open()
+    }
+}
+
+impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSettings<T>> PreferencesDraft for SettingsDocument<T, C> {
     fn differs(&self) -> bool {
         self.draft.table != self.saved_table || self.custom.differs()
     }
@@ -141,30 +168,5 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
     fn cancel(&mut self) {
         self.draft = SettingsDraft { table: self.saved_table.clone() };
         self.custom.cancel();
-    }
-
-    fn reset_page(&mut self, page: &str) {
-        if let Some(toml::Value::Table(defaults)) = self.defaults.get(page) {
-            // The page is replaced, so a key the defaults leave out (an `Option` that is `None`) goes too; only the
-            // `keep_on_reset` keys survive.
-            let mut reset = defaults.clone();
-            if let Some(toml::Value::Table(current)) = self.draft.table.get(page) {
-                for (key, value) in current {
-                    if self.rules.get(&format!("{page}.{key}")).is_some_and(|rule| rule.keep_on_reset) {
-                        reset.insert(key.clone(), value.clone());
-                    }
-                }
-            }
-            self.draft.table.insert(page.to_owned(), toml::Value::Table(reset));
-        }
-        self.custom.reset_page(page);
-    }
-
-    fn nested(&mut self, ctx: &Context) {
-        self.custom.nested(ctx, &mut self.draft);
-    }
-
-    fn nested_open(&self) -> bool {
-        self.custom.nested_open()
     }
 }

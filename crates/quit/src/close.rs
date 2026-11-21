@@ -65,8 +65,9 @@ pub enum CloseAnswer {
 /// What the app does next after an answer or a save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuardStep<D> {
-    /// Save `D` (Save As when it has no file); then report [`CloseGuard::saved`] or
-    /// [`CloseGuard::save_failed`].
+    /// Save `D` (Save As when it has no file); then report [`CloseGuard::saved`],
+    /// [`CloseGuard::save_failed`] (a cancelled step) or [`CloseGuard::retry_after_failure`]
+    /// (a write that failed).
     Save(D),
     /// Close `D` without saving.
     Discard(D),
@@ -170,10 +171,24 @@ impl<D: Clone + PartialEq> CloseGuard<D> {
         self.next_step()
     }
 
-    /// The save failed or Save As was cancelled: the document stays open and the operation stops.
+    /// A step of the save was cancelled (Save As, a replace question): the document stays open and
+    /// the operation stops. For a write that failed, see [`CloseGuard::retry_after_failure`].
     // pc: crates/ui-egui/src/dialogs/discard_ui.rs:210 `save` (the `false` branch).
     pub fn save_failed(&mut self) -> GuardStep<D> {
         self.cancel()
+    }
+
+    /// The save failed for real: the saving document returns to the front of the pending ones,
+    /// the apply-to-all answer clears, and the guard asks about that document again.
+    pub fn retry_after_failure(&mut self) -> GuardStep<D> {
+        let Some(doc) = self.saving.take() else { return self.cancel() };
+        // A save keeps its document at the front until `saved`; only a document forgotten while
+        // the save ran needs putting back.
+        if self.pending.front() != Some(&doc) {
+            self.pending.push_front(doc.clone());
+        }
+        self.apply_to_all = None;
+        GuardStep::Ask(doc)
     }
 
     /// A document closed elsewhere while the guard ran (a script): it is no longer asked about.
@@ -237,6 +252,28 @@ mod guard_tests {
         assert_eq!(guard.discarded(), GuardStep::Finished);
         assert!(guard.is_finished() && !guard.is_cancelled());
         assert_eq!(CloseGuard::<u32>::new(CloseScope::Close, []).saved(), GuardStep::Finished);
+    }
+
+    #[test]
+    fn a_cancelled_save_stops_the_operation_and_a_failed_one_asks_again() {
+        let mut guard = CloseGuard::new(CloseScope::Close, [1, 2, 3]);
+        assert_eq!(guard.answer(CloseAnswer::Save), GuardStep::Save(1));
+        assert_eq!(guard.save_failed(), GuardStep::Cancelled);
+        assert!(guard.is_finished() && guard.is_cancelled());
+        assert_eq!(guard.current(), None);
+
+        let mut guard = CloseGuard::new(CloseScope::Close, [1, 2, 3]);
+        assert_eq!(guard.answer_all(CloseAnswer::Save), GuardStep::Save(1));
+        assert_eq!(guard.retry_after_failure(), GuardStep::Ask(1));
+        assert_eq!(guard.current(), Some(&1));
+        assert_eq!(guard.remaining(), 3);
+        assert!(!guard.is_cancelled());
+        // The apply-to-all answer is gone: the next document is asked about, not saved silently.
+        assert_eq!(guard.answer(CloseAnswer::DontSave), GuardStep::Discard(1));
+        assert_eq!(guard.discarded(), GuardStep::Ask(2));
+        // A retried save that works closes the same document.
+        assert_eq!(guard.answer(CloseAnswer::Save), GuardStep::Save(2));
+        assert_eq!(guard.saved(), GuardStep::Ask(3));
     }
 }
 

@@ -16,8 +16,8 @@ use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 use serde_json::{Value, json};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the report dialog beside the common OK.
@@ -168,12 +168,29 @@ pub struct HostedReport {
     lines: Vec<String>,
     open: bool,
     copied: Option<String>,
+    /// The notes shown as notices; plain `lines` take their place when there are any.
+    notes: Vec<ReportNote>,
 }
 
 impl HostedReport {
     /// A report titled `title` with one `summary` line and the `lines`.
     pub fn new(title: impl Into<Label>, summary: impl Into<Label>, lines: Vec<String>) -> Self {
-        HostedReport { id: crate::dialog::dialog_id("report"), title: title.into(), summary: summary.into(), lines, open: true, copied: None }
+        HostedReport {
+            id: crate::dialog::dialog_id("report"),
+            title: title.into(),
+            summary: summary.into(),
+            lines,
+            open: true,
+            copied: None,
+            notes: Vec::new(),
+        }
+    }
+
+    /// Shows `notes` with the report; `json_fields` lists them.
+    #[must_use]
+    pub fn notes(mut self, notes: Vec<ReportNote>) -> Self {
+        self.notes = notes;
+        self
     }
 
     /// The text the Copy button copied since the last call, once. The app puts it on the clipboard.
@@ -194,7 +211,7 @@ impl crate::dialog::StackDialog for HostedReport {
         let shown = ReportDialog {
             title: self.title.clone(),
             summary: self.summary.clone(),
-            notes: Vec::new(),
+            notes: self.notes.clone(),
             lines,
             open: Some(Bind::bound(&mut self.open)),
         }
@@ -210,7 +227,8 @@ impl crate::dialog::StackDialog for HostedReport {
     }
 
     fn json_fields(&self) -> Option<Value> {
-        Some(json!({ "lines": self.lines }))
+        let notes: Vec<Value> = self.notes.iter().map(|note| json!({ "tone": note.tone.name(), "text": note.text.as_str() })).collect();
+        Some(json!({ "lines": self.lines, "notes": notes }))
     }
 }
 

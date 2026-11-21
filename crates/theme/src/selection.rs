@@ -1,4 +1,4 @@
-//! What the user picked (theme per mode, mode, contrast, motion, size, text size), how the suite's
+//! What the user picked (theme per mode, mode, contrast, motion, size, text size, component set), how the suite's
 //! choice, an app's own choice and the app's defaults combine, and resolution of the result
 //! against what the OS reports.
 
@@ -112,6 +112,19 @@ impl ThemePair {
     }
 }
 
+/// The set of component looks an app shows: each component that has variants maps the set to one of them (a ruler's
+/// face, for one), and every other component looks the same in each set. A component stays functionally identical
+/// across sets. The app states its set ([`AppDefaults::set`]); the suite's choice never carries one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentSet {
+    /// The look the creative apps' users expect.
+    #[default]
+    Creative,
+    /// The look the productivity apps' users expect.
+    Productivity,
+}
+
 /// What the user picked, every field concrete (after defaults are filled in).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Selection {
@@ -127,6 +140,9 @@ pub struct Selection {
     pub size: Size,
     /// The text size.
     pub text_size: TextSize,
+    /// The component set: the app's own, never the suite's.
+    #[serde(default)]
+    pub set: ComponentSet,
 }
 
 /// The suite's choice as `selection.json` holds it. Each field is set once a user picks it in
@@ -167,6 +183,7 @@ impl SuiteChoice {
             motion: self.motion.unwrap_or_default(),
             size: self.size.unwrap_or(defaults.size),
             text_size: self.text_size.unwrap_or_default(),
+            set: defaults.set,
         }
     }
 
@@ -198,7 +215,7 @@ impl From<Selection> for SuiteChoice {
 /// What an app shows for every field the suite hasn't chosen.
 ///
 /// Each app states its own, normally [`crate::SUITE_DEFAULT`] in both slots with the mode and
-/// size that suit it (the creative apps Dark and Compact; office apps may ship Light).
+/// size that suit it (the creative apps Dark and Compact; productivity apps may ship Light).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppDefaults {
     /// The theme for each mode.
@@ -210,6 +227,8 @@ pub struct AppDefaults {
     /// The app's own sizes: base overrides and component pins, applied to whichever size set is
     /// chosen.
     pub sizes: AppSizes,
+    /// The component set the app shows when the user hasn't chosen one for it.
+    pub set: ComponentSet,
 }
 
 /// An app's own choice, kept in the app's preferences: "Use a different theme / mode / size in
@@ -226,12 +245,15 @@ pub struct AppChoice {
     pub mode: Option<ModeChoice>,
     /// The app's own size set.
     pub size: Option<Size>,
+    /// The app's own component set. No user-visible choice sets it yet.
+    #[serde(default)]
+    pub set: Option<ComponentSet>,
 }
 
 impl AppChoice {
-    /// A choice with all three fields given.
+    /// A choice of theme, mode and size; the component set follows the app's default.
     pub const fn new(theme: Option<ThemePair>, mode: Option<ModeChoice>, size: Option<Size>) -> Self {
-        Self { theme, mode, size }
+        Self { theme, mode, size, set: None }
     }
 
     /// This choice with the app's own mode.
@@ -246,12 +268,19 @@ impl AppChoice {
         self
     }
 
-    /// `suite` with this app's theme, mode and size where set.
+    /// This choice with the app's own component set.
+    pub fn with_set(mut self, set: ComponentSet) -> Self {
+        self.set = Some(set);
+        self
+    }
+
+    /// `suite` with this app's theme, mode, size and component set where set.
     pub fn apply(&self, suite: &Selection) -> Selection {
         Selection {
             theme: self.theme.clone().unwrap_or_else(|| suite.theme.clone()),
             mode: self.mode.unwrap_or(suite.mode),
             size: self.size.unwrap_or(suite.size),
+            set: self.set.unwrap_or(suite.set),
             ..suite.clone()
         }
     }

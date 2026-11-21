@@ -13,6 +13,9 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Default)]
 pub struct Intents {
     items: Vec<(Intent, bool)>,
+    /// The place among the frame's events of each of `items` that came from one press or text (`keys::Item::place`);
+    /// read by index, so an item pushed without one has none.
+    places: Vec<Option<usize>>,
     took_arrows: Vec<NavMove>,
     nudge: Option<(Vec2, Mods)>,
     chords: Vec<Chord>,
@@ -186,10 +189,11 @@ impl Intents {
     }
 
     /// Takes the next intent an editor reads as input: typed text, a move, a delete, an edit command, Enter as a
-    /// newline, Tab, and Escape as a cancel. An arrow move the editor's `keep` does not keep stays for the
+    /// newline, Tab and Shift+Tab, and Escape as a cancel. An arrow move the editor's `keep` does not keep stays for the
     /// component's navigation (18.4), and with `KeepKeys::None` so do Home, End and the page keys: the editor is
-    /// a part of a grid that navigates until a cell opens.
-    pub(crate) fn take_editor_input(&mut self, keep: focus::KeepKeys) -> Option<EditorInput> {
+    /// a part of a grid that navigates until a cell opens. With it, the place among the frame's events of the press or
+    /// text it came from, `None` for an intent of no one event.
+    pub(crate) fn take_editor_input(&mut self, keep: focus::KeepKeys) -> Option<(EditorInput, Option<usize>)> {
         let kept = |item: &Intent| match item {
             Intent::Move(NavMove::Up | NavMove::Down, _) => matches!(keep, focus::KeepKeys::BlockArrows | focus::KeepKeys::Tab),
             Intent::Move(NavMove::Back | NavMove::Forward, _) => keep != focus::KeepKeys::None,
@@ -198,7 +202,7 @@ impl Intents {
         };
         let at = self.items.iter().position(|(item, taken)| !taken && kept(item) && editor_input_of(item).is_some())?;
         self.items[at].1 = true;
-        editor_input_of(&self.items[at].0)
+        editor_input_of(&self.items[at].0).map(|input| (input, self.places.get(at).copied().flatten()))
     }
 
     /// Takes the next `Intent::Access` request that `wanted` accepts.
@@ -227,10 +231,11 @@ fn editor_input_of(intent: &Intent) -> Option<EditorInput> {
     match intent {
         Intent::Text(text) => Some(EditorInput::Text(Arc::clone(text))),
         Intent::Move(mv, mods) => Some(EditorInput::Move(*mv, *mods)),
-        Intent::Delete { forward, by, .. } => Some(EditorInput::delete(*forward, *by)),
+        Intent::Delete { forward, by, shift, .. } => Some(EditorInput::delete_with_shift(*forward, *by, *shift)),
         Intent::Edit(command) => Some(EditorInput::Edit(*command)),
         Intent::Submit => Some(EditorInput::Newline),
         Intent::Tab => Some(EditorInput::Tab),
+        Intent::BackTab => Some(EditorInput::BackTab),
         Intent::Cancel => Some(EditorInput::Cancel),
         _ => None,
     }
@@ -245,6 +250,7 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
         (true, NavMove::Forward) => NavMove::Back,
         (_, mv) => mv,
     };
+    let places = routed.items.iter().map(|item| item.place).collect();
     let items = routed
         .items
         .into_iter()
@@ -255,6 +261,7 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
         .collect();
     Intents {
         items,
+        places,
         took_arrows: Vec::new(),
         nudge: routed.nudge,
         chords: routed.chords,
@@ -393,7 +400,7 @@ pub(crate) fn give_back(ctx: &Context, to: Id, lent: Lent) {
 
 /// How many lent keys session members have taken so far in the current viewport: a check of keyboard parity reads
 /// it before and after its input, since a lent key is the session control's, not the focused component's.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn lent_taken(ctx: &Context) -> u64 {
     current(ctx, |stage| stage.lent_taken)
 }
@@ -498,6 +505,11 @@ pub(crate) fn request_context(ctx: &Context, id: Id, rect: egui::Rect, part: Opt
 /// The rect `id`'s context request of this pass opens at, when it made one. A `Trigger::Context` opener reads it.
 pub(crate) fn context_request(ctx: &Context, id: Id) -> Option<egui::Rect> {
     current(ctx, |stage| stage.contexts.iter().find(|(owner, ..)| *owner == id).map(|(_, rect, _)| *rect))
+}
+
+/// Every context request of this pass so far, in the order they were made: the component and the rect it opens at.
+pub(crate) fn context_requests(ctx: &Context) -> Vec<(Id, egui::Rect)> {
+    current(ctx, |stage| stage.contexts.iter().map(|(owner, rect, _)| (*owner, *rect)).collect())
 }
 
 /// The part of `id` its context request of this pass was made at, when it made one at a part.

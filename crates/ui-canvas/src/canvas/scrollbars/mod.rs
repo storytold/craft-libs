@@ -1,6 +1,7 @@
 //! `CanvasScrollbars`: the scroll bars of a canvas (20.6): a horizontal bar along the bottom of the view and a vertical
 //! one along the right, always shown, in the docked look (`ScrollBarKind::Docked`): the thumb has the track's whole
-//! thickness at rest and under the pointer. The thumb is the visible fraction of
+//! thickness at rest and under the pointer. Document chrome uses inset thumbs, step buttons and a corner.
+//! The thumb is the visible fraction of
 //! the scrollable extent (the document, plus wherever the view has been scrolled past it); drag it to scroll, or press
 //! the track to page by one screenful. With overscroll on, a document smaller than the window can also be scrolled from
 //! one edge of the window to the other. With overscroll off the app clamps the view before it draws
@@ -9,26 +10,42 @@
 //! The bars measure the view along the screen axes, so on a rotated view they show the extent of the unrotated
 //! document.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::CanvasWords;
+use crate::contract::overlay::{Anchor, Place};
 use crate::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, THUMB, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi,
+    PartsCx, Pointer as _, Props as _, Remember as _, Role, Show as _, THUMB, WordSetCx as _,
 };
+use crate::display::Text;
+use crate::primitives::{Draw, PaintShape, ScrollBar, StrokeWidth};
 use crate::runtime::access::Numeric;
+use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleCx};
+use crate::runtime::frame;
+use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, Stateful, StyleColor, StyleCx};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::overlay::{Align, Side};
 use craft_behavior::scroll::ScrollSpan;
-use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase};
-use egui::{Pos2, Rect, Response, Vec2};
+use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase, Sense};
+use egui::{CornerRadius, Rect, Response, Vec2, pos2, vec2};
 use std::ops::{Deref, Range};
 
 const HORIZONTAL: PartKey = PartKey::new("horizontal");
+const CORNER: PartKey = PartKey::new("corner");
 const VERTICAL: PartKey = PartKey::new("vertical");
+const START_ARROW: u64 = 1;
+const END_ARROW: u64 = 2;
+/// Distance of a line step in device pixels, like the canvas's scroll wheel.
+const ARROW_STEP_PIXELS: f64 = 16.0;
+const ARROW_HOLD_DELAY: f64 = 0.4;
+const ARROW_HOLD_INTERVAL: f64 = 0.06;
+
+/// The popup of the tip beside a dragged vertical thumb.
+const TIP: &str = "tip";
 
 /// The thumb part that `PartsCx::scroll` declares for the bar `bar`.
 fn thumb_of(bar: PartKey) -> PartRef {
@@ -42,6 +59,13 @@ pub struct ScrollbarsStyle {
     #[style(metrics)]
     metrics: Metrics,
     look: ScrollBarLook,
+    document: Option<DocumentLook>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DocumentLook {
+    corner: StyleColor,
+    arrow: Stateful<StyleColor>,
 }
 
 /// One axis of the view, in document units counted from the document's start on that axis.
@@ -82,13 +106,96 @@ impl Span {
 /// One bar: where it lies and what it scrolls.
 struct Bar {
     rect: Rect,
+    track: Rect,
     span: ScrollSpan,
+}
+
+impl Bar {
+    fn new(rect: Rect, axis: Axis, span: ScrollSpan, document_chrome: bool) -> Self {
+        let mut track = rect;
+        if document_chrome {
+            let cap = if axis == Axis::X { rect.height() } else { rect.width() };
+            let length = if axis == Axis::X { rect.width() } else { rect.height() };
+            if length > 2.0 * cap && cap > 0.0 {
+                let inset = if axis == Axis::X { vec2(cap, 0.0) } else { vec2(0.0, cap) };
+                track = rect.shrink2(inset);
+            }
+        }
+        Self { rect, track, span }
+    }
+
+    fn arrows(&self, key: PartKey, axis: Axis) -> impl Iterator<Item = (PartRef, Rect, bool)> {
+        (self.track != self.rect)
+            .then(|| {
+                let (before, after) = if axis == Axis::X {
+                    (pos2(self.track.left(), self.rect.bottom()), pos2(self.track.right(), self.rect.top()))
+                } else {
+                    (pos2(self.rect.right(), self.track.top()), pos2(self.rect.left(), self.track.bottom()))
+                };
+                [
+                    (key.at(START_ARROW), Rect::from_min_max(self.rect.min, before), false),
+                    (key.at(END_ARROW), Rect::from_min_max(after, self.rect.max), true),
+                ]
+            })
+            .into_iter()
+            .flatten()
+    }
 }
 
 /// The bars of a view over a document, in the order horizontal, vertical.
 struct Bars {
     horizontal: Option<Bar>,
     vertical: Option<Bar>,
+    corner: Option<Rect>,
+}
+
+#[derive(Clone, Default)]
+struct ArrowRepeat {
+    part: Option<PartRef>,
+    next: f64,
+}
+
+fn arrow_pressed(cx: &mut Cx<'_, CanvasScrollbars<'_>>, part: PartRef, rect: Rect) -> bool {
+    if matches!(cx.part_activated(part), Some(FireSource::Access | FireSource::Key)) {
+        return true;
+    }
+    let phase = cx.part(part).press.phase;
+    if !matches!(phase, PressPhase::Down { .. } | PressPhase::Held { .. }) {
+        return false;
+    }
+    let ctx = cx.response.ctx.clone();
+    let now = frame::clock(&ctx);
+    match phase {
+        PressPhase::Down { .. } => {
+            *cx.memory::<ArrowRepeat>() = ArrowRepeat { part: Some(part), next: now + ARROW_HOLD_DELAY };
+            frame::request_repaint_after(&ctx, ARROW_HOLD_DELAY);
+            true
+        }
+        PressPhase::Held { pos, .. } if rect.contains(pos) => {
+            let repeat = cx.memory::<ArrowRepeat>();
+            if repeat.part != Some(part) {
+                return false;
+            }
+            let due = now >= repeat.next;
+            if due {
+                repeat.next = now + ARROW_HOLD_INTERVAL;
+            }
+            frame::request_repaint_after(&ctx, repeat.next - now);
+            due
+        }
+        _ => false,
+    }
+}
+
+fn paint_arrow(draw: &Draw<'_>, rect: Rect, axis: Axis, after: bool, color: StyleColor) {
+    let size = rect.width().min(rect.height()) / 4.0;
+    let sign = if after { 1.0 } else { -1.0 };
+    let point = |along, across| {
+        let along = along * sign;
+        rect.center() + if axis == Axis::X { vec2(along, across) } else { vec2(across, along) }
+    };
+    let path = PaintShape::Path(vec![point(-size * 0.5, -size), point(size * 0.5, 0.0), point(-size * 0.5, size)]);
+    draw.stroke(&path, StrokeWidth::Thin, color);
 }
 
 /// How the document's x axis runs on screen: with the view flipped, backwards.
@@ -102,16 +209,23 @@ fn aspect(view: &CanvasView) -> f64 {
 
 impl Bars {
     /// The bars inside `rect` (bottom and right edges), `width` thick, for `view` over the document `doc`.
-    fn of(view: &CanvasView, doc: DocRect, overscroll: bool, horizontal: bool, rect: Rect, width: f32) -> Bars {
+    fn of(view: &CanvasView, doc: DocRect, overscroll: bool, horizontal: bool, rect: Rect, style: &ScrollbarsStyle) -> Bars {
+        let document_chrome = style.document.is_some();
+        let mut width = style.look.thickness;
+        if document_chrome {
+            width = width.min(rect.width().max(0.0)).min(rect.height().max(0.0));
+        }
         let x = Span::of(doc.width(), along_x(view, doc.width(), view.center.x - doc.x0), f64::from(view.rect.width()) / aspect(view), view.zoom)
             .filter(|_| horizontal);
         let y = Span::of(doc.height(), view.center.y - doc.y0, f64::from(view.rect.height()), view.zoom);
         let right = if y.is_some() { rect.right() - width } else { rect.right() };
         let bottom = if x.is_some() { rect.bottom() - width } else { rect.bottom() };
-        let bar = |span: Option<Span>, rect: Rect| span.map(|span| Bar { rect, span: span.scroll(overscroll) });
+        let corner = (document_chrome && x.is_some() && y.is_some()).then(|| Rect::from_min_max(pos2(right, bottom), rect.max));
+        let bar = |span: Option<Span>, axis, rect| span.map(|span| Bar::new(rect, axis, span.scroll(overscroll), document_chrome));
         Bars {
-            horizontal: bar(x, Rect::from_min_max(Pos2::new(rect.left(), bottom), Pos2::new(right, rect.bottom()))),
-            vertical: bar(y, Rect::from_min_max(Pos2::new(right, rect.top()), Pos2::new(rect.right(), bottom))),
+            horizontal: bar(x, Axis::X, Rect::from_min_max(pos2(rect.left(), bottom), pos2(right, rect.bottom()))),
+            vertical: bar(y, Axis::Y, Rect::from_min_max(pos2(right, rect.top()), pos2(rect.right(), bottom))),
+            corner,
         }
     }
 
@@ -162,7 +276,7 @@ fn doc_corners(doc: DocRect) -> [Point; 4] {
 /// same press. Show them at the view's rect inside the `Canvas` body. The bars are AccessKit scroll bars and no Tab
 /// stops: the canvas scrolls from the keyboard as it does without bars.
 #[derive(crate::contract::Component, crate::contract::Props)]
-#[component(canvas_control)]
+#[component(canvas_control, overlay)]
 pub struct CanvasScrollbars<'a> {
     #[common]
     common: Common,
@@ -176,12 +290,21 @@ pub struct CanvasScrollbars<'a> {
     /// horizontal bar or corner is shown.
     #[prop(flag)]
     vertical_only: bool,
+    /// Wider bars with inset thumbs, step arrows and a corner for a document window.
+    #[prop(flag)]
+    #[style_key]
+    document_chrome: bool,
+    /// While the vertical thumb drags, the bars show the tip this builds from the view as the drag moved it, beside the
+    /// thumb on the reading-start side.
+    #[prop]
+    tip: Option<&'a dyn Fn(&CanvasView) -> Label>,
 }
 
 impl<'a> CanvasScrollbars<'a> {
     /// Scroll bars named `label` that edit `view`, a view over the document `document` (document units).
     pub fn new(label: impl Into<Label>, view: Bind<'a, CanvasView>, document: DocRect) -> Self {
-        CanvasScrollbars { common: Common::new(), view, document, overscroll: false, vertical_only: false }.label(label)
+        CanvasScrollbars { common: Common::new(), view, document, overscroll: false, vertical_only: false, document_chrome: false, tip: None }
+            .label(label)
     }
 
     /// Applies overscroll off to `view` over the document `doc`: the view can't leave the document's edges, and a
@@ -230,8 +353,8 @@ impl<'a> CanvasScrollbars<'a> {
         changed
     }
 
-    fn bars(&self, view: &CanvasView, rect: Rect, width: f32) -> Bars {
-        Bars::of(view, self.document, self.overscroll, !self.vertical_only, rect, width)
+    fn bars(&self, view: &CanvasView, rect: Rect, style: &ScrollbarsStyle) -> Bars {
+        Bars::of(view, self.document, self.overscroll, !self.vertical_only, rect, style)
     }
 }
 
@@ -241,8 +364,15 @@ impl Component for CanvasScrollbars<'_> {
     type Style = ScrollbarsStyle;
     type Output = CanvasScrollbarsOutput;
 
-    fn style(cx: &StyleCx<'_>, _: CanvasScrollbarsStyleKey) -> ScrollbarsStyle {
-        ScrollbarsStyle { metrics: Metrics::new(), look: cx.scroll_bar_of(ScrollBarKind::Docked) }
+    fn style(cx: &StyleCx<'_>, key: CanvasScrollbarsStyleKey) -> ScrollbarsStyle {
+        let mut look = cx.scroll_bar_of(ScrollBarKind::Docked);
+        let document = key.document_chrome.then(|| {
+            let color = &cx.tokens.color;
+            look.thickness = cx.tokens.size.icon.md;
+            look.track = Stateful::new(cx.color(color.surface.sunken));
+            DocumentLook { corner: cx.color(color.surface.panel), arrow: cx.quiet_ink() }
+        });
+        ScrollbarsStyle { metrics: Metrics::new(), look, document }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -253,19 +383,62 @@ impl Component for CanvasScrollbars<'_> {
         Some(self.view.reborrow())
     }
 
+    /// The canvas settles a view it is given to whole device pixels and to its own rect, so a thumb drag's proposal
+    /// comes back with its centre moved by under a point (photocraft#16006): that is the drag's own value, not the app
+    /// changing the view under it, and the drag goes on. A different zoom, turn, mirroring or aspect, or a centre a
+    /// point or more away, is a change.
+    fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
+        let reach = 1.0 / proposed.zoom.max(f64::MIN_POSITIVE);
+        proposed.zoom == host.zoom
+            && proposed.rotation == host.rotation
+            && proposed.flip_x == host.flip_x
+            && proposed.aspect == host.aspect
+            && (proposed.center.x - host.center.x).abs() < reach
+            && (proposed.center.y - host.center.y).abs() < reach
+    }
+
     /// The bars: `PartsCx::scroll` runs the thumb drag and the page press in the pipeline.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(view) = cx.value().copied() else { return };
-        let bars = self.bars(&view, rect, cx.style.look.thickness);
+        let bars = self.bars(&view, rect, cx.style);
         for (key, axis, bar) in bars.each() {
-            cx.scroll(key, bar.rect, axis, bar.span.clone());
+            cx.scroll(key, bar.track, axis, bar.span.clone());
+            for (part, rect, _) in bar.arrows(key, axis) {
+                // As in the reference application the step arrows take no keyboard focus: the canvas scrolls with its own
+                // keys (the arrows, Page Up/Down, Home and End), and a focused arrow would take the Escape that ends a
+                // tool's edit on the canvas.
+                cx.part(part, rect).sense(Sense::CLICK).pointer_only("the canvas scrolls with its own keys");
+            }
+        }
+        if let Some(corner) = bars.corner {
+            cx.part(CORNER, corner).sense(Sense::CLICK).pointer_only("the corner only reserves space between the two scroll bars");
         }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // The tip shows in the passes the vertical thumb drags and in no other: its popup opens or closes every pass.
+        let tip = cx.popup(TIP);
+        if self.tip.is_some() && thumb_dragging(cx) == Some(Axis::Y) {
+            tip.open(cx);
+        } else {
+            tip.close(cx);
+        }
         let Some(view) = cx.value().copied() else { return };
-        let bars = self.bars(&view, cx.rect, cx.style.look.thickness);
-        for (key, axis, _) in bars.each() {
+        let bars = self.bars(&view, cx.rect, cx.style);
+        for (key, axis, bar) in bars.each() {
+            for (part, rect, after) in bar.arrows(key, axis) {
+                if arrow_pressed(cx, part, rect) {
+                    let scale = if axis == Axis::X { aspect(&view) } else { 1.0 };
+                    let pixel_zoom = view.zoom * scale * f64::from(cx.response.ctx.pixels_per_point());
+                    let toward_end = after != (axis == Axis::X && cx.flow.is_rtl());
+                    let sign = if toward_end { 1.0 } else { -1.0 };
+                    let range = craft_behavior::scroll::shifted(&bar.span, sign * ARROW_STEP_PIXELS / pixel_zoom);
+                    let next = moved(&view, self.document, axis, &range);
+                    if next != view {
+                        cx.set(next);
+                    }
+                }
+            }
             let phase = cx.part(thumb_of(key)).press.phase;
             match phase {
                 PressPhase::DragStart { .. } => cx.begin(),
@@ -282,20 +455,50 @@ impl Component for CanvasScrollbars<'_> {
         }
     }
 
+    /// The tip beside the dragged vertical thumb, on the reading-start side, in a tooltip layer of the bars' own: the
+    /// tooltip pipeline hides a tip while its subject is pressed, and here the press is the point.
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        let popup = cx.popup(TIP);
+        let (Some(tip), Some(view), Some(thumb)) = (self.tip, cx.value().copied(), cx.part_if_declared(thumb_of(VERTICAL)).map(|result| result.rect))
+        else {
+            return;
+        };
+        let label = tip(&view);
+        let layer = Overlay::tooltip().place(Place::anchored(Anchor::Rect(thumb), Side::Start, Align::Center));
+        let _ = ui.show(popup, layer, |ui, _| Text::new(label.clone()).show(ui));
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(view) = cx.value().copied() else { return };
         let style = cx.style;
-        let bars = self.bars(&view, cx.rect, style.look.thickness);
+        let bars = self.bars(&view, cx.rect, style);
         let draw = ui.draw();
+        let rtl = cx.flow.is_rtl();
+        let fill = |rect, color| draw.fill(&PaintShape::Rect(rect, CornerRadius::ZERO), color);
         for (key, axis, bar) in bars.each() {
-            draw.scroll_bar(&style.look, bar.rect, axis, cx.flow.is_rtl(), &bar.span, &cx.scroll_bar_state(key));
+            let state = cx.scroll_bar_state(key);
+            if let Some(look) = &style.document {
+                fill(bar.rect, state.resolve(&style.look.track));
+                let inset = if axis == Axis::X { vec2(0.0, bar.rect.height() / 8.0) } else { vec2(bar.rect.width() / 8.0, 0.0) };
+                let thumb = ScrollBar::thumb(style.look.min_thumb, bar.track, axis, rtl, &bar.span).shrink2(inset);
+                fill(thumb, state.resolve(&style.look.thumb));
+                for (part, rect, after) in bar.arrows(key, axis) {
+                    let color = cx.part_state(part).resolve(&look.arrow);
+                    paint_arrow(&draw, rect, axis, after, color);
+                }
+            } else {
+                draw.scroll_bar(&style.look, bar.track, axis, rtl, &bar.span, &state);
+            }
+        }
+        if let (Some(corner), Some(look)) = (bars.corner, &style.document) {
+            fill(corner, look.corner);
         }
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let Some(view) = cx.value().copied() else { return };
         let words = cx.words::<CanvasWords>();
-        let bars = self.bars(&view, cx.rect, cx.style.look.thickness);
+        let bars = self.bars(&view, cx.rect, cx.style);
         for (key, axis, bar) in bars.each() {
             let name = if axis == Axis::X { &words.scroll_horizontal } else { &words.scroll_vertical };
             let room = (bar.span.content.end - bar.span.content.start - (bar.span.visible.end - bar.span.visible.start)).max(0.0);
@@ -303,17 +506,36 @@ impl Component for CanvasScrollbars<'_> {
             let node = access.node(key, Role::SCROLL_BAR);
             node.name = Name::Text(name.as_str().to_owned());
             node.numeric = Some(Numeric::new(position, 0.0..=room));
+            for (part, _, after) in bar.arrows(key, axis) {
+                let name = match (axis, after) {
+                    (Axis::X, false) => &words.scroll_left,
+                    (Axis::X, true) => &words.scroll_right,
+                    (_, false) => &words.scroll_up,
+                    (_, true) => &words.scroll_down,
+                };
+                access.node(part, Role::BUTTON).name = Name::Text(name.as_str().to_owned());
+            }
         }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasScrollbarsOutput {
-        let over = [HORIZONTAL, VERTICAL].into_iter().any(|key| {
-            [PartRef::from(key), thumb_of(key)]
-                .into_iter()
-                .any(|part| cx.part_if_declared(part).is_some_and(|result| result.hovered || result.press.phase.is_press()))
-        });
-        CanvasScrollbarsOutput { view: cx.edit_response(), over }
+        let is_over = |part| cx.part_if_declared(part).is_some_and(|result| result.hovered || result.press.phase.is_press());
+        let over = is_over(PartRef::from(CORNER))
+            || [HORIZONTAL, VERTICAL].into_iter().any(|key| {
+                let arrows = self.document_chrome.then_some([key.at(START_ARROW), key.at(END_ARROW)]);
+                [PartRef::from(key), thumb_of(key)].into_iter().chain(arrows.into_iter().flatten()).any(is_over)
+            });
+        let dragging = thumb_dragging(&cx);
+        CanvasScrollbarsOutput { view: cx.edit_response(), over, dragging }
     }
+}
+
+/// The axis whose thumb drags in this pass: its press past the drag threshold and still down.
+fn thumb_dragging(cx: &Cx<'_, CanvasScrollbars<'_>>) -> Option<Axis> {
+    [(HORIZONTAL, Axis::X), (VERTICAL, Axis::Y)].into_iter().find_map(|(key, axis)| {
+        let press = cx.part_if_declared(thumb_of(key))?.press;
+        matches!(press.phase, PressPhase::DragStart { .. } | PressPhase::Drag { .. }).then_some(axis)
+    })
 }
 
 /// What the scroll bars report in a pass.
@@ -324,6 +546,8 @@ pub struct CanvasScrollbarsOutput {
     pub view: EditResponse<CanvasView>,
     /// The pointer is over a bar or dragging one: the canvas leaves it alone.
     pub over: bool,
+    /// The thumb being dragged this pass.
+    pub dragging: Option<Axis>,
 }
 
 impl Deref for CanvasScrollbarsOutput {

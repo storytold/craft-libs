@@ -3,10 +3,10 @@
 use craft_ui::testing::trial;
 use std::{fs, path::Path, time::Duration};
 
-use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Selection, Size, TextSize, ThemeId, ThemePair};
+use craft_theme::{ComponentSet, ContrastChoice, ModeChoice, MotionChoice, Selection, Size, TextSize, ThemeId, ThemePair};
 
 use crate::{
-    Accepted, Problem, SelectionChange, SelectionError, Store, StoreError, StoreOptions, SuiteDir,
+    Accepted, FileStamp, Problem, SelectionChange, SelectionError, Store, StoreError, StoreOptions, SuiteDir,
     testing::{FailAt, FailingFs, SAMPLE_THEME_JSON},
 };
 
@@ -31,6 +31,7 @@ fn sel(theme: &str, mode: ModeChoice) -> Selection {
         motion: MotionChoice::System,
         size: Size::Compact,
         text_size: TextSize::Small,
+        set: ComponentSet::Creative,
     }
 }
 
@@ -117,9 +118,70 @@ fn ids_users_cant_create_never_reach_the_file_system() {
     assert!(matches!(store.export(&con), Err(StoreError::NotFound(_))));
     assert!(matches!(store.delete(&con), Err(StoreError::NotFound(_))));
     assert!(store.theme(&con).is_none());
+    let listed = store.library_files().unwrap()[0].stamp;
+    assert!(matches!(store.save_theme(&con, theme_json("con", "").as_bytes(), listed), Err(StoreError::NotFound(_))));
+    let graphite = id("craft.graphite");
+    assert!(matches!(store.save_theme(&graphite, theme_json("con", "").as_bytes(), listed), Err(StoreError::BuiltIn(_))));
     // A library theme that doesn't exist is never written as the suite's, in either slot.
     assert!(matches!(store.update(&Accepted::default(), theme("con")), Err(StoreError::NotFound(_))));
     assert!(matches!(store.update(&Accepted::default(), SelectionChange::theme_dark(id("gone"))), Err(StoreError::NotFound(_))));
     assert!(library.join("con.json").exists());
     assert!(!tmp.path().join("selection.json").exists());
+}
+
+#[trial]
+fn a_save_replaces_the_library_file_and_moves_the_library_revision() {
+    let tmp = tempfile::tempdir().unwrap();
+    for dir in [SuiteDir::at(tmp.path()), SuiteDir::memory()] {
+        let mut store = Store::open(&dir, options());
+        let imported = store.import(theme_json("one", "").as_bytes(), false).unwrap().accepted;
+        let loaded = store.theme_stamp(&id("one")).unwrap().unwrap();
+        let second = theme_json("one", r#","version":2"#);
+        let saved = store.save_theme(&id("one"), second.as_bytes(), loaded).unwrap();
+        assert_eq!(&*store.load_theme(&id("one")).unwrap().bytes, second.as_bytes());
+        assert_eq!(store.theme_stamp(&id("one")).unwrap(), Some(saved.stamp));
+        assert_ne!(saved.stamp, loaded);
+        let moved = (saved.accepted.revision, saved.accepted.library_revision);
+        assert_eq!(moved, (imported.revision + 1, imported.library_revision + 1));
+        // The next save goes from the stamp the last one returned.
+        store.save_theme(&id("one"), theme_json("one", r#","version":3"#).as_bytes(), saved.stamp).unwrap();
+        assert_eq!(store.load_theme(&id("one")).unwrap().theme.version, 3);
+    }
+}
+
+#[trial]
+fn a_save_over_a_changed_file_is_refused_and_leaves_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("library").join("one.json");
+    let mut mine = open(tmp.path());
+    let mut other = open(tmp.path());
+    mine.import(theme_json("one", "").as_bytes(), false).unwrap();
+    let loaded = mine.theme_stamp(&id("one")).unwrap().unwrap();
+    let save = |store: &mut Store, stamp: FileStamp, version: u32| {
+        store.save_theme(&id("one"), theme_json("one", &format!(r#","version":{version}"#)).as_bytes(), stamp)
+    };
+    assert!(matches!(mine.save_theme(&id("one"), theme_json("two", "").as_bytes(), loaded), Err(StoreError::FileName { .. })));
+
+    // Another app saved over it.
+    other.save_theme(&id("one"), theme_json("one", r#","version":2"#).as_bytes(), loaded).unwrap();
+    let theirs = fs::read_to_string(&path).unwrap();
+    mine.load_selection().unwrap();
+    let before = mine.accepted().clone();
+    assert!(matches!(save(&mut mine, loaded, 3), Err(StoreError::Changed(_))));
+    assert_eq!(fs::read_to_string(&path).unwrap(), theirs);
+    mine.load_selection().unwrap();
+    assert_eq!(mine.accepted(), &before);
+
+    // Edited by hand (another length, so the stamp moves however coarse the clock).
+    let now = mine.theme_stamp(&id("one")).unwrap().unwrap();
+    let hand = theme_json("one", r#","version":40"#);
+    fs::write(&path, &hand).unwrap();
+    assert!(matches!(save(&mut mine, now, 5), Err(StoreError::Changed(_))));
+    assert_eq!(fs::read_to_string(&path).unwrap(), hand);
+
+    // Deleted.
+    let now = mine.theme_stamp(&id("one")).unwrap().unwrap();
+    mine.delete(&id("one")).unwrap();
+    assert!(matches!(save(&mut mine, now, 6), Err(StoreError::NotFound(_))));
+    assert!(!path.exists());
 }

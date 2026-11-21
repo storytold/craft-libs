@@ -1,8 +1,8 @@
 //! `ColorChoice`: a choice among named colours with a custom colour, as Photoshop's pasteboard colour
 //! (Preferences, Interface), the Crop shield colour and the Note colour.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _};

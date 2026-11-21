@@ -8,12 +8,10 @@ use alloc::vec::Vec;
 use crate::error::{ParseError, Result, SegmentError, bail, err};
 use crate::reader::Reader;
 
-/// PdfCraft patch: the most segments one segment may refer to. A crafted long-form
-/// header can claim a 29-bit count, which `Vec::with_capacity` below would turn into
-/// a multi-gigabyte reservation before a single referred-to number is read — an
-/// allocation failure then aborts the process in a way `catch_unwind` cannot contain.
-/// Real files refer to a handful of segments, so `u16::MAX` is far beyond any
-/// legitimate need.
+/// PdfCraft patch: the most segments one segment may refer to. A long-form header can claim a
+/// 29-bit count, which `Vec::with_capacity` below would turn into a multi-gigabyte reservation
+/// before a single referred-to number is read; the allocation failure aborts the process. Real
+/// files refer to a handful of segments.
 pub(crate) const MAX_REFERRED_TO_SEGMENTS: u32 = u16::MAX as u32;
 
 /// "The segment type is a number between 0 and 63, inclusive. Not all values
@@ -191,8 +189,8 @@ pub(crate) fn parse_segment_header(reader: &mut Reader<'_>) -> Result<SegmentHea
         u32::from_be_bytes([count_and_retention & 0x1F, rest[0], rest[1], rest[2]])
     };
 
-    // Reject an absurd count before reserving memory for it, and before
-    // skipping the retention-flag bytes it claims to own.
+    // PdfCraft patch: refuse an oversized count before reserving memory for it and before
+    // skipping the retention-flag bytes it claims.
     if referred_to_count > MAX_REFERRED_TO_SEGMENTS {
         bail!(SegmentError::InvalidReferredCount);
     }
@@ -204,9 +202,7 @@ pub(crate) fn parse_segment_header(reader: &mut Reader<'_>) -> Result<SegmentHea
     if short_count == 7 {
         // Number of retention bytes: ceil((referred_to_count + 1) / 8)
         let retention_bytes = (referred_to_count as usize + 1).div_ceil(8);
-        reader
-            .skip_bytes(retention_bytes)
-            .ok_or(ParseError::UnexpectedEof)?;
+        reader.skip_bytes(retention_bytes).ok_or(ParseError::UnexpectedEof)?;
     }
 
     // 7.2.5: Referred-to segment numbers
@@ -252,11 +248,7 @@ pub(crate) fn parse_segment_header(reader: &mut Reader<'_>) -> Result<SegmentHea
     // length of the segment's data part is unknown at the time that the segment
     // header is written."
     let data_length_raw = reader.read_u32().ok_or(ParseError::UnexpectedEof)?;
-    let data_length = if data_length_raw == 0xFFFFFFFF {
-        None
-    } else {
-        Some(data_length_raw)
-    };
+    let data_length = if data_length_raw == 0xFFFFFFFF { None } else { Some(data_length_raw) };
 
     Ok(SegmentHeader {
         segment_number,
@@ -280,14 +272,9 @@ pub(crate) fn parse_segment<'a>(reader: &mut Reader<'a>) -> Result<Segment<'a>> 
 /// may contain the value 0xFFFFFFFF. This value is intended to mean that the
 /// length of the segment's data part is unknown at the time that the segment
 /// header is written." (7.2.7)
-pub(crate) fn parse_segment_data<'a>(
-    reader: &mut Reader<'a>,
-    header: SegmentHeader,
-) -> Result<Segment<'a>> {
+pub(crate) fn parse_segment_data<'a>(reader: &mut Reader<'a>, header: SegmentHeader) -> Result<Segment<'a>> {
     let data = if let Some(len) = header.data_length {
-        reader
-            .read_bytes(len as usize)
-            .ok_or(ParseError::UnexpectedEof)?
+        reader.read_bytes(len as usize).ok_or(ParseError::UnexpectedEof)?
     } else {
         // "In order for the decoder to correctly decode the segment, it needs to
         // read the four-byte row count field, which is stored in the last four
@@ -420,10 +407,7 @@ mod tests {
         // two bytes, since this segment's number is between 256 and 65535. The segments
         // that it refers to are, in decimal, numbers 256, 2, 30, 5, 512, 513, 514, 515,
         // and 516."
-        assert_eq!(
-            header.referred_to_segments,
-            vec![256, 2, 30, 5, 512, 513, 514, 515, 516]
-        );
+        assert_eq!(header.referred_to_segments, vec![256, 2, 30, 5, 512, 513, 514, 515, 516]);
 
         // "00 00 04 01: This segment is associated with page number 1025."
         assert_eq!(header._page_association, 1025);
@@ -431,26 +415,27 @@ mod tests {
         assert_eq!(header.data_length, Some(32));
     }
 
+    /// PdfCraft patch test (ported from craft-libs): a long-form referred-to count over
+    /// `MAX_REFERRED_TO_SEGMENTS` is refused before its retention bytes are read.
     #[test]
     fn test_referred_to_count_is_capped() {
         use crate::error::DecodeError;
 
-        // A long-form header claiming the 29-bit maximum of 536,870,911
-        // referred-to segments would otherwise make `Vec::with_capacity`
-        // reserve ~2 GiB before a single referred-to number is read.
-        // The first byte is 0xFF: long form, count bits 0x1F; the count is
-        // 0x1FFFFFFF.
-        let data = [
-            0x00, 0x01, 0x00, 0x00, // Segment number = 65536
-            0x86, // Flags: type 6, page assoc 1 byte, deferred non-retain
-            0xFF, 0xFF, 0xFF, 0xFF, // Long form, count = 536,870,911
-        ];
+        let header = |count: u32| {
+            let mut data = vec![
+                0x00, 0x01, 0x00, 0x00, // Segment number = 65536
+                0x86, // Flags: type 6, page assoc 1 byte, deferred non-retain
+            ];
+            // Long form: bits 29-31 are 7, bits 0-28 the count.
+            data.extend_from_slice(&(0xE000_0000 | count).to_be_bytes());
+            parse_segment_header(&mut Reader::new(&data)).unwrap_err()
+        };
 
-        let mut reader = Reader::new(&data);
-        let error = parse_segment_header(&mut reader).unwrap_err();
-        assert!(matches!(
-            error,
-            DecodeError::Segment(SegmentError::InvalidReferredCount)
-        ));
+        // The 29-bit maximum, 536,870,911, would reserve about 2 GiB.
+        for count in [0x1FFF_FFFF, MAX_REFERRED_TO_SEGMENTS + 1] {
+            assert!(matches!(header(count), DecodeError::Segment(SegmentError::InvalidReferredCount)));
+        }
+        // At the cap the header is read on and ends at its missing retention bytes.
+        assert!(matches!(header(MAX_REFERRED_TO_SEGMENTS), DecodeError::Parse(ParseError::UnexpectedEof)));
     }
 }

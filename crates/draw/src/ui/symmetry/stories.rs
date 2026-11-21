@@ -98,14 +98,14 @@ fn editing_guides(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(SymmetryHandles<'static>, covers = [Default], drive = Drive::Drag(Grip::part(SYMMETRY.at(CENTRE))))]
 fn handles_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let symmetry = data.value("symmetry", sample(SymmetryMode::Vertical));
+    let (symmetry, symmetry_at) = data.value_at("symmetry", sample(SymmetryMode::Vertical));
     let room = craft_ui::testing::stage(ui);
     let view = view(ui, room);
     let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
         craft_ui::testing::canvas_story::show_document(ui, body.rect, &SHOWN);
         let drawn = *symmetry;
         SymmetryOverlay::new("Symmetry", &drawn, PAGE).editing(true).show_at(ui, body.rect);
-        SymmetryHandles::new("Symmetry", Bind::bound(&mut *symmetry), PAGE).show_at(ui, body.rect)
+        SymmetryHandles::new("Symmetry", symmetry_at.bind(&mut *symmetry), PAGE).show_at(ui, body.rect)
     });
     let output = shown.inner.map(|output| StoryOutput::from(output.edit)).unwrap_or_default();
     output.readout(axes(symmetry))

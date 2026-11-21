@@ -1441,7 +1441,7 @@ fn marker_xml(m: &Marker, local: Tick, rate: FrameRate) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 

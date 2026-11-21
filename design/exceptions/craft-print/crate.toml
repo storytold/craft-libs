@@ -6,7 +6,7 @@ kind = "marker"
 rule = "literal-size/vec2"
 path = "crates/print/src/ui/dialog.rs"
 reason = "Printer's marks are page geometry in points, not UI sizes."
-count = 4
+count = 2
 
 [[exception]]
 name = "print-story-page-sizes"

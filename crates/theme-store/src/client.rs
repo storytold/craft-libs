@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use craft_theme::{SuiteChoice, ThemeDef, ThemeId, ThemePair};
 
-use crate::{Accepted, Op, Problem, SelectionChange, Snapshot, StoreError, SuiteWatch, watch::with_library_theme};
+use crate::{Accepted, FileStamp, Op, OpOutput, Problem, SelectionChange, Snapshot, StoreError, SuiteWatch, watch::with_library_theme};
 
 /// A change sent to the watch and not answered yet.
 #[derive(Clone, Debug)]
@@ -24,6 +24,9 @@ struct Pending {
 /// At most one change is in flight. Picks made meanwhile merge into one queued change (a later
 /// pick of a field replaces the earlier one), which goes out with the new accepted state as
 /// base when the first result arrives, so quick picks never conflict with each other.
+///
+/// A theme editor saves with [`save_theme`](Self::save_theme), one save at a time, and takes the
+/// answer with [`take_saved`](Self::take_saved).
 pub struct SuiteClient {
     watch: SuiteWatch,
     generation: Option<u64>,
@@ -32,6 +35,9 @@ pub struct SuiteClient {
     queued: Option<SelectionChange>,
     conflict: Option<(Accepted, SelectionChange)>,
     failure: Option<(SelectionChange, StoreError)>,
+    /// The save in flight: its request id and theme.
+    saving: Option<(u64, ThemeId)>,
+    saved: Option<(ThemeId, Result<FileStamp, StoreError>)>,
     app_theme: Option<ThemePair>,
     /// Open couldn't read `selection.json`: changes wait in the queue for the worker's first
     /// snapshot instead of merging against a state nobody read.
@@ -44,7 +50,19 @@ impl SuiteClient {
         let snapshot = watch.snapshot();
         let app_theme = watch.initial_app_theme().cloned();
         let hold = !watch.selection_read();
-        SuiteClient { watch, generation: None, snapshot, pending: None, queued: None, conflict: None, failure: None, app_theme, hold }
+        SuiteClient {
+            watch,
+            generation: None,
+            snapshot,
+            pending: None,
+            queued: None,
+            conflict: None,
+            failure: None,
+            saving: None,
+            saved: None,
+            app_theme,
+            hold,
+        }
     }
 
     /// An in-memory suite, for app constructors, tests and web builds.
@@ -70,7 +88,55 @@ impl SuiteClient {
             }
         }
         self.settle();
+        self.settle_save();
         true
+    }
+
+    fn settle_save(&mut self) {
+        let Some((request, _)) = &self.saving else {
+            return;
+        };
+        let request = *request;
+        let result = match self.snapshot.result(request) {
+            Some(Ok(OpOutput::Saved(stamp))) => Ok(*stamp),
+            Some(Err(error)) => Err(error.clone()),
+            // A save's result is always `Saved`.
+            Some(Ok(_)) => Err(StoreError::Lost),
+            // Pushed out of the snapshot by newer results before this sync.
+            None if self.snapshot.results.first().is_some_and(|(id, _)| *id > request) => Err(StoreError::Lost),
+            None => return,
+        };
+        if let Some((_, id)) = self.saving.take() {
+            self.saved = Some((id, result));
+        }
+    }
+
+    /// Saves `bytes` over library theme `id` ([`Store::save_theme`](crate::Store::save_theme)).
+    /// `expected` is the file's stamp when the app loaded it, or the stamp the last save of it
+    /// returned. One save at a time: while one is in flight this sends nothing and returns false.
+    /// The answer of an earlier save not yet taken is dropped.
+    pub fn save_theme(&mut self, id: ThemeId, bytes: Arc<[u8]>, expected: FileStamp) -> bool {
+        if self.saving.is_some() {
+            return false;
+        }
+        self.saved = None;
+        let request = self.watch.request(Op::Save { id: id.clone(), bytes, expected });
+        self.saving = Some((request, id));
+        true
+    }
+
+    /// True while a save is in flight.
+    pub fn is_saving(&self) -> bool {
+        self.saving.is_some()
+    }
+
+    /// The answer to the last save, once [`sync`](Self::sync) has seen it: the theme and the new
+    /// file's stamp, the `expected` stamp for its next save. [`StoreError::Changed`] means
+    /// another app saved over the theme since it was loaded; [`StoreError::Lost`] that the answer
+    /// was gone before the client looked, and the theme's entry in the snapshot's index shows
+    /// what is on disk.
+    pub fn take_saved(&mut self) -> Option<(ThemeId, Result<FileStamp, StoreError>)> {
+        self.saved.take()
     }
 
     fn settle(&mut self) {
@@ -268,7 +334,7 @@ impl SuiteClient {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// The suite as a reading page sees it: [`SuiteClient::shown`] and the latest snapshot, as of [`SuiteClient::view`].
 #[derive(Clone)]

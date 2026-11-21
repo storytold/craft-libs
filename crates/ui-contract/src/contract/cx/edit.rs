@@ -241,8 +241,11 @@ impl<C: Component> Edit for Cx<'_, C> {
         response.submitted = self.core.submitted;
         response.submit_mods = self.core.texts.as_ref().map_or(craft_keymap::Mods::NONE, |(_, text)| text.submit_mods());
         response.left_by_tab = self.core.texts.as_ref().and_then(|(_, text)| text.left_by_tab());
+        response.tab = self.core.texts.as_ref().and_then(|(_, text)| text.tab());
+        response.caret = self.core.texts.as_ref().and_then(|(_, text)| text.caret());
         response.unparsed = self.core.text_invalid;
         response.value_text = self.core.value_text.borrow().clone();
+        response.hover = self.core.hover();
         response.shown = match (&self.shown, self.mixed) {
             (_, true) => Some(Mixed::Mixed),
             (Some(value), false) => Some(Mixed::Same(Arc::clone(value))),

@@ -2,13 +2,13 @@
 
 pub mod check;
 pub mod radio;
-mod rating;
-mod segmented;
-mod switch;
+pub(crate) mod rating;
+pub(crate) mod segmented;
+pub(crate) mod switch;
 mod words;
 
-mod swatch;
-mod swatch_table;
+pub(crate) mod swatch;
+pub(crate) mod swatch_table;
 
 pub use check::{Checkbox, CheckboxStyle};
 pub use radio::{GroupStyle, Radio, RadioGroup, RadioKind, RadioStyle};
@@ -17,8 +17,8 @@ pub use segmented::{Segmented, SegmentedStyle};
 pub use switch::{Switch, SwitchStyle};
 pub use words::ChoiceWords;
 
-pub use swatch::{Swatch, SwatchFace, SwatchMetrics, SwatchOutput, SwatchStyle};
-pub use swatch_table::{SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
+pub use swatch::{Swatch, SwatchFace, SwatchMetrics, SwatchOutput, SwatchShape, SwatchStyle};
+pub use swatch_table::{SwatchArrangement, SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
 
 /// The well of a check box, radio button or switch track with `radius` corners: the sunken surface, so a bevelled theme
 /// draws its bevel, filled with the off fill or the on accent. A flat theme draws the outline as its edge, in the failure
