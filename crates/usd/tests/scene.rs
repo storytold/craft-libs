@@ -74,6 +74,41 @@ def Xform "World"
 "#;
 
 #[test]
+fn scalar_external_arcs_keep_following_metadata_and_prims() {
+    // Original generated layers: external targets must never resolve to the local class.
+    for key in ["references", "payload"] {
+        for arc in [
+            "@external.usda@",
+            "@external.usda@</LocalTemplate>",
+            "@external.usda@ (offset = 10; scale = 2)",
+            "@external.usda@</LocalTemplate> (offset = 10; scale = 2)",
+        ] {
+            let source = format!(
+                r#"#usda 1.0
+class Xform "LocalTemplate" {{}}
+def Xform "External" (
+    prepend {key} = {arc}
+    active = false
+) {{}}
+def Xform "Mixed" (
+    prepend {key} = [@external.usda@</LocalTemplate>, </LocalTemplate>]
+) {{}}
+def Xform "Later" {{}}
+"#
+            );
+            let layer = read_layer(source.as_bytes()).unwrap_or_else(|error| panic!("{key} = {arc}: {error}"));
+            let external = layer.prims.iter().find(|p| p.path == "/External").unwrap();
+            assert!(external.references.is_empty(), "{key} = {arc}");
+            assert_eq!(external.active, Some(false), "{key} = {arc}");
+            let mixed = layer.prims.iter().find(|p| p.path == "/Mixed").unwrap();
+            assert_eq!(mixed.references, ["/LocalTemplate"], "{key} = {arc}");
+            assert!(layer.prims.iter().any(|p| p.path == "/Later"), "{key} = {arc}");
+            assert!(layer.warnings.iter().any(|w| w.contains("external references and payloads")), "{key} = {arc}");
+        }
+    }
+}
+
+#[test]
 fn usda_corpus_overlays_references_coordinates_transforms_and_meshes() {
     let layer = read_layer(CORPUS_USDA.as_bytes()).unwrap();
     assert_eq!(layer.meters_per_unit, Some(0.01));
