@@ -62,13 +62,17 @@ pub enum Value {
     /// by commas, spaces or both, and a `boolean` input's `true` and `false` are 1 and 0. A
     /// `convert` node's output holds the converted channels. `colorspace` is the color
     /// space in effect where the value is written: the input's own `colorspace`, else that of the
-    /// nearest enclosing element (the node, then its nodegraph), else the document's.
+    /// nearest enclosing element (the node, then its nodegraph), else the document's. A value
+    /// whose input or `constant` node has a boolean, integer, float or vector type, and a value
+    /// with no type on a `convert` node's input, is in the document's working color space (the
+    /// root element's `colorspace`), and a `convert` node keeps the color space of its input.
     Constant { values: Vec<f32>, colorspace: Option<String> },
     /// A file from an image node, with the file prefix in effect applied: the `file` input's
     /// `fileprefix`, else the node's, its nodegraph's or the document's. `colorspace` is the
     /// color space in effect on the node's `file` input, found the same way as for a constant,
     /// and `uv_tiling` is the node's `uvtiling` as written. A `uvtiling` value that is not two
-    /// finite numbers is [`Error::Malformed`].
+    /// finite numbers is [`Error::Malformed`]. An image node with a boolean, integer, float or
+    /// vector type is in the document's working color space.
     Image { file: String, colorspace: Option<String>, uv_tiling: Option<[f32; 2]> },
 }
 
@@ -419,6 +423,12 @@ fn channels(ty: &str) -> Option<usize> {
     }
 }
 
+/// Whether `ty` is a numeric MaterialX type that is not a color: a boolean, integer, float or
+/// vector. A `colorspace` does not apply to values of these types.
+fn is_numeric_non_color(ty: Option<&str>) -> bool {
+    ty.is_some_and(|ty| channels(ty).is_some() && !matches!(ty, "color3" | "color4"))
+}
+
 /// The type of `count` numbers whose type is not written: a float, or a vector.
 fn untyped(count: usize) -> &'static str {
     match count {
@@ -468,6 +478,11 @@ impl<'a> Resolver<'a> {
             .or_else(|| self.root.attr("colorspace"))
     }
 
+    /// The document's working color space, the root element's `colorspace`.
+    fn working(&self) -> Option<&'a str> {
+        self.root.attr("colorspace")
+    }
+
     /// The value of `input`, an input of an element in nodegraph `scope` (or at the top level)
     /// whose color space in effect is `space`. A `value` that is not one to four finite numbers
     /// is [`Error::Malformed`]; an unsupported connection is skipped with a warning.
@@ -488,8 +503,8 @@ impl<'a> Resolver<'a> {
                 let name = input.attr("name").unwrap_or("");
                 return Err(Error::Malformed(format!("input {name} has a value that is not one to four finite numbers")));
             };
-            let colorspace = input.attr("colorspace").or(space).map(str::to_owned);
-            return Ok(Some(Value::Constant { values, colorspace }));
+            let colorspace = if is_numeric_non_color(input.attr("type")) { self.working() } else { input.attr("colorspace").or(space) };
+            return Ok(Some(Value::Constant { values, colorspace: colorspace.map(str::to_owned) }));
         }
         let target = self.target(input, scope);
         let Some(node) = target.as_ref().and_then(|t| self.nodes.get(t).copied()) else { return Ok(None) };
@@ -514,7 +529,8 @@ impl<'a> Resolver<'a> {
                         _ => return Err(Error::Malformed(format!("the uvtiling of image {node_name:?} is not two finite numbers"))),
                     },
                 };
-                let colorspace = file_input.attr("colorspace").or(node_space).map(str::to_owned);
+                let colorspace = if is_numeric_non_color(node.attr("type")) { self.working() } else { file_input.attr("colorspace").or(node_space) }
+                    .map(str::to_owned);
                 Ok(Some(Value::Image { file: format!("{prefix}{file}"), colorspace, uv_tiling }))
             }
             "normalmap" => match child("in") {
@@ -529,6 +545,9 @@ impl<'a> Resolver<'a> {
                     i.attr("type").or_else(|| self.target(i, node_scope).and_then(|t| self.nodes.get(&t).copied()).and_then(|n| n.attr("type")));
                 match value {
                     Value::Constant { values, colorspace } => {
+                        // A value with no type is a float or a vector, so it is in the working
+                        // color space like a typed one.
+                        let colorspace = if from.is_none() && i.attr("value").is_some() { self.working().map(str::to_owned) } else { colorspace };
                         let from = from.unwrap_or_else(|| untyped(values.len()));
                         match converted(&values, from, to) {
                             Some(values) => Ok(Some(Value::Constant { values, colorspace })),
@@ -556,7 +575,12 @@ impl<'a> Resolver<'a> {
                 }
             }
             "constant" => match child("value") {
-                Some(i) => self.value(i, node_scope, node_space, hops + 1, warnings),
+                Some(i) => match self.value(i, node_scope, node_space, hops + 1, warnings)? {
+                    Some(Value::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) => {
+                        Ok(Some(Value::Constant { values, colorspace: self.working().map(str::to_owned) }))
+                    }
+                    value => Ok(value),
+                },
                 None => Ok(None),
             },
             other => {
@@ -1024,6 +1048,70 @@ mod tests {
             assert_eq!(input(&changed, "base_color"), None, "{image_ty} to {ty}");
             assert!(changed.warnings.iter().any(|w| w.contains("convert node")), "{:?}", changed.warnings);
         }
+    }
+
+    #[test]
+    fn a_color_converted_from_another_type_is_in_the_working_color_space() {
+        // A colorspace applies to color values and color image files (MaterialX specification,
+        // Color Spaces and Color Management Systems), so a float or vector copied into a color
+        // by a convert node holds working-space channels; a color keeps its own color space.
+        let m = read(
+            r#"<materialx colorspace="lin_rec709">
+              <open_pbr_surface name="S">
+                <input name="base_color" nodename="F"/>
+                <input name="specular_color" nodegraph="g" output="v"/>
+                <input name="coat_color" nodename="K"/>
+                <input name="fuzz_color" nodename="I"/>
+                <input name="emission_color" nodename="J"/>
+                <input name="emission_luminance" value="1"/>
+              </open_pbr_surface>
+              <convert name="F" type="color3" colorspace="srgb_texture"><input name="in" type="float" value="0.5"/></convert>
+              <nodegraph name="g" colorspace="g22_rec709"><convert name="c" type="color3"><input name="in" type="vector3" value="0.1,0.2,0.3"/></convert><output name="v" nodename="c"/></nodegraph>
+              <convert name="K" type="color3" colorspace="srgb_texture"><input name="in" type="color4" value="0.1,0.2,0.3,1"/></convert>
+              <convert name="I" type="color3"><input name="in" nodename="V"/></convert>
+              <image name="V" type="vector3" colorspace="srgb_texture"><input name="file" value="v.png"/></image>
+              <convert name="J" type="color3"><input name="in" nodename="C"/></convert>
+              <image name="C" type="color3" colorspace="srgb_texture"><input name="file" value="c.png"/></image>
+              <surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial>
+            </materialx>"#,
+        )
+        .unwrap();
+        let image = |file: &str, space: &str| Value::Image { file: file.into(), colorspace: Some(space.into()), uv_tiling: None };
+        assert_eq!(input(&m, "base_color"), Some(&constant(&[0.5; 3], Some("lin_rec709"))));
+        assert_eq!(input(&m, "specular_color"), Some(&constant(&[0.1, 0.2, 0.3], Some("lin_rec709"))));
+        assert_eq!(input(&m, "coat_color"), Some(&constant(&[0.1, 0.2, 0.3], Some("srgb_texture"))));
+        assert_eq!(input(&m, "fuzz_color"), Some(&image("v.png", "lin_rec709")));
+        assert_eq!(input(&m, "emission_color"), Some(&image("c.png", "srgb_texture")));
+        assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+        // A color passed through a vector keeps its color space, and a float constant node or an
+        // untyped value is in the working color space.
+        let chain = read(
+            r#"<materialx colorspace="lin_rec709">
+              <open_pbr_surface name="S">
+                <input name="base_color" nodename="B"/>
+                <input name="specular_color" nodename="K2"/>
+                <input name="coat_color" nodename="U"/>
+              </open_pbr_surface>
+              <convert name="A" type="vector3"><input name="in" type="color3" value="0.5,0.5,0.5" colorspace="srgb_texture"/></convert>
+              <convert name="B" type="color3"><input name="in" nodename="A"/></convert>
+              <constant name="K" type="float" colorspace="srgb_texture"><input name="value" value="0.25"/></constant>
+              <convert name="K2" type="color3" colorspace="srgb_texture"><input name="in" nodename="K"/></convert>
+              <convert name="U" type="color3" colorspace="srgb_texture"><input name="in" value="0.75"/></convert>
+              <surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial>
+            </materialx>"#,
+        )
+        .unwrap();
+        assert_eq!(input(&chain, "base_color"), Some(&constant(&[0.5; 3], Some("srgb_texture"))));
+        assert_eq!(input(&chain, "specular_color"), Some(&constant(&[0.25; 3], Some("lin_rec709"))));
+        assert_eq!(input(&chain, "coat_color"), Some(&constant(&[0.75; 3], Some("lin_rec709"))));
+        assert!(chain.warnings.is_empty(), "{:?}", chain.warnings);
+        // A document without a working color space leaves the converted color untagged.
+        let plain = read(&open_pbr(
+            r#"<input name="base_color" nodename="F"/>"#,
+            r#"<convert name="F" type="color3" colorspace="srgb_texture"><input name="in" type="float" value="0.5"/></convert>"#,
+        ))
+        .unwrap();
+        assert_eq!(input(&plain, "base_color"), Some(&constant(&[0.5; 3], None)));
     }
 
     #[test]

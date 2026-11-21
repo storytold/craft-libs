@@ -641,6 +641,21 @@ fn materialx_reader_warnings_reach_the_report() {
 }
 
 #[test]
+fn materialx_float_converted_to_a_color_is_not_decoded_from_the_nodes_color_space() {
+    // The float is not a color value, so the node's srgb_texture does not apply to it.
+    let doc = Document::parse(
+        br#"<materialx colorspace="lin_rec709">
+          <open_pbr_surface name="S"><input name="base_color" nodename="C"/></open_pbr_surface>
+          <convert name="C" type="color3" colorspace="srgb_texture"><input name="in" type="float" value="0.5"/></convert>
+          <surfacematerial name="M"><input name="surfaceshader" nodename="S"/></surfacematerial>
+        </materialx>"#,
+    )
+    .unwrap();
+    let c = try_from_materialx(&doc.read_material(None).unwrap()).unwrap();
+    assert_close3(c.surface.material.base_color(), [0.5; 3]);
+}
+
+#[test]
 fn materialx_documents_convert_from_xml() {
     let doc = Document::parse(
         br#"<materialx colorspace="srgb_texture">
