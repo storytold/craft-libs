@@ -55,10 +55,14 @@ pub fn hammersley(i: u32, n: u32) -> Option<[f32; 2]> {
 }
 
 /// The GGX normal distribution `D` at `n_dot_h` for perceptual `roughness`, with
-/// `α = max(roughness², 0.001)`: `α² / (π ((n·h)² (α² − 1) + 1)²)`, as glTF 2.0 Appendix B writes
-/// it in section B.3.2. Over the hemisphere, `D(h) (n·h)` integrates to 1.
+/// `α = max(roughness², 0.001)`: `α² χ⁺(n·h) / (π ((n·h)² (α² − 1) + 1)²)`, as glTF 2.0
+/// Appendix B writes it in section B.3.2, so it is 0 where `n·h` is 0 or less. Over the
+/// hemisphere, `D(h) (n·h)` integrates to 1.
 /// It is evaluated in `f64`, so it keeps its peak `1 / (π α²)` at `n·h = 1` for the smallest `α`.
 pub fn ggx_distribution(n_dot_h: f32, roughness: f32) -> f32 {
+    if n_dot_h <= 0.0 {
+        return 0.0;
+    }
     let a = f64::from((roughness * roughness).max(1e-3));
     let c2 = f64::from(n_dot_h) * f64::from(n_dot_h);
     let a2 = a * a;
@@ -70,6 +74,7 @@ pub fn ggx_distribution(n_dot_h: f32, roughness: f32) -> f32 {
 /// section B.3.2 for unit vectors, with `(n·h)²` and `|n × h|²` taken from the vectors in `f64`.
 /// Near `n·h = 1` this is exact, where an `n·h` rounded to `f32` and passed to
 /// [`ggx_distribution`] can be one step below 1 and give a `D` about 20% low at the smallest `α`.
+/// It is 0 where `n·h` is 0 or less.
 ///
 /// Returns [`PbrError::BadOption`] when `roughness` is not in `0..=1`, and
 /// [`PbrError::BadDirection`] when a vector is not finite or has zero length.
@@ -85,6 +90,9 @@ pub fn ggx_distribution_between(n: [f32; 3], h: [f32; 3], roughness: f32) -> Res
         return Err(PbrError::BadDirection);
     }
     let c = dot(n, h);
+    if c <= 0.0 {
+        return Ok(0.0);
+    }
     let x = [n[1] * h[2] - n[2] * h[1], n[2] * h[0] - n[0] * h[2], n[0] * h[1] - n[1] * h[0]];
     let a = f64::from((roughness * roughness).max(1e-3));
     let a2 = a * a;

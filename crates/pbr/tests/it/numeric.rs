@@ -2,8 +2,7 @@
 //! kept, and the SH projection matches analytic irradiance.
 
 use craft_pbr::{
-    EnvImage, Environment, Limits, PbrError, PrefilterOptions, dir_of, ggx_distribution, ggx_distribution_between, irradiance, try_prefilter,
-    try_sh9,
+    EnvImage, Environment, Limits, PbrError, PrefilterOptions, dir_of, ggx_distribution, ggx_distribution_between, irradiance, try_prefilter, try_sh9,
 };
 
 use crate::{energy, env_from, max_rel_diff, opts};
@@ -64,6 +63,18 @@ fn ggx_projected_area_integrates_to_one() {
     }
 }
 
+#[test]
+fn ggx_is_zero_where_the_half_vector_is_not_above_the_surface() {
+    for roughness in [0.0, 0.5, 1.0] {
+        for n_dot_h in [0.0, -0.3, -1.0] {
+            assert_eq!(ggx_distribution(n_dot_h, roughness), 0.0, "roughness {roughness} at {n_dot_h}");
+        }
+        for h in [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.6, -0.8, 0.0]] {
+            assert_eq!(ggx_distribution_between([0.0, 1.0, 0.0], h, roughness), Ok(0.0), "roughness {roughness} at {h:?}");
+        }
+    }
+}
+
 /// `v` normalized in `f32`, divided by its largest component and then multiplied by the
 /// reciprocal of its length, as the crate normalizes directions.
 fn unit_f32(v: [f32; 3]) -> [f32; 3] {
@@ -85,7 +96,7 @@ fn ggx_between_vectors_keeps_its_peak_off_axis() {
         assert!((d / peak - 1.0).abs() < 1e-5, "{n:?} {h:?}: {d} for {peak}");
     }
     // Away from the peak it is the scalar form at the same angle.
-    for (roughness, angle) in [(0.0f32, 0.05f32), (0.3, 0.4), (1.0, 1.2), (0.5, std::f32::consts::FRAC_PI_2)] {
+    for (roughness, angle) in [(0.0f32, 0.05f32), (0.3, 0.4), (1.0, 1.2), (0.5, 1.5)] {
         let h = [angle.sin(), 0.0, angle.cos()];
         let d = ggx_distribution_between([0.0, 0.0, 1.0], h, roughness).unwrap();
         let want = ggx_distribution(angle.cos(), roughness);
