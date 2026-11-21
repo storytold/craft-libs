@@ -6,7 +6,7 @@ use std::collections::BinaryHeap;
 
 use rayon::prelude::*;
 
-use crate::scene::{EnvInfo, Scene, ShadowMap, TexInfo, validate};
+use crate::scene::{EnvInfo, Scene, ShadowMap, TexInfo, unit, validate};
 use crate::shade::sample;
 use crate::{Limits, RenderError};
 
@@ -68,8 +68,9 @@ fn basis(eye: [f64; 3], fwd: [f64; 3], down: [f64; 3]) -> [[f32; 4]; 3] {
     [0, 1, 2].map(|r| m[r].map(|v| v as f32))
 }
 
-/// Light-space near plane of a perspective shadow map.
-const NEAR: f32 = 1.0;
+/// Light-space near plane of a perspective shadow map. Casters are clipped against it, and the
+/// shader does not shadow a receiver at this depth or nearer.
+pub(crate) const NEAR: f32 = 1e-3;
 
 /// A caster's corner in light space with its texture coordinates.
 type LightCorner = ([f32; 3], [f32; 2]);
@@ -100,7 +101,9 @@ fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
             if (da >= 0.0) != (db >= 0.0) {
                 let k = da / (da - db);
                 let lerp = |x: f32, y: f32| x + (y - x) * k;
-                out.push(([lerp(a.0[0], b.0[0]), lerp(a.0[1], b.0[1]), lerp(a.0[2], b.0[2])], [lerp(a.1[0], b.1[0]), lerp(a.1[1], b.1[1])]));
+                // The crossing lies on the near plane; its depth is set to it, since the lerp of
+                // far-apart depths can round to 0 or below.
+                out.push(([lerp(a.0[0], b.0[0]), lerp(a.0[1], b.0[1]), NEAR], [lerp(a.1[0], b.1[0]), lerp(a.1[1], b.1[1])]));
             }
         }
         poly = out;
@@ -331,16 +334,10 @@ pub fn shadow_sizes(width: u32, height: u32, draft: bool, kinds: &[u32]) -> Vec<
 /// up to 24 pixels.
 ///
 /// Returns [`RenderError::BadShadowInputs`] for a zero size, a radius that is not positive and
-/// finite, a center that is not finite, a direction that is zero or not finite, or inputs whose
-/// map would hold a value that is not finite in `f32`.
+/// finite, a center that is not finite, a direction whose length differs from 1 by more than
+/// 0.001, or inputs whose map would hold a value that is not finite in `f32`.
 pub fn try_env_shadow_map(e: EnvInfo, centre: [f64; 3], radius: f64, size: u32) -> Result<ShadowMap, RenderError> {
-    let ok = size > 0
-        && radius.is_finite()
-        && radius > 0.0
-        && centre.iter().all(|v| v.is_finite())
-        && e.sun.iter().all(|v| v.is_finite())
-        && e.sun != [0.0; 3]
-        && e.shadow_diffusion.is_finite();
+    let ok = size > 0 && radius.is_finite() && radius > 0.0 && centre.iter().all(|v| v.is_finite()) && unit(&e.sun) && e.shadow_diffusion.is_finite();
     if !ok {
         return Err(RenderError::BadShadowInputs);
     }
@@ -456,10 +453,6 @@ fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<()
         s.shadows.clear();
         s.shadow_texels.clear();
         return Ok(());
-    }
-    // A parallel or spot light's map looks along its direction.
-    if s.lights.iter().any(|l| l.shadow >= 0 && l.kind < 2 && l.dir == [0.0; 3]) {
-        return Err(RenderError::BadShadowInputs);
     }
     let sphere = bounding_sphere(s);
     let kinds: Vec<u32> = s

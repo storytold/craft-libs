@@ -13,6 +13,7 @@
 //! - Shadows: depth maps per light, percentage-closer filtered.
 
 use crate::scene::{EnvInfo, Light, Material, Scene, ShadowMap, TexInfo};
+use crate::shadow::NEAR;
 
 pub(crate) const PI: f32 = std::f32::consts::PI;
 
@@ -219,7 +220,7 @@ fn shadow_coord(m: &ShadowMap, p: [f32; 3]) -> Option<(f32, f32, f32)> {
     let c = m.size as f32 * 0.5;
     if m.ortho {
         Some((q[0] * m.focal + c, q[1] * m.focal + c, q[2]))
-    } else if q[2] > 1e-3 {
+    } else if q[2] > NEAR {
         Some((q[0] * m.focal / q[2] + c, q[1] * m.focal / q[2] + c, q[2]))
     } else {
         None

@@ -53,8 +53,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   light whose `shadow` is 0 or more. The shader compares each receiver with the nearest depth in the map
   (<https://developer.nvidia.com/gpugems/gpugems/part-ii-lighting-and-shadows/chapter-11-shadow-map-antialiasing>)
   over a jittered grid of 5 × 5 to 10 × 10 taps, each a bilinear comparison against the receiver's
-  plane. A masked caster's alpha test applies to the map with the material's
-  cutoff, as in shading, and a masked or blended caster without a base texture whose alpha shading
+  plane. A spot or point light's maps hold casters at a light-space depth of 0.001 or more, and a
+  receiver at that depth or nearer is not shadowed. A masked caster's alpha test applies
+  to the map with the material's cutoff, as in shading, and a masked or blended caster without a base texture whose alpha shading
   discards casts no shadow. A blended caster with a base texture drops texels whose alpha is below 0.5. `shadow_map_size` gives one map texel per
   raster pixel (supersampled pixels when `ssaa` is above 1, as EffectCraft sizes them) to a power
   of two from 512 to 4096 (512 for a draft render), and
@@ -81,7 +82,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   exist (`try_render`; a mark of −1 means no shadow), an index list that is not whole triangles, an index, material
   or texture that does not exist, an environment light with no radiance level or with a level or
   irradiance map that does not exist, a texture or shadow-map span past its array, a value that is
-  not finite, a material or texel alpha or a material opacity outside 0 to 1, a light kind
+  not finite, a material or texel alpha or a material opacity outside 0 to 1, a parallel or spot
+  light direction or an environment light direction (other than zero) whose length differs from 1
+  by more than 0.001, a light kind
   or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` returns
   `BadPixel` when a rendered color or depth overflows `f32` (finite inputs near the top of its
   range). `try_shadow_maps` also returns an error when a map's view or a caster's
@@ -99,8 +102,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
 
 The renderer comes from EffectCraft's `crates/render/src/three_d/adv.rs` (`resolve`, `encode`,
 `render_cpu`), `adv/raster.rs`, `adv/shade.rs` and the scene types of `adv/scene.rs`, at
-`2f16feb12f`. For valid scenes whose triangles stay inside the guard band and off the far plane, and
-whose masked and blended casters have a base texture and a cutoff of 0.5, every shadow texel,
+`2f16feb12f`. For valid scenes whose triangles stay inside the guard band and off the far plane,
+whose masked and blended casters have a base texture and a cutoff of 0.5, and whose casters do not
+reach within 1 unit of light-space depth of a spot or point light, every shadow texel,
 raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit for bit;
 `tests/it/differential.rs` runs a copy of EffectCraft's code on the same scenes. Changes from those
 files:
@@ -136,6 +140,15 @@ files:
   without a base texture whose alpha shading discards casts no shadow. EffectCraft tested every
   textured caster against 0.5 and drew untextured casters whole, so a shadow could differ from
   the visible surface. With the default cutoff of 0.5 the maps are the same.
+- A spot or point light's shadow maps clip casters at a light-space depth of 0.001, the depth
+  below which the shader does not shadow a receiver. EffectCraft clipped them at 1, so a caster
+  within 1 unit of the light cast no shadow and the receivers behind it were lit. A caster's
+  crossing with that plane takes the plane's depth exactly, so a caster crossing it with
+  far-apart corners stays in front of the light.
+- A parallel or spot light's direction, and the environment light's direction when it is not
+  zero, must be unit length within 0.001. EffectCraft shaded with the direction as given and
+  normalized it for the shadow map, so a direction of another length scaled the light and changed
+  a spot light's cone without changing its shadow.
 - A triangle on the far end of the depth range (normalized device z of 0) is drawn. EffectCraft
   read a depth of 0 as an empty pixel and dropped it.
 - `try_render` returns an error for a shadow mark that names a map that does not exist.

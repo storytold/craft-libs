@@ -86,9 +86,10 @@ pub enum RenderError {
     /// A texel is not finite, or its alpha is outside 0 to 1.
     #[error("texel {0} is not finite or has an alpha outside 0 to 1")]
     BadTexel(usize),
-    /// A light has a kind other than 0 to 2, a value that is not finite, or a cone cosine
-    /// outside −1 to 1.
-    #[error("light {0} has an unknown kind, a value that is not finite or a cone cosine outside -1 to 1")]
+    /// A light has a kind other than 0 to 2, a value that is not finite, a cone cosine outside −1
+    /// to 1, or (a parallel or spot light) a direction whose length differs from 1 by more than
+    /// 0.001.
+    #[error("light {0} has an unknown kind, a value that is not finite, a cone cosine outside -1 to 1 or a direction that is not unit length")]
     BadLight(usize),
     /// The light count is over [`Limits::max_lights`].
     #[error("the scene holds {count} lights, over the limit of {limit}")]
@@ -98,9 +99,10 @@ pub enum RenderError {
     /// −1 for no shadow.
     #[error("a light refers to a shadow map that does not exist")]
     MissingShadowMap(Option<usize>),
-    /// The environment light has a value that is not finite, no radiance level, or a radiance
-    /// level or irradiance map that is not in [`Scene::textures`].
-    #[error("the environment light has a value that is not finite or names a texture that does not exist")]
+    /// The environment light has a value that is not finite, a dominant direction that is neither
+    /// zero nor unit length (within 0.001), no radiance level, or a radiance level or irradiance
+    /// map that is not in [`Scene::textures`].
+    #[error("the environment light has a value that is not finite, a direction that is not unit length or names a texture that does not exist")]
     BadEnvironment,
     /// A shadow map has a zero size, a scale or transform that is not finite, or a span that
     /// runs past [`Scene::shadow_texels`].
@@ -110,9 +112,9 @@ pub enum RenderError {
     #[error("shadow texel {0} is NaN")]
     BadShadowTexel(usize),
     /// The inputs of a shadow map are out of range: a zero size, a radius that is not positive and
-    /// finite, a center that is not finite, a light direction that is zero or not finite, or
-    /// inputs (a scene's vertices far from the origin, for one) whose map would hold a value that
-    /// is not finite in `f32`.
+    /// finite, a center that is not finite, a direction whose length differs from 1 by more than
+    /// 0.001, or inputs (a scene's vertices far from the origin, for one) whose map would hold a
+    /// value that is not finite in `f32`.
     #[error("shadow map inputs are out of range")]
     BadShadowInputs,
     /// The shadow texels do not fit `u32` offsets.

@@ -107,7 +107,8 @@ pub struct Light {
     /// 0 parallel, 1 spot, 2 point.
     pub kind: u32,
     pub pos: [f32; 3],
-    /// Direction the light travels.
+    /// Unit direction the light travels, for a parallel or spot light; a length that differs from
+    /// 1 by more than 0.001 is an error. A point light does not read it.
     pub dir: [f32; 3],
     /// Linear color times intensity.
     pub color: [f32; 3],
@@ -129,7 +130,9 @@ pub struct Light {
 
 /// A depth map seen from a light: `view` maps world → light space (+z forward); pixels
 /// `u = focal·x/z + size/2` (perspective) or `focal·x + size/2` (orthographic); texels store
-/// the light-space depth of the nearest caster.
+/// the light-space depth of the nearest caster. A perspective map holds the parts of casters at a
+/// light-space depth of at least 0.001, and a receiver at that depth or nearer is not shadowed by
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowMap {
     pub view: [[f32; 4]; 3],
@@ -161,7 +164,7 @@ pub struct EnvInfo {
     pub rotation: f32,
     /// Unit direction from the scene toward the environment's dominant bright region, the
     /// direction its shadow is cast from. `[0; 3]` when the image has no dominant direction: no
-    /// shadow.
+    /// shadow. Any other length that differs from 1 by more than 0.001 is an error.
     pub sun: [f32; 3],
     /// The image's directional fraction, 0 for a uniform image and near 1 for a single bright
     /// spot. The shadow occludes only this fraction of the environment light.
@@ -208,6 +211,15 @@ pub struct Scene {
 
 fn finite<const N: usize>(v: &[f32; N]) -> bool {
     v.iter().all(|x| x.is_finite())
+}
+
+/// How far a direction's length may differ from 1.
+const UNIT_TOLERANCE: f64 = 1e-3;
+
+/// `v` is finite and its length is within [`UNIT_TOLERANCE`] of 1.
+pub(crate) fn unit(v: &[f32; 3]) -> bool {
+    let len = v.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>().sqrt();
+    (len - 1.0).abs() <= UNIT_TOLERANCE
 }
 
 /// Checks a scene against `limits`: the raster size, the index list, every reference between the
@@ -305,12 +317,14 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
             && finite(&[l.cos_inner, l.cos_outer, l.radius, l.falloff_distance, l.shadow_darkness, l.shadow_diffusion])
             && (-1.0..=1.0).contains(&l.cos_inner)
             && (-1.0..=1.0).contains(&l.cos_outer)
+            && (l.kind == 2 || unit(&l.dir))
     };
     if let Some(i) = s.lights.iter().position(|l| !ok(l)) {
         return Err(RenderError::BadLight(i));
     }
     if let Some(e) = &s.env {
         let ok = finite(&e.sun)
+            && (e.sun == [0.0; 3] || unit(&e.sun))
             && finite(&[e.intensity, e.rotation, e.key, e.shadow_darkness, e.shadow_diffusion])
             && e.mips > 0
             && e.radiance.checked_add(e.mips).is_some_and(|end| end as usize <= s.textures.len())

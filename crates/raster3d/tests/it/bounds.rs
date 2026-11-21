@@ -211,10 +211,123 @@ fn a_shadow_casting_light_with_no_direction_is_rejected() {
     let mut s = lit_scene((16, 12), 1, false);
     let i = s.lights.iter().position(|l| l.kind < 2 && l.shadow == 0).unwrap();
     s.lights[i].dir = [0.0; 3];
-    assert_eq!(try_shadow_maps(&mut s, false, &Limits::default()), Err(RenderError::BadShadowInputs));
-    // Without a request, the direction is not used for a map.
+    assert_eq!(try_shadow_maps(&mut s, false, &Limits::default()), Err(RenderError::BadLight(i)));
+    // Shading reads the direction too, with or without a map.
     s.lights[i].shadow = -1;
+    assert_eq!(try_shadow_maps(&mut s, false, &Limits::default()), Err(RenderError::BadLight(i)));
+    assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(i)));
+}
+
+#[test]
+fn light_directions_that_are_not_unit_length_are_rejected() {
+    let base = lit_scene((16, 12), 1, false);
+    for kind in [0, 1] {
+        let i = base.lights.iter().position(|l| l.kind == kind).unwrap();
+        for k in [2.0, 0.5, 1.002] {
+            let mut s = base.clone();
+            s.lights[i].dir = s.lights[i].dir.map(|v| v * k);
+            assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(i)), "kind {kind} × {k}");
+            assert_eq!(try_shadow_maps(&mut s, false, &Limits::default()), Err(RenderError::BadLight(i)), "kind {kind} × {k}");
+        }
+        // Rounding within 0.001 of unit length is accepted.
+        let mut s = base.clone();
+        s.lights[i].dir = s.lights[i].dir.map(|v| v * 1.0005);
+        assert!(try_shadow_maps(&mut s, false, &Limits::default()).is_ok(), "kind {kind}");
+    }
+    // A point light does not read its direction.
+    let mut s = base.clone();
+    let i = s.lights.iter().position(|l| l.kind == 2).unwrap();
+    s.lights[i].dir = [0.0, 0.0, 5.0];
     assert!(try_shadow_maps(&mut s, false, &Limits::default()).is_ok());
+    assert!(try_render(&s, &Limits::default()).is_ok());
+    // The environment light's direction is unit length or zero (no dominant direction).
+    let mut s = base.clone();
+    let sun = s.env.unwrap().sun;
+    s.env.as_mut().unwrap().sun = sun.map(|v| v * 2.0);
+    assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadEnvironment));
+    assert_eq!(try_env_shadow_map(s.env.unwrap(), [0.0; 3], 100.0, 512), Err(RenderError::BadShadowInputs));
+    s.env.as_mut().unwrap().sun = [0.0; 3];
+    assert!(try_shadow_maps(&mut s, false, &Limits::default()).is_ok());
+}
+
+#[test]
+fn casters_near_a_perspective_light_cast_shadows() {
+    // Only the spot light asks for a map.
+    let mut s = lit_scene((16, 12), 1, false);
+    for l in &mut s.lights {
+        if l.kind != 1 {
+            l.shadow = -1;
+        }
+    }
+    if let Some(e) = s.env.as_mut() {
+        e.shadow = -1;
+    }
+    let spot = s.lights.iter().find(|l| l.kind == 1).copied().unwrap();
+    let d = spot.dir;
+    // A small opaque caster 0.5 units in front of the light, across its axis.
+    let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let u = [d[2], 0.0, -d[0]];
+    let u = u.map(|x| x / len(u));
+    let v = [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]];
+    let c = [0, 1, 2].map(|k| spot.pos[k] + d[k] * 0.5);
+    let r = 0.2;
+    let corners = [(1.0f32, 0.0f32), (-0.5, 0.87), (-0.5, -0.87)].map(|(a, b)| [0, 1, 2].map(|k| c[k] + r * (a * u[k] + b * v[k])));
+    let m = s.materials.iter().position(|m| m.casts_shadows && m.alpha_mode == 0).unwrap() as u32;
+    let first = s.vertices.len() as u32;
+    for p in corners {
+        s.vertices.push(Vertex { pos: p, normal: d, uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0], material: m });
+    }
+    s.indices.splice(0..0, [first, first + 1, first + 2]);
+    s.opaque_count += 3;
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    let spot = s.lights.iter().find(|l| l.kind == 1).copied().unwrap();
+    let map = s.shadows[spot.shadow as usize];
+    let n = map.size as usize;
+    let centre = s.shadow_texels[map.offset as usize + (n / 2) * n + n / 2];
+    assert!((centre - 0.5).abs() < 0.01, "center texel depth {centre}");
+}
+
+#[test]
+fn casters_crossing_a_perspective_light_plane_far_from_it_are_drawn() {
+    // A caster with corners about 100,000 units in front of and behind the spot light: the
+    // crossing with the near plane stays in front of the light.
+    let base = lit_scene((16, 12), 1, false);
+    let spot = base.lights.iter().find(|l| l.kind == 1).copied().unwrap();
+    let d = spot.dir;
+    let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let u = [d[2], 0.0, -d[0]];
+    let u = u.map(|x| x / len(u));
+    let v = [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]];
+    let m = base.materials.iter().position(|m| m.casts_shadows && m.alpha_mode == 0).unwrap() as u32;
+    let mut without = base.clone();
+    for l in &mut without.lights {
+        if l.kind != 1 {
+            l.shadow = -1;
+        }
+    }
+    if let Some(e) = without.env.as_mut() {
+        e.shadow = -1;
+    }
+    let mut before = without.clone();
+    try_shadow_maps(&mut before, true, &Limits::default()).unwrap();
+    for i in 0..64 {
+        let mut s = without.clone();
+        let (front, back) = (1.0e5 + i as f32 * 37.3, -(1.0e5 + i as f32 * 11.1));
+        // In the plane 20 units to the light's side along `v`, so the map sees its face.
+        let at = |t: f32, side: f32| [0, 1, 2].map(|k| spot.pos[k] + d[k] * t + u[k] * side + v[k] * 20.0);
+        let first = s.vertices.len() as u32;
+        for p in [at(front, 0.0), at(back, 0.0), at(front, 10.0 + i as f32)] {
+            s.vertices.push(Vertex { pos: p, normal: v, uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0], material: m });
+        }
+        s.indices.splice(0..0, [first, first + 1, first + 2]);
+        s.opaque_count += 3;
+        assert_eq!(try_shadow_maps(&mut s, true, &Limits::default()), Ok(()), "variant {i}");
+        // The maps are the same size and view with or without the caster; the caster brings
+        // some texels nearer.
+        assert_eq!(s.shadows, before.shadows, "variant {i}");
+        let nearer = s.shadow_texels.iter().zip(&before.shadow_texels).filter(|(a, b)| a < b).count();
+        assert!(nearer > 0, "variant {i}: the caster is missing from the map");
+    }
 }
 
 #[test]
