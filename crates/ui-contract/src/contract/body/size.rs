@@ -118,7 +118,9 @@ impl<'b> BodyHooks<'b> {
     ///
     /// A container that fits its content in a bar (`ContainerProps::content_in_bar`) is not given the width there.
     /// A fill-width container whose body is a row, shown on the line of a row given its height, is given that height
-    /// too: the line is a fixed cross extent, and the container fills it (a bar in a shell slot).
+    /// too: the line is a fixed cross extent, and the container fills it (a bar in a shell slot). A container that
+    /// fills its height on the line of a row that takes its height from its content is given the line's height once
+    /// the row's measuring run settled it (`line_height`).
     pub(super) fn given_axes(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> (bool, bool) {
         let sizing = self.sizing(props);
         let fills_line = sizing == Sizing::FillWidth && unwrapped_row(props) && env.row_line.is_some();
@@ -126,9 +128,22 @@ impl<'b> BodyHooks<'b> {
         let (x, y) = (!sizing.content_width() && !fits_bar, sizing.fills_height() || fills_line);
         match (at, &props.mount) {
             (ShowAt::Rect(_), _) => (true, true),
-            (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && !env.content.1),
+            (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && (!env.content.1 || self.line_height(props, env, at).is_some())),
             (ShowAt::Flow, _) => (x, y),
         }
+    }
+
+    /// The height of the line an inline container that fills its height stands on, where `env` is its parent's: the
+    /// line of an unwrapped row that takes its height from its content, once this pass's measuring run of the row
+    /// settled it. The container takes that height (`layout::fill_size`) and its body runs in it, so the children in
+    /// it that fill share it: a ribbon group as tall as the tallest group, its title at its foot. In the row's
+    /// measuring run there is no line yet, and the container measures its content.
+    pub(super) fn line_height(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> Option<f32> {
+        let inline = matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline));
+        if !(inline && self.sizing(props).fills_height() && env.content.1) {
+            return None;
+        }
+        env.row_line.and_then(|line| line.height).filter(|height| height.is_finite() && *height > 0.0)
     }
 
     /// Whether a content-sized inline container passes the width its column gives it on to its own body, where `env`
@@ -322,6 +337,8 @@ impl<'b> BodyHooks<'b> {
                     // shows (`layout::view_room`): it runs in that room, bounded like a body in a room that does not scroll.
                     let shares_view = !room.y.is_finite() && self.sizing(props).fills_height() && crate::layout::shares_y(ui);
                     let y = shares_view.then(|| crate::layout::view_room(ui, craft_behavior::Axis::Y)).flatten().unwrap_or(room.y);
+                    // A body that fills the height of the row line it stands on runs in that line.
+                    let y = self.line_height(props, &Env::of(ui), at).unwrap_or(y);
                     Vec2::new(cap.map_or(room.x, |cap| room.x.min(cap)), props.room_height.unwrap_or(y))
                 }
             },

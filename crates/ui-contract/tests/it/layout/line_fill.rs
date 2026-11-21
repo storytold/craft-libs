@@ -1,4 +1,5 @@
-//! Filling the line of a row that takes its height from its content: a levelled unit stands on the row's line.
+//! Filling the line of a row that takes its height from its content: a levelled unit stands on the row's line, and a
+//! container that fills its height there runs its body in the line's height from the first frame.
 
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::{BodyLayout, levelled_unit};
@@ -42,6 +43,24 @@ fn a_levelled_unit_stands_on_its_rows_line() {
         assert!(
             (fill.top() - row.top()).abs() <= SNAP && (fill.bottom() - row.bottom()).abs() <= SNAP,
             "{when}: the unit's filling child {fill:?} spans the row's line {row:?}"
+        );
+    }
+}
+
+#[trial]
+fn a_fill_height_container_on_a_content_height_row_runs_its_body_in_the_line() {
+    let seen = line_and_fill(|ui, fill| {
+        let top = RefCell::new(Seen::default());
+        Panel::new().layout(BodyLayout::stack()).sizing(Sizing::FillHeight).id_salt("column").show(ui, |ui, _| {
+            Probe::new(&top).id_salt("top").show(ui);
+            Probe::new(fill).sizing(Sizing::Fill).id_salt("fill").show(ui);
+        });
+    });
+    for ((row, fill), when) in seen.into_iter().zip(["in the first frame", "once settled"]) {
+        assert!((row.height() - TALL).abs() <= SNAP, "{when}: the row {row:?} is as tall as its tall member");
+        assert!(
+            (fill.bottom() - row.bottom()).abs() <= SNAP && fill.height() > TALL / 2.0,
+            "{when}: the column's filling child {fill:?} takes what its column leaves of the row's line {row:?}"
         );
     }
 }
