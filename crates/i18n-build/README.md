@@ -4,7 +4,7 @@ Embeds the optional [craft-i18n](https://github.com/storytold/craft-i18n) transl
 from an app's `build.rs`, as the `CRAFT_I18N` table that
 [`craft-i18n`](../i18n/README.md)'s `I18n::new` takes. No dependencies.
 
-Apps never list craft-i18n in `Cargo.toml`: Cargo would fetch the catalog repository for every
+Apps never list the craft-i18n catalog repository in `Cargo.toml`: Cargo would fetch it for every
 build. The build reads a local checkout named by `CRAFT_I18N_DIR` instead, following craft-i18n's
 [`docs/integration.md`](https://github.com/storytold/craft-i18n/blob/main/docs/integration.md).
 
@@ -23,7 +23,12 @@ and `include_str!` resolves a relative path against the generated file.
 `Cargo.toml` (same `rev` as the app's other craft-libs crates):
 
 ```toml
+[dependencies]
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "…" }
+log = "0.4"
+
 [build-dependencies]
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "…", features = ["subset"] }
 craft-i18n-build = { git = "https://github.com/storytold/craft-libs", rev = "…" }
 ```
 
