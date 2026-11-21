@@ -386,7 +386,7 @@ fn dnx_rgb_is_reordered_to_r_g_b() {
     assert_eq!(f.family(), ColorFamily::Rgb);
     let first = |i: usize| f.planes()[i].row_u16(0).and_then(|r| r.first().copied());
     assert_eq!([first(0), first(1), first(2)], [Some(3), Some(1), Some(2)]);
-    assert_eq!(f.color, ColorTags { matrix: 0, ..ColorTags::UNSPECIFIED });
+    assert_eq!(f.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
 }
 
 #[cfg(feature = "dnx")]

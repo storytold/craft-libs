@@ -27,7 +27,9 @@ pub fn compositor_frame(frame: DecodedFrame, pts: Tick) -> Result<VideoFrame> {
 ///   A gray picture gets neutral 4:2:0 chroma.
 /// - RGB pictures become [`PixelData::Rgba8`] (straight alpha) when every plane, alpha included,
 ///   is 8 bits and the transfer is BT.709 or sRGB, otherwise [`PixelData::RgbaF32`] (linear
-///   light, premultiplied). RGB samples are read as full range.
+///   light, premultiplied), tagged full range. The samples of an RGB picture tagged limited range
+///   are expanded to full range from black at 16 and white at 235, scaled to the plane's depth.
+///   Alpha is read as full range.
 /// - The ITU-T H.273 color tags map onto [`ColorInfo`]. A matrix, transfer or primaries code
 ///   that is unspecified or has no [`ColorInfo`] value takes BT.709, except that pictures under
 ///   720 lines take the BT.601 matrix and BT.601 primaries (625-line primaries at 288 and 576
@@ -39,12 +41,13 @@ pub fn compositor_frame_within(frame: DecodedFrame, pts: Tick, max_bytes: usize)
     let family = frame.family();
     let subsampling = frame.subsampling();
     let par = frame.sar.filter(|&(n, d)| n > 0 && d > 0).unwrap_or((1, 1));
-    let mut color = color_info(frame.color, height);
+    let tags = frame.color;
+    let mut color = color_info(tags, height);
     let (planes, alpha) = frame.into_planes();
     let data = match family {
         ColorFamily::Rgb => {
             color.range = Range::Full;
-            let (data, transfer) = rgb(planes, alpha, color.transfer, max_bytes)?;
+            let (data, transfer) = rgb(planes, alpha, color.transfer, !tags.full_range, max_bytes)?;
             color.transfer = transfer;
             data
         }
@@ -277,14 +280,24 @@ fn planar(planes: Vec<Plane>, alpha: Option<Plane>, subsampling: Subsampling, ma
     Ok(PixelData::Yuv16 { planes: [Arc::new(y), Arc::new(cb), Arc::new(cr)], chroma, bits: u32::from(bits), alpha: alpha.map(Arc::new) })
 }
 
-/// RGB planes as RGBA, and the transfer the result is tagged with.
-fn rgb(planes: Vec<Plane>, alpha: Option<Plane>, transfer: Transfer, max_bytes: usize) -> Result<(PixelData, Transfer)> {
+/// An 8-bit limited-range sample (black 16, white 235) at full range, rounded.
+fn full_range_u8(s: u8) -> u8 {
+    let v = (i32::from(s) - 16).clamp(0, 219);
+    u8::try_from((v * 255 + 109) / 219).unwrap_or(u8::MAX)
+}
+
+/// RGB planes as RGBA, and the transfer the result is tagged with. `limited` color samples are
+/// expanded to full range.
+fn rgb(planes: Vec<Plane>, alpha: Option<Plane>, transfer: Transfer, limited: bool, max_bytes: usize) -> Result<(PixelData, Transfer)> {
     let [r, g, b]: [Plane; 3] = planes.try_into().map_err(|_| decode_error("plane count"))?;
     let (w, h) = plane_size(&r)?;
     let len = w.checked_mul(h).and_then(|n| n.checked_mul(4)).ok_or_else(|| decode_error("plane size overflows"))?;
     let encoded = matches!(transfer, Transfer::Bt709 | Transfer::Srgb);
     if encoded && [Some(&r), Some(&g), Some(&b), alpha.as_ref()].into_iter().flatten().all(|p| p.bit_depth() == 8) {
-        let (r, g, b) = (plane_u8(r, max_bytes)?, plane_u8(g, max_bytes)?, plane_u8(b, max_bytes)?);
+        let (mut r, mut g, mut b) = (plane_u8(r, max_bytes)?, plane_u8(g, max_bytes)?, plane_u8(b, max_bytes)?);
+        if limited {
+            r.iter_mut().chain(g.iter_mut()).chain(b.iter_mut()).for_each(|s| *s = full_range_u8(*s));
+        }
         let a = alpha.map(|a| alpha_u8(a, max_bytes)).transpose()?;
         let mut out = allocate::<u8>(len, max_bytes)?;
         for (i, o) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -298,13 +311,19 @@ fn rgb(planes: Vec<Plane>, alpha: Option<Plane>, transfer: Transfer, max_bytes: 
     let linear = |p: &Plane| -> Result<Vec<f32>> {
         let max = depth_max(p.bit_depth());
         let scale = f32::from(max.max(1));
+        // A limited-range code value is 2^(depth - 8) times the 8-bit one.
+        let unit = (f32::from(max) + 1.0) / 256.0;
+        let level = |s: u16| {
+            let v = f32::from(s.min(max));
+            if limited { ((v / unit - 16.0) / 219.0).clamp(0.0, 1.0) } else { v / scale }
+        };
         let entries = usize::from(max) + 1;
         if entries > w.saturating_mul(h) || entries.saturating_mul(4) > max_bytes {
-            return pack(p, max_bytes, |s| to_linear(f32::from(s.min(max)) / scale, transfer));
+            return pack(p, max_bytes, |s| to_linear(level(s), transfer));
         }
         let mut table = allocate::<f32>(entries, max_bytes)?;
         for (v, t) in (0..=max).zip(table.iter_mut()) {
-            *t = to_linear(f32::from(v) / scale, transfer);
+            *t = to_linear(level(v), transfer);
         }
         pack(p, max_bytes, |s| table.get(usize::from(s.min(max))).copied().unwrap_or(0.0))
     };
@@ -506,6 +525,39 @@ mod tests {
         assert!(px[1][0] > 0.1 && px[1][0] < 0.4 && px[1][0] == px[1][1]);
         // A transparent pixel premultiplies to nothing.
         assert_eq!(px[3], [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn limited_range_rgb_is_expanded_to_full_range() {
+        let rgb = |bits: u8, samples: [u16; 3], color: ColorTags| {
+            let plane = |s: u16| match bits {
+                8 => Plane::packed(1, 1, 8, Samples::U8(vec![u8::try_from(s).unwrap()])).unwrap(),
+                _ => Plane::packed(1, 1, bits, Samples::U16(vec![s])).unwrap(),
+            };
+            let mut frame = DecodedFrame::new(1, 1, ColorFamily::Rgb, Subsampling::S444, samples.map(plane).to_vec(), None).unwrap();
+            frame.color = color;
+            compositor_frame(frame, Tick::ZERO).unwrap()
+        };
+        let limited = ColorTags { matrix: 0, ..ColorTags::UNSPECIFIED };
+        // 8-bit black, white and a middle value.
+        let out = rgb(8, [16, 235, 126], limited);
+        let PixelData::Rgba8(px) = &out.data else { panic!("expected Rgba8, got {}", out.format_label()) };
+        assert_eq!((px.as_slice(), out.color.range), (&[0, 255, 128, 255][..], Range::Full));
+        // Codes outside 16 to 235 clamp.
+        let PixelData::Rgba8(px) = &rgb(8, [0, 255, 16], limited).data else { panic!("expected Rgba8") };
+        assert_eq!(px.as_slice(), &[0, 255, 0, 255]);
+        // 10-bit black and white are 64 and 940.
+        let PixelData::RgbaF32(px) = &rgb(10, [64, 940, 64], limited).data else { panic!("expected RgbaF32") };
+        assert!(px[0] == 0.0 && (px[1] - 1.0).abs() < 1e-5 && px[2] == 0.0 && px[3] == 1.0, "{:?}", px.as_slice());
+        // Full-range codes stay as they are.
+        let full = ColorTags { full_range: true, ..limited };
+        let PixelData::Rgba8(px) = &rgb(8, [16, 235, 126], full).data else { panic!("expected Rgba8") };
+        assert_eq!(px.as_slice(), &[16, 235, 126, 255]);
+        // An RGB frame whose range nobody set starts full range.
+        let plane = |s: u8| Plane::packed(1, 1, 8, Samples::U8(vec![s])).unwrap();
+        let untouched = DecodedFrame::new(1, 1, ColorFamily::Rgb, Subsampling::S444, vec![plane(16), plane(235), plane(126)], None).unwrap();
+        let PixelData::Rgba8(px) = &compositor_frame(untouched, Tick::ZERO).unwrap().data else { panic!("expected Rgba8") };
+        assert_eq!(px.as_slice(), &[16, 235, 126, 255]);
     }
 
     #[test]
