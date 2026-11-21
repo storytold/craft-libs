@@ -358,3 +358,19 @@ fn zoom_field_fits_a_narrow_host_slot() {
     fixture.key(Key::Enter, Modifiers::NONE).settle();
     assert!((kept.zoom() - 200.0).abs() < 0.01, "the field remains editable");
 }
+
+/// A rail-width field shows all of a three-digit zoom and its percent sign.
+#[trial]
+fn rail_width_zoom_shows_its_whole_value() {
+    let mut fixture = Fixture::new(|ui| {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(40.0, 30.0), egui::Sense::hover());
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), 2.44);
+        ZoomField::new(ZOOM, Some(view), DOCUMENT).show_at(ui, rect);
+    });
+    fixture.settle();
+    for text in ["244", "%"] {
+        let run = fixture.texts().iter().find(|run| run.text == text).expect("the zoom value is painted");
+        assert!(!run.elided && run.clip.contains_rect(run.rect), "{text} must be visible: {run:?}");
+    }
+}

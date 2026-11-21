@@ -150,6 +150,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     leading: Vec<Adornment>,
     /// The unit and the chevrons after the text, measured in measure and parts for paint.
     trailing: Vec<Adornment>,
+    /// Width of the current value in this pass, including its caret.
+    value_width: f32,
 }
 
 impl<'a> NumberField<'a, Option<f64>> {
@@ -204,6 +206,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             picked: None,
             leading: Vec::new(),
             trailing: Vec::new(),
+            value_width: 0.0,
         }
         .label(label)
     }
@@ -363,7 +366,28 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
 
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
     fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
-        place(rect, &style.field, &self.leading, &self.trailing, rtl)
+        let mut field = style.field.clone();
+        let mut content = rect;
+        let mut placed = place(content, &field, &self.leading, &self.trailing, rtl);
+        if placed.text.width() < self.value_width {
+            field.metrics.gap = 0.0;
+            placed = place(content, &field, &self.leading, &self.trailing, rtl);
+            let missing = (self.value_width - placed.text.width()).max(0.0);
+            let padding = field.metrics.padding;
+            let available = padding.start + padding.end;
+            if available > 0.0 {
+                let fraction = (missing / available).min(1.0);
+                let start = padding.start * fraction;
+                let end = padding.end * fraction;
+                field.metrics.padding.start -= start;
+                field.metrics.padding.end -= end;
+                let (left, right) = if rtl { (end, start) } else { (start, end) };
+                content.min.x -= left;
+                content.max.x += right;
+                placed = place(content, &field, &self.leading, &self.trailing, rtl);
+            }
+        }
+        placed
     }
 
     /// The alert for `typed`, a typed number the rule held to its range, in shown units; `kept` is the committed
@@ -449,6 +473,11 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         self.leading = Self::before_text(cx);
         self.trailing = self.after_text(cx, &chevrons);
+        let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        self.value_width = cx.value().map_or(0.0, |value| {
+            let text = self.ruled(&cx.env.units(), false, names).format(value);
+            cx.field_text(&TextRun::new(&text).role(TypeRole::Mono)).x
+        });
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
         if let Some(slot) = placed.leading.first() {
             cx.label_part(*slot);
