@@ -204,8 +204,11 @@ pub enum RowKind<'a> {
     },
     /// A text field.
     Text(&'a str),
-    /// The host draws the control ([`PreferencesModel::custom_row`]).
+    /// The host draws the control ([`PreferencesModel::custom_row`]); the window labels it beside the control.
     Custom,
+    /// The host draws whole rows, labels included ([`PreferencesModel::custom_row`]): the window adds no label. The
+    /// row's label stays its search text and its group's name.
+    CustomRows,
 }
 
 impl<'a> RowKind<'a> {
