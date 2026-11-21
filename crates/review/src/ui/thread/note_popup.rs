@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_theme::Opacity;
 use craft_theme::variant::Variant;
-use craft_ui::buttons::{Button, IconButton};
+use craft_ui::buttons::{Button, IconButton, PressFocus};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use craft_ui::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MeasureCx, Mount, NoValue, Outcome, Overlay,
@@ -566,7 +566,11 @@ impl Container for NoteWindow {
 
     /// Close, which needs the document to allow commenting, as closing changes the note.
     fn controls(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        let close = IconButton::new(IconSpec::svg(IconId::new("close"))).label(self.close_label.clone()).enabled(self.allowed).show(ui);
+        let close = IconButton::new(IconSpec::svg(IconId::new("close")))
+            .label(self.close_label.clone())
+            .enabled(self.allowed)
+            .press_focus(PressFocus::Keep)
+            .show(ui);
         self.close |= clicked(&close);
     }
 

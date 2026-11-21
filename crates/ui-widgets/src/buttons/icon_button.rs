@@ -88,6 +88,16 @@ pub enum PopupMark {
     Menu,
 }
 
+/// How an icon button's pointer press affects the focused control.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PressFocus {
+    /// Follow the standard focus policy.
+    #[default]
+    Standard,
+    /// Leave focus with the current control on press.
+    Keep,
+}
+
 /// A square button showing only an icon. Its label is its accessible name; a tooltip is the caller's. A selected
 /// button (`selected(true)`) shows the on look: the host owns the state and a click is reported in the response.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -99,6 +109,9 @@ pub struct IconButton<'a> {
     /// field's clear button repeats Escape.
     #[prop]
     focusable: bool,
+    /// The focus policy for a pointer press.
+    #[prop]
+    press_focus: PressFocus,
     /// The kind of popup the button opens: AccessKit reports it, and [`popup_mark`](Self::popup_mark) shows it.
     #[prop(into)]
     popup: Option<PopupKind>,
@@ -114,7 +127,15 @@ pub struct IconButton<'a> {
 impl<'a> IconButton<'a> {
     /// An icon button showing `icon`; `label` it with the accessible name.
     pub fn new(icon: impl Into<IconSpec<'a>>) -> Self {
-        IconButton { common: Common::new(), icon: icon.into(), focusable: true, popup: None, popup_mark: PopupMark::None, expanded: None }
+        IconButton {
+            common: Common::new(),
+            icon: icon.into(),
+            focusable: true,
+            press_focus: PressFocus::Standard,
+            popup: None,
+            popup_mark: PopupMark::None,
+            expanded: None,
+        }
     }
 
     /// An icon button bound to `command`: its label, enabled state and activation follow the command.
@@ -159,7 +180,8 @@ impl Component for IconButton<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.focusable { Sense::CLICK | Sense::FOCUS } else { Sense::CLICK }
+        let sense = if self.focusable { Sense::CLICK | Sense::FOCUS } else { Sense::CLICK };
+        if self.press_focus == PressFocus::Keep { sense | Sense::KEEP_FOCUS } else { sense }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {

@@ -13,7 +13,7 @@ mod words;
 
 pub use button::{Button, ButtonOutput, ButtonStyle};
 pub use command_search::{CommandSearch, CommandSearchStyle};
-pub use icon_button::{IconButton, IconButtonStyle, PopupMark};
+pub use icon_button::{IconButton, IconButtonStyle, PopupMark, PressFocus};
 pub use link::{Link, LinkStyle};
 pub use split_button::{SplitButton, SplitButtonStyle, SplitOutput};
 pub use toggle_button::{ToggleButton, ToggleButtonStyle};

@@ -1,6 +1,6 @@
 //! Stories of the buttons.
 
-use super::{Button, CommandSearch, IconButton, Link, SplitButton, ToggleButton};
+use super::{Button, CommandSearch, IconButton, Link, PressFocus, SplitButton, ToggleButton};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Grid, Row};
@@ -106,6 +106,16 @@ fn command_search_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(IconButton<'static>, covers = [Default])]
 fn icon_button(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     IconButton::new(IconId::new("settings")).label("Settings").show(ui).into()
+}
+
+/// A button whose press leaves the editor focused.
+#[story(IconButton<'static>, covers = [], drive = Drive::Never, title = "Keep focus")]
+fn icon_button_keep_focus(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        crate::text::TextField::new("Text", Bind::bound(data.value("focus_text", String::new()))).show(ui);
+        IconButton::new(IconId::new("close")).label("Close").press_focus(PressFocus::Keep).show(ui);
+    });
+    shown.into()
 }
 
 /// A tool strip: the first tool selected, as the gallery card shows it.

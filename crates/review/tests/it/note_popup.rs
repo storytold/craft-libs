@@ -32,6 +32,31 @@ fn the_note_header_close_reports_to_the_host() {
     assert!(closed.get(), "closing reaches the host");
 }
 
+/// Closing after editing reports the text and close together, so the host can undo the gesture once.
+#[trial]
+fn closing_an_edited_note_reports_text_with_the_close() {
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let result = reports.clone();
+    let mut drafts = NoteDrafts::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = NotePopup::new(1, "Note", Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 200.0)), &NOTE, &mut drafts).show(ui);
+        if out.closed || out.body.is_some() {
+            result.borrow_mut().push((out.closed, out.body));
+        }
+    });
+    fixture.room(vec2(1000.0, 800.0)).settle();
+    let field = fixture.by_label("Add a comment").expect("the note's text field");
+    fixture.click(&field).type_text(" More").settle();
+    let close = fixture.by_label("Close").expect("the close control");
+    fixture.press(&close).frame(vec![Event::PointerMoved(pos2(900.0, 700.0))]).release_at(pos2(900.0, 700.0)).settle();
+    assert!(reports.borrow().is_empty(), "an aborted close keeps the draft editable");
+    fixture.type_text(" still").settle();
+    fixture.click(&close).settle();
+    let reports = reports.borrow();
+    assert_eq!(reports.len(), 1, "the edit and close are one report: {reports:?}");
+    assert_eq!((reports[0].0, reports[0].1.as_deref()), (true, Some("Check the margin. More still")));
+}
+
 /// The host of one note pop-up: a button stands for the note's mark, and the pop-up sits at `rect`, which takes each
 /// reported placement.
 struct NoteHost {
