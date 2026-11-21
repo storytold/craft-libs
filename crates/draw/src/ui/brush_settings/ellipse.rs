@@ -34,7 +34,7 @@ const ROUND_STEP: f64 = 0.01;
 const ROUND_MIN: f64 = 0.01;
 
 /// A tip's angle and roundness.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct TipAngle {
     /// The major axis's angle in whole degrees, counter-clockwise from the right, −180 to 180.
@@ -235,12 +235,12 @@ impl Component for TipEllipse<'_> {
         let value = cx.value().copied().unwrap_or_default();
         let dots = ellipse_handles(value, radius);
         cx.part(ARROW, HitShape::circle(center, disc))
-            .sense(Sense::CLICK | Sense::DRAG)
+            .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
             .value_part()
             .pointer_only("the arrow keys turn the angle, Alt with them squashes the ellipse");
         for (at, dot) in dots.into_iter().enumerate() {
             cx.part(DOT.at(at as u64), HitShape::circle(center + dot, reach))
-                .sense(Sense::CLICK | Sense::DRAG)
+                .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
                 .value_part()
                 .pointer_only("Alt with the arrow keys squashes the ellipse");

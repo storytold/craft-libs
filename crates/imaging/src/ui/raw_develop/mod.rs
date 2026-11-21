@@ -524,7 +524,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
         let words = env.words::<RawDevelopWords>();
         let common = env.words::<CommonWords>();
         let ctx = ui.ctx().clone();
-        let alt = craft_ui::runtime::pointer::frame(&ctx).mods.alt;
+        let alt = craft_ui::runtime::pointer::mods(&ctx).alt;
         self.open_scope(&ctx, source);
 
         let name = if self.target == RawTarget::OpenRaw { words.name.clone() } else { words.name_filter.clone() };

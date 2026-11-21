@@ -554,7 +554,7 @@ pub(super) fn group_location<P: Clone + Eq>(panels: &[P], panel: &P) -> Option<L
     let index = panels.iter().position(|p| p == panel)?;
     let anchor = panels.iter().find(|p| *p != panel).cloned();
     let before = panels.get(index + 1).cloned();
-    Some(Location { floating: None, anchor, placement: DockPlacement::Tab { before }, size: None, stack: None, sibling: Vec::new(), group: None })
+    Some(Location::new(anchor, DockPlacement::Tab { before }))
 }
 
 pub(super) fn first_panel<P>(node: &Node<P>) -> Option<&P> {

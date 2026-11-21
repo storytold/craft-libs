@@ -14,6 +14,7 @@ use craft_ui::display::Text;
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
+use craft_ui::style::GlyphRole;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::layout::Block;
 use craft_ui::testing::{Fixture, shrink_least_runs, trial};
@@ -447,6 +448,26 @@ fn a_labelled_check_box_in_a_row_in_a_bar_lays_out_under_rtl() {
         assert!(rect.is_finite() && bar.contains_rect(rect), "{rect:?} lies outside the bar {bar:?}");
     }
     assert!(label.max.x <= alpha.min.x + SLACK, "the check box {label:?} follows Alpha {alpha:?} from the right");
+}
+
+/// An icon-only button in an options bar draws its icon at the tool size, as the align strip's buttons do.
+#[trial]
+fn an_icon_button_in_an_options_bar_draws_its_icon_at_the_tool_size() {
+    let mut fixture = Fixture::new(|ui| {
+        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+            IconButton::new(IconId::new("settings")).label("Plain").show(ui);
+            IconButton::new(IconId::new("settings")).label("Tool").glyphs(GlyphRole::Tool).show(ui);
+        });
+    });
+    fixture.room(Vec2::new(400.0, 80.0)).settle();
+    let sides: Vec<f32> = fixture
+        .styles_of(std::any::type_name::<IconButton<'static>>())
+        .iter()
+        .flat_map(|seen| seen.looks.icons.iter().map(|icon| icon.side))
+        .collect();
+    // Buttons that resolve the same looks share one recorded style, so a single side means they agree.
+    assert!(!sides.is_empty(), "the buttons resolved a style");
+    assert!(sides.iter().all(|side| (side - sides[0]).abs() <= 0.01), "the options bar's button and the tool button differ: {sides:?}");
 }
 
 /// Each pass's stops, each with the roving group it registered in.

@@ -434,3 +434,83 @@ fn a_right_click_on_a_control_opens_the_ribbons_menu_with_its_command() {
     assert!(fixture.by_label(MENU_ROW).is_some(), "a right click on a tab opens the menu");
     assert!(menus.borrow().iter().all(Option::is_none) && !menus.borrow().is_empty(), "a tab's request carries no command: {:?}", menus.borrow());
 }
+
+/// What a ribbon of a one-button group, a group of three rows and a group of one stacked button shows in its first
+/// frame and once settled: the ribbon's rect, and each group's rect, whose foot its title sits at, from the first frame
+/// that shows the groups (the slide's layer shows nothing in its first frame).
+fn first_and_settled() -> [(egui::Rect, [egui::Rect; 3]); 2] {
+    let rect = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let controls: Controls = Rc::new(RefCell::new(None));
+    let (out, record) = (rect.clone(), controls.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let shown = Stack::new().show(ui, |ui, _| {
+            let shown = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+                row.group(RibbonGroup::new("short", "Short", IconId::new("list").into()), |ui| {
+                    Button::new("One").show(ui);
+                });
+                row.group(RibbonGroup::new("rows", "Rows", IconId::new("list").into()).launcher(CommandRef::new("group.dialog")), |ui| {
+                    Stack::new().show(ui, |ui, _| {
+                        for label in ["First", "Second", "Third"] {
+                            Button::new(label).show(ui);
+                        }
+                    });
+                });
+                group(row, "big", "Big", &["Large"]);
+            });
+            if let Some(controls) = shown.controls {
+                *record.borrow_mut() = Some(controls);
+            }
+        });
+        if !ui.is_sizing_pass() && !is_measuring(ui.ctx()) {
+            out.set(shown.output.rect);
+        }
+    });
+    fixture.room(vec2(900.0, 400.0));
+    // A group is the outermost element of the ribbon's record named by its title: the record maps it through the
+    // slide's layer, which shows nothing in its first frame.
+    let seen = |_: &Fixture| {
+        let recorded = controls.borrow();
+        let elements: &[Element] = recorded.as_deref().map_or(&[], |recorded| recorded.elements.as_slice());
+        let group = |title: &str| {
+            let named = |element: &&Element| element.part.is_none() && element.facts.as_ref().and_then(|facts| facts.name.as_deref()) == Some(title);
+            elements.iter().filter(named).min_by_key(|element| element.depth).map_or(egui::Rect::NOTHING, |element| element.rect)
+        };
+        (rect.get(), [group("Short"), group("Rows"), group("Big")])
+    };
+    fixture.frame(Vec::new());
+    let (first, mut groups) = seen(&fixture);
+    for _ in 0..2 {
+        if groups.iter().all(|group| group.is_finite()) {
+            break;
+        }
+        fixture.frame(Vec::new());
+        groups = seen(&fixture).1;
+    }
+    fixture.settle();
+    [(first, groups), seen(&fixture)]
+}
+
+/// The ribbon measures right in its first frame: no group stands taller than its content and title then, so a host
+/// that lays out under the ribbon (a document view scrolling its caret into view) never sees a taller ribbon first.
+#[trial]
+fn the_ribbon_is_its_settled_height_in_its_first_frame() {
+    let [(first, _), (settled, _)] = first_and_settled();
+    assert!(settled.height() > 0.0, "the ribbon shows: {settled:?}");
+    assert!((first.height() - settled.height()).abs() < 0.5, "the first frame's ribbon {first:?} is as tall as the settled one {settled:?}");
+}
+
+/// Every group fills the row's line in the first frame that shows it, so every title, at its group's foot, sits on the
+/// settled line from the start.
+#[trial]
+fn group_titles_sit_at_the_foot_in_the_first_frame() {
+    let [(_, first), (_, settled)] = first_and_settled();
+    let foot = settled[1].bottom();
+    for (title, (first, settled)) in ["Short", "Rows", "Big"].into_iter().zip(first.into_iter().zip(settled)) {
+        assert!(
+            (first.bottom() - foot).abs() < 0.5,
+            "in the first frame that shows it the group {title} {first:?} ends on the settled foot ({foot})"
+        );
+        assert!((settled.bottom() - foot).abs() < 0.5, "once settled the group {title} {settled:?} ends on the row's foot ({foot})");
+    }
+}
