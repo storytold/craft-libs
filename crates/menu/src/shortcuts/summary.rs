@@ -3,6 +3,9 @@
 //! cheat sheet outside the dialog.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
+
+use craft_host::Host;
 
 use craft_keymap::{Binding, Keymap, Scope};
 use egui::Ui;
@@ -107,6 +110,12 @@ pub(crate) fn html_in(km: &Keymap, text: &Say, title: &str) -> String {
 /// Plain text titled `title`, in the language of `ui`: a line per group, then `  label<TAB>shortcuts` per command.
 pub fn text(km: &Keymap, ui: &Ui, title: &str) -> String {
     text_in(km, &Say::of(ui), title)
+}
+
+/// [`text`] without a `Ui`, in the interface language of `host` (a command or a file export, which run outside a
+/// frame).
+pub fn text_for(km: &Keymap, host: &Arc<Host>, title: &str) -> String {
+    text_in(km, &Say::of_host(host), title)
 }
 
 pub(crate) fn text_in(km: &Keymap, text: &Say, title: &str) -> String {

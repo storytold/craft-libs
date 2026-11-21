@@ -262,6 +262,14 @@ impl Say {
         Say { words: view.words(), keys: view.words(), host: view.host().cloned(), rtl: view.direction().is_rtl(), folder: env.folder() }
     }
 
+    /// The words of `host`'s interface language, for code without a `Ui`: what [`Say::of`] reads in a scope under
+    /// `host`, with the direction of the language.
+    pub(crate) fn of_host(host: &Arc<Host>) -> Say {
+        let words = host.words();
+        let rtl = host.i18n().is_some_and(|i18n| i18n.rtl(host.lang()));
+        Say { words: words.set(), keys: words.set(), host: Some(Arc::clone(host)), rtl, folder: Folder::new(host.language_code()) }
+    }
+
     /// The folder that folds search text in the dialog's language.
     pub(crate) fn folder(&self) -> Folder {
         self.folder

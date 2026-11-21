@@ -88,3 +88,25 @@ fn the_summary_lists_hold_bindings() {
     let (text, html) = summarize(&mut rig);
     assert!(!text.contains("Hold K") && !html.contains("Hold K"), "with holds off the summary has no hold: {text}");
 }
+
+/// The summary written without a `Ui` (a command's file export) is the one Summarize… writes under the same host.
+#[trial]
+fn the_summary_without_a_ui_is_the_one_summarize_writes() {
+    let host = Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).build());
+    let km = fixture::keymap(Platform::Mac);
+    let mut rig = Rig::new(km.clone(), fixture::options(), None);
+    rig.fixture.host(host.clone());
+    rig.pass();
+    rig.click("Summarize…");
+    let text = rig
+        .outcomes()
+        .into_iter()
+        .rev()
+        .find_map(|o| match o {
+            Outcome::Summary { text, .. } => Some(text),
+            _ => None,
+        })
+        .expect("a summary");
+    let (title, _) = text.split_once('\n').expect("a title line");
+    assert_eq!(craft_menu::shortcuts::summary::text_for(&km, &host, title), text);
+}
