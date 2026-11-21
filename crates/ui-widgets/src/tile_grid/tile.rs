@@ -152,8 +152,8 @@ impl AroundPicture {
             let sizes = Sizes::of(cx, card, place);
             let mut around = sizes.around(place, detail);
             if action_place == TileActionPlace::Band {
-                around.start = sizes.bar + sizes.column(place);
-                around.end = sizes.bar;
+                around.start = sizes.glyph + sizes.column(place);
+                around.end = sizes.glyph;
                 around.top += sizes.bar;
                 around.bottom += sizes.bar;
             }
@@ -787,8 +787,8 @@ impl Component for Tile<'_> {
         TileStyle {
             surface,
             metrics: Metrics::new().padding(Insets::new(
-                if key.action_place == TileActionPlace::Band { sizes.bar } else { sizes.inset },
-                if key.action_place == TileActionPlace::Band { sizes.bar } else { sizes.inset },
+                if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
+                if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
                 sizes.inset,
                 sizes.inset,
             )).gap(sizes.tight),
