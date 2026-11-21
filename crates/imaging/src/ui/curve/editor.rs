@@ -83,8 +83,10 @@ struct Memory {
 /// stays strictly between its neighbours' inputs.
 ///
 /// Pointer: a press on a point selects and drags it; a press on the empty plot adds a point there and drags it, as one
-/// gesture. Dragged more than the handle reach off the plot an interior point is removed, and comes back on re-entry
-/// within the drag. A right click or a Cmd/Ctrl press on a point deletes it.
+/// gesture. A press takes a point within one hit target of it; a plain press within two with
+/// [`wide_grab`](CurveEditor::wide_grab).
+/// Dragged more than the handle reach off the plot an interior point is removed, and comes back on re-entry within the
+/// drag. A right click or a Cmd/Ctrl press on a point deletes it.
 ///
 /// Keys while the graph has focus: `+` (or `=`) and `-` select the next and previous point (the first and last with
 /// nothing selected; they stop at the ends); arrows move the selected point one level, ten with Shift; Delete and
@@ -133,6 +135,10 @@ pub struct CurveEditor<'a> {
     /// Points can be corner points.
     #[prop(flag)]
     corners: bool,
+    /// A plain press takes a point up to two hit targets from it (`size.hit.target`; 16 at 8), as in Photoshop's
+    /// Curves dialog, instead of one. A right click or a Cmd/Ctrl press still deletes within one.
+    #[prop(flag)]
+    wide_grab: bool,
     /// The active channel's histogram, drawn behind the curve.
     #[prop]
     histogram: Option<&'a HistogramData>,
@@ -164,6 +170,7 @@ impl<'a> CurveEditor<'a> {
             hint: None,
             pencil: false,
             corners: false,
+            wide_grab: false,
             histogram: None,
             overlays: &[],
             selection: None,
@@ -193,6 +200,7 @@ impl<'a> CurveEditor<'a> {
             hint,
             pencil,
             corners,
+            wide_grab,
             histogram,
             overlays,
             selection: host_selection,
@@ -238,6 +246,9 @@ impl<'a> CurveEditor<'a> {
             }
             if percent {
                 graph = graph.percent();
+            }
+            if wide_grab {
+                graph = graph.wide_grab();
             }
             let CurveGraphOutput { mut edit, selected } = graph.show(ui);
             if let Some(rows) = between.as_mut() {

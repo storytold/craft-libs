@@ -37,6 +37,11 @@ const NUDGE_LARGE: f32 = 10.0;
 /// The greatest side of the graph, in least plot widths (`size.plot.width`; 300 at a 240 plot).
 const MOST_IN_PLOTS: f32 = 1.25;
 
+/// The radius around a point that takes a press with [`wide_grab`](CurveGraph::wide_grab), in hit targets
+/// (`size.hit.target`; 16 at 8). Photoshop's Curves dialog at 1 screen px per level: a press 8, 13 and 15 px from a
+/// point selects it, and one 30 px away adds a point.
+const WIDE_GRAB_IN_TARGETS: f32 = 2.0;
+
 /// One channel of a curve dialog: its name and colour.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveChannel {
@@ -226,6 +231,8 @@ pub struct CurveGraphStyle {
     bar_gap: f32,
     /// Radius around a point that takes a press.
     hit: f32,
+    /// The same radius with [`wide_grab`](CurveGraph::wide_grab).
+    wide_hit: f32,
     /// How far outside the plot a dragged interior point is removed.
     drag_off: f32,
     /// The side of a point's handle.
@@ -355,6 +362,10 @@ pub struct CurveGraph<'a> {
     /// Accessible values in percent of the levels.
     #[prop(flag)]
     percent: bool,
+    /// A plain press takes a point up to two hit targets from it, as in Photoshop's Curves dialog, instead of one. A
+    /// right click or a Cmd/Ctrl press still deletes within one.
+    #[prop(flag)]
+    wide_grab: bool,
     /// The active channel's histogram, drawn behind the curve.
     #[prop]
     histogram: Option<&'a HistogramData>,
@@ -383,6 +394,7 @@ impl<'a> CurveGraph<'a> {
             pencil: false,
             corners: false,
             percent: false,
+            wide_grab: false,
             histogram: None,
             overlays: &[],
             selection: None,
@@ -396,6 +408,11 @@ impl<'a> CurveGraph<'a> {
     pub fn levels(mut self, levels: u32) -> Self {
         self.levels = levels.max(1) as f32;
         self
+    }
+
+    /// The radius around a point that takes a press.
+    fn grab(&self, style: &CurveGraphStyle) -> f32 {
+        if self.wide_grab { style.wide_hit } else { style.hit }
     }
 
     fn rules(&self) -> CurveRules {
@@ -505,6 +522,7 @@ impl Component for CurveGraph<'_> {
             bar: tokens.size.icon.sm,
             bar_gap: tokens.space.gap.inline,
             hit: tokens.size.hit.target,
+            wide_hit: tokens.size.hit.target * WIDE_GRAB_IN_TARGETS,
             drag_off: tokens.size.icon.sm + tokens.space.gap.inline,
             handle: tokens.size.handle.md,
             point_fill: cx.color(colors.surface.sunken),
@@ -560,7 +578,10 @@ impl Component for CurveGraph<'_> {
         };
         selected = selected.filter(|&i| i < count);
         let rules = self.rules();
-        let reach = cx.style.look.pad + cx.style.drag_off;
+        let grab = self.grab(cx.style);
+        // A press that takes a point outside the value area must not remove it on release: the removal band starts
+        // beyond the grab radius.
+        let reach = (cx.style.look.pad + cx.style.drag_off).max(grab);
         let press = cx.part(PLOT).press;
         let running = cx.gesture().is_some();
         let mut held = cx.memory::<Held>().clone();
@@ -580,7 +601,10 @@ impl Component for CurveGraph<'_> {
                 let command = press.mods.cmd || press.mods.ctrl;
                 let points = curve.points().map(<[_]>::to_vec).unwrap_or_default();
                 let before = selected;
-                match frame.map.hit(&points, origin, cx.style.hit) {
+                // The wide grab is for a plain press, the one Photoshop was measured for: a right click or a
+                // Cmd/Ctrl press deletes within one hit target.
+                let radius = if secondary || command { cx.style.hit } else { grab };
+                match frame.map.hit(&points, origin, radius) {
                     Some(i) if secondary || command => {
                         if let Some(next) = CurveRules::deleted(&curve, i) {
                             cx.set(next);
