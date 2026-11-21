@@ -563,6 +563,19 @@ const MAX_DASHES_PER_STROKE: f64 = 250_000.0;
 /// before.
 const SOLID_DASH_PERIOD_PX: f64 = 0.1;
 
+/// PdfCraft patch (35): the least `transform` lengthens any vector, its smallest singular value:
+/// `|det| / s` with `s` the largest, `sqrt((F + sqrt(F² - 4 det²)) / 2)` and `F` the sum of the
+/// squared coefficients of its linear part. 0 for a singular matrix, NaN or 0 when the
+/// coefficients overflow or one is NaN; the caller then keeps its 0.01 floor.
+fn smallest_stretch(transform: &Affine) -> f64 {
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    let sum_sq = a * a + b * b + c * c + d * d;
+    let det = (a * d - b * c).abs();
+    let disc = (sum_sq * sum_sq - 4.0 * det * det).max(0.0);
+    let largest = ((sum_sq + disc.sqrt()) / 2.0).sqrt();
+    if largest > 0.0 { det / largest } else { 0.0 }
+}
+
 /// PdfCraft patch: the dash pattern to stroke `path` with under `transform` (user space to
 /// device pixels). Empty (a solid line) when the pattern is invalid, when its period is under
 /// [`SOLID_DASH_PERIOD_PX`] device pixels, or when it could cut the path into more than
@@ -1245,8 +1258,11 @@ impl Renderer {
         // ISO 32000-2 §8.4.3.2 gives the width in user space and makes 0 the thinnest line the
         // device can draw. A NaN or negative width counts as 0. Where no device minimum applies
         // (inside a pattern or a Type 3 glyph, or under a matrix that collapses or isn't finite),
-        // the 0.01 floor stays, so no stroke is drawn 0 or NaN wide.
-        let thinnest = threshold / min_factor;
+        // the 0.01 floor stays, so no stroke is drawn 0 or NaN wide. The minimum is taken along
+        // the direction the matrix shrinks most (`smallest_stretch`), so a thin stroke is at least
+        // the threshold across whichever way it runs: under `400 0 0 100 cm`, one along the larger
+        // scale only would have left a vertical zero-width line a quarter of a pixel wide.
+        let thinnest = (f64::from(threshold) / smallest_stretch(self.ctx.transform())) as f32;
         // Only enforce line width if not inside of pattern or type 3 glyph.
         let device_minimum = !self.inside_pattern
             && !self.in_type3_glyph
