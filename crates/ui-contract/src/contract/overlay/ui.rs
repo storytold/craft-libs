@@ -76,10 +76,10 @@ impl<'a> OverlayUi<'a> {
     }
 
     /// Keeps the popups this component shows from here on, and every popup opened from them, below the component:
-    /// inside the safe rect less the part above the component's bottom edge. A menu bar's menus and their submenus
+    /// inside the layer room less the part above the component's bottom edge. A menu bar's menus and their submenus
     /// never cover the bar.
     pub fn contain_popups_below(&mut self) {
-        let safe = areas::safe_rect(self.ctx);
+        let safe = super::layer_room(self.ctx);
         let top = (self.to_screen * self.anchor).bottom().clamp(safe.top(), safe.bottom());
         let region = Rect::from_min_max(egui::pos2(safe.left(), top), safe.max);
         self.env = self.env.derive(|scoped| {

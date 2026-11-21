@@ -205,7 +205,9 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// Whether Auto-Collapse Iconic Panels is on.
     #[prop]
     auto_collapse: bool,
-    /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
+    /// The rect the dock may grow within, which bounds how wide its inner edge can make the column, and the rect its
+    /// flyouts open in. Unset, the flyouts take the room layers opened there have (`overlay::layer_room`): around a
+    /// palette window, the work area.
     #[prop]
     within: Rect,
     open: Bind<'a, Option<P>>,
@@ -617,7 +619,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         let (opens, auto_collapse, column) = (self.opens, self.auto_collapse, cx.rect);
         // The screen side the flyouts open on, mirrored in a right-to-left layout.
         let right = (opens == Side::End) != cx.flow.is_rtl();
-        let within = if self.within.is_positive() { self.within } else { cx.core.ctx.content_rect() };
+        let within = if self.within.is_positive() { self.within } else { crate::contract::overlay::layer_room(&cx.core.ctx) };
         // The column side of the bounds stops at the column, so a saved width wider than the room keeps that side.
         let bounds = if right { within.with_min_x(within.min.x.max(column.right())) } else { within.with_max_x(within.max.x.min(column.left())) };
         if !bounds.is_positive() {

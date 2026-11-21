@@ -11,7 +11,7 @@ use std::hash::Hash;
 use craft_behavior::IconId;
 use craft_keymap::Mods;
 use craft_theme::LabelColor;
-use craft_ui::contract::{Entry, MemoProps, PlainData, ReorderMove};
+use craft_ui::contract::{Entry, PlainData, ReorderMove};
 use craft_ui::list::ThumbTarget;
 
 use super::filter::{EffectKind, LayerFilter, SmartSource};
@@ -22,6 +22,9 @@ use super::panel::MenuTarget;
 /// the panel derives from the tree.
 ///
 /// ```ignore
+/// #[derive(Clone, PartialEq, Eq, Hash, Debug, PlainData)]
+/// struct LayerId(u64);
+///
 /// #[derive(PlainData)]
 /// struct PhotoLayers { layers: LayerIndex, open: HashSet<LayerId> }
 /// impl LayerTree for PhotoLayers {
@@ -36,9 +39,10 @@ use super::panel::MenuTarget;
 /// [`children`](Self::children) and [`is_open`](Self::is_open) are walked to build the display order, and only when the
 /// tracked revision, the filter or a reveal's opens changed.
 pub trait LayerTree: PlainData {
-    /// The app's layer id: the key of a row, of its thumbnails and of every event. It feeds the memo key of the
-    /// display order when a reveal opens groups.
-    type Id: Clone + Eq + Hash + Debug + Send + Sync + MemoProps + 'static;
+    /// The app's layer id: the key of a row, of its thumbnails and of every event. It is plain model data
+    /// (`#[derive(PlainData)]`), so the panel keys it by its `Hash`, including in the memo key of the display order
+    /// when a reveal opens groups.
+    type Id: Clone + Eq + Hash + Debug + Send + Sync + PlainData + 'static;
 
     /// Children of `parent` (`None`: the top level), topmost first. The app leaves out what the
     /// panel never shows: layers outside an Isolate Layers set, a Type Mask session's working text.
