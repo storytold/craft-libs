@@ -1430,3 +1430,43 @@ fn links_copy_no_more_target_text_than_the_budget() {
     assert!(urls.len() < count, "links past the budget are left out");
     assert!(urls.iter().sum::<usize>() <= crate::link::MAX_LINK_TARGET_BYTES);
 }
+
+/// One linked range split into many runs by its formatting: each run holds its own copy of the
+/// link, so the copies together stay within the budget, and the runs past it keep their text.
+#[test]
+fn a_link_split_into_many_runs_copies_no_more_than_the_budget() {
+    let target = format!("https://example.com/{}", "a".repeat(1 << 20));
+    let count = crate::link::MAX_LINK_TARGET_BYTES / target.len() + 4;
+    let text: String = "x".repeat(count);
+    // Shadow on every other character, so no two neighbouring runs merge.
+    let mut style = vec![];
+    style.extend_from_slice(&(count as u32 + 1).to_le_bytes());
+    style.extend_from_slice(&0u16.to_le_bytes());
+    style.extend_from_slice(&pf_bytes(0, false));
+    for i in 0..count {
+        let n = if i + 1 == count { 2u32 } else { 1 };
+        style.extend_from_slice(&n.to_le_bytes());
+        style.extend_from_slice(&0x10u32.to_le_bytes()); // mask: shadow
+        style.extend_from_slice(&(if i % 2 == 0 { 0x10u16 } else { 0 }).to_le_bytes());
+    }
+    let extra = [
+        atom(rt::STYLE_TEXT_PROP, 0, &style),
+        interactive(0, 0x04, 0, 9, 0x08, 0),
+        atom(rt::TEXT_INTERACTIVE_INFO_ATOM, 0, &le32(&[0, count as u32])),
+    ];
+    let shape = container(rt::SP_CONTAINER, 0, &[fsp(202, 2049, 0xA00), anchor(400, 500, 2000, 1200), text_box(0, &text, &extra)]);
+    let p = file_with_shapes(&[shape], &[(9, &target)]);
+    let runs = &p.slides[0].shapes.iter().find_map(|s| s.text.as_ref()).unwrap().paragraphs[0].runs;
+    assert!(runs.len() >= count, "each character is a run of its own");
+    let urls: Vec<usize> = runs
+        .iter()
+        .filter_map(|r| match &r.props.link.as_ref()?.action {
+            craft_pptx::text::Action::Url { url } => Some(url.len()),
+            _ => None,
+        })
+        .collect();
+    assert!(!urls.is_empty(), "runs within the budget keep the link");
+    assert!(urls.len() < runs.len(), "runs past the budget lose it");
+    assert!(urls.iter().sum::<usize>() <= crate::link::MAX_LINK_TARGET_BYTES);
+    assert_eq!(runs.iter().map(|r| r.text.as_str()).collect::<String>(), text, "every run keeps its text");
+}

@@ -11,9 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft_pptx::style::{Dash, LineCap, LineEnd, LineJoin, PictureFill, PictureMode, Shadow};
-use craft_pptx::text::{
-    Align, Anchor as TextAnchor, AutoFit, BodyProps, Bullet, Hyperlink, LevelStyle, ListStyle, ParaProps, RunKind, Spacing, TabStop,
-};
+use craft_pptx::text::{Align, Anchor as TextAnchor, AutoFit, BodyProps, Bullet, LevelStyle, ListStyle, ParaProps, RunKind, Spacing, TabStop};
 use craft_pptx::{
     Background, ColorRef, Defaults, Effects, Fill, Layout, LayoutId, LayoutType, Line, Master, MediaId, Paragraph, PhType, Placeholder, Presentation,
     Run, RunProps, Shape, ShapeId, ShapeKind, Size, Slide, SlideId, TextBody, Theme, Xfrm,
@@ -882,8 +880,15 @@ impl<'a> Ctx<'a> {
         let mut cuts: Vec<usize> = clicks.iter().chain(&overs).flat_map(|r| [r.0, r.1]).collect();
         cuts.sort_unstable();
         cuts.dedup();
-        let link_at = |ranges: &[(usize, usize, Hyperlink)], i: usize| {
-            ranges.partition_point(|r| r.0 <= i).checked_sub(1).and_then(|k| ranges.get(k)).filter(|r| i < r.1).map(|r| r.2.clone())
+        // Each run in a range holds its own copy of the action, so each copy is charged to the
+        // link-target budget: a range split into many runs can't copy one target over and over.
+        let link_at = |ranges: &[(usize, usize, &crate::link::Info)], i: usize| {
+            ranges
+                .partition_point(|r| r.0 <= i)
+                .checked_sub(1)
+                .and_then(|k| ranges.get(k))
+                .filter(|r| i < r.1)
+                .and_then(|r| crate::link::hyperlink(r.2, &self.link_targets, &self.link_budget))
         };
         let mut out = vec![];
         let mut start = 0usize;
@@ -977,15 +982,15 @@ impl<'a> Ctx<'a> {
 
     /// The actions of `instance` ([`crate::link::CLICK`] or [`crate::link::OVER`]) on ranges of
     /// `block`'s text, as (begin, end, action): inside the text, sorted, and not overlapping (a
-    /// range that overlaps an earlier one is left out), so a run's action is a binary search.
-    fn text_links(&self, block: &TextBlock, instance: u16) -> Vec<(usize, usize, Hyperlink)> {
+    /// range that overlaps an earlier one is left out), so a run's action is a binary search. No
+    /// target is copied here; each run that takes the action copies it.
+    fn text_links<'b>(&self, block: &'b TextBlock, instance: u16) -> Vec<(usize, usize, &'b crate::link::Info)> {
         let chars = &block.chars;
         // A boundary between a high and a low surrogate would split one character.
         let splits_pair = |at: usize| {
             at > 0 && chars.get(at - 1).is_some_and(|u| (0xD800..0xDC00).contains(u)) && chars.get(at).is_some_and(|u| (0xDC00..0xE000).contains(u))
         };
-        // Which ranges survive is decided before any target is copied, so ranges that overlap,
-        // or that name a missing target, cost nothing.
+        // Ranges that overlap, or that name a missing target, are left out here and cost nothing.
         let mut ranges: Vec<(usize, usize, &crate::link::Info)> = block
             .links
             .iter()
@@ -1003,9 +1008,7 @@ impl<'a> Ctx<'a> {
                 kept.push(r);
             }
         }
-        kept.into_iter()
-            .filter_map(|(begin, end, info)| Some((begin, end, crate::link::hyperlink(info, &self.link_targets, &self.link_budget)?)))
-            .collect()
+        kept
     }
 
     fn run_props(&self, cf: &Cf, scheme: &Scheme) -> RunProps {
