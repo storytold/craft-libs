@@ -419,6 +419,7 @@ fn hyperlink_runs_and_wrappers() {
 <w:p>
  <w:hyperlink r:id="rId5" w:history="1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>site</w:t></w:r></w:hyperlink>
  <w:hyperlink r:id="rId5" w:anchor="frag"><w:r><w:t>X</w:t></w:r></w:hyperlink>
+ <w:hyperlink r:id="rId5" w:docLocation="sample-marker"><w:r><w:t>L</w:t></w:r></w:hyperlink>
  <w:smartTag><w:r><w:t>A</w:t></w:r></w:smartTag><w:customXml><w:r><w:t>B</w:t></w:r></w:customXml>
  <w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>C</w:t></w:r></w:sdtContent></w:sdt>
  <w:r><w:sym w:font="Wingdings" w:char="F04A"/><w:noBreakHyphen/><w:softHyphen/><w:cr/><w:br w:type="page"/><w:br w:type="column"/><w:t xml:space="preserve"> e&amp;</w:t></w:r>
@@ -429,11 +430,14 @@ fn hyperlink_runs_and_wrappers() {
     let d = craft_docx::read(&bytes).unwrap();
     let p = paras(&d);
     // The content control around "C" is kept (zero-width markers in the text).
-    assert_eq!(p[0].plain_text(), "siteXABC\u{F04A}\u{2011}\u{AD}\n\u{C}\u{E} e&T");
+    assert_eq!(p[0].plain_text(), "siteXLABC\u{F04A}\u{2011}\u{AD}\n\u{C}\u{E} e&T");
     assert!(matches!(p[0].objects.first(), Some(InlineObject::ControlStart { .. })));
     assert_eq!(p[0].props_of_char(0).link.as_deref(), Some("https://example.org/"));
     assert_eq!(p[0].props_of_char(0).style.as_deref(), Some("Hyperlink"));
     assert_eq!(p[0].props_of_char(4).link.as_deref(), Some("https://example.org/#frag"));
+    // #7123: a hyperlink's destination location survives a save.
+    let saved = text(&unzip(&craft_docx::write(&d).unwrap()), "word/document.xml");
+    assert!(saved.contains(r#"w:docLocation="sample-marker""#), "saved document: {saved}");
     let sym_off = p[0].text.find('\u{F04A}').unwrap();
     assert_eq!(p[0].props_of_char(sym_off).sym_font.as_deref(), Some("Wingdings"), "the symbol keeps its own font");
     let t = p[0].props_of_char(p[0].text.len() - 1);

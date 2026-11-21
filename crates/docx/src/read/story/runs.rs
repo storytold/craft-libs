@@ -31,6 +31,7 @@ impl Reader<'_> {
                 };
                 if let Some(link) = link {
                     c.link = Some(link);
+                    c.link_location = k.attr("w:docLocation").and_then(crate::bounded_doc_location).map(str::to_string);
                     c.link_tooltip = k.attr("w:tooltip").and_then(crate::bounded_link_tooltip).map(std::sync::Arc::from);
                 }
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
@@ -137,6 +138,7 @@ impl Reader<'_> {
     fn run_props(&mut self, rpr: &El, ctx: &RunCtx) -> CharProps {
         let mut p = self.pc.rpr(rpr);
         p.link = ctx.link.clone();
+        p.link_location = ctx.link_location.clone();
         p.link_tooltip = ctx.link_tooltip.clone();
         p.ins = ctx.ins;
         p.del = ctx.del;
@@ -145,7 +147,14 @@ impl Reader<'_> {
     }
 
     fn run_props_none(&self, ctx: &RunCtx) -> CharProps {
-        CharProps { link: ctx.link.clone(), link_tooltip: ctx.link_tooltip.clone(), ins: ctx.ins, del: ctx.del, ..Default::default() }
+        CharProps {
+            link: ctx.link.clone(),
+            link_location: ctx.link_location.clone(),
+            link_tooltip: ctx.link_tooltip.clone(),
+            ins: ctx.ins,
+            del: ctx.del,
+            ..Default::default()
+        }
     }
 
     fn read_run(&mut self, sc: &mut StoryCtx, pb: &mut PB, r: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {

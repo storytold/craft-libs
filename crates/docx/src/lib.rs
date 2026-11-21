@@ -171,6 +171,13 @@ fn bounded_link_tooltip(text: &str) -> Option<&str> {
     text.get(..text.floor_char_boundary(MAX_BYTES)).filter(|tip| !tip.is_empty())
 }
 
+/// Bound the destination location of a hyperlink at both file boundaries, as with its tooltip.
+fn bounded_doc_location(text: &str) -> Option<&str> {
+    const MAX_BYTES: usize = 4096;
+    let text = text.trim();
+    text.get(..text.floor_char_boundary(MAX_BYTES)).filter(|loc| !loc.is_empty())
+}
+
 /// Errors from reading or writing a DOCX package.
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum DocxError {
