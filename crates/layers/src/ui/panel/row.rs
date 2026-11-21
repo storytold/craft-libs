@@ -57,7 +57,7 @@ pub(super) fn paint_color(color: Rgba) -> Color32 {
 /// The cursor over a thumbnail a Cmd/Ctrl click with `mods` loads as a selection: the pointing hand, with the mark of
 /// the operation Shift and Alt pick (add, subtract, intersect).
 fn load_cursor(mods: Mods) -> Cursor {
-    let badge = match (mods.shift, mods.alt) {
+    let badge = match (mods.shift, mods.alt) {\
         (true, true) => CursorBadge::Intersect,
         (true, false) => CursorBadge::Add,
         (false, true) => CursorBadge::Subtract,
@@ -170,11 +170,11 @@ fn paint_picture<Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static>(
 
 /// The tile of a layer whose thumbnail has no picture: the sunken placeholder with the kind's glyph (a pixel layer has
 /// none), or for a type layer its glyph in ink on paper.
-fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind) {
+fn paint_kind_tile(painter: &ContentPainterCx<'_>, rect: Rect, kind: LayerKind, custom_icon: Option<IconId>) {
     let rect = rect.round_to_pixels(painter.pixels_per_point());
     let side = rect.width().min(rect.height()) * KIND_GLYPH_SHARE;
     let glyph = Rect::from_center_size(rect.center(), vec2(side, side));
-    let icon = kind_icon(kind).map(IconSpec::svg);
+    let icon = custom_icon.or_else(|| kind_icon(kind)).map(IconSpec::svg);
     if kind == LayerKind::Text {
         painter.painter.rect_filled(rect, 0.0, TYPE_PAPER);
         if let Some(icon) = icon {
@@ -270,10 +270,10 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
 
     if size != ThumbSize::None && !compact {
         let host = cx.thumbs;
-        let (layer, kind, badge) = (id.clone(), info.kind, info.thumb_badge);
+        let (layer, kind, badge, custom_icon) = (id.clone(), info.kind, info.thumb_badge, info.kind_icon);
         row = row.thumb(size, move |painter, rect| {
             if !paint_picture(host, &LayerThumb::pixels(layer, contents), painter, rect, &PicturePaint::default()) {
-                paint_kind_tile(painter, rect, kind);
+                paint_kind_tile(painter, rect, kind, custom_icon);
             }
             if let Some(mark) = badge {
                 paint_thumb_badge(painter, rect, mark);
@@ -286,7 +286,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             let layer = id.clone();
             row = row.extra_thumb(move |painter, rect| {
                 if !paint_picture(host, &LayerThumb::frame_content(layer, contents), painter, rect, &PicturePaint::default()) {
-                    paint_kind_tile(painter, rect, LayerKind::Frame);
+                    paint_kind_tile(painter, rect, LayerKind::Frame, None);
                 }
             });
             row = with_load_cursor(row, cx.held, ThumbTarget::Extra(0), LayerPart::FrameContent, &info);
@@ -314,7 +314,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
                 part => row = row.thumb_target(info.thumb(part).unwrap_or(ThumbTarget::First)),
             }
         }
-    } else if let Some(icon) = kind_icon(info.kind) {
+    } else if let Some(icon) = info.kind_icon.or_else(|| kind_icon(info.kind)) {
         row = row.icon(IconSpec::svg(icon));
     }
 

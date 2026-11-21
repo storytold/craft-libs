@@ -1,7 +1,7 @@
 //! `LayersPanel` rows the app reads back: the hovered layer, a Smart Filter row selected on its own, its Blending
 //! Options button, and a frame's masks after its content thumbnail: linked and dragged by their own index.
 
-use craft_behavior::{EditEvent, Mixed, SelectionChange};
+use craft_behavior::{EditEvent, IconId, Mixed, SelectionChange};
 use craft_layers::testing;
 use craft_layers::ui::mock::{FakeLayers, sub_row};
 use craft_layers::ui::panel::{ActivateOn, LayerDrop, LayersEvent, LayersPanel, MaskMove};
@@ -172,10 +172,10 @@ fn the_blending_options_button_opens_on_a_double_click() {
     let options = |events: &[LayersEvent<u32>]| -> Vec<LayerRowKey<u32>> {
         events
             .iter()
-            .filter_map(|event| match event {
+            .filter_map(|event| match event {\
                 LayersEvent::Activate { row, on: ActivateOn::Options, .. } => Some(row.clone()),
                 _ => None,
-            })
+            })\
             .collect()
     };
     take(&app);
@@ -198,9 +198,9 @@ fn a_frames_mask_chain_links_the_mask_after_the_content() {
     let (mut fixture, app) = rig(tree);
     take(&app);
     fixture.click(&node(&fixture, "Unlink layer mask of Frame 1")).idle(2);
-    let links: Vec<_> = take(&app)
-        .into_iter()
-        .filter_map(|event| if let LayersEvent::MaskLink { layer, part, linked, .. } = event { Some((layer, part, linked)) } else { None })
+    let links: Vec<_> = take(&app)\
+        .into_iter()\
+        .filter_map(|event| if let LayersEvent::MaskLink { layer, part, linked, .. } = event { Some((layer, part, linked)) } else { None })\
         .collect();
     assert_eq!(links, [(1, LayerPart::LayerMask, false)]);
 }
@@ -219,24 +219,24 @@ fn a_frames_mask_thumbnail_drags_the_mask() {
     let from = testing::thumb_rect(fixture.ctx(), row, &frame, LayerPart::LayerMask).expect("the frame's layer mask thumbnail").center();
     let to = node(&fixture, "Title").center();
     fixture.drag_hold_at(from, to - from).release_at(to).idle(2);
-    let moves: Vec<_> = take(&app)
-        .into_iter()
-        .filter_map(|event| match event {
-            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Mask(mv), .. }) => Some(mv),
-            _ => None,
-        })
+    let moves: Vec<_> = take(&app)\
+        .into_iter()\
+        .filter_map(|event| match event {\
+            LayersEvent::Drop(EditEvent::Set { after: LayerDrop::Mask(mv), .. }) => Some(mv),\
+            _ => None,\
+        })\
         .collect();
     assert_eq!(moves, [MaskMove::new(id, LayerPart::LayerMask, 1, false)]);
 }
 
 /// The Activate events on a thumbnail among `events`: the layer and the part.
-fn thumb_activations(events: &[LayersEvent<u32>]) -> Vec<(LayerRowKey<u32>, LayerPart)> {
+fn thumb_activations(events: &[LayersEvent<u32>]) -> Vec<(LayerRowKey<u32>, LayerPart)> {\
     events
         .iter()
-        .filter_map(|event| match event {
+        .filter_map(|event| match event {\
             LayersEvent::Activate { row, on: ActivateOn::Thumbnail(part), .. } => Some((row.clone(), *part)),
             _ => None,
-        })
+        })\
         .collect()
 }
 
@@ -445,4 +445,17 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
     }
     assert!(calls[0] > 0, "the rows in view are built");
     assert_eq!(calls[0], calls[1], "a settled frame builds as many rows for 2,000 layers as for 200");
+}
+
+
+/// An adjustment layer with a custom `kind_icon` renders without error and falls back to `kind_icon`
+/// when thumbnail size is None.
+#[trial]
+fn a_custom_kind_icon_is_used_for_layer_thumbnail_and_compact_row() {
+    let mut tree = FakeLayers::default();
+    let mut adj = LayerInfo::new("Curves 1", LayerKind::Adjustment);
+    adj.kind_icon = Some(IconId::new("curves"));
+    tree.add(None, adj, false);
+    let (mut fixture, _app) = rig(tree);
+    assert!(fixture.by_label("Curves 1").is_some(), "the layer row with custom kind_icon is rendered");
 }
