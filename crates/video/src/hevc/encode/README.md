@@ -16,6 +16,9 @@ no `unsafe`, builds for `wasm32-unknown-unknown`).
   only the first), `TRAIL_R` P pictures otherwise, each referencing the previous picture (one
   short-term RPS in the SPS, `num_ref_idx_l0_active` 1, no reordering, pts = dts). Packets are
   length-prefixed (4-byte big-endian) NAL units without parameter sets.
+- **Timestamps:** each `Packet` carries `pts` and `dts` (always equal). `Encoder::encode_at` takes the
+  `pts` in the caller's time base and rejects one that is not greater than the previous picture's
+  with `Error::InvalidFrame`; `Encoder::encode` uses the previous `pts` plus one, starting at 0.
 - **Picture size:** any even width / height; the coded size is padded to a multiple of 8 by edge
   replication and cropped with the conformance window. Odd sizes are rejected with
   `Error::InvalidConfig` (4:2:0 conformance-window offsets are in units of two luma samples).
