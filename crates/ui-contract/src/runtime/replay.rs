@@ -266,7 +266,8 @@ pub(crate) fn in_audit_run(ctx: &Context) -> bool {
     OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.iter().any(|open| open.audit))
 }
 
-/// Ends the innermost record, the one around a run on `layer`: paint or widgets on another layer block it.
+/// Ends the innermost record, the one around a run on `layer`: paint or widgets on a layer that is neither `layer` nor
+/// an overlay the run showed block it.
 pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     OPEN.fetch_sub(1, Ordering::AcqRel);
     let (open, journal) = pass_state::with::<Recorder, _>(ctx, |recorder| {
