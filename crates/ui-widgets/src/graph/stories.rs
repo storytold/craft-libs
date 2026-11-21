@@ -26,7 +26,7 @@ enum CompEdit {
 /// Two inputs on the left and an output on the right.
 struct Mix;
 
-static MIX: Mix = Mix;
+const MIX: Mix = Mix;
 
 impl<E: 'static> NodeKind<E> for Mix {
     fn title(&self) -> &str {

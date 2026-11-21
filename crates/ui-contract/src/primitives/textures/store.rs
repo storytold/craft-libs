@@ -7,7 +7,7 @@ use crate::runtime::egui::pass;
 use crate::runtime::egui::textures;
 use craft_behavior::PixelSize;
 use egui::load::SizedTexture;
-use egui::{ColorImage, Context, TextureHandle, TextureId, TextureOptions, Vec2};
+use egui::{ColorImage, Context, Rect, TextureHandle, TextureId, TextureOptions, Vec2};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Debug;
@@ -90,6 +90,8 @@ pub struct TextureStoreOptions {
     /// The sampling of every texture: `TextureOptions::LINEAR` by default; the clipping overlay and pixel-exact
     /// previews use `TextureOptions::NEAREST`.
     pub filter: TextureOptions,
+    /// The largest side of a picture the store puts on shared pages; `None` gives every picture a texture of its own.
+    pub packed: Option<u32>,
 }
 
 impl TextureStoreOptions {
@@ -109,7 +111,27 @@ impl TextureStoreOptions {
     }
 
     const fn with_budget(max_bytes: usize, max_entries: usize) -> Self {
-        Self { budget: TextureBudget::new(max_bytes, max_entries), filter: TextureOptions::LINEAR }
+        Self { budget: TextureBudget::new(max_bytes, max_entries), filter: TextureOptions::LINEAR, packed: None }
+    }
+
+    /// Puts pictures up to `max_side` texels per side on a few shared page textures written in place, so browsing
+    /// many small pictures creates and frees no textures. When every page is full the store starts over the page
+    /// drawn from longest ago, never one drawn from in this frame (its pictures are on screen); the pictures on it
+    /// become `Missing` and are put again. When every page was drawn from in this frame, or a picture is larger than
+    /// `max_side` or a page, the picture takes a texture of its own. A packed texture is drawn by
+    /// [`CachedTexture::uv`].
+    #[must_use]
+    pub const fn packed(mut self, max_side: u32) -> Self {
+        self.packed = Some(max_side);
+        self
+    }
+
+    /// [`packed`](Self::packed) for the small pictures of an interface (a style tile, a font sample row): those up to a
+    /// quarter of a page side share pages, so a few large ones never fill a page alone; a larger picture takes a
+    /// texture of its own.
+    #[must_use]
+    pub const fn packed_small(self) -> Self {
+        self.packed(PAGE_SIDE / 4)
     }
 
     /// The sampling of every texture.
@@ -142,15 +164,33 @@ pub struct CachedTexture {
     pub id: TextureId,
     /// The texture's size in texels (reduced when the image was past the device limit).
     pub size: PixelSize,
+    /// The picture's top-left texel on its page; `[0, 0]` for an unpacked texture.
+    pub origin: [u32; 2],
+    /// The size of the page texture the picture sits on; `size` for an unpacked texture.
+    pub page: PixelSize,
 }
 
 impl CachedTexture {
-    /// `size` as a vector, for fitting: only the aspect matters to a cell.
+    /// The picture's part of its page texture, in uv coordinates, to paint with `id`: the full rect for an unpacked
+    /// texture.
+    pub fn uv(&self) -> Rect {
+        let (width, height) = (self.page.width.max(1) as f32, self.page.height.max(1) as f32);
+        let [x, y] = self.origin;
+        let (x, y) = (x as f32, y as f32);
+        Rect::from_min_max(
+            egui::pos2(x / width, y / height),
+            egui::pos2((x + self.size.width as f32) / width, (y + self.size.height as f32) / height),
+        )
+    }
+
+    /// `size` as a vector, for fitting: only the aspect matters to a cell. It is the picture's own size, also for a
+    /// packed texture.
     pub fn size_vec2(&self) -> Vec2 {
         Vec2::new(self.size.width as f32, self.size.height as f32)
     }
 
-    /// The texture with its size, the form `PreviewPane` and egui's image widgets take.
+    /// The texture with its size, the form `PreviewPane` and egui's image widgets take. Those draw the whole
+    /// texture, so a texture of a packed store is drawn by [`uv`](Self::uv) instead.
     pub fn sized(&self) -> SizedTexture {
         SizedTexture::new(self.id, self.size_vec2())
     }
@@ -215,8 +255,84 @@ enum Picture {
         /// The whole factor `fit_image` reduced it by: 1 when it fitted.
         factor: u32,
     },
+    /// A picture on the shared page `page` of a packed store, its top-left texel at `origin`.
+    Packed {
+        page: usize,
+        origin: [u32; 2],
+        size: PixelSize,
+    },
     Empty,
     Failed(LoadFailure),
+}
+
+/// The side of a packed store's square pages in texels, at most the device limit.
+const PAGE_SIDE: u32 = 2048;
+/// At most this many pages: enough for a frame's pictures at a high display scale, still a handful of textures.
+const PAGE_COUNT: usize = 4;
+/// Transparent texels between pictures, so linear filtering never bleeds one into the next.
+const PAGE_GAP: u32 = 2;
+
+/// A shared texture of a packed store, filled row by row.
+struct Page {
+    handle: TextureHandle,
+    side: u32,
+    /// Where the next picture goes: the current row's left edge and top, and the row's height.
+    x: u32,
+    y: u32,
+    row_height: u32,
+    /// The last frame a picture on the page was seen.
+    seen: u64,
+    /// The page started over and still holds the old pictures' texels; it is cleared before its next picture.
+    stale: bool,
+}
+
+impl Page {
+    /// A free spot for a picture of `size`, taken; `None` when the page has no room for it.
+    fn place(&mut self, size: PixelSize) -> Option<[u32; 2]> {
+        let (w, h) = (size.width, size.height);
+        if w == 0 || h == 0 || w > self.side || h > self.side {
+            return None;
+        }
+        let (mut x, mut y, mut row_height) = (self.x, self.y, self.row_height);
+        if x.saturating_add(w) > self.side {
+            x = 0;
+            y = y.saturating_add(row_height).saturating_add(PAGE_GAP);
+            row_height = 0;
+        }
+        if y.saturating_add(h) > self.side {
+            return None;
+        }
+        self.x = x.saturating_add(w).saturating_add(PAGE_GAP);
+        self.y = y;
+        self.row_height = row_height.max(h);
+        Some([x, y])
+    }
+
+    fn cached(&self, origin: [u32; 2], size: PixelSize) -> CachedTexture {
+        CachedTexture { id: self.handle.id(), size, origin, page: PixelSize::new(self.side, self.side) }
+    }
+}
+
+/// Where a packed picture goes, decided under the lock; the texture work runs after it.
+enum Spot {
+    /// At `origin` on the page `page`; `clear` when the page started over and its texture holds old pictures.
+    On { page: usize, origin: [u32; 2], handle: TextureHandle, side: u32, clear: bool },
+    /// On a new page, whose texture is named `name`.
+    New { name: String },
+}
+
+/// A transparent page of `side` texels.
+fn blank_page(side: u32) -> ColorImage {
+    ColorImage::filled([side as usize; 2], egui::Color32::TRANSPARENT)
+}
+
+/// The picture `picture` shows, on its page when packed; `None` for an empty or failed entry.
+fn shown(pages: &[Page], picture: &Picture) -> Option<CachedTexture> {
+    match picture {
+        Picture::Texture { handle, source, factor } => Some(cached(handle, *source, *factor)),
+        Picture::Packed { page, origin, size } => pages.get(*page).map(|page| page.cached(*origin, *size)),
+        Picture::Empty | Picture::Failed(_) => None,
+    }
 }
 
 struct Entry {
@@ -229,6 +345,8 @@ struct Entry {
 struct Inner<K> {
     options: TextureStoreOptions,
     entries: HashMap<K, Entry>,
+    /// The shared pages of a packed store; none for an unpacked one.
+    pages: Vec<Page>,
     bytes: usize,
     /// The frame the upload counters are for, and the counters.
     upload_frame: u64,
@@ -253,6 +371,22 @@ impl<K> Default for Stores<K> {
     }
 }
 
+/// The numbers that keep apart the textures one owner makes: a mask or preview made anew gets a number no earlier one
+/// of the same `Serials` had, so an entry kept under its key is never taken for the new one's. The owner of what the
+/// textures show (a tool's state, a model) holds the `Serials`. The numbers are unique per owner, not per context: a
+/// texture store that several owners share keys each entry by the owner's component id as well as the serial. Plain
+/// data, so it can sit in tracked or model state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Serials(u64);
+
+impl Serials {
+    /// A new number: never one this `Serials` gave before.
+    pub fn mint(&mut self) -> u64 {
+        self.0 += 1;
+        self.0
+    }
+}
+
 /// Textures by key and revision, with byte and entry budgets: the one place an app's pictures become egui
 /// textures. The app never holds a `TextureHandle`. The state lives in runtime memory of the context under the
 /// salt; the value is a cheap handle that clones share.
@@ -265,7 +399,8 @@ impl<K> Default for Stores<K> {
 /// - **Eviction**, after every put: least recently seen first, until both the bytes and the entry count are within
 ///   the budget, but never an entry seen in this frame or the previous one; what is in view stays even past the
 ///   budget.
-/// - **One texture per entry**, no atlas.
+/// - **One texture per entry**, unless the store is built with [`TextureStoreOptions::packed`]: then small pictures
+///   share a few pages, each page's bytes counted once, and a page, not an entry, is what starts over.
 ///
 /// The icon path is `TextureCache`; the store keeps pictures that change and that the app names.
 pub struct TextureStore<K: TextureKey> {
@@ -321,13 +456,18 @@ impl<K: TextureKey> TextureStore<K> {
     /// Stores `image` as `key`'s picture at `revision` and returns it: in place when the key has a texture (same
     /// id), else a new texture with the store's filter. Reduced first when past `texture_side`. Counts as an upload
     /// this frame, marks the entry seen, then evicts. The image is sRGBA as egui's `ColorImage` holds it (built
-    /// from unmultiplied values with `ColorImage::from_rgba_unmultiplied`).
+    /// from unmultiplied values with `ColorImage::from_rgba_unmultiplied`). A packed store writes a small picture
+    /// onto a shared page instead (see [`TextureStoreOptions::packed`]).
     pub fn put(&self, ctx: &Context, key: K, revision: Revision, image: ColorImage) -> CachedTexture {
         let frame = pass::root_frame_nr(ctx);
         let side = texture_side(ctx);
         let source = texels(image.size);
         let factor = texture_factor(source, side);
         let image = fit_image(image, side);
+        let image = match self.put_packed(ctx, &key, revision, image, frame, side) {
+            Ok(texture) => return texture,
+            Err(image) => image,
+        };
         let size = texels(image.size);
         let (existing, filter, name) = self.with(ctx, |inner| {
             let existing = inner.handle_of(&key);
@@ -342,7 +482,7 @@ impl<K: TextureKey> TextureStore<K> {
             }
             (None, name) => textures::load(ctx, name.unwrap_or_default(), image, filter),
         };
-        let texture = CachedTexture { id: handle.id(), size };
+        let texture = CachedTexture { id: handle.id(), size, origin: [0, 0], page: size };
         let bytes = byte_size(size);
         self.with(ctx, |inner| {
             inner.roll_uploads(frame);
@@ -354,6 +494,54 @@ impl<K: TextureKey> TextureStore<K> {
         texture
     }
 
+    /// Writes `image` onto a page of a packed store as `key`'s picture at `revision`; gives the image back when the
+    /// store is unpacked, the picture is larger than `max_side` or a page, or no page has room and every page was
+    /// drawn from in `frame` (the picture then takes a texture of its own, `put`'s ordinary path). Two passes of
+    /// one frame share its number, so a page drawn from in the first pass is kept in the second.
+    fn put_packed(&self, ctx: &Context, key: &K, revision: Revision, image: ColorImage, frame: u64, side: u32) -> Result<CachedTexture, ColorImage> {
+        let size = texels(image.size);
+        let page_side = PAGE_SIDE.min(side);
+        let Some(max_side) = self.options.packed else {
+            return Err(image);
+        };
+        if size.width == 0 || size.height == 0 || size.width.max(size.height) > max_side.min(page_side) {
+            return Err(image);
+        }
+        let Some(spot) = self.with(ctx, |inner| inner.spot(size, frame, page_side)) else {
+            return Err(image);
+        };
+        // Texture work runs outside the service lock, as `put`'s upload does.
+        let (page, origin, mut handle, page_side) = match spot {
+            Spot::On { page, origin, mut handle, side, clear } => {
+                if clear {
+                    textures::replace(&mut handle, blank_page(side), self.options.filter);
+                }
+                (page, origin, handle, side)
+            }
+            Spot::New { name } => {
+                let handle = textures::load(ctx, name, blank_page(page_side), self.options.filter);
+                let Some((page, origin)) = self.with(ctx, |inner| inner.add_page(handle.clone(), page_side, size)) else {
+                    return Err(image);
+                };
+                (page, origin, handle, page_side)
+            }
+        };
+        textures::replace_region(&mut handle, origin, image, self.options.filter);
+        let bytes = byte_size(size);
+        let texture = CachedTexture { id: handle.id(), size, origin, page: PixelSize::new(page_side, page_side) };
+        self.with(ctx, |inner| {
+            inner.roll_uploads(frame);
+            inner.uploads += 1;
+            inner.upload_bytes += bytes;
+            if let Some(shared) = inner.pages.get_mut(page) {
+                shared.seen = frame;
+            }
+            inner.store(key.clone(), Entry { revision, picture: Picture::Packed { page, origin, size }, seen: frame });
+            inner.evict(frame);
+        });
+        Ok(texture)
+    }
+
     /// Updates part of `key`'s picture in place and moves the entry to `revision`: `image` goes at `origin`, both
     /// in the pixels of the image last put (the navigator's damage updates). The id stays. Returns `None` and
     /// changes nothing when the key has no picture, or when the region does not fit the stored image.
@@ -361,7 +549,8 @@ impl<K: TextureKey> TextureStore<K> {
     /// An image that was reduced by the whole factor `f` on put is updated reduced the same way: the region's
     /// origin must be a multiple of `f`, and its far edges multiples of `f` or the image's own edges; it is
     /// box-averaged by `f` and written at `origin / f`. A region off that grid returns `None`, and the app puts the
-    /// whole image.
+    /// whole image. A picture on a packed store's page also returns `None`, as for a key with no texture, so the
+    /// caller puts the whole picture: packed pictures are small.
     pub fn put_region(&self, ctx: &Context, key: &K, revision: Revision, origin: [u32; 2], image: ColorImage) -> Option<CachedTexture> {
         let frame = pass::root_frame_nr(ctx);
         let extent = texels(image.size);
@@ -395,11 +584,14 @@ impl<K: TextureKey> TextureStore<K> {
             if entry.revision != revision {
                 return None;
             }
-            let Picture::Texture { handle, source, factor } = &entry.picture else {
-                return None;
-            };
+            let texture = shown(&inner.pages, &entry.picture)?;
             entry.seen = frame;
-            Some(cached(handle, *source, *factor))
+            if let Picture::Packed { page, .. } = entry.picture
+                && let Some(shared) = inner.pages.get_mut(page)
+            {
+                shared.seen = frame;
+            }
+            Some(texture)
         });
         match found {
             Some(texture) => texture,
@@ -443,12 +635,15 @@ impl<K: TextureKey> TextureStore<K> {
         });
     }
 
-    /// Drops every entry (another library opened).
+    /// Drops every entry (another library opened); a packed store's pages start over and keep their textures.
     pub fn clear(&self, ctx: &Context) {
         self.with(ctx, |inner| {
             let all: Vec<K> = inner.entries.keys().cloned().collect();
             for key in &all {
                 inner.remove(key);
+            }
+            for page in 0..inner.pages.len() {
+                inner.restart(page);
             }
         });
     }
@@ -499,13 +694,15 @@ fn texture_size(source: PixelSize, factor: u32) -> PixelSize {
 }
 
 fn cached(handle: &TextureHandle, source: PixelSize, factor: u32) -> CachedTexture {
-    CachedTexture { id: handle.id(), size: texture_size(source, factor) }
+    let size = texture_size(source, factor);
+    CachedTexture { id: handle.id(), size, origin: [0, 0], page: size }
 }
 
+/// The texture bytes `picture` holds on its own: none for a packed picture, whose page is counted once.
 fn picture_bytes(picture: &Picture) -> usize {
     match picture {
         Picture::Texture { source, factor, .. } => byte_size(texture_size(*source, *factor)),
-        Picture::Empty | Picture::Failed(_) => 0,
+        Picture::Packed { .. } | Picture::Empty | Picture::Failed(_) => 0,
     }
 }
 
@@ -514,6 +711,7 @@ impl<K: TextureKey> Inner<K> {
         Self {
             options,
             entries: HashMap::new(),
+            pages: Vec::new(),
             bytes: 0,
             upload_frame: 0,
             uploads: 0,
@@ -530,21 +728,78 @@ impl<K: TextureKey> Inner<K> {
             return TextureState::Missing;
         };
         entry.seen = frame;
+        if let Picture::Packed { page, .. } = entry.picture
+            && let Some(shared) = self.pages.get_mut(page)
+        {
+            shared.seen = frame;
+        }
         let same = entry.revision == revision;
-        match &entry.picture {
-            Picture::Texture { handle, source, factor } if same => TextureState::Ready(cached(handle, *source, *factor)),
-            Picture::Texture { handle, source, factor } => TextureState::Loading { stand_in: Some(cached(handle, *source, *factor)) },
-            Picture::Empty if same => TextureState::Empty,
-            Picture::Failed(failure) if same => TextureState::Failed { failure: failure.clone() },
-            Picture::Empty | Picture::Failed(_) => TextureState::Missing,
+        match (&entry.picture, shown(&self.pages, &entry.picture)) {
+            (_, Some(texture)) if same => TextureState::Ready(texture),
+            (_, Some(texture)) => TextureState::Loading { stand_in: Some(texture) },
+            (Picture::Empty, _) if same => TextureState::Empty,
+            (Picture::Failed(failure), _) if same => TextureState::Failed { failure: failure.clone() },
+            _ => TextureState::Missing,
         }
     }
 
-    /// The texture handle of `key`, if it has a picture.
+    /// How many pages a packed store keeps: `PAGE_COUNT`, fewer when the byte budget holds fewer pages of `side`,
+    /// and at least one.
+    fn page_limit(&self, side: u32) -> usize {
+        let page = byte_size(PixelSize::new(side, side)).max(1);
+        (self.options.budget.max_bytes / page).clamp(1, PAGE_COUNT)
+    }
+
+    /// Where a packed picture of `size` goes: the first page with room, else a new page while there are fewer than
+    /// the limit, else the page seen longest ago started over. `None` when every page was seen in `frame`: none
+    /// starts over while its pictures are on screen.
+    fn spot(&mut self, size: PixelSize, frame: u64, side: u32) -> Option<Spot> {
+        let on = |index: usize, page: &mut Page| {
+            page.place(size).map(|origin| Spot::On {
+                page: index,
+                origin,
+                handle: page.handle.clone(),
+                side: page.side,
+                clear: std::mem::take(&mut page.stale),
+            })
+        };
+        if let Some(spot) = self.pages.iter_mut().enumerate().find_map(|(index, page)| on(index, page)) {
+            return Some(spot);
+        }
+        if self.pages.len() < self.page_limit(side) {
+            return Some(Spot::New { name: self.next_texture_name() });
+        }
+        let index = self.pages.iter().enumerate().filter(|(_, page)| page.seen < frame).min_by_key(|(_, page)| page.seen).map(|(index, _)| index)?;
+        self.restart(index);
+        on(index, self.pages.get_mut(index)?)
+    }
+
+    /// Adds a page with `handle`, `side` texels square, and takes a spot for a picture of `size` on it.
+    fn add_page(&mut self, handle: TextureHandle, side: u32, size: PixelSize) -> Option<(usize, [u32; 2])> {
+        let mut page = Page { handle, side, x: 0, y: 0, row_height: 0, seen: 0, stale: false };
+        let origin = page.place(size)?;
+        self.bytes += byte_size(PixelSize::new(side, side));
+        self.pages.push(page);
+        Some((self.pages.len() - 1, origin))
+    }
+
+    /// Starts the page `index` over: its layout is forgotten, its pictures become `Missing`, and its texture is
+    /// cleared before the next picture goes on it.
+    fn restart(&mut self, index: usize) {
+        let Some(page) = self.pages.get_mut(index) else {
+            return;
+        };
+        (page.x, page.y, page.row_height, page.stale) = (0, 0, 0, true);
+        let before = self.entries.len();
+        self.entries.retain(|_, entry| !matches!(entry.picture, Picture::Packed { page: on, .. } if on == index));
+        self.evicted += before - self.entries.len();
+    }
+
+    /// The texture handle of `key`, if it has a texture of its own; a packed picture's page is shared, so it has none.
     fn handle_of(&self, key: &K) -> Option<TextureHandle> {
         match &self.entries.get(key)?.picture {
             Picture::Texture { handle, .. } => Some(handle.clone()),
-            Picture::Empty | Picture::Failed(_) => None,
+            Picture::Packed { .. } | Picture::Empty | Picture::Failed(_) => None,
         }
     }
 
@@ -604,22 +859,66 @@ impl<K: TextureKey> Inner<K> {
         self.bytes <= self.options.budget.max_bytes && self.entries.len() <= self.options.budget.max_entries
     }
 
-    /// Drops the least recently seen entries until the budget holds, never one seen in `frame` or the frame before.
+    /// Drops the least recently seen units until the budget holds, never one seen in `frame` or the frame before. A
+    /// unit is an entry with a texture of its own, an empty or failed entry, or a whole page of a packed store with
+    /// its pictures: a packed picture holds no bytes, so it goes alone only for the entry count, while the bytes are
+    /// within budget.
     fn evict(&mut self, frame: u64) {
         if self.within_budget() {
             return;
         }
         let protected = frame.saturating_sub(1);
-        let mut candidates: Vec<(u64, K)> =
-            self.entries.iter().filter(|(_, entry)| entry.seen < protected).map(|(key, entry)| (entry.seen, key.clone())).collect();
-        candidates.sort_by_key(|(seen, _)| *seen);
-        for (_, key) in candidates {
+        let mut units: Vec<(u64, Unit<K>)> =
+            self.entries.iter().filter(|(_, entry)| entry.seen < protected).map(|(key, entry)| (entry.seen, Unit::Entry(key.clone()))).collect();
+        units.extend(self.pages.iter().filter(|page| page.seen < protected).map(|page| (page.seen, Unit::Page(page.handle.id()))));
+        units.sort_by_key(|(seen, _)| *seen);
+        for (_, unit) in units {
             if self.within_budget() {
                 break;
             }
-            if self.remove(&key) {
-                self.evicted += 1;
+            match unit {
+                Unit::Entry(key) => {
+                    let packed = matches!(self.entries.get(&key).map(|entry| &entry.picture), Some(Picture::Packed { .. }));
+                    if packed && self.bytes > self.options.budget.max_bytes {
+                        continue;
+                    }
+                    if self.remove(&key) {
+                        self.evicted += 1;
+                    }
+                }
+                Unit::Page(id) => {
+                    if let Some(index) = self.pages.iter().position(|page| page.handle.id() == id) {
+                        self.drop_page(index);
+                    }
+                }
             }
         }
     }
+
+    /// Removes the page `index` with its pictures and frees its texture. The last page takes its place in the list,
+    /// so the pictures on it follow.
+    fn drop_page(&mut self, index: usize) {
+        self.restart(index);
+        let page = self.pages.swap_remove(index);
+        let side = PixelSize::new(page.side, page.side);
+        self.bytes -= byte_size(side);
+        let moved = self.pages.len();
+        if index != moved {
+            for entry in self.entries.values_mut() {
+                if let Picture::Packed { page: on, .. } = &mut entry.picture
+                    && *on == moved
+                {
+                    *on = index;
+                }
+            }
+        }
+        // The page is a texture like any other; its handle is dropped after the lock is released.
+        self.doomed.push(Picture::Texture { handle: page.handle, source: side, factor: 1 });
+    }
+}
+
+/// What the budget loop drops: an entry, or a page of a packed store by its texture.
+enum Unit<K> {
+    Entry(K),
+    Page(TextureId),
 }

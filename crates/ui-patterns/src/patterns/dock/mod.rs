@@ -2,17 +2,17 @@
 
 mod words;
 
-mod area;
+pub(crate) mod area;
 mod hide;
-mod switcher;
-mod workspace_dialogs;
+pub(crate) mod switcher;
+pub(crate) mod workspace_dialogs;
 // Task panes: docked panes as shell panes, floating panes as floating frames.
-mod panes;
+pub(crate) mod panes;
 
 pub use area::{DockArea, DockAreaOutput, InvalidGeometry};
 pub use panes::{
-    PaneArea, PaneAreaOutput, PaneCommands, PaneContent, PaneFrame, PaneFrameOutput, PaneFrameStyle, PanePlace, PaneRequest, PaneSpec, PaneState,
-    SidePolicy,
+    PaneArea, PaneAreaOutput, PaneCommands, PaneContent, PaneEdges, PaneFrame, PaneFrameOutput, PaneFrameStyle, PanePlace, PaneRequest, PaneSpec,
+    PaneState, SidePolicy,
 };
 pub use switcher::{WorkspaceSwitcher, WorkspaceSwitcherOutput};
 pub use words::WorkspaceDialogWords;

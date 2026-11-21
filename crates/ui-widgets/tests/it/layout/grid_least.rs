@@ -1,9 +1,10 @@
 //! The columns of a grid keep their least: a column whose content takes the room it is offered (wrapping text, a
 //! picture) leaves the others theirs, and a grid whose columns do not fit even at their least lays its cells out one
-//! under another. A picture takes the width it is given.
+//! under another. A picture takes the width it is given; a check box with its label after it takes the two's width.
 
 use craft_behavior::{ColumnWidth, Mixed};
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::testing::{Frames, shrink_least_runs, trial};
@@ -87,4 +88,27 @@ fn a_picture_takes_the_width_it_is_given() {
     };
     let (wide, wider) = (width(500.0), width(700.0));
     assert!((wide - 500.0).abs() <= SNAP && (wider - 700.0).abs() <= SNAP, "the picture follows its room");
+}
+
+/// Check boxes with their labels after them stand two to a line in a grid of two content columns, as a dialog's
+/// Effects box (Bold beside Italic, Underline beside Strikethrough): each cell is as wide as its box and label, not
+/// the whole grid, so the columns fit beside each other.
+#[trial]
+fn labelled_check_boxes_stand_two_to_a_line() {
+    let seen = Cell::new([Rect::NOTHING; 4]);
+    let _ = in_room(400.0, |ui| {
+        Grid::new(HALVES).show(ui, |ui, _| {
+            let mut rects = [Rect::NOTHING; 4];
+            for (at, label) in ["Bold", "Italic", "Underline", "Strikethrough"].into_iter().enumerate() {
+                rects[at] = Checkbox::new(Bind::given(false)).label(label).id_salt(label).show(ui).response.rect;
+            }
+            seen.set(rects);
+        });
+    });
+    let [bold, italic, underline, strike] = seen.get();
+    let beside = |a: Rect, b: Rect| (a.center().y - b.center().y).abs() <= SNAP && a.right() <= b.left() + SNAP;
+    assert!(beside(bold, italic), "Italic stands beside Bold: {bold:?} {italic:?}");
+    assert!(beside(underline, strike), "Strikethrough stands beside Underline: {underline:?} {strike:?}");
+    assert!(underline.top() >= bold.bottom() - SNAP, "the second pair is on the next line");
+    assert!((italic.left() - strike.left()).abs() <= SNAP, "the second column starts at one edge");
 }

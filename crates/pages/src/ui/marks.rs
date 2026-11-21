@@ -3,8 +3,8 @@
 //! ° no-break spaces, ¶ paragraph ends, # the end of a story. Extras: the overset mark (a red + in the out port) on a
 //! frame whose story does not fit, and frame outlines with their in and out ports.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, Input, Metrics, Sense};

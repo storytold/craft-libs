@@ -13,7 +13,13 @@
 //!    without Shift). A digit-row press that types punctuation also matches its position's digit,
 //!    after the punctuation: AZERTY's `-` key runs Ctrl+- and, when that has no binding, Ctrl+6.
 //! 3. **Punctuation:** the character typed, without Shift when the layout needs Shift for it
-//!    (German `/` is ⇧7, so ⇧⌘7 is ⌘/; US `:` is ⇧;, so ⇧; is `:`). A Shift binding on a US
+//!    (German `/` is ⇧7, so ⇧⌘7 is ⌘/; US `:` is ⇧;, so ⇧; is `:`). One exception, for the
+//!    command a press runs (lead ruling, [`Matcher`](crate::Matcher)): when the person held Shift
+//!    and the keymap binds the chord with Shift kept, that binding wins over the Shift-dropped
+//!    chord's; on a layout where `=` is ⇧0, Ctrl+Shift+0 runs Ctrl+Shift+= (Word's Superscript),
+//!    not Ctrl+= (Subscript), and Ctrl+= only when Ctrl+Shift+= is unbound. Recording
+//!    ([`Layout::resolve`]), [`Layout::candidates`] and [`Layout::matches`] keep rule 3. A Shift
+//!    binding on a US
 //!    base key also matches the same press (`Shift+;` matches `:`), and `=` and `+` stand for
 //!    each other so zoom keys work with and without Shift. egui has no key for the characters the
 //!    ISO key next to left Shift types (`<` and `>` on Turkish Q) and reports both as that key,

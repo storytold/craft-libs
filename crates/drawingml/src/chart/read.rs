@@ -1,6 +1,6 @@
 //! Chart parts (`c:chartSpace`) → [`Chart`]. The original XML is kept in `Chart.raw`.
 
-use crate::chart::{Chart, ChartType, ErrorBars, Series, Trendline, TrendlineType};
+use crate::chart::{Chart, ChartDataTable, ChartType, ErrorBars, Series, Trendline, TrendlineType};
 use crate::style::Fill;
 
 use craft_xml::{El, Local, value};
@@ -174,7 +174,11 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         let val_axis = group_value_axis(&val_map, g);
         let secondary = val_axis.is_some() && val_axis != primary_val;
         for s in g.children(Local("ser")).take(1000) {
+            let needs_categories = c.categories.is_empty();
             let ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            if needs_categories && !c.categories.is_empty() {
+                c.category_format = category_format(pa, g, s);
+            }
             c.series.push(ser);
         }
     }
@@ -194,6 +198,18 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         }
     }
     c.lang = root.child(Local("lang")).and_then(|c| c.attr_local("val")).map(str::to_string);
+    // A bare `<c:date1904/>` means true, as in the schema's default.
+    c.date_1904 = root.child(Local("date1904")).is_some_and(|d| d.attr_local("val").and_then(value::to_bool).unwrap_or(true));
+    c.pivot_source = root.path(&[Local("pivotSource"), Local("name")]).map(|n| n.deep_text().trim().to_string()).filter(|n| !n.is_empty());
+    c.data_table = pa.child(Local("dTable")).map(|t| {
+        let flag = |name: &str| t.child(Local(name)).is_some_and(|e| e.attr_local("val").and_then(value::to_bool).unwrap_or(true));
+        ChartDataTable {
+            show_keys: flag("showKeys"),
+            horizontal_border: flag("showHorzBorder"),
+            vertical_border: flag("showVertBorder"),
+            outline: flag("showOutline"),
+        }
+    });
     let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
@@ -287,6 +303,9 @@ fn read_group_settings(g: &El, c: &mut Chart) -> Option<bool> {
     }
     if let Some(v) = g.child(Local("holeSize")).and_then(|c| c.attr_local("val")).and_then(|v| v.parse::<f64>().ok()) {
         c.hole_size = (v / 100.0).clamp(0.0, 0.9);
+    }
+    if let Some(v) = g.child(Local("firstSliceAng")).and_then(|c| c.attr_local("val")).and_then(|v| v.trim().parse::<u16>().ok()) {
+        c.first_slice_angle = v % 360;
     }
     // `<c:showVal/>` without a val attribute means true, as in the schema's default.
     // The setting belongs to this plot group: a group that asks for no labels keeps them
@@ -482,6 +501,41 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
         c.axis_titles.0 = a.child(Local("title")).map(|t| rich_text(t).unwrap_or_else(|| "Axis Title".into()));
     }
     (val_ax, cat_ax)
+}
+
+/// The number format of the category labels, for categories that are numbers or dates: the category
+/// axis' own format, unless it is linked to the source (`sourceLinked`, or no `c:numFmt`), in which
+/// case the format code of the category cells. `None` when the categories are text (their cached
+/// strings show as they are) or the file gives only General.
+fn category_format(pa: &El, group: &El, series: &El) -> Option<String> {
+    // Called only when the budgeted series read first supplies categories. Never rescan caches
+    // or take a format from a skipped series or another plot group's axis.
+    let cat = series.child(Local("cat")).or_else(|| series.child(Local("xVal")))?;
+    let ids: Vec<&str> = group.children(Local("axId")).filter_map(|id| id.attr_local("val")).collect();
+    let cat_ax = pa
+        .elements()
+        .find(|axis| {
+            matches!(axis.local(), "catAx" | "dateAx")
+                && axis.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
+        })
+        .or_else(|| {
+            pa.children(Local("valAx")).find(|axis| {
+                matches!(axis.child(Local("axPos")).and_then(|pos| pos.attr_local("val")), Some("b" | "t"))
+                    && axis.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
+            })
+        });
+    if cat.find(Local("strCache")).or_else(|| cat.find(Local("strLit"))).is_some() {
+        return None;
+    }
+    let cache = cat.find(Local("numCache")).or_else(|| cat.find(Local("numLit")))?;
+    let source = cache.child(Local("formatCode")).map(|f| f.deep_text()).filter(|f| !f.is_empty() && f != "General");
+    let numfmt = cat_ax.and_then(|a| a.child(Local("numFmt")));
+    let own = numfmt.and_then(|n| n.attr_local("formatCode")).filter(|f| !f.is_empty()).map(str::to_string);
+    match numfmt {
+        // An explicit format wins, "General" included (serial numbers, not dates).
+        Some(n) if n.attr_local("sourceLinked").and_then(value::to_bool) != Some(true) => own.or(source),
+        _ => source.or(own.filter(|f| f != "General")),
+    }
 }
 
 /// Text sizes and colours as the file sets them.
@@ -901,5 +955,137 @@ mod tests {
     fn explicit_vary_colors_is_respected() {
         assert!(read_chart_xml(vary_xml(r#"<c:varyColors val="0"/>"#).as_bytes()).is_some_and(|c| !c.vary_colors));
         assert!(read_chart_xml(vary_xml(r#"<c:varyColors val="1"/>"#).as_bytes()).is_some_and(|c| c.vary_colors));
+    }
+    /// A line chart over `cat` (a `c:cat` body) with the category axis element `ax` (a `c:dateAx`
+    /// or `c:catAx` body) and `extra` after `c:chart`'s siblings (`c:date1904`).
+    fn category_chart(cat: &str, ax: &str, extra: &str) -> Chart {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">{extra}<c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:cat>{cat}</c:cat><c:val><c:numRef><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart>{ax}<c:valAx><c:axId val="2"/><c:axPos val="l"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        read_chart_xml(xml.as_bytes()).unwrap()
+    }
+
+    fn num_cat(format_code: &str) -> String {
+        let code = if format_code.is_empty() { String::new() } else { format!("<c:formatCode>{format_code}</c:formatCode>") };
+        format!(
+            r#"<c:numRef><c:numCache>{code}<c:ptCount val="2"/><c:pt idx="0"><c:v>45292</c:v></c:pt><c:pt idx="1"><c:v>45323</c:v></c:pt></c:numCache></c:numRef>"#
+        )
+    }
+
+    #[test]
+    fn date_categories_use_the_cell_format_and_the_axis_format() {
+        // category cache format, axis element, Excel shows (first category, second category)
+        let own = r#"<c:dateAx><c:axId val="1"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:dateAx>"#;
+        let linked = r#"<c:dateAx><c:axId val="1"/><c:numFmt formatCode="General" sourceLinked="1"/></c:dateAx>"#;
+        let bare = r#"<c:dateAx><c:axId val="1"/></c:dateAx>"#;
+        let general = r#"<c:dateAx><c:axId val="1"/><c:numFmt formatCode="General" sourceLinked="0"/></c:dateAx>"#;
+        for (cell, ax, excel) in [
+            ("m/d/yyyy", own, ("Jan-24", "Feb-24")),
+            ("", own, ("Jan-24", "Feb-24")),
+            ("m/d/yyyy", linked, ("1/1/2024", "2/1/2024")),
+            ("m/d/yyyy", bare, ("1/1/2024", "2/1/2024")),
+            ("mmmm d", linked, ("January 1", "February 1")),
+            // an axis that says General shows the serial numbers, whatever the cells say
+            ("m/d/yyyy", general, ("45292", "45323")),
+            // nothing says a date: the cached text, as before
+            ("", bare, ("45292", "45323")),
+            ("General", linked, ("45292", "45323")),
+            ("", linked, ("45292", "45323")),
+        ] {
+            let c = category_chart(&num_cat(cell), ax, "");
+            assert_eq!((c.category_label(0).as_str(), c.category_label(1).as_str()), excel, "cell {cell:?}, axis {ax}");
+            // the cached categories are kept as the file has them
+            assert_eq!(c.categories, ["45292", "45323"]);
+        }
+        // a category index past the data has no label
+        assert_eq!(category_chart(&num_cat("m/d/yyyy"), bare, "").category_label(5), "");
+    }
+
+    #[test]
+    fn the_category_format_comes_from_the_series_that_gave_the_categories() {
+        // The first series has multi-level text categories, the second numeric dates.
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:cat><c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val="1"/><c:lvl><c:pt idx="0"><c:v>2024</c:v></c:pt></c:lvl></c:multiLvlStrCache></c:multiLvlStrRef></c:cat><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser><c:ser><c:idx val="1"/><c:cat>{}</c:cat><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:dateAx><c:axId val="1"/></c:dateAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#,
+            num_cat("m/d/yyyy")
+        );
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.categories, ["2024"]);
+        assert_eq!(c.category_format, None);
+        assert_eq!(c.category_label(0), "2024");
+    }
+
+    #[test]
+    fn category_formats_follow_the_retained_series_and_its_plot_axis() {
+        let skipped = format!(r#"<c:ser><c:idx val="1000"/><c:cat>{}</c:cat></c:ser>"#, num_cat("m/d/yyyy"));
+        let over_budget = format!("{}{}", r#"<c:ser><c:idx val="0"/></c:ser>"#.repeat(1000), skipped);
+        let text = r#"<c:strLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2024</c:v></c:pt></c:strLit>"#;
+        for (first, second, expected) in [(String::new(), num_cat("m/d/yyyy"), "Jan-24"), (over_budget, text.to_string(), "2024")] {
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart>{first}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:ser><c:idx val="0"/><c:cat>{second}</c:cat></c:ser><c:axId val="3"/><c:axId val="4"/></c:lineChart><c:catAx><c:axId val="1"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/></c:valAx><c:dateAx><c:axId val="3"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:dateAx><c:valAx><c:axId val="4"/><c:axPos val="r"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#
+            );
+            let c = read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(c.category_label(0), expected);
+        }
+    }
+
+    #[test]
+    fn scatter_category_format_uses_the_horizontal_axis_regardless_of_id_order() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:scatterChart><c:ser><c:idx val="0"/><c:xVal>{}</c:xVal></c:ser><c:axId val="4"/><c:axId val="3"/></c:scatterChart><c:valAx><c:axId val="4"/><c:axPos val="l"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx><c:valAx><c:axId val="3"/><c:axPos val="b"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#,
+            num_cat("m/d/yyyy")
+        );
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.category_label(0), "Jan-24");
+    }
+
+    #[test]
+    fn text_categories_ignore_the_axis_number_format() {
+        let strs = r#"<c:strRef><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>2024</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt></c:strCache></c:strRef>"#;
+        let ax = r#"<c:catAx><c:axId val="1"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:catAx>"#;
+        let c = category_chart(strs, ax, "");
+        assert_eq!(c.category_format, None);
+        assert_eq!((c.category_label(0).as_str(), c.category_label(1).as_str()), ("2024", "Q2"));
+    }
+
+    #[test]
+    fn the_1904_date_system_is_read_from_the_chart() {
+        let cat = r#"<c:numRef><c:numCache><c:formatCode>m/d/yyyy</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>43830</c:v></c:pt></c:numCache></c:numRef>"#;
+        let ax = r#"<c:dateAx><c:axId val="1"/></c:dateAx>"#;
+        // Excel shows 1/1/2024 for 43830 in a 1904 workbook, 12/31/2019 in a 1900 one.
+        for (extra, date_1904, excel) in [
+            ("", false, "12/31/2019"),
+            (r#"<c:date1904 val="0"/>"#, false, "12/31/2019"),
+            (r#"<c:date1904 val="1"/>"#, true, "1/1/2024"),
+            ("<c:date1904/>", true, "1/1/2024"),
+        ] {
+            let c = category_chart(cat, ax, extra);
+            assert_eq!((c.date_1904, c.category_label(0).as_str()), (date_1904, excel), "{extra}");
+        }
+    }
+
+    #[test]
+    fn data_table_first_slice_angle_and_pivot_source_roundtrip() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{NS_C}"><c:pivotSource><c:name>[Book.xlsx]Sheet1!PivotTable1</c:name><c:fmtId val="0"/></c:pivotSource><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:dTable><c:showHorzBorder/><c:showVertBorder val="0"/><c:showOutline val="1"/><c:showKeys/></c:dTable></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.pivot_source.as_deref(), Some("[Book.xlsx]Sheet1!PivotTable1"));
+        assert_eq!(c.data_table, Some(ChartDataTable { show_keys: true, horizontal_border: true, vertical_border: false, outline: true }));
+        let mut edited = c.clone();
+        edited.raw = None;
+        let (written, kept) = crate::chart::write::chart_xml(&edited);
+        assert!(!kept);
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.pivot_source, c.pivot_source);
+        assert_eq!(back.data_table, c.data_table);
+
+        let pie_xml = format!(
+            r#"<c:chartSpace xmlns:c="{NS_C}"><c:chart><c:plotArea><c:pieChart><c:ser><c:idx val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser><c:firstSliceAng val="450"/></c:pieChart></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let mut pie = read_chart_xml(pie_xml.as_bytes()).unwrap();
+        assert_eq!(pie.first_slice_angle, 90);
+        pie.raw = None;
+        let (pie_written, _) = crate::chart::write::chart_xml(&pie);
+        assert_eq!(read_chart_xml(&pie_written).unwrap().first_slice_angle, 90);
     }
 }

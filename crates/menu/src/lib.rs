@@ -88,8 +88,8 @@
 //! [`NativeMenu::on_command`] sees each allowed click as it arrives, also while egui is idle.
 //!
 //! Per frame: [`NativeMenu::poll`], then [`NativeMenu::set_gate`], [`NativeMenu::take_clicks`] and run the commands, then
-//! [`NativeMenu::sync_with`], which lays the menus out again only when the app's state changed
-//! (or [`NativeMenu::sync`], which compares a layout built every frame).
+//! [`NativeMenu::sync_with`], which lays the menus out again only when its key changed (the menu model's
+//! `Tracked` revision and the other inputs of the layout).
 //! The input filter also keeps a click or Escape that closes an open native menu away
 //! from egui.
 #![warn(missing_docs)]
@@ -101,6 +101,7 @@ mod documents;
 mod driver;
 mod help;
 mod keymap;
+pub(crate) mod keytips;
 mod language;
 mod layout;
 mod modal;
@@ -110,15 +111,17 @@ mod theme;
 
 pub mod mac;
 
+pub mod ribbon;
 pub mod shortcuts;
 
 pub use bar::{EnglishHook, Labeled, MenuBarOutput, MenuBarUi};
 pub use craft_keymap::{Chord, CommandRef};
 pub use customize::Customization;
 pub use documents::DOCUMENT_COMMAND_PREFIX;
-pub use driver::{Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu, had_input};
+pub use driver::{Backend, ClipboardKeys, CommandHook, Dispatch, Event, Gate, NativeMenu};
 pub use help::{HelpCommand, HelpLabels, HelpLink, HelpMenu};
 pub use keymap::{ItemState, apply_keymap, apply_state};
+pub use keytips::{KeytipControl, Keytips, KeytipsOutput};
 pub use language::{LANGUAGE_COMMAND, LanguageChoice, LanguageLabels, LanguageMenu, LanguageRow};
 pub use layout::{Clash, Layout, LayoutOptions, Target, desktop_layout, layout, mac_layout, web_layout};
 pub use modal::{ModalRules, NAVIGATION_COMMANDS, PendingRule};
@@ -126,10 +129,16 @@ pub use model::{
     Alternate, Builtin, Document, Item, ItemKind, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Row, Standard, from_items, structure_key, tidy,
     window_key,
 };
+pub use ribbon::{
+    Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput, GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonMenuRequest, RibbonOutput,
+    RibbonRow, RibbonTab, plan,
+};
 pub use theme::{THEME_COMMAND, ThemeChoice, ThemeLabels, ThemeMenu, ThemeRow};
 
 #[cfg(feature = "screen-testing")]
 /// The stories and words this crate registers, for the story tests.
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }

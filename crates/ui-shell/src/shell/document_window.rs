@@ -1,7 +1,7 @@
 //! `DocumentWindow`: a document's window, a container in its own OS viewport.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::contract::overlay::OverlayFit;
 use crate::contract::{
@@ -84,6 +84,8 @@ impl Outcome for DocumentWindowOutput {
 /// - **Title and focus.** The title is the label given to `new`; it follows the document while the app changes it.
 ///   [`raise`](DocumentWindow::raise) brings the window forward in the pass it is set. With
 ///   [`in_list`](DocumentWindow::in_list) the window makes itself the list's active window when it gains OS focus.
+/// - **Body.** The body is laid out in the window's room and never scrolls, in the OS window and on the fallback
+///   layer alike; an app that wants scrolling puts a scroll region in the body.
 /// - **Fallback.** Where OS windows are unavailable the document shows on a movable, resizable layer with a title row.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
@@ -138,7 +140,7 @@ impl<'a> DocumentWindow<'a> {
 
     /// A window titled `title`, resizable, with the installed decision's frame.
     pub fn new(title: impl Into<Label>) -> Self {
-        let fallback = Overlay::floating().resizable(true).fit(OverlayFit::Resizable);
+        let fallback = Overlay::floating().resizable(true).fit(OverlayFit::Resizable).body_scroll(false);
         let props = ContainerProps::new()
             .surface(SurfaceKind::Background)
             .pad(Pad::None)

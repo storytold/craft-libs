@@ -66,6 +66,11 @@ craft_ui::words! {
         label_chord: template "keyboardShortcuts.labelChord" = "{label}: {chord}";
         label_press_keys: template "keyboardShortcuts.labelPressKeys" = "{label}: press keys";
         now_used_by_label: template "keyboardShortcuts.nowUsedByLabel" = "Now used by {label}";
+        categories: "keyboardShortcuts.categories" = "Categories:";
+
+        now_used_by_command: template "keyboardShortcuts.nowUsedByCommand" = "Now used by {command}";
+        not_used_by_any_command: "keyboardShortcuts.notUsedByAnyCommand" = "Not used by any command";
+        remove: "keyboardShortcuts.remove" = "Remove";
         label_chord_now_used_by_holder: template "keyboardShortcuts.labelChordNowUsedByHolder" = "{label}: {chord} (Now used by {holder})";
         // Typed shortcuts and saved texts that do not parse.
         the_shortcut_has_no_key: "keyboardShortcuts.theShortcutHasNoKey" = "the shortcut has no key";

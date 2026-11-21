@@ -2099,6 +2099,25 @@ fn compound_borders_round_trip() {
     assert_eq!(tops(&back), want);
 }
 
+/// storytold/wordcraft#5764: a DOCX cell border of width 0 (`w:sz="0"`, or no `w:sz`) is a line
+/// Word draws without giving it room. RTF has no such border, so it is written at the thinnest
+/// line rather than dropped.
+#[test]
+fn a_width_0_cell_border_exports_as_the_thinnest_line() {
+    let mut d = import(br"{\rtf1\ansi\trowd\clbrdrb\brdrs\cellx2000\pard\intbl a\cell\row}").unwrap();
+    for b in d.body.iter_mut() {
+        if let craft_wordmodel::Block::Table(t) = std::sync::Arc::make_mut(b)
+            && let Some(bd) = t.rows[0].cells[0].props.borders.as_mut()
+            && let Some(bottom) = bd.bottom.as_mut()
+        {
+            bottom.width = 0.0;
+        }
+    }
+    let exported = export(&d);
+    let twips = (craft_wordmodel::props::Border::THINNEST * 20.0).round() as i64;
+    assert!(exported.contains(&format!(r"\clbrdrb\brdrs\brdrw{twips}")), "{exported}");
+}
+
 fn para_aligns(flow: &Flow) -> Vec<(bool, Option<Align>)> {
     flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
 }
@@ -2160,4 +2179,259 @@ fn the_generator_names_the_writing_application() {
     // Whatever the name, the text reads back.
     let back = parse(odd.as_bytes()).expect("parses");
     assert_eq!(texts(&back), ["Normal:Hello"]);
+}
+
+/// The list paragraphs of `rtf`: their text and list info.
+fn list_paras(rtf: &[u8]) -> Vec<(String, ListInfo)> {
+    let f = parse(rtf).unwrap();
+    f.blocks
+        .iter()
+        .filter_map(|b| match b {
+            FBlock::Para(p) => p.list.map(|li| (p.text(), li)),
+            FBlock::Table(_) => None,
+        })
+        .collect()
+}
+
+/// #2085: each RTF list level keeps its number format, the number of its first item and its level
+/// text: c), d) from a lower-letter level starting at 3, (i) from a lower-roman level in
+/// parentheses, 7. from a decimal level starting at 7.
+#[test]
+fn list_levels_keep_their_number_format_start_and_level_text() {
+    use craft_wordmodel::section::NumFormat;
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable
+{\list\listtemplateid1{\listlevel\levelnfc4\levelnfcn4\levelstartat3{\leveltext\'02\'00);}{\levelnumbers\'01;}}\listid1}
+{\list\listtemplateid2{\listlevel\levelnfc2\levelnfcn2\levelstartat1{\leveltext\'03(\'00);}{\levelnumbers\'02;}}\listid2}
+{\list\listtemplateid3{\listlevel\levelnfc0\levelnfcn0\levelstartat7{\leveltext\'02\'00.;}{\levelnumbers\'01;}}\listid3}
+}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}{\listoverride\listid2\listoverridecount0\ls2}{\listoverride\listid3\listoverridecount0\ls3}}
+\pard\ls1\ilvl0 letter from c\par
+\pard\ls1\ilvl0 next letter\par
+\pard\plain plain\par
+\pard\ls2\ilvl0 roman in parens\par
+\pard\plain plain\par
+\pard\ls3\ilvl0 decimal from 7\par
+}"#;
+    let got: Vec<(String, u32, Option<model::Label>)> = list_paras(rtf).into_iter().map(|(t, li)| (t, li.start, li.label)).collect();
+    let label = |f, t| Some(model::Label::of_level(f, t));
+    assert_eq!(
+        got,
+        [
+            ("letter from c".to_owned(), 3, label(NumFormat::LowerLetter, "%1)")),
+            ("next letter".to_owned(), 3, label(NumFormat::LowerLetter, "%1)")),
+            ("roman in parens".to_owned(), 1, label(NumFormat::LowerRoman, "(%1)")),
+            ("decimal from 7".to_owned(), 7, label(NumFormat::Decimal, "%1.")),
+        ]
+    );
+    let shown: Vec<String> = got.iter().filter_map(|(_, _, l)| l.map(|l| l.text(0))).collect();
+    assert_eq!(shown, ["%1)", "%1)", "(%1)", "%1."]);
+}
+
+/// A list's deeper levels keep theirs too: a level showing the numbers above it (`%1.%2.`), an
+/// upper-letter level starting at B, and a bullet level whose bullet is a `\u` character.
+#[test]
+fn deeper_list_levels_keep_their_own_format_start_and_text() {
+    use craft_wordmodel::section::NumFormat;
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable
+{\list\listtemplateid9
+{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'02\'00.;}{\levelnumbers\'01;}}
+{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'04\'00.\'01.;}{\levelnumbers\'01\'03;}}
+{\listlevel\levelnfc3\levelnfcn3\levelstartat2{\leveltext\'02\'02);}{\levelnumbers\'01;}}
+{\listlevel\levelnfc23\levelnfcn23\levelstartat1{\leveltext\'01\u8226 ?;}{\levelnumbers;}}
+\listid9}}
+{\*\listoverridetable{\listoverride\listid9\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 one\par
+\pard\ls1\ilvl1 one one\par
+\pard\ls1\ilvl2 letter\par
+\pard\ls1\ilvl3 bullet\par
+}"#;
+    let got: Vec<(String, bool, u8, u32, Option<model::Label>)> =
+        list_paras(rtf).into_iter().map(|(t, li)| (t, li.ordered, li.level, li.start, li.label)).collect();
+    let label = |f, t| Some(model::Label::of_level(f, t));
+    assert_eq!(
+        got,
+        [
+            ("one".to_owned(), true, 0, 1, label(NumFormat::Decimal, "%1.")),
+            ("one one".to_owned(), true, 1, 1, label(NumFormat::Decimal, "%1.%2.")),
+            ("letter".to_owned(), true, 2, 2, label(NumFormat::UpperLetter, "%3)")),
+            ("bullet".to_owned(), false, 3, 1, Some(model::Label::bulleted(Some('•')))),
+        ]
+    );
+}
+
+/// A list table without level text or start numbers reads as it always did: numbered or not,
+/// starting at 1, with no label of its own; a paragraph of an unknown list is unnumbered.
+#[test]
+fn a_list_level_without_level_text_or_start_keeps_its_old_reading() {
+    let rtf = br#"{\rtf1\ansi
+{\*\listtable{\list\listtemplateid1{\listlevel\levelnfc0}{\listlevel\levelnfc23}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 numbered\par
+\pard\ls1\ilvl1 bulleted\par
+\pard\ls2\ilvl0 unknown list\par
+}"#;
+    let got = list_paras(rtf);
+    assert_eq!(
+        got,
+        [
+            ("numbered".to_owned(), ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }),
+            ("bulleted".to_owned(), ListInfo { ordered: false, level: 1, start: 1, ..Default::default() }),
+            ("unknown list".to_owned(), ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }),
+        ]
+    );
+}
+
+/// Hostile list tables read without a panic and within bounds: a level text whose length runs
+/// past its characters, a length of 255 with a long text, out-of-range start numbers and number
+/// format codes, and a level text outside any level.
+#[test]
+fn hostile_list_levels_read_within_bounds() {
+    let long = "x".repeat(10_000);
+    let rtf = format!(
+        r#"{{\rtf1\ansi
+{{\*\listtable{{\list{{\leveltext\'05\'00;}}{{\listlevel\levelnfc9999\levelstartat-5{{\leveltext\'09\'00);}}}}{{\listlevel\levelnfc-3\levelstartat2147483647{{\leveltext\'ff{long};}}}}\listid1}}}}
+{{\*\listoverridetable{{\listoverride\listid1\listoverridecount0\ls1}}}}
+\pard\ls1\ilvl0 a\par
+\pard\ls1\ilvl1 b\par
+}}"#
+    );
+    let got = list_paras(rtf.as_bytes());
+    assert_eq!(got.len(), 2);
+    let (a, b) = (&got[0].1, &got[1].1);
+    assert_eq!((a.ordered, a.start), (true, 0), "a start below 0 is held to 0");
+    assert_eq!(a.label.map(|l| l.text(0)), Some("%1)".to_owned()), "a length past the text takes what is there");
+    assert_eq!(b.start, 32_767, "a start past Word's range is held to it");
+    let text = b.label.map(|l| l.text(1)).unwrap_or_default();
+    assert!(text.chars().count() <= 255, "the level text is at most its length: {}", text.chars().count());
+}
+
+/// Original RTF: only the previous paragraph properties carry spacing and borders.
+fn prior_layout_document(words: &str) -> Document {
+    let rtf = format!(
+        r"{{\rtf1\ansi{{\colortbl;\red17\green89\blue203;}}{{\*\revtbl{{Unknown;}}{{Alice;}}}}
+\pard\qc\prauth1\prdate-2014675576{{\*\oldpprops\pard\ql{words}}}Changed\par\pard\ql Neighbor\par}}"
+    );
+    import(rtf.as_bytes()).unwrap()
+}
+
+fn prior_props(doc: &Document) -> &craft_wordmodel::props::ParaProps {
+    &doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old
+}
+
+/// Every line-spacing rule, explicit zeros and a hanging indent survive repeated RTF saves.
+#[test]
+fn saving_keeps_prior_paragraph_spacing() {
+    use craft_wordmodel::props::LineSpacing;
+    for (words, line) in [
+        (r"\sb480\sa720\sl360\slmult1\li360\ri180\fi-80", LineSpacing::Multiple(1.5)),
+        (r"\sb0\sa0\sl-360\slmult0\li0\ri0\fi0", LineSpacing::Exactly(18.0)),
+        (r"\sb100\sa0\sl400\slmult0\li360\ri180\fi-80", LineSpacing::AtLeast(20.0)),
+    ] {
+        let mut doc = prior_layout_document(words);
+        let expected = prior_props(&doc).clone();
+        assert_eq!(expected.line_spacing, Some(line));
+        assert!(expected.space_before.is_some() && expected.space_after.is_some());
+        let revisions = doc.revisions.clone();
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            let old = prior_props(&doc);
+            assert_eq!((old.space_before, old.space_after, old.line_spacing), (expected.space_before, expected.space_after, expected.line_spacing));
+            assert_eq!((old.indent_left, old.indent_right, old.indent_first), (expected.indent_left, expected.indent_right, expected.indent_first));
+            assert_eq!(doc.revisions, revisions);
+            let p = doc.body[0].as_para().unwrap();
+            assert_eq!(p.props.align, Some(Align::Center));
+            assert_eq!(p.props.space_before, None, "old properties must not become current properties");
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// An explicit old minimum of zero survives saves without leaking through resets or groups.
+#[test]
+fn prior_zero_line_spacing_is_explicit_and_scoped() {
+    use craft_wordmodel::props::LineSpacing;
+    for (words, expected) in [
+        ("", None),
+        (r"\sl0", None),
+        (r"\slmult0", None),
+        (r"\sl0\slmult0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\slmult0\sl0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl0\slmult1", None),
+        (r"\sl0\slmult0\pard\ql\sl0", None),
+        (r"{\sl0\slmult0}\sl0", None),
+        (r"\sl0\slmult0{\slmult1}", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl300", Some(LineSpacing::AtLeast(15.0))),
+        (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
+    ] {
+        let mut doc = prior_layout_document(words);
+        for _ in 0..3 {
+            assert_eq!(prior_props(&doc).line_spacing, expected, "{words}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().props.line_spacing, None);
+            doc = import(export(&doc).as_bytes()).unwrap();
+        }
+    }
+}
+
+/// Imported old exact spacing below the supported minimum retains the exact rule on save.
+#[test]
+fn prior_exact_spacing_below_the_supported_minimum_keeps_its_rule() {
+    use craft_wordmodel::props::LineSpacing;
+    for value in [0.0, 0.01, 0.05, 0.65, 0.7] {
+        let mut doc = prior_layout_document("");
+        let craft_wordmodel::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) else { panic!("expected paragraph") };
+        p.props.fmt_change.as_deref_mut().unwrap().old.line_spacing = Some(LineSpacing::Exactly(value));
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            assert_eq!(prior_props(&doc).line_spacing, Some(LineSpacing::Exactly(0.7)), "{value}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// Prior visible borders stay inside oldpprops and retain their colour and geometry.
+#[test]
+fn saving_keeps_prior_paragraph_borders() {
+    let mut doc = prior_layout_document(r"\brdrt\brdrs\brdrw20\brdrcf1\brdrr\brdrdb\brdrw30\brdrcf1");
+    let expected = prior_props(&doc).borders;
+    let borders = expected.unwrap();
+    assert_eq!(borders.top.unwrap().color, Some(Rgb(17, 89, 203)));
+    assert_eq!(borders.top.unwrap().width, 1.0);
+    assert_eq!(borders.top.unwrap().space, 0.0);
+    assert!(borders.right.is_some());
+    for _ in 0..2 {
+        doc = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(prior_props(&doc).borders, expected);
+        assert_eq!(doc.body[0].as_para().unwrap().props.borders, None, "old borders stay out of the current paragraph");
+        assert_eq!(doc.body[1].as_para().unwrap().props.borders, None);
+    }
+}
+
+#[test]
+fn metadata_text_survives_nested_formatting_without_reading_other_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\info{\title Before {\b bold {\i caf\u233?}}{\fonttbl{\f0 Wrong;}}{\*\bkmkstart hidden}{\pict\pngblip 00} After}{\author Author}}\f0 Body}").unwrap();
+    assert_eq!(flow.meta.title, "Before bold café After");
+    assert_eq!(flow.meta.author, "Author");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+    let FBlock::Para(body) = &flow.blocks[0] else { panic!("expected body text") };
+    assert!(matches!(&body.inlines[0], Inline::Text(_, fmt) if fmt.font.as_deref() == Some("Arial")));
+}
+
+#[test]
+fn metadata_creation_date_ignores_other_date_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\info{\creatim\yr2026{\revtim\yr1999}{\b\mo11}\dy19}}Body}").unwrap();
+    assert_eq!(flow.meta.created, "2026-11-19T00:00:00Z");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+}
+
+#[test]
+fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page() {
+    let flow =
+        parse(br"{\rtf1\ansi{\fonttbl{\f0\fcharset0 Arial;}{\f1\fcharset204 Cyrillic;}}{\info{\title A\emdash {\f1 \'e0\plain \'e0}}}\f0 Body}")
+            .unwrap();
+    assert_eq!(flow.meta.title, "A—аà");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
 }

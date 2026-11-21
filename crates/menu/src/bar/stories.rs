@@ -1,11 +1,14 @@
 //! Stories of the in-window bar over a small model.
 
+use std::sync::{Arc, LazyLock};
+
+use craft_ui::contract::Tracked;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use crate::{Document, Item, LayoutOptions, Menu, MenuBar, MenuBarUi, MenuRole, Node, Target, layout};
 
-fn model() -> MenuBar {
+fn build() -> MenuBar {
     let item = |id: &str, label: &str| Item::new(id, label);
     let bar = MenuBar {
         menus: vec![
@@ -35,6 +38,12 @@ fn model() -> MenuBar {
         documents: vec![Document::new("doc.0", "One"), Document::new("doc.1", "Two").active(true)],
     };
     layout(&bar, Target::Linux, &LayoutOptions::new("Sample")).bar
+}
+
+/// The stories' model, made once: a model made again each pass is a new source, and the bar would run each time.
+fn model() -> Arc<Tracked<MenuBar>> {
+    static MODEL: LazyLock<Arc<Tracked<MenuBar>>> = LazyLock::new(|| Arc::new(Tracked::new(build())));
+    MODEL.clone()
 }
 
 #[story(MenuBarUi<'static>, covers = [Default], drive = Drive::Never)]

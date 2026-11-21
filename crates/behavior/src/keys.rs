@@ -8,7 +8,7 @@ use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 
 /// What the focused stop is, as far as the table's rows differ.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyRole {
     /// A value control with a reset value and no text part: Delete resets it.

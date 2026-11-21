@@ -127,17 +127,10 @@ struct Scope {
     /// The component whose eviction takes the facts the scope records.
     owner: Id,
     kind: Kind,
-    /// The direct controls, decided when the scope closes: node components inside this scope that sit in no other
-    /// component that has a node.
+    /// The direct controls: node components inside this scope that sit in no other node component of it.
     nodes: Vec<ScopeNode>,
-    /// Every node component that reported inside this scope, with the node components that were open around it.
-    reported: Vec<(ScopeNode, Vec<Id>)>,
-    /// Node components that began as a node at step 8 and turned out to have none at step 16 (a layout container
-    /// with no label): the controls inside them are direct controls of the scope.
-    hollow: Vec<Id>,
-    /// Node components inside this scope whose step 16 has not come yet, outermost first, with the number of focus stops
-    /// registered before they began.
-    open: Vec<(Id, usize)>,
+    /// Node components inside this scope whose step 16 has not come yet, outermost first.
+    open: Vec<Open>,
     /// The screen y of the top of the rect the label step placed the controls in; the recorded baseline and centre
     /// are stored measured from it.
     control_top: f32,
@@ -160,6 +153,15 @@ struct Scope {
     control_min: Option<f32>,
 }
 
+/// A node component of a scope whose step 16 has not come yet.
+struct Open {
+    id: Id,
+    /// The number of focus stops registered before it began.
+    stops: usize,
+    /// The nodes that registered inside it and in no node component inside it.
+    held: Vec<ScopeNode>,
+}
+
 /// A control that reported its node in a scope: the name and description its node got at its own report.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ScopeNode {
@@ -172,9 +174,14 @@ pub(crate) struct ScopeNode {
     pub unnamed: Option<Finding>,
     /// The first focus stop inside a control that has none of its own: where a click on its label moves focus.
     pub inner_stop: Option<crate::runtime::focus::FocusTarget>,
+    /// The control takes key focus, at its own stop or at a part's (a segmented control's segments).
+    pub focusable: bool,
     /// The control is disabled: a label that names only disabled controls is disabled too.
     pub disabled: bool,
-    /// The node is static display (a text): it is no control of the scope.
+    /// The control reached the scope through a node component that reports no node (an unlabelled row): it is part
+    /// of the field's arrangement, so the label names the field's group and the control keeps its own name.
+    pub arranged: bool,
+    /// The node is static display (a text): it is no control of a label scope.
     pub display: bool,
 }
 
@@ -214,8 +221,6 @@ pub(crate) fn begin(ctx: &Context, container: Id, owner: Id, kind: Kind) {
             owner,
             kind,
             nodes: Vec::new(),
-            reported: Vec::new(),
-            hollow: Vec::new(),
             open: Vec::new(),
             control_top: 0.0,
             first_bottom: None,
@@ -245,42 +250,50 @@ pub(crate) fn field_label(ctx: &Context) -> Option<FieldLabel> {
 pub(crate) fn enter(ctx: &Context, id: Id) {
     pass_state::with::<Stack, _>(ctx, |stack| {
         if let Some(scope) = stack.0.last_mut() {
-            scope.open.push((id, crate::runtime::focus::stop_count(ctx)));
+            scope.open.push(Open { id, stops: crate::runtime::focus::stop_count(ctx), held: Vec::new() });
         }
     });
 }
 
 /// Registers the node `id` with the innermost scope at its step 16. Children reach step 16 first, so they find their
-/// parent still open. Whether it is a direct control is decided when the scope closes, once every node component
-/// around it has said whether it has a node (`leave`).
+/// parent still open: a node inside an open node component is held by it until that component's own step 16, which
+/// drops it when the component reports a node and passes it on (`leave`) when it reports none.
 pub(crate) fn register(ctx: &Context, mut node: ScopeNode) {
-    let unnamed = pass_state::with::<Stack, _>(ctx, |stack| {
-        let Some(scope) = stack.0.last_mut() else { return node.unnamed.take() };
-        let around = match scope.open.iter().rposition(|(open, _)| *open == node.id) {
-            Some(at) => {
-                node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].1);
-                let around = scope.open[..at].iter().map(|(open, _)| *open).collect();
-                scope.open.truncate(at);
-                around
-            }
-            None => scope.open.iter().map(|(open, _)| *open).collect(),
-        };
-        scope.reported.push((node, around));
-        None
+    let unnamed: Vec<Finding> = pass_state::with::<Stack, _>(ctx, |stack| {
+        let Some(scope) = stack.0.last_mut() else { return node.unnamed.take().into_iter().collect() };
+        let mut unnamed = Vec::new();
+        if let Some(at) = scope.open.iter().rposition(|open| open.id == node.id) {
+            node.inner_stop = crate::runtime::focus::first_stop_inside(ctx, node.id, scope.open[at].stops);
+            // What the node held sits inside it: none of it is a control of the scope.
+            unnamed.extend(scope.open.drain(at..).flat_map(|open| open.held).filter_map(|held| held.unnamed));
+        }
+        scope.hold(node);
+        unnamed
     });
-    report_unnamed(ctx, unnamed);
+    unnamed.into_iter().for_each(|finding| report_unnamed(ctx, Some(finding)));
 }
 
-/// Notes that the node component `id`, which began as a node at step 8, reports none at step 16.
+/// Closes the node component `id` that created its node at step 8 but reports none at step 16 (a layout container
+/// that is a group only when labelled or scrolled): the nodes it held belong to the component around it, or are
+/// controls of the scope when no node component of the scope holds it.
 pub(crate) fn leave(ctx: &Context, id: Id) {
     pass_state::with::<Stack, _>(ctx, |stack| {
-        if let Some(scope) = stack.0.last_mut()
-            && let Some(at) = scope.open.iter().rposition(|(open, _)| *open == id)
-        {
-            scope.open.truncate(at);
-            scope.hollow.push(id);
-        }
+        let Some(scope) = stack.0.last_mut() else { return };
+        let Some(at) = scope.open.iter().rposition(|open| open.id == id) else { return };
+        let held: Vec<ScopeNode> = scope.open.drain(at..).flat_map(|open| open.held).collect();
+        held.into_iter().for_each(|node| scope.hold(ScopeNode { arranged: true, ..node }));
     });
+}
+
+impl Scope {
+    /// Puts `node` in the innermost open node component of the scope, or among the scope's controls when none is
+    /// open.
+    fn hold(&mut self, node: ScopeNode) {
+        match self.open.last_mut() {
+            Some(open) => open.held.push(node),
+            None => self.nodes.push(node),
+        }
+    }
 }
 
 fn report_unnamed(ctx: &Context, unnamed: Option<Finding>) {
@@ -492,19 +505,22 @@ pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNod
         return Vec::new();
     }
     let mut patches = vec![LabelPatch::Label { id: label.id, text: label.text.clone(), disabled: nodes.iter().all(|node| node.disabled) }];
-    match nodes {
-        [only] if label.role == FieldLabelRole::Describes || only.keeps_name => {
+    // The label is about one control only when that control sits directly in the scope. One in an unlabelled row is
+    // part of the field's arrangement: the label names the group, as for several controls, and the control keeps the
+    // name its own content gives it (a link's file name, a command button's words).
+    let single = match nodes {
+        [only] if !only.arranged => Some(only),
+        _ => None,
+    };
+    match single {
+        Some(only) if label.role == FieldLabelRole::Describes || only.keeps_name => {
             patches.push(LabelPatch::DescribedBy { node: only.id, label: label.id });
         }
-        [only] => patches.push(LabelPatch::LabelledBy { node: only.id, label: label.id, text: label.text.clone() }),
-        _ => patches.push(LabelPatch::GroupLabelledBy { container, label: label.id }),
+        Some(only) => patches.push(LabelPatch::LabelledBy { node: only.id, label: label.id, text: label.text.clone() }),
+        None => patches.push(LabelPatch::GroupLabelledBy { container, label: label.id }),
     }
     if let Some(text) = &label.detail {
-        let node = match nodes {
-            [only] => only.id,
-            _ => container,
-        };
-        patches.push(LabelPatch::Detail { node, text: text.clone() });
+        patches.push(LabelPatch::Detail { node: single.map_or(container, |only| only.id), text: text.clone() });
     }
     patches
 }
@@ -570,14 +586,14 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
         (stack.0.last().is_some_and(|scope| scope.container == container)).then(|| stack.0.pop()).flatten()
     });
     let Some(mut scope) = scope else { return };
-    for (node, around) in std::mem::take(&mut scope.reported) {
-        // A label scope's controls are not its static texts; a merged container shows whatever one component it has.
-        let counts = !node.display || matches!(scope.kind, Kind::Merge);
-        if counts && around.iter().all(|id| scope.hollow.contains(id)) {
-            scope.nodes.push(node);
-        } else {
-            report_unnamed(ctx, node.unnamed);
-        }
+    // A node component still open never reported its own node (it folded into its owner's): what it held is inside
+    // it, so none of it is a control of the scope.
+    scope.open.drain(..).flat_map(|open| open.held).for_each(|node| report_unnamed(ctx, node.unnamed));
+    // A label scope's controls are not its static texts; a merged container shows whatever one component it has.
+    if matches!(scope.kind, Kind::Label(_)) {
+        let (texts, controls): (Vec<ScopeNode>, Vec<ScopeNode>) = std::mem::take(&mut scope.nodes).into_iter().partition(|node| node.display);
+        scope.nodes = controls;
+        texts.into_iter().for_each(|node| report_unnamed(ctx, node.unnamed));
     }
     match scope.kind {
         Kind::Label(label) => {
@@ -601,8 +617,10 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
                 let named = patches.iter().any(|patch| matches!(patch, LabelPatch::LabelledBy { node: id, .. } if *id == node.id));
                 report_unnamed(ctx, node.unnamed.clone().filter(|_| !named));
             }
-            // A click on a label, as on any form label, moves focus to its one control.
-            if let (true, [only]) = (label.activated, &scope.nodes[..])
+            // A click on a label, as on any form label, moves focus to its one control. A node that takes no focus
+            // beside it (the unit text after a number field) is not a control the click could mean.
+            let mut controls = scope.nodes.iter().filter(|node| node.focusable || node.inner_stop.is_some());
+            if let (true, Some(only), None) = (label.activated, controls.next(), controls.next())
                 && !only.disabled
             {
                 crate::runtime::focus::request(ctx, only.inner_stop.unwrap_or(crate::runtime::focus::FocusTarget::Id(only.id)));

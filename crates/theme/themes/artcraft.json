@@ -59,5 +59,50 @@
     "text.muted": "#d4d4d4",
     "text.normal": "#eeeeee",
     "text.on_accent": "#ffffff"
+  },
+  "apps": {
+    "wordcraft": {
+      "shape": {
+        "button_radius": 4
+      },
+      "light": {
+        "accent.soft": "#dde3f8",
+        "accent.solid": "#3b5bdb",
+        "accent.text": "#2b47b5",
+        "line.border": "#e1e1e1",
+        "line.control_edge": "#8a8a8a",
+        "line.divider": "#e1e1e1",
+        "state.hover": "#e6e6e6",
+        "state.pressed": "#d6d6d6",
+        "surface.background": "#f9f9f9",
+        "surface.canvas": "#e6e6e6",
+        "surface.chrome": "#f0f0f0",
+        "surface.panel": "#ffffff",
+        "text.disabled": "#a8a8a8",
+        "text.faint": "#707070",
+        "text.muted": "#616161",
+        "text.normal": "#242424",
+        "text.on_accent": "#ffffff"
+      },
+      "dark": {
+        "accent.soft": "#2e3a66",
+        "accent.solid": "#7a93f0",
+        "accent.text": "#9cb0f5",
+        "line.border": "#3a3a3a",
+        "line.control_edge": "#7a7a7a",
+        "line.divider": "#3a3a3a",
+        "state.hover": "#3d3d3d",
+        "state.pressed": "#4a4a4a",
+        "surface.background": "#292929",
+        "surface.canvas": "#141414",
+        "surface.chrome": "#1f1f1f",
+        "surface.panel": "#2b2b2b",
+        "text.disabled": "#6a6a6a",
+        "text.faint": "#a0a0a0",
+        "text.muted": "#c8c8c8",
+        "text.normal": "#eeeeee",
+        "text.on_accent": "#11162e"
+      }
+    }
   }
 }

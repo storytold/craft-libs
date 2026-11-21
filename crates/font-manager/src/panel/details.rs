@@ -1,9 +1,9 @@
 //! The details sheet: a family's every style in its own face, its facts and languages, and
 //! installing or removing it whole or a style at a time.
 
-mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod rows;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 
@@ -37,7 +37,7 @@ const HERO_POINTS: f32 = 96.0;
 const LANGUAGES_SHOWN: usize = 60;
 
 /// The facts' labels over their values.
-static FACT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
+const FACT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
 /// The installed catalog and the preview catalog, which the faces of the two owners load from.
 type Catalogs = (Arc<Catalog>, Arc<Catalog>);

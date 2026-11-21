@@ -1,7 +1,6 @@
 //! Stories of `NamedPresetRow`.
 
-use super::{NamedPresetRow, NamedPresetStyle, PresetError};
-use crate::contract::Bind;
+use super::{NameCheck, NamedPresetRow, NamedPresetStyle, PresetError};
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PickerField, PresetExport, PresetFiles, PresetPicker, PresetRow, PresetState};
 use crate::testing::pictures::paint_contour;
@@ -10,8 +9,13 @@ use egui::Ui;
 
 const TRACE: [&str; 6] = ["Default", "High Fidelity Photo", "Low Fidelity Photo", "3 Colors", "Sketched Art", "Line Art"];
 
-fn taken(rows: &[PresetRow<u32>], name: &str) -> Option<PresetError> {
-    rows.iter().any(|row| row.label.eq_ignore_ascii_case(name)).then_some(PresetError::NameTaken)
+fn taken(names: &Vec<&str>, name: &str) -> Option<PresetError> {
+    names.iter().any(|label| label.eq_ignore_ascii_case(name)).then_some(PresetError::NameTaken)
+}
+
+/// The rows' names, as the inputs of the name check.
+fn names(rows: &[PresetRow<u32>]) -> Vec<&str> {
+    rows.iter().map(|row| row.label.as_str()).collect()
 }
 
 /// The contour editor's row: a thumbnail picker, then Load…, Save… and New… as buttons.
@@ -22,12 +26,12 @@ fn contour_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .collect();
     let files =
         PresetFiles::new("contours", "Contours", &["shc"]).export(|_| Some(PresetExport { file_name: "Contours.shc".to_owned(), bytes: Vec::new() }));
-    let (contour, state) = data.value("contour", (None::<u32>, PresetState::<u32>::new()));
-    let picker = PresetPicker::new("Contour", Bind::bound(contour), &rows, Bind::bound(state)).field(PickerField::Thumbnail);
+    let ((contour, state), contour_at) = data.value_at("contour", (None::<u32>, PresetState::<u32>::new()));
+    let picker = PresetPicker::new("Contour", contour_at.bind(contour), &rows, contour_at.bind(state)).field(PickerField::Thumbnail);
     NamedPresetRow::new("Contour", picker)
         .style(NamedPresetStyle::Buttons)
         .suggest_name("Contour 5")
-        .check_name(|name| taken(&rows, name))
+        .check_name(NameCheck::new(names(&rows), taken))
         .built_in(|_| true)
         .files(&files)
         .show(ui)
@@ -40,12 +44,12 @@ fn trace_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows: Vec<PresetRow<u32>> = (1..).zip(TRACE).map(|(n, name)| PresetRow::item(n, name, 0)).collect();
     let files = PresetFiles::new("trace-presets", "Trace presets", &["json"])
         .export(|_| Some(PresetExport { file_name: "Trace.json".to_owned(), bytes: Vec::new() }));
-    let (preset, state) = data.value("preset", (Some(1_u32), PresetState::<u32>::new()));
-    let picker = PresetPicker::new("Trace preset", Bind::bound(preset), &rows, Bind::bound(state)).field(PickerField::Name);
+    let ((preset, state), preset_at) = data.value_at("preset", (Some(1_u32), PresetState::<u32>::new()));
+    let picker = PresetPicker::new("Trace preset", preset_at.bind(preset), &rows, preset_at.bind(state)).field(PickerField::Name);
     NamedPresetRow::new("Trace preset", picker)
         .style(NamedPresetStyle::Menu)
         .suggest_name("Preset 7")
-        .check_name(|name| taken(&rows, name))
+        .check_name(NameCheck::new(names(&rows), taken))
         .built_in(|_| true)
         .files(&files)
         .show(ui)

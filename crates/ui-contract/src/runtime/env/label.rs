@@ -47,7 +47,7 @@ impl Label {
     #[doc(hidden)]
     pub fn resolved(&self, words: &Words) -> Label {
         match self {
-            Label::Word(word) => Label::from_cow(words.get(*word)),
+            Label::Word(word) => words.translated_label(*word).map_or(Label::Static(word.english), Label::Shared),
             other => other.clone(),
         }
     }

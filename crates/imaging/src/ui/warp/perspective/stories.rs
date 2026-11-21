@@ -3,8 +3,8 @@
 
 use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::Point;
-use craft_ui::contract::{Bind, Show as _};
-use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
+use craft_ui::contract::Show as _;
+use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, ValueAt, story};
 use egui::{Ui, vec2};
 
 use super::overlay::CORNER;
@@ -54,27 +54,27 @@ fn warped_by(planes: &[Plane]) -> impl Fn(Point) -> Point + use<> {
 
 /// Shows `planes` over the transform preview stage: the layer's picture drawn through the planes (in Layout the
 /// planes' targets are their sources, so it stays), the planes over it.
-fn on_canvas(ui: &mut Ui, planes: &mut Vec<Plane>, mode: PlaneMode) -> StoryOutput {
+fn on_canvas(ui: &mut Ui, planes: &mut Vec<Plane>, planes_at: ValueAt<'_>, mode: PlaneMode) -> StoryOutput {
     let doc = Document::standard();
     let textures = doc.textures();
     let layer = doc.layer();
     doc.canvas(ui, Zoom::Fit, None, |ui, at| {
         let map = warped_by(planes);
         draw(ui, at, &doc, &textures, PreviewMap::function(layer, PreviewQuality::PLANE_CELLS, &map), 1.0, false);
-        StoryOutput::from(PerspectiveWarp::new("Planes", Bind::bound(&mut *planes), mode, 0).show_at(ui, at))
+        StoryOutput::from(PerspectiveWarp::new("Planes", planes_at.bind(&mut *planes), mode, 0).show_at(ui, at))
     })
 }
 
 #[story(PerspectiveWarp<'static>, covers = [Default], drive = Drive::Drag(Grip::part(CORNER.at(1)).toward(vec2(1.0, -1.0))), group = "Planes", title = "Layout, two linked planes")]
 fn two_linked_planes_in_layout(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let planes = data.value("planes", two_linked_planes(0.0));
-    on_canvas(ui, planes, PlaneMode::Layout)
+    let (planes, planes_at) = data.value_at("planes", two_linked_planes(0.0));
+    on_canvas(ui, planes, planes_at, PlaneMode::Layout)
 }
 
 #[story(PerspectiveWarp<'static>, covers = [Default], drive = Drive::Drag(Grip::part(CORNER.at(1)).toward(vec2(1.0, -1.0))), group = "Planes", title = "Warp, the picture follows")]
 fn two_linked_planes_in_warp(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let planes = data.value("warped", two_linked_planes(PULL));
-    on_canvas(ui, planes, PlaneMode::Warp)
+    let (planes, planes_at) = data.value_at("warped", two_linked_planes(PULL));
+    on_canvas(ui, planes, planes_at, PlaneMode::Warp)
 }
 
 /// A session over two linked planes, in `mode`.

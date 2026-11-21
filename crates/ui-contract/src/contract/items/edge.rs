@@ -16,7 +16,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn edge_parts(&mut self, comp: &C, pcx: &mut PartsCx<'_, C>) {
         self.edge = None;
         let Some(rule) = comp.edge_press() else { return };
-        let frame = crate::runtime::pointer::frame(pcx.measure.ui.ctx());
+        let frame = crate::runtime::pointer::frame_raw(pcx.measure.ui.ctx());
         let (Some(pos), true) = (frame.pos, frame.mods == rule.mods()) else { return };
         let Some(layout) = self.layout.clone() else { return };
         let view = self.below_header(pcx.content_rect);
@@ -59,7 +59,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn edge_step(&mut self, cx: &mut Cx<'_, C>) {
         let Some((above, below)) = self.edge.clone() else { return };
         if cx.part_activated(EDGE).is_some() {
-            let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
+            let mods = crate::runtime::pointer::frame_raw(&cx.core.ctx).mods;
             self.events.push(CollectionEvent::EdgePressed { above, below, mods });
         }
     }

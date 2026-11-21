@@ -756,7 +756,7 @@ fn check(cfg: Cfg) {
     }
     let psnr = 10.0 * (255f64 * 255.0 * n as f64 / sse.max(1e-9)).log10();
     println!("{}: {} frames, max diff {worst}, {:.3}% differ, PSNR {psnr:.2} dB", cfg.name, pics.len(), 100.0 * differ as f64 / n as f64);
-    // the same criteria as the ffmpeg-encoded fixtures (tests/mpeg2/oracle.rs)
+    // the same criteria as the ffmpeg-encoded fixtures (tests/it/mpeg2/oracle.rs)
     assert!(worst <= 4 && psnr >= 58.0, "{} (seed {:#x}): max diff {worst}, PSNR {psnr:.2}, first at {first_bad:?}", cfg.name, cfg.seed);
 }
 
@@ -857,7 +857,7 @@ fn frame_pictures_field_mc_and_dual_prime() {
 }
 
 /// ffmpeg's encoder writes no field pictures, 16x8 or dual-prime prediction, so the hostile sweep
-/// over its streams (`tests/mpeg2/fuzz_hostile.rs`) never reaches that code. Mutate and truncate
+/// over its streams (`tests/it/mpeg2/fuzz_hostile.rs`) never reaches that code. Mutate and truncate
 /// the synthetic streams instead; needs no ffmpeg.
 #[test]
 fn mutated_field_and_dual_prime_streams_never_panic() {

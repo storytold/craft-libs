@@ -2,8 +2,8 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx};
-use craft_ui::docking::{DockConfig, DockPanels, HidePanels, PanelSpec};
+use craft_ui::contract::{Bind, BodyCx, PlainData, Tracked};
+use craft_ui::docking::{DockConfig, DockPanels, HidePanels, PanelKey, PanelSpec, PanelSpecs};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::env::{BodyMode, ShellCx, ShellEntry, WindowKey};
 use craft_ui::testing::{Fixture, trial};
@@ -11,6 +11,7 @@ use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 const CANVAS: usize = 1;
 /// Docked, and named by the host's `HidePanels::Except`.
@@ -25,7 +26,11 @@ struct Panels {
     shown: Rc<RefCell<BTreeSet<usize>>>,
 }
 
-impl DockPanels<usize> for Panels {
+/// Panels named by number; the canvas is protected.
+#[derive(PlainData)]
+struct Specs;
+
+impl PanelSpecs<usize> for Specs {
     fn spec(&self, panel: &usize) -> PanelSpec {
         PanelSpec::new(format!("Panel {panel}"))
     }
@@ -33,7 +38,9 @@ impl DockPanels<usize> for Panels {
     fn permissions(&self, panel: &usize) -> Permissions {
         if *panel == CANVAS { Permissions::PROTECTED } else { Permissions::ALL }
     }
+}
 
+impl DockPanels<usize> for Panels {
     fn body(&mut self, panel: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {
         self.shown.borrow_mut().insert(*panel);
     }
@@ -44,7 +51,8 @@ fn layout() -> Layout<usize> {
     let start = Node::dock(DockEdge::Start, vec![Column::new(vec![Group::new(vec![TOOLBAR], 0)])]);
     let end = Node::dock(DockEdge::End, vec![Column::new(vec![Group::new(vec![LAYERS], 0)])]);
     let root = Node::split(Axis::X, SplitSize::Ratio(0.2), start, Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![CANVAS], 0), end));
-    let window = |panel: usize, x: f32| Floating::single(vec![panel], 0, Rect::from_min_size(Pos2::new(x, 60.0), Vec2::new(120.0, 120.0)));
+    let window =
+        |panel: usize, x: f32| Floating::single(panel as u64, vec![panel], 0, Rect::from_min_size(Pos2::new(x, 60.0), Vec2::new(120.0, 120.0)));
     Layout::new(Some(root), vec![window(PALETTE, 90.0), window(NAVIGATOR, 220.0)])
 }
 
@@ -54,10 +62,11 @@ fn shown_under(shell: ShellCx, keeps: bool) -> BTreeSet<usize> {
     let seen = Rc::clone(&shown);
     let mut fixture = Fixture::new(move |ui| {
         seen.borrow_mut().clear();
-        let mut workspace = Workspace::new(layout());
+        let mut workspace = Arc::new(Workspace::new(layout()));
         let mut panels = Panels { shown: Rc::clone(&seen) };
-        let keep = |panel: &usize| *panel == TOOLBAR || *panel == PALETTE;
-        let mut area = DockArea::new("Hidden dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default());
+        let specs = Tracked::new(Specs);
+        let keep = Tracked::new(BTreeSet::from([PanelKey::of(&TOOLBAR), PanelKey::of(&PALETTE)]));
+        let mut area = DockArea::new("Hidden dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default());
         if keeps {
             area = area.hide(HidePanels::Except(&keep));
         }
