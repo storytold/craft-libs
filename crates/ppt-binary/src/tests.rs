@@ -1273,3 +1273,93 @@ fn a_broken_chain_reads_the_newest_edits() {
     let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
     assert_eq!(p.slides[0].shapes[0].text.as_ref().unwrap().text(), "Newest");
 }
+
+/// A `SlideShowSlideInfoAtom` body ([MS-PPT] §2.6.6).
+fn show_info(effect: u8, dir: u8, flags: u16, speed: u8, time: i32, sound: u32) -> Vec<u8> {
+    let mut b = vec![];
+    b.extend_from_slice(&time.to_le_bytes());
+    b.extend_from_slice(&sound.to_le_bytes());
+    b.extend_from_slice(&[dir, effect]);
+    b.extend_from_slice(&flags.to_le_bytes());
+    b.extend_from_slice(&[speed, 0, 0, 0]);
+    b
+}
+
+/// fManualAdvance, fSound, fLoopSound, fStopSound and fAutoAdvance.
+const MANUAL: u16 = 1;
+const SOUND: u16 = 1 << 4;
+const LOOP: u16 = 1 << 6;
+const STOP: u16 = 1 << 8;
+const AUTO: u16 = 1 << 10;
+
+/// The test document with one empty slide holding `info`, and `extra` records in the document.
+fn with_show_info(info: &[u8], extra: &[Vec<u8>]) -> Presentation {
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), atom(rt::SLIDE_SHOW_SLIDE_INFO, 0, info), drawing(None, &[])]);
+    let (cu, stream, pics) = streams_with_document(0xE391_C05F, 1, master(), slide, None, &[], extra);
+    import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap()
+}
+
+/// #2480: a slide's transition is read from its `SlideShowSlideInfoAtom`: the effect and its
+/// direction, the speed and the automatic advance.
+#[test]
+fn a_slides_transition_is_read() {
+    let p = with_show_info(&show_info(4, 5, MANUAL | AUTO, 2, 3000, 0), &[]);
+    let t = p.slides[0].transition.as_ref().expect("a transition");
+    assert_eq!((t.kind.as_str(), t.option.as_str()), ("cover", "ru"));
+    assert_eq!(t.duration_ms, 250);
+    assert!(t.advance_on_click);
+    assert_eq!(t.advance_after_ms, Some(3000));
+    assert_eq!((t.sound, t.sound_loop, t.stop_sound), (None, false, false));
+
+    for (effect, dir, speed, kind, option, ms) in
+        [(13, 3, 0, "split", "vertIn", 750), (9, 6, 1, "wipe", "ld", 500), (11, 1, 2, "shape", "in", 250), (0, 1, 1, "cut", "throughBlack", 500)]
+    {
+        let p = with_show_info(&show_info(effect, dir, MANUAL, speed, 0, 0), &[]);
+        let t = p.slides[0].transition.as_ref().expect("a transition");
+        assert_eq!((t.kind.as_str(), t.option.as_str(), t.duration_ms), (kind, option, ms), "effect {effect}");
+        assert_eq!(t.advance_after_ms, None);
+    }
+}
+
+/// #2480: a plain Cut that advances on click is no transition; an effect the model has no match
+/// for keeps the slide's timing without guessing one; a slide time is held to the spec's range.
+#[test]
+fn a_slide_without_an_effect_keeps_only_its_timing() {
+    assert_eq!(with_show_info(&show_info(0, 0, MANUAL, 0, 0, 0), &[]).slides[0].transition, None);
+    let p = with_show_info(&show_info(12, 0, AUTO | STOP, 0, i32::MAX, 0), &[]);
+    let t = p.slides[0].transition.as_ref().expect("a transition");
+    assert_eq!(t.kind, "none");
+    assert!(!t.advance_on_click);
+    assert_eq!(t.advance_after_ms, Some(86_399_000));
+    assert!(t.stop_sound);
+    let p = with_show_info(&show_info(5, 0, MANUAL | AUTO, 0, -5, 0), &[]);
+    assert_eq!(p.slides[0].transition.as_ref().and_then(|t| t.advance_after_ms), Some(0));
+}
+
+/// A `SoundCollectionContainer` with one WAV sound, id `id`.
+fn sound_collection(id: &str, name: &str, wav: &[u8]) -> Vec<u8> {
+    let sound = container(
+        rt::SOUND,
+        0,
+        &[atom(rt::CSTRING, 0, &utf16(name)), atom(rt::CSTRING, 1, &utf16(".wav")), atom(rt::CSTRING, 2, &utf16(id)), atom(rt::SOUND_DATA, 0, wav)],
+    );
+    container(rt::SOUND_COLLECTION, 5, &[atom(0x07E5, 0, &7u32.to_le_bytes()), sound])
+}
+
+/// #2480: a transition's sound is the document's embedded sound its id names, with its loop flag;
+/// an id the collection doesn't hold plays none.
+#[test]
+fn a_transitions_sound_comes_from_the_sound_collection() {
+    let wav: Vec<u8> = [b"RIFF".as_slice(), &[0; 4], b"WAVEfmt ", &[1, 2, 3]].concat();
+    let p = with_show_info(&show_info(5, 0, MANUAL | SOUND | LOOP, 1, 0, 7), &[sound_collection("7", "Chime", &wav)]);
+    let t = p.slides[0].transition.as_ref().expect("a transition");
+    let media = p.media.iter().find(|m| Some(m.id) == t.sound).expect("the sound's media");
+    assert_eq!((media.name.as_str(), media.content_type.as_str()), ("Chime.wav", "audio/wav"));
+    assert_eq!(media.data.as_slice(), wav.as_slice());
+    assert!(t.sound_loop);
+
+    let p = with_show_info(&show_info(5, 0, MANUAL | SOUND | LOOP, 1, 0, 8), &[sound_collection("7", "Chime", &wav)]);
+    let t = p.slides[0].transition.as_ref().expect("a transition");
+    assert_eq!((t.sound, t.sound_loop), (None, false));
+    assert!(p.media.iter().all(|m| !m.content_type.starts_with("audio/")));
+}

@@ -24,6 +24,9 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
   lines, shadows, pictures (PNG, JPEG, DIB, TIFF, EMF and WMF), tables (as groups of shapes, the
   way the file stores them), and text with the master's styles resolved into it, along with
   fields, numbering, headers and footers, notes, and hidden slides.
+- Slide transitions: the effect and direction where the model has a match, the speed, advancing
+  on click and after a time, and the transition's sound (WAV or AIFF) with its loop and
+  stop-sound flags.
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
   bounded.
