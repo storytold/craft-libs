@@ -334,3 +334,37 @@ fn four_up_webp_halves_the_quality_until_lossless() {
     let [half, quarter] = four_up_options(&host);
     assert_eq!((half.format, quarter.format), (WebFormat::Png8, WebFormat::Gif));
 }
+
+// In a window smaller than its pane and settings column side by side, Save for Web still fits it: the dialog and its
+// buttons stay inside the window, so its settings are reachable (storytold/photocraft#9965). Where its least width
+// fits the window it is placed inside it; where it does not, the settings go below the panes and the body scrolls.
+#[trial]
+fn save_for_web_fits_a_small_window() {
+    for room in [vec2(512.0, 384.0), vec2(480.0, 360.0), vec2(1400.0, 1000.0)] {
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.window(room);
+        host.borrow_mut().open(HostedSaveForWeb::new("poster.psd", PixelSize::new(4000, 3000), texture()));
+        fixture.idle(10);
+        let screen = Rect::from_min_size(Pos2::ZERO, room).expand(0.5);
+        let dialog = fixture.by_label("Save for Web (Legacy)").unwrap_or_else(|| panic!("{room:?}: the dialog shows")).rect;
+        assert!(screen.contains_rect(dialog), "{room:?}: the dialog at {dialog:?} is outside the window");
+        // Across, the settings column and its rows stay inside the dialog (down, its body scrolls); squeezed beside the
+        // panes the column had no width and its rows ran past the dialog's edge.
+        let settings = fixture.by_label("Settings").unwrap_or_else(|| panic!("{room:?}: the settings show")).rect;
+        assert!(settings.width() > 100.0, "{room:?}: the settings column has room: {settings:?}");
+        let preview = fixture.by_label("Preview").unwrap_or_else(|| panic!("{room:?}: the view row shows")).rect;
+        if room.x >= 1000.0 {
+            assert!(settings.min.x >= preview.max.x, "{room:?}: with room the settings stay beside the panes");
+        } else {
+            assert!(settings.min.y > preview.max.y, "{room:?}: in a small window the settings go below the panes");
+        }
+        for label in ["Preview", "Settings", "Format", "Save…", "Cancel"] {
+            let target = fixture.by_label(label).unwrap_or_else(|| panic!("{room:?}: {label} shows")).rect;
+            let across = |r: Rect| (r.min.x, r.max.x);
+            let inside = |outer: Rect| outer.min.x - 0.5 <= target.min.x && target.max.x <= outer.max.x + 0.5;
+            assert!(inside(dialog) && inside(screen), "{room:?}: {label} across {:?} leaves the dialog across {:?}", across(target), across(dialog));
+        }
+    }
+}

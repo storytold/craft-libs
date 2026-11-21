@@ -184,6 +184,9 @@ struct Live {
     table: Selection<usize>,
     /// The palette index whose colour request is out.
     editing: Option<u16>,
+    /// The width the panes and the settings took side by side, while that is wider than the room the dialog's body has:
+    /// the settings then go below the panes, until the body has that room again.
+    wide: Option<f32>,
 }
 
 impl Default for Live {
@@ -201,6 +204,7 @@ impl Default for Live {
             reported: 0,
             table: Selection::default(),
             editing: None,
+            wide: None,
         }
     }
 }
@@ -482,7 +486,11 @@ impl<'a> SaveForWebDialog<'a> {
             let mut ask = None;
             let mut slice_click = None;
             let palette = palette_of(&pictures, live.selected);
-            Row::new().show(ui, |ui, _| {
+            // With too little room for the panes beside the settings (a small window), the settings go below them: the
+            // dialog's body scrolls, so the column keeps its width (storytold/photocraft#9965).
+            let room = ui.available_width();
+            let stacked = live.wide.is_some_and(|wide| wide > room + 0.5);
+            let mut body = |ui: &mut Ui| {
                 Stack::new().id_salt("preview").show(ui, |ui, _| {
                     let reads = panes::Panes {
                         words: &words,
@@ -506,7 +514,13 @@ impl<'a> SaveForWebDialog<'a> {
                         options::Kit { words: &words, sizing: &sizing, units: &units, presets: &presets, palette, has_slices: !slices.is_empty() };
                     options::show(ui, &kit, options, &mut live.link, &mut live.table, &mut live.editing, &mut ask)
                 });
-            });
+            };
+            if stacked {
+                Stack::new().id_salt("stacked").show(ui, |ui, _| body(ui));
+            } else {
+                let row = Row::new().show(ui, |ui, _| body(ui)).output.rect.width();
+                live.wide = (row > room + 0.5).then_some(row);
+            }
             if let Some(panes::SliceClick { number, add }) = slice_click {
                 options.slices.select(number, add);
             }

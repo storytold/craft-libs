@@ -77,6 +77,12 @@ impl Frames {
         self.screen = room.max(Self::SCREEN);
     }
 
+    /// The size of the egui screen rect in every following frame, exactly `size`: a window smaller than the default,
+    /// for layout that must fit a small window. Presses outside it miss the window.
+    pub fn window(&mut self, size: Vec2) {
+        self.screen = size;
+    }
+
     /// A fresh context with the runtime installed.
     pub fn new() -> Self {
         let mut frames = Self::uninstalled();

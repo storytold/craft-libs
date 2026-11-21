@@ -313,6 +313,13 @@ impl Fixture {
         self
     }
 
+    /// A window exactly `size` points across, smaller than the default 800 by 600 if need be, for layout that must fit
+    /// a small window; the room stays as it was. Presses outside the window miss it.
+    pub fn window(&mut self, size: Vec2) -> &mut Self {
+        self.frames.window(size);
+        self
+    }
+
     /// The room of a host kind: the same as [`Fixture::room`] with that kind's size.
     pub fn in_room(&mut self, room: Room) -> &mut Self {
         self.room(room.size())

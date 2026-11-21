@@ -4637,6 +4637,7 @@ Text dumps for tests: ordered `key = value` lines compared exactly with a file, 
   - `pub fn command_state(&mut self, command: impl Into<CommandRef>, state: CommandState) -> &mut Self`. Gives app-scope `command` this state in every following pass, as an app's `FrameInput.commands` does; a later
   - `pub fn gate(&mut self, gate: CommandGate) -> &mut Self`. Sets the app's one gate over commands for every following pass, as an app's `FrameInput.commands` does.
   - `pub fn room(&mut self, room: Vec2) -> &mut Self`. The room the story is shown in.
+  - `pub fn window(&mut self, size: Vec2) -> &mut Self`. A window exactly `size` points across, smaller than the default 800 by 600 if need be, for layout that must fit
   - `pub fn in_room(&mut self, room: Room) -> &mut Self`. The room of a host kind: the same as [`Fixture::room`] with that kind's size.
   - `pub fn direction(&mut self, direction: Direction) -> &mut Self`. The layout direction.
   - `pub fn theme(&mut self, mode: Mode, contrast: Contrast) -> &mut Self`. Light or dark, and standard or high contrast.
