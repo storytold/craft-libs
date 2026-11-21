@@ -538,11 +538,11 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn add_document(&mut self, document: &D)`. Adds `document` to the first docked group, or to a new docked group when there is none. A document a group
   - `pub fn to_actions<P: Clone + Eq + Hash>(&self, layout: &Layout<P>, panel_of: impl Fn(u64) -> P) -> Vec<Action<P>>`. The dock actions that put `self` into `layout`, for the dock to draw the windows. The
 - `craft_behavior::dock::Floating`: `pub struct Floating<P> { pub id: u64, pub column: Column<P>, pub rect: Rect, pub native: Option<Placement>, pub edge: Option<DockEdge> }`. A floating window: one column of groups, the same [`Column`] a dock holds. Nothing sits beside the column
-  - `pub fn new(column: Column<P>, rect: Rect) -> Self`. A window holding `column`. Each call makes a new window, with a fresh [`Self::id`]: build
-  - `pub fn single(panels: Vec<P>, active: usize, rect: Rect) -> Self`. A window with one group. Each call makes a new window, as [`Self::new`] does.
-  - `pub fn with_id(mut self, id: u64) -> Self`. The window with `id`, for a layout the app builds in code, such as a default layout:
+  - `pub fn new(id: u64, column: Column<P>, rect: Rect) -> Self`. The window `id` holding `column`. Ids are unique within a layout; a window added to a live layout takes its id
+  - `pub fn single(id: u64, panels: Vec<P>, active: usize, rect: Rect) -> Self`. The window `id` with one group.
+  - `pub fn with_id(mut self, id: u64) -> Self`. The window with `id` in place of its own. Ids must be unique within a layout.
   - `pub fn panels(&self) -> impl Iterator<Item = &P>`. Every panel in the window, top group first.
-  - `pub fn stack(groups: Vec<Group<P>>, rect: Rect) -> Option<Self>`. A window of `groups`, stacked top to bottom, expanded. `None` without groups. Each call makes a new window,
+  - `pub fn stack(id: u64, groups: Vec<Group<P>>, rect: Rect) -> Option<Self>`. The window `id` of `groups`, stacked top to bottom, expanded. `None` without groups.
   - `pub fn groups(&self) -> &[Group<P>]`. The window's groups, top to bottom.
   - `pub fn contains<Q: ?Sized + PartialEq>(&self, panel: &Q) -> bool where P: std::borrow::Borrow<Q>,`. True when a group of this window holds `panel`. Takes any borrowed form of `P`, such
 - `craft_behavior::dock::Group`: `pub struct Group<P> { pub panels: Vec<P>, pub active: usize, pub minimized: bool, pub height: Option<f32>, pub flyout_width: Option<f32>, pub flyout_offset: Option<f32> }`. Tabs that move, minimize and size together in a column, docked or floating.
@@ -553,7 +553,9 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub const fn with_flyout_width(mut self, width: Option<f32>) -> Self`. The location with the group's flyout `width` points wide.
   - `pub const fn with_flyout_offset(mut self, offset: Option<f32>) -> Self`. The location with the group's flyout top `offset` points from its icons' top.
 - `craft_behavior::dock::Layout`: `pub struct Layout<P> { pub root: Option<Node<P>>, pub floating: Vec<Floating<P>> }`. The panels of a workspace: a docked tree plus floating windows. Every panel occurs once.
-  - `pub fn new(root: Option<Node<P>>, floating: Vec<Floating<P>>) -> Self`. A layout with the docked tree `root` and the floating windows `floating`.
+  - `pub fn new(root: Option<Node<P>>, floating: Vec<Floating<P>>) -> Self`. A layout with the docked tree `root` and the floating windows `floating`. New windows take ids above every id
+  - `pub fn fresh_window_id(&mut self) -> u64`. An id for a new floating window: above every window id the layout held when it was built or loaded and every
+  - `pub fn window_floor(&self) -> u64`. The least id above every id the layout holds or has held.
   - `pub fn validate(&self) -> Result<(), DockError>`. Check depth, allocation bounds, geometry, selection, globally unique panel ownership and
   - `pub fn panels(&self) -> Vec<&P>`. Iterate identities without recursion. On excessive input returns no more than the limit.
   - `pub fn contains(&self, panel: &P) -> bool`. Whether the layout holds `panel`, docked or floating.
@@ -600,10 +602,17 @@ The dock model: the tree of splits over panel frames, the side of a group a drop
   - `pub fn new_dock(side: DockEdge) -> Self`. Builds [`Target::NewDock`].
   - `pub fn float(rect: Rect) -> Self`. Builds [`Target::Float`] with no edge: the area takes the edge nearer `rect`.
   - `pub fn float_with_edge(rect: Rect, edge: Option<DockEdge>) -> Self`. Builds [`Target::Float`] with the edge a collapsed window keeps to.
-- `craft_behavior::dock::Workspace`: `pub struct Workspace<P> { pub version: u32, pub layout: Layout<P>, pub hidden: Vec<(P, Location<P>)>, pub floated: Vec<(P, Location<P>)> }`. A saved arrangement of panels: the [`Layout`] and the closed panels' former places.
+- `craft_behavior::dock::Workspace`: `pub struct Workspace<P>`. A saved arrangement of panels: the [`Layout`] and the closed panels' former places.
   - `pub const VERSION: u32`. The format version written to files. Version 4 saves a floating window as one column; older floating
-  - `pub fn revision(&self) -> u64`. The revision of this live workspace: it changes with every [`replace`](Self::replace) and nothing else.
-  - `pub fn replace(&mut self, with: Workspace<P>)`. Replaces the arrangement with `with` and moves to the next revision.
+  - `pub fn version(&self) -> u32`. The format version the workspace was read with.
+  - `pub fn layout(&self) -> &Layout<P>`. The current arrangement.
+  - `pub fn hidden(&self) -> &[(P, Location<P>)]`. The closed panels, and panels the application does not register now, with where each one goes back.
+  - `pub fn floated(&self) -> &[(P, Location<P>)]`. The floating panels with the docked location each one left.
+  - `pub fn revision(&self) -> Revision`. The revision of this workspace value: it moves with every write, and no other value has it.
+  - `pub fn generation(&self) -> u64`. The generation of this live workspace: it moves with every [`replace`](Self::replace) and nothing else.
+  - `pub fn raise_window_floor(&mut self, floor: u64)`. Keeps the ids of new floating windows at or above `floor`. A dock that showed windows below `floor` raises a
+  - `pub fn forget_hidden(&mut self, forget: impl Fn(&P) -> bool)`. Drops the closed-panel records of the panels `forget` names, so reopening them does not restore their place.
+  - `pub fn replace(&mut self, with: Workspace<P>)`. Replaces the arrangement with `with` and moves to the next generation. The windows of `with` take ids this
   - `pub fn apply(&mut self, action: Action<P>, locked: bool, permissions: impl Fn(&P) -> Permissions) -> Result<Vec<P>, DockError>`. Apply one action. Closed panels record where they go back, so each one can be reopened
   - `pub fn apply_all(&mut self, actions: impl IntoIterator<Item = Action<P>>, locked: bool, permissions: impl Fn(&P) -> Permissions,) -> Result<Vec<P>, DockError>`. Apply every action in order, or none, as [`Self::apply`] does. Returns the panels the
 - `craft_behavior::dock::WorkspaceChrome`: `pub struct WorkspaceChrome { pub menu_bar: bool, pub tool_rail: bool, pub options_bar: bool, pub status_bar: bool }`. Chrome a workspace remembers beside the dock layout: which bars show. The default shows every bar.
@@ -1955,6 +1964,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn labelled_with<C: Show, D: Show>(&mut self, ui: &mut Ui, key: impl Hash + Debug, label: Label, side: SideLabel, child: C, content: D,) -> C::Output`. `labelled`, with `content` shown inside the label after its text (a sample of what the option picks). The
   - `pub fn style<C: Container>(&self) -> Option<&'a C::Style>`. The style of the container `C` whose body this is, as step 2 resolved it for this pass: the one way a body
   - `pub fn gap(&self) -> Option<f32>`. The gap the body's layout puts between its children (`ContainerProps::body_gap`), for a body that places
+  - `pub fn derived<K: crate::contract::MemoProps, V: Send + Sync + 'static>(&self, key: &K, build: impl FnOnce() -> V) -> std::sync::Arc<V>`. The value this body derives from `key`: kept while `key` is unchanged, else built by `build`
   - `pub fn take_cancel(&mut self) -> bool`. Takes the Escape of this pass that no component took: a field that clears on Escape passes it on once it
 - `craft_ui::contract::BodyLayout`: `pub enum BodyLayout { Stack, Row { wrap: bool, align: RowAlign }, Grid { columns: Cow<'static, [ColumnWidth]>, fit: GridFit, cells: CellAlign } }`. How a body lays out its children, in reading order: mirrored under a right-to-left direction.
   - `pub const fn stack() -> Self`. Children one under another.
@@ -1971,7 +1981,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn initially_open(mut self, on: bool) -> Self`. Whether the body starts open.
   - `pub const fn animated(mut self, on: bool) -> Self`. Whether opening and closing animate.
 - `craft_ui::contract::CollectionEvent`: `pub enum CollectionEvent<K, E> { Selection(SelectionChange<K>), LeadMoved { key: K, by: LeadSource }, Activate(K), Rested(K), EmptyActivated, EmptyContextMenu { at: Pos2 }, Preview(K), ContextMenu(ContextMenuRequest<K>), EdgePressed { above: K, below: K, mods: craft_keymap::Mods }, CommandClick { key: K, mods: craft_keymap::Mods }, Delete(Vec<K>), Open(OpenChange<K>), Reorder(EditEvent<ReorderMove<K>>), Move(EditEvent<Vec2>), Dropped { at: DropAt<K>, op: DropOperation, payload: DropPayload }, Zoom { factor: f32, about: Pos2 }, Rename(EditEvent<Rename<K>>), Toggle(EditEvent<ToggleEdit<K>>), Column(ColumnEvent), Item(K, E) }`. What a collection reports, in drawing order.
-- `craft_ui::contract::CollectionProps`: `pub struct CollectionProps { pub select: SelectMode, pub reorder: Option<ReorderRule>, pub rename: bool, pub rename_column: Option<ColumnKey>, pub slow_click_rename: bool, pub columns: Vec<ColumnSpec>, pub sort: Option<ColumnSort>, pub empty: Option<Label>, pub activate: ActivateOn, pub striped: bool, pub allow_empty: bool, pub lead_on_open: LeadOnOpen, pub lead_follows_hover: bool, pub arrows_select: bool, pub focus_on_press: bool, pub rows_stamp: Option<u64>, pub space: SpaceAction, pub type_ahead: bool, pub arrows_wrap: bool, pub header: bool, pub digit_keys: bool, pub menu_on_click: bool, pub item_keys: ItemKeys, pub marquee: bool, pub deletable: bool, pub drag_payload: Option<DragPayload>, pub drag_count: Option<Counted>, pub natural_height: bool, pub min_rows: u16, pub max_rows: Option<u16>, pub row_height: RowHeight, pub command_click: bool, pub notch: Option<Notch>, pub overflow: Axis, pub pages: bool, pub current: Option<Arc<dyn Any + Send + Sync>>, pub select_under_drag: bool }`. What a collection reads from the app: plain data. A new builder's name is added to the forwarder list in
+- `craft_ui::contract::CollectionProps`: `pub struct CollectionProps { pub select: SelectMode, pub reorder: Option<ReorderRule>, pub rename: bool, pub rename_column: Option<ColumnKey>, pub slow_click_rename: bool, pub columns: Vec<ColumnSpec>, pub sort: Option<ColumnSort>, pub empty: Option<Label>, pub activate: ActivateOn, pub striped: bool, pub allow_empty: bool, pub lead_on_open: LeadOnOpen, pub hover_lead: HoverLead, pub arrows_select: bool, pub focus_on_press: bool, pub rows_stamp: Option<u64>, pub space: SpaceAction, pub type_ahead: bool, pub arrows_wrap: bool, pub header: bool, pub digit_keys: bool, pub menu_on_click: bool, pub item_keys: ItemKeys, pub marquee: bool, pub deletable: bool, pub drag_payload: Option<DragPayload>, pub drag_count: Option<Counted>, pub natural_height: bool, pub min_rows: u16, pub max_rows: Option<u16>, pub row_height: RowHeight, pub command_click: bool, pub notch: Option<Notch>, pub overflow: Axis, pub pages: bool, pub current: Option<Arc<dyn Any + Send + Sync>>, pub select_under_drag: bool }`. What a collection reads from the app: plain data. A new builder's name is added to the forwarder list in
   - `pub const fn new() -> Self`. Collection props with every setting at its default.
   - `pub const fn select_under_drag(mut self, on: bool) -> Self`. Whether a foreign drag resting over an unselected item selects it (`select_under_drag`).
   - `pub fn select(mut self, mode: SelectMode) -> Self`. What can be selected.
@@ -1988,7 +1998,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn striped(mut self, on: bool) -> Self`. Odd rows carry `RowState.striped`.
   - `pub const fn allow_empty(mut self, on: bool) -> Self`. A press on the empty space below the rows empties the selection.
   - `pub const fn lead_on_open(mut self, at: LeadOnOpen) -> Self`. Where the lead starts.
-  - `pub const fn lead_follows_hover(mut self, on: bool) -> Self`. The lead follows the pointer over the rows.
+  - `pub const fn hover_lead(mut self, hover: HoverLead) -> Self`. What the pointer moving over the rows changes.
   - `pub const fn arrows_select(mut self, on: bool) -> Self`. Whether the arrow keys select the row they move the lead to.
   - `pub const fn type_ahead(mut self, on: bool) -> Self`. Typed letters move the lead (`CollectionProps::type_ahead`).
   - `pub const fn arrows_wrap(mut self, on: bool) -> Self`. The arrow keys wrap at the ends (`CollectionProps::arrows_wrap`).
@@ -2046,7 +2056,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Common`: `pub struct Common { pub label: Label, pub tooltip: Option<Tooltip>, pub description: Option<String>, pub selected: Option<bool> }`. What every component carries: the props the pipeline reads at step 1.
   - `pub const fn new() -> Common`. A `Common` with every prop unset, which the derive's constructors start from.
 - `craft_ui::contract::Component`: re-export of `craft_ui_macros::Component` (outside these crates).
-- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub pad_edges: PadEdges, pub sizing: Sizing, pub content_in_bar: bool, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub wrap_width: Option<WrapWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
+- `craft_ui::contract::ContainerProps`: `pub struct ContainerProps { pub mount: Mount, pub surface: Option<SurfaceKind>, pub pad: Pad, pub pad_edges: PadEdges, pub sizing: Sizing, pub content_in_bar: bool, pub room_height: Option<f32>, pub layout: BodyLayout, pub header: Option<HeaderRegion>, pub scroll: Option<Scroll>, pub footer: Option<FooterRegion>, pub end: Option<EndRegion>, pub help: Option<Label>, pub position: Option<SetPosition>, pub focus: FocusPolicy, pub collapse: Option<Collapse>, pub body_gap: Gap, pub least_width: Option<LeastWidth>, pub least_height: Option<f32>, pub wrap_width: Option<WrapWidth>, pub edge_rule: bool, pub child_size: Option<ControlSize>, pub child_glyphs: Option<GlyphRole>, pub arena: bool, pub scroll_owner: bool, pub gates: bool, pub transform: Option<CanvasTransform>, pub theme: Option<ThemeScope>, pub command_scope: Option<CommandScope>, pub live: Option<Politeness>, pub label: Option<SideLabel>, pub roving: Option<Roving>, pub save: Option<SaveKey>, pub outer_edit: bool, pub collection_body: bool, pub label_column: bool, pub labels: Option<LabelScheme> }`. What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
   - `pub const fn new() -> Self`. Props with every field at its default.
   - `pub fn mount(mut self, mount: Mount) -> Self`. Where the container lives.
   - `pub const fn surface(mut self, surface: SurfaceKind) -> Self`. The surface the container paints.
@@ -2067,6 +2077,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn collapse(mut self, collapse: Collapse) -> Self`. Collapse configuration.
   - `pub const fn body_gap(mut self, gap: Gap) -> Self`. The spacing between the children of the body.
   - `pub const fn least_width(mut self, least: LeastWidth) -> Self`. The least width of the content, from a size role.
+  - `pub const fn least_height(mut self, points: f32) -> Self`. The least height of an unwrapped `Row` body's line ([`least_height`](Self::least_height)).
   - `pub const fn wrap_width(mut self, wrap: WrapWidth) -> Self`. The line length of the body's paragraphs while the container takes its width from its content, from a size role.
   - `pub const fn edge_rule(mut self, on: bool) -> Self`. Draws a divider along the inner edge of a container mounted as an edge pane.
   - `pub const fn child_size(mut self, size: ControlSize) -> Self`. A scope size for the regions: header, body, end region and footer.
@@ -2244,6 +2255,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn show(self: Box<Self>, ui: &mut PaintUi<'_>, key: HostedKey, rect: Rect)`. Shows the leaf at `rect` under `key` and hands its output on.
 - `craft_ui::contract::HostedKey`: `pub type HostedKey = (&'static str, usize)`. The key a hosted leaf is measured and shown under: the slot's name and its index among the host's slots.
 - `craft_ui::contract::Hover`: `pub struct Hover { pub over: bool, pub entered: bool, pub left: bool, pub clicked: bool }`. A command-bound control's report of the pointer's stay over it.
+- `craft_ui::contract::HoverLead`: `pub enum HoverLead { Off, Lead, LeadAndSelection }`. What the pointer moving over the rows changes.
 - `craft_ui::contract::Input`: re-export of `craft_behavior::input::Input`.
 - `craft_ui::contract::InsideLabel`: `pub struct InsideLabel`. What a control shows in its slot for a side label with `FieldLayout::Inside` (`EnvView::inside_label`): the
   - `pub const PART: PartKey`. The part a control declares its slot as (`PartsCx::label_part`).
@@ -3515,6 +3527,12 @@ The cursor service (8.5): requests of a pass collect here, the end hook picks th
   - `pub fn new(layer: LayerKey, clip: Rect) -> Self`. The region of `clip` on `layer`.
 - `craft_ui::runtime::cursor::current`: `pub fn current(ctx: &Context) -> Option<Cursor>`. The cursor the last pass of the running viewport settled on; `None` is the default arrow.
 
+## `craft_ui::runtime::derived`
+
+Derived values: data a component computes from its inputs and keeps across passes. [`derived`] keeps one value per
+
+- `craft_ui::runtime::derived::derived`: `pub fn derived<K: MemoProps, V: Send + Sync + 'static>(ctx: &Context, id: Id, key: &K, build: impl FnOnce() -> V) -> Arc<V>`. The value of the component `id` derived from `key`: the kept one while `key` is the one it was built from, else
+
 ## `craft_ui::runtime::drag`
 
 The drag session (8.4): one per context. It holds the payload, the preview, the held modifiers, the operation and the
@@ -4336,7 +4354,7 @@ The style layer: the state set and its resolver, style parts and `ComponentStyle
   - `pub fn pixels(self, pixels_per_point: f32) -> f32`. The width in whole physical pixels on a display of `pixels_per_point`.
   - `pub fn points(self, pixels_per_point: f32) -> f32`. The width in points on a display of `pixels_per_point`.
 - `craft_ui::style::ScrollBarKind`: `pub enum ScrollBarKind { Floating, Docked }`. Which of the two scroll bar looks a bar has.
-- `craft_ui::style::ScrollBarLook`: `pub struct ScrollBarLook { pub track: Stateful<StyleColor>, pub thumb: Stateful<StyleColor>, pub thickness: f32, pub thumb_width: Stateful<f32>, pub min_thumb: f32, pub fade: f32 }`. A scroll bar's track and thumb, of a [`ScrollBarKind`].
+- `craft_ui::style::ScrollBarLook`: `pub struct ScrollBarLook { pub track: Stateful<StyleColor>, pub thumb: Stateful<StyleColor>, pub thickness: f32, pub thumb_width: Stateful<f32>, pub min_thumb: f32 }`. A scroll bar's track and thumb, of a [`ScrollBarKind`].
 - `craft_ui::style::Span`: `pub struct Span<'a> { pub text: Cow<'a, str>, pub italic: bool, pub tabular: bool, pub mono: bool, pub muted: bool, pub shortcut: bool, pub highlight: bool, pub underline: bool, pub strong: bool, pub flag: Option<Tone> }`. One styled stretch of a run.
   - `pub fn new(text: impl Into<Cow<'a, str>>) -> Self`. A plain span.
   - `pub fn flag(mut self, tone: Tone) -> Self`. Underlines the span in the ink of `tone` (spelling `Bad`, grammar `Info`).
@@ -4473,7 +4491,9 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.
 - `craft_ui::testing::is_measuring`: re-export of `craft_ui::runtime::measure::active` (defined outside these crates).
 - `craft_ui::testing::kept_measurement_leaves`: re-export of `craft_ui::runtime::layout_memory::kept_leaves`.
+- `craft_ui::testing::last_frame_derived_builds`: re-export of `craft_ui::runtime::measure::last_frame_derived_builds` (defined outside these crates).
 - `craft_ui::testing::last_frame_memo_runs`: re-export of `craft_ui::runtime::measure::last_frame_memo_runs` (defined outside these crates).
+- `craft_ui::testing::last_pass_derived_builds`: re-export of `craft_ui::runtime::measure::last_pass_derived_builds` (defined outside these crates).
 - `craft_ui::testing::last_pass_measure_asks`: re-export of `craft_ui::runtime::measure::last_pass_measure_asks` (defined outside these crates).
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_memo_key_bytes`: re-export of `craft_ui::runtime::measure::last_pass_memo_key_bytes` (defined outside these crates).
@@ -4636,6 +4656,7 @@ Text dumps for tests: ordered `key = value` lines compared exactly with a file, 
   - `pub fn take_paint(&mut self) -> Option<fixture::FullOutput>`. What the frames painted since the last call, as a renderer takes it: the latest frame's shapes and every texture
   - `pub fn command_state(&mut self, command: impl Into<CommandRef>, state: CommandState) -> &mut Self`. Gives app-scope `command` this state in every following pass, as an app's `FrameInput.commands` does; a later
   - `pub fn gate(&mut self, gate: CommandGate) -> &mut Self`. Sets the app's one gate over commands for every following pass, as an app's `FrameInput.commands` does.
+  - `pub fn overrides(&mut self, overrides: std::sync::Arc<craft_keymap::Overrides>) -> &mut Self`. Sets the user's binding overrides for every following pass, as an app's `FrameInput.commands` does: the keymap is
   - `pub fn room(&mut self, room: Vec2) -> &mut Self`. The room the story is shown in.
   - `pub fn in_room(&mut self, room: Room) -> &mut Self`. The room of a host kind: the same as [`Fixture::room`] with that kind's size.
   - `pub fn direction(&mut self, direction: Direction) -> &mut Self`. The layout direction.
