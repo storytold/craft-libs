@@ -36,6 +36,7 @@ pub mod requests;
 pub mod sampler;
 pub(crate) mod shift;
 pub mod toast;
+pub(crate) mod toggle_sweep;
 pub mod wheel;
 pub mod windows;
 pub mod words;
