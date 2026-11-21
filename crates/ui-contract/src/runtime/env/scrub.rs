@@ -3,7 +3,7 @@
 use super::EnvValue;
 
 /// Which drags scrub a value, an `AppValues` env value.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ScrubDrags {
     /// The body of a field not in edit and a scrubbing side label scrub.

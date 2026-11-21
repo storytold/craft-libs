@@ -43,6 +43,7 @@ use crate::runtime::egui::{areas, pass};
 use crate::runtime::env::Label;
 use crate::runtime::memory::Facts;
 use crate::runtime::overlay;
+use crate::runtime::{RecordShift, Shift};
 use craft_behavior::CommandFlags;
 use craft_behavior::edit_history::Step;
 use craft_keymap::{Chord, Overrides};
@@ -623,20 +624,25 @@ pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     board::holder(ctx, chord)
 }
 
-/// The runtime's keymap: the linked sets and the app catalog on the window's platform, under the overrides, with the
-/// system chords reserved. `None` before the first frame.
-pub fn keymap(ctx: &Context) -> Option<Arc<craft_keymap::Keymap>> {
-    board::keymap(ctx)
-}
-
 /// A command shown at `rect` in `layer`, as a pass registered it.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct ShownFact {
     command: CommandRef,
     layer: egui::LayerId,
     rect: egui::Rect,
     label: Label,
     holder: bool,
+}
+
+/// A replay moves the rect; the rest stays.
+impl Shift for ShownFact {
+    fn shifted(&self, by: &RecordShift) -> Self {
+        ShownFact { rect: self.rect.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        ShownFact { rect: self.rect.snapped(&to.rect, within), ..self.clone() }
+    }
 }
 
 /// Registers `command` as shown for the next pass of the running viewport.

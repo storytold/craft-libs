@@ -1006,6 +1006,27 @@ impl MemoProps for craft_behavior::canvas::CanvasView {
     }
 }
 
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the rungs, the greatest zoom, the
+/// least zoom and the device zoom of 100 %.
+impl MemoProps for craft_behavior::ZoomScheme {
+    fn key(&self, key: &mut MemoKey) {
+        self.rungs.key(key);
+        self.max.key(key);
+        match self.floor {
+            craft_behavior::ZoomFloor::ShorterSide(side) => {
+                key.write_u32(0);
+                side.key(key);
+            }
+            craft_behavior::ZoomFloor::Fixed(zoom) => {
+                key.write_u32(1);
+                zoom.key(key);
+            }
+            other => format!("{other:?}").key(key),
+        }
+        self.hundred.key(key);
+    }
+}
+
 /// The width and the height.
 impl MemoProps for craft_behavior::kurbo::Size {
     fn key(&self, key: &mut MemoKey) {
