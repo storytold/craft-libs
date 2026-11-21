@@ -365,7 +365,7 @@ impl Work {
             self.next.style = style.clone();
         }
         let before = self.next.style.clone();
-        let defaults = |kind| specs.iter().find(|spec| spec.kind == kind).map(|spec| spec.defaults.clone()).unwrap_or_default();
+        let spec = |kind| specs.iter().find(|spec| spec.kind == kind);
         for action in actions {
             match action {
                 ListAction::Select(page) => self.next.page = page,
@@ -378,14 +378,18 @@ impl Work {
                     let present = self.next.style.instances(kind).next();
                     match (present, on) {
                         (None, true) => {
-                            self.next.add_instance(kind, &defaults(kind));
+                            if let Some(spec) = spec(kind) {
+                                self.next.add_instance(spec);
+                            }
                         }
                         (Some(id), false) => self.next.remove_instance(id),
                         _ => {}
                     }
                 }
                 ListAction::Add(kind) => {
-                    self.next.add_instance(kind, &defaults(kind));
+                    if let Some(spec) = spec(kind) {
+                        self.next.add_instance(spec);
+                    }
                 }
                 ListAction::Remove(id) => self.next.remove_instance(id),
             }

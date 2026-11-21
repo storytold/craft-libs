@@ -99,7 +99,8 @@ impl LayerStyleDraft {
     }
 
     /// Opens on `kind`'s page (Layer › Layer Style › Drop Shadow…): its first instance, turned on,
-    /// or a new instance when the layer has none.
+    /// or a new instance when the layer has none. It never adds one beside an instance, so a kind
+    /// at its [`max_instances`](EffectSpec::max_instances) gets no more from here.
     // pc: crates/ui-egui/src/dialogs/layer_style.rs:549-567 (`select` names a kind).
     pub fn open_on(&mut self, kind: EffectKind) {
         let first = self.style.instances(kind).next();
@@ -109,7 +110,7 @@ impl LayerStyleDraft {
             }
             self.page = LayerStylePage::Effect(id);
         } else {
-            self.add_instance(kind, &EffectSpec::photoshop(kind).defaults);
+            self.add_instance(&EffectSpec::photoshop(kind));
         }
     }
 
@@ -121,23 +122,36 @@ impl LayerStyleDraft {
         }
     }
 
-    /// Adds an instance of `kind`, turned on, with `defaults` (the kind's spec defaults) and,
-    /// when its `useGlobalLight` is on, `angle` set to the shared light angle. The id is one past
-    /// the highest `fxN` in the style (the lowest free number if that overflows). It goes right
-    /// after the last instance of its kind (at the end when there is none), so the render order
-    /// keeps the layer's effect order, and its page is selected.
+    /// Whether [`add_instance`](Self::add_instance) adds an instance of `spec`'s kind: the style
+    /// holds fewer than its [`max_instances`](EffectSpec::max_instances), or it has none. The
+    /// list greys the kind's `+` while this is false.
+    pub fn can_add(&self, spec: &EffectSpec) -> bool {
+        spec.max_instances.is_none_or(|max| self.style.instances(spec.kind).count() < max)
+    }
+
+    /// Adds an instance of `spec`'s kind, turned on, with the spec's defaults and, when its
+    /// `useGlobalLight` is on, `angle` set to the shared light angle. The id is one past the
+    /// highest `fxN` in the style (the lowest free number if that overflows). It goes right after
+    /// the last instance of its kind (at the end when there is none), so the render order keeps
+    /// the layer's effect order, and its page is selected. At the kind's
+    /// [`max_instances`](EffectSpec::max_instances) ([`can_add`](Self::can_add) is false) it adds
+    /// nothing, leaves the page alone and returns `None`.
     // pc: crates/ui-egui/src/dialogs/layer_style.rs:449-460 `next_id`, :463-473 `add_instance`,
     // :82-88 `fresh_params`.
-    pub fn add_instance(&mut self, kind: EffectKind, defaults: &StyleParams) -> EffectId {
+    pub fn add_instance(&mut self, spec: &EffectSpec) -> Option<EffectId> {
+        if !self.can_add(spec) {
+            return None;
+        }
+        let kind = spec.kind;
         let id = self.next_id();
-        let mut params = defaults.clone();
+        let mut params = spec.defaults.clone();
         if params.bool("useGlobalLight") == Some(true) {
             params.set("angle", StyleValue::Number(f64::from(self.style.global_light)));
         }
         let at = self.style.effects.iter().rposition(|e| e.kind == kind).map_or(self.style.effects.len(), |i| i + 1);
         self.style.effects.insert(at, EffectInstance { id, kind, on: true, params });
         self.page = LayerStylePage::Effect(id);
-        id
+        Some(id)
     }
 
     /// Removes instance `id`. When its page was selected, the selection moves to the first
