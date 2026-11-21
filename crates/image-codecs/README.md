@@ -57,6 +57,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
+| JPEG 2000 (`.jp2`, `.j2k`) | with feature `jp2` | **no** | U8 | Gray, GrayA, RGB, RGBA, CMYK | yes | yes | no | no | no | no | no | `hayro-jpeg2000` (off by default, so an SVG or raster reader carries no PDF decoder family) |
 | Sun Raster (`.ras`) | with feature `sunraster` (incl. RLE and colour maps) | with feature `sunraster` (uncompressed) | U8 | Gray, RGB, RGBA | yes | no | no | no | no | no | no | `sunraster` (off by default) |
 | SGI (`.sgi`, `.rgb`, `.bw`) | with feature `sgi` | with feature `sgi` (RLE) | U8, U16 | Gray, Gray+A, RGB, RGBA | yes | no | no | no | no | no | no | `sgi` (off by default) |
 | JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
