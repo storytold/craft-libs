@@ -6,10 +6,9 @@ use super::overlay::{RulerOverlay, moved, reading_text, ruler_cursor, translated
 use super::words::RulerWords;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CancelReason, Cursor, EditEvent, GestureId, Mixed};
-use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft_ui::canvas_controls::StraightLinePreview;
+use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer, canvas_space};
 use craft_ui::contract::{Bind, Props as _, Show as _};
-use craft_ui::primitives::Draw;
+use craft_ui::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use egui::{Rect, Ui};
 use std::sync::Arc;
 
@@ -70,7 +69,7 @@ impl RulerPass<'_> {
     pub fn show_line(&mut self, ui: &mut Ui, rect: Rect) {
         let Some(line) = self.line else { return };
         let words = craft_ui::runtime::env::Env::of(ui).words::<RulerWords>();
-        show_lines(ui, rect, line, &words);
+        show_lines(ui, rect, line);
         let mut shown = Some(line);
         let edit = RulerOverlay::new(words.group.clone(), Bind::bound(&mut shown)).show_at(ui, rect);
         if !edit.events.is_empty() {
@@ -107,20 +106,45 @@ impl RulerPass<'_> {
     }
 }
 
-/// The Ruler line and its protractor arm.
-fn show_lines(ui: &mut Ui, rect: Rect, line: RulerLine, words: &RulerWords) {
-    StraightLinePreview::new(words.group.clone(), line.start, line.end).show_at(ui, rect);
-    if let Some(arm) = line.protractor {
-        StraightLinePreview::new(words.protractor.clone(), line.start, arm).show_at(ui, rect);
-    }
+/// The shortest Ruler line, in points on screen, that is drawn: a drag that has barely begun shows no line, the
+/// same lag the painting tools' line preview has.
+const MIN_LENGTH: f32 = 2.0;
+
+/// The Ruler line and its protractor arm, each one stroke one physical pixel wide in the theme's `overlay.stroke`
+/// ink with no halo under it (photocraft#11988). The reference application paints the line by inverting the pixels
+/// under it; the overlay painter composites with alpha and has no blend mode, so the closest look it allows is the
+/// plain one-pixel line in the overlay ink. `StraightLinePreview`, the look of the painting tools' Shift-click
+/// line, is not used here: the Ruler line has its own.
+fn show_lines(ui: &mut Ui, rect: Rect, line: RulerLine) {
+    let env = craft_ui::runtime::env::Env::of(ui);
+    let Some(space) = canvas_space(&env.view()) else { return };
+    let segment = |from: Point, to: Point| {
+        let (from, to) = (space.view.to_screen(from), space.view.to_screen(to));
+        // A non-finite point gives a NaN distance, which never reaches the lag: the segment draws nothing, as the
+        // line preview's own finite guard did.
+        (from.distance(to) >= MIN_LENGTH).then(|| PaintShape::Path(vec![from, to]))
+    };
+    let content = ContentPainterCx::new(ui.painter().with_clip_rect(rect), &env, env.ink);
+    let ink = content.style_cx().color(env.tokens.color.overlay.stroke);
+    content.with_draw(|draw| {
+        if let Some(segment) = segment(line.start, line.end) {
+            draw.stroke(&segment, StrokeWidth::Hairline, ink);
+        }
+        if let Some(arm) = line.protractor
+            && let Some(segment) = segment(line.start, arm)
+        {
+            draw.stroke(&segment, StrokeWidth::Hairline, ink);
+        }
+    });
 }
 
-/// Draws the Ruler `line` read only over the canvas `rect`: the line, the protractor arm and the crosses at its
-/// points, taking no press, key or focus. The app calls it in the canvas body while another tool is active (the ruler
-/// stays drawn until View > Extras hides it); under the Ruler tool, [`RulerPass::show_line`] draws it.
+/// Draws the Ruler `line` read only over the canvas `rect`: the line, the protractor arm and the marks a
+/// protractor shows (the dot on its vertex, the cross on its arm's free end), taking no press, key or focus. The
+/// app calls it in the canvas body while another tool is active (the ruler stays drawn until View > Extras hides
+/// it); under the Ruler tool, [`RulerPass::show_line`] draws it.
 pub fn show_ruler(ui: &mut Ui, rect: Rect, line: RulerLine) {
     let words = craft_ui::runtime::env::Env::of(ui).words::<RulerWords>();
-    show_lines(ui, rect, line, &words);
+    show_lines(ui, rect, line);
     let _ = RulerOverlay::new(words.group.clone(), Bind::given(Some(line))).read_only(true).show_at(ui, rect);
 }
 

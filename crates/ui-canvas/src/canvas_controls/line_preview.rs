@@ -2,7 +2,8 @@
 //!
 //! While Shift is held with a painting tool and nothing is being painted, a thin line runs from the end of the last
 //! stroke on the document to the pointer (Photoshop's rubber band). Which tools connect and where the last stroke
-//! ended are the app's; this draws the line. The Ruler tool's line and protractor arm share its look.
+//! ended are the app's; this draws the line. The Ruler tool's line and protractor arm draw their own look in
+//! `crates/draw` (photocraft#11988).
 
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
