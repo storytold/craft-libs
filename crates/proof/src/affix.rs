@@ -3262,6 +3262,23 @@ pub(crate) mod tests {
         let back = AffixDict::from_bytes(&bytes).unwrap();
         assert!(back.contains("grad") && back.contains("negrada"));
         assert!(!back.contains("negrad") && !back.contains("grada"));
+
+        // Repeated aliases across both directions share their final sets, including one already
+        // interned for a stem. Distinct alias indices may name the same continuation flags.
+        let shared = "FLAG num\nAF 3\nAF 7,12\nAF 12\nAF 12\nPFX 7 Y 2\nPFX 7 0 ne/2 .\nPFX 7 0 na/3 .\nSFX 12 Y 2\nSFX 12 0 a/3 .\nSFX 12 0 i/2 .\n";
+        let literal = "FLAG num\nPFX 7 Y 2\nPFX 7 0 ne/12 .\nPFX 7 0 na/12 .\nSFX 12 Y 2\nSFX 12 0 a/12 .\nSFX 12 0 i/12 .\n";
+        let shared = AffixDict::from_hunspell(shared, "2\ngrad/1\nother/2\n", &[]).unwrap();
+        let literal = AffixDict::from_hunspell(literal, "2\ngrad/7,12\nother/12\n", &[]).unwrap();
+        for word in ["grad", "other", "negrad", "nagrad", "grada", "gradi", "othera", "otheri", "negrada", "negradi", "nagrada", "nagradi"] {
+            assert!(shared.contains(word) && literal.contains(word), "{word}");
+        }
+        for word in ["neother", "naother", "gradz"] {
+            assert!(!shared.contains(word) && !literal.contains(word), "{word}");
+        }
+        let bytes = shared.to_bytes().unwrap();
+        assert_eq!(bytes, literal.to_bytes().unwrap(), "alias identity does not change the compact bytes");
+        let back = AffixDict::from_bytes(&bytes).unwrap();
+        assert_eq!(back.to_bytes().unwrap(), bytes, "the shared continuation sets survive compact reloading");
     }
 
     #[test]
