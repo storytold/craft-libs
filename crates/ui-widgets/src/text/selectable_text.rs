@@ -43,13 +43,12 @@ pub struct SelectableText<'a> {
 impl<'a> SelectableText<'a> {
     /// Selectable `text` named `label`: one plain span, not copied.
     pub fn new(label: impl Into<Label>, text: &'a str) -> Self {
-        SelectableText { common: Common::new(), spans: vec![Span::new(text)], wrap: Wrap::Line, mono: false, field_inset: false }.label(label)
+        Self::spans(label, vec![Span::new(text)])
     }
 
     /// Selectable text of styled `spans` named `label`, selected, copied and named as one text.
     pub fn spans(label: impl Into<Label>, spans: Vec<Span<'a>>) -> Self {
-        let _ = (label, spans);
-        todo!("op.F10")
+        SelectableText { common: Common::new(), spans, wrap: Wrap::Line, mono: false, field_inset: false }.label(label)
     }
 
     /// The text wraps over several lines.
@@ -100,7 +99,7 @@ impl Component for SelectableText<'_> {
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
-        access.value(self.run(TypeRole::Body).full_text()); // P3(object-panels-w2): op.F10
+        access.value(self.run(TypeRole::Body).full_text());
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

@@ -65,6 +65,7 @@ pub enum PopupMark {
 
 /// A square button showing only an icon. Its label is its accessible name; a tooltip is the caller's. A selected
 /// button (`selected(true)`) shows the on look: the host owns the state and a click is reported in the response.
+/// [`ButtonOutput::held`] reports the press from its start to its end.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct IconButton<'a> {
     #[common]

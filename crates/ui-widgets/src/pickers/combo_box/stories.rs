@@ -40,6 +40,11 @@ fn combo_box_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ComboBox::new("Font", Bind::bound(data.value("invalid", "Zapfino".to_owned())).check(refuse_zapfino), &options).show(ui).into()
 }
 
+#[story(ComboBox<'static>, covers = [], drive = Drive::Never, group = "States", title = "No options")]
+fn combo_box_no_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ComboBox::new("Font", Bind::bound(data.value("none", String::new())), &[]).show(ui).into()
+}
+
 /// Focuses the field and opens the list on every option with Alt+Down.
 fn open_list(fixture: &mut Fixture) {
     fixture.key(Key::Tab, Modifiers::NONE);
