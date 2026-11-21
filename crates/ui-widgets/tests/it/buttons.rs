@@ -7,7 +7,7 @@ use craft_theme::ControlSize;
 use craft_theme::Variant;
 use craft_ui::buttons::{Arrangement, Button, ControlPlace, GroupLevel, SplitButton, SplitMenu, ToggleButton};
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Picture;
 use craft_ui::list::ThumbAspect;
 use craft_ui::pickers::ComboBox;
