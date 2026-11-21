@@ -4,9 +4,10 @@
 //! layout, SubIFDs, maker note header) and the ExifTool Nikon tag-name documentation (`0x000c` WB_RBLevels,
 //! `0x003d` BlackLevel, `0x0096` NEFLinearizationTable). The Huffman-compressed data (compression 34713) is decoded
 //! by [`crate::nefc`], which documents its clean-room sources; "lossy after split" files are decoded when their strip follows the
-//! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work. So are High Efficiency NEFs
-//! (HE / HE★, Z 8, Z 9, Z 6III, Z f): they keep compression 34713 but carry a wavelet codestream that starts with
-//! the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table (storytold/lightcraft#193).
+//! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work.
+//! High Efficiency NEFs (HE / HE★, Z 8, Z 9, Z 6III, Z f) keep compression 34713 but carry a wavelet codestream that
+//! starts with the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table
+//! (storytold/lightcraft#193); [`crate::nef_he`] decodes the variant measured on the Z f and refuses the others.
 //! Strips labelled 34713 without a `0x0096`
 //! linearization table are packed uncompressed data in several measured layouts ([`PackedLayout`]) or, when the strip
 //! is exactly three bytes per pixel, Nikon small raw ([`small_raw`]); the D1X's genuinely Huffman-coded strip stays
@@ -552,7 +553,9 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
     // a 0x0096 table
     let mode = nef_compression(mn);
     if starts_with(&JPEG_XS_START) || matches!(mode, Some(13 | 14)) {
-        return Err(RawError::Unsupported(HIGH_EFFICIENCY.into()));
+        let black = mn.and_then(|m| m.ifd.f64s(BLACK_LEVEL)).filter(|v| !v.is_empty()).map_or(0.0, |v| v.iter().sum::<f64>() / v.len() as f64);
+        let src = strip_bytes(bytes, info)?;
+        return Ok(RawData::U16(crate::nef_he::decode(src, info.width as usize, info.height as usize, rows, black, limits)?));
     }
     if let Some(depth) = match mode {
         Some(6) => Some(12),
@@ -575,13 +578,17 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
         return Err(RawError::Limit("image too large"));
     }
     let table = nefc::parse_table(table.0, table.1, bits)?;
-    // one strip in every sample; several would be contiguous parts of the same bit stream
+    let src = strip_bytes(bytes, info)?;
+    Ok(RawData::U16(nefc::decode_rows(src, info.width as usize, info.height as usize, rows, bits, &table)?))
+}
+
+/// The image data: one strip in every sample; several would be contiguous parts of the same bit stream.
+fn strip_bytes<'a>(bytes: &'a [u8], info: &ImageInfo) -> Result<&'a [u8]> {
     let chunks = info.chunks(bytes.len() as u64);
     let (Some(first), Some(last)) = (chunks.first(), chunks.last()) else { return Err(RawError::Corrupt("NEF: no image data".into())) };
     let end = last.offset.saturating_add(last.len).min(bytes.len() as u64);
     let src = usize::try_from(first.offset).ok().zip(usize::try_from(end).ok()).and_then(|(a, b)| bytes.get(a..b));
-    let src = src.ok_or_else(|| RawError::Corrupt("NEF: image data outside the file".into()))?;
-    Ok(RawData::U16(nefc::decode_rows(src, info.width as usize, info.height as usize, rows, bits, &table)?))
+    src.ok_or_else(|| RawError::Corrupt("NEF: image data outside the file".into()))
 }
 
 /// A "compressed" strip of packed samples: the strip size must match a measured layout exactly. `stated` is set

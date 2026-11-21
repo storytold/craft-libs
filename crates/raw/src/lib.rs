@@ -122,6 +122,7 @@ pub mod mrw;
 #[cfg(feature = "nef")]
 mod nef;
 #[cfg(feature = "nef")]
+mod nef_he;
 mod nef_lens;
 #[cfg(feature = "nef")]
 mod nefc;
