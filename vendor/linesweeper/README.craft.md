@@ -13,7 +13,7 @@ in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local patch.
 
-## Local patches
+## Local changes
 
 | File | Change |
 |---|---|
@@ -23,6 +23,7 @@ holds `upstream_revision`. `local_patches` describes each local patch.
 | `docs/sweep.typ` | The intersection scan to the left compares each segment with `alpha^(i+1)` instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma after it is stated for `alpha^(i+1)`. |
 | `docs/sweep.typ` | Two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. |
 | `docs/sweep.typ` | The lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. |
+| `docs/sweep.typ` | The floating-point ratio lemma assumes `fl(y_1 - y_0)` is finite and `y_0 < y_1`, and its proof bounds `fl(y_1 - y_0)` instead of `fl(y + y_0)`. The x-coordinate accuracy lemma takes `M` as a floating-point number and shows both assumptions hold. Code comments label the change `Craft patch (ratio lemma)`. |
 | `src/sweep/sweep_line.rs`, `src/topology.rs` | Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change. Code comments label the change `Craft patch (clippy lints)`. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:

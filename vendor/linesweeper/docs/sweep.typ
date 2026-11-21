@@ -640,18 +640,23 @@ Now, if the result of floating point addition or subtraction is subnormal then i
 for any floating-point $x$ and $y$, if $x - y$ and $x + y$ don't overflow then after rounding they
 have relative error at most $epsilon_0$.
 
+// Craft patch (ratio lemma): the finite, nonzero denominator assumption and fl(y_1 - y_0) in the proof.
 #lemma[
-  If $y_0 <= y <= y_1$ are floating-point numbers and $epsilon_0 <= 1/2$ then computing $(y - y_0) / (y_1 - y_0)$
+  If $y_0 <= y <= y_1$ are floating-point numbers with $y_0 < y_1$, $fl(y_1 - y_0)$ is finite
+  and $epsilon_0 <= 1/2$ then computing $(y - y_0) / (y_1 - y_0)$
   the naive way gives an absolute error of
   at most $3 epsilon_0 + 4 epsilon_0^2$.
 ]<lem-ratio-error>
 
 #proof[
-The assumption $y_0 <= y <= y_1$ ensures that $y - y_0$ and $y_1 - y_0$ do not overflow. Therefore
+The assumption that $fl(y_1 - y_0)$ is finite ensures that $y_1 - y_0$ does not overflow, and since
+$0 <= y - y_0 <= y_1 - y_0$, neither does $y - y_0$. (The ordering $y_0 <= y <= y_1$ alone is not
+enough: with $y_0 = -10^308$, $y = 0$ and $y_1 = 10^308$, $fl(y_1 - y_0)$ is infinite and the computed
+ratio is $0$ instead of $1/2$.) Therefore
 
 $
 fl(y - y_0) &= (y - y_0) (1 plus.minus epsilon_0) \
-fl(y + y_0) &= (y + y_0) (1 plus.minus epsilon_0)
+fl(y_1 - y_0) &= (y_1 - y_0) (1 plus.minus epsilon_0)
 $
 and so
 $
@@ -794,8 +799,9 @@ the maximum of these inverse-slopes.
 ]
 
 Putting all this together (and handling the "chamfers" yet):
+// Craft patch (ratio lemma): M is a floating-point number, and the proof shows the ratio lemma's assumptions hold.
 #lemma[
-Assume all line segments are inside the square $[-M/2, M/2]^2$,
+Assume $M$ is a floating-point number, all line segments are inside the square $[-M/2, M/2]^2$,
 and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
 
 - We can compute $x$ coordinates of line segments to additive accuracy $delta/8$.
@@ -808,7 +814,8 @@ and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
 
 #proof[
 We compute $x$ coordinates by first computing $t = (y - y_0) / (y_1 - y_0)$ (with error at most $3 epsilon_0 + 4 epsilon_0^2$ by
-@lem-ratio-error). Then we apply @lem-convex-combination-error with $epsilon = 3 epsilon_0 + 4 epsilon_0^2$ to see that we
+@lem-ratio-error, which applies because a segment that is not horizontal has $y_0 < y_1$, and $fl(y_1 - y_0)$
+is finite because $0 < y_1 - y_0 <= M$ and $M$ is a floating-point number). Then we apply @lem-convex-combination-error with $epsilon = 3 epsilon_0 + 4 epsilon_0^2$ to see that we
 can compute the horizontal coordinate with error at most $(6 epsilon_0 + 4 epsilon_0^2)M$. If $epsilon_0 <= 1/4$ as we assumed,
 this is at most $7 epsilon_0 M <= delta/8$. This proves the first claim.
 
