@@ -116,7 +116,7 @@ pub fn scan(bytes: &[u8], max_frames: usize) -> Option<Info> {
     b.get(12)?;
     let mut info = Info { width, height, global_table: packed & 0x80 != 0, frames: Vec::new(), complete: false, loop_count: None };
     let mut at = 13 + table_len(packed);
-    // What the last Graphic Control Extension said, for the next image.
+    // What the last Graphic Control Extension said, for the next rendering block.
     let (mut delay_cs, mut transparent, mut disposal) = (0u16, None, 0u8);
     // Each step either finishes the walk or moves `at` forward, so this ends with the file.
     let mut step = || -> Option<bool> {
@@ -141,6 +141,10 @@ pub fn scan(bytes: &[u8], max_frames: usize) -> Option<Info> {
                     info.loop_count = u16_at(b, body + 14);
                 }
                 at = skip_sub_blocks(b, body)?;
+                // GIF89a §12: a Plain Text Extension consumes the pending graphic control.
+                if label == 0x01 {
+                    (delay_cs, transparent, disposal) = (0, None, 0);
+                }
                 Some(true)
             }
             // Image Descriptor: separator, left, top, width, height, packed fields, then the
