@@ -387,6 +387,8 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn access(&self) -> (Access, Option<String>) {
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_access_build(&self.cx.core.ctx);
         let mut access = Access::default();
         self.comp.access(&mut access, self.cx);
         (access, self.comp.value_text(self.cx))

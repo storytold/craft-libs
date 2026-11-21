@@ -87,7 +87,10 @@ fn register_validity(p: &dyn ErasedPass<'_>) -> Option<(String, bool)> {
 fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>, validity: Option<String>) {
     let core = p.core_ref();
     let (ctx, id) = (&core.ctx, core.id);
-    let (mut access, value_text) = p.access();
+    // `Access` is read by the node, by a merged role's facts, and for its role when the type has alternatives. Without
+    // any of them (AccessKit off, or a role with no node) the component's access data is never built.
+    let reads_access = input.node || facts.role == Role::Merged || !facts.alt_roles.is_empty();
+    let (mut access, value_text) = if reads_access { p.access() } else { (Access::default(), p.value_text()) };
     if let Some(text) = &value_text {
         match &mut access.numeric {
             Some(numeric) => numeric.text = Some(text.clone()),
@@ -115,7 +118,6 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         return;
     }
     scope::finish(ctx, id, None);
-    let carried = scope::carried_name(ctx, id);
     // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`). The node
     // then stays only as the place of the children shown inside it, which assistive technology passes over: left
     // unwritten it would be reported as a node of unknown role.
@@ -130,6 +132,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         return;
     }
     // Facts that only a node shows are built after the node check.
+    let carried = scope::carried_name(ctx, id);
     for node in &mut access.nodes {
         if let Some(toggle) = core.toggles.iter().find(|toggle| toggle.part == node.part) {
             node.expanded = Some(toggle.open);
