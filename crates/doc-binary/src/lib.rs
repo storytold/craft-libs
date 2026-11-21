@@ -953,8 +953,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 }
                 // In a table, the frame sprms place the table (Word 2016 reads them as its
                 // `w:tblpPr`), not the paragraphs in its cells.
+                // A style's frame is cancelled there too, by the model's zero-size frame.
                 if row.is_some() {
-                    pb.props.frame = None;
+                    let styled = pb.props.style.as_deref().and_then(|id| ctx.sheet.get(id)).is_some_and(|s| s.para.frame.is_some());
+                    pb.props.frame = styled.then(|| craft_wordmodel::props::TextFrame { w: Some(0.0), h: Some(0.0), ..Default::default() });
                 }
                 if let Some(num) = num_of(ilfo) {
                     pb.props.numbering = Some(NumRef { num, level: ilvl });
@@ -1357,10 +1359,17 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
 /// A paragraph sprm, applied to the paragraph's own properties. A frame sprm changes the style's
 /// frame, which the paragraph's own replaces whole: the first one starts from the style's.
 fn apply_para_prl(sheet: &StyleSheet, props: &mut craft_wordmodel::props::ParaProps, prl: &sprm::Prl<'_>) {
+    let style_frame =
+        |props: &craft_wordmodel::props::ParaProps| props.style.as_deref().and_then(|id| sheet.get(id)).and_then(|s| s.para.frame.clone());
     if props.frame.is_none() && fmt::is_frame(prl.op) {
-        props.frame = props.style.as_deref().and_then(|id| sheet.get(id)).and_then(|s| s.para.frame.clone());
+        props.frame = style_frame(props);
     }
     fmt::apply_para(props, prl);
+    // A drop cap on a paragraph with no frame of its own is as far from the text as its style's
+    // frame says.
+    if prl.op == fmt::P_DCS && props.drop_cap.is_some_and(|l| l > 0) && props.drop_cap_distance.is_none() {
+        props.drop_cap_distance = style_frame(props).map(|f| f.h_space);
+    }
 }
 
 /// The model id of paragraph style `istd`, when it names a style.

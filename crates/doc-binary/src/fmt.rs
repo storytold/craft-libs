@@ -599,7 +599,7 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 kind @ (1 | 2) => {
                     p.drop_cap = Some(((v >> 3) & 0x1F).clamp(1, 10) as u8);
                     p.drop_cap_margin = Some(kind == 2);
-                    p.drop_cap_distance = p.frame.as_ref().map(|f| f.h_space).filter(|d| *d > 0.0);
+                    p.drop_cap_distance = p.frame.as_ref().map(|f| f.h_space);
                 }
                 _ => (p.drop_cap, p.drop_cap_margin) = (Some(0), None),
             }
@@ -676,10 +676,10 @@ fn apply_frame(p: &mut ParaProps, prl: &Prl) {
             .into();
         }
         P_DXA_FROM_TEXT => {
+            // A drop cap's distance from the text, whether the cap is the paragraph's or its
+            // style's; 0 is a distance too, not the style's.
             f.h_space = tw(i32::from(v)).max(0.0);
-            if p.drop_cap.is_some() {
-                p.drop_cap_distance = Some(f.h_space).filter(|d| *d > 0.0);
-            }
+            p.drop_cap_distance = Some(f.h_space);
         }
         P_DYA_FROM_TEXT => f.v_space = tw(i32::from(v)).max(0.0),
         _ => {}

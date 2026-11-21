@@ -3744,6 +3744,59 @@ fn frames_and_drop_caps_are_read() {
     assert_eq!(props("In a cell").frame, None);
 }
 
+/// A drop cap is as far from the text as the paragraph's effective frame: its style's when it has
+/// none of its own, and its own distance (0 too) over a capped style's.
+#[test]
+fn a_drop_caps_distance_is_the_effective_frames() {
+    let u = |v: u16| v.to_le_bytes();
+    let framed = grpprl(&[(0x261B, &[0x90]), (0x842F, &u(120))]);
+    let capped = grpprl(&[(0x442C, &u(0x19)), (0x842F, &u(180))]);
+    let spec = RichSpec {
+        text: "a\rb\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "Framed", framed, Vec::new()), (1, 0, "Capped", capped, Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, grpprl(&[(0x442C, &u(0x19))])), (2, 2, grpprl(&[(0x842F, &u(0))]))],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let distance = |text: &str| {
+        let p = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == text).expect(text);
+        doc.styles.resolve_para(&p.props).drop_cap_distance
+    };
+    let style_distance = |id: &str| doc.styles.get(id).and_then(|s| s.para.drop_cap_distance).unwrap_or(0.0);
+    assert!(distance("a") > 0.0, "the style's frame distance");
+    assert!(distance("b") < style_distance("Capped"), "its own 0 over the style's");
+}
+
+/// A paragraph in a table cell has no frame, its style's included (the frame places the table);
+/// the same style's paragraph outside the table keeps it.
+#[test]
+fn a_cell_paragraph_has_no_frame_from_its_style() {
+    let framed = grpprl(&[(0x261B, &[0x90]), (0x2423, &[1])]);
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_table(&[0, 2880])].concat();
+    let spec = RichSpec {
+        text: "Body\rCell\u{7}\u{7}\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "Framed", framed, Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 1, Vec::new()), (5, 1, in_tbl), (10, 0, ttp), (11, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let mut paras: Vec<&craft_wordmodel::para::Paragraph> = Vec::new();
+    for b in &doc.body {
+        match &**b {
+            craft_wordmodel::Block::Para(p) => paras.push(p),
+            craft_wordmodel::Block::Table(t) => {
+                paras.extend(t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).filter_map(|b| b.as_para()))
+            }
+        }
+    }
+    let frame = |text: &str| paras.iter().find(|p| p.text == text).map(|p| doc.styles.resolve_para(&p.props).frame).expect(text);
+    assert!(frame("Body").is_some());
+    assert_eq!(frame("Cell"), None);
+}
+
 /// A paragraph's sprmPDcs overrides its style's drop cap: 0 turns it off and a dropped cap
 /// replaces one in the margin, each stored as such, as the model's unset values inherit.
 #[test]
