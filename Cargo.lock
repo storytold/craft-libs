@@ -2391,6 +2391,7 @@ name = "craft-image-codecs"
 version = "0.1.0"
 dependencies = [
  "avif-serialize",
+ "craft-cms",
  "craft-dds",
  "craft-heif",
  "craft-jpeg",
