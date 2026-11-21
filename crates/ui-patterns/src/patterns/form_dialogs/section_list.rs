@@ -79,7 +79,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
                 }
                 let listed = sections.show_items(ui, source, &mut |key, _| row(key));
                 for event in listed.events {
-                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event // P3(mechanical): dp.C12
+                    if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                         && let Some(key) = keys.into_iter().last()
                     {
                         picked = Some(key);
