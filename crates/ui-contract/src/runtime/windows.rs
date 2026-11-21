@@ -461,8 +461,8 @@ fn refuse_close_under_modal(ctx: &Context) -> bool {
 
 /// The compositor owns the pointer during an OS move or resize and sets its own cursor, and egui-winit only sends a
 /// cursor that changed, so afterwards the window keeps the compositor's cursor. On the first pointer motion after the
-/// hand-off's press was ended, asks for the default cursor for one pass, so the cursor the pointer is over is sent
-/// again on the next.
+/// hand-off's press was ended, hides the cursor for one pass, so the cursor the pointer is over, the default arrow
+/// included, is sent again on the next.
 fn reshow_cursor(ctx: &Context, viewport: ViewportId) {
     if !ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::PointerMoved(_)))) {
         return;
@@ -473,7 +473,7 @@ fn reshow_cursor(ctx: &Context, viewport: ViewportId) {
         _ => false,
     });
     if due {
-        cursor::request(ctx, Cursor::System(CursorIcon::Default), CursorPriority::Drag);
+        cursor::request(ctx, Cursor::System(CursorIcon::None), CursorPriority::Drag);
         ctx.request_repaint_of(viewport);
     }
 }

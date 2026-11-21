@@ -1,17 +1,18 @@
 //! A title bar in an embedded shell is a picture of a window: it reports its captions and acts on no window. An action
 //! title is a button that reports its activation.
 
-use craft_host::target::ShellInfo;
-use craft_ui::contract::Role;
+use craft_host::target::{Backend, Os, ShellInfo};
+use craft_ui::contract::{Role, Show as _};
+use craft_ui::menu::bar::{MenuBar, MenuTitle};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::windows::NoWindows;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, Frames, install_spec, trial};
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
-use egui::{Event, Pos2, Rect, Ui, ViewportCommand, ViewportId, ViewportInfo, vec2};
+use egui::{CursorIcon, Event, Pos2, Rect, Ui, ViewportCommand, ViewportId, ViewportInfo, vec2};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -92,6 +93,65 @@ fn a_title_bar_in_an_embedded_shell_acts_on_no_window() {
     let (commands, clicked) = sent(false);
     assert_eq!(clicked, Some(Caption::Maximize), "the window's bar reports the caption");
     assert!(!commands.is_empty(), "the window's bar acts on the window");
+}
+
+/// Frames of a Linux X11 window with an app-drawn frame.
+fn linux_window() -> Frames {
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let mut spec = install_spec().frame(Decision { frame, overridden: None, desktop });
+    spec.shell_info = ShellInfo::default().os(Os::Linux).backend(Backend::X11);
+    let frames = Frames::uninstalled();
+    craft_ui::install(&frames.ctx, spec).expect("the runtime installs once");
+    frames
+}
+
+/// After an OS move the cursor changes for one pass and returns to the arrow: egui-winit sends only a changed cursor,
+/// and the window would keep the compositor's.
+#[trial]
+fn a_title_bar_sends_the_arrow_again_after_an_os_move() {
+    let mut frames = linux_window();
+    let bar = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
+    frames.frame(vec![], &mut show);
+    frames.frame(vec![], &mut show);
+    let at = bar.get().center();
+    for events in [vec![moved(at)], vec![press(at)], vec![moved(at + vec2(40.0, 0.0))], vec![]] {
+        frames.frame(events, &mut show);
+    }
+    frames.frame(vec![moved(at)], &mut show);
+    assert_ne!(frames.cursor_icon(), CursorIcon::Default, "the first motion after the move changes the cursor");
+    frames.frame(vec![], &mut show);
+    assert_eq!(frames.cursor_icon(), CursorIcon::Default, "the next pass sends the arrow");
+}
+
+/// A window's own title bar shows the arrow over its free band and its menu titles, as an OS title bar does.
+#[trial]
+fn a_window_title_bar_keeps_the_arrow() {
+    let mut frames = linux_window();
+    let bar = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| {
+        let shown = TitleBar::new().show_titled(
+            ui,
+            Title::new("Landscape.psd"),
+            |ui, _| {
+                MenuBar::new("Main menu", vec![MenuTitle::new("File", |_| {})]).show(ui);
+            },
+            |_, _| {},
+        );
+        bar.set(shown.response.rect);
+    };
+    frames.frame(vec![], &mut show);
+    frames.frame(vec![], &mut show);
+    let tree = frames.tree();
+    let file = tree.keys().into_iter().find(|key| tree.name_of(*key) == Some("File")).and_then(|key| tree.bounds_of(key));
+    let file = file.expect("the bar shows its File title").center();
+    for at in [bar.get().center(), file] {
+        frames.frame(vec![moved(at)], &mut show);
+        frames.frame(vec![], &mut show);
+        assert_eq!(frames.cursor_icon(), CursorIcon::Default, "the cursor over {at:?}");
+    }
 }
 
 /// The shell sends the window title once after a change and not again while the viewport reports it; an embedded shell

@@ -3,6 +3,7 @@
 
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
+use craft_behavior::{Cursor, CursorIcon};
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
 use craft_ui::contract::Role;
 use craft_ui::contract::{Bind, BodyCx, DropMark, PlainData, Show as _, ShowContainer as _, SizeLimits, Tracked};
@@ -11,7 +12,7 @@ use craft_ui::docking::{DockConfig, DockGrid, DockPanels, PanelSpec, PanelSpecs}
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
-use craft_ui::runtime::drag;
+use craft_ui::runtime::{cursor, drag};
 use craft_ui::testing::access::AccessTree;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release};
@@ -94,6 +95,34 @@ fn a_native_dock_window_is_moved_by_the_app_from_its_first_pass() {
     });
     assert!(!probe.0.is_empty(), "the window's first frame runs the panel's body");
     assert!(probe.0.iter().all(|known| *known), "every pass of the window knows the app moves it: {:?}", probe.0);
+}
+
+/// Palette panels whose body records the cursor its window's last pass settled on.
+struct CursorProbe(Option<Cursor>);
+
+impl DockPanels<u32> for CursorProbe {
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        self.0 = cursor::current(ui.ctx());
+    }
+}
+
+/// A dock window's title row shows the hand on Linux, as its drag can dock the window.
+#[trial]
+fn a_native_dock_windows_title_row_shows_the_hand() {
+    let shell = ShellInfo::default().os(Os::Linux).caps(Caps::native(Os::Linux));
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(FakeSystem::new())));
+    windows.root_info(info(true, MAIN_AT));
+    windows.child_info(info(true, FLOAT_AT));
+    let palette = Floating::single(101, vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])));
+    let specs = Specs::with(Permissions::ALL);
+    let mut probe = CursorProbe(None);
+    for child in [vec![], vec![], vec![], vec![moved(ROW_AT)], vec![], vec![]] {
+        windows.frame(vec![], child, |ui| {
+            DockArea::new("Native dock", Bind::bound(&mut workspace), &specs, &mut probe, DockConfig::default()).show(ui);
+        });
+    }
+    assert!(matches!(probe.0, Some(Cursor::System(CursorIcon::Grab))), "the row's cursor: {:?}", probe.0);
 }
 
 /// The dock records a move the OS made to its native window, and nothing while the OS reports what the model holds.
