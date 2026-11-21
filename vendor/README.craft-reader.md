@@ -301,6 +301,15 @@ or DefaultGray profile and the CMYK simulation of patch 36. PdfCraft's eight ras
 adapted in `tests/upstream_raster.rs` (`default_color_spaces`); the plate case is
 `default_color_spaces_leave_device_color_on_its_plates` in `tests/plates.rs`.
 
+A craft-libs patch on top of it, labeled `Craft patch (default spaces)` in code comments:
+`RasterImage::default_color_space` returns the default color space that one draw of an image
+uses in place of its device space, with the cache key of the object it was read from, or `None`
+when the draw uses the image's own space. The same image XObject drawn inside and outside a
+default's scope reports each draw by its own scope. An inline image that names a `/ColorSpace`
+resource that is a device space reports the default substituted for it too
+(`named_color_space_and_default` in hayro-interpret `interpret/mod.rs`). Tests:
+`crates/pdf/tests/image_default_spaces.rs`.
+
 A rendering speedup from the [PdfCraft revision 0b670caf4a090e9d83a7f41a84b4cb2144a2d33e ledger](https://github.com/storytold/pdfcraft/blob/0b670caf4a090e9d83a7f41a84b4cb2144a2d33e/vendor/README.md),
 hayro-interpret (35) with hayro (19), PdfCraft #3296, marked `PdfCraft patch (#3296)` because
 the plate-mode code uses (35) for #2770's own numbers. `EncodedShadingPattern::extent` is the

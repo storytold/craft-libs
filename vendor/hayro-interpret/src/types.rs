@@ -118,6 +118,15 @@ impl RasterImage<'_> {
             func(image);
         }
     }
+
+    /// Craft patch (default spaces): the default color space (`/DefaultGray`, `/DefaultRGB` or
+    /// `/DefaultCMYK` of the resources in scope, ISO 32000-2 §8.6.5.6) that this draw of the
+    /// image uses in place of its device space, with the cache key of the object it was read
+    /// from. `None` when the image is drawn in its own color space. The same image drawn where a
+    /// default is in scope and where none is answers each draw by its own scope.
+    pub fn default_color_space(&self) -> Option<(&crate::color::ColorSpace, u128)> {
+        self.0.default_color_space()
+    }
 }
 
 /// Craft patch (flatten): a raster image decoded into inks rather than RGB.
