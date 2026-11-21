@@ -1020,7 +1020,8 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
     table.extend_from_slice(&plcf_sed);
     let hdd_plc_at = table.len();
     table.extend_from_slice(&plcf_hdd);
-    let stsh = stsh_bytes(&[std_bytes(1, 0x0FFF, "Normal", &Vec::new(), &Vec::new())]);
+    // Normal, and a second paragraph style based on it, for tests that move a paragraph to istd 1.
+    let stsh = stsh_bytes(&[std_bytes(1, 0x0FFF, "Normal", &Vec::new(), &Vec::new()), std_bytes(1, 0, "Second", &Vec::new(), &Vec::new())]);
     let stsh_at = table.len();
     table.extend_from_slice(&stsh);
     let ffn = ffn_bytes(&["Times New Roman", "Wingdings"]);
@@ -1269,6 +1270,135 @@ fn table_assembled_from_marks() {
     assert_eq!(cell_text(1, 1), "d");
     let last = doc.body.last().and_then(|b| b.as_para()).expect("tail para");
     assert_eq!(last.text, "tail");
+}
+
+/// A paragraph whose properties don't fit a PAPX holds only `sprmPHugePapx`: the offset of the real
+/// properties in the Data stream, as a byte count and then the sprms.
+#[test]
+fn huge_papx_reads_the_paragraph_properties_from_the_data_stream() {
+    let text = "indented\r";
+    let real = grpprl(&[(0x845E, &720u16.to_le_bytes())]);
+    let mut data = vec![0u8; 8]; // something before them, so the offset isn't zero
+    let at = data.len() as u32;
+    data.extend_from_slice(&(real.len() as u16).to_le_bytes());
+    data.extend_from_slice(&real);
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![(0, 0, grpprl(&[(0x6646, &at.to_le_bytes())]))],
+        data_stream: data,
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p = doc.body.first().and_then(|b| b.as_para()).expect("paragraph");
+    assert_eq!(p.props.indent_left, Some(36.0), "720 twips from the Data stream");
+}
+
+/// A paragraph document whose one PAPX is `papx`, over a Data stream, read for its first paragraph.
+fn huge_papx_para(papx: Vec<u8>, data: Vec<u8>) -> craft_wordmodel::Paragraph {
+    let text = "para\r";
+    let spec = StructSpec { text, papx_entries: vec![(0, 0, papx)], data_stream: data, ..structured_spec(text, text.chars().count() as u32) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    doc.body.first().and_then(|b| b.as_para()).expect("paragraph").clone()
+}
+
+/// A `PrcData`: a two-byte byte count and then the grpprl.
+fn prc_data(grpprl: &[u8]) -> Vec<u8> {
+    [(grpprl.len() as u16).to_le_bytes().as_slice(), grpprl].concat()
+}
+
+/// The offset and byte count of a `sprmPHugePapx` are untrusted: one that points past the Data
+/// stream's end leaves the PAPX as it was.
+#[test]
+fn a_huge_papx_that_points_outside_the_data_stream_is_left_alone() {
+    let indent = |data: Vec<u8>, at: u32| huge_papx_para(grpprl(&[(0x6646, &at.to_le_bytes())]), data).props.indent_left;
+    let real = grpprl(&[(0x845E, &720u16.to_le_bytes())]);
+    // The offset is past the end of the stream, or its two count bytes are.
+    assert_eq!(indent(prc_data(&real), 100), None);
+    assert_eq!(indent(prc_data(&real), u32::MAX), None);
+    assert_eq!(indent(vec![0u8], 0), None, "a single byte can't hold the count");
+    // The count runs past the end of the stream.
+    let long_count = [(real.len() as u16 + 50).to_le_bytes().as_slice(), &real].concat();
+    assert_eq!(indent(long_count, 0), None);
+}
+
+/// `sprmPHugePapx` and `sprmPTableProps` may refer to records that begin with each other
+/// ([MS-DOC] §2.6.2): the chain is followed to its end, and a chain that never ends is not read.
+#[test]
+fn a_chain_of_huge_papx_references_is_followed_to_its_end() {
+    let reference = |op: u16, at: usize| grpprl(&[(op, &(at as u32).to_le_bytes())]);
+    let real = grpprl(&[(0x845E, &720u16.to_le_bytes())]);
+    // `links` records, each beginning with a reference to the next, then the real properties.
+    let chain = |links: usize, op: u16| {
+        let mut data = Vec::new();
+        let mut at = 0;
+        for _ in 0..links {
+            let record = prc_data(&reference(op, at + 8)); // a record is two count bytes and a six-byte sprm
+            at += record.len();
+            data.extend_from_slice(&record);
+        }
+        data.extend_from_slice(&prc_data(&real));
+        data
+    };
+    let indent = |links: usize, op: u16| huge_papx_para(reference(0x6646, 0), chain(links, op)).props.indent_left;
+    assert_eq!(indent(1, 0x6646), Some(36.0), "a record that begins with another sprmPHugePapx");
+    assert_eq!(indent(1, 0x646B), Some(36.0), "or with a sprmPTableProps");
+    assert_eq!(indent(7, 0x6646), Some(36.0), "up to the limit");
+    assert_eq!(indent(8, 0x6646), None, "past it the PAPX is left as it was");
+    // A record that refers to itself never ends.
+    assert_eq!(huge_papx_para(reference(0x6646, 0), prc_data(&reference(0x6646, 0))).props.indent_left, None);
+    // A reference that is not the first sprm of its array is ignored: the sprm before it applies.
+    let second = [grpprl(&[(0x845E, &240u16.to_le_bytes())]), reference(0x6646, 0)].concat();
+    assert_eq!(huge_papx_para(second, prc_data(&real)).props.indent_left, Some(12.0));
+}
+
+/// The FKP's own istd is zero when its PAPX is a `sprmPHugePapx`: the paragraph style is the one the
+/// properties it stands for name.
+#[test]
+fn a_huge_papx_names_the_paragraph_style_through_sprm_p_istd() {
+    let real = grpprl(&[(0x4600, &1u16.to_le_bytes())]);
+    let p = huge_papx_para(grpprl(&[(0x6646, &0u32.to_le_bytes())]), prc_data(&real));
+    assert_eq!(p.props.style.as_deref(), Some("Second"));
+    let plain = huge_papx_para(Vec::new(), Vec::new());
+    assert_eq!(plain.props.style.as_deref(), Some("Normal"));
+}
+
+/// Each record read from the Data stream is charged to the document's work budget, so a flood of
+/// marks that each name a large one can't repeat it without bound: past the budget a mark keeps the
+/// PAPX it has, and the document says so.
+#[test]
+fn a_huge_papx_is_charged_to_the_work_budget() {
+    let real = grpprl(&[(0x845E, &720u16.to_le_bytes())]);
+    let data = prc_data(&real);
+    let papx = grpprl(&[(0x6646, &0u32.to_le_bytes())]);
+    let rich = super::Work::new(real.len() as u64 * 2);
+    assert_eq!(super::expand_papx(&data, &papx, &rich), Some(real.as_slice()));
+    assert_eq!(super::expand_papx(&data, &papx, &rich), Some(real.as_slice()));
+    assert!(rich.dropped().is_empty());
+    assert_eq!(super::expand_papx(&data, &papx, &rich), None, "the third read is past the budget");
+    assert_eq!(rich.dropped(), [super::Cost::ParagraphProps]);
+}
+
+/// A table row whose end mark is a huge PAPX (its `sprmTDefTable` is in the Data stream) still ends
+/// the row, with the cell widths its edges give, rather than leaving its cells to the next row.
+#[test]
+fn a_table_row_end_in_a_huge_papx_still_ends_the_row() {
+    let text = "a\u{7}b\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let real = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_edges(&[0, 2000, 4000])].concat();
+    let mut data = Vec::new();
+    data.extend_from_slice(&(real.len() as u16).to_le_bytes());
+    data.extend_from_slice(&real);
+    let spec = StructSpec {
+        text,
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, grpprl(&[(0x6646, &0u32.to_le_bytes())])), (4, 0, Vec::new())],
+        data_stream: data,
+        ..structured_spec(text, text.chars().count() as u32)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 1);
+    assert_eq!(tbl.rows[0].cells.len(), 2);
+    assert_eq!(tbl.grid, vec![100.0, 100.0]);
 }
 
 #[test]
