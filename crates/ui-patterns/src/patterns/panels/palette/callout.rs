@@ -1,7 +1,7 @@
 //! The callout of the palette's active row: the mark on its shown control and the box beside it.
 
 use super::super::tour;
-use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::display::{TargetMark, Text};
 use crate::popover::Popover;
 use crate::runtime::commands::{self, CommandRef};

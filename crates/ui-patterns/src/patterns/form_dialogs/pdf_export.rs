@@ -167,11 +167,6 @@ pub(crate) fn apply_standard(settings: &mut PdfSettings) {
     }
 }
 
-/// The warnings of `settings`, worded, then the host's: what the Summary shows and Save Summary… writes.
-pub(super) fn warning_lines(words: &PdfExportWords, settings: &PdfSettings, catalog: &dyn ProfileCatalog, host: &[String]) -> Vec<String> {
-    settings.warnings(catalog).iter().map(|warning| words.warning_text(warning)).chain(host.iter().cloned()).collect()
-}
-
 /// The value `bind` holds, when it is bound and holds one.
 fn bound_value<T: Value>(bind: &mut Option<Bind<'_, T>>) -> Option<T> {
     bind.as_mut().and_then(read_bind)

@@ -9,10 +9,10 @@ pub(super) mod stories;
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
 use crate::primitives::textures::{Revision, TextureStore, TextureStoreOptions, UNTINTED};
-use crate::primitives::{ContentPainterCx, Dashes, PaintShape, dashed, outline};
+use crate::primitives::{ContentPainterCx, Dashes, PaintShape, dashed, outline_with};
 use crate::runtime::env::Label;
 use crate::runtime::memory::Remember as _;
-use crate::style::{ComponentStyle, DataColor, StyleColor, StyleCx, UiTokens};
+use crate::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use craft_behavior::kurbo::{self, BezPath, PathEl, Point, Rect};
 use craft_behavior::{CanvasView, Input, Metrics};
 use egui::epaint::Vertex;
@@ -67,6 +67,9 @@ pub struct OutlineStyle {
     metrics: Metrics,
     /// The line colour of a shape the host gives no colour: the accent as a bare line.
     line: StyleColor,
+    /// The colour of the halo under that line, and its width.
+    halo: StyleColor,
+    thick: f32,
     /// The width of a hover line and of a dashed selection line.
     medium: f32,
     /// The width of a solid selection line.
@@ -81,6 +84,8 @@ fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
     OutlineStyle {
         metrics: Metrics::new(),
         line: cx.color(cx.tokens.color.overlay.line),
+        halo: cx.color(cx.tokens.color.overlay.halo),
+        thick: stroke.thick,
         medium: stroke.medium,
         thin: stroke.thin,
         dash: stroke.dash,
@@ -153,9 +158,13 @@ fn segment_hull(from: kurbo::Point, segment: PathEl) -> Vec<kurbo::Point> {
 
 /// The shapes of one run: the kit's halo-and-line outline in the overlay colours, or a line of the host's `color`
 /// alone.
-fn run_shapes(tokens: &UiTokens, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) -> Vec<Shape> {
+fn run_shapes(style: &OutlineStyle, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) -> Vec<Shape> {
     match color {
-        None => outline(tokens, &if closed { PaintShape::Polygon(run) } else { PaintShape::Path(run) }),
+        None => outline_with(
+            Stroke::new(style.thick, style.halo.egui()),
+            Stroke::new(style.medium, style.line.egui()),
+            &[if closed { PaintShape::Polygon(run) } else { PaintShape::Path(run) }],
+        ),
         Some(color) => {
             let stroke = Stroke::new(width, color.0);
             vec![if closed { Shape::closed_line(run, stroke) } else { Shape::line(run, stroke) }]
@@ -164,8 +173,8 @@ fn run_shapes(tokens: &UiTokens, run: Vec<Pos2>, closed: bool, color: Option<Dat
 }
 
 /// Strokes one run; see [`run_shapes`].
-fn stroke_run(painter: &ContentPainterCx<'_>, tokens: &UiTokens, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) {
-    painter.painter.extend(run_shapes(tokens, run, closed, color, width));
+fn stroke_run(painter: &ContentPainterCx<'_>, style: &OutlineStyle, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) {
+    painter.painter.extend(run_shapes(style, run, closed, color, width));
 }
 
 fn tint(mask: &HoverMask, color: Color32) -> ColorImage {
@@ -251,11 +260,11 @@ impl Component for HoverOutline {
                 let (half_y, half_x) = (view.doc_len(style.medium / 2.0), f64::from(style.medium / 2.0) / view.zoom_x());
                 let rect = rect.abs();
                 let grown = Rect::new(rect.x0 - half_x, rect.y0 - half_y, rect.x1 + half_x, rect.y1 + half_y);
-                stroke_run(&painter, &cx.env.tokens, view.quad(grown).to_vec(), true, self.color, style.medium);
+                stroke_run(&painter, style, view.quad(grown).to_vec(), true, self.color, style.medium);
             }
             HoverShape::Path(path) => {
                 for (points, closed) in path_runs(&view, path) {
-                    stroke_run(&painter, &cx.env.tokens, points, closed, self.color, style.medium);
+                    stroke_run(&painter, style, points, closed, self.color, style.medium);
                 }
             }
             HoverShape::Mask(mask) => paint_mask(&painter, &view, mask, self.color.map_or(style.line.egui(), |color| color.0)),
@@ -330,12 +339,12 @@ impl<'a> SelectionOutline<'a> {
 
 impl SelectionOutline<'_> {
     /// The shapes of the paths, then of the key path, under `view`.
-    fn build(&self, view: &CanvasView, tokens: &UiTokens, style: &OutlineStyle) -> Vec<Shape> {
+    fn build(&self, view: &CanvasView, style: &OutlineStyle) -> Vec<Shape> {
         let mut shapes = Vec::new();
         for path in self.paths {
             for (mut points, closed) in path_runs(view, path) {
                 match self.look {
-                    SelectionOutlineLook::Solid => shapes.extend(run_shapes(tokens, points, closed, self.color, style.thin)),
+                    SelectionOutlineLook::Solid => shapes.extend(run_shapes(style, points, closed, self.color, style.thin)),
                     SelectionOutlineLook::Dashed => {
                         if closed {
                             points.extend(points.first().copied());
@@ -348,7 +357,7 @@ impl SelectionOutline<'_> {
         }
         if let Some(key) = self.key {
             for (points, closed) in path_runs(view, key) {
-                shapes.extend(run_shapes(tokens, points, closed, self.color, style.medium));
+                shapes.extend(run_shapes(style, points, closed, self.color, style.medium));
             }
         }
         shapes
@@ -407,7 +416,7 @@ impl Component for SelectionOutline<'_> {
                 return;
             }
         }
-        let shapes = Arc::new(self.build(&space.view, &cx.env.tokens, &key.style));
+        let shapes = Arc::new(self.build(&space.view, &key.style));
         *cx.memory::<OutlineShapes>() = OutlineShapes { key: Some(key), centre, shapes };
     }
 
@@ -417,7 +426,7 @@ impl Component for SelectionOutline<'_> {
         if self.revision.is_some() {
             painter.painter.extend(cx.recall::<OutlineShapes>().shapes.iter().cloned());
         } else {
-            painter.painter.extend(self.build(&space.view, &cx.env.tokens, &cx.style));
+            painter.painter.extend(self.build(&space.view, cx.style));
         }
     }
 

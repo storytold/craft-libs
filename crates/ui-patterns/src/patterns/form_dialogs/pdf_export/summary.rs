@@ -19,10 +19,10 @@ enum Shown {
     },
 }
 
-/// The worded warnings of `settings` against `catalog`: the Summary's warnings, and what Save Summary… appends the
-/// host's to.
-pub(super) fn warning_lines(words: &PdfExportWords, settings: &PdfSettings, catalog: &dyn ProfileCatalog) -> Vec<String> {
-    settings.warnings(catalog).iter().map(|warning| words.warning_text(warning)).collect()
+/// The warnings of `settings` against `catalog`, worded, then the host's: what the Summary shows and Save Summary…
+/// writes.
+pub(super) fn warning_lines(words: &PdfExportWords, settings: &PdfSettings, catalog: &dyn ProfileCatalog, host: &[String]) -> Vec<String> {
+    settings.warnings(catalog).iter().map(|warning| words.warning_text(warning)).chain(host.iter().cloned()).collect()
 }
 
 /// The Summary's lines for `settings` against `base`, then the `warnings`, with LF line breaks (CR and CRLF in values

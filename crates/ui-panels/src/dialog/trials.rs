@@ -429,7 +429,13 @@ fn a_tall_body_scrolls_under_a_footer_that_stays_in_view() {
     assert!(fixture.by_label("Line 59").is_none_or(|last| !screen.contains_rect(last.rect)), "the body does not all fit: it scrolls");
 
     let over = fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect.center();
-    let wheel = egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -400.0), modifiers: Modifiers::NONE };
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -400.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
+    };
     fixture.frame(vec![egui::Event::PointerMoved(over), wheel]).settle();
     assert_ne!(first(&fixture), Some(at_top), "the wheel scrolled the body");
     assert!(screen.contains_rect(fixture.by_label("OK").expect("the footer is shown").rect), "the footer stays in view while the body scrolls");

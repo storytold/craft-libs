@@ -500,7 +500,7 @@ impl Component for Pasteboard<'_> {
             match page.fill {
                 Some(PageFill::Color(color)) => draw.data_fill(&polygon(&quad), color),
                 Some(PageFill::Checker(checker)) => {
-                    let grid = checker.shape(edges.painter.ctx(), &cx.env.tokens, CheckerArea::Quad(quad), page_corner(&view, page));
+                    let grid = checker.shape(edges.painter.ctx(), &ui.env.tokens, CheckerArea::Quad(quad), page_corner(&view, page));
                     edges.painter.add(grid);
                 }
                 None => {}

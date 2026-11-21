@@ -62,7 +62,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
     /// Shows the list with a row per section from `row` and `body` beside it; the section picked this pass.
     // PLAN: ty.X70 gives `body: impl FnOnce`; a container runs its body again for a measuring pass, so `body` and
     // `foot` are `FnMut`.
-    pub fn show(self, ui: &mut Ui, mut row: impl FnMut(&K) -> ListRow, mut body: impl FnMut(&mut Ui)) -> Option<K> {
+    pub fn show(self, ui: &mut Ui, mut row: impl FnMut(&K) -> ListRow<'static>, mut body: impl FnMut(&mut Ui)) -> Option<K> {
         let SectionList { label, source, shown, id, body_label, mut foot } = self;
         let mut picked = None;
         Row::new().fill().show(ui, |ui, _| {

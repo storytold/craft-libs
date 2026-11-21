@@ -111,7 +111,7 @@ fn artboards_show_outside(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let border = border_of(data, PageBorder::DropShadow);
     let pages: &[PageFrame] = data.value("pages", boards());
     on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| {
-        Pasteboard::new("Pasteboard", pages).shows_outside(true).border(border).show_at(ui, at)
+        Pasteboard::new("Pasteboard", pages).shows_outside().border(border).show_at(ui, at)
     })
 }
 

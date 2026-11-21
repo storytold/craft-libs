@@ -10,7 +10,7 @@ use crate::runtime::requests::{ColorRequest, EyedropperRequest, ListingRequest, 
 use super::param::{CustomContext, Head, Lifted, Param, ParamKind, fill_defaults, path_list, rounded};
 use super::path_row::PathRow;
 use super::words::ParamWords;
-use crate::buttons::{Button, ToggleButton};
+use crate::buttons::{Button, IconButton, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
     Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
@@ -361,7 +361,7 @@ impl Line<'_> {
     /// The help button after a row's control: a press is noted for the pass, which reports the row's link.
     fn help_button(&self, ui: &mut Ui) {
         let help = Env::of(ui).words::<ParamWords>().help.clone();
-        if clicked(&Button::new(help).icon(IconId::new("help")).icon_only().id_salt("help").show(ui)) {
+        if clicked(&IconButton::new(IconId::new("help")).label(help).id_salt("help").show(ui)) {
             self.helped.set(true);
         }
     }

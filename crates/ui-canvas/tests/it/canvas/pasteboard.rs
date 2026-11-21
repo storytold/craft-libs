@@ -273,7 +273,8 @@ fn pasteboard_shapes(pages: Vec<PageFrame>, shows_outside: bool) -> (CanvasView,
     let view = CanvasView::new(egui::Rect::from_min_size(Pos2::ZERO, room), Point::new(200.0, 150.0), 1.0);
     let mut fixture = Fixture::new(move |ui| {
         Canvas::new("Document").view(view).pasteboard(PasteboardColor::DarkGray).show(ui, |ui, body| {
-            let _ = Pasteboard::new("Pasteboard", &pages).shows_outside(shows_outside).show_at(ui, body.rect);
+            let pasteboard = Pasteboard::new("Pasteboard", &pages);
+            let _ = if shows_outside { pasteboard.shows_outside() } else { pasteboard }.show_at(ui, body.rect);
             let paint = AppPaint::new(|painter, view: CanvasView| {
                 painter.painter.add(Shape::rect_filled(view.rect, 0.0, PICTURE));
             });
