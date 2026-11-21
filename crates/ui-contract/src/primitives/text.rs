@@ -376,6 +376,7 @@ impl LayoutQuery<'_> {
                 highlight: span.highlight,
                 underline: span.underline,
                 strong: span.strong,
+                link: span.link,
                 flag: span.flag,
             })
             .collect();
@@ -388,6 +389,7 @@ impl LayoutQuery<'_> {
                 ltr: self.run.ltr,
                 align: self.run.align,
                 rotation: self.run.rotation,
+                link_color: self.run.link_color,
             },
             tokens: self.tokens,
             token_values: self.token_values.clone(),

@@ -170,7 +170,7 @@ fn a_second_finger_cancels_an_open_press_and_two_fingers_moving_together_give_th
 
     // PLAN: the sheet pans a `Canvas` with `NavigationOptions::touch_gestures`; ui-contract's trials cannot reach
     // ui-canvas, so the wheel share a taker reads is what this trial checks.
-    let id = Id::new("pan_taker");
+    let id = Id::unique("pan_taker");
     let pans: Rc<RefCell<Vec<Vec2>>> = Rc::default();
     let sink = pans.clone();
     let mut show_taker = move |ui: &mut Ui| {

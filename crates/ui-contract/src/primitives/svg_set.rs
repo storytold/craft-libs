@@ -112,7 +112,7 @@ pub(crate) fn fill_of(entry: Entry) -> Option<(&'static [u8], [u8; 4])> {
 /// A fill document in white at `px` x `px` physical pixels, drawn as drawn and never mirrored: no app icon is
 /// directional.
 pub(crate) fn rasterise_fill(svg: &[u8], px: u32) -> ColorImage {
-    image(draw(svg, None, px, 0.0, false), px, || "app icon fill".to_owned())
+    image(draw(svg, None, None, px, 0.0, false), px, false, || "app icon fill".to_owned())
 }
 
 /// The position of the icon called `name` in the catalog.
