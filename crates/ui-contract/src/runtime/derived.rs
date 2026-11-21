@@ -46,6 +46,9 @@ impl Store {
 /// The value of the component `id` derived from `key`: the kept one while `key` is the one it was built from, else
 /// `build`'s, which is kept in its place. One value is kept per id and value type `V`; a component that derives two
 /// values of one type gives each its own id.
+///
+/// While the key is unchanged, every call returns the same `Arc` (`Arc::ptr_eq` holds), so a caller that keeps the
+/// last result can tell "unchanged" from a pointer compare.
 pub fn derived<K: MemoProps, V: Send + Sync + 'static>(ctx: &Context, id: Id, key: &K, build: impl FnOnce() -> V) -> Arc<V> {
     let mut memo = MemoKey::of_view(ctx);
     memo.feed_hash(&K::identity());
