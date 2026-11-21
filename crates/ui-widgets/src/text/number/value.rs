@@ -139,6 +139,8 @@ pub struct NumberOutput<V: NumberValue = Option<f64>> {
     pub out_of_range: Option<RangeAlert>,
     /// The committed text held more than the codec reads, in the pass it committed.
     pub cut: bool,
+    /// The field's link label was clicked in this pass (`Cx::link_activated`).
+    pub link: bool,
 }
 
 /// A typed value the field clamped to its range, in shown units.

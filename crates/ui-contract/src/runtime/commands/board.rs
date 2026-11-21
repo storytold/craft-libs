@@ -24,6 +24,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 type StateKey = (u32, Option<Id>);
+/// The key of an app-scope state: the command number and, for a ref with params, its `CommandRef::key`.
+type AppStateKey = (u32, Option<String>);
 
 /// How a command with `ModalRule::Declared` reaches into the top modal layer.
 #[derive(Clone, Copy)]
@@ -130,7 +132,7 @@ pub(crate) struct Board {
     /// Command ids by number, so a state lookup allocates nothing.
     numbers: HashMap<String, u32>,
     /// The app-scope states of the app's `Tracked<CommandStates>`, by command number, and the revision they are of.
-    app_states: HashMap<u32, CommandState>,
+    app_states: HashMap<AppStateKey, CommandState>,
     app_revision: Option<Revision>,
     /// The states instances published this frame and last frame; a resolution reads this frame's, else last frame's.
     this: HashMap<StateKey, CommandState>,
@@ -625,14 +627,14 @@ impl Board {
         self.instances.get(id).is_some_and(|i| self.live(ctx, i))
     }
 
-    /// The definition of the command `id`: the linked sets', else the frame's app catalog's.
-    fn def(&self, id: &str) -> Option<&CommandDef> {
-        self.registry.get(id).or_else(|| self.app.as_ref()?.get(id))
+    /// The definition of `command`: the linked sets' by id, else the frame's app catalog's.
+    fn def(&self, command: &CommandRef) -> Option<&CommandDef> {
+        self.registry.get(&command.id).or_else(|| self.app.as_ref()?.get(command))
     }
 
     /// The scope name of `command`; commands no definition names belong to the application.
     fn scope_of(&self, command: &CommandRef) -> &str {
-        self.def(&command.id).map_or(CommandScope::APP.name(), |def| def.scope.as_str())
+        self.def(command).map_or(CommandScope::APP.name(), |def| def.scope.as_str()) // P3(shortcuts-w1): kb.C3
     }
 
     fn state_key(&self, command: &CommandRef, instance: Option<Id>) -> Option<StateKey> {
@@ -725,7 +727,7 @@ impl Board {
         from: &Vantage,
         reads: &mut Reads,
     ) -> (ResolvedCommand, Option<StateKey>) {
-        let def = self.def(&command.id);
+        let def = self.def(command); // P3(shortcuts-w1): kb.C3
         let app = self.to_app(self.scope_of(command));
         let instance = if app { None } else { instance };
         let dialog_open = from.modal_open || from.dialog_keys;
@@ -746,7 +748,8 @@ impl Board {
         };
         // An app-scope state is the app's held one; an instance's is this frame's publish, else last frame's.
         let (this, last) = match key {
-            Some((number, None)) => (self.app_states.get(&number), None),
+            // P3(shortcuts-w1): op.F9
+            Some((number, None)) => (self.app_states.get(&(number, None)), None),
             Some(key) => (self.this.get(&key), self.last.get(&key)),
             None => (None, None),
         };
@@ -938,7 +941,8 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
         .iter()
         .filter_map(|def| WindowShortcut::of(&def.command).map(|key| (key, &def.command)))
         .flat_map(|(key, command)| {
-            keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.double).map(move |binding| (key, binding.trigger.chord))
+            // P3(shortcuts-w1): kb.C13b
+            keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.is_double()).map(move |binding| (key, binding.trigger.chord))
         })
         .collect();
     let edit_chords = registry
@@ -948,7 +952,8 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
         // Delete's keys (Delete, Backspace) stay a focused text part's own deletion, which also deletes one character.
         .filter(|(edit, _)| *edit != EditCommand::Delete)
         .flat_map(|(edit, command)| {
-            keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.double).map(move |binding| (edit, binding.trigger.chord))
+            // P3(shortcuts-w1): kb.C13b
+            keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.is_double()).map(move |binding| (edit, binding.trigger.chord))
         })
         .collect();
     let mut shown_text = HashMap::new();
@@ -1030,13 +1035,15 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
             board.app_revision = revision;
             let mut states = HashMap::new();
             for (command, state) in input.states.iter().flat_map(|(_, states)| states.iter()) {
-                states.insert(board.number(&command.id), state.clone());
+                // P3(shortcuts-w1): op.F9
+                states.insert((board.number(&command.id), None), state.clone());
             }
             let changed: Vec<u32> = states
                 .iter()
-                .filter(|(number, state)| board.app_states.get(number) != Some(*state))
-                .map(|(number, _)| *number)
-                .chain(board.app_states.keys().filter(|number| !states.contains_key(number)).copied())
+                // P3(shortcuts-w1): op.F9
+                .filter(|(key, state)| board.app_states.get(*key) != Some(*state))
+                .map(|(key, _)| key.0)
+                .chain(board.app_states.keys().filter(|key| !states.contains_key(*key)).map(|key| key.0))
                 .collect();
             board.app_states = states;
             for number in changed {
@@ -1231,7 +1238,7 @@ fn resolve_in(
     mut reads: Reads,
 ) -> (ResolvedCommand, ResolveKey) {
     let (resolved, key, first_unknown) = with(ctx, |board| {
-        let first_unknown = board.def(&command.id).is_none() && board.unknown.insert(command.id.clone());
+        let first_unknown = board.def(command).is_none() && board.unknown.insert(command.id.clone()); // P3(shortcuts-w1): kb.C3
         // A command no state named yet has a key too, so a state given later reaches the regions that read it.
         board.number(&command.id);
         let (mut resolved, state) = board.resolve(ctx, command, instance, reach, from.unwrap_or(&board.here), &mut reads);
@@ -1513,12 +1520,13 @@ pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) 
 }
 
 /// Step 17: the command of a component that was activated and enabled.
-pub(crate) fn fire_bound(ctx: &Context, command: &ResolvedCommand) {
-    fire_resolved(ctx, command, FireSource::Pointer);
+pub(crate) fn fire_bound(ctx: &Context, command: &ResolvedCommand, mods: craft_keymap::Mods) {
+    fire_resolved(ctx, command, FireSource::Pointer, mods);
 }
 
 /// Queues `command` for its instance with `source`; false when disabled.
-pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: FireSource) -> bool {
+pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: FireSource, mods: craft_keymap::Mods) -> bool {
+    let _ = mods; // P3(shortcuts-w1): ap.AP9
     if !command.enabled || !crate::runtime::measure::effect(ctx, "board::fire_resolved") {
         return false;
     }
@@ -1569,7 +1577,7 @@ pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef,
     );
     let changed = with(ctx, |board| {
         let scope = board.scope_of(command);
-        let declared = board.def(&command.id).is_some_and(|def| def.modal == ModalRule::Declared);
+        let declared = board.def(command).is_some_and(|def| def.modal == ModalRule::Declared); // P3(shortcuts-w1): kb.C3
         debug_assert!(
             !is_app(scope) || declared,
             "{command} is an app-scope command: its state comes from `FrameInput.commands`, unless the command is declared by an instance"
@@ -1824,6 +1832,7 @@ pub(crate) fn begin(ctx: &Context) {
                         phase: FirePhase::Release,
                         cycle: false,
                         alt_variant: false,
+                        mods: craft_keymap::Mods::NONE, // P3(shortcuts-w1): ap.AP9
                         time,
                     });
                 }
@@ -1843,7 +1852,8 @@ pub(crate) fn begin(ctx: &Context) {
                 let key = shortcut.input.physical.or(shortcut.input.typed);
                 with(ctx, |board| {
                     if let Some(key) = key.filter(|_| {
-                        board.def(&hit.command.id).is_some_and(|def| matches!(def.kind, CommandKind::Momentary | CommandKind::Tool { .. }))
+                        // P3(shortcuts-w1): kb.C3
+                        board.def(&hit.command).is_some_and(|def| matches!(def.kind, CommandKind::Momentary | CommandKind::Tool { .. }))
                     }) {
                         board.held.retain(|held| held.key != key);
                         board.held.push(Held { key, command: hit.command.clone(), target });
@@ -1856,6 +1866,7 @@ pub(crate) fn begin(ctx: &Context) {
                     phase: FirePhase::Press,
                     cycle: hit.cycle.len() > 1,
                     alt_variant: hit.alt_variant,
+                    mods: craft_keymap::Mods::NONE, // P3(shortcuts-w1): ap.AP9
                     time,
                 });
             }

@@ -3,6 +3,7 @@
 pub mod backdrop;
 mod content;
 mod draw;
+mod face;
 mod faces;
 mod focus_ring;
 #[doc(hidden)]
@@ -33,11 +34,12 @@ mod tool;
 
 pub use content::{ContentPainterCx, DocRun, DocText};
 pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokeWidth};
+pub use face::FacePaint;
 pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};
 pub use handle::{Handle, HandleShape};
 pub(crate) use icon::SvgIcon;
-pub use icon::{Glyph, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names};
+pub use icon::{Glyph, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_names, paint_icon};
 pub use ime_surface::ImeSurface;
 pub use kit::{
     Checker, CheckerArea, GridAxis, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark, ellipse,

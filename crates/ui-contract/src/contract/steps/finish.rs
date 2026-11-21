@@ -21,9 +21,11 @@ pub(crate) fn before_finish(core: &mut CxCore<'_>, activated: bool, injected: Op
     if activated && let Some(command) = &core.command {
         match injected {
             Some(source) => {
-                commands::fire_resolved(&core.ctx, command, source);
+                // P3(shortcuts-w1): ap.AP9
+                commands::fire_resolved(&core.ctx, command, source, craft_keymap::Mods::NONE);
             }
-            None => commands::fire_bound(&core.ctx, command),
+            // P3(shortcuts-w1): ap.AP9
+            None => commands::fire_bound(&core.ctx, command, craft_keymap::Mods::NONE),
         }
     }
 }

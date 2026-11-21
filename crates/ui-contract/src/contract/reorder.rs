@@ -6,6 +6,18 @@ use crate::runtime::keys::Intents;
 use craft_behavior::{Axis, Intent, NavOutline, keys};
 use egui::{Pos2, Rect};
 
+/// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
+pub(crate) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
+
+/// The scroll step, in the view's units, of a drag whose pointer is `at` from the view's top edge in a `view` tall
+/// view of `row` tall rows: the band is `row.min(view / 2.0)`, the step grows with the depth into it, and `dt` is the
+/// frame's time.
+#[allow(dead_code)] // P3(appearance-w1): ap.AP10
+pub(crate) fn edge_step(view: f32, row: f32, at: f32, dt: f32) -> f32 {
+    let _ = (view, row, at, dt);
+    todo!("ap.AP10")
+}
+
 /// The gap a drop would land in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]

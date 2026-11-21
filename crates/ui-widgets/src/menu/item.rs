@@ -193,6 +193,8 @@ pub struct MenuItem<'a> {
     /// The checked state of the entry the row shows: a radio mark in a value menu, a check mark elsewhere while true.
     #[prop(name = "entry_checked")]
     entry: Option<bool>,
+    #[allow(dead_code)] // P3(menus-w1): mn.M14
+    sample: Option<(crate::list::ThumbAspect, crate::primitives::FacePaint)>,
     ran: bool,
     opens: bool,
     open: bool,
@@ -216,12 +218,21 @@ impl<'a> MenuItem<'a> {
             shortcut: None,
             keep_open: false,
             entry: None,
+            sample: None,
             ran: false,
             opens: false,
             open: false,
             active: false,
         }
         .label(label)
+    }
+
+    /// A content-painted cell after the label and before the shortcut, in a column shared by the level's rows: as high
+    /// as the row's text line and as wide as that height times `aspect`.
+    #[must_use]
+    pub fn sample(self, aspect: crate::list::ThumbAspect, face: crate::primitives::FacePaint) -> Self {
+        let _ = (aspect, face);
+        todo!("mn.M14")
     }
 
     /// A row bound to `command`: its label, chord, enabled state and checked state follow the command, and running it

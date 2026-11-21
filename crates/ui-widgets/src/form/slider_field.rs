@@ -152,6 +152,20 @@ impl<'a> SliderField<'a> {
         .label(label)
     }
 
+    /// Values the field's slider snaps to, drawn as marks under the track: [`Slider::marks`].
+    #[must_use]
+    pub fn marks(self, marks: &[f64]) -> Self {
+        let _ = marks;
+        todo!("wg.W31")
+    }
+
+    /// [`marks`](Self::marks) at the values, each with a caption centred under its mark: [`Slider::marks_labelled`].
+    #[must_use]
+    pub fn marks_labelled<L: Into<Label>>(self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
+        let _ = marks;
+        todo!("wg.W31")
+    }
+
     /// What the children are built from, apart from the binding and the track face.
     fn look(&self) -> Look {
         Look {

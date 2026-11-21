@@ -78,7 +78,8 @@ impl ZoomField {
             field = field.range(range);
         }
         if self.stepper {
-            field = field.stepper(move |percent: f64, dir: i32| ZoomLadder::step(percent / 100.0, dir, document) * 100.0);
+            // P3(canvas-w1): ap.AP15
+            field = field.stepper(move |percent: f64, dir: i32, _scale: f64| ZoomLadder::step(percent / 100.0, dir, document) * 100.0);
         }
         if self.scrub {
             field = field.scrub_by_label();
@@ -90,7 +91,12 @@ impl ZoomField {
                 .edit
                 .events
                 .clone()
-                .map(|percent| percent.map_or(current, |percent| zoom::with_device(&current, percent / 100.0, document, pixels_per_point))),
+                // P3(canvas-w1): cv.F3
+                .map(|percent| {
+                    percent.map_or(current, |percent| {
+                        zoom::with_device(&current, percent / 100.0, document, pixels_per_point, &craft_behavior::ZoomScheme::PHOTOSHOP)
+                    })
+                }),
             None => EditEvents::new(),
         };
         ZoomFieldOutput { response: shown.edit.response.clone(), view, invalid_zoom }

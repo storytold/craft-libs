@@ -141,6 +141,13 @@ impl RootEnv {
         self
     }
 
+    /// Overrides `seeds.accent` of whichever theme resolves, built-in or library, in both modes; the accent ramp derives
+    /// from the seed. `None` keeps the theme's own.
+    pub fn accent(self, seed: Option<craft_theme::Rgba>) -> Self {
+        let _ = seed;
+        todo!("sh.K20")
+    }
+
     /// What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer, as
     /// [`system_appearance`](super::system_appearance) reads it. A value the OS reports none for resolves to light,
     /// standard contrast and full motion.

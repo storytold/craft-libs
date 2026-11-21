@@ -167,6 +167,13 @@ impl<T: Value + 'static> Radio<T> {
     pub fn new(value: T) -> Self {
         Radio { common: Common::new(), value, checked: false, invalid: false }
     }
+
+    /// A dimmed line under the label (muted text role, small text token), inside the radio's hit area.
+    #[must_use]
+    pub fn detail(self, text: impl Into<crate::runtime::env::Label>) -> Self {
+        let _ = text;
+        todo!("co.K26")
+    }
 }
 
 impl<T: Value + 'static> Component for Radio<T> {

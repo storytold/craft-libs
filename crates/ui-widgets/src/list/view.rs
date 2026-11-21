@@ -83,6 +83,15 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The kept rows are in order of how well they match the query.
     #[prop]
     ranked: bool,
+    /// Which end of the rows the list stays at while rows are added: `End` follows the newest row as long as the user
+    /// left the scroll at the end.
+    #[prop]
+    #[allow(dead_code)] // P3(appearance-w2): dp.C6
+    scroll_anchor: crate::contract::ScrollAnchor,
+    /// Whether every group after the first starts below a full-width divider row instead of a titled group row.
+    #[prop]
+    #[allow(dead_code)] // P3(appearance-w2): ap.AP6
+    group_heads: crate::tile_grid::GroupHeads,
 }
 
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
@@ -106,6 +115,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             row_menu: false,
             filter: None,
             ranked: false,
+            scroll_anchor: crate::contract::ScrollAnchor::Start,
+            group_heads: crate::tile_grid::GroupHeads::Titled,
         }
         .label(label)
     }

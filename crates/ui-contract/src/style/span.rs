@@ -24,6 +24,8 @@ pub struct Span<'a> {
     pub underline: bool,
     /// The role's semibold face, at the role's size.
     pub strong: bool,
+    /// A link in a paragraph: drawn in the run's link colour, and the only part of the paragraph that takes the pointer.
+    pub link: bool,
 }
 
 impl<'a> Span<'a> {
@@ -39,7 +41,13 @@ impl<'a> Span<'a> {
             highlight: false,
             underline: false,
             strong: false,
+            link: false,
         }
+    }
+
+    /// Makes the span a link: it takes the run's link colour and the pointer.
+    pub fn link(self) -> Self {
+        todo!("dp.R2")
     }
 
     /// Italic.

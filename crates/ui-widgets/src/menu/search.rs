@@ -6,6 +6,12 @@ use crate::runtime::env::Label;
 use craft_i18n::Folder;
 use craft_i18n::matcher::Matcher;
 
+mod index;
+mod synonyms;
+
+pub use index::{SearchIndex, rank};
+pub use synonyms::{SearchWords, Synonyms};
+
 /// The most matches the help search lists.
 pub const MAX_RESULTS: usize = 15;
 
@@ -17,12 +23,16 @@ pub struct HelpEntry {
     label: Label,
     english: Option<Label>,
     path: Vec<Label>,
+    #[allow(dead_code)] // P3(menus-w2): mn.M17
+    home: Option<Label>,
+    #[allow(dead_code)] // P3(menus-w2): mn.M18
+    words: Option<String>,
 }
 
 impl HelpEntry {
     /// A command found by `label`, the label its menu row shows.
     pub fn new(command: impl Into<CommandRef>, label: impl Into<Label>) -> Self {
-        HelpEntry { command: command.into(), label: label.into(), english: None, path: Vec::new() }
+        HelpEntry { command: command.into(), label: label.into(), english: None, path: Vec::new(), home: None, words: None }
     }
 
     /// The English label, which matches too.
@@ -37,6 +47,32 @@ impl HelpEntry {
     pub fn with_path(mut self, path: impl IntoIterator<Item = impl Into<Label>>) -> Self {
         self.path = path.into_iter().map(Into::into).collect();
         self
+    }
+
+    /// The label shown in place of the path. It is not searched.
+    #[must_use]
+    pub fn with_home(self, home: impl Into<Label>) -> Self {
+        let _ = home;
+        todo!("mn.M17")
+    }
+
+    /// The label shown in place of the path, if any.
+    #[must_use]
+    pub fn home(&self) -> Option<&Label> {
+        todo!("mn.M17")
+    }
+
+    /// The command id and description words: searched (word index, description tier), never shown.
+    #[must_use]
+    pub fn with_words(self, words: impl Into<String>) -> Self {
+        let _ = words;
+        todo!("mn.M18")
+    }
+
+    /// The searched words, if any.
+    #[must_use]
+    pub fn words(&self) -> Option<&str> {
+        todo!("mn.M18")
     }
 
     /// The command the entry runs.

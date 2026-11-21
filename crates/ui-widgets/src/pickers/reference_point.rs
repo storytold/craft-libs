@@ -62,6 +62,18 @@ pub struct ReferencePointStyle {
     arrow_ink: Stateful<StyleColor>,
 }
 
+/// How a [`ReferencePoint`] draws its nine points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub enum ReferencePointLook {
+    /// A dot for each point, the pick's twice as wide.
+    #[default]
+    Dots,
+    /// Eight outer squares joined by one line round the box and a lone centre square, the pick filled, with growth
+    /// arrows in `Dots` only.
+    Squares,
+}
+
 /// The 3 by 3 picker of a box's nine points: the point a transform, a resize or a watermark works about. The nine
 /// points are one Tab stop; the arrows move the focus and stop at the grid's edges, and Space, Enter or a click picks
 /// the focused point. The arrows are directions in the box, so they do not mirror in a right-to-left interface and
@@ -83,12 +95,17 @@ pub struct ReferencePoint<'a> {
     #[style_key]
     #[prop(flag)]
     compact: bool,
+    /// How the nine points are drawn: dots, or squares joined by a line round the box.
+    #[style_key]
+    #[prop]
+    #[allow(dead_code)] // P3(widgets-w3): wg.W32
+    look: ReferencePointLook,
 }
 
 impl<'a> ReferencePoint<'a> {
     /// A picker named `label` over `value`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Anchor9>) -> Self {
-        ReferencePoint { common: Common::new(), value, growth: None, compact: false }.label(label)
+        ReferencePoint { common: Common::new(), value, growth: None, compact: false, look: ReferencePointLook::Dots }.label(label)
     }
 
     /// The direction of the arrow `cell` shows when the pick is `anchor`, in cell steps (each -1, 0 or 1): away from

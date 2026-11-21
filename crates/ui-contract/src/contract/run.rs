@@ -1694,9 +1694,9 @@ fn measure_step(
             let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
             let whole = steps::whole(style, content, Vec2::ZERO, resolved);
             let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
-            crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
+            crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first(), None); // P3(chrome-w5): ch.K30
         }
-        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),
+        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false, None), // P3(chrome-w5): ch.K30
         Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(ctx, row, id, size.x),
         _ => {}
     }
@@ -1704,7 +1704,7 @@ fn measure_step(
     // the units narrow to leave it, and it takes what they leave.
     if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
         let content = measured.x + t.overflow();
-        crate::layout::report_shrink(ctx, row, id, size.x.min(content), content, Some((content, content)), false);
+        crate::layout::report_shrink(ctx, row, id, size.x.min(content), content, Some((content, content)), false, None); // P3(chrome-w5): ch.K30
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.

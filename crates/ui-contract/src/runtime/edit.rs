@@ -116,6 +116,41 @@ impl RemovalWatch {
     }
 }
 
+/// The preview watch of a component with a live preview, kept in its shown memory. When eviction drops an armed
+/// watch it notes the ended preview (`FrameOutput::ended_previews`) and requests a repaint.
+#[derive(Default)]
+pub struct PreviewWatch {
+    armed: Option<(Context, Id)>,
+}
+
+impl PreviewWatch {
+    /// Arms the watch for the component `owner`.
+    pub fn arm(&mut self, ctx: &Context, owner: Id) {
+        let _ = (ctx, owner);
+        todo!("ty.X2")
+    }
+
+    /// Disarms the watch: its drop notes nothing.
+    pub fn disarm(&mut self) {
+        todo!("ty.X2")
+    }
+}
+
+impl Clone for PreviewWatch {
+    fn clone(&self) -> Self {
+        PreviewWatch::default()
+    }
+}
+
+impl Drop for PreviewWatch {
+    fn drop(&mut self) {
+        if let Some((ctx, id)) = self.armed.take() {
+            super::frame::note_ended_preview(&ctx, id);
+            repaint::request(&ctx);
+        }
+    }
+}
+
 impl Clone for RemovalWatch {
     fn clone(&self) -> Self {
         RemovalWatch::default()

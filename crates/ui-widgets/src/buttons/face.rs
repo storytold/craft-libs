@@ -44,6 +44,9 @@ pub(crate) struct FaceSpec<'a> {
     pub mnemonic: Option<usize>,
     /// Where the icons and the label sit along the area when it is wider than they are.
     pub align: HAlign,
+    /// The command's chord, shown after the label and dropped before the label elides.
+    #[allow(dead_code)] // P3(shell-w2): sh.K13
+    pub chord: Option<&'a str>,
 }
 
 impl FaceSpec<'_> {

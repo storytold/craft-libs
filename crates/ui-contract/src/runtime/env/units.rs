@@ -27,6 +27,11 @@ craft_ui::words! {
         pixels_per_centimetre: unit "units.pixelsPerCentimetre" = "{n} ppcm";
         lines_per_inch: unit "units.linesPerInch" = "{n} lpi";
         lines_per_centimetre: unit "units.linesPerCentimetre" = "{n} lpcm";
+        feet: unit "units.feet" = "{n} ft";
+        yards: unit "units.yards" = "{n} yd";
+        metres: unit "units.metres" = "{n} m";
+        q: unit "units.q" = "{n} Q";
+        ha: unit "units.ha" = "{n} H";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
         pixels_name: "units.pixelsName" = "Pixels";
@@ -44,6 +49,11 @@ craft_ui::words! {
         columns_name: "units.columnsName" = "Columns";
         lines_per_inch_name: "units.linesPerInchName" = "Lines/Inch";
         lines_per_centimetre_name: "units.linesPerCentimetreName" = "Lines/Centimetre";
+        feet_name: "units.feetName" = "Feet";
+        yards_name: "units.yardsName" = "Yards";
+        metres_name: "units.metresName" = "Metres";
+        q_name: "units.qName" = "Q";
+        ha_name: "units.haName" = "H";
     }
 }
 
@@ -76,6 +86,12 @@ impl PointSize {
 impl EnvValue for PointSize {
     fn root() -> Self {
         PointSize::default()
+    }
+}
+
+impl EnvValue for craft_behavior::ZoomScheme {
+    fn root() -> Self {
+        craft_behavior::ZoomScheme::PHOTOSHOP
     }
 }
 
@@ -114,6 +130,16 @@ pub enum UnitKind {
     LinesPerInch,
     /// `{n} lpcm`: a halftone screen's frequency.
     LinesPerCentimetre,
+    /// `{n} ft`.
+    Feet,
+    /// `{n} yd`.
+    Yards,
+    /// `{n} m`.
+    Metres,
+    /// `{n} Q`.
+    Q,
+    /// `{n} H`.
+    Ha,
 }
 
 impl UnitKind {
@@ -126,7 +152,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 15] = [
+    const ALL: [UnitKind; 20] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -142,6 +168,11 @@ impl UnitKind {
         UnitKind::Columns,
         UnitKind::LinesPerInch,
         UnitKind::LinesPerCentimetre,
+        UnitKind::Feet,
+        UnitKind::Yards,
+        UnitKind::Metres,
+        UnitKind::Q,
+        UnitKind::Ha,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
@@ -149,6 +180,8 @@ impl UnitKind {
         match self {
             UnitKind::Pixels | UnitKind::Minutes => 0..=0,
             UnitKind::Percent | UnitKind::Degrees | UnitKind::Points => 0..=1,
+            UnitKind::Q | UnitKind::Ha => 0..=2,
+            UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0..=4,
             UnitKind::Times
             | UnitKind::Centimetres
             | UnitKind::Millimetres
@@ -165,7 +198,7 @@ impl UnitKind {
     /// the kind steps by the kind's rule.
     pub const fn step(self) -> f64 {
         match self {
-            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres => 0.1,
+            UnitKind::Times | UnitKind::Inches | UnitKind::Centimetres | UnitKind::Feet | UnitKind::Yards | UnitKind::Metres => 0.1,
             _ => 1.0,
         }
     }
@@ -182,6 +215,10 @@ impl UnitKind {
             UnitKind::Millimetres => Some(25.4),
             UnitKind::Points => Some(points_per_inch),
             UnitKind::Picas => Some(points_per_inch / 12.0),
+            UnitKind::Feet => Some(1.0 / 12.0),
+            UnitKind::Yards => Some(1.0 / 36.0),
+            UnitKind::Metres => Some(0.0254),
+            UnitKind::Q | UnitKind::Ha => Some(101.6),
             _ => None,
         }
     }
@@ -355,6 +392,11 @@ impl Units {
             UnitKind::Columns => words.columns.as_str(),
             UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
             UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
+            UnitKind::Feet => words.feet.as_str(),
+            UnitKind::Yards => words.yards.as_str(),
+            UnitKind::Metres => words.metres.as_str(),
+            UnitKind::Q => words.q.as_str(),
+            UnitKind::Ha => words.ha.as_str(),
         }
     }
 
@@ -377,6 +419,11 @@ impl Units {
             UnitKind::Columns => &words.columns_name,
             UnitKind::LinesPerInch => &words.lines_per_inch_name,
             UnitKind::LinesPerCentimetre => &words.lines_per_centimetre_name,
+            UnitKind::Feet => &words.feet_name,
+            UnitKind::Yards => &words.yards_name,
+            UnitKind::Metres => &words.metres_name,
+            UnitKind::Q => &words.q_name,
+            UnitKind::Ha => &words.ha_name,
         };
         name.clone()
     }

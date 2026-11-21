@@ -198,8 +198,9 @@ pub fn icon_names() -> &'static [&'static str] {
     svg_set::names()
 }
 
-/// Paints `spec`'s glyph centred in the square of `rect`'s shorter side; `Draw::icon` adds the badge.
-pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, rect: Rect, spec: &IconSpec<'_>) {
+/// Paints `spec` centred in `rect` as components do, so a [`Glyph`] (which gets a raw `Painter`) can draw a set icon
+/// inside its own drawing. `Draw::icon` adds the badge.
+pub fn paint_icon(painter: &Painter, tokens: &UiTokens, direction: Direction, rect: Rect, spec: &IconSpec<'_>) {
     let color = spec.color_in(tokens);
     let rtl = direction == Direction::Rtl;
     let side = rect.width().min(rect.height());

@@ -16,7 +16,7 @@ use crate::runtime::env::Label;
 use craft_behavior::IconId;
 use craft_theme::variant::Tone;
 
-pub use grid::{GridEvent, RatingKeys, TileGrid, TileGridOutput, TileGridStyle};
+pub use grid::{GridEvent, GroupHeads, RatingKeys, TileGrid, TileGridOutput, TileGridStyle};
 pub use layout::{Around, ArrangeSpacing, GridLayout, TailRow, TileArrangement, TileGroup, TileRow, Tiling, arrange, aspects_of};
 pub use slider::{ThumbnailSlider, ThumbnailSliderStyle, TileZoom, ZoomStep};
 pub use tile::{Tile, TileOutput, TilePartEvent, TileStyle};

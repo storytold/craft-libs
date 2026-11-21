@@ -6,6 +6,19 @@ use accesskit::{Action, Node, NodeId, TreeUpdate};
 use egui::Id;
 use std::collections::{HashMap, HashSet};
 
+/// The accessible name of the node, when it has a non-empty one: its own, else the first non-empty name of the nodes
+/// that label it (`labelled_by`).
+pub fn name(tree: &AccessTree, key: NodeKey) -> Option<&str> {
+    let _ = (tree, key);
+    todo!("wg.W14")
+}
+
+/// Whether the node declares an action a user can take: focus, click or a value change.
+pub fn is_interactive(tree: &AccessTree, key: NodeKey) -> bool {
+    let _ = (tree, key);
+    todo!("wg.W14")
+}
+
 /// A node's number in the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeKey(u64);
@@ -364,13 +377,13 @@ impl AccessTree {
 }
 
 impl AccessTree {
-    /// The root node, when the frame made a tree.
-    pub(crate) fn root_key(&self) -> Option<NodeKey> {
+    /// The root node, when the frame made a tree: where reading order starts.
+    pub fn root_key(&self) -> Option<NodeKey> {
         self.update.tree.as_ref().map(|tree| NodeKey(tree.root.0))
     }
 
     /// The node AccessKit reports as focused.
-    pub(crate) fn focused_key(&self) -> NodeKey {
+    pub fn focused_key(&self) -> NodeKey {
         NodeKey(self.update.focus.0)
     }
 

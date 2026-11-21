@@ -145,6 +145,13 @@ impl<'a> Bar<'a> {
         self
     }
 
+    /// Lays out the members as a row that wraps instead of scrolling under an overlay bar: no horizontal scroll, no row
+    /// cap; a member wider than the bar narrows and elides by the shared rules.
+    #[must_use]
+    pub fn wrap(self) -> Self {
+        todo!("cv.F37")
+    }
+
     /// Makes each member its own Tab stop, in reading order, as media controls are; the arrows no longer move between
     /// them.
     #[must_use]

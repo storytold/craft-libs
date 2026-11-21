@@ -17,7 +17,9 @@ pub use alt_text::{AltText, AltTextField, AltTextFieldStyle, AltTextWords};
 pub use chips::{ChipCodec, ChipField, ChipFieldOutput, ChipFieldStyle, ChipWords, PartialChips};
 pub use hex::{HexCodec, HexField};
 pub use linked::{LinkMode, LinkedFields, LinkedFieldsStyle, LinkedLayout, LinkedOutput, LinkedWords, follow_equal, follow_ratio, link_toggle};
-pub use number::{NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert, UnitPlacement};
+pub use number::{
+    NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert, StepArrows, UnitPlacement,
+};
 pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
 pub use words::TextWords;
@@ -94,7 +96,7 @@ fn text_part<V>() -> TextKey<V> {
 
 /// The text field every collection's `rename_editor` shows over an item's label: it selects the name on focus, so
 /// typing replaces it.
-pub(crate) fn rename_field(ui: &mut egui::Ui, draft: Bind<'_, String>, label: egui::Rect, name: &str) -> EditResponse<String> {
+pub fn rename_field(ui: &mut egui::Ui, draft: Bind<'_, String>, label: egui::Rect, name: &str) -> EditResponse<String> {
     use crate::contract::Show as _;
     TextField::new(name.to_owned(), draft).select_on_focus().show_at(ui, label)
 }

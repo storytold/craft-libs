@@ -13,6 +13,7 @@ use crate::contract::collection::{
     CollectionEvent, CollectionProps, ColumnKind, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove, ToggleColumn, ToggleEdit,
 };
 use crate::contract::reorder;
+use crate::contract::reorder::EDGE_ROWS_PER_SECOND;
 use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer as _};
 use crate::runtime::drag;
 use crate::runtime::env::Label;
@@ -22,9 +23,6 @@ use craft_behavior::{
 };
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
-
-/// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
-pub(super) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
 
 /// A toggle sweep: the value it sets and the rows it has crossed.
 #[derive(Clone)]
@@ -57,6 +55,9 @@ pub enum SweepStep<K> {
     Restore(ToggleEdit<K>),
     /// Undo the `ShowOnly` of a cancelled Alt sweep: the cell has the value from before it.
     UndoShowOnly(ToggleEdit<K>),
+    /// The first press held exactly one of the [`SweepApply::claims`] modifiers: it belongs to the host. It flips
+    /// nothing, and the cells its drag crosses give nothing. Reported once; its Cancel gives nothing.
+    Claimed(ToggleEdit<K>),
 }
 
 /// The state a sweep needs between events: which gesture opened it and whether Alt was held.
@@ -83,6 +84,8 @@ struct Run {
 pub struct SweepApply {
     run: Option<Run>,
     show_only: bool,
+    #[allow(dead_code)] // P3(appearance-w1): dp.C8
+    claims: Vec<craft_keymap::Mods>,
 }
 
 /// A move of a collection's own items as they stand before the drop, and as the drop leaves them.
@@ -96,7 +99,15 @@ impl SweepApply {
 
     /// A column where Alt plus the first press shows only that cell.
     pub fn show_only() -> Self {
-        SweepApply { run: None, show_only: true }
+        SweepApply { run: None, show_only: true, claims: Vec::new() }
+    }
+
+    /// A first press with exactly `mods` held belongs to the host: it flips nothing, and the cells its drag crosses
+    /// give nothing (`SweepStep::Claimed`). Claims are checked before `show_only`'s Alt, and the method can be called
+    /// more than once.
+    pub fn claims(self, mods: craft_keymap::Mods) -> Self {
+        let _ = mods;
+        todo!("dp.C8")
     }
 
     /// Whether this is a [`SweepApply::show_only`] column, where Alt plus the first press shows only that cell.

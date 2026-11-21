@@ -114,6 +114,7 @@ impl<'a> ToggleButton<'a> {
             loading: false,
             mnemonic: None,
             align: crate::primitives::HAlign::Center,
+            chord: None, // P3(shell-w2): sh.K13
         }
     }
 }

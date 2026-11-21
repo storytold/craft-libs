@@ -243,9 +243,10 @@ impl ShellCx {
         self.inner.panels_hidden
     }
 
-    /// Whether the dock shows: in normal mode, during the Tab reveal and during the end-edge reveal, unless the panels
-    /// are hidden.
-    pub fn dock_visible(&self) -> bool {
+    /// Whether the dock at `edge` shows: in normal mode, during the Tab reveal and, for the `Start` and `End` edges,
+    /// while that edge's reveal is on, unless the panels are hidden.
+    pub fn dock_visible(&self, edge: super::PaneEdge) -> bool {
+        let _ = edge; // P3(chrome-w2): ch.K1
         !self.inner.panels_hidden && (self.inner.mode == BodyMode::Normal || self.inner.tab_reveal || self.edge_revealed(RevealEdge::End))
     }
 

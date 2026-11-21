@@ -17,8 +17,18 @@ const DISC: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24
 const SQUARE: &[u8] =
     b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" fill=\"black\"/></svg>";
 
-const FIRST_SET: AppIcons = AppIcons { name: "t10-first", stroke_width: None, icons: &[(FIRST_NAME, DISC), (CATALOG_NAME, DISC)] };
-const SECOND_SET: AppIcons = AppIcons { name: "t10-second", stroke_width: None, icons: &[(FIRST_NAME, SQUARE), (SECOND_NAME, SQUARE)] };
+const FIRST_SET: AppIcons = AppIcons {
+    name: "t10-first",
+    stroke_width: None,
+    icons: &[(FIRST_NAME, DISC), (CATALOG_NAME, DISC)],
+    fills: &[], /* P3(shell-w2): sh.K10 */
+};
+const SECOND_SET: AppIcons = AppIcons {
+    name: "t10-second",
+    stroke_width: None,
+    icons: &[(FIRST_NAME, SQUARE), (SECOND_NAME, SQUARE)],
+    fills: &[], /* P3(shell-w2): sh.K10 */
+};
 
 fn icon(name: &'static str) -> Option<SvgIcon> {
     let tokens = style::tokens(Mode::Light, Contrast::Standard);

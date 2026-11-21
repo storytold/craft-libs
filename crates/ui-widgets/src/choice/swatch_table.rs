@@ -1,9 +1,9 @@
 //! `SwatchTable`: a table of touching cells selected by index, for a colour table whose entries may repeat a colour.
 
-use super::{Swatch, SwatchMetrics};
+use super::{CellMarks, Swatch, SwatchMetrics};
 use crate::contract::{
-    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, NoValue, Outcome, Props, Role,
-    SelectMode, ShowCollection as _, Sizing,
+    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, ListDrag, NoValue, Outcome,
+    Props, Role, SelectMode, ShowCollection as _, Sizing,
 };
 use crate::list::RowTest;
 use crate::runtime::env::Label;
@@ -46,6 +46,27 @@ impl DisplayOrder<usize> for SwatchRows<'_> {
 
 impl ItemSource<usize> for SwatchRows<'_> {}
 
+/// How the cells of a [`SwatchTable`] sit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SwatchSpacing {
+    /// The cells touch.
+    #[default]
+    Touching,
+    /// The theme's item gap (`space.gap.item`) lies between the cells.
+    Spaced,
+}
+
+/// The marks of the cell of a key: `SwatchTable::marks`.
+pub struct RowMarks<'a, K>(#[allow(dead_code)] Box<dyn Fn(&K) -> CellMarks + 'a>); // P3(color-w1): ex.E20
+
+impl<'a, K> RowMarks<'a, K> {
+    /// The marks `marks` gives.
+    pub fn new(marks: impl Fn(&K) -> CellMarks + 'a) -> Self {
+        RowMarks(Box::new(marks))
+    }
+}
+
 /// What a [`SwatchTable`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -59,6 +80,8 @@ pub struct SwatchTableOutput {
     pub chosen: Vec<usize>,
     /// The entry a double click or Enter asked to edit this pass.
     pub open: Option<usize>,
+    /// Delete or Backspace was pressed on the selection this pass (`CollectionEvent::Delete`).
+    pub delete: bool,
 }
 
 impl Outcome for SwatchTableOutput {
@@ -106,6 +129,14 @@ pub struct SwatchTable<'a> {
     /// Whether the cells are wells at the control height, as a palette's swatches are, instead of small touching cells.
     #[prop]
     wells: bool,
+    /// How the cells sit: touching, or the theme's item gap apart.
+    #[prop]
+    #[allow(dead_code)] // P3(color-w1): co.K5
+    spacing: SwatchSpacing,
+    /// The marks of each cell, by index, given to the cell's `Swatch::marks`; in place of `marked`.
+    #[prop(func = "Fn(&usize) -> CellMarks")]
+    #[allow(dead_code)] // P3(color-w1): ex.E20
+    marks: Option<RowMarks<'a, usize>>,
 }
 
 impl<'a> SwatchTable<'a> {
@@ -128,8 +159,17 @@ impl<'a> SwatchTable<'a> {
             marked: None,
             tips: false,
             wells: false,
+            spacing: SwatchSpacing::Touching,
+            marks: None,
         }
         .label(label)
+    }
+
+    /// Hands the drag of the cells to the host as `map` gives its payload, as `TileGrid::drag_payload` does.
+    #[must_use]
+    pub fn drag_payload<P: Send + Sync + 'static>(self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
+        let _ = map;
+        todo!("co.K6")
     }
 
     /// Whether Shift or Cmd adds cells to the selection.
@@ -180,7 +220,7 @@ impl Component for SwatchTable<'_> {
             _ => None,
         });
         let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection(_)));
-        SwatchTableOutput { response: response.response, selected: selection.lead.filter(|_| changed), chosen: selection.items, open }
+        SwatchTableOutput { response: response.response, selected: selection.lead.filter(|_| changed), chosen: selection.items, open, delete: false } // P3(color-w1): ex.E20
     }
 }
 

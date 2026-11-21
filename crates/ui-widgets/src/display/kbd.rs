@@ -127,7 +127,8 @@ impl Kbd {
             }
             None => one,
         };
-        if trigger.double { format!("{one} {one}") } else { one }
+        // P3(shortcuts-w3): kb.C13b
+        if trigger.is_double() { format!("{one} {one}") } else { one }
     }
 
     /// The name of `key` alone for `os`, in the language of `words`: its word when it has one, else the key as the

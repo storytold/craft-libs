@@ -6,7 +6,6 @@ mod node;
 mod patch;
 mod roles;
 mod text;
-#[cfg(feature = "testing")]
 mod tree;
 
 use crate::runtime::pass_state;
@@ -20,8 +19,7 @@ pub(crate) use patch::{write_label_patch, write_merge_patch, write_status};
 pub(crate) use text::{
     NodeEnd, RunLink, RunNode, TextNode, fold_widget, is_text_request, requested_selection, requested_value, write_run, write_selection, write_text,
 };
-#[cfg(feature = "testing")]
-pub use tree::{AccessTree, Declared, NodeKey};
+pub use tree::{AccessTree, Declared, NodeKey, is_interactive, name};
 
 /// The rect `id`'s response had in the last finished pass, converted as the node's bounds are; `None` when absent,
 /// without area, or behind the open modal. The ids it answers are component and item widget ids; parts have none.

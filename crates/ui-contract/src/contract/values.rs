@@ -450,6 +450,9 @@ pub struct EditResponse<T> {
     /// The modifiers of the Enter that submitted the value (Shift+Enter, Cmd+Enter); none unless `submitted` came
     /// from a key.
     pub submit_mods: craft_keymap::Mods,
+    /// The modifiers held at the activation (click, Enter, Space) that applied this pass's value; a text Enter's stay
+    /// in `submit_mods`.
+    pub activation_mods: craft_keymap::Mods,
     /// Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the text part in this pass, which ended its
     /// edit; a list's rename continues on the next or previous row.
     pub left_by_tab: Option<bool>,
@@ -476,6 +479,7 @@ impl<T> EditResponse<T> {
             events,
             submitted: false,
             submit_mods: craft_keymap::Mods::NONE,
+            activation_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
             escaped: false,
             unparsed: false,
@@ -495,6 +499,7 @@ impl<T> EditResponse<T> {
             events,
             submitted: false,
             submit_mods: craft_keymap::Mods::NONE,
+            activation_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
             escaped: false,
             unparsed: false,
@@ -532,6 +537,7 @@ impl<T: Clone> EditResponse<T> {
             events: self.events.map(&f),
             submitted: self.submitted,
             submit_mods: self.submit_mods,
+            activation_mods: self.activation_mods,
             left_by_tab: self.left_by_tab,
             escaped: self.escaped,
             unparsed: self.unparsed,

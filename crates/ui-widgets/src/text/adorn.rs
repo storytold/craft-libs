@@ -20,6 +20,9 @@ pub struct Adornment {
 enum Kind {
     Glyph(IconSpec<'static>),
     Button(PartKey, IconSpec<'static>, Label),
+    /// The up and down step halves of a number field's leading arrows, by their part keys.
+    #[allow(dead_code)] // P3(widgets-w2): wg.W28
+    Steps(PartKey, PartKey),
     /// Text in the line, of `role`, monospace with `mono`, the gap kept before the text with `apart`; `size` is its
     /// measured run, zero until [`Adornment::measured`].
     Text {
@@ -106,6 +109,7 @@ impl Adornment {
         match &self.kind {
             Kind::Glyph(_) => Vec2::splat(style.glyph.side),
             Kind::Button(..) => Vec2::splat(style.button),
+            Kind::Steps(..) => todo!("wg.W28"),
             Kind::Text { size, .. } => *size,
         }
     }
@@ -130,6 +134,7 @@ impl Adornment {
             Kind::Button(part, icon, name) => {
                 ui.face(*part, IconButton::new(Self::spec(icon, None)).label(name.clone()).focusable(false).size(ControlSize::Sm))
             }
+            Kind::Steps(..) => todo!("wg.W28"),
             Kind::Text { label, role, mono, .. } => {
                 ui.draw().text_on_line(rect, &Self::run(label, *role, *mono).color(color), line);
             }

@@ -214,7 +214,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         })
         .copied()
         .collect();
-    (Shortcuts { keys, typing, dialog, layout: Layout::default() }, held)
+    (Shortcuts { keys, typing, dialog, layout: Layout::default(), mods: Vec::new(), focus_lost: false }, held) // P3(shortcuts-w2): kb.C8
 }
 
 /// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither

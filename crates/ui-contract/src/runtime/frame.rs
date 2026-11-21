@@ -68,6 +68,10 @@ pub enum ChromeToggle {
     Panels,
     /// Every panel of the window except the tools.
     PanelsKeepTools,
+    /// Ends Tab and Shift+Tab hiding the panels; nothing when they are shown.
+    ShowPanels,
+    /// Reveals the edge while the window is body-only or its panels are hidden; `None` ends the reveal.
+    Reveal(Option<super::env::RevealEdge>),
 }
 
 /// A step of the outer gesture of a container whose `ContainerProps::outer_edit` is on: one undo step over the edits of
@@ -120,6 +124,9 @@ pub struct FrameOutput {
     pub outer_edits: Vec<OuterEdit>,
     /// Whether a component refused this pass's input since the last call (`frame::refuse`): the app plays its alert.
     pub refused: bool,
+    /// The components whose live preview ended because they stopped showing; the host ends the preview it holds for
+    /// each id.
+    pub ended_previews: Vec<egui::Id>,
 }
 
 /// The per-frame and per-context state of the frame loop.
@@ -391,6 +398,12 @@ pub(crate) fn note_removed_gesture(ctx: &Context, id: GestureId) {
     pass_state::with::<FrameState, _>(ctx, |state| state.output.removed_gestures.push(id));
 }
 
+/// Adds a component whose live preview ended to the next `FrameOutput`.
+pub(crate) fn note_ended_preview(ctx: &Context, id: Id) {
+    let _ = (ctx, id);
+    todo!("ty.X1")
+}
+
 /// Adds a step of an outer gesture to the next `FrameOutput`.
 #[doc(hidden)]
 pub fn note_outer_edit(ctx: &Context, edit: OuterEdit) {
@@ -463,7 +476,7 @@ pub(crate) fn shell_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
 
 /// Adds a chrome toggle of `viewport` to the next `FrameOutput` and aims it at the window of the viewport that holds
 /// focus, or at the first shell that asks when none does.
-pub(crate) fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
+pub fn request_chrome_toggle(ctx: &Context, viewport: ViewportId, toggle: ChromeToggle) {
     queue_toggle(ctx, viewport, toggle);
     pass_state::with::<FrameState, _>(ctx, |state| state.output.chrome_toggles.push((viewport, toggle)));
 }

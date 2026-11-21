@@ -121,6 +121,7 @@ impl Component for TitleFace {
                 loading: false,
                 mnemonic: None,
                 align: crate::primitives::HAlign::Center,
+                chord: None, // P3(menus-w2): sh.K13
             },
         )
     }
@@ -142,6 +143,7 @@ impl Component for TitleFace {
             loading: false,
             mnemonic: self.mnemonic,
             align: crate::primitives::HAlign::Center,
+            chord: None, // P3(menus-w2): sh.K13
         };
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &spec, cx.content_rect);
     }
@@ -169,6 +171,13 @@ impl<'a> MenuTitle<'a> {
     /// A menu titled `label` (a `&` marks the mnemonic) whose rows `body` shows.
     pub fn new(label: impl Into<Label>, body: impl FnMut(&mut Ui) + 'a) -> Self {
         MenuTitle { label: label.into(), body: Box::new(body) }
+    }
+
+    /// Records the title's rect for `commands` with `commands::holds` in every pass it is shown.
+    #[must_use]
+    pub fn holds(self, commands: Vec<crate::runtime::commands::CommandRef>) -> Self {
+        let _ = commands;
+        todo!("mn.M15")
     }
 }
 
@@ -205,6 +214,9 @@ pub struct MenuBarOutput {
     pub open: bool,
     /// The titles alone (with "…" when it shows), from the first title's reading start to the last title's end.
     pub titles: Rect,
+    /// True in the one pass where a menu of the bar opened while no menu of the bar was open when the pass began. A
+    /// rerun pass in the same frame and a switch from one open title to another report false.
+    pub opened: bool,
 }
 
 impl Outcome for MenuBarOutput {
@@ -675,6 +687,6 @@ impl Component for MenuBar<'_> {
         let rects = Self::slots(found).into_iter().filter_map(|slot| cx.part_if_declared(Self::slot_part(slot)).map(|result| result.rect));
         let start = if cx.flow.is_rtl() { cx.rect.right_top() } else { cx.rect.left_top() };
         let titles = rects.reduce(Rect::union).unwrap_or_else(|| Rect::from_min_size(start, Vec2::ZERO));
-        MenuBarOutput { response: cx.response.clone(), open: self.open, titles }
+        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, opened: false } // P3(menus-w2): mn.M16
     }
 }

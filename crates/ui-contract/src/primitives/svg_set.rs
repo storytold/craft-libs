@@ -18,12 +18,20 @@ pub struct AppIcons {
     pub stroke_width: Option<f32>,
     /// Each icon's name and SVG document.
     pub icons: &'static [(&'static str, &'static [u8])],
+    /// For each icon name, an SVG document drawn under the icon in a fixed sRGBA colour; the icon itself stays tinted.
+    pub fills: &'static [(&'static str, &'static [u8], [u8; 4])],
 }
 
 impl AppIcons {
     /// The set `name` of `icons`, each an icon name and its SVG document, drawn with `stroke_width` when it is `Some`.
     pub const fn new(name: &'static str, stroke_width: Option<f32>, icons: &'static [(&'static str, &'static [u8])]) -> Self {
-        Self { name, stroke_width, icons }
+        Self { name, stroke_width, icons, fills: &[] }
+    }
+
+    /// The set with `fills`: for each icon name, an SVG drawn under the icon in a fixed sRGBA colour.
+    pub const fn with_fills(mut self, fills: &'static [(&'static str, &'static [u8], [u8; 4])]) -> Self {
+        self.fills = fills;
+        self
     }
 }
 

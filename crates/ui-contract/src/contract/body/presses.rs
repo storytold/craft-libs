@@ -19,6 +19,8 @@ struct BandDouble(bool);
 struct SurfacePress {
     pressed: bool,
     double: bool,
+    #[allow(dead_code)] // P3(chrome-w5): ch.K32
+    clicked: bool,
 }
 
 impl BodyCx<'_> {
@@ -51,6 +53,13 @@ impl BodyCx<'_> {
     /// [`band_double_pressed`](Self::band_double_pressed) gives.
     pub fn surface_double_pressed(&self) -> bool {
         !self.memory.is_peek() && self.memory.recall::<SurfacePress>(sub(self.id, "surface_press")).double
+    }
+
+    /// Whether this pass's primary release ends a press that went down on the container's own surface, moved less
+    /// than `PointerFrame::slop` and was released inside. A drag, a cancel, a release elsewhere and a measuring run
+    /// give false. It takes no focus and is no Tab stop.
+    pub fn surface_clicked(&self) -> bool {
+        todo!("ch.K32")
     }
 
     /// Requests `cursor` at `priority` for this pass, in the cursor service the parts' and components' requests go

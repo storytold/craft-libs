@@ -52,6 +52,14 @@ impl Link {
         Link { common: Common::new(), url: None, role: TypeRole::Body, wrap: Wrap::Line, tone: None }.label(label)
     }
 
+    /// Sets the link in a wrapped paragraph `before` + the label + `after`, in the body ink. Only the link's characters
+    /// take the pointer. It is one Tab stop, and click, Enter and Space activate it.
+    #[must_use]
+    pub fn in_sentence(self, before: impl Into<crate::runtime::env::Label>, after: impl Into<crate::runtime::env::Label>) -> Self {
+        let _ = (before, after);
+        todo!("dp.R2")
+    }
+
     fn run<'a>(&self, label: &'a str) -> TextRun<'a> {
         TextRun::spans(vec![Span::new(label).underline()]).role(self.role).wrap(self.wrap)
     }

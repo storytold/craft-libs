@@ -2,7 +2,7 @@
 
 use super::columns::{ColumnSort, ColumnSpec};
 use super::events::ListDrag;
-use crate::contract::Notch;
+use crate::contract::{Notch, ScrollAnchor};
 pub use crate::runtime::env::RowPressed;
 use crate::runtime::env::{Counted, Label};
 use crate::style::StyleCx;
@@ -241,6 +241,9 @@ pub struct CollectionProps {
     /// While a drag whose payload is neither the collection's own nor one of its drop kinds rests over an item that is
     /// not selected, the item becomes the lead and the selection in that pass.
     pub select_under_drag: bool,
+    /// Which end of the rows a collection that scrolls its own rows stays at while rows are added; `End` keeps the offset
+    /// at the end as long as the user left it there.
+    pub scroll_anchor: ScrollAnchor,
 }
 
 type Payload = Arc<dyn Any + Send + Sync>;
@@ -324,6 +327,7 @@ impl CollectionProps {
             pages: false,
             current: None,
             select_under_drag: false,
+            scroll_anchor: ScrollAnchor::Start,
         }
     }
 

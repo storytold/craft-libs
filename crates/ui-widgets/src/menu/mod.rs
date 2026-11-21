@@ -1,5 +1,6 @@
 //! Menu presets with `MenuItem` rows, menu-bar keys and mnemonics.
 
+mod alternate;
 pub mod bar;
 mod edit;
 pub(crate) mod item;
@@ -12,6 +13,7 @@ pub mod search;
 mod stories;
 mod words;
 
+pub use alternate::Alternate;
 pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle};
 pub(crate) use edit::text_menu;
 pub use edit::{EditMenu, EditMenuOutput};
@@ -22,6 +24,6 @@ pub use popup::entry_rows;
 #[doc(hidden)]
 pub use popup::layer;
 pub(crate) use popup::pick_values_from;
-pub use popup::{Menu, MenuOutput, MenuPick, MenuStep, MenuStyle};
-pub use search::HelpEntry;
+pub use popup::{Menu, MenuOutput, MenuPick, MenuRow, MenuStep, MenuStyle, menu_rows};
+pub use search::{HelpEntry, SearchIndex, SearchWords, Synonyms, rank};
 pub use words::MenuWords;

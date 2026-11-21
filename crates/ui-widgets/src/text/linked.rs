@@ -158,6 +158,11 @@ pub struct LinkedFields<'a, const N: usize> {
     /// `units.shown`. `range` is then in the stored unit.
     #[prop]
     lengths: Option<LengthUnits>,
+    /// Every field without `lengths` shows its numbers in this unit (`NumberField::unit_kind`); `lengths` wins when both
+    /// are set.
+    #[prop]
+    #[allow(dead_code)] // P3(widgets-w2): ap.AP16
+    unit_kind: Option<crate::runtime::env::UnitKind>,
 }
 
 impl<'a, const N: usize> LinkedFields<'a, N> {
@@ -174,6 +179,7 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
             captions: None,
             ranges: None,
             lengths: None,
+            unit_kind: None,
         }
         .label(label)
     }

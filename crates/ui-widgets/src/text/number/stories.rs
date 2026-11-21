@@ -87,7 +87,8 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             NumberField::new("Zoom", Bind::bound(data.value("zoom", Some(100.0))))
                 .range(0.1..=12_800.0)
                 .unit("%")
-                .stepper(zoom_step)
+                // P3(widgets-w2): ap.AP15
+                .stepper(|value, direction, _scale| zoom_step(value, direction))
                 .size(size)
                 .show(ui);
         });

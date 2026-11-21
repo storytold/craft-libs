@@ -24,8 +24,11 @@ pub use claims::claim;
 pub(crate) use claims::hold_escape;
 #[doc(hidden)]
 pub use claims::take_claimed;
+#[doc(hidden)]
+pub use claims::{claim_alt_tap, take_alt_tap};
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
+pub use input::held;
 #[doc(hidden)]
 pub use input::{down, keyed};
 pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
@@ -46,6 +49,12 @@ pub(crate) use intents::{
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
 pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
+
+/// The Alt and Shift held at the press of the pass's last Escape that became a `Cancel`; `None` when the pass had none.
+pub fn escape_mods(ctx: &Context) -> Option<Mods> {
+    let _ = ctx;
+    todo!("kb.C6")
+}
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +125,12 @@ pub(crate) struct Shortcuts {
     pub(crate) dialog: bool,
     /// The layout that reads the presses.
     pub(crate) layout: Layout,
+    /// Each change of Cmd, Ctrl or Alt in the pass, with the index into `keys` of the first entry after it.
+    #[allow(dead_code)] // P3(shortcuts-w2): kb.C8
+    pub(crate) mods: Vec<(usize, craft_keymap::Mods)>,
+    /// The pass's input had `WindowFocused(false)`.
+    #[allow(dead_code)] // P3(shortcuts-w2): kb.C8
+    pub(crate) focus_lost: bool,
 }
 
 /// What the input hook recorded for the next pass's begin hook.

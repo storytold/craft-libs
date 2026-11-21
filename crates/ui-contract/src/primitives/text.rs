@@ -76,6 +76,8 @@ pub struct TextRun<'a> {
     /// The angle the run is painted at, in radians clockwise about the top-left corner of its layout. Layout and
     /// measure see the unrotated run.
     pub rotation: f32,
+    /// The colour of the link spans; `None` takes the link look's.
+    pub link_color: Option<Color32>,
 }
 
 impl<'a> TextRun<'a> {
@@ -94,12 +96,13 @@ impl<'a> TextRun<'a> {
             ltr: false,
             align: HAlign::Start,
             rotation: 0.0,
+            link_color: None,
         }
     }
 
     /// A run of `spans`.
     pub fn spans(spans: Vec<Span<'a>>) -> Self {
-        TextRun { spans, role: TypeRole::Label, color: None, wrap: Wrap::Line, ltr: false, align: HAlign::Start, rotation: 0.0 }
+        TextRun { spans, role: TypeRole::Label, color: None, wrap: Wrap::Line, ltr: false, align: HAlign::Start, rotation: 0.0, link_color: None }
     }
 
     /// `text` with its character `at` underlined, as a mnemonic shows while it is in use; all of `text` plain when
@@ -115,6 +118,12 @@ impl<'a> TextRun<'a> {
     pub fn role(mut self, role: TypeRole) -> Self {
         self.role = role;
         self
+    }
+
+    /// Sets the colour of the run's link spans.
+    pub fn link_color(self, color: Color32) -> Self {
+        let _ = color;
+        todo!("dp.R2")
     }
 
     /// Sets the colour.

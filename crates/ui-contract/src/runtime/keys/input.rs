@@ -125,7 +125,8 @@ impl Strip<'_> {
                 batch.egui_texts += 1;
                 true
             }
-            KeyEvent::Clip { command, text } if (self.edits)(command) => {
+            // P3(shortcuts-w2): kb.C10a
+            KeyEvent::Clip { command, text, .. } if (self.edits)(command) => {
                 batch.clips.push(command);
                 if text.is_some() {
                     batch.paste = text;
@@ -523,6 +524,14 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
 #[doc(hidden)]
 pub fn down(ctx: &Context) -> Vec<Key> {
     current(ctx, |stage| stage.down.clone())
+}
+
+/// The keys down in the running viewport this pass: the key stage's `down` (withheld presses included), plus each key
+/// automation holds there that is not already listed. It gives the same answer on every pass of a frame, and is a
+/// guard, never an event.
+pub fn held(ctx: &egui::Context) -> Vec<egui::Key> {
+    let _ = ctx;
+    todo!("pl.F1")
 }
 
 /// Whether the running viewport's input hook read a key press, typed text or a clipboard event in this pass, the ones

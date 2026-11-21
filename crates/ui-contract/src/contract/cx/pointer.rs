@@ -6,7 +6,7 @@ use crate::primitives::PartResult;
 use crate::runtime::drag::{self, DragPreview, DropTarget, DropZone, Typed, WindowDropTarget};
 use crate::runtime::egui::areas;
 use crate::runtime::{cursor, frame, pointer, wheel};
-use craft_behavior::{Cursor, CursorPriority, DropOperation, PartKey, PartRef, PressCancel, PressState, Wheel};
+use craft_behavior::{Cursor, CursorPriority, DropOperation, MultiTap, PartKey, PartRef, PressCancel, PressState, Wheel};
 use egui::{Id, Pos2};
 use std::any::{Any, TypeId};
 use std::ops::Range;
@@ -35,6 +35,9 @@ pub trait Pointer {
     fn activated_member(&self) -> Option<Id>;
     /// This pass's wheel share, once, with the pointer it came at (`Wheel::at`) in this component's egui layer space (8.3).
     fn take_wheel(&mut self) -> Option<Wheel>;
+    /// This pass's tap, once, when it lies in this component's rect and this component (an arena root with its members)
+    /// wins a press there.
+    fn take_multi_tap(&mut self) -> Option<MultiTap>;
     /// Requests `cursor` at `priority`; the highest priority of the pass wins.
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority);
     /// Ends every captured press of this viewport.
@@ -105,6 +108,10 @@ impl Pointer for CxCore<'_> {
             wheel.at = Some(map.to_layer(at));
         }
         Some(wheel)
+    }
+
+    fn take_multi_tap(&mut self) -> Option<MultiTap> {
+        todo!("cv.F19")
     }
 
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority) {
@@ -196,6 +203,10 @@ impl<C: Component> Pointer for Cx<'_, C> {
 
     fn take_wheel(&mut self) -> Option<Wheel> {
         self.core.take_wheel()
+    }
+
+    fn take_multi_tap(&mut self) -> Option<MultiTap> {
+        self.core.take_multi_tap()
     }
 
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority) {

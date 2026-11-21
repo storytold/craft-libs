@@ -370,7 +370,8 @@ impl<'a> Draw<'a> {
                 self.initial(rect, letter, StyleColor(color));
                 return;
             }
-            _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon),
+            // P3(object-panels-w1): op.F3
+            _ => super::icon::paint_icon(self.painter, self.env.tokens, self.env.direction, rect, icon),
         }
         if let Some(badge) = icon.badge {
             let radius = self.env.tokens.size.handle.sm / 2.0;

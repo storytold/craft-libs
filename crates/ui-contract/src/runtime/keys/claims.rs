@@ -32,6 +32,20 @@ pub fn claim(ctx: &Context, owner: Id, chord: Chord) {
     current(ctx, |stage| stage.claims.push((owner, chord)));
 }
 
+/// The tool host claims the next pass's lone Alt tap for `owner` at the end of a pass, as it claims chords.
+#[doc(hidden)]
+pub fn claim_alt_tap(ctx: &Context, owner: Id) {
+    let _ = (ctx, owner);
+    todo!("kb.C11c")
+}
+
+/// Reads this pass's lone Alt tap for the claimer `owner`.
+#[doc(hidden)]
+pub fn take_alt_tap(ctx: &Context, owner: Id) -> bool {
+    let _ = (ctx, owner);
+    todo!("kb.C11c")
+}
+
 /// Holds `chord` for `owner` from the next input hook on, whichever component has focus: the key stage withholds
 /// it from every component and `take_claimed` reads it. Used while a container is in a mode that owns the arrow
 /// keys, Enter and Escape (the window move and size modes, 16.3); the claim lapses when it is not renewed.

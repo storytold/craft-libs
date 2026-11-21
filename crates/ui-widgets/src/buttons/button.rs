@@ -79,6 +79,9 @@ pub struct ButtonOutput {
     /// The modifiers held at the activation (with the click for a pointer one); none when the button was not
     /// activated.
     pub mods: Mods,
+    /// True in every pass from the pointer press on the button to its release or cancel, also after the pointer leaves
+    /// the button or the window. A key or AccessKit activation never sets it.
+    pub held: bool,
 }
 
 impl ButtonOutput {
@@ -93,7 +96,7 @@ impl ButtonOutput {
             (true, Some(activation)) => activation.mods,
             _ => Mods::NONE,
         };
-        ButtonOutput { response: cx.response.clone(), clicks, mods }
+        ButtonOutput { response: cx.response.clone(), clicks, mods, held: false } // P3(shell-w2): op.F1
     }
 
     /// Whether the button was clicked this pass, by pointer or by key, by the framework's click rule. It stands in
@@ -117,6 +120,18 @@ impl Outcome for ButtonOutput {
     fn response(&self) -> &Response {
         &self.response
     }
+}
+
+/// Whether a command button shows its command's chord.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ButtonChord {
+    /// No chord.
+    #[default]
+    Hidden,
+    /// The command's chord after the label, in the `Kbd` notation; a command with no chord shows none. The chord is
+    /// dropped first when room is short.
+    Trailing,
 }
 
 /// A push button. A label wider than the room is cut with an ellipsis and shown whole in a tooltip. While `loading`
@@ -152,6 +167,15 @@ pub struct Button<'a> {
     /// that names an item at the reading start).
     #[prop]
     align: HAlign,
+    /// A muted caption-role second line, wrapped under the icon and label. The face grows to fit it. It is the
+    /// accessible description unless `description` is set.
+    #[prop(into)]
+    #[allow(dead_code)] // P3(shell-w2): dp.R3
+    detail: Option<Label>,
+    /// Whether a command button shows its command's chord after the label.
+    #[prop]
+    #[allow(dead_code)] // P3(shell-w2): sh.K13
+    chord: ButtonChord,
 }
 
 impl<'a> Button<'a> {
@@ -166,6 +190,8 @@ impl<'a> Button<'a> {
             tint: None,
             least_width: None,
             align: HAlign::Center,
+            detail: None,
+            chord: ButtonChord::Hidden,
         }
         .label(label)
     }
@@ -185,6 +211,7 @@ impl<'a> Button<'a> {
             loading: self.loading,
             mnemonic: None,
             align: self.align,
+            chord: None, // P3(shell-w2): sh.K13
         }
     }
 }

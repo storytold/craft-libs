@@ -102,6 +102,11 @@ impl Codec for HexCodec {
     fn sample(&self, _current: &Rgba) -> Cow<'_, str> {
         Cow::Owned("0".repeat(self.digits * self.channels()))
     }
+
+    fn whole_paste(&self, pasted: &str) -> bool {
+        let _ = pasted;
+        todo!("wg.W34")
+    }
 }
 
 /// A text field over a colour's hexadecimal digits.

@@ -138,9 +138,23 @@ impl WindowHost {
         injected::inject_key(&self.ctx, viewport, key, mods, hold);
     }
 
-    /// Queues a move to `at`, then a wheel turn of `delta` points with `mods` held. A non-finite `delta` queues nothing.
-    pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
+    /// Queues a move to `at`, then a wheel turn of `delta` in `unit` with `mods` held. A non-finite `delta` queues
+    /// nothing.
+    pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, unit: egui::MouseWheelUnit, mods: Mods) {
+        let _ = unit; // P3(widgets-w8): sh.K4
         injected::inject_wheel(&self.ctx, viewport, at, delta, mods);
+    }
+
+    /// Turns AccessKit on, idempotent and off by default; from then the tree of every finished pass is kept per
+    /// viewport (`access_tree`).
+    pub fn keep_access_trees(&self) {
+        todo!("wg.W16")
+    }
+
+    /// The last kept access tree of `viewport`, `None` before the first.
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<std::sync::Arc<crate::runtime::egui::access::AccessTree>> {
+        let _ = viewport;
+        todo!("wg.W16")
     }
 
     /// Queues the release of what `released` names, at `at` or where the injected pointer is.

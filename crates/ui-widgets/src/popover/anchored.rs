@@ -86,6 +86,13 @@ impl<'a> Popover<'a> {
         Popover { common: Common::new(), props, open, closed: None }.label(label)
     }
 
+    /// The popover has no surface and no padding of its own: its content (a `Bar` with `surface(SurfaceKind::Floating)`)
+    /// is the one surface.
+    #[must_use]
+    pub fn content_surface(self) -> Self {
+        todo!("cv.F41")
+    }
+
     /// Changes the layer the popover shows in, for the settings without a setter of their own: the size a
     /// [resizable](Popover::resizable) popover has until the user resizes it (`Overlay::size`) and the least it may be
     /// resized to (`Overlay::min_size`).

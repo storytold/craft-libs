@@ -97,6 +97,9 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
+    /// Set from the codec by `Cx::text`, never by hosts: a pasted text, trimmed, that this says is whole replaces all
+    /// the text instead of the selection.
+    pub whole_paste: Option<std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>>,
 }
 
 impl Default for TextOptions {
@@ -127,6 +130,7 @@ impl Default for TextOptions {
             own_menu: false,
             tab_rewrites: false,
             holds_drafts: false,
+            whole_paste: None,
         }
     }
 }

@@ -55,6 +55,18 @@ pub enum UnitPlacement {
     After,
 }
 
+/// Whether a number field shows step arrows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StepArrows {
+    /// No arrows.
+    #[default]
+    Hidden,
+    /// Up and down halves at the start edge. A press steps once as ArrowUp or ArrowDown, one edit step each; a held
+    /// press repeats after the hold delay at the hold interval; disabled or read-only arrows take no press.
+    Leading,
+}
+
 /// The placeholder of a mixed field.
 const BLANK: &str = "\u{2014}";
 
@@ -120,7 +132,7 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     step: Option<f64>,
     /// Where an arrow press, a Page key and a wheel notch go from the current value, for values on a ladder (the zoom
     /// ladder); the step is ignored for them. The range still holds the result.
-    #[prop(func = "Fn(f64, i32) -> f64")]
+    #[prop(func = "Fn(f64, i32, f64) -> f64")]
     stepper: Option<NumberStepper<'a>>,
     /// A unit shown after the number.
     #[prop(into)]
@@ -128,6 +140,10 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// Whether the unit is drawn inside the field or left to the host to draw after it.
     #[prop]
     unit_placement: UnitPlacement,
+    /// Up and down step halves at the start edge: a press steps once, a held press repeats; no Tab stop.
+    #[prop]
+    #[allow(dead_code)] // P3(widgets-w2): wg.W27
+    step_arrows: StepArrows,
     /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
     #[prop]
     presets: Option<&'a [Entry<NumberPick>]>,
@@ -200,6 +216,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             stepper: None,
             unit: None,
             unit_placement: UnitPlacement::Inside,
+            step_arrows: StepArrows::Hidden,
             presets: None,
             popup_slider: None,
             snap_typed: false,
@@ -652,6 +669,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             typed_unit: committed.and_then(|note| note.unit).and_then(UnitKind::from_tag),
             out_of_range,
             cut: committed.is_some_and(|note| note.cut),
+            link: false, // P3(widgets-w2): wg.W29
         }
     }
 }

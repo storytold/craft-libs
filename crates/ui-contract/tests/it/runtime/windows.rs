@@ -481,7 +481,8 @@ fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
     let nan = Pos2::new(f32::NAN, 10.0);
     host.inject_click(ViewportId::ROOT, nan, PointerButton::Primary, 1, Mods::NONE, false);
     host.inject_move(ViewportId::ROOT, Pos2::new(f32::INFINITY, 0.0), Mods::NONE, 0.0);
-    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), Mods::NONE);
+    // P3(shell-w1): sh.K4
+    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), egui::MouseWheelUnit::Point, Mods::NONE);
     host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Primary, nan, Mods::NONE, None));
     frames(6);
     assert_eq!(presses.get(), 0, "no non-finite press reaches egui");

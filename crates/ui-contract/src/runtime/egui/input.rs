@@ -153,8 +153,13 @@ pub(crate) enum KeyEvent {
     Release { input: KeyInput },
     /// Typed text.
     Text(String),
-    /// egui's own clipboard events; a paste carries its text.
-    Clip { command: craft_behavior::EditCommand, text: Option<String> },
+    /// egui's own clipboard events; a paste carries its text. `mods` are the modifiers held at the event.
+    Clip {
+        command: craft_behavior::EditCommand,
+        text: Option<String>,
+        #[allow(dead_code)] // P3(canvas-w2): kb.C10a
+        mods: craft_keymap::Mods,
+    },
     /// A pointer press, which ends keyboard modality.
     PointerPress,
     /// An AccessKit action request.
@@ -186,9 +191,10 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> K
         Event::Key { pressed: false, .. } => read(event).map_or(KeyEvent::Other, |input| KeyEvent::Release { input }),
         Event::Text(text) => KeyEvent::Text(text.clone()),
         Event::ModifiersChanged(modifiers) => KeyEvent::Modifiers(Mods::from_egui(modifiers, os)),
-        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None },
-        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None },
-        Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()) },
+        // P3(canvas-w2): kb.C10a
+        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None, mods: Mods::NONE },
+        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None, mods: Mods::NONE },
+        Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()), mods: Mods::NONE },
         Event::PointerButton { pressed: true, .. } => KeyEvent::PointerPress,
         Event::AccessKitActionRequest(request) => KeyEvent::Access(Action(request.clone())),
         _ => KeyEvent::Other,
@@ -259,6 +265,9 @@ pub(crate) struct PointerRead {
     pub buttons: Buttons,
     /// The button that went up last in the pass, any button.
     pub release: Option<PointerButton>,
+    /// The modifiers of the pass's last button release.
+    #[allow(dead_code)] // P3(canvas-w2): ap.AP8
+    pub release_mods: Option<Mods>,
     /// The last press of a button other than the primary one: the button and where it went down.
     pub other_press: Option<(PointerButton, Pos2)>,
     /// Whether the primary button went down in this pass.
@@ -416,6 +425,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             primary_down: input.pointer.primary_down() && !barrel_press,
             buttons,
             release,
+            release_mods: None, // P3(canvas-w2): ap.AP8
             other_press,
             primary_pressed: input.pointer.primary_pressed() && !barrel_pressed,
             mods: Mods::from_egui(&input.modifiers, os),

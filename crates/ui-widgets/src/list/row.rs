@@ -56,6 +56,33 @@ pub enum RowDragSpot {
     Trailing(TrailingPart),
 }
 
+/// Where a row sits in a run of rows that share one outline ([`ListRow::run`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RowRun {
+    /// A run of one row: outlined on every side.
+    Alone,
+    /// The first row of a run.
+    First,
+    /// A row inside a run.
+    Middle,
+    /// The last row of a run.
+    Last,
+}
+
+/// The line under a row's label.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LabelUnderline {
+    /// No line.
+    #[default]
+    None,
+    /// A solid line.
+    Solid,
+    /// A dashed line.
+    Dashed,
+}
+
 /// The name of a label colour, or of no label, in the language of `words`.
 pub fn label_color_label(color: Option<LabelColor>, words: &ListWords) -> Label {
     let word = match color {
@@ -166,6 +193,20 @@ pub struct ListRow<'a> {
     /// The label in italics.
     #[prop]
     pub(super) italic: bool,
+    /// The line under the row's label: `Solid` underlines the label span, `Dashed` draws a dashed line under it.
+    #[prop]
+    #[allow(dead_code)] // P3(document-panels-w1): dp.C2
+    pub(super) underline: LabelUnderline,
+    /// A filled right triangle in the row's trailing top corner, in the label's ink: it marks the list's current row
+    /// and mirrors.
+    #[prop]
+    #[allow(dead_code)] // P3(document-panels-w1): dp.C4
+    pub(super) corner_mark: bool,
+    /// The row is its thumbnails and their link glyphs, with no label band, and as wide and high as they are. The label
+    /// stays the accessible name.
+    #[prop(flag)]
+    #[allow(dead_code)] // P3(document-panels-w1): ap.AP13
+    pub(super) thumbnails_only: bool,
     /// The hover look without the pointer (the canvas hovers the layer).
     #[prop]
     pub(super) highlight: bool,
@@ -280,6 +321,30 @@ pub struct ListRow<'a> {
 }
 
 impl<'a> ListRow<'a> {
+    /// One outline per run in the divider stroke and `radius.control`, inside each row's rect, for the row at `run`'s
+    /// place in a run of rows.
+    #[must_use]
+    pub fn run(self, run: RowRun) -> Self {
+        let _ = run;
+        todo!("ch.K24")
+    }
+
+    /// A full-height bar at the start of the row's content, after its toggle cells and before the indent. It takes no
+    /// room from the label and mirrors in right-to-left. It is not the `striped` list tint.
+    #[must_use]
+    pub fn stripe(self, color: crate::style::DataColor, width: crate::primitives::StrokeWidth) -> Self {
+        let _ = (color, width);
+        todo!("dp.C3")
+    }
+
+    /// The row is as tall as a row with a `size` thumbnail and draws no thumbnail; its icon stands in the thumbnail's
+    /// place.
+    #[must_use]
+    pub fn thumb_height(self, size: ThumbSize) -> Self {
+        let _ = size;
+        todo!("dp.C5")
+    }
+
     /// A row showing `label`, which also names it for a screen reader.
     pub fn new(label: impl Into<Label>) -> Self {
         use crate::contract::Props as _;
@@ -301,6 +366,9 @@ impl<'a> ListRow<'a> {
             sub_steps: 0,
             divider_below: true,
             italic: false,
+            underline: LabelUnderline::None,
+            corner_mark: false,
+            thumbnails_only: false,
             highlight: false,
             clipped: false,
             rule: false,

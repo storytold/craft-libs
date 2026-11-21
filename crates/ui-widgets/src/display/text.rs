@@ -97,6 +97,13 @@ impl Text {
         text
     }
 
+    /// Sets the text's ideal and least width to those of `sample`, so a readout keeps its width while its value changes.
+    #[must_use]
+    pub fn sample(self, sample: impl Into<Label>) -> Self {
+        let _ = sample;
+        todo!("ch.K33")
+    }
+
     /// Sets the text in italics: a value set apart from the words around it.
     pub fn italic(mut self) -> Self {
         self.italic = true;

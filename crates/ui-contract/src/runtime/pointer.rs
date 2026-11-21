@@ -44,6 +44,11 @@ pub struct PointerFrame {
     /// The modifiers held, with the ones the app latches for the user (a Modifier Keys panel) added: the app holds
     /// them down for every press and drag. Key chords read the keyboard's own modifiers instead.
     pub mods: Mods,
+    /// The modifiers of the pass's last button release, with the latched ones added; the held `mods` in a pass with no
+    /// release and in a rerun pass. The one source of a pick's and a drop's modifiers.
+    pub pick_mods: Mods,
+    /// The tap a per-viewport recognizer reports when the last finger lifts, in the frame's first pass only.
+    pub multi_tap: Option<craft_behavior::MultiTap>,
     /// The pass's time in seconds.
     pub time: f64,
     /// The device.
@@ -84,7 +89,7 @@ pub struct PassPointer {
     pub primary_down: bool,
     pub press_targets: PressTargets,
     pub focus_lost: bool,
-    /// Whether the real pointer moved or entered, or its modifiers changed, in the pass.
+    /// Whether the real pointer moved or entered, or a held modifier or key changed, in the pass.
     pub stirred: bool,
 }
 
@@ -198,6 +203,8 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         press,
         release: read.release,
         mods,
+        pick_mods: mods, // P3(canvas-w2): ap.AP8
+        multi_tap: None, // P3(canvas-w2): cv.F16
         time: read.time,
         kind: read.kind,
         sample: read.sample,
@@ -292,6 +299,8 @@ pub fn frame(ctx: &Context) -> PointerFrame {
         press: None,
         release: None,
         mods: Mods::NONE,
+        pick_mods: Mods::NONE,
+        multi_tap: None,
         time: 0.0,
         kind: PointerKind::Mouse,
         sample: None,

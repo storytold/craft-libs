@@ -269,6 +269,11 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// dragged tiles would go.
     #[prop(func = "Fn(&ListDrag<K>, Option<&K>, usize) -> bool")]
     accepts: Option<DropTest<'a, K>>,
+    /// How the groups are set apart: `Rule` starts every group after the first below a full-width divider row in place
+    /// of its titled head.
+    #[prop]
+    #[allow(dead_code)] // P3(appearance-w2): ap.AP6
+    group_heads: GroupHeads,
     /// The layout of this pass, kept for the headers' parts and paint.
     laid: RefCell<Option<GridLayout>>,
     /// The headers this pass shows, in the grid's layer space: the group, its rect and whether it is pinned.
@@ -278,6 +283,18 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The tail rows clicked this pass, in order.
     tail_clicked: Vec<K>,
     events: Vec<GridEvent<K>>,
+}
+
+/// How the groups of a grid or a list are set apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GroupHeads {
+    /// Every group has its titled head.
+    #[default]
+    Titled,
+    /// Every group after the first starts below a full-width divider row with no title, no disclosure and no Tab
+    /// stop; the group is always open.
+    Rule,
 }
 
 /// A group header as it shows this pass.
@@ -321,6 +338,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             can_drag: None,
             drops: Vec::new(),
             accepts: None,
+            group_heads: GroupHeads::Titled,
             laid: RefCell::new(None),
             placed: Vec::new(),
             placed_tail: Vec::new(),

@@ -85,6 +85,13 @@ pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: Vie
     });
 }
 
+/// Whether the engine's last `interrupt` asks the platform to discard the marked text: once for each interrupt.
+#[allow(dead_code)] // P3(type-w1): ty.X5
+pub(crate) fn take_discard(ctx: &Context) -> bool {
+    let _ = ctx;
+    todo!("ty.X5")
+}
+
 /// The begin hook, after pending focus moves are applied: resolves the owner and turns the queue into edits.
 pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
     current(ctx, |engine| {

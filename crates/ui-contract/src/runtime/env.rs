@@ -36,6 +36,7 @@ mod app_values;
 mod host_words;
 mod overrides;
 mod root;
+mod scrub;
 pub(crate) mod system;
 pub(crate) mod tokens;
 mod values;
@@ -46,6 +47,7 @@ pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
 pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
 pub use root::{ResolvedRoot, RootEnv};
+pub use scrub::ScrubDrags;
 pub use system::{SystemState, system_appearance};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]

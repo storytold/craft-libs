@@ -143,6 +143,15 @@ pub struct Swatch<T: Value + 'static = ()> {
     /// A thin edge in the text colour just inside the outline.
     #[prop(flag)]
     marked: bool,
+    /// The well shows its colour as a ring: a band of the colour round the edge, open in the middle.
+    #[style_key]
+    #[prop(flag)]
+    #[allow(dead_code)] // P3(widgets-w6): cv.F40
+    stroke: bool,
+    /// The face the well shows over its checker instead of the colour; ring, mark and mixed look unchanged.
+    #[prop]
+    #[allow(dead_code)] // P3(widgets-w6): wg.W33
+    face: Option<crate::primitives::FacePaint>,
     /// The key of the `ColorRequest` a click files.
     #[prop(into)]
     picker: Option<String>,
@@ -160,6 +169,8 @@ impl Swatch<()> {
             cell: false,
             well: false,
             marked: false,
+            stroke: false,
+            face: None,
             picker: None,
             checked: false,
             activation: None,
@@ -178,11 +189,82 @@ impl<T: Value + 'static> Swatch<T> {
             cell: self.cell,
             well: self.well,
             marked: self.marked,
+            stroke: self.stroke,
+            face: self.face,
             picker: self.picker,
             checked: false,
             activation: None,
         }
     }
+
+    /// Paints the marks of `marks` on the well: the edge mark, a locked corner square, a web-safe centre diamond, the
+    /// transparent checker half and the source-colour corner triangle, each from tokens.
+    #[must_use]
+    pub fn marks(self, marks: CellMarks) -> Self {
+        let _ = marks;
+        todo!("ex.E19")
+    }
+}
+
+/// The marks of a swatch cell: each is painted from tokens. Other crates build them with the builders, as
+/// `#[non_exhaustive]` forbids a struct literal outside this crate.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct CellMarks {
+    /// A thin edge in the text colour just inside the outline.
+    pub edge: bool,
+    /// A locked corner square.
+    pub locked: bool,
+    /// A web-safe centre diamond.
+    pub web_safe: bool,
+    /// The transparent checker half.
+    pub transparent: bool,
+    /// The source-colour corner triangle.
+    pub source: Option<Srgba>,
+}
+
+impl CellMarks {
+    /// Sets the edge mark.
+    #[must_use]
+    pub fn edge(self, on: bool) -> Self {
+        let _ = on;
+        todo!("ex.E19")
+    }
+
+    /// Sets the locked mark.
+    #[must_use]
+    pub fn locked(self, on: bool) -> Self {
+        let _ = on;
+        todo!("ex.E19")
+    }
+
+    /// Sets the web-safe mark.
+    #[must_use]
+    pub fn web_safe(self, on: bool) -> Self {
+        let _ = on;
+        todo!("ex.E19")
+    }
+
+    /// Sets the transparent mark.
+    #[must_use]
+    pub fn transparent(self, on: bool) -> Self {
+        let _ = on;
+        todo!("ex.E19")
+    }
+
+    /// Sets the source-colour mark.
+    #[must_use]
+    pub fn source(self, color: Srgba) -> Self {
+        let _ = color;
+        todo!("ex.E19")
+    }
+}
+
+/// Paints `color` as a ring in `well`: a band of the colour round the edge, open in the middle, each side with the
+/// edge and the inner edge (`SwatchStyle::inner_edge`) that stand out from the colour, in `state`.
+pub fn paint_ring(draw: &Draw<'_>, well: Rect, color: Srgba, style: &SwatchStyle, state: &StateSet) {
+    let _ = (draw, well, color, style, state);
+    todo!("cv.F40")
 }
 
 impl<T: Value + 'static> Component for Swatch<T> {

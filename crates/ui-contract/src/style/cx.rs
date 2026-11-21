@@ -188,6 +188,19 @@ impl<'a> StyleCx<'a> {
         f(&StyleCx::of_env(ctx, &env))
     }
 
+    /// Runs `f` with the root style at the tokens `scope` resolves, for code that has a context and no `Ui`.
+    pub fn with_root_scoped<R>(ctx: &Context, scope: &crate::runtime::env::ThemeScope, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
+        let _ = (ctx, scope, f);
+        todo!("ch.K19")
+    }
+
+    /// The one link look: body role, underlined, `accent.solid` (`accent.text` at high contrast), `text.disabled` when
+    /// not `enabled`.
+    pub fn link_look(&self, enabled: bool) -> super::look::TextLook {
+        let _ = enabled;
+        todo!("wg.W07")
+    }
+
     /// The same context with another variant.
     #[doc(hidden)]
     pub fn with_variant(&self, variant: Variant) -> StyleCx<'a> {

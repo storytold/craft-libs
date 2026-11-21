@@ -74,8 +74,10 @@ impl AppCatalog {
         &self.defs
     }
 
-    pub(crate) fn get(&self, id: &str) -> Option<&CommandDef> {
-        self.index.get(id).and_then(|&at| self.defs.get(at))
+    /// The def with the command's key, else the def with the bare id.
+    pub(crate) fn get(&self, command: &CommandRef) -> Option<&CommandDef> {
+        // P3(shortcuts-w1): kb.C2
+        self.index.get(command.id.as_str()).and_then(|&at| self.defs.get(at))
     }
 }
 
@@ -138,13 +140,22 @@ pub struct Fired {
     /// release arrived, also when the runtime held the event back to a later frame; the pass time for the other
     /// sources. A key's hold is the time between its press and its release, however late a frame runs them.
     pub time: f64,
+    /// The modifiers the firing input carried: a key's chord, a component's activation, the frame's held modifiers for
+    /// an injected activation. Automation and the palette carry none.
+    pub mods: craft_keymap::Mods,
 }
 
 impl Fired {
     /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
     /// cycle or the Alt variant.
     pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time }
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time, mods: craft_keymap::Mods::NONE }
+    }
+
+    /// The command with `mods` as the modifiers its firing input carried.
+    pub fn mods(self, mods: craft_keymap::Mods) -> Fired {
+        let _ = mods;
+        todo!("ap.AP9")
     }
 }
 
@@ -381,6 +392,14 @@ impl CommandInput {
         self
     }
 
+    /// Turns hold bindings on with the app's hold delay in seconds, `Some(delay)`; `None`, the default, turns them off.
+    /// The keymap is rebuilt when this changes.
+    #[must_use]
+    pub fn holds(self, delay: Option<f64>) -> Self {
+        let _ = delay;
+        todo!("kb.C14")
+    }
+
     /// The frame's app catalog; the keymap is rebuilt when the platform, the overrides or the catalog's generation change.
     #[must_use]
     pub fn catalog(mut self, catalog: AppCatalog) -> Self {
@@ -536,6 +555,41 @@ pub fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
 /// the first frame.
 pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     board::holder(ctx, chord)
+}
+
+/// The runtime's keymap: the linked sets and the app catalog on the window's platform, under the overrides, with the
+/// system chords reserved. `None` before the first frame.
+pub fn keymap(ctx: &Context) -> Option<Arc<craft_keymap::Keymap>> {
+    let _ = ctx;
+    todo!("kb.C4")
+}
+
+/// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
+/// turns hold bindings on.
+pub fn holds(ctx: &Context, rect: egui::Rect, commands: &[CommandRef], label: crate::runtime::env::Label) {
+    let _ = (ctx, rect, commands, label);
+    todo!("mn.M36")
+}
+
+/// Where `command` was shown in the last pass: a bound component's clipped rect or a holder's rect. `None` unless it
+/// was wholly in view and not under another window.
+pub fn shown(ctx: &Context, command: &CommandRef) -> Option<Shown> {
+    let _ = (ctx, command);
+    todo!("mn.M37")
+}
+
+/// Where a command was shown, from [`shown`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Shown {
+    /// The rect it was shown in.
+    pub rect: egui::Rect,
+    /// The viewport it was shown in.
+    pub viewport: ViewportId,
+    /// The label it was shown with.
+    pub label: crate::runtime::env::Label,
+    /// Whether the rect is a holder's rather than a bound component's.
+    pub holder: bool,
 }
 
 /// `command` as [`resolve`] shows it, from the window under the modal layer whose body is running, as that window is

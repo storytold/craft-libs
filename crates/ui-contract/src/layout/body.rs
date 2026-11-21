@@ -302,6 +302,8 @@ struct Reported {
     whole: f32,
     body: bool,
     cut_first: bool,
+    /// The rank by which the unit leaves whole before the cut-first drops; `None` never leaves by rank.
+    rank: Option<u8>,
 }
 
 /// The widths of a unit of a row that shrinks to fit: the width it asks for and the least it narrows to.
@@ -331,10 +333,19 @@ pub(crate) struct LeastReports(IdMap<IdMap<f32>>);
 
 /// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's whole and least widths, or `None`
 /// for a body.
-pub(crate) fn report_shrink(ctx: &egui::Context, row: Id, leaf: Id, took: f32, ideal: f32, whole_least: Option<(f32, f32)>, cut_first: bool) {
+pub(crate) fn report_shrink(
+    ctx: &egui::Context,
+    row: Id,
+    leaf: Id,
+    took: f32,
+    ideal: f32,
+    whole_least: Option<(f32, f32)>,
+    cut_first: bool,
+    rank: Option<u8>,
+) {
     let (whole, least) = whole_least.map_or((ideal, ideal), |(whole, least)| (whole.min(ideal), least.min(ideal)));
     let widths = ShrinkUnit { ideal, least: least.min(whole) };
-    let leaf = Reported { leaf, took, widths, whole, body: whole_least.is_none(), cut_first };
+    let leaf = Reported { leaf, took, widths, whole, body: whole_least.is_none(), cut_first, rank };
     pass_state::with::<ShrinkReports, _>(ctx, |reports| reports.0.entry(row).or_default().push(leaf));
 }
 
@@ -442,11 +453,13 @@ fn shrink_or_drop(
     units: &[ShrinkUnit],
     whole: &[f32],
     first: &[bool],
+    ranks: &[Option<u8>],
     (fixed, gap): (f32, f32),
     room: f32,
     order: ShrinkOrder,
     drops: bool,
 ) -> Vec<ShrinkCap> {
+    let _ = ranks; // P3(chrome-w5): ch.K30
     let mut kept = vec![true; units.len()];
     let mut fixed = fixed;
     // Half a point: less than a pixel shows at any scale the box runs.
@@ -534,8 +547,9 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let units: Vec<ShrinkUnit> = leaves.iter().map(|leaf| leaf.widths).collect();
         let whole: Vec<f32> = leaves.iter().map(|leaf| leaf.whole).collect();
         let first: Vec<bool> = leaves.iter().map(|leaf| leaf.cut_first).collect();
+        let ranks: Vec<Option<u8>> = leaves.iter().map(|leaf| leaf.rank).collect();
         let widths = if room.is_finite() {
-            shrink_or_drop(&units, &whole, &first, (fixed, gap), room, order, drops)
+            shrink_or_drop(&units, &whole, &first, &ranks, (fixed, gap), room, order, drops)
         } else {
             units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false }).collect()
         };

@@ -287,6 +287,30 @@ pub(crate) fn forget(ctx: &Context, id: Id) {
     forget_tier(ctx, id, SESSION);
 }
 
+/// How long a remembered value lives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Lifetime {
+    /// The value goes through the host's saved state (the `SaveKey` tier).
+    #[default]
+    Saved,
+    /// The value lasts until the app quits.
+    Run,
+}
+
+/// The run-only value under `key`, in the session tier. It never reaches the host. It gives the default until a value
+/// is set, and it is readable outside a pass, as [`saved_value`] is.
+pub fn run_value<T: Slot>(ctx: &Context, key: &SaveKey) -> T {
+    let _ = (ctx, key);
+    todo!("od.OD2")
+}
+
+/// Sets the run-only value under `key`; see [`run_value`].
+pub fn set_run_value<T: Slot>(ctx: &Context, key: &SaveKey, value: T) {
+    let _ = (ctx, key, value);
+    todo!("od.OD2")
+}
+
 /// The saved value under `key`, outside a dialog: an app reads one SAVED value through the same store the dialogs'
 /// remembered fields use.
 pub fn saved_value<T: Savable>(ctx: &Context, key: &SaveKey) -> T {

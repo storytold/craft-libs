@@ -90,6 +90,29 @@ pub fn layer(submenu: bool) -> Overlay {
     base.dismiss(Dismiss::new().outside(Outside::Absorb).on_activate(true)).focus(FocusPolicy::MENU.initial(Initial::Default))
 }
 
+/// A row of a menu that picks a caller's value: an entry, or a submenu of rows.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum MenuRow<T> {
+    /// An entry, shown as [`entry_rows`] shows it.
+    Entry(Entry<T>),
+    /// A submenu row of the label that shows `rows`, recursively; a submenu with no enabled row is disabled.
+    Submenu(Label, Vec<MenuRow<T>>),
+}
+
+impl<T> From<Entry<T>> for MenuRow<T> {
+    fn from(entry: Entry<T>) -> Self {
+        MenuRow::Entry(entry)
+    }
+}
+
+/// Shows `rows` as `entry_rows` shows entries, a submenu as `Menu::submenu_row_enabled`, and returns the value picked at
+/// any depth.
+pub fn menu_rows<T: Clone>(ui: &mut Ui, rows: &[MenuRow<T>]) -> Option<T> {
+    let _ = (ui, rows);
+    todo!("dp.C7")
+}
+
 /// Shows one row per entry, a caption for a heading, a rule for a separator, and returns the index of the entry that
 /// ran. In a value menu
 /// ([`Menu::values`]) every row is a radio item and the checked entry carries the mark; elsewhere a checked entry

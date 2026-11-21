@@ -32,6 +32,8 @@ pub enum PanelRow {
     Item(Entry<GroupItem>),
     /// A row that opens a submenu.
     Submenu(Label, Vec<PanelRow>),
+    /// A command row that runs its alternate's command while the alternate's modifiers are held, as the bar's rows do.
+    Alternated(CommandRef, super::Alternate),
     /// A separator.
     Separator,
 }
@@ -83,6 +85,7 @@ impl PanelMenu {
                 PanelRow::Submenu(label, rows) => {
                     Menu::submenu_row(ui, label.clone(), |ui, _| Self::rows(ui, rows, picked));
                 }
+                PanelRow::Alternated(..) => todo!("mn.B10"),
                 PanelRow::Separator => {
                     Divider::horizontal().show(ui);
                 }
