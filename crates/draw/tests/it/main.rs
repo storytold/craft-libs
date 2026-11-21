@@ -33,7 +33,6 @@ mod artboard;
 // draw-bars
 mod measure;
 mod slice;
-mod slice_divide;
 
 // draw-stroke
 mod stroke_button;
@@ -43,6 +42,7 @@ mod stroke_editor;
 mod brush_presets;
 mod brush_size;
 mod paint_bar;
+mod tip_ellipse;
 
 // draw-transform-a
 mod transform_box;

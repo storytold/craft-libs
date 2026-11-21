@@ -49,8 +49,7 @@ craft_ui::words! {
         background: "slice.background" = "Background";
         background_none: "slice.backgroundNone" = "None";
         background_color: "slice.backgroundColor" = "Slice Background Color";
-        background_kind: "slice.backgroundKind" = "Background Type";
-        background_color_choice: "slice.backgroundColorChoice" = "Color";
+
         h_align: "slice.hAlign" = "Horizontal";
         v_align: "slice.vAlign" = "Vertical";
         align_default: "slice.alignDefault" = "Default";
