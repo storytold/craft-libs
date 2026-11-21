@@ -302,6 +302,8 @@ fn find_image(b: &[u8]) -> Result<(Header, Option<Header>), CodecError> {
     Err(err("the file holds no image"))
 }
 
+/// Decode the first image, preserving integer samples when their physical values fit.
+/// Check the larger output size before normalizing or allocating a float fallback.
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (h, primary) = find_image(bytes)?;
     let bitpix = h.int("BITPIX").ok_or_else(|| err("missing BITPIX"))?;
@@ -373,7 +375,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
                 for i in 0..n {
                     let v = physical(i).unwrap_or(0.0);
                     if !(0.0..=65535.0).contains(&v) {
-                        // Signed data with negative values: fall back to float.
+                        // Physical values outside U16's range require float storage.
                         out16 = None;
                         break;
                     }
@@ -383,6 +385,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
             match out16 {
                 Some(out) => Image::from_u16(w, hgt, layout, &out)?,
                 None => {
+                    limits.check(w, hgt, layout, SampleType::F32)?;
                     let max = (0..n).filter_map(physical).fold(0.0f64, f64::max);
                     let white = if max <= 2.0 {
                         1.0
@@ -628,6 +631,98 @@ mod tests {
         let mut out = w.out;
         out.resize(out.len().div_ceil(BLOCK) * BLOCK, b' ');
         out
+    }
+
+    /// Build a signed image without data padding so missing samples stay missing.
+    fn signed16_fixture(cards: &[&str], samples: &[i16]) -> Vec<u8> {
+        let cards: Vec<&str> = ["SIMPLE  = T", "BITPIX  = 16"].into_iter().chain(cards.iter().copied()).collect();
+        let mut bytes = header(&cards);
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_be_bytes());
+        }
+        bytes
+    }
+
+    /// A negative sample can force a larger allocation at either end of the input.
+    /// Check the decoder directly so a caller's final size check cannot hide the bug.
+    #[test]
+    fn float_fallback_checks_its_own_budget() {
+        for samples in [[-1, 1], [1, -1]] {
+            let bytes = signed16_fixture(&["NAXIS   = 2", "NAXIS1  = 2", "NAXIS2  = 1", "OBJECT  = 'budget'"], &samples);
+            for max_alloc in [4, 7] {
+                assert!(matches!(decode(&bytes, &Limits { max_alloc, ..Limits::default() }), Err(CodecError::LimitExceeded(_))));
+            }
+            let img = decode(&bytes, &Limits { max_alloc: 8, ..Limits::default() }).unwrap();
+            assert_eq!((img.dimensions(), img.layout(), img.sample_type()), ((2, 1), ChannelLayout::Gray, SampleType::F32));
+            assert_eq!(img.to_f32_samples().unwrap(), samples.map(f32::from));
+            assert_eq!(img.meta.text, vec![("OBJECT".into(), "budget".into())]);
+        }
+    }
+
+    /// Signed nonnegative data and offset camera data still fit a U16-only budget.
+    #[test]
+    fn integer_candidates_keep_their_tight_budgets() {
+        for (offset, samples, expected) in [(0, [0, 32767], [0, 32767]), (32768, [-32768, 32767], [0, 65535])] {
+            let bytes = signed16_fixture(&["NAXIS   = 2", "NAXIS1  = 2", "NAXIS2  = 1", &format!("BZERO   = {offset}")], &samples);
+            let img = decode(&bytes, &Limits { max_alloc: 4, ..Limits::default() }).unwrap();
+            assert_eq!(img.sample_type(), SampleType::U16);
+            assert_eq!(img.to_u16_samples().unwrap(), expected);
+            assert!(matches!(decode(&bytes, &Limits { max_alloc: 3, ..Limits::default() }), Err(CodecError::LimitExceeded(_))));
+        }
+    }
+
+    /// A late sample above U16's range requires all three F32 channels in the
+    /// budget. Fitting images retain the FITS scaling and declared row order.
+    #[test]
+    fn float_fallback_counts_rgb_channels_and_preserves_row_order() {
+        for (order, expected) in [
+            ("BOTTOM-UP", [65532.0, 65534.0, 65536.0, 65531.0, 65533.0, 65535.0]),
+            ("TOP-DOWN", [65531.0, 65533.0, 65535.0, 65532.0, 65534.0, 65536.0]),
+        ] {
+            let bytes = signed16_fixture(
+                &["NAXIS   = 3", "NAXIS1  = 1", "NAXIS2  = 2", "NAXIS3  = 3", "BZERO   = 65531", &format!("ROWORDER= '{order}'")],
+                &[0, 1, 2, 3, 4, 5],
+            );
+            for max_alloc in [12, 23] {
+                assert!(matches!(decode(&bytes, &Limits { max_alloc, ..Limits::default() }), Err(CodecError::LimitExceeded(_))));
+            }
+            let img = decode(&bytes, &Limits { max_alloc: 24, ..Limits::default() }).unwrap();
+            assert_eq!((img.dimensions(), img.layout(), img.sample_type()), ((1, 2), ChannelLayout::Rgb, SampleType::F32));
+            assert_eq!(img.to_f32_samples().unwrap(), expected.map(|v| v / 65536.0));
+        }
+    }
+
+    /// Blank samples alone do not force float output. When another sample does,
+    /// ignored planes keep their warning and do not add to the output budget.
+    #[test]
+    fn float_fallback_preserves_blank_and_extra_plane_warning() {
+        let bytes =
+            signed16_fixture(&["NAXIS   = 3", "NAXIS1  = 2", "NAXIS2  = 1", "NAXIS3  = 4", "BLANK   = -32768"], &[-32768, -1, 0, 1, 2, 3, 4, 5]);
+        assert!(matches!(decode(&bytes, &Limits { max_alloc: 7, ..Limits::default() }), Err(CodecError::LimitExceeded(_))));
+        let img = decode(&bytes, &Limits { max_alloc: 8, ..Limits::default() }).unwrap();
+        assert_eq!(img.layout(), ChannelLayout::Gray);
+        assert_eq!(img.to_f32_samples().unwrap(), [0.0, -1.0]);
+        assert_eq!(img.warnings, vec![DecodeWarning::MorePages { total: Some(4) }]);
+        let bytes = signed16_fixture(&["NAXIS   = 2", "NAXIS1  = 2", "NAXIS2  = 1", "BLANK   = -32768"], &[-32768, 1]);
+        let img = decode(&bytes, &Limits { max_alloc: 4, ..Limits::default() }).unwrap();
+        assert_eq!(img.sample_type(), SampleType::U16);
+        assert_eq!(img.to_u16_samples().unwrap(), [0, 1]);
+    }
+
+    /// Fractional scaling selects F32 without entering integer conversion.
+    #[test]
+    fn scaled_float_candidate_keeps_its_exact_budget() {
+        let bytes = signed16_fixture(&["NAXIS   = 2", "NAXIS1  = 2", "NAXIS2  = 1", "BSCALE  = 0.5", "BZERO   = 0.5"], &[-2, 2]);
+        assert!(matches!(decode(&bytes, &Limits { max_alloc: 7, ..Limits::default() }), Err(CodecError::LimitExceeded(_))));
+        let img = decode(&bytes, &Limits { max_alloc: 8, ..Limits::default() }).unwrap();
+        assert_eq!(img.to_f32_samples().unwrap(), [-0.5, 1.5]);
+    }
+
+    /// Validate the entire declared input before a negative sample can trigger fallback.
+    #[test]
+    fn truncated_data_errors_before_float_fallback() {
+        let bytes = signed16_fixture(&["NAXIS   = 2", "NAXIS1  = 2", "NAXIS2  = 1"], &[-1]);
+        assert!(matches!(decode(&bytes, &Limits { max_alloc: 4, ..Limits::default() }), Err(CodecError::Malformed { .. })));
     }
 
     #[test]
