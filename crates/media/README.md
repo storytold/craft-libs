@@ -592,6 +592,14 @@ let au: Vec<u8> = file.read_unit(&bytes, v, 0)?; // the first access unit
 - **Reading**: a unit records only the position of its first packet and its offset in that
   packet's payload; `read_unit` re-reads from there (the index costs a few dozen bytes per
   unit, not per packet).
+- **Index store**: `open` reads the whole file. An app that opens the same large recordings again
+  can register an `mpegts::IndexStore` (`load(key)`, `save(key, bytes)`) with
+  `mpegts::set_index_store`; `open` then takes a file's `File` from the store when it has one, and
+  saves it there after a scan. A file is known by its length and hashes of its first and last
+  64 KiB. A saved index carries its form's version, the craft-media version that wrote it and a
+  checksum, and is checked against the file before it is used (counts, positions, stream ids, the
+  format, and a spread of units that must start at their stream's packets); anything that does not
+  fit is scanned and saved again. Without a store nothing changes.
 
 `frame_bytes`, `frame_info` and `sei_has_recovery_point` are public: other containers that store
 MPEG audio or AC-3 frames in chunks that do not follow them (AVI) find the frames again with them.

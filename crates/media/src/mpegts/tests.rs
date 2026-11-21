@@ -1140,3 +1140,124 @@ fn transport_stream_resyncs_after_garbage() {
         }
     }
 }
+
+/// An in-memory [`IndexStore`] that counts what it is asked, and serves only the thread that made
+/// it: other tests open files while it is registered, and they neither find nor save anything in
+/// it.
+struct CountingStore {
+    thread: std::thread::ThreadId,
+    kept: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    loads: std::sync::atomic::AtomicUsize,
+    saves: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingStore {
+    fn new() -> Self {
+        CountingStore { thread: std::thread::current().id(), kept: Default::default(), loads: Default::default(), saves: Default::default() }
+    }
+
+    fn counts(&self) -> (usize, usize) {
+        (self.loads.load(std::sync::atomic::Ordering::SeqCst), self.saves.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    /// Changes the one index it keeps.
+    fn change(&self, f: impl FnOnce(&mut Vec<u8>)) {
+        let mut kept = self.kept.lock().unwrap();
+        assert_eq!(kept.len(), 1);
+        f(kept.values_mut().next().unwrap());
+    }
+}
+
+impl IndexStore for CountingStore {
+    fn load(&self, key: &str) -> Option<Vec<u8>> {
+        if std::thread::current().id() != self.thread {
+            return None;
+        }
+        self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.kept.lock().unwrap().get(key).cloned()
+    }
+    fn save(&self, key: &str, index: &[u8]) {
+        if std::thread::current().id() != self.thread {
+            return;
+        }
+        self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.kept.lock().unwrap().insert(key.to_owned(), index.to_vec());
+    }
+}
+
+/// A store registered for as long as this lives: dropping it (at the end of a scope, or when an
+/// assertion fails) registers again the store that was registered before.
+struct Registered(Option<std::sync::Arc<dyn IndexStore>>);
+
+impl Registered {
+    fn new(store: std::sync::Arc<dyn IndexStore>) -> Self {
+        let before = index_store::index_store();
+        set_index_store(Some(store));
+        Registered(before)
+    }
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        set_index_store(self.0.take());
+    }
+}
+
+/// A file's index is saved to the registered store after a scan and taken from it at the next
+/// open, which gives the same `File` as a scan, its warnings too. A saved index whose units do not
+/// start at their stream's packets in the file, or that was damaged in the store, is not used: the
+/// file is scanned again and saved again. For a transport stream (192-byte packets, garbage that
+/// loses sync once) and a program stream.
+///
+/// (One test, as the store is registered for the whole process.)
+#[test]
+fn an_index_store_keeps_the_scan() {
+    let mut mux = TsMux::new(true);
+    mux.psi(&[(0x02, 0x1011), (0x03, 0x1100)]);
+    for k in 0..40u16 {
+        if k == 20 {
+            mux.out.extend([0x11, 0x47, 0x22]);
+        }
+        let f = mpeg2_frame(if k % 10 == 0 { 1 } else { 2 }, k % 10, k % 3 == 1, 300 + 37 * k as usize);
+        mux.pes(0x1011, &pes(0xE0, Some(90_000 + 3600 * k as i64), None, &f, false));
+        mux.pes(0x1100, &pes(0xC0, Some(90_000 + 2160 * k as i64), None, &mp2_frame(k as u8), true));
+    }
+    let ts = mux.out;
+    let ps = work_tests::big_program_stream(false, 40).0;
+    for data in [ts, ps] {
+        let reference = open(&data).unwrap();
+        let expected = format!("{reference:?}");
+        assert!(reference.streams.iter().all(|s| !s.units.is_empty()), "{expected}");
+        if matches!(reference.format, Format::Ts { .. }) {
+            assert!(reference.warnings.iter().any(|w| w.contains("lost packet sync")), "{:?}", reference.warnings);
+        }
+        let store = std::sync::Arc::new(CountingStore::new());
+        let registered = Registered::new(store.clone());
+        // Scanned and saved; then taken from the store: the same file.
+        assert_eq!(format!("{:?}", open(&data).unwrap()), expected);
+        assert_eq!(store.counts(), (1, 1));
+        assert_eq!(format!("{:?}", open(&data).unwrap()), expected);
+        assert_eq!(store.counts(), (2, 1));
+        // A unit moved off its packet (an index saved whole, its checksum matching): scanned again,
+        // and saved again.
+        store.change(|saved| {
+            let mut file = index_store::decode(saved, data.len() as u64).unwrap();
+            file.streams[0].units[0].pos += 1;
+            *saved = index_store::encode(&file, data.len() as u64).unwrap();
+        });
+        assert_eq!(format!("{:?}", open(&data).unwrap()), expected);
+        assert_eq!(store.counts(), (3, 2));
+        assert_eq!(format!("{:?}", open(&data).unwrap()), expected);
+        assert_eq!(store.counts(), (4, 2));
+        // An index damaged in the store (its checksum does not match): scanned again, and saved again.
+        store.change(|saved| {
+            let middle = saved.len() / 2;
+            saved[middle] ^= 0x10;
+        });
+        assert_eq!(format!("{:?}", open(&data).unwrap()), expected);
+        assert_eq!(store.counts(), (5, 3));
+        assert_eq!(format!("{:?}", open(&data).unwrap()), expected);
+        assert_eq!(store.counts(), (6, 3));
+        drop(registered);
+    }
+}
