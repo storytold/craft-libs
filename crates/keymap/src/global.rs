@@ -453,12 +453,13 @@ impl KeyMap {
     /// first key code whose keysyms hold the key's keysym. The chord is refused when that key
     /// types the keysym only at a third or later level (AltGr): the grab would then go to another
     /// key than the one `chord` names. Letters and digits may be at level 2 (`A` is the shifted
-    /// letter, and French AZERTY types digits with Shift); other keys must be at level 1.
+    /// letter, and French AZERTY types digits with Shift). Other keys may be at level 2 when the
+    /// chord holds Shift (Ctrl+Shift+. on French AZERTY), and must be at level 1 otherwise.
     fn slot(&self, hotkey: &HotKey, chord: Chord) -> Result<u64, GlobalError> {
         let keysym = x11_keysym(hotkey.key).ok_or(GlobalError::Unbindable(chord))?;
         let (index, keysyms) =
             self.keysyms.chunks(self.per_keycode.max(1)).enumerate().find(|(_, k)| k.contains(&keysym)).ok_or(GlobalError::Unbindable(chord))?;
-        let levels = if chord.key.is_letter() || chord.key.is_digit() { 2 } else { 1 };
+        let levels = if chord.key.is_letter() || chord.key.is_digit() || hotkey.mods.contains(Modifiers::SHIFT) { 2 } else { 1 };
         if !keysyms[..levels.min(keysyms.len())].contains(&keysym) {
             return Err(GlobalError::Unbindable(chord));
         }
@@ -1298,6 +1299,10 @@ mod tests {
         assert_ne!(slot(&us, "Ctrl+["), slot(&us, "Ctrl+8"));
         // A key the layout lacks is refused.
         assert_eq!(slot(&us, "Ctrl+]"), Err(GlobalError::Unbindable(chord("Ctrl+]"))));
+        // French AZERTY: `.` is Shift+`;`, so only a chord with Shift reaches it.
+        let fr = key_map(&[(59, [0x3b, 0x2e, 0, 0])]);
+        assert!(slot(&fr, "Ctrl+Shift+.").is_ok());
+        assert_eq!(slot(&fr, "Ctrl+."), Err(GlobalError::Unbindable(chord("Ctrl+."))));
         // Every key the backend can grab has a keysym here.
         for &key in Key::ALL {
             if let Ok(hotkey) = hotkey(Chord { mods: Mods::CMD, key }, Platform::Linux) {
