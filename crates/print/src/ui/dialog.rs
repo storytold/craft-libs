@@ -21,7 +21,7 @@ use craft_ui::patterns::form_dialogs::{
     DialogFields, FieldValue, FormDialog, HostRequests, Param, ParamRows, SectionList, set_color_field, set_param_field,
 };
 use craft_ui::patterns::presets::{
-    NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetPicker, PresetRow, PresetState, PresetWords,
+    NameCheck, NamedPresetEvent, NamedPresetRow, Naming, PickerField, PresetError, PresetPicker, PresetRow, PresetSource, PresetState, PresetWords,
 };
 use craft_ui::runtime::env::{Env, Label, Message};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
@@ -518,36 +518,35 @@ fn preset_row(
     ui: &mut Ui,
     words: &PrintDialogWords,
     presets: &PrintPresets<'_>,
-    check: Option<&NameCheck<'_>>,
+    check: Option<&dyn Fn(&str) -> Option<PresetError>>,
     picker: &mut PresetState<String>,
     events: &mut Vec<NamedPresetEvent<String>>,
 ) {
-    let mut pick = PresetPicker::new(words.preset.clone(), Bind::given(presets.held.clone()), presets.rows, Bind::bound(picker))
-        .field(PickerField::Name);
+    let source = PresetSource::listed(presets.rows);
+    let mut pick = PresetPicker::new(words.preset.clone(), Bind::given(presets.held.clone()), &source, Bind::bound(picker)).field(PickerField::Name);
     if presets.held.is_none() {
         pick = pick.placeholder(words.custom.clone());
     }
     let mut row = NamedPresetRow::new(words.preset.clone(), pick).built_in(|key: &String| presets.built_in.contains(key));
     if let Some(check) = check {
-        // PLAN: `NameCheck::refuses` is private to presets/named.rs; the presets owner makes it `pub` so a dialog can run the check it was given.
-        row = row.check_name(|name| check.refuses(name));
+        row = row.check_name(NameCheck::of_host(check));
     }
     events.extend(row.show(ui).events);
 }
 
 /// The preset editor's name field with the host's refusal under it. Returns whether the name can be saved.
-fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&NameCheck<'_>>, name: &mut Bind<'_, String>) -> bool {
+fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&dyn Fn(&str) -> Option<PresetError>>, name: &mut Bind<'_, String>) -> bool {
     let preset_words = Env::of(ui).words::<PresetWords>();
     let current = read(name).unwrap_or_default();
-    let refused = |text: &str| check.and_then(|check| check.refuses(text));
-    let check_text = |text: &String| match refused(text).filter(|_| !text.is_empty()) {
-        Some(PresetError::NameTaken) => Validity::Refuse(Message::new(preset_words.name_taken.clone())),
-        Some(_) => Validity::Refuse(Message::new(preset_words.name_invalid.clone())),
-        None => Validity::Ok,
-    };
+    let host = check.map(NameCheck::of_host);
+    let naming = Naming::new(host.as_ref(), &preset_words.name_taken, &preset_words.name_invalid);
     let mut typed = None;
     Field::new(words.preset_name.clone()).id_salt("name").show(ui, |ui, _| {
-        typed = TextField::new(words.preset_name.clone(), Bind::given(current.clone()).check(check_text))
+        let checked = Bind::given(current.clone()).check_with(&naming, |naming, text| match naming.problem(text) {
+            Some(message) => Validity::Refuse(Message::new(message)),
+            None => Validity::Ok,
+        });
+        typed = TextField::new(words.preset_name.clone(), checked)
             .id_salt("name-text")
             .select_on_focus()
             .show(ui)
@@ -561,7 +560,7 @@ fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&NameCheck<'_>>
         }
         None => current,
     };
-    usable_name(&shown, refused(&shown))
+    usable_name(&shown, check.and_then(|check| check(&shown)))
 }
 
 /// `params` as rows over `values`; the colour, path and eyedropper requests they file go to `requests`.
@@ -626,8 +625,8 @@ pub struct PrintDialog<'a> {
     #[prop]
     preset_name: Option<Bind<'a, String>>,
     /// Whether a typed preset name may be used, in the preset editor.
-    #[prop(func = "Fn(&str) -> Option<PresetError>")]
-    check_name: Option<NameCheck<'a>>,
+    #[prop(boxed)]
+    check_name: Option<Box<dyn Fn(&str) -> Option<PresetError> + 'a>>,
     /// The driver's Setup… button is shown, with [`PrintLayout::Sections`].
     #[prop]
     driver: bool,
@@ -771,7 +770,7 @@ impl<'a> PrintDialog<'a> {
                 let mut index_bind = bound_or(&mut sheet_index, own_sheet);
                 let mut name_bind = bound_or(&mut preset_name, own_name);
                 if editor {
-                    name_row(ui, &words, check_name.as_ref(), &mut name_bind)
+                    name_row(ui, &words, check_name.as_deref(), &mut name_bind)
                 } else {
                     let mut preview = |ui: &mut Ui| preview_room(ui, &words, sheet, message.as_ref(), &mut index_bind, &mut moved, &mut stepped);
                     match layout {
@@ -794,7 +793,7 @@ impl<'a> PrintDialog<'a> {
                         PrintLayout::Sections => {
                             Stack::new().show(ui, |ui, _| {
                                 if let Some(presets) = &presets {
-                                    preset_row(ui, &words, presets, check_name.as_ref(), picker, &mut preset_events);
+                                    preset_row(ui, &words, presets, check_name.as_deref(), picker, &mut preset_events);
                                 }
                                 let panel = PrintPanel::new(settings.reborrowed(), printers)
                                     .layout(PrintPanelLayout::PrinterOnly)

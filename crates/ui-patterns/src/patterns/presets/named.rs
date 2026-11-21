@@ -72,6 +72,12 @@ impl<'a> NameCheck<'a> {
         NameCheck(Box::new(WithInputs { inputs, check }))
     }
 
+    /// The host's `check`, a closure: a memoized view that holds it runs every pass, as no key can follow what the
+    /// closure reads.
+    pub fn of_host(check: &'a dyn Fn(&str) -> Option<PresetError>) -> Self {
+        NameCheck::new(HostCheck(check), |host, name| (host.0)(name))
+    }
+
     /// The refusal of `name`, `None` when the host accepts it; the preset editor of the PDF dialog asks it for its own
     /// name field.
     pub fn refuses(&self, name: &str) -> Option<PresetError> {
@@ -85,6 +91,11 @@ impl MemoProps for NameCheck<'_> {
         self.0.key(key);
     }
 }
+
+/// The inputs of [`NameCheck::of_host`].
+#[derive(MemoProps)]
+#[memo_props(every_pass = "the host's name check is a closure, whose answers no key can follow")]
+struct HostCheck<'a>(&'a dyn Fn(&str) -> Option<PresetError>);
 
 /// A name check: its answer, and the key of its inputs and `fn`.
 trait NameChecker {
@@ -108,10 +119,11 @@ impl<I: MemoProps> NameChecker for WithInputs<I> {
     }
 }
 
-/// What the name field checks a typed name against: the host's check, the suggestion an empty field stands for, the
-/// name of the preset being renamed and the messages.
+/// What a preset name field checks a typed name against: the host's check, the suggestion an empty field stands for, the
+/// name of the preset being renamed and the messages. A field takes it as the inputs of its binding's check
+/// (`Bind::check_with`).
 #[derive(MemoProps)]
-struct Naming<'n, 'c> {
+pub struct Naming<'n, 'c> {
     check_name: Option<&'n NameCheck<'c>>,
     fallback: Option<&'n str>,
     own: Option<&'n str>,
@@ -119,9 +131,14 @@ struct Naming<'n, 'c> {
     invalid: &'n Label,
 }
 
-impl Naming<'_, '_> {
-    /// Why `name` cannot be used, as the field shows it.
-    fn problem(&self, name: &str) -> Option<Label> {
+impl<'n, 'c> Naming<'n, 'c> {
+    /// A new name checked by `check_name`, refused with `taken` or `invalid`.
+    pub fn new(check_name: Option<&'n NameCheck<'c>>, taken: &'n Label, invalid: &'n Label) -> Self {
+        Naming { check_name, fallback: None, own: None, taken, invalid }
+    }
+
+    /// Why `name` cannot be used, as the field shows it; an empty name is not refused here.
+    pub fn problem(&self, name: &str) -> Option<Label> {
         let own = self.own.is_some_and(|label| label.to_lowercase() == name.to_lowercase());
         if name.is_empty() || own {
             return None;

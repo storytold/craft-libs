@@ -25,7 +25,7 @@ use crate::form::{Field, FieldGroup};
 use crate::list::ListRow;
 use crate::notices::{Notice, NoticeLayout};
 use crate::patterns::presets::{
-    NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState, PresetWords,
+    NameCheck, NamedPresetEvent, Naming, NamedPresetRow, PickerField, PresetError, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState, PresetWords,
 };
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label, Message, UnitKind};
@@ -536,25 +536,19 @@ impl<'a> PdfExportDialog<'a> {
             let preset_name = reference.map_or_else(Label::default, |preset| words.preset_name(&preset.name, &app));
             let mut name_refused = false;
             let named_events = if editor {
-                let refusal_of = |typed: &str| -> Option<Label> {
-                    let error = check_name.as_ref()?(typed.trim())?;
-                    Some(match error {
-                        PresetError::NameTaken => preset_words.name_taken.clone(),
-                        _ => preset_words.name_invalid.clone(),
-                    })
-                };
+                let check = check_name.as_deref().map(NameCheck::of_host);
+                let naming = Naming::new(check.as_ref(), &preset_words.name_taken, &preset_words.name_invalid);
                 Field::new(words.preset_name.clone()).id_salt("preset-name").show(ui, |ui, _| {
-                    let check = |refusal: &HostRefusal<'_>, text: &String| match (refusal.0)(text) {
+                    let name = Bind::given(draft.name.clone()).check_with(&naming, |naming, text| match naming.problem(text.trim()) {
                         Some(message) => Validity::Refuse(Message::new(message)),
                         None => Validity::Ok,
-                    };
-                    let name = Bind::given(draft.name.clone()).check_with(HostRefusal(&refusal_of), check);
+                    });
                     let typed = TextField::new(words.preset_name.clone(), name).id_salt("name").show(ui);
                     if let Some(text) = typed.value().cloned() {
                         draft.name = text;
                     }
                 });
-                name_refused = draft.name.trim().is_empty() || refusal_of(&draft.name).is_some();
+                name_refused = draft.name.trim().is_empty() || naming.problem(draft.name.trim()).is_some();
                 Vec::new()
             } else {
                 let mut picker =
@@ -745,11 +739,6 @@ impl<'a> PdfExportDialog<'a> {
         }
     }
 }
-
-/// The host's refusal of a typed preset name, a closure: a view that checks with it runs every pass.
-#[derive(crate::contract::MemoProps)]
-#[memo_props(every_pass = "the host's name check is a closure, whose answers no key can follow")]
-struct HostRefusal<'a>(&'a dyn Fn(&str) -> Option<Label>);
 
 /// One preset row per (name, shown name), keyed by the name.
 fn preset_rows(names: &&[(String, String)], _: &Env) -> Vec<PresetRow<String>> {

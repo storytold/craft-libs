@@ -3,7 +3,7 @@
 
 use super::fields::{DialogFields, FieldValue};
 use crate::patterns::presets::{
-    NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetFns, PresetKind, PresetPicker, PresetRow, PresetSource,
+    NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetKind, PresetPicker, PresetRow, PresetSource,
 };
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, ListingRequest, PathRequest};
 
@@ -15,7 +15,7 @@ use super::preview::{PreviewPane, PreviewView, PreviewZoom};
 use super::rows::{ParamRows, ParamRowsOutput};
 
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, MemoKey, MemoProps, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _,
+    Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _,
 };
 
 use crate::dialog::{
@@ -649,7 +649,7 @@ fn reset_target(opened: &DialogFields, reset_to: Option<&DialogFields>) -> Dialo
 /// renamed or deleted come back in `events` for the host to store.
 fn show_presets(ui: &mut Ui, label: &Label, presets: &ParamPresets<'_>, values: &mut DialogFields, events: &mut Vec<NamedPresetEvent<String>>) {
     let current = presets.values.iter().find(|(_, preset)| preset_applies(preset, values)).map(|(name, _)| name.clone());
-    let source = PresetSource::new(ListedRows(presets.rows), PresetFns::new(listed_rows));
+    let source = PresetSource::listed(presets.rows);
     let picker = PresetPicker::new(label.clone(), Bind::given(current), &source, Bind::kept()).field(PickerField::Name);
     let taken: Vec<&str> = presets.built_in.iter().map(String::as_str).chain(presets.rows.iter().map(|row| row.label.as_str())).collect();
     let check = NameCheck::new(taken, |taken, name| {
@@ -668,28 +668,6 @@ fn show_presets(ui: &mut Ui, label: &Label, presets: &ParamPresets<'_>, values: 
             _ => {}
         }
     }
-}
-
-/// The rows a [`ParamPresets`] lists, as the inputs of the presets row's source: keyed by each row's key, name, depth
-/// and kind, which are all a named preset row shows.
-#[derive(Clone, Copy)]
-struct ListedRows<'a>(&'a [PresetRow<String>]);
-
-impl MemoProps for ListedRows<'_> {
-    fn key(&self, key: &mut MemoKey) {
-        for row in self.0 {
-            row.key.key(key);
-            row.label.key(key);
-            row.depth.key(key);
-            (row.kind == PresetKind::Item).key(key);
-        }
-        self.0.len().key(key);
-    }
-}
-
-/// The rows of the presets row: the host's own.
-fn listed_rows(listed: &ListedRows<'_>, _: &Env) -> Vec<PresetRow<String>> {
-    listed.0.to_vec()
 }
 
 /// Whether `values` hold every value `preset` sets.
