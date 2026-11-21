@@ -24,6 +24,7 @@ use std::path::PathBuf;
 /// ```ignore
 /// let mut web = HostedSaveForWeb::new("poster.psd", PixelSize::new(1200, 800), original).animation(Animation::new(12, 24.0));
 /// // each pass: for want in web.wanted_variants() { encode(want) -> web.set_variant(variant) }
+/// // when web.frame() changed: web.set_original(picture of that frame)
 /// // pick_color() -> picker -> answer_color(MATTE_COLOR_KEY, color); pick_path() -> file dialog -> answer_path(key, path)
 /// ```
 pub struct HostedSaveForWeb {
@@ -127,6 +128,12 @@ impl HostedSaveForWeb {
     /// The frame the panes show; the app encodes this frame.
     pub fn frame(&self) -> u32 {
         self.frame
+    }
+
+    /// Shows `original` in the Original pane from the next pass, for example the document at a new
+    /// [`frame`](Self::frame) of its animation.
+    pub fn set_original(&mut self, original: SizedTexture) {
+        self.pictures.original = Some(original);
     }
 
     /// The panes to encode when they changed since the last call.
