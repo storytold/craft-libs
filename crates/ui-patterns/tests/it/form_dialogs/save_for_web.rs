@@ -309,6 +309,36 @@ fn advance_frame_keeps_time_across_slow_frames_pauses_and_bad_rates() {
     }
 }
 
+/// The textures a pass paints, other than the font atlas.
+fn painted_textures(fixture: &mut Fixture) -> Vec<egui::TextureId> {
+    fn collect(shape: &egui::Shape, into: &mut Vec<egui::TextureId>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, into)),
+            shape if shape.texture_id() != egui::TextureId::default() => into.push(shape.texture_id()),
+            _ => {}
+        }
+    }
+    let mut textures = Vec::new();
+    fixture.frame_shapes().iter().for_each(|shape| collect(shape, &mut textures));
+    textures
+}
+
+/// While an animation plays, the app hands the Original pane each frame's picture.
+#[trial]
+fn the_original_pane_shows_the_picture_the_app_sets() {
+    // User textures, so none of them is one the dialog loads for itself.
+    let picture = |id| SizedTexture::new(egui::TextureId::User(id), Vec2::new(200.0, 100.0));
+    let (first, next) = (picture(1), picture(2));
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, first).animation(Animation::new(4, 10.0)));
+    assert!(painted_textures(&mut fixture).contains(&first.id), "the Original pane shows the picture the dialog opened with");
+
+    host.borrow_mut().get_mut::<HostedSaveForWeb>().expect("the dialog is open").set_original(next);
+    fixture.idle(1);
+    let painted = painted_textures(&mut fixture);
+    assert!(painted.contains(&next.id), "the Original pane shows the new picture");
+    assert!(!painted.contains(&first.id), "the old picture is gone");
+}
+
 /// The options 4-Up's panes 1 and 2 are asked to encode, from the dialog's request for them.
 fn four_up_options(host: &Rc<RefCell<DialogHost>>) -> [SaveForWebOptions; 2] {
     let wanted = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::wanted_variants).expect("the dialog is open");
