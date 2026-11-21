@@ -23,9 +23,35 @@ use crate::self_update::{Outcome, Restart};
 use crate::translate::{Note, Translate, english};
 use crate::{App, Http, Paths, Platform, Stop, check_for_update, self_update};
 
-/// Asks for the newest release (blocking; it runs on its own thread). Tests stand in for the network
-/// with one; without it the check asks GitHub.
+/// Asks for the newest release (blocking; it runs on its own thread), in place of the built-in
+/// check that asks GitHub. It gets no context; [`ContextSource`] is the one that does.
 pub type CheckSource = Arc<dyn Fn() -> Result<Option<Release>, String> + Send + Sync>;
+
+/// Asks for the newest release for the app and version in a [`CheckContext`] (blocking; it runs on
+/// the check's thread), in place of the built-in check that asks GitHub. An app with its own
+/// release policy sets one with [`Updater::with_check`]; [`CheckContext::check_github`] runs the
+/// built-in check from inside it.
+pub type ContextSource = Arc<dyn Fn(&CheckContext) -> Result<Option<Release>, String> + Send + Sync>;
+
+/// What a check runs for: the app, and the version the running copy reports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckContext {
+    pub app: &'static App,
+    /// The running version, after [`self_update::current_version`], as [`Updater`] compares it.
+    pub version: String,
+}
+
+impl CheckContext {
+    /// The HTTP client the built-in check uses, with the User-Agent `<app name>/Update`.
+    pub fn http(&self) -> Result<Http, String> {
+        Http::new(&format!("{}/Update", self.app.name))
+    }
+
+    /// The built-in check: [`check_for_update`] over [`Self::http`].
+    pub fn check_github(&self) -> Result<Option<Release>, String> {
+        check_for_update(self.app, &self.http()?, &self.version)
+    }
+}
 
 /// What a requested check came to, for a window that answers Help ▸ Check for Updates, and what
 /// the last update came to, at the first start after it.
@@ -143,7 +169,7 @@ impl From<&str> for Failure {
 pub struct Updater {
     app: &'static App,
     version: String,
-    source: Option<CheckSource>,
+    source: Option<ContextSource>,
     status: Status,
     /// The check running (or queued behind it) was asked for by the user.
     requested: bool,
@@ -260,8 +286,16 @@ impl Updater {
         Note::new(READY_TEXT, &[("app", self.app.name)])
     }
 
-    /// Replaces the network with `source` (tests).
-    pub fn with_source(mut self, source: CheckSource) -> Self {
+    /// Replaces the built-in check with `source`, which takes no arguments. [`Self::with_check`]
+    /// sets one that is passed the app and version.
+    pub fn with_source(self, source: CheckSource) -> Self {
+        self.with_check(Arc::new(move |_| source()))
+    }
+
+    /// Replaces the built-in check with `source`, which is passed the app and the running version
+    /// on each check, so it can apply its own release policy without working them out again.
+    /// The launcher's version choice ([`crate::pins`]) is still read first.
+    pub fn with_check(mut self, source: ContextSource) -> Self {
         self.source = Some(source);
         self
     }
@@ -471,9 +505,10 @@ impl Updater {
         let (source, probe, app, version, ctx) = (self.source.clone(), self.probe.clone(), self.app, self.version.clone(), ctx.clone());
         let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
             let ask = || -> Found {
+                let check = CheckContext { app, version };
                 let checked: Checked = match source {
-                    Some(ask) => ask(),
-                    None => Http::new(&format!("{}/Update", app.name)).and_then(|http| check_for_update(app, &http, &version)),
+                    Some(ask) => ask(&check),
+                    None => check.check_github(),
                 };
                 // Whether the copy installs the release itself is read from the installed files
                 // here, on the check's thread, and not in `tick`.
@@ -1088,6 +1123,29 @@ mod tests {
         assert_eq!(u.status(), &Status::UpToDate);
         u.dismiss_status();
         assert_eq!(u.status(), &Status::Idle);
+    }
+
+    /// A source set with `with_check` is passed the app and the version the updater compares, so
+    /// it decides on them without working them out again.
+    #[test]
+    fn a_check_source_is_passed_the_app_and_running_version() {
+        let seen = Arc::new(Mutex::new(None));
+        let source: ContextSource = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |check: &CheckContext| {
+                *seen.lock().unwrap() = Some(check.clone());
+                let running = crate::version::parse(&check.version);
+                let offered = newer();
+                Ok(offered.version.as_ref().zip(running.as_ref()).is_some_and(|(new, cur)| crate::is_newer(new, cur)).then_some(offered))
+            })
+        };
+        let ctx = egui::Context::default();
+        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_check(source).with_pins_path(no_pins()).with_probe(Arc::new(|_, _| false));
+        u.check_now(&ctx);
+        settle(&mut u, &ctx);
+        let seen = seen.lock().unwrap().clone().expect("the check asked its source");
+        assert_eq!(seen, CheckContext { app: &PHOTOCRAFT, version: u.version.clone() });
+        assert!(u.prompt_open(), "the release the source found for that version is offered");
     }
 
     #[test]
