@@ -1,20 +1,23 @@
 //! Native dock windows: when a float gets an OS window, what the dock records when the OS moves it, the OS close, and
-//! docking the whole window by dragging its title row.
+//! docking the whole window by dragging its title row. A context menu opened in a palette places its popup window as
+//! it places the menu in the main window.
 
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
+use craft_ui::buttons::Button;
 use craft_ui::contract::Role;
 use craft_ui::contract::{Bind, BodyCx, DropMark, PlainData, Show as _, ShowContainer as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockGrid, DockPanels, PanelSpec, PanelSpecs};
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::drag;
 use craft_ui::testing::access::AccessTree;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui_test_kit::windows::{Out, Windows};
@@ -1216,5 +1219,69 @@ fn scaled(focused: bool, rect: Rect, pixels_per_point: f32) -> ViewportInfo {
         outer_rect: Some(rect),
         native_pixels_per_point: Some(pixels_per_point),
         ..ViewportInfo::default()
+    }
+}
+
+/// How far down panel 1's body the context menu's target sits, and the menu's rows: in the native palette at
+/// `FLOAT_AT`, the pointer on the target has about 300 points above it and below it in the windows' span, and the
+/// menu is taller than either and shorter than the span.
+const CONTEXT_DROP: f32 = 220.0;
+const CONTEXT_ROWS: usize = 18;
+
+/// A palette whose panel 1 holds a button with a context menu of `CONTEXT_ROWS` rows.
+struct ContextTarget;
+
+impl DockPanels<u32> for ContextTarget {
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if *panel != 1 {
+            return;
+        }
+        ui.add_space(CONTEXT_DROP);
+        let target = Button::new("Target").show(ui);
+        let _ = Menu::context("Target menu", &target).show(ui, |ui, _| {
+            for at in 0..CONTEXT_ROWS {
+                MenuItem::new(format!("Row {at}")).show(ui);
+            }
+        });
+    }
+}
+
+/// A context menu opened in a native palette shows in a popup OS window; too tall for the room on either side of the
+/// pointer but not for the room the popup has, it covers the pointer and shows every row, as it does in the main window.
+#[trial]
+fn a_context_menu_from_a_native_palette_too_tall_for_either_side_covers_the_pointer_in_its_popup_window() {
+    let mut dock = NativeDock::on(Os::Windows, Arc::new(FakeSystem::new()));
+    dock.windows.root_info(scaled(true, MAIN_AT, COLLAPSED_SCALE));
+    let mut at = FLOAT_AT;
+    dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
+    let mut panels = ContextTarget;
+    let out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![]);
+    let palette = dock.palette.expect("the palette's window opened");
+    let target = node_rect(tree_of_viewport(&out, palette), "Target", Role::BUTTON).expect("the palette shows the target").center();
+    for events in [vec![moved(target)], vec![secondary(target, true)], vec![secondary(target, false)]] {
+        collapsed_frame(&mut dock, &mut panels, &mut at, vec![], events);
+    }
+    let mut out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![]);
+    for _ in 0..4 {
+        out = collapsed_frame(&mut dock, &mut panels, &mut at, vec![], vec![]);
+    }
+    let menu = popups(&dock, &out)
+        .into_iter()
+        .find(|viewport| !tree_of_viewport(&out, *viewport).with_role(Role::MENU).is_empty())
+        .expect("the menu shows in a popup window");
+    let rect = window_rect(&dock, menu);
+    let pointer = at.min + target.to_vec2();
+    let room = MAIN_AT.union(at);
+    assert!(
+        rect.height() > pointer.y - room.top() && rect.height() > room.bottom() - pointer.y,
+        "the menu {rect:?} fits on neither side of {pointer:?}"
+    );
+    assert!(room.contains_rect(rect.shrink(0.5)), "the menu {rect:?} stays inside the windows' span {room:?}");
+    assert!(rect.contains(pointer), "the menu {rect:?} covers the pointer at {pointer:?}");
+    let tree = tree_of_viewport(&out, menu);
+    let window = Rect::from_min_size(Pos2::ZERO, rect.size()).expand(FIT_ROUNDING);
+    for row in [0, CONTEXT_ROWS - 1] {
+        let shown = node_rect(tree, &format!("Row {row}"), Role::MENU_ITEM).unwrap_or_else(|| panic!("row {row} shows"));
+        assert!(window.contains_rect(shown), "row {row} {shown:?} lies whole in the menu's window {window:?}");
     }
 }

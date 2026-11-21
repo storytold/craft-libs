@@ -5,7 +5,8 @@
 use craft_host::target::ShellInfo;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Scroll, Show as _, ShowContainer as _};
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -135,6 +136,35 @@ fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
     assert!(slot.height() <= row.max.y - strip.min.y + RULE, "the slot {slot:?} is as tall as its content, from {strip:?} to {row:?}");
     assert!((row.width() - slot.width()).abs() <= SLACK, "the row {row:?} takes the slot's width {slot:?}");
     assert!(body.min.y >= row.max.y - SLACK, "the body {body:?} starts under the row {row:?}");
+}
+
+/// A check box with its label after it sits on the options slot's middle, as a button beside it does: the slot is
+/// shorter than the bar asks for, and the bar centres its members in it.
+#[trial]
+fn a_labelled_check_box_in_the_options_slot_sits_on_its_middle() {
+    let seen = Rc::new(Cell::new(None::<(Rect, Rect, Rect)>));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut check, mut button) = (Rect::NOTHING, Rect::NOTHING);
+        let mut on = true;
+        let shown = AppShell::new(WindowKey::main())
+            .options_bar(true, |ui, _, _: &mut ()| {
+                let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+                    check = Checkbox::new(Bind::bound(&mut on)).label("Anti-alias").show(ui).response.rect;
+                    button = Button::new("Select and Mask").show(ui).rect;
+                });
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect) {
+            out.set(Some((slot, check, button)));
+        }
+    });
+    fixture.room(Vec2::new(600.0, 300.0)).settle();
+    let (slot, check, button) = seen.get().expect("the options slot shows");
+    assert!(check.height() > 0.0 && button.height() > 0.0, "both members show (check box {check:?}, button {button:?})");
+    assert!((button.center().y - slot.center().y).abs() <= 1.0, "the button {button:?} sits on the slot's middle {slot:?}");
+    assert!((check.center().y - slot.center().y).abs() <= 1.0, "the check box {check:?} sits on the slot's middle {slot:?}");
 }
 
 /// A title bar in the title slot shows its leading content inside the slot, on the slot's middle.

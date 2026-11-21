@@ -12,6 +12,7 @@ pub(crate) mod ribbon;
 pub(crate) mod ribbon_gallery;
 mod sample;
 pub(crate) mod shortcuts;
+pub(crate) mod title_bar;
 
 craft_ui::registry!();
 
