@@ -341,8 +341,8 @@ pub struct PdfExportDialog<'a> {
     #[prop]
     preset_draft: Option<Bind<'a, PresetDraft>>,
     /// Whether a typed preset name may be used, in the preset editor.
-    #[prop(func = "Fn(&str) -> Option<PresetError>")]
-    check_name: Option<NameCheck<'a>>,
+    #[prop(boxed)]
+    check_name: Option<Box<dyn Fn(&str) -> Option<PresetError> + 'a>>,
     /// Binds the shown section.
     #[prop]
     section: Option<Bind<'a, PdfSection>>,
@@ -537,18 +537,19 @@ impl<'a> PdfExportDialog<'a> {
             let mut name_refused = false;
             let named_events = if editor {
                 let refusal_of = |typed: &str| -> Option<Label> {
-                    let error = check_name.as_ref()?.refuses(typed.trim())?;
+                    let error = check_name.as_ref()?(typed.trim())?;
                     Some(match error {
                         PresetError::NameTaken => preset_words.name_taken.clone(),
                         _ => preset_words.name_invalid.clone(),
                     })
                 };
                 Field::new(words.preset_name.clone()).id_salt("preset-name").show(ui, |ui, _| {
-                    let check = |text: &String| match refusal_of(text) {
+                    let check = |refusal: &HostRefusal<'_>, text: &String| match (refusal.0)(text) {
                         Some(message) => Validity::Refuse(Message::new(message)),
                         None => Validity::Ok,
                     };
-                    let typed = TextField::new(words.preset_name.clone(), Bind::given(draft.name.clone()).check(check)).id_salt("name").show(ui);
+                    let name = Bind::given(draft.name.clone()).check_with(HostRefusal(&refusal_of), check);
+                    let typed = TextField::new(words.preset_name.clone(), name).id_salt("name").show(ui);
                     if let Some(text) = typed.value().cloned() {
                         draft.name = text;
                     }
@@ -744,6 +745,11 @@ impl<'a> PdfExportDialog<'a> {
         }
     }
 }
+
+/// The host's refusal of a typed preset name, a closure: a view that checks with it runs every pass.
+#[derive(crate::contract::MemoProps)]
+#[memo_props(every_pass = "the host's name check is a closure, whose answers no key can follow")]
+struct HostRefusal<'a>(&'a dyn Fn(&str) -> Option<Label>);
 
 /// One preset row per (name, shown name), keyed by the name.
 fn preset_rows(names: &&[(String, String)], _: &Env) -> Vec<PresetRow<String>> {
