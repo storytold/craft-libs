@@ -1,5 +1,6 @@
 use crate::font::blob::{CffFontBlob, OpenTypeFontBlob, Type1FontBlob};
 use crate::font::generated::glyph_names;
+use crate::font::facts::{DictFacts, FontFacts, FontKind, GlyphFacts};
 use crate::font::standard_font::select_standard_font;
 use crate::font::{
     FallbackFontQuery, FontFlags, FontQuery, read_to_unicode, stretch_glyph, strip_subset_prefix,
@@ -11,7 +12,7 @@ use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::*;
-use hayro_syntax::object::{Array, Object};
+use hayro_syntax::object::{Array, Object, ObjectIdentifier};
 use kurbo::{BezPath, Vec2};
 use skrifa::attribute::Style;
 use skrifa::charmap::MapVariant;
@@ -60,6 +61,8 @@ pub(crate) struct Type0Font {
     /// gives glyph indexes in the author's font, which numbers its first 258 glyphs in the
     /// standard Macintosh order of the TrueType `post` table (#5889, #6449).
     mac_glyph_order: bool,
+    /// PdfCraft patch (107): what the font's facts read from its dictionary.
+    dict_facts: DictFacts,
 }
 
 impl Type0Font {
@@ -185,6 +188,8 @@ impl Type0Font {
             .get::<u32>(FLAGS)
             .and_then(FontFlags::from_bits);
 
+        let dict_facts = DictFacts::new(dict, Some(&descendant_font));
+
         Some(Self {
             cache_key,
             horizontal,
@@ -204,6 +209,7 @@ impl Type0Font {
             adobe_collection,
             identity_to_unicode,
             mac_glyph_order,
+            dict_facts,
         })
     }
 
@@ -531,6 +537,151 @@ impl Type0Font {
         }
     }
 
+    /// PdfCraft patch (107): what the font's facts read from its dictionary.
+    pub(crate) fn dict_facts(&self) -> &DictFacts {
+        &self.dict_facts
+    }
+
+    /// PdfCraft patch (107): whether codes are CIDs and CIDs glyph ids: an `Identity-H` or
+    /// `Identity-V` encoding CMap and an identity `/CIDToGIDMap`.
+    fn identity_codes(&self) -> bool {
+        matches!(self.cid_to_gid_map, CidToGIdMap::Identity) && self.identity_encoding()
+    }
+
+    /// PdfCraft patch (107): whether the encoding CMap is `Identity-H` or `Identity-V` (codes
+    /// are CIDs), whatever the `/CIDToGIDMap`.
+    pub(crate) fn identity_encoding(&self) -> bool {
+        self.encoding
+            .metadata()
+            .name
+            .as_deref()
+            .is_some_and(|n| matches!(n, b"Identity-H" | b"Identity-V"))
+    }
+
+    /// PdfCraft patch (107): how many glyphs the embedded program has (`maxp` of a TrueType or
+    /// OpenType program, the charstrings of a CFF one); `None` for a substitute.
+    pub(crate) fn program_glyphs(&self) -> Option<u32> {
+        if self.fallback {
+            return None;
+        }
+        match &self.font_type {
+            FontType::OpenType(t) => {
+                use skrifa::raw::TableProvider;
+                t.font_ref()
+                    .maxp()
+                    .ok()
+                    .map(|m| u32::from(m.num_glyphs()))
+            }
+            FontType::Cff(c) => Some(c.num_glyphs()),
+            FontType::Type1(_) => None,
+        }
+    }
+
+    /// PdfCraft patch (107): the embedded program the facts give: a TrueType or OpenType
+    /// program, or a CID-keyed CFF program drawn by CID (its charset's CIDs are what a standard
+    /// order reads). Neither for a substitute, whose glyph ids are its own.
+    fn facts_program(&self) -> (Option<&FontRef<'_>>, Option<&CffFontBlob>) {
+        let program = match &self.font_type {
+            FontType::OpenType(t) if !self.fallback => Some(t.font_ref()),
+            _ => None,
+        };
+        let cid_cff = match &self.font_type {
+            FontType::Cff(c)
+                if !self.fallback
+                    && c.is_cid()
+                    && matches!(self.cid_to_gid_map, CidToGIdMap::Identity) =>
+            {
+                Some(c)
+            }
+            _ => None,
+        };
+        (program, cid_cff)
+    }
+
+    /// PdfCraft patch (107): the kind of font the facts give, from [`Self::facts_program`].
+    fn kind_of(program: bool, cid_cff: bool) -> FontKind {
+        if program {
+            FontKind::CidTrueType
+        } else if cid_cff {
+            FontKind::CidCff
+        } else {
+            FontKind::CidOther
+        }
+    }
+
+    /// PdfCraft patch (107): the kind of font ([`FontFacts::kind`]).
+    pub(crate) fn font_kind(&self) -> FontKind {
+        let (program, cid_cff) = self.facts_program();
+        Self::kind_of(program.is_some(), cid_cff.is_some())
+    }
+
+    /// PdfCraft patch (107): for a font whose glyphs a reader can read by number (an embedded
+    /// TrueType or OpenType program, or a CID-keyed CFF one), the number for `code`: the glyph
+    /// id the CID draws through `/CIDToGIDMap` (nothing for a CID the map leaves out), or the
+    /// CID of a CFF program. What [`CidFontProbe::number`] is tested against.
+    fn glyph_number(&self, code: u32) -> Option<u32> {
+        let cid = self.code_to_cid(code)?;
+        match self.font_kind() {
+            FontKind::CidTrueType => match &self.cid_to_gid_map {
+                CidToGIdMap::Identity => Some(cid),
+                CidToGIdMap::Mapped { forward, .. } => {
+                    Some(forward.get(&u16::try_from(cid).ok()?)?.to_u32())
+                }
+            },
+            FontKind::CidCff => Some(cid),
+            _ => None,
+        }
+    }
+
+    /// PdfCraft patch (107): `f` called with the font's facts and those of `code`, drawn as
+    /// glyph `gid` ([`crate::font::Glyph::with_facts`]). Only an embedded program is given: a
+    /// substitute's glyph ids are its own.
+    pub(crate) fn with_facts<R>(
+        &self,
+        code: u32,
+        gid: GlyphId,
+        f: impl FnOnce(&FontFacts<'_>, &GlyphFacts<'_>) -> R,
+    ) -> R {
+        let (program, cid_cff) = self.facts_program();
+        let kind = Self::kind_of(program.is_some(), cid_cff.is_some());
+        let ids = || cid_cff.map(|c| c.charset_cids()).unwrap_or_default();
+        let id_width = |cid: u32| self.widths.get(&cid).copied();
+        let id_text = |gid: u32| {
+            self.identity_codes()
+                .then(|| self.char_code_to_unicode(gid))
+                .flatten()
+        };
+        let identity = self.identity_codes();
+        let font = FontFacts {
+            // A font of an Adobe character collection names its characters by CID, through the
+            // collection's UCS2 CMap (patch 84) even where that map lacks a CID.
+            has_to_unicode: self.to_unicode.is_some()
+                || self.identity_to_unicode
+                || self.adobe_collection,
+            program,
+            to_unicode_checkable: self.to_unicode.is_some()
+                && !self.to_unicode_is_cid_indexed
+                && !self.identity_to_unicode
+                && !self.adobe_collection
+                && identity,
+            ids: cid_cff.is_some().then_some(&ids as &dyn Fn() -> Vec<u32>),
+            // By CID: a glyph id too when codes are glyph ids.
+            id_width: (cid_cff.is_some() || identity)
+                .then_some(&id_width as &dyn Fn(u32) -> Option<f32>),
+            id_text: identity.then_some(&id_text as &dyn Fn(u32) -> Option<BfString>),
+            identity_encoding: self.identity_encoding(),
+            program_glyphs: self.program_glyphs(),
+            substitute: self.fallback,
+            ..self.dict_facts.facts(kind)
+        };
+        let glyph = GlyphFacts {
+            gid,
+            name: None,
+            id: self.code_to_cid(code),
+        };
+        f(&font, &glyph)
+    }
+
     /// The text a character code stands for, or `None` when the font gives none (or, for an
     /// identity `/ToUnicode` name, when the code is a control or a lone surrogate).
     pub(crate) fn char_code_to_unicode(&self, code: u32) -> Option<BfString> {
@@ -628,15 +779,7 @@ impl FontType {
         // PDFs use wrong metadata, so we simply bruteforce without even looking
         // at the metadata.
 
-        let data = descriptor
-            .get::<Stream<'_>>(FONT_FILE2)
-            .or_else(|| descriptor.get::<Stream<'_>>(FONT_FILE3))
-            // See PDFBOX-2599. Apparently, Acrobat accepts this as well.
-            .or_else(|| descriptor.get::<Stream<'_>>(FONT_FILE))?
-            .decoded()
-            .ok()?;
-
-        let data = Arc::new(data.into_owned());
+        let data = Arc::new(program_data(descriptor)?);
 
         let parsed = if let Ok(_font_ref) = FontRef::from_index(data.as_ref(), 0) {
             // It's an OpenType font, either TrueType or CFF.
@@ -653,6 +796,215 @@ impl FontType {
 
         Some(parsed)
     }
+}
+
+/// The embedded program stream of a CID font's descriptor: `/FontFile2`, else `/FontFile3`,
+/// else `/FontFile` (whichever is there first, read or not).
+fn program_stream<'a>(descriptor: &Dict<'a>) -> Option<Stream<'a>> {
+    descriptor
+        .get::<Stream<'_>>(FONT_FILE2)
+        .or_else(|| descriptor.get::<Stream<'_>>(FONT_FILE3))
+        // See PDFBOX-2599. Apparently, Acrobat accepts this as well.
+        .or_else(|| descriptor.get::<Stream<'_>>(FONT_FILE))
+}
+
+/// The embedded program of a CID font's descriptor ([`program_stream`]), decoded.
+fn program_data(descriptor: &Dict<'_>) -> Option<Vec<u8>> {
+    Some(program_stream(descriptor)?.decoded().ok()?.into_owned())
+}
+
+/// PdfCraft patch (107): what [`FontType::new`] makes of an embedded program, as far as
+/// [`CidFontProbe`] needs it: an OpenType font (TrueType or CFF outlines) and its `maxp` glyph
+/// count, or a bare CFF font, whether it is CID-keyed and its glyph count.
+#[derive(Clone, Copy, Debug)]
+enum SurveyProgram {
+    OpenType(Option<u32>),
+    Cff { cid_keyed: bool, glyphs: u32 },
+}
+
+impl SurveyProgram {
+    /// `None` when [`FontType::new`] would not read the program as either (a Type 1 program,
+    /// one it rejects, or bytes that are no program): the font is then not counted.
+    fn read(stream: &Stream<'_>) -> Option<Self> {
+        let data = stream.decoded().ok()?;
+        // As `FontType::new`: an OpenType font if it parses as one (and is then rejected or
+        // read), else a CFF font.
+        if FontRef::from_index(&data, 0).is_ok() {
+            return OpenTypeFontBlob::probe(&data, 0).map(Self::OpenType);
+        }
+        let (cid_keyed, glyphs) = CffFontBlob::probe(&data)?;
+        Some(Self::Cff { cid_keyed, glyphs })
+    }
+}
+
+/// PdfCraft patch (107): the programs and `/CIDToGIDMap` streams [`CidFontProbe::read`] has
+/// read, by object: a document's font objects often share a descendant font, and so its
+/// program, which is then decoded once rather than once per font object. Keep one per document.
+#[derive(Default)]
+pub struct CidProbeCache {
+    programs: HashMap<ObjectIdentifier, Option<SurveyProgram>>,
+    maps: HashMap<ObjectIdentifier, Option<Arc<[u8]>>>,
+}
+
+impl CidProbeCache {
+    /// How many program streams have been read (each decoded and checked once).
+    pub fn programs_read(&self) -> usize {
+        self.programs.len()
+    }
+}
+
+impl std::fmt::Debug for CidProbeCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CidProbeCache")
+            .field("programs", &self.programs.len())
+            .field("maps", &self.maps.len())
+            .finish()
+    }
+}
+
+/// PdfCraft patch (107): what a Type 0 font whose codes are CIDs says about its glyphs, read
+/// from its dictionary without building the font, as the built font's facts give it
+/// ([`FontFacts::kind`], [`FontFacts::program_glyphs`], and the number of each code's glyph:
+/// [`crate::font::GlyphFacts::gid`] of a TrueType program, [`crate::font::GlyphFacts::id`] of a
+/// CFF one). For a reader that surveys the fonts of a whole document, most of which no page it
+/// reads draws: a built font (its widths, its hinting instance, a copy of its program) costs far
+/// more than this does.
+#[derive(Debug)]
+pub struct CidFontProbe {
+    /// [`FontKind::CidTrueType`] or [`FontKind::CidCff`].
+    kind: FontKind,
+    /// [`FontFacts::program_glyphs`].
+    glyphs: Option<u32>,
+    /// A TrueType font's `/CIDToGIDMap` stream, decoded (`None`: the identity map).
+    map: Option<Arc<[u8]>>,
+}
+
+impl CidFontProbe {
+    /// The probe of Type 0 font `dict`, when the interpreter would build it as a font whose
+    /// codes are CIDs and whose glyphs are read by number: an `Identity-H` or `Identity-V`
+    /// encoding, a descendant whose CIDs are not of an Adobe character collection, and an
+    /// embedded program read as a TrueType or OpenType one ([`FontKind::CidTrueType`]) or a
+    /// CID-keyed CFF one drawn by CID ([`FontKind::CidCff`]). `None` for any other font, a
+    /// substitute's included. Reads the program (it decodes it and checks it as the font would)
+    /// and the map once per object, through `seen`, and nothing else of them.
+    pub fn read(dict: &Dict<'_>, seen: &mut CidProbeCache) -> Option<Self> {
+        let encoding = dict.get::<Name<'_>>(ENCODING)?;
+        if !matches!(encoding.as_ref(), b"Identity-H" | b"Identity-V") {
+            return None;
+        }
+        let descendant = dict
+            .get::<Array<'_>>(DESCENDANT_FONTS)?
+            .iter::<Dict<'_>>()
+            .next()?;
+        // The identity CMaps name the Adobe-Identity collection, which `Type0Font::new` passes
+        // over for the descendant's `/CIDSystemInfo`.
+        if read_cid_system_info(&descendant).is_some_and(|cc| cc.family.ucs2_cmap().is_some()) {
+            return None;
+        }
+        let descriptor = descendant
+            .get::<Dict<'_>>(FONT_DESC)
+            .unwrap_or_default();
+        let stream = program_stream(&descriptor)?;
+        let program = *seen
+            .programs
+            .entry(stream.obj_id())
+            .or_insert_with(|| SurveyProgram::read(&stream));
+        // As `CidToGIdMap::new`: a stream that decodes is a map; anything else is the identity.
+        let map = descendant
+            .get::<Stream<'_>>(CID_TO_GID_MAP)
+            .and_then(|s| {
+                seen.maps
+                    .entry(s.obj_id())
+                    .or_insert_with(|| s.decoded().ok().map(|d| Arc::from(d.as_ref())))
+                    .clone()
+            });
+        match program? {
+            SurveyProgram::OpenType(glyphs) => Some(Self {
+                kind: FontKind::CidTrueType,
+                glyphs,
+                map,
+            }),
+            SurveyProgram::Cff { cid_keyed, glyphs } => {
+                (cid_keyed && map.is_none()).then_some(Self {
+                    kind: FontKind::CidCff,
+                    glyphs: Some(glyphs),
+                    map: None,
+                })
+            }
+        }
+    }
+
+    /// The kind of font: [`FontKind::CidTrueType`] or [`FontKind::CidCff`].
+    pub fn kind(&self) -> FontKind {
+        self.kind
+    }
+
+    /// How many glyphs the embedded program has ([`FontFacts::program_glyphs`]).
+    pub fn glyphs(&self) -> Option<u32> {
+        self.glyphs
+    }
+
+    /// The number of the glyph `code` draws: the CID (the code, through an identity CMap) of a
+    /// CFF font; the glyph id a TrueType font's map gives it, nothing for a CID the map leaves
+    /// out. Like the font's own `/CIDToGIDMap`, a map of more than 65,536 entries numbers its
+    /// entries modulo 65,536, the last one with a number winning.
+    pub fn number(&self, code: u16) -> Option<u32> {
+        let Some(map) = self.map.as_ref() else {
+            return Some(u32::from(code));
+        };
+        let entries = map.len() / 2;
+        let cid = usize::from(code);
+        if cid >= entries {
+            return None;
+        }
+        let last = cid.checked_add((entries.saturating_sub(1).saturating_sub(cid) / 65_536).checked_mul(65_536)?)?;
+        let at = last.checked_mul(2)?;
+        let bytes = map.get(at..at.checked_add(2)?)?;
+        let (Some(&hi), Some(&lo)) = (bytes.first(), bytes.get(1)) else {
+            return None;
+        };
+        Some(u32::from(u16::from_be_bytes([hi, lo])))
+    }
+}
+
+/// PdfCraft patch (107), a test hook: Type 0 font `dict` built as a page draws it, and asked
+/// what [`CidFontProbe`] reads without building it: the kind of font, the program's glyph count
+/// and the number of the glyph each of `codes` draws (`None` for a font that is not
+/// `Identity-H` or `Identity-V`, names its characters through an Adobe character collection, or
+/// is of another kind). Equal answers show a probe reads a font as the page draws it.
+#[doc(hidden)]
+pub fn built_cid_font_numbers(
+    dict: &Dict<'_>,
+    settings: &crate::InterpreterSettings,
+    codes: impl IntoIterator<Item = u16>,
+) -> Option<(FontKind, Option<u32>, Vec<Option<u32>>)> {
+    let font = Type0Font::new(dict, &settings.font_resolver, &settings.cmap_resolver)?;
+    let kind = font.font_kind();
+    (font.identity_encoding()
+        && !font.adobe_collection
+        && matches!(kind, FontKind::CidTrueType | FontKind::CidCff))
+    .then(|| {
+        let numbers = codes
+            .into_iter()
+            .map(|c| font.glyph_number(u32::from(c)))
+            .collect();
+        (kind, font.program_glyphs(), numbers)
+    })
+}
+
+/// PdfCraft patch (107), a verification hook: Type 0 font `dict` built as a page draws it, and
+/// the CIDs of its CID-keyed CFF program's charset in glyph order, as its facts give them
+/// ([`FontFacts::ids`]); `None` for a font that can't be built or isn't a CID-keyed CFF font
+/// ([`FontKind::CidCff`]). For a reader's report on fonts its document survey counts without
+/// building them ([`CidFontProbe`] reads no charset).
+#[doc(hidden)]
+pub fn built_cid_font_charset(
+    dict: &Dict<'_>,
+    settings: &crate::InterpreterSettings,
+) -> Option<Vec<u32>> {
+    let font = Type0Font::new(dict, &settings.font_resolver, &settings.cmap_resolver)?;
+    let (_, cid_cff) = font.facts_program();
+    cid_cff.map(|c| c.charset_cids())
 }
 
 #[derive(Debug, Default)]

@@ -249,3 +249,75 @@ fn lazy_xref_repair_keeps_the_document_limit() {
     assert_eq!(marker(&low, 41), None);
     assert_eq!(low.decode_limits(), limits);
 }
+
+/// `data` as a zlib stream of stored (uncompressed) deflate blocks.
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let chunks: Vec<&[u8]> = data.chunks(65_535).collect();
+    for (i, chunk) in chunks.iter().enumerate() {
+        out.push(u8::from(i + 1 == chunks.len()));
+        let len = u16::try_from(chunk.len()).unwrap();
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(chunk);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in data {
+        a = (a + u32::from(byte)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    out.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    out
+}
+
+/// A one-page document whose object 4 is `body` (a stream object).
+fn stream_object_pdf(body: &[u8]) -> Vec<u8> {
+    let (mut out, mut offsets) = base();
+    object(&mut out, &mut offsets, 4, body);
+    table(&mut out, &offsets, "");
+    out
+}
+
+/// PdfCraft patch (55): `decoded_within_or_cut` says whether a filter stopped at its limit, so a
+/// caller that must read a stream whole can tell part of it from all of it.
+#[test]
+fn a_stream_cut_at_its_limit_is_reported_cut() {
+    let pdf = Pdf::new(ordinary_stream_pdf()).unwrap();
+    let stream = pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+    let (data, cut) = stream.decoded_within_or_cut(7).unwrap();
+    assert_eq!((data.len(), cut), (7, true), "512 bytes read within 7");
+    let (data, cut) = stream.decoded_within_or_cut(1000).unwrap();
+    assert_eq!((data.len(), cut), (512, false), "512 bytes read within 1000");
+    // An output exactly at the limit counts as cut: the filter can't tell it was the end.
+    let (data, cut) = stream.decoded_within_or_cut(512).unwrap();
+    assert_eq!((data.len(), cut), (512, true));
+    assert_eq!(stream.decoded_within(7).unwrap().len(), 7, "decoded_within reads as before");
+}
+
+/// PdfCraft patch (55): Flate (and LZW) say themselves that they stopped at the limit, since
+/// undoing a PNG predictor leaves fewer bytes than were inflated, under the limit.
+#[test]
+fn a_flate_stream_with_a_predictor_cut_at_its_limit_is_reported_cut() {
+    // Four rows of four bytes, each behind a PNG `None` tag: 20 bytes inflated, 16 bytes out.
+    let mut rows = Vec::new();
+    for row in 0..4u8 {
+        rows.push(0);
+        rows.extend_from_slice(&[row; 4]);
+    }
+    let encoded = zlib_stored(&rows);
+    let mut body = format!(
+        "<< /Length {} /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 4 >> >>\nstream\n",
+        encoded.len()
+    )
+    .into_bytes();
+    body.extend_from_slice(&encoded);
+    body.extend_from_slice(b"\nendstream");
+    let pdf = Pdf::new(stream_object_pdf(&body)).unwrap();
+    let stream = pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+    let (data, cut) = stream.decoded_within_or_cut(1000).unwrap();
+    assert_eq!((data.len(), cut), (16, false));
+    // Inflating stops at 12 bytes: two whole rows, 8 bytes once the tags are gone.
+    let (data, cut) = stream.decoded_within_or_cut(12).unwrap();
+    assert_eq!(data.len(), 8);
+    assert!(cut, "the predictor left fewer bytes than the limit, but inflating stopped there");
+}
