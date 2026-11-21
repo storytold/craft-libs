@@ -120,6 +120,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static, C: DockContent<P>> Do
 
     /// Render one frame with `events` and return its output. Nothing is applied.
     pub fn frame(&mut self, events: Vec<Event>) -> DockOutput<P> {
+        self.frame_with(events, |_, _| {})
+    }
+
+    /// Like [`Self::frame`], with `before` run in the frame before the dock area draws, as an
+    /// application's own logic runs: it reads that frame's input and may change the layout.
+    pub fn frame_with(&mut self, events: Vec<Event>, before: impl FnOnce(&Context, &mut Layout<P>)) -> DockOutput<P> {
         let mut output = DockOutput::default();
         self.time += 1.0 / 60.0;
         #[allow(unused_mut)]
@@ -139,7 +145,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static, C: DockContent<P>> Do
             input.viewports = host.infos();
             input.focused = host.focus == Some(egui::ViewportId::ROOT);
         }
-        let (layout, content, area, id) = (&self.layout, &mut self.content, self.area, self.id);
+        let (layout, content, area, id) = (&mut self.layout, &mut self.content, self.area, self.id);
         let monitors = self.monitors.clone();
         #[cfg(feature = "native-windows")]
         let input_hook = self.input_hook.clone();
@@ -155,7 +161,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static, C: DockContent<P>> Do
             self.native_windows,
             self.input_blocked,
         );
+        let mut before = Some(before);
         let mut full = self.ctx.run_ui(input, |ui| {
+            if let Some(before) = before.take() {
+                before(ui.ctx(), layout);
+            }
             let mut style = DockStyle::from_ui(ui);
             if let Some(adjust) = style_fn {
                 adjust(&mut style);
@@ -182,7 +192,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static, C: DockContent<P>> Do
                 if let Some(hook) = input_hook.clone() {
                     dock = dock.native_input_hook(move |ctx, input| hook(ctx, input));
                 }
-                output = dock.show_content(ui, layout, &style, content);
+                output = dock.show_content(ui, &*layout, &style, content);
             });
         });
         full.textures_delta.clear();
