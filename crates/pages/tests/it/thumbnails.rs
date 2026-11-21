@@ -68,7 +68,20 @@ fn a_wide_thumbnail_strip_keeps_pages_in_one_column() {
 
 #[trial]
 fn organize_keeps_room_above_and_below_each_page() {
-    let pages = DemoPages::new(1);
+    struct Landscape(DemoPages);
+    impl craft_ui::primitives::textures::ThumbSource<usize> for Landscape {
+        fn revision(&self, key: &usize, request: &craft_ui::primitives::textures::ThumbRequest) -> craft_ui::primitives::textures::Revision {
+            self.0.revision(key, request)
+        }
+        fn render(&self, key: &usize, request: &craft_ui::primitives::textures::ThumbRequest) -> craft_ui::primitives::textures::ThumbRender {
+            self.0.render(key, request)
+        }
+    }
+    impl craft_pages::ui::PageSource for Landscape {
+        fn page_count(&self) -> usize { 1 }
+        fn page_size(&self, _: usize) -> craft_behavior::kurbo::Size { craft_behavior::kurbo::Size::new(792.0, 612.0) }
+    }
+    let pages = Landscape(DemoPages::new(1));
     let mut picked = Selection::default();
     let mut fixture = Fixture::new(move |ui| {
         PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).arrangement(ThumbnailArrangement::Organize).show(ui);
