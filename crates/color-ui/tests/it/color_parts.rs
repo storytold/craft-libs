@@ -7,7 +7,8 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CancelReason, CanvasView, EditEvent, PointerButton};
 use craft_color_ui::AreaMode;
 use craft_color_ui::ui::{
-    ColorArea, ColorDisc, ColorHud, ColorRamp, DiscMove, RampKind, RampPick, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv,
+    ColorArea, ColorDisc, ColorHud, ColorRamp, ColorWheel, DiscMove, DiscRadius, RampKind, RampPick, WheelGeometry, WheelInner, hue_at,
+    hue_direction, patch_at, triangle_corners, triangle_point, triangle_sv,
 };
 use craft_keymap::Mods;
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
@@ -126,6 +127,176 @@ fn the_disc_markers_take_focus_from_tab_a_press_and_assistive_technology() {
     rig.fixture.idle(2);
     assert_eq!(rig.moved.get().map(|moved| moved.marker), Some(0), "the arrows move the focused marker");
     assert_eq!(rig.focused().as_deref(), Some("Color 1"), "and leave focus on it");
+}
+
+/// The segmented disc's patch centres: 24 sectors by 5 rings, each hue and radius in one patch, the hue wrapping; and the
+/// brightness radius puts a marker at its brightness.
+#[trial]
+fn segmented_disc_patches_and_brightness_radius() {
+    let mut centres: Vec<(u32, u32)> = Vec::new();
+    for sector in 0..24 {
+        for ring in 0..5 {
+            let (hue, radial) = patch_at(sector as f32 * 15.0 + 3.0, (ring as f32 + 0.3) / 5.0);
+            centres.push((hue.to_bits(), radial.to_bits()));
+        }
+    }
+    centres.sort_unstable();
+    centres.dedup();
+    assert_eq!(centres.len(), 120, "every sector and ring has its own patch");
+    assert_eq!(patch_at(7.0, 1.0), (0.0, 0.9), "7 degrees is still the red sector; the rim is the last ring");
+    assert_eq!(patch_at(8.0, 0.0).0, 15.0, "8 degrees is the next sector");
+    assert_eq!(patch_at(355.0, 0.5).0, 0.0, "the hue wraps to the red sector");
+    assert_eq!(patch_at(-10.0, 0.5).0, 345.0, "a negative hue wraps");
+
+    // A saturated red at 80 % brightness: on the rim of a saturation disc, 0.8 of the way on a brightness disc.
+    let markers = [Srgba::rgb(0.8, 0.0, 0.0), Srgba::BLACK];
+    let distance = |radius: DiscRadius| {
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ColorDisc::new("Harmony", &markers, Bind::given(DiscMove::new(0, 0.0, 0.0))).radius(radius).show(ui);
+        });
+        fixture.room(vec2(320.0, 240.0));
+        fixture.settle();
+        let red = fixture.by_label("Color 1").expect("marker 1").center();
+        let centre = fixture.by_label("Color 2").expect("marker 2").center();
+        red.distance(centre)
+    };
+    let ratio = distance(DiscRadius::Brightness) / distance(DiscRadius::Saturation);
+    assert!((ratio - 0.8).abs() < 0.02, "the brightness radius places the marker at its brightness: {ratio}");
+}
+
+/// A square wheel's rig: the host keeps the values the wheel reports and the marker it picked and holds.
+struct WheelRig {
+    fixture: Fixture,
+    values: Rc<Cell<ModelValues>>,
+    picked: Rc<Cell<Option<usize>>>,
+    held: Rc<Cell<Option<usize>>>,
+}
+
+impl WheelRig {
+    fn new(inner: WheelInner, markers: usize) -> Self {
+        let colors = [Srgba::rgb(0.9, 0.2, 0.2), Srgba::rgb(0.2, 0.9, 0.2), Srgba::rgb(0.2, 0.2, 0.9)];
+        let names = ["Warm", "Green", "Cool"].map(|name| craft_ui::runtime::env::Label::from(name.to_owned())).to_vec();
+        let values = Rc::new(Cell::new(ModelValues::new("hsb", &[200.0, 50.0, 50.0])));
+        let (picked, held) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+        let (v, p, h) = (values.clone(), picked.clone(), held.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let out = ColorWheel::new("Color wheel", Bind::given(v.get())).inner(inner).markers(&colors[..markers]).marker_names(names.clone()).show(ui);
+            if let Some(values) = out.edit.value() {
+                v.set(*values);
+            }
+            if out.picked.is_some() {
+                p.set(out.picked);
+            }
+            if out.held.is_some() {
+                h.set(out.held);
+            }
+        });
+        fixture.room(vec2(320.0, 320.0));
+        fixture.settle();
+        WheelRig { fixture, values, picked, held }
+    }
+
+    fn hue(&self) -> f32 {
+        self.values.get().values[0]
+    }
+}
+
+/// A square wheel hands a press between the square and the ring to the square; its markers pick on a click and a press
+/// held on one still drags the ring; Shift snaps a ring drag to 45 degrees, in both variants.
+#[trial]
+fn a_square_wheel_hands_the_inner_press_to_the_square_and_its_markers_pick() {
+    let mut rig = WheelRig::new(WheelInner::Square, 3);
+    let square = rig.fixture.by_label("Saturation and brightness").expect("the square").rect;
+    rig.fixture.click_at(pos2(square.right() + 2.0, square.center().y));
+    rig.fixture.idle(2);
+    let [hue, saturation, brightness] = rig.values.get().values;
+    assert_eq!(hue, 200.0, "the square leaves the hue");
+    assert_eq!(saturation, 100.0, "beside the square's right edge is full saturation");
+    assert!((brightness - 50.0).abs() < 4.0, "level with the square's middle is half brightness: {brightness}");
+
+    let warm = rig.fixture.by_label("Warm").expect("marker").center();
+    rig.fixture.click_at(warm);
+    rig.fixture.idle(2);
+    assert_eq!(rig.picked.get(), Some(0), "a click on a marker picks it");
+
+    let green = rig.fixture.by_label("Green").expect("marker").center();
+    rig.fixture.drag_hold_at(green, egui::Vec2::ZERO);
+    assert_eq!(rig.held.get(), Some(1), "a press on a marker holds it");
+    assert!((rig.hue() - 120.0).abs() <= 1.0, "and the ring takes the press: {}", rig.hue());
+    rig.fixture.release_at(green);
+    rig.fixture.idle(2);
+
+    for inner in [WheelInner::Triangle, WheelInner::Square] {
+        let mut rig = WheelRig::new(inner, 0);
+        let wheel = rig.fixture.by_label("Color wheel").expect("the wheel").rect;
+        let (centre, reach) = (wheel.center(), wheel.width().min(wheel.height()) / 2.0 - 8.0);
+        let from = centre + hue_direction(0.0) * reach;
+        let to = centre + hue_direction(25.0) * reach;
+        rig.fixture.hold(Modifiers::SHIFT);
+        rig.fixture.drag_at(from, to - from);
+        rig.fixture.idle(2);
+        rig.fixture.hold(Modifiers::NONE);
+        assert_eq!(rig.hue(), 45.0, "{inner:?}: Shift snaps 25 degrees to 45");
+        let mut free = WheelRig::new(inner, 0);
+        free.fixture.drag_at(from, to - from);
+        free.fixture.idle(2);
+        assert!((free.hue() - 25.0).abs() <= 1.0, "{inner:?}: without Shift the hue follows the pointer: {}", free.hue());
+    }
+}
+
+/// A primary click reports the grabbed marker and the point under the release; a secondary click reports the marker in
+/// reach, else the marker whose spoke it is on, else neither, and nothing outside the circle.
+#[trial]
+fn a_disc_click_reports_its_point_and_a_secondary_click_what_it_hit() {
+    let markers = [Srgba::rgb(0.8, 0.0, 0.0), Srgba::rgb(0.0, 0.8, 0.8), Srgba::rgb(0.0, 0.8, 0.0)];
+    let (clicked, context) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+    let (k, c) = (clicked.clone(), context.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let out = ColorDisc::new("Harmony", &markers, Bind::given(DiscMove::new(0, 0.0, 0.0))).show(ui);
+        if out.clicked.is_some() {
+            k.set(out.clicked);
+        }
+        if out.context.is_some() {
+            c.set(out.context);
+        }
+    });
+    fixture.room(vec2(320.0, 240.0));
+    fixture.settle();
+    // Red at 0 degrees and cyan at 180 are on the rim, opposite: their midpoint is the centre.
+    let (red, cyan) = (fixture.by_label("Color 1").expect("marker").center(), fixture.by_label("Color 2").expect("marker").center());
+    let (centre, radius) = (red.lerp(cyan, 0.5), red.distance(cyan) / 2.0);
+    let at = |hue: f32, share: f32| centre + hue_direction(hue) * (radius * share);
+
+    let up = at(90.0, 0.5);
+    fixture.click_at(up);
+    fixture.idle(2);
+    let hit = clicked.get().expect("a click reports");
+    assert_eq!(hit.marker, None, "a press away from every marker grabs none");
+    assert!((hit.hue - 90.0).abs() <= 1.0 && (hit.radial - 0.5).abs() < 0.05, "the point under the release: {hit:?}");
+    clicked.set(None);
+    fixture.click_at(red);
+    fixture.idle(2);
+    assert_eq!(clicked.get().map(|hit| hit.marker), Some(Some(0)), "a click on a marker reports it");
+
+    let secondary = |fixture: &mut Fixture, at: Pos2| {
+        context.set(None);
+        for pressed in [true, false] {
+            fixture.frame(vec![
+                Event::PointerMoved(at),
+                Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE },
+            ]);
+        }
+        fixture.idle(2);
+        context.get()
+    };
+    let on_marker = secondary(&mut fixture, red).expect("a secondary click in the circle reports");
+    assert_eq!((on_marker.marker, on_marker.spoke), (Some(0), None), "the marker in reach");
+    let on_spoke = secondary(&mut fixture, at(120.0, 0.5)).expect("reports");
+    assert_eq!((on_spoke.marker, on_spoke.spoke), (None, Some(2)), "else the marker whose spoke it is on");
+    let between = secondary(&mut fixture, at(300.0, 0.5)).expect("reports");
+    assert_eq!((between.marker, between.spoke), (None, None), "else neither");
+    assert!((between.hue - 300.0).abs() <= 1.0, "with the point: {between:?}");
+    assert!(secondary(&mut fixture, centre + vec2(radius * 1.05, radius * 0.5)).is_none(), "nothing outside the circle");
 }
 
 /// Alt with Enter on the focused bar or a box picks for the colour the host is not editing, as Alt with a click does.

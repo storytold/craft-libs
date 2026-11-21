@@ -4,7 +4,7 @@
 use super::channels::{finite, primary};
 use super::wheel::{hue_at, hue_direction, vertex};
 use craft_behavior::nav::{Arrows, NavShape, Roving};
-use craft_behavior::{CancelReason, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
+use craft_behavior::{CancelReason, HitShape, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense};
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome,
@@ -36,12 +36,17 @@ const CENTRE: f32 = 0.5;
 /// Degrees a hue key moves, and percents a saturation key moves; Shift moves ten times as far.
 const KEY_STEP: f32 = 1.0;
 const FAR: f32 = 10.0;
+/// The segmented look: hue sectors round the disc, rings out from its centre, and the degrees one sector spans.
+const SECTORS: u32 = 24;
+const PATCH_RINGS: u32 = 5;
+const SECTOR_DEGREES: f32 = 15.0;
 
 craft_ui::words! {
     /// The words of colour discs.
     pub struct ColorDiscWords {
         marker: template "colorDisc.marker" = "Color {n}";
         value: template "colorDisc.value" = "Hue {hue} degrees, saturation {saturation} %";
+        value_brightness: template "colorDisc.valueBrightness" = "Hue {hue} degrees, brightness {brightness} %";
     }
 }
 
@@ -110,8 +115,9 @@ pub enum DiscRadius {
 /// The centre of the segmented patch at `hue` and `radial`, as `(hue, radial)`: sector `round(h/15) mod 24`, ring
 /// `floor(r*5).min(4)`.
 pub fn patch_at(hue: f32, radial: f32) -> (f32, f32) {
-    let _ = (hue, radial);
-    todo!("wg.W43")
+    let sector = (finite(hue).rem_euclid(360.0) / SECTOR_DEGREES).round() as u32 % SECTORS;
+    let ring = ((finite(radial).clamp(0.0, 1.0) * PATCH_RINGS as f32).floor() as u32).min(PATCH_RINGS - 1);
+    (sector as f32 * SECTOR_DEGREES, (ring as f32 + 0.5) / PATCH_RINGS as f32)
 }
 
 /// The style of a colour disc.
@@ -220,6 +226,8 @@ pub struct ColorDisc<'a> {
     names: Vec<Label>,
     pressed: Option<usize>,
     grabbed: Option<usize>,
+    clicked: Option<DiscHit>,
+    context: Option<DiscHit>,
 }
 
 impl<'a> ColorDisc<'a> {
@@ -237,6 +245,8 @@ impl<'a> ColorDisc<'a> {
             names: Vec::new(),
             pressed: None,
             grabbed: None,
+            clicked: None,
+            context: None,
         }
         .label(label)
         .ltr_axis()
@@ -257,20 +267,50 @@ impl<'a> ColorDisc<'a> {
         self.chosen.filter(|selected| *selected < self.markers.len()).unwrap_or(0)
     }
 
-    /// Marker `index` as the host's colour places it: hue, saturation (0 to 1) and brightness.
+    /// Marker `index` as the host's colour places it: hue, saturation and brightness (0 to 1).
     fn hsb(&self, index: usize) -> [f32; 3] {
         let values = self.markers.get(index).map_or([0.0; 3], |color| {
             let v = HsbModel.from_srgb(*color).values;
             [finite(v[0]), finite(v[1]), finite(v[2])]
         });
-        [values[0], values[1] / 100.0, values[2]]
+        [values[0], values[1] / 100.0, values[2] / 100.0]
     }
 
-    /// Marker `index` where the host has it.
+    /// Marker `index` where the host has it: the radial channel is the one the radius shows.
     fn resting(&self, index: usize) -> DiscMove {
-        let [hue, saturation, _] = self.hsb(index);
-        DiscMove::new(index, hue, saturation)
+        let [hue, saturation, brightness] = self.hsb(index);
+        let radial = match self.radius {
+            DiscRadius::Saturation => saturation,
+            DiscRadius::Brightness => brightness,
+        };
+        DiscMove::new(index, hue, radial)
     }
+
+    /// The HSB values (degrees, percents) `moved` stands for: its radial channel on the radius's axis, the other
+    /// channel the host's.
+    fn values_of(&self, moved: &DiscMove) -> [f32; 3] {
+        let [_, saturation, brightness] = self.hsb(moved.marker);
+        match self.radius {
+            DiscRadius::Saturation => [moved.hue, moved.radial * 100.0, brightness * 100.0],
+            DiscRadius::Brightness => [moved.hue, saturation * 100.0, moved.radial * 100.0],
+        }
+    }
+
+    /// Where marker `index` lies as the host has it.
+    fn place(&self, index: usize, center: Pos2, radius: f32) -> Pos2 {
+        let at = self.resting(index);
+        Self::marker_pos(center, radius, at.hue, at.radial)
+    }
+
+    /// The channel the radius does not show, 0 to 1; never below a floor on a saturation disc.
+    fn shown_level(&self) -> f32 {
+        let level = if self.level.is_finite() { self.level.clamp(0.0, 1.0) } else { 1.0 };
+        match self.radius {
+            DiscRadius::Saturation => level.max(DISC_FLOOR),
+            DiscRadius::Brightness => level,
+        }
+    }
+
     /// The marker focus is on.
     fn focused(&self, cx: &Cx<'_, Self>) -> Option<usize> {
         (0..self.markers.len()).find(|index| cx.active_part() == Some(MARKER.at(*index as u64)))
@@ -314,7 +354,7 @@ impl Component for ColorDisc<'_> {
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
         let (center, radius) = Self::geometry(rect, cx.style.inset);
         cx.part(DISC, HitShape::circle(center, radius + cx.style.grab))
-            .sense(Sense::DRAG | Sense::CLICK)
+            .sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK)
             .pointer_only("the arrow keys move the marker");
         let stop = self.stop();
         for index in 0..self.markers.len() {
@@ -322,7 +362,7 @@ impl Component for ColorDisc<'_> {
                 Some(moved) => *moved,
                 None => self.resting(index),
             };
-            let reach = Marker::reach(&cx.style.marker, marker_size(self.chosen == Some(index)));
+            let reach = Marker::reach(&cx.style.marker, marker_size(self.base == Some(index)));
             let part = cx.part(MARKER.at(index as u64), HitShape::circle(Self::marker_pos(center, radius, at.hue, at.radial), reach));
             // A marker takes no press of its own: the disc grabs the nearest.
             let part = part.focusable().focus_shape(FocusShape::Circle);
@@ -342,18 +382,14 @@ impl Component for ColorDisc<'_> {
         let (center, radius) = Self::geometry(cx.rect, cx.style.inset);
         let grab_reach = cx.style.grab;
         let press = cx.part(DISC).press;
+        let secondary = press.phase.start().is_some_and(|start| start.button == PointerButton::Secondary);
         if primary(&press) && matches!(press.phase, PressPhase::Down { .. }) {
-            let origin = press.phase.start().map(|start| start.origin);
-            let near = origin.and_then(|origin| {
-                let distance = |index: usize| {
-                    let at = self.resting(index);
-                    Self::marker_pos(center, radius, at.hue, at.radial).distance(origin)
-                };
-                (0..self.markers.len()).map(|index| (index, distance(index))).filter(|(_, d)| *d <= grab_reach).min_by(|a, b| a.1.total_cmp(&b.1))
+            let near = press.phase.start().and_then(|start| {
+                nearest_within((0..self.markers.len()).map(|index| self.place(index, center, radius).distance(start.origin)), grab_reach)
             });
-            cx.memory::<Grab>().marker = near.map(|(index, _)| index);
-            self.pressed = near.map(|(index, _)| index);
-            if let Some((index, _)) = near {
+            cx.memory::<Grab>().marker = near;
+            self.pressed = near;
+            if let Some(index) = near {
                 cx.focus_part(MARKER.at(index as u64));
             }
         }
@@ -364,7 +400,7 @@ impl Component for ColorDisc<'_> {
         if running && let Some(marker) = grabbed.filter(|marker| *marker < self.markers.len()) {
             let last = cx.memory::<Grab>().last.replace(self.markers[marker]);
             if let Some(moved) = cx.value().filter(|moved| moved.marker == marker) {
-                let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &[moved.hue, moved.radial * 100.0, self.hsb(marker)[2]]).values);
+                let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &self.values_of(moved)).values);
                 if last.is_some_and(|last| last != self.markers[marker]) && !echo.same_rgb8(self.markers[marker]) {
                     cx.cancel(CancelReason::HostChanged);
                 }
@@ -372,17 +408,7 @@ impl Component for ColorDisc<'_> {
         }
         let value_at = |cx: &Cx<'_, Self>, marker: usize, pos: Pos2| {
             let base = cx.value().filter(|moved| moved.marker == marker && cx.gesture().is_some()).copied().unwrap_or_else(|| self.resting(marker));
-            let offset = pos - center;
-            let mut out = base;
-            if offset.length().is_finite() {
-                out.radial = ((offset.length() / radius).clamp(0.0, 1.0) * 100.0).round() / 100.0;
-                if offset.length() >= CENTRE
-                    && let Some(hue) = hue_at(center, pos)
-                {
-                    out.hue = hue;
-                }
-            }
-            out
+            moved_to(base, center, radius, pos)
         };
         if primary(&press)
             && let Some(marker) = grabbed
@@ -402,6 +428,20 @@ impl Component for ColorDisc<'_> {
                     }
                 }
                 _ => {}
+            }
+        }
+        if let PressPhase::Release { pos, click: true, .. } = press.phase {
+            let point = moved_to(DiscMove::new(0, 0.0, 0.0), center, radius, pos);
+            if primary(&press) {
+                self.clicked = Some(DiscHit::new(grabbed, None, point.hue, point.radial));
+            } else if secondary && pos.distance(center) <= radius {
+                let places: Vec<Pos2> = (0..self.markers.len()).map(|index| self.place(index, center, radius)).collect();
+                let marker = nearest_within(places.iter().map(|place| place.distance(pos)), grab_reach);
+                let spoke = match marker {
+                    Some(_) => None,
+                    None => nearest_within(places.iter().map(|place| segment_distance(center, *place, pos)), grab_reach),
+                };
+                self.context = Some(DiscHit::new(marker, spoke, point.hue, point.radial));
             }
         }
         if matches!(press.phase, PressPhase::Release { .. } | PressPhase::Cancel { .. }) {
@@ -446,20 +486,36 @@ impl Component for ColorDisc<'_> {
                 None => words.marker.fill(&[("n", (index + 1).to_string().as_str())]),
             };
             let hue = format!("{:.0}", live.hue.rem_euclid(360.0));
-            let saturation = format!("{:.0}", live.radial * 100.0);
+            let radial = format!("{:.0}", live.radial * 100.0);
             let node = access.node(MARKER.at(index as u64), Role::SLIDER);
             node.name = Name::Text(name);
-            let text = words.value.fill(&[("hue", hue.as_str()), ("saturation", saturation.as_str())]);
+            let text = match self.radius {
+                DiscRadius::Saturation => words.value.fill(&[("hue", hue.as_str()), ("saturation", radial.as_str())]),
+                DiscRadius::Brightness => words.value_brightness.fill(&[("hue", hue.as_str()), ("brightness", radial.as_str())]),
+            };
             node.numeric = Some(Numeric::new(f64::from(live.hue.rem_euclid(360.0)), 0.0..=360.0).step(f64::from(KEY_STEP)).wraps(true).text(text));
         }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let (center, radius) = Self::geometry(cx.rect, cx.style.inset);
-        let brightness = if self.level.is_finite() { self.level.clamp(0.0, 1.0).max(DISC_FLOOR) } else { 1.0 };
+        let level = self.shown_level();
         let painter = ui.content_painter(cx);
-        painter.painter.add(disc_mesh(center, radius, brightness));
+        let patches = match self.look {
+            DiscLook::Segmented => {
+                let (mesh, edges) = patch_mesh(center, radius, level, self.radius);
+                painter.painter.add(mesh);
+                edges
+            }
+            _ => {
+                painter.painter.add(disc_mesh(center, radius, level, self.radius));
+                Vec::new()
+            }
+        };
         let draw = ui.draw();
+        for edge in patches {
+            draw.stroke(&PaintShape::Polygon(edge), StrokeWidth::Thin, cx.style.edge);
+        }
         draw.stroke(&PaintShape::Circle(center, radius), StrokeWidth::Thin, cx.style.edge);
         let places: Vec<Pos2> = (0..self.markers.len())
             .map(|index| {
@@ -470,30 +526,97 @@ impl Component for ColorDisc<'_> {
         for place in &places {
             draw.stroke(&PaintShape::Path(vec![center, *place]), StrokeWidth::Thin, cx.style.spoke);
         }
-        let selected = self.chosen.filter(|selected| *selected < places.len());
-        let order = (0..places.len()).filter(|index| Some(*index) != selected).chain(selected);
+        let base = self.base.filter(|base| *base < places.len());
+        let chosen = self.chosen.filter(|chosen| *chosen < places.len());
+        // The base is drawn last, over the chosen marker, over the rest.
+        let order = (0..places.len())
+            .filter(|index| Some(*index) != chosen && Some(*index) != base)
+            .chain(chosen.filter(|chosen| Some(*chosen) != base))
+            .chain(base);
         for index in order {
-            let marker = Marker::filled(places[index], Color32::from(self.markers[index])).size(marker_size(Some(index) == selected));
+            let marker = Marker::filled(places[index], Color32::from(self.markers[index]))
+                .size(marker_size(Some(index) == base))
+                .selected(Some(index) == chosen && Some(index) != base);
             draw.marker(&cx.style.marker, &marker);
         }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> ColorDiscOutput {
-        let (pressed, grabbed) = (self.pressed, self.grabbed);
-        ColorDiscOutput { edit: cx.edit_response(), pressed, grabbed, clicked: None, context: None }
+        let (pressed, grabbed, clicked, context) = (self.pressed, self.grabbed, self.clicked, self.context);
+        ColorDiscOutput { edit: cx.edit_response(), pressed, grabbed, clicked, context }
     }
 }
 
-/// The disc at `brightness`: a centre vertex and rings out to the rim, hue around.
-fn disc_mesh(center: Pos2, radius: f32, brightness: f32) -> Mesh {
+/// `base` moved to the pointer at `pos`: the hue is the pointer's angle (kept at the centre), the radial channel its
+/// distance over `radius`, in whole percents.
+fn moved_to(base: DiscMove, center: Pos2, radius: f32, pos: Pos2) -> DiscMove {
+    let offset = pos - center;
+    let mut out = base;
+    if offset.length().is_finite() {
+        out.radial = ((offset.length() / radius).clamp(0.0, 1.0) * 100.0).round() / 100.0;
+        if offset.length() >= CENTRE
+            && let Some(hue) = hue_at(center, pos)
+        {
+            out.hue = hue;
+        }
+    }
+    out
+}
+
+/// The index of the least of `distances` that is within `reach`.
+pub(super) fn nearest_within(distances: impl Iterator<Item = f32>, reach: f32) -> Option<usize> {
+    distances.enumerate().filter(|(_, distance)| *distance <= reach).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(index, _)| index)
+}
+
+/// The distance from `p` to the segment `a` to `b`.
+fn segment_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
+    let along = b - a;
+    let length_sq = along.length_sq();
+    let t = if length_sq > 0.0 { ((p - a).dot(along) / length_sq).clamp(0.0, 1.0) } else { 0.0 };
+    p.distance(a + along * t)
+}
+
+/// The colour at `hue` and `radial` on a disc whose radius shows `kind`, the other channel at `level`.
+fn disc_color(kind: DiscRadius, hue: f32, radial: f32, level: f32) -> Color32 {
+    let (saturation, brightness) = match kind {
+        DiscRadius::Saturation => (radial, level),
+        DiscRadius::Brightness => (level, radial),
+    };
+    vertex(hue, saturation * 100.0, brightness * 100.0)
+}
+
+/// The segmented disc: a solid patch per sector and ring, centred on `patch_at`'s colour, and each patch's outline.
+fn patch_mesh(center: Pos2, radius: f32, level: f32, kind: DiscRadius) -> (Mesh, Vec<Vec<Pos2>>) {
     let mut mesh = Mesh::default();
-    let b = brightness * 100.0;
-    mesh.colored_vertex(center, vertex(0.0, 0.0, b));
+    let mut edges = Vec::new();
+    for sector in 0..SECTORS {
+        for ring in 0..PATCH_RINGS {
+            let (hue, radial) = patch_at(sector as f32 * SECTOR_DEGREES, (ring as f32 + 0.5) / PATCH_RINGS as f32);
+            let color = disc_color(kind, hue, radial, level);
+            let corners = [(-1.0, ring), (1.0, ring), (1.0, ring + 1), (-1.0, ring + 1)].map(|(side, edge)| {
+                ColorDisc::marker_pos(center, radius, hue + side * SECTOR_DEGREES / 2.0, edge as f32 / PATCH_RINGS as f32)
+            });
+            let first = mesh.vertices.len() as u32;
+            for corner in corners {
+                mesh.colored_vertex(corner, color);
+            }
+            mesh.add_triangle(first, first + 1, first + 2);
+            mesh.add_triangle(first, first + 2, first + 3);
+            edges.push(corners.to_vec());
+        }
+    }
+    (mesh, edges)
+}
+
+/// The smooth disc at `level`: a centre vertex and rings out to the rim, hue around.
+fn disc_mesh(center: Pos2, radius: f32, level: f32, kind: DiscRadius) -> Mesh {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(center, disc_color(kind, 0.0, 0.0, level));
     for ring in 1..=RINGS {
         let s = ring as f32 / RINGS as f32;
         for k in 0..SEGMENTS {
             let hue = k as f32 * 360.0 / SEGMENTS as f32;
-            mesh.colored_vertex(ColorDisc::marker_pos(center, radius, hue, s), vertex(hue, s * 100.0, b));
+            mesh.colored_vertex(ColorDisc::marker_pos(center, radius, hue, s), disc_color(kind, hue, s, level));
         }
     }
     let at = |ring: u32, k: u32| if ring == 0 { 0 } else { 1 + (ring - 1) * SEGMENTS + k % SEGMENTS };
@@ -510,7 +633,7 @@ fn disc_mesh(center: Pos2, radius: f32, brightness: f32) -> Mesh {
     mesh
 }
 
-/// The size of a marker: large while it is the selected one.
-fn marker_size(selected: bool) -> MarkerSize {
-    if selected { MarkerSize::Large } else { MarkerSize::Regular }
+/// The size of a marker: large while it is the base.
+fn marker_size(base: bool) -> MarkerSize {
+    if base { MarkerSize::Large } else { MarkerSize::Regular }
 }

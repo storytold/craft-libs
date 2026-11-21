@@ -1,28 +1,36 @@
 //! [`ColorWheel`]: a hue ring round a saturation and brightness triangle that turns with the hue, as PhotoCraft's
 //! Color Wheel.
 
+use super::area::{AreaShape, ColorArea};
 use super::channels::{channel_step, finite, primary, settled, spoken};
+use super::disc::nearest_within;
 use super::ramp::Gamut;
-use craft_behavior::{HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
+use crate::AreaMode;
+use craft_behavior::nav::{NavShape, Roving};
+use craft_behavior::{HitLevel, HitPriority, HitShape, Metrics, Mixed, NavMove, PartKey, PressPhase, Sense};
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Numeric, Outcome,
-    PaintUi, PartsCx, Pointer as _, Props as _, Role, WordSetCx as _,
+    PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{Marker, PaintShape, StrokeWidth};
+use craft_ui::primitives::{Marker, MarkerSize, PaintShape, StrokeWidth};
+use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx};
-use egui::{Mesh, Pos2, Rect, Response, Vec2, vec2};
-use std::f32::consts::TAU;
+use egui::{Color32, Mesh, Pos2, Rect, Response, Vec2, vec2};
+use std::f32::consts::{SQRT_2, TAU};
 
 #[cfg(feature = "screen-testing")]
 mod stories;
 
 /// The hue ring: a press on it sets the hue to the pointer's angle.
 const RING: PartKey = PartKey::new("ring");
-/// The triangle: a press on it sets saturation and brightness.
+/// The triangle: a press on it sets saturation and brightness. With a square inside the ring it is the catch area
+/// round the square: a press there sets the square's closest point.
 const TRIANGLE: PartKey = PartKey::new("triangle");
+/// A marker on the ring: `MARKER.at(i)`, a member of the markers' roving group.
+const MARKER: PartKey = PartKey::new("marker");
 
 /// Steps round the hue ring's mesh (PhotoCraft's 96).
 const RING_STEPS: u32 = 96;
@@ -38,6 +46,8 @@ const BRIGHTNESS_PAGE: f32 = 10.0;
 const FAR: f32 = 10.0;
 /// The last hue a key reaches: the hue wraps at 360 and has no 360 of its own.
 const HUE_LAST: f32 = 359.0;
+/// Degrees a ring drag with Shift snaps the hue to.
+const HUE_SNAP: f32 = 45.0;
 
 craft_ui::words! {
     /// The words of colour wheels.
@@ -121,8 +131,9 @@ impl WheelGeometry {
     }
 
     /// The largest square inside the ring, a `space.gap.tight` inside its inner edge: where `WheelInner::Square` lies.
+    /// The square's corners lie on the circle `triangle` is the radius of, which the style insets by that gap.
     pub fn square(&self) -> Rect {
-        todo!("wg.W45")
+        Rect::from_center_size(self.center, Vec2::splat(self.triangle * SQRT_2))
     }
 
     /// The part a press at `pos` takes: nothing beyond the ring's outer edge plus `grab_outer`,
@@ -204,7 +215,7 @@ pub struct ColorWheelStyle {
     ring_max: f32,
     /// The gap between the area's edge and the ring.
     outer_inset: f32,
-    /// The gap between the ring's inner edge and the triangle's circle.
+    /// The gap between the ring's inner edge and the circle round the triangle's corners or the square's.
     triangle_inset: f32,
     /// A press this far outside the ring still takes it, and this far inside its inner edge.
     grab: f32,
@@ -226,14 +237,19 @@ pub struct ColorWheelStyle {
 /// - Pointer (primary button): the part under the press is kept for the whole drag, so a drag that leaves the ring
 ///   keeps turning the hue; a press further outside the ring than `size.hit.target` starts nothing. A press sets the
 ///   value under the pointer (whole degrees, whole percents) and a drag follows it; Esc cancels. A press focuses the
-///   part.
+///   part. A ring drag with Shift snaps the hue to 45 degrees.
 /// - Keys on the focused ring: Left and Down lower the hue by 1 degree, Right and Up raise it, wrapping at 360;
 ///   Shift steps ten; Page Up and Page Down 36 degrees; Home 0, End 359. On the triangle: Left and Right saturation,
 ///   Up and Down brightness; Shift ten; Page keys a tenth of brightness; Home and End saturation 0 and 100. The
 ///   directions are not screen directions: the triangle turns with the hue.
-/// - Two Tab stops, the ring and then the triangle.
+/// - Two Tab stops, the ring and then the triangle; then the markers, one roving stop, when there are any.
+/// - [`WheelInner::Square`]: the largest square inside the ring is a `ColorArea` with its own stop, keys and node; a
+///   press between the square and the ring sets the square's closest point.
+/// - Markers: a click, Enter or Space on one reports [`picked`](ColorWheelOutput::picked); a press on one still drags
+///   the ring and reports it as [`held`](ColorWheelOutput::held).
 /// - AccessKit: a `Group` named `label` holding a `Slider` for the hue (0 to 360, step 1, increment, decrement and
-///   set value) and a `Slider` for saturation and brightness (value text, no numeric value).
+///   set value; no numeric value while the value is mixed), a `Slider` for saturation and brightness (value text, no
+///   numeric value) on the triangle, and a `Button` per marker.
 /// - Right to left nothing mirrors: red stays at 3 o'clock.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
@@ -254,20 +270,42 @@ pub struct ColorWheel<'a> {
     /// The markers' accessible names, in order.
     #[prop(into)]
     marker_names: Vec<Label>,
+    picked: Option<usize>,
+    held: Option<usize>,
 }
 
 impl<'a> ColorWheel<'a> {
     /// A wheel named `label` ("Color wheel") showing `values`, HSB values.
     pub fn new(label: impl Into<Label>, values: Bind<'a, ModelValues>) -> Self {
-        ColorWheel { common: Common::new(), values, gamut: None, inner: WheelInner::Triangle, markers: &[], marker_names: Vec::new() }
-            .label(label)
-            .ltr_axis()
+        ColorWheel {
+            common: Common::new(),
+            values,
+            gamut: None,
+            inner: WheelInner::Triangle,
+            markers: &[],
+            marker_names: Vec::new(),
+            picked: None,
+            held: None,
+        }
+        .label(label)
+        .ltr_axis()
     }
 
     /// Where the wheel lies in `area`.
     pub fn geometry(style: &ColorWheelStyle, area: Rect) -> WheelGeometry {
         WheelGeometry::new(area, style.outer_inset, (style.ring_min, style.ring_max), RING_RATIO, style.triangle_inset)
     }
+
+    /// Where each marker lies on the ring: at its colour's hue.
+    fn places(&self, geometry: &WheelGeometry) -> Vec<Pos2> {
+        self.markers.iter().map(|color| geometry.ring_knob(finite(HsbModel.from_srgb(*color).values[0]))).collect()
+    }
+}
+
+/// The marker a press holds, kept until the press ends.
+#[derive(Clone, Copy, Default)]
+struct Held {
+    marker: Option<usize>,
 }
 
 /// The HSB values the wheel shows when the host gives none.
@@ -275,22 +313,35 @@ fn blank() -> ModelValues {
     ModelValues::new(HsbModel.id(), &[])
 }
 
-/// `base` with what a press at `pos` in `part` picks: the hue for the ring, saturation and brightness for the
-/// triangle (turned to `base`'s hue); `base` when `pos` picks nothing.
-fn value_at(geometry: &WheelGeometry, base: &ModelValues, part: WheelPart, pos: Pos2) -> ModelValues {
+/// The square's area over `values`: the one point-to-value mapping of the square, for the child and for a press
+/// between it and the ring.
+fn square_area(label: impl Into<Label>, values: impl Into<Mixed<ModelValues>>) -> ColorArea<'static> {
+    ColorArea::new(label, AreaMode::Hue, Bind::given(values)).shape(AreaShape::Square)
+}
+
+/// `hue` rounded to the nearest multiple of [`HUE_SNAP`] degrees.
+fn snapped(hue: f32) -> f32 {
+    ((hue / HUE_SNAP).round() * HUE_SNAP).rem_euclid(360.0)
+}
+
+/// `base` with what a press at `pos` in `part` picks: the hue for the ring (to a multiple of 45 degrees when `snap`),
+/// saturation and brightness for the triangle (turned to `base`'s hue) or the square's closest point; `base` when
+/// `pos` picks nothing.
+fn value_at(geometry: &WheelGeometry, base: &ModelValues, part: WheelPart, inner: WheelInner, pos: Pos2, snap: bool) -> ModelValues {
     let mut out = *base;
-    match part {
-        WheelPart::Ring => {
+    match (part, inner) {
+        (WheelPart::Ring, _) => {
             if let Some(hue) = hue_at(geometry.center, pos) {
-                out.values[0] = hue;
+                out.values[0] = if snap { snapped(hue) } else { hue };
             }
         }
-        WheelPart::Triangle => {
+        (WheelPart::Triangle, WheelInner::Triangle) => {
             if let Some((s, b)) = triangle_sv(geometry.corners(finite(base.values[0]), 0.0), pos) {
                 out.values[1] = (s * 100.0).round();
                 out.values[2] = (b * 100.0).round();
             }
         }
+        (WheelPart::Triangle, WheelInner::Square) => out = square_area("", *base).value_at(geometry.square(), base, pos),
     }
     out
 }
@@ -340,12 +391,12 @@ impl Component for ColorWheel<'_> {
     const DISABLED: DisabledLook = DisabledLook::Faded;
     const SINGLE_VALUE: bool = true;
     const ROLE: Role = Role::GROUP;
-    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Neither);
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_keep(KeepKeys::BlockArrows).with_activate(ActivateKeys::Both);
     const OVERLAYS: bool = false;
     type Style = ColorWheelStyle;
     type Output = ColorWheelOutput;
 
-    fn style(cx: &StyleCx<'_>, _: ColorWheelStyleKey) -> ColorWheelStyle {
+    fn style(cx: &StyleCx<'_>, key: ColorWheelStyleKey) -> ColorWheelStyle {
         let tokens = cx.tokens;
         ColorWheelStyle {
             metrics: Metrics::new(),
@@ -355,7 +406,10 @@ impl Component for ColorWheel<'_> {
             ring_min: tokens.size.icon.sm,
             ring_max: tokens.size.control.md,
             outer_inset: tokens.space.gap.tight,
-            triangle_inset: tokens.stroke.thin,
+            triangle_inset: match key.inner {
+                WheelInner::Triangle => tokens.stroke.thin,
+                WheelInner::Square => tokens.space.gap.tight,
+            },
             grab: tokens.size.hit.target,
             edge: cx.color(tokens.color.line.control_edge),
             knob: cx.marker(),
@@ -380,12 +434,26 @@ impl Component for ColorWheel<'_> {
             .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
             .focusable()
             .focus_shape(FocusShape::Circle);
-        cx.part(TRIANGLE, HitShape::circle(geometry.center, (geometry.inner - reach).max(0.0)))
+        let triangle = cx
+            .part(TRIANGLE, HitShape::circle(geometry.center, (geometry.inner - reach).max(0.0)))
             .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
-            .priority(HitPriority::new(HitLevel::Handle, 0))
-            .focusable()
+            .priority(HitPriority::new(HitLevel::Handle, 0));
+        // The square is a child with its own stop; only the triangle is a stop of the wheel's.
+        if self.inner == WheelInner::Triangle {
             // The triangle turns with the hue, so its ring is rebuilt each pass.
-            .focus_shape(FocusShape::Polygon(geometry.corners(hue, 0.0).to_vec()));
+            triangle.focusable().focus_shape(FocusShape::Polygon(geometry.corners(hue, 0.0).to_vec()));
+        }
+        let marker_reach = Marker::reach(&cx.style.knob, MarkerSize::Regular);
+        for (index, place) in self.places(&geometry).into_iter().enumerate() {
+            // A marker takes no press of its own: the ring takes it and drags on.
+            let part = cx.part(MARKER.at(index as u64), HitShape::circle(place, marker_reach)).focusable().focus_shape(FocusShape::Circle);
+            if index == 0 {
+                part.selected();
+            }
+        }
+        if !self.markers.is_empty() {
+            cx.roving(Roving::new(NavShape::Flat));
+        }
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, ModelValues>> {
@@ -394,6 +462,9 @@ impl Component for ColorWheel<'_> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let geometry = ColorWheel::geometry(cx.style, cx.rect);
+        let inner = self.inner;
+        let marker_reach = Marker::reach(&cx.style.knob, MarkerSize::Regular);
+        let places = self.places(&geometry);
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or_else(blank);
         for (key, part) in [(RING, WheelPart::Ring), (TRIANGLE, WheelPart::Triangle)] {
             let press = cx.part(key).press;
@@ -401,10 +472,31 @@ impl Component for ColorWheel<'_> {
                 continue;
             }
             if matches!(press.phase, PressPhase::Down { .. }) {
-                cx.focus_part(key);
+                if part == WheelPart::Ring {
+                    cx.memory::<Held>().marker =
+                        press.phase.start().and_then(|start| nearest_within(places.iter().map(|place| place.distance(start.origin)), marker_reach));
+                }
+                if part == WheelPart::Ring || inner == WheelInner::Triangle {
+                    cx.focus_part(key);
+                }
             }
             let now = current(&*cx);
-            cx.follow_press(key, |pos| Some(value_at(&geometry, &now, part, pos)));
+            let snap = press.mods.shift;
+            cx.follow_press(key, |pos| Some(value_at(&geometry, &now, part, inner, pos, snap)));
+        }
+        let held = cx.memory::<Held>().marker;
+        self.held = held;
+        let ring = cx.part(RING).press;
+        if primary(&ring) && matches!(ring.phase, PressPhase::Release { click: true, .. }) {
+            self.picked = held;
+        }
+        if matches!(ring.phase, PressPhase::Release { .. } | PressPhase::Cancel { .. }) {
+            *cx.memory::<Held>() = Held::default();
+        }
+        for index in 0..self.markers.len() {
+            if matches!(cx.part_activated(MARKER.at(index as u64)), Some(FireSource::Key | FireSource::Access)) {
+                self.picked = Some(index);
+            }
         }
         let running = cx.gesture().is_some();
         let focused = match cx.active_part() {
@@ -413,12 +505,16 @@ impl Component for ColorWheel<'_> {
             _ => None,
         };
         let mut now = current(&*cx);
-        while let Some((mv, mods)) = cx.intents().take_move() {
-            if let Some(part) = focused.filter(|_| !running)
-                && let Some(next) = keyed(&now, part, mv, mods.extend)
-            {
-                now = next;
-                cx.set(now);
+        // The moves are the focused part's; with a marker focused they are the markers' group's.
+        if let Some(part) = focused {
+            while let Some((mv, mods)) = cx.intents().take_move() {
+                if running {
+                    continue;
+                }
+                if let Some(next) = keyed(&now, part, mv, mods.extend) {
+                    now = next;
+                    cx.set(now);
+                }
             }
         }
         if let Some(value) = cx.intents().take_set_value_at(RING).filter(|value| value.is_finite() && !running) {
@@ -429,38 +525,79 @@ impl Component for ColorWheel<'_> {
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let words = cx.words::<ColorWheelWords>();
-        let values = cx.value().copied().unwrap_or_else(blank);
-        let [hue, saturation, brightness] = [0, 1, 2].map(|channel| finite(values.values[channel]));
+        // A mixed value has no number to speak.
+        let shown = cx.value().copied();
         let ring = access.node(RING, Role::SLIDER);
         ring.name = Name::Text(words.hue.as_str().to_owned());
-        ring.numeric = Some(Numeric::new(f64::from(hue.rem_euclid(360.0)), 0.0..=360.0).step(1.0).wraps(true));
-        let model = &HsbModel as &dyn ColorModel;
-        let text =
-            format!("{}, {}", spoken(words.saturation.as_str(), model, 1, saturation), spoken(words.brightness.as_str(), model, 2, brightness));
-        let triangle = access.node(TRIANGLE, Role::GROUP);
-        triangle.name = Name::Text(words.triangle.as_str().to_owned());
-        triangle.value(text);
+        if let Some(values) = shown {
+            ring.numeric = Some(Numeric::new(f64::from(finite(values.values[0]).rem_euclid(360.0)), 0.0..=360.0).step(1.0).wraps(true));
+        }
+        if self.inner == WheelInner::Triangle {
+            let triangle = access.node(TRIANGLE, Role::GROUP);
+            triangle.name = Name::Text(words.triangle.as_str().to_owned());
+            if let Some(values) = shown {
+                let [saturation, brightness] = [1, 2].map(|channel| finite(values.values[channel]));
+                let model = &HsbModel as &dyn ColorModel;
+                triangle.value(format!(
+                    "{}, {}",
+                    spoken(words.saturation.as_str(), model, 1, saturation),
+                    spoken(words.brightness.as_str(), model, 2, brightness)
+                ));
+            }
+        }
+        for (index, color) in self.markers.iter().enumerate() {
+            let node = access.node(MARKER.at(index as u64), Role::BUTTON);
+            node.name = Name::Text(match self.marker_names.get(index) {
+                Some(name) => cx.env.resolve(name).as_str().to_owned(),
+                None => color.to_hex(),
+            });
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let geometry = ColorWheel::geometry(cx.style, cx.rect);
-        let values = cx.value().copied().unwrap_or_else(blank);
+        let shown = cx.value().copied();
+        let values = shown.unwrap_or_else(blank);
         let [hue, saturation, brightness] = [0, 1, 2].map(|channel| finite(values.values[channel]));
         let corners = geometry.corners(hue, 0.0);
-        let painter = ui.content_painter(cx);
-        painter.painter.add(ring_mesh(&geometry));
-        painter.painter.add(triangle_mesh(corners, hue));
+        {
+            let painter = ui.content_painter(cx);
+            painter.painter.add(ring_mesh(&geometry));
+            if self.inner == WheelInner::Triangle {
+                painter.painter.add(triangle_mesh(corners, hue));
+            }
+        }
+        if self.inner == WheelInner::Square {
+            let words = cx.words::<ColorWheelWords>();
+            // `Gamut` is not `Clone`: the wheel is built anew every pass, so the child takes it.
+            let area = square_area(words.triangle.clone(), shown.map_or(Mixed::Mixed, Mixed::from));
+            let area = match self.gamut.take() {
+                Some(gamut) => area.gamut(gamut),
+                None => area,
+            };
+            let edit = ui.child("square", geometry.square(), area);
+            cx.adopt(&edit, &blank(), |point, mine| *mine = *point);
+        }
         let draw = ui.draw();
         draw.stroke(&PaintShape::Circle(geometry.center, geometry.outer), StrokeWidth::Thin, cx.style.edge);
-        draw.stroke(&PaintShape::Polygon(corners.to_vec()), StrokeWidth::Thin, cx.style.edge);
-        let knobs = [geometry.ring_knob(hue), triangle_point(corners, saturation / 100.0, brightness / 100.0)];
-        for at in knobs {
-            draw.marker(&cx.style.knob, &Marker::hollow(at));
+        if self.inner == WheelInner::Triangle {
+            draw.stroke(&PaintShape::Polygon(corners.to_vec()), StrokeWidth::Thin, cx.style.edge);
+        }
+        // A mixed value draws no knob.
+        if shown.is_some() {
+            draw.marker(&cx.style.knob, &Marker::hollow(geometry.ring_knob(hue)));
+            if self.inner == WheelInner::Triangle {
+                draw.marker(&cx.style.knob, &Marker::hollow(triangle_point(corners, saturation / 100.0, brightness / 100.0)));
+            }
+        }
+        for (place, color) in self.places(&geometry).into_iter().zip(self.markers) {
+            draw.marker(&cx.style.knob, &Marker::filled(place, Color32::from(*color)));
         }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> ColorWheelOutput {
-        ColorWheelOutput { edit: cx.edit_response(), picked: None, held: None }
+        let (picked, held) = (self.picked, self.held);
+        ColorWheelOutput { edit: cx.edit_response(), picked, held }
     }
 }
 
