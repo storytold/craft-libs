@@ -2813,6 +2813,8 @@ version = "0.1.0"
 name = "craft-pbr"
 version = "0.1.0"
 dependencies = [
+ "craft-materialx",
+ "craft-mesh",
  "craft-pbr",
  "craft-texture",
  "glam 0.30.10",

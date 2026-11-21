@@ -5,6 +5,7 @@
 mod bench;
 mod bounds;
 mod brdf;
+mod convert;
 mod differential;
 mod moved;
 mod numeric;

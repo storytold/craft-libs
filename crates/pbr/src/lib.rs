@@ -31,6 +31,14 @@
 //! with the Smith-Schlick geometry term Karis gives for analytic lights. [`default_environment`]
 //! is a small studio environment for an environment light without an image.
 //!
+//! A [`Surface`] is a [`Material`] with the state a renderer applies around it: alpha and its
+//! mode, emission, sidedness, the unlit flag, clearcoat and sheen layers, and texture bindings
+//! that are kept but not loaded. With the `mesh` feature, `try_from_mesh` converts a
+//! `craft_mesh::Material`, and with the `materialx` feature, `try_from_materialx` converts a
+//! `craft_materialx::Material`. Each returns the surface and a [`ConversionReport`] of what it
+//! kept without shading, approximated or dropped, and a [`ConvertError`] for a value that is not
+//! finite or is out of its range. Neither feature is on by default.
+//!
 //! The diffuse coefficients are the nine real SH coefficients of the radiance, convolved with the
 //! clamped cosine lobe (band factors `π`, `2π/3` and `π/4`, Ramamoorthi and Hanrahan 2001,
 //! <https://graphics.stanford.edu/papers/envmap/envmap.pdf>) and divided by `π`. [`irradiance`]
@@ -46,18 +54,31 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod brdf;
+#[cfg(feature = "materialx")]
+mod convert_materialx;
+#[cfg(feature = "mesh")]
+mod convert_mesh;
 mod environment;
 mod prefilter;
 mod sh;
+mod surface;
 mod vec3;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 pub use brdf::{MAX_SPECULAR, MIN_DIRECT_ROUGHNESS, Material, try_environment_brdf};
+#[cfg(feature = "materialx")]
+pub use convert_materialx::try_from_materialx;
+#[cfg(feature = "mesh")]
+pub use convert_mesh::try_from_mesh;
 pub use environment::{ColorEncoding, ENVIRONMENTS, EnvImage, Environment, MAX_RADIANCE, default_environment, dir_of, uv_of};
 pub use prefilter::{PrefilterOptions, ggx_distribution, ggx_distribution_between, hammersley, try_prefilter};
 pub use sh::{irradiance, sh_basis, try_sh9};
+pub use surface::{
+    AlphaMode, Clearcoat, Conversion, ConversionReport, ConvertError, ReportItem, Sheen, Surface, TextureBinding, TextureEncoding, TextureInput,
+    TextureSource, UvTransform, Wrap,
+};
 
 /// Why an environment could not be made, filtered or read, or a material could not be shaded.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
