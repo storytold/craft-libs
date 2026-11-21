@@ -1155,8 +1155,9 @@ pub(crate) struct InFlow {
     /// rows run along Y, or a container whose first child is one. The child is one line when that centre lies at
     /// half its height (`one_line`).
     pub first: Option<f32>,
-    /// `first` is the line of the child's own unwrapped `Row` body: the child sits on a row's line by it even when it
-    /// is more than one line (a nested row with a child of two lines).
+    /// `first` is the line of the child's own unwrapped `Row` body, or of the control of a labelled control's row: the
+    /// child sits on a row's line by it even when it is more than one line (a nested row with a child of two lines, a
+    /// check box whose label has a detail line under it, a control under its label).
     pub line: bool,
 }
 
@@ -1169,37 +1170,6 @@ const ONE_LINE_SLACK: f32 = 0.5;
 /// has its first line above its middle.
 fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
     first.filter(|first| (2.0 * first - height).abs() <= ONE_LINE_SLACK)
-}
-
-/// The offset of a child whose first line is `first` below its top, on the row line whose centre is `centre` below
-/// the flow's top: its first line's centre lands on the line.
-fn centre_on_line(centre: f32, first: f32) -> f32 {
-    (centre - first).max(0.0)
-}
-
-/// The offset of a child in `spare` room left over beside it: half of it.
-fn centred(spare: f32) -> f32 {
-    spare.max(0.0) / 2.0
-}
-
-/// Where a labelled control's row of `height` sits below the top of the flow, as `place_in_cell` places any other
-/// one-line child: `(offset, taken)`. On the line of the unwrapped `Row` around it the row's centre is on the line, and
-/// it takes the offset with its height, as the line does. Else, in a horizontal layout that does not wrap, it is
-/// centred in `room`, the flow's height, and takes only its height, so a tall room does not make the row taller.
-/// Anywhere else it sits at the top. An options bar shown in a slot shorter than it asks for centres its members this
-/// way; without it a check box with its label after it stood at the bar's top edge while the fields beside it sat on
-/// the bar's middle.
-pub(crate) fn labelled_above(ui: &Ui, room: f32, height: f32) -> (f32, f32) {
-    let env = Env::of(ui);
-    let layout = ui.layout();
-    match env.row_line.and_then(|line| line.centre) {
-        Some(centre) => {
-            let above = centre_on_line(centre, height / 2.0);
-            (above, above)
-        }
-        None if layout.is_horizontal() && !layout.main_wrap && !env.grid_top && room.is_finite() => (centred(room - height), 0.0),
-        None => (0.0, 0.0),
-    }
 }
 
 /// The rect a child of measured `size` takes in flow in `ui`: the next cell of the `Grid` or spread `Row` body that
@@ -1226,7 +1196,7 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
         Some((line.body, took.centre().map(|centre| centre - ui.available_rect_before_wrap().top())))
     });
     let centre = bracket.and_then(|(_, centre)| centre).or_else(|| line.and_then(|line| line.centre));
-    let above = centre.zip(child.first).map_or(0.0, |(centre, first)| centre_on_line(centre, first));
+    let above = centre.zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
     let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
     let (rect, in_cell) = take_in(ui, &env, slot);
     let placed = if child.fill && in_cell {
@@ -1236,7 +1206,7 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
             Some(_) => (above, (rect.height() - above - size.y).max(0.0)),
             None => {
                 let spare = (rect.height() - size.y).max(0.0);
-                if env.grid_top { (0.0, spare) } else { (centred(spare), spare / 2.0) }
+                if env.grid_top { (0.0, spare) } else { (spare / 2.0, spare / 2.0) }
             }
         };
         Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
