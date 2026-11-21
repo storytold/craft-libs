@@ -56,6 +56,13 @@ fn charset_declarations_preserve_visible_imported_text() {
     assert_eq!(paras(&flow)[0].text(), "你好 世界。");
 }
 
+#[test]
+fn a_legacy_content_charset_decodes_visible_text_without_a_semicolon() {
+    let html = b"<meta http-equiv=content-type content=\"text/html charset=windows-1251\"><p>\xe0</p>";
+    let flow = parse(&decode_as(html, None));
+    assert_eq!(paras(&flow)[0].text(), "а");
+}
+
 fn texts(f: &Flow) -> Vec<String> {
     f.blocks
         .iter()

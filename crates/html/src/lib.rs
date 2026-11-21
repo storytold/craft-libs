@@ -80,10 +80,21 @@ fn meta_charset(tag: &Tag<'_>) -> Option<String> {
     if !tag.raw_attr("http-equiv")?.trim().eq_ignore_ascii_case("content-type") {
         return None;
     }
-    tag.raw_attr("content")?.split(';').find_map(|part| {
-        let (key, value) = part.split_once('=')?;
-        if key.trim().eq_ignore_ascii_case("charset") { charset_label(value) } else { None }
-    })
+    content_charset(tag.raw_attr("content")?)
+}
+
+/// HTML extracts the legacy charset from the pragma value even without a separating semicolon.
+fn content_charset(content: &str) -> Option<String> {
+    let content = content.to_ascii_lowercase();
+    let value = content
+        .match_indices("charset")
+        .find_map(|(start, name)| content.get(start + name.len()..)?.trim_ascii_start().strip_prefix('='))?
+        .trim_ascii_start();
+    let label = match value.chars().next()? {
+        quote @ ('"' | '\'') => value.strip_prefix(quote)?.split_once(quote)?.0.trim_ascii(),
+        _ => value.split(|c: char| c.is_ascii_whitespace() || c == ';').next()?,
+    };
+    (!label.is_empty()).then(|| label.to_string())
 }
 
 fn xml_charset(head: &str) -> Option<String> {
@@ -122,6 +133,18 @@ mod tests {
         let mut late = vec![b' '; super::CHARSET_SNIFF_BYTES];
         late.extend_from_slice(b"<meta charset=utf-8>");
         assert_eq!(declared_charset(&late), None);
+    }
+
+    #[test]
+    fn a_legacy_content_charset_needs_no_semicolon() {
+        let html = br#"<meta http-equiv=content-type content="text/html charset=windows-1251">"#;
+        assert_eq!(declared_charset(html).as_deref(), Some("windows-1251"));
+        let html = br#"<meta http-equiv=content-type content='text/html charset note CHARSET = " Shift_JIS "'>"#;
+        assert_eq!(declared_charset(html).as_deref(), Some("shift_jis"));
+        let html = br#"<meta http-equiv=content-type content="text/html; charset='windows-1251">"#;
+        assert_eq!(declared_charset(html), None);
+        let html = br#"<meta name=description content="text/html charset=windows-1251"><meta charset=utf-8>"#;
+        assert_eq!(declared_charset(html).as_deref(), Some("utf-8"));
     }
 
     #[test]
