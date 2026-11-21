@@ -203,6 +203,22 @@ fn a_windowed_dialog_runs_in_its_own_window_and_stores_its_result() {
     assert_eq!(host.take::<Windowed>(), Some(DialogResult::Ok(7)));
 }
 
+/// A press on the document window behind a windowed modal dialog goes on: the pass that checks whether it began on a
+/// caption area does not wait on the context's lock (it hung the app).
+#[trial]
+fn a_press_behind_a_windowed_dialog_does_not_hang() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    host.open(Windowed { key: "panel", shows: 0, finish: None });
+    let ctx = frames.ctx.clone();
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    let at = egui::pos2(40.0, 40.0);
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    frames.frame(vec![egui::Event::PointerMoved(at), press(true)], |_ui| host.run_windowed(&ctx));
+    frames.frame(vec![press(false)], |_ui| host.run_windowed(&ctx));
+    assert!(host.is_open::<Windowed>(), "the dialog is still open after the press");
+}
+
 /// While a windowed dialog that is not modeless is open, the document window behind it is blocked:
 /// the modal layer sits on the context, and lifts when the dialog closes.
 #[trial]

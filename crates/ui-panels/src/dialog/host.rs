@@ -541,12 +541,12 @@ impl DialogHost {
             // The panel is a separate window, so it covers no caption area of this one, but the
             // backdrop does: a drag started on a caption move area still moves the window, as
             // behind an in-window modal.
-            let on_caption = ctx.input(|i| {
-                i.pointer.press_origin().is_some_and(|p| {
-                    crate::runtime::windows::WindowHost::of(ctx)
-                        .caption_regions(viewport)
-                        .is_some_and(|regions| regions.moves.iter().any(|moves| moves.contains(p)))
-                })
+            // The press is read first: the caption regions take the context's lock, which `input` holds.
+            let press = ctx.input(|i| i.pointer.press_origin());
+            let on_caption = press.is_some_and(|p| {
+                crate::runtime::windows::WindowHost::of(ctx)
+                    .caption_regions(viewport)
+                    .is_some_and(|regions| regions.moves.iter().any(|moves| moves.contains(p)))
             });
             if backdrop.drag_started() && on_caption {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
