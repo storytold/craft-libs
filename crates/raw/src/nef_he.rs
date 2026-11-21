@@ -14,8 +14,8 @@
 //! - Bitplane counts are unary. A slice's first precinct codes them as is; later lines predict them from the line
 //!   above (see [`residual`]). WGT lists one gain and priority per band in packet order; a band's truncation is
 //!   `Q - gain - (priority < R)`.
-//! - The components are `(r + 2g + b) / 4`, `r - g`, `g1 - g2` and `b - g` of `16 * sqrt(2 * (sample - black))`.
-//!   The scale and the luma offset are fitted (the exposure ratio of the CC0 pair fixes the scale).
+//! - The components are a lifting transform of `24.24 * sqrt(sample - black)` over the mosaic (see [`mosaic`]); the
+//!   scale and the luma offset are measured on the CC0 Z 9 Lossless / HE★ pair.
 //!
 //! Open: the meaning of the 13 bytes PIH carries past its usual end, the exact luma offset, and other bodies.
 //! Variants that differ from the measured layout are refused as [`HIGH_EFFICIENCY`](crate::nef) so their
@@ -24,10 +24,10 @@
 use crate::{Limits, RawError, Result};
 
 const UNSUPPORTED: &str = crate::nef::HIGH_EFFICIENCY;
-/// Scale of the square-root domain: `16 * sqrt(2)` (4 fractional bits).
-const SCALE: f64 = 22.627_416_997_969_52;
-/// Offset of the luma component, fitted on the CC0 pair.
-const LUMA_OFFSET: f64 = -956.0;
+/// Scale and luma offset of the square-root domain, measured on the CC0 Z 9 Lossless / HE★ pair (same exposure;
+/// patches registered one by one): within 1.5 % of the lossless levels from 25 above black to white.
+const SCALE: f64 = 24.24;
+const LUMA_OFFSET: f64 = -1032.7;
 const COMPONENTS: usize = 4;
 const BANDS: usize = 25;
 /// Most bitplanes a code group may hold; more means the stream is not what we measured.
@@ -35,6 +35,8 @@ const MAX_PLANES: u32 = 30;
 /// Largest coefficient magnitude: the measured streams use 18-bit coefficients (PIH `Bw`). Holding damaged
 /// ones to this keeps the lifting sums far inside `i32`.
 const MAX_COEFFICIENT: i64 = 1 << 20;
+/// Largest truncation a band can have with 18-bit coefficients; a larger one comes from a damaged precinct header.
+const MAX_TRUNCATION: u32 = 20;
 
 /// A variant that differs from the measured one: the same reason as before this decoder existed, so the
 /// embedded preview is used. `_what` names the difference for a reader of the code.
@@ -174,18 +176,19 @@ fn residual(u: u32, theta: u32) -> i64 {
     }
 }
 
-/// Uniform dequantization: the coded magnitude's bit pattern repeated below the truncation.
+/// Uniform dequantization: the coded magnitude's bit pattern repeated below the truncation. `truncation` is at
+/// most [`MAX_TRUNCATION`] and `planes` at most [`MAX_PLANES`] (both checked where they are read).
 fn dequantize(magnitude: u32, planes: u32, truncation: u32) -> i32 {
-    let base = i64::from(magnitude) << truncation;
+    let base = (u64::from(magnitude) << truncation.min(MAX_TRUNCATION)).min(MAX_COEFFICIENT as u64);
     let (mut acc, mut s) = (base, base);
     loop {
-        s >>= planes + 1;
+        s >>= (planes + 1).min(63);
         if s == 0 {
             break;
         }
         acc += s;
     }
-    i32::try_from(acc.min(MAX_COEFFICIENT)).unwrap_or(0)
+    i32::try_from(acc.min(MAX_COEFFICIENT as u64)).unwrap_or(0)
 }
 
 struct Subpackets<'a> {
@@ -236,7 +239,11 @@ struct Precinct {
 impl Coder {
     fn truncation(&self, weight: usize, pr: &Precinct) -> Result<i32> {
         let &(gain, priority) = self.weights.get(weight).ok_or_else(|| corrupt("band weight"))?;
-        Ok((pr.q - i32::from(gain) - i32::from(i32::from(priority) < pr.r)).max(0))
+        let t = (pr.q - i32::from(gain) - i32::from(i32::from(priority) < pr.r)).max(0);
+        if t > MAX_TRUNCATION as i32 {
+            return Err(corrupt("truncation out of range"));
+        }
+        Ok(t)
     }
 
     /// Decodes packet `k` into `out` (one line of the packet's bands, concatenated).
@@ -444,22 +451,64 @@ fn components(packets: &[Packet], lines: &[Vec<i32>], cw: usize, precincts: usiz
     planes
 }
 
-/// Components to RGGB samples: undo the colour transform and the square-root coding.
+/// Components to RGGB samples: undo the colour transform, then the square-root coding.
+///
+/// The transform is a lifting scheme on the mosaic (cell `(y, x)` holds R, G1 above-right, G2 below-left, B):
+/// the third component is G2 less the mean of its four diagonal G1 neighbours, the second and fourth are R and B
+/// less the mean of their four adjacent greens, and the first is G1 plus half the mean of its four diagonal
+/// differences and half the mean of its two R and two B differences. Each component's high-frequency signature
+/// against the lossless twin picks this over a per-cell transform; the halves are the usual lifting update
+/// weights (the measurements cannot tell them from a quarter).
 fn mosaic(planes: &[Vec<i32>], cw: usize, rows: usize, black: f64) -> Vec<u16> {
     let width = 2 * cw;
+    let cells_h = planes.first().map_or(0, |p| p.len() / cw.max(1));
     let mut out = vec![0u16; width * rows];
+    if cw == 0 || cells_h == 0 {
+        return out;
+    }
+    // a plane's value at a cell, the edge repeated outside the plane
+    let at = |c: usize, y: isize, x: isize| -> f64 {
+        let y = y.clamp(0, cells_h as isize - 1) as usize;
+        let x = x.clamp(0, cw as isize - 1) as usize;
+        planes.get(c).and_then(|p| p.get(y * cw + x)).copied().unwrap_or(0) as f64
+    };
+    let (luma, cr, delta, cb) = (0, 1, 2, 3);
+    let g1_at = |y: isize, x: isize| {
+        let d = (at(delta, y, x) + at(delta, y, x + 1) + at(delta, y - 1, x) + at(delta, y - 1, x + 1)) / 4.0;
+        let c = (at(cr, y, x) + at(cr, y, x + 1) + at(cb, y - 1, x) + at(cb, y, x)) / 4.0;
+        (at(luma, y, x) - LUMA_OFFSET - d / 2.0 - c / 2.0) as f32
+    };
+    let rows_c = rows.div_ceil(2).min(cells_h);
+    // G1 and G2 once for every cell the rows read (one row past them), then the samples
+    let needed = (rows_c + 1).min(cells_h);
+    let g1_plane: Vec<f32> = (0..needed * cw).map(|i| g1_at((i / cw) as isize, (i % cw) as isize)).collect();
+    let g1 = |y: isize, x: isize| -> f64 {
+        let y = y.clamp(0, needed as isize - 1) as usize;
+        let x = x.clamp(0, cw as isize - 1) as usize;
+        f64::from(g1_plane.get(y * cw + x).copied().unwrap_or(0.0))
+    };
+    let g2_plane: Vec<f32> = (0..needed * cw)
+        .map(|i| {
+            let (y, x) = ((i / cw) as isize, (i % cw) as isize);
+            (at(delta, y, x) + (g1(y, x) + g1(y, x - 1) + g1(y + 1, x) + g1(y + 1, x - 1)) / 4.0) as f32
+        })
+        .collect();
+    let g2 = |y: isize, x: isize| -> f64 {
+        let y = y.clamp(0, needed as isize - 1) as usize;
+        let x = x.clamp(0, cw as isize - 1) as usize;
+        f64::from(g2_plane.get(y * cw + x).copied().unwrap_or(0.0))
+    };
     let linear = |e: f64| {
         let s = (e / SCALE).max(0.0);
         (s * s + black).round().clamp(0.0, 16383.0) as u16
     };
-    let at = |c: usize, i: usize| planes.get(c).and_then(|p| p.get(i)).copied().unwrap_or(0) as f64;
-    for y in 0..rows.div_ceil(2) {
+    for y in 0..rows_c {
         for x in 0..cw {
-            let i = y * cw + x;
-            let (luma, rg, gg, bg) = (at(0, i), at(1, i), at(2, i), at(3, i));
-            let g = luma - LUMA_OFFSET - (rg + bg) / 4.0;
-            let cell = [[rg + g, g + gg / 2.0], [g - gg / 2.0, bg + g]];
-            for (dy, pair) in cell.iter().enumerate() {
+            let (yi, xi) = (y as isize, x as isize);
+            let (a, b) = (g1(yi, xi), g2(yi, xi));
+            let r = at(cr, yi, xi) + (a + g1(yi, xi - 1) + b + g2(yi - 1, xi)) / 4.0;
+            let bl = at(cb, yi, xi) + (a + g1(yi + 1, xi) + b + g2(yi, xi + 1)) / 4.0;
+            for (dy, pair) in [[r, a], [b, bl]].iter().enumerate() {
                 for (dx, &e) in pair.iter().enumerate() {
                     if let Some(v) = out.get_mut((2 * y + dy) * width + 2 * x + dx) {
                         *v = linear(e);
@@ -518,6 +567,20 @@ mod tests {
         assert!(decode(&codestream(256, 32, &body), 256, 32, 32, 1008.0, &limits).is_err());
         // a size the codestream does not state is refused as the unsupported variant
         assert!(matches!(decode(&codestream(256, 32, &[]), 512, 32, 32, 1008.0, &limits), Err(RawError::Unsupported(m)) if m == UNSUPPORTED));
+    }
+
+    /// A damaged precinct header (Q = 255) made the truncation shift overflow, and a negative intermediate never
+    /// shifted down to zero.
+    #[test]
+    fn dequantization_stays_bounded() {
+        assert_eq!(dequantize(u32::MAX >> 2, MAX_PLANES, 255), MAX_COEFFICIENT as i32);
+        assert!(dequantize(3, 1, 4) > 3 << 4);
+        let mut body = vec![0x00, 0x00, 0x40, 255, 11];
+        body.extend([0xff; 6]);
+        body.push(0xc0);
+        body.extend([0x00, 0x00, 0x00, 0x20, 0x00, 0x08, 0x00]);
+        body.resize(64 + 12, 0xff);
+        assert!(decode(&codestream(256, 32, &body), 256, 32, 32, 1008.0, &Limits::default()).is_err());
     }
 
     #[test]
