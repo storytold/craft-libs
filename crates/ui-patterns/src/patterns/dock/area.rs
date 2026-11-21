@@ -141,6 +141,8 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// binding: the panel shows in its flyout, and the layout does not change.
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
+    /// The panel whose floating window takes over the held press this pass, and where the window holds the pointer.
+    continue_move: Option<(P, Vec2)>,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
@@ -166,6 +168,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             auto_collapse: false,
             locked: false,
             flyout: None,
+            continue_move: None,
         }
     }
 
@@ -179,6 +182,16 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         config: DockConfig,
     ) -> Self {
         DockArea { locked: true, ..Self::new(label, Bind::given(Arc::clone(workspace)), specs, panels, config) }
+    }
+
+    /// The floating window holding `panel` takes over the held primary press in this pass, with the pointer at `grab`
+    /// inside the window ([`FloatingGroup::continue_move`]): the window follows the pointer and docks where it would
+    /// dock on release. A request of the pass: a host that floats a panel from a rail's `torn_off` keeps it for the one
+    /// pass after, when the window shows. Without a held press, or when no window holds `panel`, it does nothing.
+    #[must_use]
+    pub fn continue_move(mut self, panel: P, grab: Vec2) -> Self {
+        self.continue_move = Some((panel, grab));
+        self
     }
 }
 
@@ -277,6 +290,8 @@ struct Scene<'s, P> {
     space: &'s FloatSpace<P>,
     bounds: Rect,
     auto_collapse: bool,
+    /// The panel whose window takes over the held press, with its grab point (`DockArea::continue_move`).
+    continue_move: Option<(&'s P, Vec2)>,
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
@@ -409,7 +424,7 @@ struct Pass<'s, P> {
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// Shows the area across the room offered.
     pub fn show(self, ui: &mut Ui) -> DockAreaOutput<P> {
-        let DockArea { label, mut workspace, specs, panels, config, hide, maximized, auto_collapse, locked, mut flyout } = self;
+        let DockArea { label, mut workspace, specs, panels, config, hide, maximized, auto_collapse, locked, mut flyout, continue_move } = self;
         let ctx = ui.ctx().clone();
         let (rtl, window) = {
             let env = Env::of(ui);
@@ -464,6 +479,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 model: key,
                 maximized: maximized.as_ref(),
                 auto_collapse,
+                continue_move: continue_move.as_ref().map(|(panel, grab)| (panel, *grab)),
                 sizes,
                 rtl,
             };
@@ -566,6 +582,7 @@ struct Input<'i, P> {
     model: ModelKey,
     maximized: Option<&'i P>,
     auto_collapse: bool,
+    continue_move: Option<(&'i P, Vec2)>,
     sizes: DockSizes,
     rtl: bool,
 }
@@ -592,7 +609,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, sizes, rtl } = *input;
+    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, continue_move, sizes, rtl } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
@@ -613,6 +630,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         space: &space,
         bounds,
         auto_collapse,
+        continue_move,
         rtl,
         floated: current.floated(),
     };
@@ -1358,6 +1376,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .id(group_id);
             if let Some(scale) = scale {
                 group = group.scale(scale);
+            }
+            if let Some((_, grab)) = scene.continue_move.filter(|(panel, _)| window.panels().any(|held| held == *panel)) {
+                group = group.continue_move(grab);
             }
             group = match opening.spec.clone() {
                 Some(window_spec) => group.native(window_spec),
