@@ -67,7 +67,7 @@ network I/O and has no `unsafe` code.
   into texture sets by their shared folder and stem, and gives each name the map role its suffix
   or prefix names, with the normal convention and UDIM tile the name states. It reads names only:
   no file is opened and no path is joined. Names that are not maps are returned with the reason,
-  and two names of one set with the same role are both kept and reported. See
+  and two names of one set with the same role and tile are both kept and reported. See
   [Texture-set names](#texture-set-names).
 
 Mirrored repeat and mip chains are not in the crate yet.
@@ -93,7 +93,8 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 ## Texture-set names
 
 `texture_set::recognize(names, &NameLimits::default())` reads each name's leaf, the part after
-its last `/` or `\`. The leaf's extension must be `png`, `jpg`, `jpeg`, `tga`, `tif`, `tiff`,
+its last `/` or `\`; the part before it is the folder (the separator itself for a name such as
+`/brick_albedo.png`). The leaf's extension must be `png`, `jpg`, `jpeg`, `tga`, `tif`, `tiff`,
 `bmp`, `webp`, `exr` or `hdr`, in any case. The stem before it is split into words at every
 character that is not a letter or digit, at lower-to-upper case changes (`BaseColor`) and between
 digits and letters (`diff4k`), and words are compared after ASCII lower-casing.
@@ -103,11 +104,13 @@ digits and letters (`diff4k`), and words are compared after ASCII lower-casing.
   taken out of the stem wherever they are. A bare `1024` is a resolution, or tile 1024 when
   another name of its set has a tile. A name with both a bare `1024` and a tile is ignored.
 - `gl`, `ogl`, `opengl` and `open gl` mark an OpenGL normal map (green up), and `dx`, `directx`,
-  `direct x` and `d3d` a DirectX one (green down), as `normal::NormalConvention` names them. A
-  normal map with neither has no convention, and one with both is ignored.
+  `direct x` and `d3d` (written without separators) a DirectX one (green down), as
+  `normal::NormalConvention` names them. `normalgl` and `normaldx` state a convention too, as role
+  words or as normal words right next to them. A normal map with neither has no convention, and
+  one with both is ignored.
 - The role is named by the last words of the stem, or by the first words when the last words
-  name no role.
-  The other words are the set's stem, and names with the same folder and stem words form one set.
+  name no role. Words right next to them that name the same role, as in `diffuse_color`, go
+  with them. The other words are the set's stem, and names with the same folder and stem words form one set.
   A different role named right next to the role words, as in `albedo_normal`, makes the name
   ambiguous, and it is ignored. An occlusion, a roughness and a metallic word in that order, such
   as `ao_rough_metal`, name a packed map.
@@ -145,7 +148,7 @@ inverted.
 
 | `NameLimits` field | Default | On a list over it |
 |---|---|---|
-| `max_names` | 4096 | `NameError::TooManyNames`; no name after the limit is read |
+| `max_names` | 4096 | `NameError::TooManyNames`; the first name past the limit is taken from the iterator but not read, and no later name is taken |
 | `max_name_bytes` | 1024 UTF-8 bytes, folder included | `NameError::NameTooLong` with the name's index |
 
 ## Origin

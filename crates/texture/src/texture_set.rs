@@ -13,7 +13,8 @@
 //!
 //! The module reads names only. It opens no file, joins or resolves no path and accepts names in
 //! any Unicode. A name is split at its last `/` or `\`, and only the part after it, the leaf, is
-//! read; the part before it is the folder, compared with `\` and `/` taken as equal.
+//! read; the part before it is the folder, compared with `\` and `/` taken as equal. When the
+//! name starts with its only separator, as in `/brick_albedo.png`, the folder is that separator.
 //! [`NameLimits`] caps the number of names and the bytes of each, and the memory used grows only
 //! with the names read.
 //!
@@ -30,12 +31,15 @@
 //!    lower-casing; other characters are compared as they are.
 //! 3. Resolution words (`1k` to `16k`, `16px` to `16384px`, a bare power of two from 128 to
 //!    16384), bit depths (`8bit`, `16bit`, `32bit`), normal conventions (`gl`, `ogl`, `opengl`,
-//!    `open gl`; `dx`, `directx`, `direct x`, `d3d`) and a four-digit UDIM tile from 1001 to 1999
-//!    are taken out wherever they are. A bare `1024` is a resolution, or tile 1024 when another
-//!    name of its set has a tile; a name with both a bare `1024` and a tile is
-//!    [`IgnoreReason::SeveralTiles`].
+//!    `open gl`; `dx`, `directx`, `direct x`, `d3d` written without separators) and a four-digit
+//!    UDIM tile from 1001 to 1999 are taken out wherever they are. A bare `1024` is a resolution,
+//!    or tile 1024 when another name of its set has a tile; a name with both a bare `1024` and a
+//!    tile is [`IgnoreReason::SeveralTiles`]. A normal map's convention also comes from
+//!    `normalgl` and `normaldx`, in its role words and in normal words right next to them; a
+//!    name that states both conventions is [`IgnoreReason::ConflictingNormalConvention`].
 //! 4. The role is named by the last remaining words (three, two or one), or by the first ones when
-//!    the last do not name a role. The words left over are the set's stem. A different role named
+//!    the last do not name a role. Words right next to them that name the same role, as in
+//!    `diffuse_color`, go with them. The words left over are the set's stem. A different role named
 //!    right next to the role words makes the name [`IgnoreReason::SeveralRoles`], except an
 //!    occlusion, a roughness and a metallic word in that order, which name
 //!    [`MapRole::PackedOrm`]. A single letter is never a role, except a trailing `n` (normal).
@@ -90,7 +94,8 @@ pub enum MapRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NameLimits {
-    /// Most names in one call. Default [`DEFAULT_MAX_NAMES`].
+    /// Most names in one call. Default [`DEFAULT_MAX_NAMES`]. To find a longer list, [`recognize`]
+    /// takes one name past the limit from the iterator and does not read it.
     pub max_names: usize,
     /// Most UTF-8 bytes in one name, folder included. Default [`DEFAULT_MAX_NAME_BYTES`].
     pub max_name_bytes: usize,
@@ -106,7 +111,8 @@ impl Default for NameLimits {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum NameError {
-    /// The list holds more than [`NameLimits::max_names`] names. No name after the limit is read.
+    /// The list holds more than [`NameLimits::max_names`] names. The first name past the limit is
+    /// taken from the iterator but not read, and no later name is taken.
     #[error("the list holds more than {limit} names")]
     TooManyNames { limit: usize },
     /// The name at `index` is longer than [`NameLimits::max_name_bytes`].
@@ -178,7 +184,7 @@ pub struct DuplicateRole {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextureSet<'a> {
     /// The folder part of the set's first name, without its last separator; empty for a bare
-    /// name.
+    /// name, and the separator alone for a name such as `/brick_albedo.png`.
     pub folder: &'a str,
     /// The stem words of the set's first name, as written there: without its role words and the
     /// words that rule 3 takes out, so `brick_4k_wall_albedo.png` gives `brick_wall`. Empty for a
@@ -211,7 +217,9 @@ pub struct Recognition<'a> {
 /// the names one at a time and stops at the first that breaks `limits`.
 ///
 /// Returns [`NameError::TooManyNames`] when `names` has more than [`NameLimits::max_names`]
-/// entries, and [`NameError::NameTooLong`] for the first name over
+/// entries; to find that out it takes one entry past the limit from the iterator, which a lazy
+/// iterator has to produce, and does not read it. Returns [`NameError::NameTooLong`] for the first
+/// name over
 /// [`NameLimits::max_name_bytes`]. An empty list gives an empty [`Recognition`].
 pub fn recognize<'a>(names: impl IntoIterator<Item = &'a str>, limits: &NameLimits) -> Result<Recognition<'a>, NameError> {
     let mut seen: HashSet<&'a str> = HashSet::new();
@@ -374,14 +382,20 @@ fn edge_span(words: &[&str], at_end: bool, lone_n: bool) -> Option<(Word, Range<
     })
 }
 
-/// The role of `words` and the positions of its words, or why the words name none.
+/// The role of `words` and the positions of its role words, together with the words right next to
+/// them that name the same role, or why the words name none.
 fn find_role(words: &[&str]) -> Result<(MapRole, Range<usize>), IgnoreReason> {
-    let (found, span) = edge_span(words, true, true).or_else(|| edge_span(words, false, false)).ok_or(IgnoreReason::UnknownMap)?;
-    // The words on the stem side of the role words, and a role they name right next to them.
+    let (found, mut span) = edge_span(words, true, true).or_else(|| edge_span(words, false, false)).ok_or(IgnoreReason::UnknownMap)?;
     let at_end = span.end == words.len();
-    let side = if at_end { words.get(..span.start) } else { words.get(span.end..) }.unwrap_or_default();
-    if edge_span(side, at_end, false).is_some_and(|(w, _)| w != found) {
-        return Err(IgnoreReason::SeveralRoles);
+    // The words on the stem side of the role words, and a role they name right next to them.
+    loop {
+        let side = if at_end { words.get(..span.start) } else { words.get(span.end..) }.unwrap_or_default();
+        match edge_span(side, at_end, false) {
+            Some((w, _)) if w != found => return Err(IgnoreReason::SeveralRoles),
+            Some((_, next)) if at_end => span.start = next.start,
+            Some((_, next)) => span.end += next.len(),
+            None => break,
+        }
     }
     match found {
         Word::Map(role) => Ok((role, span)),
@@ -391,10 +405,15 @@ fn find_role(words: &[&str]) -> Result<(MapRole, Range<usize>), IgnoreReason> {
 
 /// What a name says, or why it is in no set.
 fn classify(name: &str) -> Result<Parsed<'_>, IgnoreReason> {
-    if name.split(['/', '\\']).any(|part| part == "__MACOSX" || part.starts_with("._")) {
+    let (folder, leaf) = match name.rfind(['/', '\\']) {
+        // A name under the root keeps its separator as the folder.
+        Some(0) => name.split_at(1),
+        Some(at) => (name.get(..at).unwrap_or_default(), name.get(at + 1..).unwrap_or_default()),
+        None => ("", name),
+    };
+    if name.split(['/', '\\']).any(|part| part == "__MACOSX") || leaf.starts_with("._") {
         return Err(IgnoreReason::ArchiveMetadata);
     }
-    let (folder, leaf) = name.rsplit_once(['/', '\\']).unwrap_or(("", name));
     if leaf.is_empty() {
         return Err(IgnoreReason::NoFileName);
     }
@@ -415,12 +434,18 @@ fn classify(name: &str) -> Result<Parsed<'_>, IgnoreReason> {
     let rest = if span.start == 0 { extras.kept.get(span.end..) } else { extras.kept.get(..span.start) }.unwrap_or_default();
     let stem_text = stem_without_extras(stem, &tokens, rest);
     let key = rest.iter().filter_map(|&i| tokens.get(i)).map(|t| t.text.as_str()).collect::<Vec<_>>().join("_");
-    let glued = words.get(span.clone()).unwrap_or_default().iter().find_map(|w| match *w {
-        "normalgl" => Some(NormalConvention::OpenGl),
-        "normaldx" => Some(NormalConvention::DirectX),
-        _ => None,
-    });
-    let convention = if role == MapRole::Normal { extras.convention(glued)? } else { None };
+    // The conventions that the role words with one glued on state.
+    let glued: Vec<NormalConvention> = words
+        .get(span)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|w| match *w {
+            "normalgl" => Some(NormalConvention::OpenGl),
+            "normaldx" => Some(NormalConvention::DirectX),
+            _ => None,
+        })
+        .collect();
+    let convention = if role == MapRole::Normal { extras.convention(&glued)? } else { None };
     let tile = extras.tile()?;
     // A bare 1024 next to a tile is a second tile.
     if extras.bare_1024 && tile.is_some() {
@@ -548,10 +573,12 @@ fn single_extra(text: &str) -> Option<Extra> {
 /// The extra word starting at `tokens[i]` and how many tokens it spans.
 fn extra_at(tokens: &[Token], i: usize) -> Option<(Extra, usize)> {
     let text = |k: usize| tokens.get(i + k).map(|t| t.text.as_str());
+    // Whether tokens[i + k] ends where the next token starts.
+    let touches = |k: usize| matches!((tokens.get(i + k), tokens.get(i + k + 1)), (Some(a), Some(b)) if a.end == b.start);
     match (text(0)?, text(1), text(2)) {
         ("open", Some("gl"), _) => Some((Extra::Convention(NormalConvention::OpenGl), 2)),
         ("direct", Some("x"), _) => Some((Extra::Convention(NormalConvention::DirectX), 2)),
-        ("d", Some("3"), Some("d")) => Some((Extra::Convention(NormalConvention::DirectX), 3)),
+        ("d", Some("3"), Some("d")) if touches(0) && touches(1) => Some((Extra::Convention(NormalConvention::DirectX), 3)),
         (first, _, _) => single_extra(first).map(|extra| (extra, 1)),
     }
 }
@@ -587,13 +614,13 @@ impl Extras {
     }
 
     /// The normal convention the words and `glued` state, or an error when they state both.
-    fn convention(&self, glued: Option<NormalConvention>) -> Result<Option<NormalConvention>, IgnoreReason> {
+    fn convention(&self, glued: &[NormalConvention]) -> Result<Option<NormalConvention>, IgnoreReason> {
         let stated = self.found.iter().filter_map(|extra| match extra {
             Extra::Convention(c) => Some(*c),
             _ => None,
         });
-        let mut result = glued;
-        for c in stated {
+        let mut result = None;
+        for c in glued.iter().copied().chain(stated) {
             match result {
                 Some(r) if r != c => return Err(IgnoreReason::ConflictingNormalConvention),
                 _ => result = Some(c),
@@ -790,6 +817,38 @@ mod tests {
     }
 
     #[test]
+    fn a_normal_word_next_to_the_role_words_states_its_convention() {
+        let convention = |name: &str| run(&[name]).sets.first().and_then(|s| s.maps.first()).and_then(|m| m.convention);
+        assert_eq!(one("brick_normalgl_normaldx.png"), Err(IgnoreReason::ConflictingNormalConvention));
+        assert_eq!(one("normalgl_normaldx_brick.png"), Err(IgnoreReason::ConflictingNormalConvention));
+        assert_eq!(convention("brick_normaldx_normal.png"), Some(NormalConvention::DirectX));
+        assert_eq!(convention("brick_normalgl_normal_gl.png"), Some(NormalConvention::OpenGl));
+        assert_eq!(convention("brick_normalgl_normalgl_4k.png"), Some(NormalConvention::OpenGl));
+        // The words next to the role words that name the same role are not in the stem.
+        let found = run(&[
+            "brick_normal.png",
+            "brick_normal_normaldx.png",
+            "NormalGL_Normal_brick.png",
+            "brick_diffuse_color.png",
+            "brick_diffuse_color_albedo_bc.png",
+            "albedo_col_diffuse_brick.png",
+        ]);
+        let summary: Vec<(&str, Vec<usize>)> = found.sets.iter().map(|s| (s.stem.as_str(), s.maps.iter().map(|m| m.index).collect())).collect();
+        assert_eq!(summary, [("brick", vec![0, 1, 2, 3, 4, 5])], "{:?}", found.ignored);
+        assert_eq!(one("brick_normal_nrm_normaldx_normalgl.png"), Err(IgnoreReason::ConflictingNormalConvention));
+        assert_eq!(one("brick_normal_diffuse_color_albedo.png"), Err(IgnoreReason::SeveralRoles));
+    }
+
+    #[test]
+    fn d3d_is_read_only_when_its_letters_touch() {
+        let found = run(&["panel_d_3_d_normal_gl.png"]);
+        let maps: Vec<(&str, MapRole, Option<NormalConvention>)> =
+            found.sets.iter().flat_map(|s| s.maps.iter().map(|m| (s.stem.as_str(), m.role, m.convention))).collect();
+        assert_eq!(maps, [("panel_d_3_d", MapRole::Normal, Some(NormalConvention::OpenGl))], "{:?}", found.ignored);
+        assert_eq!(one("panel_D3D_normal.png"), Ok((MapRole::Normal, "panel".to_string())));
+    }
+
+    #[test]
     fn several_sets_in_one_folder() {
         let found = run(&[
             "textures/brick_albedo.png",
@@ -849,6 +908,21 @@ mod tests {
         for (name, reason) in cases {
             assert_eq!(one(name), Err(reason), "{name}");
         }
+    }
+
+    #[test]
+    fn only_a_leaf_starting_with_dot_underscore_is_archive_metadata() {
+        assert_eq!(one("assets/._materials/brick_albedo.png"), Ok((MapRole::BaseColor, "brick".to_string())));
+        assert_eq!(one("assets\\._materials\\._brick_albedo.png"), Err(IgnoreReason::ArchiveMetadata));
+        assert_eq!(one("a/__MACOSX/b/brick_albedo.png"), Err(IgnoreReason::ArchiveMetadata));
+    }
+
+    #[test]
+    fn a_rooted_name_is_not_in_the_set_of_a_bare_name() {
+        let found = run(&["brick_albedo.png", "/brick_normal.png", "\\brick_roughness.png"]);
+        let summary: Vec<(&str, &str, Vec<usize>)> =
+            found.sets.iter().map(|s| (s.folder, s.stem.as_str(), s.maps.iter().map(|m| m.index).collect())).collect();
+        assert_eq!(summary, [("", "brick", vec![0]), ("/", "brick", vec![1, 2])]);
     }
 
     #[test]
