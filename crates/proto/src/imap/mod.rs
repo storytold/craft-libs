@@ -102,9 +102,32 @@ const MAX_FOUND: usize = 1_000;
 /// in: as many as fit the longest line read, at the longest a UID is written.
 pub const MAX_GMAIL_FOUND: usize = 5_000;
 
+/// Budgets shared by the commands of one session. Public constructors use the production caps.
+#[derive(Clone, Copy)]
+struct Limits {
+    responses: usize,
+    command_text: usize,
+    fetch_text: usize,
+    flag_bytes: usize,
+    label_bytes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            responses: MAX_RESPONSES,
+            command_text: MAX_COMMAND_TEXT,
+            fetch_text: MAX_FETCH_TEXT,
+            flag_bytes: MAX_FLAG_BYTES,
+            label_bytes: MAX_GMAIL_LABEL_BYTES,
+        }
+    }
+}
+
 /// An IMAP session on a stream.
 pub struct Imap<S> {
     wire: Wire<S>,
+    limits: Limits,
     /// The number in the next command's tag.
     next_tag: u32,
     secrets: Secrets,
@@ -470,8 +493,8 @@ impl Wanted {
 
     /// Most responses a fetch of this mailbox may bring: one for each message it may report, but
     /// never fewer than any other command.
-    fn responses(&self) -> usize {
-        self.cap.max(MAX_RESPONSES)
+    fn responses(&self, minimum: usize) -> usize {
+        self.cap.max(minimum)
     }
 
     fn wants(&self, uid: u32) -> bool {
@@ -678,8 +701,13 @@ impl<S: Read + Write> Imap<S> {
 
     /// Continue on a stream that already greeted (after the caller wrapped it in TLS).
     pub fn resume(stream: S) -> Self {
+        Self::resume_with_limits(stream, Limits::default())
+    }
+
+    fn resume_with_limits(stream: S, limits: Limits) -> Self {
         Imap {
             wire: Wire::new(stream),
+            limits,
             next_tag: 1,
             secrets: Secrets::default(),
             capabilities: None,
@@ -689,8 +717,8 @@ impl<S: Read + Write> Imap<S> {
             appended: Vec::new(),
             leaving: false,
             text_seen: 0,
-            response_cap: MAX_RESPONSES,
-            text_cap: MAX_COMMAND_TEXT,
+            response_cap: limits.responses,
+            text_cap: limits.command_text,
             skip_long: false,
             skipped: false,
             idle_tag: None,
@@ -884,6 +912,7 @@ impl<S: Read + Write> Imap<S> {
 
     fn fetch_flags(&mut self, set: &str, ids: bool, labels_wanted: bool) -> Result<Vec<Fetched>, ProtoError> {
         type FetchedFlags = (Vec<String>, Option<u64>, Option<Vec<String>>);
+        let limits = self.limits;
         let mut found: BTreeMap<u32, FetchedFlags> = BTreeMap::new();
         // The bytes of labels and of flags kept so far, all messages together.
         let mut label_bytes = 0usize;
@@ -896,12 +925,12 @@ impl<S: Read + Write> Imap<S> {
         };
         let command = Self::fetch(set, items)?;
         let mut wanted = Wanted::new(set, &self.selected).ok_or_else(|| ProtoError::Protocol(said!("not a set of messages")))?;
-        self.response_cap = wanted.responses();
+        self.response_cap = wanted.responses(self.limits.responses);
         let claimed = usize::try_from(self.selected.exists).unwrap_or(usize::MAX);
-        self.text_cap = claimed.saturating_mul(FETCH_TEXT_PER_MESSAGE).clamp(MAX_COMMAND_TEXT, MAX_FETCH_TEXT);
+        self.text_cap = claimed.saturating_mul(FETCH_TEXT_PER_MESSAGE).clamp(limits.command_text, limits.fetch_text);
         let answered = self.run(command, &mut |values| {
             // A response with a UID shows the message is there, even one that forgot the flags.
-            if flag_bytes <= MAX_FLAG_BYTES
+            if flag_bytes <= limits.flag_bytes
                 && let Some(item) = Item::from(values)
                 && wanted.wants(item.uid)
                 && (found.contains_key(&item.uid) || wanted.room(found.len()))
@@ -911,7 +940,7 @@ impl<S: Read + Write> Imap<S> {
                 let size = item.flags.iter().flatten().map(|flag| flag.len().saturating_add(FLAG_OVERHEAD)).sum::<usize>();
                 let entry = if found.contains_key(&item.uid) { 0 } else { ENTRY_OVERHEAD };
                 flag_bytes = flag_bytes.saturating_add(size).saturating_add(entry);
-                if flag_bytes > MAX_FLAG_BYTES {
+                if flag_bytes > limits.flag_bytes {
                     return;
                 }
                 let (flags, id, labels) = found.entry(item.uid).or_default();
@@ -924,17 +953,17 @@ impl<S: Read + Write> Imap<S> {
                 }
                 if labels_wanted && let Some(later) = item.gmail_labels {
                     let size = later.iter().map(|label| label.len().saturating_add(LABEL_OVERHEAD)).sum::<usize>();
-                    if label_bytes.saturating_add(size) <= MAX_GMAIL_LABEL_BYTES {
+                    if label_bytes.saturating_add(size) <= limits.label_bytes {
                         label_bytes = label_bytes.saturating_add(size);
                         *labels = Some(later);
                     }
                 }
             }
         });
-        self.response_cap = MAX_RESPONSES;
-        self.text_cap = MAX_COMMAND_TEXT;
+        self.response_cap = limits.responses;
+        self.text_cap = limits.command_text;
         answered?;
-        if flag_bytes > MAX_FLAG_BYTES {
+        if flag_bytes > limits.flag_bytes {
             return Err(ProtoError::Protocol(said!("more flags than one listing keeps")));
         }
         wanted.check()?;
@@ -949,7 +978,7 @@ impl<S: Read + Write> Imap<S> {
         let mut out: Vec<(u32, u64)> = Vec::new();
         let command = Self::fetch(set, "(UID RFC822.SIZE)")?;
         let mut wanted = Wanted::new(set, &self.selected).ok_or_else(|| ProtoError::Protocol(said!("not a set of messages")))?;
-        self.response_cap = wanted.responses();
+        self.response_cap = wanted.responses(self.limits.responses);
         let answered = self.run(command, &mut |values| {
             if let Some(Item { uid, size: Some(size), .. }) = Item::from(values)
                 && wanted.wants(uid)
@@ -958,7 +987,7 @@ impl<S: Read + Write> Imap<S> {
                 out.push((uid, size));
             }
         });
-        self.response_cap = MAX_RESPONSES;
+        self.response_cap = self.limits.responses;
         answered?;
         wanted.check()?;
         out.sort_by_key(|(uid, _)| *uid);
