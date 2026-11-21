@@ -146,13 +146,35 @@ impl Reader {
             }
             "ulnone" => self.st.fmt.underline = false,
             "strike" | "striked" => self.st.fmt.strike = on,
-            "super" | "up" => {
+            "super" => {
                 self.st.fmt.sup = on;
                 self.st.fmt.sub = false;
             }
-            "sub" | "dn" => {
+            "sub" => {
                 self.st.fmt.sub = on;
                 self.st.fmt.sup = false;
+            }
+            // Exact raises and lowers are half-point positions, not superscript/subscript:
+            // the amount is the run's `w:position`, which superscript would lose (#7132).
+            "up" => {
+                let x = self.st.fmt.extra.get_or_insert_with(Default::default);
+                if on && pv > 0 {
+                    x.position = Some((pv as f32 / 2.0).clamp(-1584.0, 1584.0));
+                    self.st.fmt.sup = false;
+                    self.st.fmt.sub = false;
+                } else {
+                    x.position = None;
+                }
+            }
+            "dn" => {
+                let x = self.st.fmt.extra.get_or_insert_with(Default::default);
+                if on && pv > 0 {
+                    x.position = Some((-(pv as f32) / 2.0).clamp(-1584.0, 1584.0));
+                    self.st.fmt.sup = false;
+                    self.st.fmt.sub = false;
+                } else {
+                    x.position = None;
+                }
             }
             "nosupersub" => {
                 self.st.fmt.sup = false;

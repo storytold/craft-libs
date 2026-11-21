@@ -19,7 +19,8 @@ const C_KUL: u16 = 0x2A3E; // underline style (Kul)
 const C_ICO: u16 = 0x2A42; // palette colour
 const C_CR: u16 = 0x6870; // explicit COLORREF
 const C_HPS: u16 = 0x4A43; // half-points
-const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
+const C_HPS_POS: u16 = 0x4845; // raised/lowered by half-points (exact position)
+const C_ISS: u16 = 0x2A3C; // sprmCIss: 0 baseline, 1 superscript, 2 subscript
 const C_FTC0: u16 = 0x4A4F; // font index (ASCII)
 const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
@@ -253,14 +254,19 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
             }
         }
         C_HPS_POS => {
+            // An exact raise or lower in half-points: the run's `w:position`, not a
+            // superscript — which would lose the amount (#7132). Superscript and subscript
+            // come from `iss` below.
             if let Some(pos) = s16_of(prl) {
-                p.vert_align = Some(match pos {
-                    pos if pos > 0 => VertAlign::Superscript,
-                    pos if pos < 0 => VertAlign::Subscript,
-                    _ => VertAlign::Baseline,
-                });
+                p.position = Some((f32::from(pos) / 2.0).clamp(-1584.0, 1584.0));
             }
         }
+        C_ISS => match u16_of(prl).map(|v| v & 0xFF) {
+            Some(1) => p.vert_align = Some(VertAlign::Superscript),
+            Some(2) => p.vert_align = Some(VertAlign::Subscript),
+            Some(_) => p.vert_align = Some(VertAlign::Baseline),
+            None => {}
+        },
         C_FTC0 => {
             if let Some(name) = u16_of(prl).and_then(|i| fonts.get(i as usize)) {
                 p.font = Some(name.clone());
