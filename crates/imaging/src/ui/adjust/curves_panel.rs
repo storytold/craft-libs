@@ -12,20 +12,22 @@ use craft_behavior::{EditEvent, EditEvents, IconId, Mixed};
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
 use craft_ui::buttons::{Button, ToggleButton};
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
     Bind, CanvasGesture, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _,
-    ShowContainer as _, clicked,
+    ShowContainer as _, Sizing, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
+use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::TypeRole;
 use egui::{Id, Response, Ui};
 
-use super::context::{read_shown, write_shown};
-use super::{AdjustContext, AdjustWords, ToneChannel, ToneChannelCommands, ToneChannels, TonePicker, TonePickerRow};
-use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveRules};
+use super::context::{channel_commands, read_shown, write_shown};
+use super::{AdjustContext, AdjustWords, LevelsClip, ToneChannel, ToneChannelCommands, ToneChannels, TonePicker, TonePickerRow};
+use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveEnd, CurveRules};
 use crate::ui::histogram::{ChannelColor, HistogramData};
 
 /// The levels of a Curves value (8-bit tones) and the most points Photoshop allows.
@@ -118,6 +120,10 @@ pub struct CurvesPanelOutput {
     pub picker: Option<Option<TonePicker>>,
     /// The selected point of the shown curve after the pass.
     pub selected: Option<usize>,
+    /// Which end an Alt (Option) press or drag moves now (any press or drag with Show Clipping on), by its end point
+    /// or its input slider, for the host's clipping display: the one Levels reports for its input thumbs. `None`
+    /// otherwise.
+    pub clipping: Option<LevelsClip>,
 }
 
 impl Outcome for CurvesPanelOutput {
@@ -128,14 +134,56 @@ impl Outcome for CurvesPanelOutput {
     }
 }
 
-/// The panel's own state: the selected point of the shown channel and the channel it belongs to.
+/// The panel's own state: the selected point of the shown channel, the channel it belongs to, and the Show Clipping
+/// check box.
 #[derive(Clone, Debug, Default)]
 struct Shown {
     channel: usize,
     selected: Option<usize>,
+    show_clipping: bool,
 }
 
 type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
+
+/// The plot height of a panel sized with [`CurvesPanel::fill_height`], from the visible room and what the panel showed
+/// besides its plot in the last real pass (kept under the parent's id).
+struct Fit {
+    id: Id,
+    /// The plot height asked for, down to the least; none without `fill_height`.
+    plot: Option<f32>,
+    /// Where the panel starts.
+    top: f32,
+}
+
+impl Fit {
+    fn read(ui: &Ui, reserve: Option<f32>) -> Self {
+        let id = ui.scope_id().with("curves-panel-fit");
+        let top = ui.cursor().top();
+        let plot = reserve.map(|reserve| {
+            let least = Env::of(ui).tokens.tokens().size.plot.height;
+            let rest = ui.ctx().data(|d| d.get_temp::<f32>(id));
+            let room = ui.clip_rect().bottom() - top - reserve.max(0.0);
+            match rest {
+                Some(rest) if room.is_finite() => (room - rest).max(least),
+                _ => least,
+            }
+        });
+        Fit { id, plot, top }
+    }
+
+    /// Keeps what the panel shown at `response` took besides its plot, for the next pass. A measuring run's sizes are
+    /// not the panel's.
+    fn keep(&self, ui: &Ui, response: &Response) {
+        let Some(plot) = self.plot else { return };
+        if craft_ui::runtime::measure::active(ui.ctx()) {
+            return;
+        }
+        let rest = response.rect.bottom() - self.top - plot;
+        if rest.is_finite() {
+            ui.ctx().data_mut(|d| d.insert_temp(self.id, rest.max(0.0)));
+        }
+    }
+}
 
 /// The Curves adjustment: Image › Adjustments › Curves and a Curves layer's Properties panel.
 ///
@@ -146,12 +194,17 @@ type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
 /// 3. The mode row: two icon-only toggle buttons ("Edit points to modify the curve", "Draw to modify the curve", the
 ///    current one pressed) and Smooth (enabled in pencil mode only).
 /// 4. The [`CurveEditor`] for the shown channel: in its colour, over its histogram, in pencil mode for a drawn curve,
-///    and, on a composite only, the other channels' curves as overlays (Photoshop; none for an isolated channel).
+///    and, on a composite only, the other channels' curves as overlays (Photoshop; none for an isolated channel). In
+///    points mode the black and white input sliders sit under its gradient bar, in the dialog and in Properties.
 /// 5. The hint line, with the key names from the platform's shortcut words.
 ///
 /// - **Smooth** replaces the shown map with its moving average over 7 levels (radius 3, shrunk at the ends so the
 ///   first and last levels keep their values: PhotoCraft's `smooth_curve_map`), as one `Set`.
 /// - **Mode icons** report [`CurvesPanelOutput::mode`]; the current mode's icon reports nothing.
+/// - **Clipping**: Alt held on the press or drag of the black or white end point, or of its input slider, reports
+///   [`CurvesPanelOutput::clipping`] for the host's clipping display, from the press on; it ends with the release or
+///   with Alt. With the **Show Clipping** check box on (the panel keeps it), the press or drag reports without Alt.
+///   Points mode only.
 /// - **Selection**: the selected point is the panel's own state ([`CurvesPanelOutput::selected`]); the host sets
 ///   it with [`select`](Self::select), after [`add_point_from_sample`](Self::add_point_from_sample).
 /// - **Sampling under the dialog**: with a [`canvas`](Self::canvas) the panel lets the ⌘/Ctrl-click on the image
@@ -184,12 +237,23 @@ pub struct CurvesPanel<'a> {
     /// Dialog or Properties panel.
     #[prop]
     context: AdjustContext,
+    /// The commands that pick the Channel select's entries, by position, when the host runs them itself (a Properties
+    /// panel): the select shows their keys beside the entries. A dialog's panel runs and shows its own
+    /// [`ToneChannelCommands`].
+    #[prop]
+    channel_keys: Option<&'a [CommandRef]>,
     /// Selects point `index` of the shown curve in this pass, as a click on it would.
     #[prop]
     select: Option<usize>,
     /// Whether the whole panel takes input.
     #[prop]
     enabled: bool,
+    /// Sizes the graph to the panel the Curves panel shows in: the graph takes the width, and the height the visible
+    /// room leaves under the panel's top once its other rows and `reserve` (the host's controls under the panel) are
+    /// counted, so it is wider or taller than square as the panel is resized. Down to the least plot height; a panel
+    /// too short for that scrolls. Without it the graph is a square.
+    #[prop]
+    fill_height: Option<f32>,
 }
 
 impl<'a> CurvesPanel<'a> {
@@ -207,8 +271,10 @@ impl<'a> CurvesPanel<'a> {
             picker_enabled: [true; 3],
             pickers_unavailable: false,
             context: AdjustContext::dialog(true),
+            channel_keys: None,
             select: None,
             enabled: true,
+            fill_height: None,
         }
     }
 
@@ -297,9 +363,12 @@ impl<'a> CurvesPanel<'a> {
             picker_enabled,
             pickers_unavailable,
             context,
+            channel_keys,
             select,
             enabled,
+            fill_height,
         } = self;
+        let key_commands = channel_commands(channel_keys, context);
         let env = Env::of(ui);
         let words = env.words::<AdjustWords>();
         let view = env.view();
@@ -308,8 +377,11 @@ impl<'a> CurvesPanel<'a> {
         let curve_channels: Vec<CurveChannel> = channels.as_slice().iter().map(|c| CurveChannel::new(c.label(&words), c.color())).collect();
         let (mut edit, mut mode, mut picker) = (EditEvents::new(), None, None);
         let mut selected = None;
+        let mut clipping = None;
         let mut shown_channel = 0;
+        let fit = Fit::read(ui, fill_height);
         let stack = Stack::new().label(label).enabled(enabled);
+        let stack = if fit.plot.is_some() { stack.sizing(Sizing::FillWidth) } else { stack };
         // Alt+2…Alt+6 pick the Channel select's entry in a dialog; Properties has no such keys.
         let stack = if context.is_dialog() { stack.command_scope(ToneChannelCommands::SCOPE) } else { stack };
         let group = stack.show(ui, |ui, cx| {
@@ -362,14 +434,25 @@ impl<'a> CurvesPanel<'a> {
             let mut picked = channel;
             // No channels (an action whose target is unresolved): no Channel select.
             if !entries.is_empty() {
+                // Each entry shows the key that picks it, as the keymap has it now (Photoshop's Alt+2 to Alt+5).
+                let keys: Vec<String> = key_commands
+                    .iter()
+                    .map(|command| craft_ui::runtime::commands::chord(ui.ctx(), command).map(|chord| chord.display(os)).unwrap_or_default())
+                    .collect();
                 Row::new().show(ui, |ui, _| {
                     Text::new(words.channel.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
-                    if let Some(&at) = Select::new(words.channel.clone(), Bind::given(channel), &entries).show(ui).value() {
+                    let keys = keys.clone();
+                    let select = Select::new(words.channel.clone(), Bind::given(channel), &entries).decorate(move |at, row| match keys.get(*at) {
+                        Some(key) if !key.is_empty() => row.trailing(key.clone()),
+                        _ => row,
+                    });
+                    if let Some(&at) = select.show(ui).value() {
                         picked = at;
                     }
                 });
             }
             let mut smooth = false;
+            let mut show_clipping = state.show_clipping;
             Row::new().show(ui, |ui, _| {
                 for (target, icon, name) in
                     [(CurvesMode::Points, "spline", words.edit_points.clone()), (CurvesMode::Pencil, "pencil", words.draw_curve.clone())]
@@ -382,6 +465,11 @@ impl<'a> CurvesPanel<'a> {
                 }
                 let can_smooth = pencil && matches!(curve, Curve::Map(_));
                 smooth = clicked(&Button::new(words.smooth.clone()).enabled(can_smooth).tooltip(words.smooth_tip.clone()).show(ui));
+                Checkbox::new(Bind::bound(&mut show_clipping))
+                    .label(words.show_clipping.clone())
+                    .tooltip(words.show_clipping_tip.clone())
+                    .enabled(!pencil)
+                    .show(ui);
             });
 
             let selection = if picked == channel { select.or(kept_selection) } else { None };
@@ -393,9 +481,14 @@ impl<'a> CurvesPanel<'a> {
                 .hint(hint)
                 .levels(255)
                 .max_points(RULES.max_points)
-                .selection(selection);
+                .selection(selection)
+                .show_clipping(show_clipping)
+                .input_sliders();
             if pencil {
                 editor = editor.pencil();
+            }
+            if let Some(height) = fit.plot {
+                editor = editor.plot_height(height);
             }
             if let Some(data) = &data {
                 editor = editor.histogram(data);
@@ -405,6 +498,10 @@ impl<'a> CurvesPanel<'a> {
             }
             let shown = editor.show(ui);
             selected = shown.selected;
+            clipping = shown.clipping.map(|end| match end {
+                CurveEnd::Black => LevelsClip::Shadows,
+                _ => LevelsClip::Highlights,
+            });
             let mapped = |one: Curve| {
                 let mut next = value.clone();
                 if let Some(slot) = next.curves.get_mut(channel) {
@@ -425,8 +522,9 @@ impl<'a> CurvesPanel<'a> {
             shown_channel = if picked == channel || !edit.is_empty() { channel } else { picked };
             write_shown(&mut channel_bind, cx, stored, shown_channel);
             let kept_channel = if channel_bind.is_some() { stored } else { shown_channel };
-            *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None } };
+            *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None }, show_clipping };
         });
-        CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected }
+        fit.keep(ui, &group.output);
+        CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected, clipping }
     }
 }

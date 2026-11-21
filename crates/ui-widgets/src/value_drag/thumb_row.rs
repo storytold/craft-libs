@@ -1,8 +1,9 @@
 //! `ThumbRow`: triangle thumbs on one row, each setting a value of its own, as the input and output rows of a levels
 //! editor do. One leaf with a focusable thumb part per value. A press on a thumb grabs it and a drag moves it by the
-//! pointer's travel; a press elsewhere on the row jumps the nearest thumb there; arrows, the wheel and AccessKit step
-//! the focused thumb. Each value is mixed or not on its own. The row's rules (order, wrap, split halves) are
-//! `RowRules`; what a press off the thumbs does is the row's [`OffThumbs`].
+//! pointer's travel; a press elsewhere on the row jumps the nearest thumb there; arrows and AccessKit step the focused
+//! thumb, and the wheel the thumb nearest the pointer, which it focuses. Each value is mixed or not on its own. The
+//! row's rules (order, wrap, split halves) are `RowRules`; what a press off the thumbs does is the row's
+//! [`OffThumbs`].
 //!
 //! Alt keeps the meaning it has in Photoshop's Blend If: on a split thumb it moves one half alone, at full rate on a
 //! drag (from the moment it is held) and by the plain step on a key or the wheel; without it the pair moves together.
@@ -255,8 +256,9 @@ impl Thumb {
         self
     }
 
-    /// Alt held on a drag of this thumb is reported in [`ThumbRowOutput::held`] and is not the fine scale: the thumb
-    /// moves at full rate (a levels black or white point, where Alt shows the clipped pixels).
+    /// Alt held on a press or drag of this thumb is reported in [`ThumbRowOutput::held`], and on the wheel in
+    /// [`ThumbRowOutput::wheeled`], and is not the fine scale: the thumb moves at full rate (a levels black or white
+    /// point, where Alt shows the clipped pixels).
     #[must_use]
     pub fn alt_reports(mut self) -> Self {
         self.alt_reports = true;
@@ -794,7 +796,15 @@ struct Held {
     mods: Mods,
 }
 
-/// The thumb a running drag moves and the modifiers held on it.
+/// The thumb the button is down on before a drag begins, and the modifiers held, in the latest pass.
+#[derive(Clone, Copy, Default)]
+struct Pressed(Option<ThumbHold>);
+
+/// The thumb the wheel moved in the latest pass, and the modifiers held on it.
+#[derive(Clone, Copy, Default)]
+struct Wheeled(Option<ThumbHold>);
+
+/// The thumb a press or a running drag moves and the modifiers held on it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ThumbHold {
@@ -810,9 +820,13 @@ pub struct ThumbHold {
 pub struct ThumbRowOutput<const N: usize> {
     /// The row's edit.
     pub edit: EditResponse<[Mixed<f64>; N]>,
-    /// The drag in progress: its thumb and the modifiers held, so an editor can show what Alt means on a thumb that
-    /// asked for [`Thumb::alt_reports`]. `None` when no drag runs.
+    /// The press or drag in progress on a thumb: its thumb and the modifiers held, so an editor can show what Alt
+    /// means on a thumb that asked for [`Thumb::alt_reports`]. It starts with the button going down on the thumb,
+    /// before the pointer moves, and ends with the release. `None` when the button is not down on a thumb.
     pub held: Option<ThumbHold>,
+    /// The thumb the wheel moved this pass and the modifiers held on it, so an editor can show what Alt means on a
+    /// thumb that asked for [`Thumb::alt_reports`] while the wheel moves it. `None` in a pass the wheel moved none.
+    pub wheeled: Option<ThumbHold>,
     /// The horizontal span the thumbs' centres travel along: the row's rect inset by half a thumb on each side. A
     /// thumb sits at one end of it at the range minimum and at the other at the maximum (the right end under a
     /// right-to-left flow). An editor places a plot or bar over it so the thumbs line up with what they edit.
@@ -885,6 +899,13 @@ pub struct ThumbRow<'a, const N: usize> {
     track_face: Option<TrackFace<'a>>,
 }
 
+/// The width and height of a row's thumb. A row's thumbs travel along its rect inset by half this width, so a
+/// component that lines a row up with a plot above it widens the row by this width.
+pub fn thumb_size(cx: &StyleCx<'_>) -> Vec2 {
+    let handle = &cx.tokens.size.handle;
+    Vec2::new(handle.md + handle.sm * THUMB_WIDTH_IN_SMALL_HANDLES, handle.md)
+}
+
 /// The values of a row whose binding is mixed as a whole: every part is mixed.
 fn all_mixed<const N: usize>() -> [Mixed<f64>; N] {
     std::array::from_fn(|_| Mixed::Mixed)
@@ -947,7 +968,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
 
     fn style(cx: &StyleCx<'_>, _: ThumbRowStyleKey<N>) -> ThumbRowStyle {
         let control = cx.control();
-        let (colors, handle) = (&cx.tokens.color, &cx.tokens.size.handle);
+        let colors = &cx.tokens.color;
         let length = cx.tokens.size.length.track;
         let fixed = |rest: Rgba, disabled: Rgba| {
             Stateful::new(cx.color(rest)).off(States::new(cx.color(rest), cx.color(rest), cx.color(rest), cx.color(disabled)))
@@ -959,7 +980,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             edge: fixed(colors.text.muted, colors.text.disabled),
             ring: ThumbRing::new(cx),
             hit: cx.tokens.size.hit.target,
-            thumb: Vec2::new(handle.md + handle.sm * THUMB_WIDTH_IN_SMALL_HANDLES, handle.md),
+            thumb: thumb_size(cx),
             track: TrackLook { thickness: cx.tokens.size.ramp.bar, ..cx.track() },
             length,
             span_faint: cx.color(colors.text.faint),
@@ -980,7 +1001,9 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
     /// No wheel bits: as a value control the row takes the vertical wheel only while focused or armed, and no scope
     /// frees it, since a wheel over the track has no one thumb to step.
     fn sense(&self) -> Sense {
-        Sense::empty()
+        // The wheel steps a thumb on either axis: a row lies sideways, and a mouse wheel with a modifier held may
+        // arrive as a horizontal scroll.
+        Sense::WHEEL_X | Sense::WHEEL_Y
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
@@ -1034,9 +1057,18 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
         let size = cx.style.thumb;
         let row = cx.value().cloned().unwrap_or_else(all_mixed);
         let parts: Vec<PartRef> = std::iter::once(PartRef::from(ROW)).chain((0..N).map(|i| Thumb::PART.at(i as u64))).collect();
+        let mut pressed = None;
         for part in parts {
             let press = cx.part(part).press;
             match press.phase {
+                // The button is down on a thumb and the pointer has not left the slop yet: no drag runs, but an editor
+                // that shows what Alt means on a thumb shows it from the press, as it will through the drag.
+                PressPhase::Down { start, .. } | PressPhase::Held { start, .. } => {
+                    let layout = Layout::new(rules, rect, size, rtl, reach, false, off);
+                    if let Some(Press::Grab(thumb)) = layout.press(&rules.placed(&row), start.origin.x) {
+                        pressed = Some(ThumbHold { thumb, mods: press.mods });
+                    }
+                }
                 PressPhase::DragStart { start, pos, .. } => {
                     // Alt moves a half of a split thumb alone while it is held, from the values the drag began at.
                     let layout = Layout::new(rules, rect, size, rtl, reach, press.mods.alt, off);
@@ -1087,6 +1119,7 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
                 _ => {}
             }
         }
+        *cx.memory::<Pressed>() = Pressed(pressed);
         let current = |cx: &Cx<'_, Self>| cx.value().cloned().unwrap_or_else(all_mixed);
         if let Some(part) = cx.reset_part().filter(|part| part.key == Thumb::PART)
             && let Some(thumb) = part.index.map(|i| i as usize).filter(|i| *i < N)
@@ -1102,19 +1135,42 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
             }
         }
         let focused = cx.active_part().filter(|part| part.key == Thumb::PART).and_then(|part| part.index).map(|i| i as usize).filter(|i| *i < N);
-        let Some(thumb) = focused else { return };
-        let falling = rules.thumbs[thumb].falling;
-        let direction = |mv: NavMove| if falling { against(mv) } else { mv };
-        while let Some((mv, mods)) = cx.intents().take_move() {
-            if !running {
-                cx.set(rules.apply(&RowOp::new(thumb, ThumbOp::Move(direction(mv), mods)), &current(&*cx)));
+        if let Some(thumb) = focused {
+            let falling = rules.thumbs[thumb].falling;
+            let direction = |mv: NavMove| if falling { against(mv) } else { mv };
+            while let Some((mv, mods)) = cx.intents().take_move() {
+                if !running {
+                    cx.set(rules.apply(&RowOp::new(thumb, ThumbOp::Move(direction(mv), mods)), &current(&*cx)));
+                }
             }
         }
+        let mut wheeled = None;
         if let Some(wheel) = cx.take_wheel().filter(|_| !running) {
-            // A falling thumb moves the way the wheel points, so its value goes the other way.
-            let wheel = if falling { Wheel::new(-wheel.scroll, wheel.mods, wheel.unit, wheel.phase) } else { wheel };
-            cx.set(rules.apply(&RowOp::new(thumb, ThumbOp::Wheel(wheel, rtl)), &current(&*cx)));
+            // The wheel moves the thumb nearest the pointer (the row takes it once focused or armed by a press), and a
+            // focused row moves its focus there, so the keys go on with it; a wheel without a position moves the
+            // focused thumb.
+            let layout = Layout::new(rules, rect, size, rtl, reach, false, off);
+            let xs = layout.xs(&rules.placed(&current(&*cx)));
+            let nearest = wheel.at.and_then(|at| (0..N).min_by(|&a, &b| (xs[a] - at.x).abs().total_cmp(&(xs[b] - at.x).abs())));
+            if let Some(thumb) = nearest.or(focused) {
+                if nearest.is_some() && focused.is_some_and(|f| f != thumb) {
+                    cx.focus_part(Thumb::PART.at(thumb as u64));
+                }
+                let falling = rules.thumbs[thumb].falling;
+                let mut moved = wheel;
+                // A falling thumb moves the way the wheel points, so its value goes the other way.
+                if falling {
+                    moved.scroll = -moved.scroll;
+                }
+                // Alt on a thumb that reports it is the report, not the fine scale: the wheel moves it a whole step.
+                if rules.thumbs[thumb].alt_reports {
+                    moved.mods.alt = false;
+                }
+                cx.set(rules.apply(&RowOp::new(thumb, ThumbOp::Wheel(moved, rtl)), &current(&*cx)));
+                wheeled = Some(ThumbHold { thumb, mods: wheel.mods });
+            }
         }
+        *cx.memory::<Wheeled>() = Wheeled(wheeled);
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
@@ -1192,7 +1248,13 @@ impl<const N: usize> Component for ThumbRow<'_, N> {
     fn finish(self, mut cx: Cx<'_, Self>) -> ThumbRowOutput<N> {
         let running = cx.gesture().is_some();
         let travel = travel(cx.rect, cx.style.thumb.x);
-        let held = running.then(|| cx.memory::<Held>().clone()).and_then(|held| held.thumb.map(|thumb| ThumbHold { thumb, mods: held.mods }));
-        ThumbRowOutput { edit: cx.edit_response(), held, travel }
+        let held = if running {
+            let held = cx.memory::<Held>().clone();
+            held.thumb.map(|thumb| ThumbHold { thumb, mods: held.mods })
+        } else {
+            cx.memory::<Pressed>().0
+        };
+        let wheeled = cx.memory::<Wheeled>().0;
+        ThumbRowOutput { edit: cx.edit_response(), held, wheeled, travel }
     }
 }

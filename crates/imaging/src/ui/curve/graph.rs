@@ -4,20 +4,25 @@ use super::model::{Curve, CurveRules, follow_corners};
 use super::ramp::ToneRamp;
 use super::words::CurveWords;
 use crate::ui::histogram::{ChannelColor, HistogramData, HistogramInks, HistogramLook, PlotFrame, paint_bins, paint_frame};
-use craft_behavior::{HitLevel, HitPriority, Input, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense};
+use craft_behavior::{HitLevel, HitPriority, Input, Metrics, Mixed, NavMove, PartKey, PointerButton, PressPhase, Sense};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Animate as _, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi,
+    PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::access::Name;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, DataColor, FocusLook, Mix as _, RuleKind, StyleColor, StyleCx};
+use craft_ui::value_drag::{Thumb, ThumbRow, thumb_size};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 use std::ops::Deref;
 use std::rc::Rc;
+
+/// How long the clipping display stays after the last wheel turn on an end's input slider, in seconds: a turn of the
+/// wheel or a trackpad swipe arrives as a burst of events with short gaps, and the display holds across them.
+const WHEEL_CLIP_HOLD: f64 = 0.4;
 
 /// The plot of the graph: the area inside the border, where levels `0..=levels` map to.
 pub(super) const PLOT: PartKey = PartKey::new("plot");
@@ -36,6 +41,54 @@ const NUDGE_LARGE: f32 = 10.0;
 
 /// The greatest side of the graph, in least plot widths (`size.plot.width`; 300 at a 240 plot).
 const MOST_IN_PLOTS: f32 = 1.25;
+
+/// The least distance, in levels, an end point's input slider keeps from its neighbouring point's input.
+const INPUT_GAP: f32 = 4.0;
+
+/// An end point of a curve: the black one (the first point) or the white one (the last).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CurveEnd {
+    /// The first point, which sets what clips to black.
+    Black,
+    /// The last point, which sets what clips to white.
+    White,
+}
+
+/// The input level the `end` point of `points` takes when its slider is moved to `level`: a whole level, at least
+/// [`INPUT_GAP`] from the neighbouring point's input and within `0..=levels`. Where the neighbour is closer than the gap,
+/// the bound that cannot be met gives way. `None` without two points.
+pub(super) fn input_slider_level(points: &[[f32; 2]], end: CurveEnd, level: f32, levels: f32) -> Option<f32> {
+    let level = if level.is_finite() { level } else { 0.0 };
+    let (lo, hi) = match end {
+        CurveEnd::Black => {
+            let lo = 0.0;
+            (lo, (points.get(1)?[0] - INPUT_GAP).max(lo))
+        }
+        CurveEnd::White => {
+            let hi = levels;
+            ((points.get(points.len().checked_sub(2)?)?[0] + INPUT_GAP).min(hi), hi)
+        }
+    };
+    Some(level.clamp(lo, hi).round())
+}
+
+/// `curve` with the inputs of its end points at the input sliders' `values` (black, white), each kept by
+/// [`input_slider_level`]; the outputs stay. A mixed value leaves its end as it is.
+fn with_inputs(curve: &mut Curve, values: &[Mixed<f64>; 2], levels: f32) {
+    let Curve::Points { points, .. } = curve else { return };
+    for (end, value) in [CurveEnd::Black, CurveEnd::White].into_iter().zip(values) {
+        let Some(&value) = value.same() else { continue };
+        let Some(level) = input_slider_level(points, end, value as f32, levels) else { continue };
+        let at = match end {
+            CurveEnd::Black => 0,
+            CurveEnd::White => points.len().saturating_sub(1),
+        };
+        if let Some(point) = points.get_mut(at) {
+            point[0] = level;
+        }
+    }
+}
 
 /// One channel of a curve dialog: its name and colour.
 #[derive(Clone, Debug, PartialEq)]
@@ -221,9 +274,14 @@ pub struct CurveGraphStyle {
     /// The least and the greatest side of the graph, tone bars included; between them it takes the room it is given.
     least: f32,
     most: f32,
+    /// The least height of a plot whose height the host sets.
+    least_plot: f32,
     /// Thickness of the tone bars and the gap between them and the plot.
     bar: f32,
     bar_gap: f32,
+    /// The height of the input sliders' row and the width of one slider.
+    slider_row: f32,
+    slider: f32,
     /// Radius around a point that takes a press.
     hit: f32,
     /// How far outside the plot a dragged interior point is removed.
@@ -253,13 +311,15 @@ fn bar_end(color: ChannelColor, cx: &StyleCx<'_>) -> DataColor {
     DataColor::new(Color32::from_rgba_unmultiplied(r, g, b, a))
 }
 
-/// The squares the graph is laid out in.
+/// The rects the graph is laid out in.
 #[derive(Clone, Copy, Debug)]
 struct Frame {
     plot: Rect,
     map: Map,
     under: Rect,
     left: Rect,
+    /// The input sliders' row, under the bottom tone bar: its sliders' centres travel along the value area's width.
+    sliders: Option<Rect>,
 }
 
 /// The pointer's hold on a point.
@@ -297,6 +357,9 @@ pub struct CurveGraphOutput {
     pub edit: EditResponse<Curve>,
     /// The selected point after the pass.
     pub selected: Option<usize>,
+    /// The end point an Alt (Option) press or drag moves this pass (any press or drag of it with Show Clipping on), by
+    /// its point or its input slider, for the host's clipping display; `None` otherwise.
+    pub clipping: Option<CurveEnd>,
 }
 
 impl Outcome for CurveGraphOutput {
@@ -346,6 +409,13 @@ pub struct CurveGraph<'a> {
     /// Whether the tone bars show under the plot and beside it.
     #[prop]
     bars: bool,
+    /// A black and a white slider under the plot move the end points' inputs; their outputs stay.
+    #[prop(flag)]
+    input_sliders: bool,
+    /// The height of the plot, set by a host that sizes the graph to its panel: the graph then takes the width of
+    /// its room and this height, wider or taller than square. Without it the graph is a square.
+    #[prop]
+    plot_height: Option<f32>,
     /// Pencil mode: a drag draws one output per input level.
     #[prop(flag)]
     pencil: bool,
@@ -364,8 +434,13 @@ pub struct CurveGraph<'a> {
     /// The selected point.
     #[prop]
     selection: Option<usize>,
+    /// The clipping display shows while an end point moves without Alt held too: the Show Clipping check box.
+    #[prop]
+    show_clipping: bool,
     /// The selection after `update`, for the output.
     chosen: Option<usize>,
+    /// The end point an Alt press or drag moves this pass, for the output.
+    clip: Option<CurveEnd>,
 }
 
 impl<'a> CurveGraph<'a> {
@@ -380,13 +455,17 @@ impl<'a> CurveGraph<'a> {
             max_points: 16,
             sampler: None,
             bars: true,
+            input_sliders: false,
+            plot_height: None,
             pencil: false,
             corners: false,
             percent: false,
             histogram: None,
             overlays: &[],
             selection: None,
+            show_clipping: false,
             chosen: None,
+            clip: None,
         }
         .label(label)
     }
@@ -415,20 +494,30 @@ impl<'a> CurveGraph<'a> {
         (0..self.overlays.len().min(self.channels.len())).filter(|&i| i != self.channel && !self.overlays[i].is_identity(self.levels)).collect()
     }
 
-    /// The squares of the graph in `rect`.
-    fn frame(&self, rect: Rect, style: &CurveGraphStyle) -> Frame {
+    /// The rects of the graph in `rect`, for a graph that shows its input sliders when `sliders` is on.
+    fn frame(&self, rect: Rect, style: &CurveGraphStyle, sliders: bool) -> Frame {
         let edge = if self.bars { style.bar + style.bar_gap } else { 0.0 };
-        let plot = Rect::from_min_size(rect.min + vec2(edge, 0.0), (rect.size() - vec2(edge, edge)).max(Vec2::ZERO));
+        let (row, end) = sliders_room(style, sliders);
+        let plot = Rect::from_min_size(rect.min + vec2(edge, 0.0), (rect.size() - vec2(edge + end, edge + row)).max(Vec2::ZERO));
         let area = plot.shrink(style.look.pad);
         let under =
             Rect::from_min_max(pos2(area.left(), plot.bottom() + style.bar_gap), pos2(area.right(), plot.bottom() + style.bar_gap + style.bar));
         let left = Rect::from_min_max(pos2(plot.left() - style.bar_gap - style.bar, area.top()), pos2(plot.left() - style.bar_gap, area.bottom()));
-        Frame { plot, map: Map { area, levels: self.levels }, under, left }
+        let sliders = sliders.then(|| {
+            let top = plot.bottom() + edge;
+            Rect::from_min_max(pos2(area.left() - style.slider / 2.0, top), pos2(area.right() + style.slider / 2.0, top + row))
+        });
+        Frame { plot, map: Map { area, levels: self.levels }, under, left, sliders }
     }
 
     /// Whether the graph shows points: a point curve outside pencil mode.
     fn points_mode(&self, curve: Option<&Curve>) -> bool {
         !self.pencil && curve.is_some_and(|curve| curve.points().is_some())
+    }
+
+    /// Whether the input sliders show under `curve`: asked for, in points mode, with two end points.
+    fn shows_sliders(&self, curve: Option<&Curve>) -> bool {
+        self.input_sliders && self.points_mode(curve) && curve.and_then(Curve::points).is_some_and(|points| points.len() >= 2)
     }
 
     /// The value text of a level as the fields write it: whole levels, or a whole percent.
@@ -440,6 +529,15 @@ impl<'a> CurveGraph<'a> {
             }
             false => cx.format().number(f64::from(level), 0),
         }
+    }
+}
+
+/// The room the input sliders take: their row under the plot, and the width past the value area's end that half a
+/// slider at the white end needs beyond the plot's inset. Nothing when they don't show.
+fn sliders_room(style: &CurveGraphStyle, shown: bool) -> (f32, f32) {
+    match shown {
+        true => (style.slider_row, (style.slider / 2.0 - style.look.pad).max(0.0)),
+        false => (0.0, 0.0),
     }
 }
 
@@ -502,8 +600,11 @@ impl Component for CurveGraph<'_> {
             look: PlotLook::new(cx),
             least,
             most: (tokens.size.plot.width * MOST_IN_PLOTS).max(least),
+            least_plot: tokens.size.plot.height,
             bar: tokens.size.icon.sm,
             bar_gap: tokens.space.gap.inline,
+            slider_row: cx.control().icon,
+            slider: thumb_size(cx).x,
             hit: tokens.size.hit.target,
             drag_off: tokens.size.icon.sm + tokens.space.gap.inline,
             handle: tokens.size.handle.md,
@@ -516,7 +617,14 @@ impl Component for CurveGraph<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.picture_width(cx.style.least, cx.style.most))
+        let (row, _) = sliders_room(cx.style, self.shows_sliders(cx.value()));
+        if let Some(height) = self.plot_height {
+            let edge = if self.bars { cx.style.bar + cx.style.bar_gap } else { 0.0 };
+            let height = if height.is_finite() { height.max(cx.style.least_plot) } else { cx.style.least_plot };
+            return Vec2::new(cx.picture_width(cx.style.least, f32::INFINITY), height + edge + row);
+        }
+        let side = cx.picture_width(cx.style.least, cx.style.most);
+        Vec2::new(side, side + row)
     }
 
     fn sense(&self) -> Sense {
@@ -524,7 +632,7 @@ impl Component for CurveGraph<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let frame = self.frame(rect, cx.style);
+        let frame = self.frame(rect, cx.style, self.shows_sliders(cx.value()));
         cx.part(PLOT, frame.plot)
             .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
             .value_part()
@@ -543,11 +651,12 @@ impl Component for CurveGraph<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        self.clip = None;
         let Some(mut curve) = cx.value().cloned() else {
             self.chosen = None;
             return;
         };
-        let frame = self.frame(cx.rect, cx.style);
+        let frame = self.frame(cx.rect, cx.style, self.shows_sliders(cx.value()));
         let mut selected = self.selection;
         if self.pencil {
             self.pencil_update(cx, &frame, &curve);
@@ -647,6 +756,14 @@ impl Component for CurveGraph<'_> {
         if !dragging {
             selected = self.keys(cx, &rules, &mut curve, selected);
         }
+        // Alt (or Show Clipping) on the press or drag of an end point: the host shows what that end clips.
+        let last = curve.points().map_or(0, <[_]>::len).saturating_sub(1);
+        let clips = press.mods.alt || self.show_clipping;
+        self.clip = match held.drag.and_then(|drag| drag.index) {
+            Some(0) if clips => Some(CurveEnd::Black),
+            Some(i) if clips && i == last => Some(CurveEnd::White),
+            _ => None,
+        };
         *cx.memory::<Held>() = held;
         for chord in PLUS.into_iter().chain([MINUS]).chain(INSERT).chain(DELETE) {
             cx.claim(chord);
@@ -687,7 +804,7 @@ impl Component for CurveGraph<'_> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let style = cx.style;
-        let frame = self.frame(cx.rect, style);
+        let frame = self.frame(cx.rect, style, self.shows_sliders(cx.value()));
         let curve = cx.value();
         let color = self.color();
         {
@@ -717,10 +834,13 @@ impl Component for CurveGraph<'_> {
             ui.child("under", frame.under, ToneRamp::new(&stops));
             ui.child("left", frame.left, ToneRamp::new(&stops).vertical());
         }
+        if let (Some(row), Some(curve)) = (frame.sliders, curve) {
+            self.input_sliders_row(ui, cx, row, curve);
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CurveGraphOutput {
-        CurveGraphOutput { selected: self.chosen, edit: cx.edit_response() }
+        CurveGraphOutput { selected: self.chosen, clipping: self.clip, edit: cx.edit_response() }
     }
 }
 
@@ -741,6 +861,62 @@ fn point(draw: &Draw<'_>, style: &CurveGraphStyle, center: Pos2, smooth: bool, s
 }
 
 impl CurveGraph<'_> {
+    /// The black and white input sliders in `row`, at the inputs of `curve`'s end points: a slider's drag or key moves
+    /// its end point's input (the outputs stay) as the graph's own edit and selects that point; Alt (or Show Clipping) on a
+    /// slider's press or drag reports its end for the clipping display.
+    fn input_sliders_row(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, row: Rect, curve: &Curve) {
+        let Some(points) = curve.points() else { return };
+        let (Some(first), Some(last)) = (points.first(), points.last()) else { return };
+        let ends = [f64::from(first[0]), f64::from(last[0])];
+        let words = cx.words::<CurveWords>();
+        let black = DataColor::new(Color32::from_gray(0));
+        let white = DataColor::new(Color32::from_gray(u8::MAX));
+        let thumbs =
+            [Thumb::new(words.black_input.clone()).face(black).alt_reports(), Thumb::new(words.white_input.clone()).face(white).alt_reports()];
+        let sliders = ThumbRow::new(Bind::given(ends.map(Mixed::Same)), 0.0..=f64::from(self.levels))
+            .step(1.0)
+            .thumbs(thumbs)
+            .label(words.input_sliders.clone())
+            .ltr_axis();
+        // Keyed by channel: a drag ends with the channel it began on.
+        let shown = ui.child(("input-sliders", self.channel), row, sliders);
+        let levels = self.levels;
+        cx.adopt(&shown.edit, curve, |values, mine| with_inputs(mine, values, levels));
+        let end = |thumb: usize| if thumb == 0 { 0 } else { points.len().saturating_sub(1) };
+        let moved = shown.edit.events.iter().rev().find_map(|event| event.value()).and_then(|values| {
+            let changed = |i: usize| values[i].same().is_some_and(|v| *v != ends[i]);
+            if changed(0) {
+                Some(0)
+            } else if changed(1) {
+                Some(1)
+            } else {
+                None
+            }
+        });
+        if let Some(thumb) = shown.held.map(|held| held.thumb).or(moved) {
+            self.chosen = Some(end(thumb));
+        }
+        if let Some(held) = shown.held.filter(|held| held.mods.alt || self.show_clipping) {
+            self.clip = Some(if held.thumb == 0 { CurveEnd::Black } else { CurveEnd::White });
+        }
+        // The wheel moves an end too. With Alt held (or Show Clipping on) its end reports while the wheel turns and
+        // for WHEEL_CLIP_HOLD after the last turn; letting Alt go ends it at once.
+        let wheel_key = cx.id.with(("wheel-clip", self.channel));
+        let now = cx.now();
+        if let Some(wheeled) = shown.wheeled {
+            cx.ctx.data_mut(|d| d.insert_temp(wheel_key, (now, wheeled.thumb)));
+        }
+        let alt = cx.ctx.input(|i| i.modifiers.alt);
+        if self.clip.is_none()
+            && (alt || self.show_clipping)
+            && let Some((at, thumb)) = cx.ctx.data(|d| d.get_temp::<(f64, usize)>(wheel_key))
+            && now - at < WHEEL_CLIP_HOLD
+        {
+            self.clip = Some(if thumb == 0 { CurveEnd::Black } else { CurveEnd::White });
+            cx.wake_at(at + WHEEL_CLIP_HOLD);
+        }
+    }
+
     /// Selection, nudges, additions and deletes from the keys. Returns the selection after them.
     fn keys(&self, cx: &mut Cx<'_, Self>, rules: &CurveRules, curve: &mut Curve, mut selected: Option<usize>) -> Option<usize> {
         let n = curve.points().map_or(0, <[_]>::len);

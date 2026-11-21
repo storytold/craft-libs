@@ -42,6 +42,8 @@ craft_ui::words! {
         draw_curve: "adjust.drawCurve" = "Draw to modify the curve";
         smooth: "adjust.smooth" = "Smooth";
         smooth_tip: "adjust.smoothTip" = "Smooth the curve values";
+        show_clipping: "adjust.showClipping" = "Show Clipping";
+        show_clipping_tip: "adjust.showClippingTip" = "Show what the black or white point clips while it moves, as holding Alt (Option) does";
         points_hint: template "adjust.pointsHint" = "Click to add a point · drag off or {key}-click or Delete to remove";
         pencil_hint: template "adjust.pencilHint" = "Drag to draw the curve · {key}-click draws a straight line";
 
