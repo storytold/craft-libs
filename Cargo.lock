@@ -1672,6 +1672,7 @@ name = "craft-codepage"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "unicode-normalization",
 ]
 
 [[package]]

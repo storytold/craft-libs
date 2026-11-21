@@ -167,3 +167,8 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 `crates/xfdf` extracts PDFCraft field reading from #5937 refresh `cb564fd827f572818e9ddb0ea5989a432b1f39fd` (MIT OR Apache-2.0). App-side annotation and form policy remains local; source history is retained in the original repository.
 
 Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
+
+## Legacy Vietnamese code pages
+
+`crates/codepage/src/vietnamese` implements TCVN3 (TCVN 5712:1993), VNI-Windows conventions, Windows-1258 and Vietnamese NFC composition in original code, described from the public TCVN 5712:1993 standard, Microsoft code page 1258 and Unicode canonical composition. No third-party implementation source is copied. The four files in `crates/codepage/src/vietnamese/fixtures/` are short synthetic strings written for these tests, not extracts from real documents or third-party files (MIT OR Apache-2.0).
+
