@@ -396,11 +396,6 @@ impl<'a> StyleCx<'a> {
         super::text_measure::line_width(self.ctx, self.tokens, stack_facts(self.ctx), self.direction, role, text)
     }
 
-    /// The width of the caret an editable text draws past its last letter.
-    pub fn caret_width(&self) -> f32 {
-        crate::runtime::egui::style::caret_width(self.ctx)
-    }
-
     /// What a surface of `kind` draws.
     pub fn surface(&self, kind: SurfaceKind) -> SurfaceStyle {
         surface_style(self.tokens, kind)
