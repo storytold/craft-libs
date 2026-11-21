@@ -831,6 +831,15 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 let line = PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]);
                 ui.draw().stroke(&line, StrokeWidth::Thick, style.insert);
             }
+            // The insertion target must be discoverable before the pointer is over it.
+            let center = rect.center();
+            let radius = (rect.width() * 0.4).min(9.0);
+            let arm = radius * 0.45;
+            let draw = ui.draw();
+            draw.fill(&PaintShape::Circle(center, radius), style.pinned);
+            draw.stroke(&PaintShape::Circle(center, radius), StrokeWidth::Thin, style.insert);
+            draw.stroke(&PaintShape::Path(vec![center - vec2(arm, 0.0), center + vec2(arm, 0.0)]), StrokeWidth::Medium, style.insert);
+            draw.stroke(&PaintShape::Path(vec![center - vec2(0.0, arm), center + vec2(0.0, arm)]), StrokeWidth::Medium, style.insert);
         }
     }
 
