@@ -9,6 +9,7 @@
 pub mod controls;
 pub mod crs;
 pub mod crs_masks;
+pub mod migration;
 pub mod presets;
 pub mod segmask;
 pub mod settings;

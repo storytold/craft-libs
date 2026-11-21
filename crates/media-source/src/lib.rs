@@ -29,6 +29,7 @@ use craft_media::ByteSource;
 use craft_time::{FrameRate, Tick};
 use serde::{Deserialize, Serialize};
 
+pub mod cancel;
 mod decoded;
 
 pub use decoded::{compositor_frame, compositor_frame_within};
