@@ -3,7 +3,7 @@
 //! exception is `process`: missing (or unreadable), it is V1, the rendering those older files were
 //! made with.
 
-use craft_geom::{CropGeometry, Homography, Orientation, Point};
+use craft_crop_geom::{CropGeometry, Homography, Orientation, Point};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 1;

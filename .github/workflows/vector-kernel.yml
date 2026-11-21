@@ -1,0 +1,50 @@
+name: Vector kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/geom/**', 'crates/pathops/**', 'crates/trace/**', 'crates/testkit/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/vector-kernel.yml']
+  pull_request:
+    paths: ['crates/geom/**', 'crates/pathops/**', 'crates/trace/**', 'crates/testkit/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/vector-kernel.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: vector-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+# fmt, clippy and the tests run in the Workspace gate on every OS; this runs what it does not:
+# the kernel's property suites at depth, and the wasm32 builds the web apps consume.
+jobs:
+  proptests:
+    name: Kernel proptests at depth
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+      - name: Kernel property suites, 4x cases
+        run: cargo test --locked -p craft-geom -p craft-pathops -p craft-trace
+        env:
+          PROPTEST_CASES: "1024"
+
+  wasm:
+    name: Kernel WASM
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.4.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo check --locked -p craft-geom -p craft-pathops -p craft-trace --target wasm32-unknown-unknown

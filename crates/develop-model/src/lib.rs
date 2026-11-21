@@ -126,18 +126,18 @@ impl DevelopSettings {
         }
         let c = &mut self.curve;
         for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
-            *p = craft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
+            *p = craft_crop_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
         let g = &mut self.crop.geometry;
         g.angle = if g.angle.is_finite() { g.angle.clamp(-45.0, 45.0) } else { 0.0 };
         if g.angle == 0.0 {
-            g.rect = g.rect.intersect(&craft_geom::Rect::UNIT);
+            g.rect = g.rect.intersect(&craft_crop_geom::Rect::UNIT);
         }
         if g.rect.is_empty() {
             // the rectangle it had, which under another angle may have reached outside the photo
             let old = before.crop.geometry.rect;
-            let old = if g.angle == 0.0 { old.intersect(&craft_geom::Rect::UNIT) } else { old };
-            g.rect = if old.is_empty() { craft_geom::Rect::UNIT } else { old };
+            let old = if g.angle == 0.0 { old.intersect(&craft_crop_geom::Rect::UNIT) } else { old };
+            g.rect = if old.is_empty() { craft_crop_geom::Rect::UNIT } else { old };
         }
     }
 
@@ -256,10 +256,10 @@ impl DevelopSettings {
 
     /// The middle of the crop, in normalized photo coordinates (the photo's middle when the crop
     /// isn't a usable rectangle).
-    pub fn crop_center(&self) -> craft_geom::Point {
+    pub fn crop_center(&self) -> craft_crop_geom::Point {
         let r = self.crop.geometry.rect;
         let (x, y) = ((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0);
-        if x.is_finite() && y.is_finite() { craft_geom::Point::new(x, y) } else { craft_geom::Point::new(0.5, 0.5) }
+        if x.is_finite() && y.is_finite() { craft_crop_geom::Point::new(x, y) } else { craft_crop_geom::Point::new(0.5, 0.5) }
     }
 
     /// Next free mask id: one past the highest, or, when that is `u32::MAX` (ids come from files,
@@ -328,7 +328,14 @@ mod tests {
                 name: None,
                 op: MaskOp::Add,
                 invert: false,
-                shape: MaskShape::Radial { center: craft_geom::Point::new(0.5, 0.5), rx: 0.2, ry: 0.1, angle: 10.0, feather: 50.0, invert: false },
+                shape: MaskShape::Radial {
+                    center: craft_crop_geom::Point::new(0.5, 0.5),
+                    rx: 0.2,
+                    ry: 0.1,
+                    angle: 10.0,
+                    feather: 50.0,
+                    invert: false,
+                },
             }],
             ..Default::default()
         });
@@ -468,14 +475,14 @@ mod tests {
     fn merged_settings_are_kept_in_range() {
         // issue storytold/lightcraft#1946: `develop.merge`, `render --settings` and presets stored whatever the JSON said
         let mut base = DevelopSettings::default();
-        base.crop.geometry.rect = craft_geom::Rect::new(0.1, 0.2, 0.8, 0.9);
+        base.crop.geometry.rect = craft_crop_geom::Rect::new(0.1, 0.2, 0.8, 0.9);
         let m = base
             .merged(&json!({"light": {"exposure": 1e308}, "vignette": {"amount": -1e308}, "geometry": {"scale": 0}, "optics": {"distortion": 1e308}}))
             .unwrap();
         assert_eq!((m.light.exposure, m.vignette.amount, m.geometry.scale, m.optics.distortion), (5.0, -100.0, 50.0, 100.0));
         // point curves stay in 0..1, as an imported XMP curve does
         let m = base.merged(&json!({"curve": {"master": [{"x": -3, "y": 0}, {"x": 1, "y": 1e308}]}})).unwrap();
-        assert_eq!(m.curve.master, vec![craft_geom::Point::new(0.0, 0.0), craft_geom::Point::new(1.0, 1.0)]);
+        assert_eq!(m.curve.master, vec![craft_crop_geom::Point::new(0.0, 0.0), craft_crop_geom::Point::new(1.0, 1.0)]);
         // a crop with no area is left out, as XMP import leaves out one whose edges are inverted
         for rect in
             [json!({"x0": 0.9, "x1": 0.1, "y0": 0, "y1": 1}), json!({"x0": 1e308, "x1": -1e308, "y0": 0, "y1": 1}), json!({"x0": 0.5, "x1": 0.5})]
@@ -486,12 +493,12 @@ mod tests {
         // a turned crop may reach outside; put back under no angle, it is clipped like any unrotated crop
         let mut turned = base.clone();
         turned.crop.geometry.angle = 10.0;
-        turned.crop.geometry.rect = craft_geom::Rect::new(-0.1, 0.2, 0.8, 0.9);
+        turned.crop.geometry.rect = craft_crop_geom::Rect::new(-0.1, 0.2, 0.8, 0.9);
         let m = turned.merged(&json!({"crop": {"geometry": {"angle": 0, "rect": {"x0": 0.5, "x1": 0.5}}}})).unwrap();
-        assert_eq!((m.crop.geometry.angle, m.crop.geometry.rect), (0.0, craft_geom::Rect::new(0.0, 0.2, 0.8, 0.9)));
+        assert_eq!((m.crop.geometry.angle, m.crop.geometry.rect), (0.0, craft_crop_geom::Rect::new(0.0, 0.2, 0.8, 0.9)));
         // unrotated, the crop stays inside the photo
         let m = base.merged(&json!({"crop": {"geometry": {"rect": {"x0": -1e308, "y0": 0.25, "x1": 1e308, "y1": 0.75}}}})).unwrap();
-        assert_eq!(m.crop.geometry.rect, craft_geom::Rect::new(0.0, 0.25, 1.0, 0.75));
+        assert_eq!(m.crop.geometry.rect, craft_crop_geom::Rect::new(0.0, 0.25, 1.0, 0.75));
     }
 
     #[test]

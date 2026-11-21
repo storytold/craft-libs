@@ -276,3 +276,9 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+## The `geom` feature (RFC-0030)
+
+The vector kernel's test helpers sit behind the `geom` feature: `strategies` (proptest strategies for points, rectangles, star and convex polygons, ellipses and whole `PathData` paths) and `geom` (geometry assertions: approximate equality, curve sampling, directed and symmetric Hausdorff distance, areas, finiteness). The feature alone pulls in `craft-geom`, `kurbo` and `proptest`; the default build depends on no craft-libs crate.
+
+The kernel crates (`craft-geom`, `craft-pathops`, `craft-trace`) take this feature from integration tests under `tests/` only, never from `#[cfg(test)]` unit tests: a unit test taking it would build a second `craft-geom` whose types do not match the crate under test. VectorCraft's engine-command strategies stay in VectorCraft's own testkit; they are app scope.

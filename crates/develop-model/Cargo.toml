@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-craft-geom = { workspace = true }
+craft-crop-geom = { workspace = true }
 craft-metadata = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
