@@ -48,11 +48,11 @@ pub(crate) fn keymap_platform(target: Target, os: Platform) -> Platform {
 /// A replay at another place moves the titles' rect with the bar.
 impl craft_ui::runtime::Shift for MenuBarOutput {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
-        MenuBarOutput { titles: by.rect(self.titles) }
+        MenuBarOutput { titles: by.rect(self.titles), natural: self.natural }
     }
 
     fn snapped(&self, to: &Self, within: f32) -> Self {
-        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within) }
+        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within), natural: self.natural }
     }
 }
 
@@ -63,6 +63,9 @@ pub struct MenuBarOutput {
     /// The menu titles alone, without the room the bar leaves after them
     /// ([`craft_ui::menu::MenuBarOutput::titles`]).
     pub titles: Rect,
+    /// The width every title takes side by side with none in "…", whatever room the bar had
+    /// ([`craft_ui::menu::MenuBarOutput::natural`]). Zero when the bar shows nothing.
+    pub natural: f32,
 }
 
 /// The bar for one frame: `MenuBarUi::new(&bar).show(ui)`. Draw it at the top of the window, inside a `Stack` (a top
@@ -145,7 +148,7 @@ impl<'a> MenuBarUi<'a> {
             help,
             label: env.words::<BarWords>().label.clone(),
         };
-        MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING })
+        MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING, natural: 0.0 })
     }
 }
 
@@ -182,7 +185,8 @@ fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
     if let Some(menu) = props.help {
         bar = bar.help(MenuHelp::new(menu, &entries));
     }
-    MenuBarOutput { titles: bar.show(ui).titles }
+    let shown = bar.show(ui);
+    MenuBarOutput { titles: shown.titles, natural: shown.natural }
 }
 
 /// What the kept text of a bar is made of: the model, the platform that names its shortcuts, the preferred mnemonics,

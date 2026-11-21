@@ -1,6 +1,7 @@
 //! The in-window menu bar in an app's title bar: every title shows while the bar has room for them, the document title
 //! takes the rest of the bar, and only a bar too narrow for every title folds the last into "…". In a `Stack`
-//! narrower than its titles the bar folds the same way and draws nothing past the stack's edge.
+//! narrower than its titles the bar folds the same way and draws nothing past the stack's edge. In any room the bar
+//! reports the width its titles take side by side.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -130,4 +131,31 @@ fn a_bar_in_a_stack_narrower_than_its_titles_folds_them_and_draws_nothing_past_i
     let more = fixture.by_label("…").expect("the \"…\" title");
     fixture.click(&more).settle();
     assert!(fixture.by_label("Help").is_some(), "Help is a row of the \"…\" menu");
+}
+
+/// The bar reports the width every title takes side by side: in a stack that holds them all it is the titles' width,
+/// and in a stack too narrow for them it is the same width while the drawn titles are narrower.
+#[trial]
+fn the_bar_reports_the_width_every_title_takes_in_a_wide_and_a_narrow_stack() {
+    let mut reports = Vec::new();
+    for width in [1520.0, 240.0] {
+        let bar = Rc::new(model());
+        let seen = Rc::new(Cell::new((0.0, 0.0)));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let bar = Rc::clone(&bar);
+            let out = Rc::clone(&out);
+            Stack::new().show(ui, move |ui, _| {
+                let shown = MenuBarUi::new(&bar).target(Target::Windows).show(ui);
+                out.set((shown.natural, shown.titles.width()));
+            });
+        });
+        fixture.os(Os::Windows).room(vec2(width, 600.0)).settle();
+        reports.push(seen.get());
+    }
+    let [(wide, wide_titles), (narrow, narrow_titles)] = [reports[0], reports[1]];
+    assert!(wide > 0.0, "the bar reports a width");
+    assert!((wide - wide_titles).abs() < 0.5, "with room for every title the natural width {wide} is the titles' width {wide_titles}");
+    assert!((narrow - wide).abs() < 0.5, "a narrow bar reports the same natural width {narrow} as a wide one {wide}");
+    assert!(narrow_titles < narrow, "a narrow bar draws titles {narrow_titles} narrower than its natural width {narrow}");
 }
