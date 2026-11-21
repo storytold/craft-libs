@@ -7,6 +7,8 @@
 
 use egui::{Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+mod underline;
+pub use underline::{SlidingUnderline, UnderlineFrame};
 mod dialog;
 pub use dialog::DialogTabStyle;
 
