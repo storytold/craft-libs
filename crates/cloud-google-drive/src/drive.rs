@@ -381,6 +381,7 @@ impl Drive {
                 // Sent once per check: a 401 refreshes the token, and the revision is checked
                 // again before the retry, so a retry never skips the check.
                 let body: std::sync::Arc<[u8]> = std::sync::Arc::from(content);
+                let mut last = None;
                 for attempt in 0..2 {
                     if attempt > 0 {
                         self.check_unchanged(id, name, version)?;
@@ -392,8 +393,11 @@ impl Drive {
                         return Self::file(resp);
                     }
                     self.auth.invalidate_access();
+                    last = Some(resp);
                 }
-                Err(Error::NotSignedIn)
+                // Refreshed and still refused: Google's answer, not "not signed in", which would
+                // ask to link again while the session holds.
+                Err(last.map_or(Error::NotSignedIn, |r| r.api_error()))
             }
             SaveTarget::New { name, parent } => self.create(name, parent.as_deref(), content),
         }

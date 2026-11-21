@@ -2,7 +2,7 @@
 //! system browser, and a loopback redirect to `http://127.0.0.1:<port>`.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::encode::{self, form};
@@ -299,12 +299,22 @@ pub struct Auth {
     store: Store,
     handle: String,
     tokens: Option<Tokens>,
+    /// Whether this session may write its refresh token to the store, behind its own lock so a
+    /// sign-out can close it without waiting for a transfer. See [`Auth::keeping`].
+    keep: Arc<Mutex<bool>>,
 }
 
 impl Auth {
     pub fn new(cfg: ClientConfig, http: Arc<dyn Transport>, store: Store) -> Self {
         let handle = token_handle(&cfg);
-        Self { cfg, http, store, handle, tokens: None }
+        Self { cfg, http, store, handle, tokens: None, keep: Arc::new(Mutex::new(true)) }
+    }
+
+    /// The switch that lets this session write to the store. A sign-out sets it to `false` and
+    /// removes the stored token while holding it, so a refresh still in flight can't store a
+    /// rotated token afterwards; the next sign-in sets it back.
+    pub fn keeping(&self) -> Arc<Mutex<bool>> {
+        self.keep.clone()
     }
 
     pub fn config(&self) -> &ClientConfig {
@@ -360,6 +370,9 @@ impl Auth {
         let v =
             self.token_request(vec![("grant_type", "authorization_code"), ("code", code), ("code_verifier", verifier), ("redirect_uri", redirect)])?;
         let tokens = parse_tokens(&v, now)?;
+        // A new session: it may keep its token again.
+        let mut keep = self.keep.lock().unwrap_or_else(PoisonError::into_inner);
+        *keep = true;
         let kept = match &tokens.refresh_token {
             Some(r) => {
                 self.store.put(&self.handle, &Secret::new(r.as_str())).map_err(|e| log::warn!("Google Drive: refresh token not kept: {e}")).is_ok()
@@ -376,6 +389,7 @@ impl Auth {
                 .remove(&self.handle)
                 .map_err(|e| Error::Keychain(format!("the earlier Google sign-in couldn't be replaced or removed: {e}")))?;
         }
+        drop(keep);
         self.tokens = Some(tokens);
         Ok(())
     }
@@ -406,7 +420,12 @@ impl Auth {
             None => fresh.refresh_token = Some(refresh),
             // A replacement: the old one may stop working, so it isn't kept as a fallback.
             Some(new) if *new != refresh => {
-                if let Err(e) = self.store.put(&self.handle, &Secret::new(new.as_str())) {
+                // Held across the write: a sign-out that already started has removed the stored
+                // token and closed this, so the replacement lives in memory only and is revoked.
+                let keep = self.keep.lock().unwrap_or_else(PoisonError::into_inner);
+                if !*keep {
+                    log::info!("Google Drive: signing out; the renewed sign-in isn't kept");
+                } else if let Err(e) = self.store.put(&self.handle, &Secret::new(new.as_str())) {
                     log::warn!("Google Drive: the renewed sign-in wasn't kept ({e}); it lasts this session");
                     let _ = self.store.remove(&self.handle);
                 }

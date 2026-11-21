@@ -51,6 +51,9 @@ struct Inner {
     /// The registration and its token's keychain entry, readable without waiting for a transfer.
     config: Option<ClientConfig>,
     store: Store,
+    /// The session's permission to store its token ([`Auth::keeping`]), reachable without the
+    /// Drive lock.
+    keep: Option<Arc<Mutex<bool>>>,
     /// Path → folder id, for every folder path handed out. `""` is My Drive.
     folders: Mutex<HashMap<String, String>>,
     /// Sign-ins started by [`Job::LinkStart`], by the handle the page polls.
@@ -187,11 +190,13 @@ impl GoogleDriveBackend {
     pub fn with(config: Result<ClientConfig>, http: Arc<dyn Transport>, store: Store, app: &str) -> GoogleDriveBackend {
         let kept = config.as_ref().ok().cloned();
         let drive = config.map(|cfg| Drive::new(Auth::new(cfg, http, store.clone()))).map_err(|e| e.to_string());
+        let keep = drive.as_ref().ok().map(|d| d.auth.keeping());
         GoogleDriveBackend {
             inner: Arc::new(Inner {
                 drive: Mutex::new(drive),
                 config: kept,
                 store,
+                keep,
                 folders: Mutex::new(HashMap::new()),
                 links: Mutex::new(HashMap::new()),
                 cancel: Mutex::new(None),
@@ -403,6 +408,12 @@ impl Inner {
         // The stored token goes first, so quitting during a long transfer doesn't leave the
         // person signed in on the next launch. It is kept in memory to be revoked below.
         let stored = self.config.as_ref().and_then(|cfg| {
+            // Closed first and held while the token is removed: a refresh finishing during the
+            // transfer can't store a rotated token behind this sign-out.
+            let mut keep = self.keep.as_ref().map(|k| lock(k));
+            if let Some(k) = keep.as_deref_mut() {
+                *k = false;
+            }
             let handle = token_handle(cfg);
             let stored = self.store.get(&handle).ok().flatten();
             if let Err(e) = self.store.remove(&handle) {

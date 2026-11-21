@@ -818,6 +818,37 @@ fn a_renewed_refresh_token_is_kept() {
 }
 
 #[test]
+fn a_renewed_refresh_token_arriving_after_sign_out_started_isnt_kept() {
+    let fake = Fake::with(vec![(200, json!({"access_token": "a2", "refresh_token": "refresh-2", "expires_in": 3599}))]);
+    let store = Memory::new();
+    store.put(&handle(), &Secret::new("refresh-1")).unwrap();
+    let mut auth = Auth::new(cfg(), fake, Arc::new(store.clone()));
+    assert!(auth.restore().unwrap());
+    // What the backend's sign-out does before it waits for the transfer.
+    *auth.keeping().lock().unwrap() = false;
+    store.remove(&handle()).unwrap();
+    assert_eq!(auth.access_token(Instant::now()).unwrap(), "a2", "the transfer carries on");
+    assert_eq!(store.get(&handle()).unwrap(), None, "nothing to restore on the next launch");
+}
+
+#[test]
+fn a_save_refused_after_a_refresh_is_googles_error_not_a_sign_out() {
+    let denied = || (401, json!({"error": {"code": 401, "message": "Invalid Credentials"}}));
+    let fake = Fake::with(vec![
+        token_reply(),
+        (200, file_json("f1", "Essay.docx", DOCX, "7")),
+        denied(),
+        (200, json!({"access_token": "access-2", "expires_in": 3599})),
+        (200, file_json("f1", "Essay.docx", DOCX, "7")),
+        denied(),
+    ]);
+    let mut d = Drive::new(signed_in(&fake));
+    let target = SaveTarget::Existing { id: "f1".into(), name: "Essay.docx".into(), version: "7".into() };
+    assert_eq!(d.save(&target, b"PK"), Err(Error::Api { status: 401, message: "Invalid Credentials".into() }));
+    assert!(d.auth.signed_in(), "still signed in");
+}
+
+#[test]
 fn a_session_only_sign_in_removes_the_earlier_one() {
     // Another account's sign-in is stored; this one comes back with no refresh token.
     let fake = Fake::with(vec![(200, json!({"access_token": "a", "expires_in": 3599}))]);
