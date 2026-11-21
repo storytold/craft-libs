@@ -47,6 +47,22 @@ fn known_formats_separate_build_disabled_and_unsupported_operations() {
 }
 
 #[test]
+fn pict_is_read_only_and_resolves_its_extensions() {
+    assert_eq!(super::from_extension("pct"), Some(Format::Pict));
+    assert_eq!(super::from_extension(".PICT"), Some(Format::Pict));
+    assert_eq!(super::detect("scan.pct", b""), Some(Format::Pict));
+    let pict = Format::Pict.capabilities();
+    assert_eq!(pict.write, Availability::Unsupported);
+    #[cfg(feature = "raster-codecs")]
+    {
+        assert_eq!(Format::Pict.raster_codec(), Some(craft_image_codecs::Format::Pict));
+        assert_eq!(pict.read, Availability::Available);
+    }
+    #[cfg(not(feature = "raster-codecs"))]
+    assert_eq!(pict.read, Availability::BuildDisabled);
+}
+
+#[test]
 fn bounded_probes_prefer_signatures_and_resolve_extensions() {
     assert_eq!(super::detect("misnamed.png", b"\x76\x2f\x31\x01rest"), Some(Format::OpenExr));
     assert_eq!(super::detect("misnamed.exr", b"\x89PNG\r\n\x1a\n"), Some(Format::Png));
