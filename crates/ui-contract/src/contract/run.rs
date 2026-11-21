@@ -827,7 +827,14 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
     } else {
         let fill = p.p.fills_width() && !p.p.fills_width_only();
         let size = if inert { Vec2::ZERO } else { size };
-        steps::place(ui, at, size, InFlow { fill, first: first(size.y), line: p.p.first_is_row_line() })
+        let placed = steps::place(ui, at, size, InFlow { fill, first: first(size.y), line: p.p.first_is_row_line() });
+        // A picture its measure held (`MeasureCx::picture_size`) reports its placed width, padding included.
+        if let Some(ColumnSweep::Count(column)) = env.column
+            && crate::layout::held_kind(&ctx, column, id) == Some(crate::layout::HeldKind::Picture)
+        {
+            crate::layout::report_held(&ctx, column, id, crate::layout::HeldKind::Picture, placed.width());
+        }
+        placed
     };
     (rect, held)
 }

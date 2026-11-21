@@ -143,8 +143,9 @@ pub(crate) struct FillCounts(IdMap<u32>);
 pub(crate) enum HeldKind {
     /// A fill-width child: it shows across the width the column settles on.
     Fill,
-    /// A picture that took its least for want of room (`MeasureCx::picture_width`): it shows at the width it sizes
-    /// at in the column's width, which may be narrower than the column.
+    /// A picture whose height follows from its width that took its least for want of room
+    /// (`MeasureCx::picture_size`): it shows at the width it sizes at in the column's width, which may be narrower than
+    /// the column.
     Picture,
 }
 
@@ -164,8 +165,8 @@ pub(crate) fn report_held(ctx: &egui::Context, column: Id, child: Id, kind: Held
     });
 }
 
-/// The kind of the held child `child` of the column `column`, as its first sweep reported it, while the column's
-/// second sweep runs.
+/// The kind of the held child `child` of the column `column`, as the column's first sweep reported it, while the
+/// column's measuring run runs.
 pub(crate) fn held_kind(ctx: &egui::Context, column: Id, child: Id) -> Option<HeldKind> {
     pass_state::with::<HeldWidths, _>(ctx, |held| held.0.get(&column).and_then(|children| children.get(&child)).map(|(kind, _)| *kind))
 }
