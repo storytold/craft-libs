@@ -1,0 +1,8 @@
+id = "org.example.t"
+name = "T"
+version = "1.0.0"
+
+[[contributions]]
+kind = "gizmo"
+id = "a"
+handler = "a"

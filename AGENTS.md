@@ -68,4 +68,13 @@ Shared Rust libraries for the Craft Apps: a Cargo workspace (edition 2024, resol
 - **New crates** go in `crates/<name>`, named `craft-<name>`, inherit the workspace package fields and lints, and are listed in `[workspace.dependencies]`. A new crate's `Cargo.toml` includes `[lints] workspace = true`.
 - **No app code.** A crate here is useful to more than one app and does not depend on any app.
 - **`unsafe`:** the workspace sets `unsafe_code = "forbid"`, and no crate in `crates/` allows it, so no module here may use `unsafe`. The one exception is vendored upstream code in `vendor/hayro-syntax`.
+- **`unsafe` in the plugin SDK (proposed in RFC #414, question 4).** Only `craft-plugin-sdk` and
+  `craft-plugin-sdk-macros` may use `unsafe`, and only for wasm32 guest glue: the `craft_host.call`
+  import and the `craft_*` exports the host calls with raw addresses into linear memory.
+  `craft-plugin-sdk` does not inherit `[workspace.lints]`, because `forbid` cannot be lowered. It
+  copies them with `unsafe_code = "deny"`, denies `unsafe_op_in_unsafe_fn`,
+  `clippy::undocumented_unsafe_blocks` and `clippy::missing_safety_doc`, and allows `unsafe` only
+  in the modules its README lists. `craft-plugin-sdk-macros` inherits the workspace lints. It emits
+  the exports into the plugin crate with `#[allow(unsafe_code)]` on that one module. Any function
+  that takes a host address is an `unsafe fn` with a `# Safety` section. No other crate gets this.
 - **Checks for the crates you changed:** `cargo fmt --check`, `cargo clippy -p <crate> --all-targets -- -D warnings`, `cargo test -p <crate>`.

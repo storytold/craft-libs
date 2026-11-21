@@ -1,0 +1,37 @@
+[package]
+name = "craft-plugin-sdk"
+description = "Guest SDK for craft-abi 1 WebAssembly plugins: host calls, handler types, panel trees and the runtime behind the exports."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+craft-plugin-abi.workspace = true
+craft-plugin-sdk-macros.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Runs the wasm32 plugin built by tests/wasm_plugin.rs, so the unsafe glue executes in a test.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "portable-dispatch"] }
+
+# Not `workspace = true`: the workspace forbids unsafe code, and AGENTS.md names this crate as the
+# exception. The guest glue needs it in two wasm32 modules (`backend::imp` for the `craft_host.call`
+# import, `rt::wasm` for raw memory access behind the exports). Both carry an explicit
+# `#[allow(unsafe_code)]`. Everything else is denied, and plugin code written against this SDK needs
+# none. The clippy entries copy `[workspace.lints.clippy]`, plus two for unsafe code.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+# Every `unsafe` block says why it holds, and every `unsafe fn` says what its caller must promise.
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+dbg_macro = "warn"
+todo = "warn"

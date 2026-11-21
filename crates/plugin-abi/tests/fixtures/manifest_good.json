@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "id": "org.example.posterize",
+  "name": "Posterize Bands",
+  "version": "1.2.0",
+  "description": "d",
+  "author": "a",
+  "license": "MIT",
+  "homepage": "https://example.org",
+  "abi": { "craft": 1, "codec": "json" },
+  "apps": { "effectcraft": ">=0.8", "filmcraft": "*" },
+  "requires": { "features": [], "ops": ["host.log", "cmd.execute"], "engine_caps": [] },
+  "permissions": { "required": ["commands.run:effect.*"], "optional": ["net.fetch:https://example.org"] },
+  "limits": { "memory_mb": 256, "stack_kb": 512 },
+  "contributions": [
+    { "kind": "effect", "id": "posterize", "label": "Posterize Bands", "category": "Stylize", "entry": 0,
+      "instance": "fresh", "budget": "render",
+      "process": { "overlap": 0, "band_bytes": 4194304, "sample": ["f32"], "alpha": "premultiplied", "area": "content" },
+      "params": { "bands": { "type": "int", "min": 2, "max": 32, "default": 4, "label": "Bands" } } },
+    { "kind": "command", "id": "nudge", "label": "Nudge", "menu": ["Plug-ins"], "shortcut": "Ctrl+Alt+N",
+      "entry": 1, "instance": "session", "budget": "interactive", "params": {} },
+    { "kind": "hook", "id": "log-edits", "entry": 2, "phase": "after", "match": ["*"] },
+    { "kind": "hook", "id": "guard", "entry": 3, "phase": "before", "match": ["effect.*"] },
+    { "kind": "panel", "id": "main", "title": "Posterize", "entry": 4, "instance": "session", "dock": "right" }
+  ],
+  "legacy": null,
+  "signature": null
+}
