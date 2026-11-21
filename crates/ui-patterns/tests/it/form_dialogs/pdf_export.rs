@@ -1,6 +1,6 @@
 //! The hosted Save PDF dialog on a `DialogHost`: the fields automation lists and sets, Alt-Reset, and the Summary text.
 
-use craft_pdf::settings::{Choice, Compatibility, PdfPreset, PdfSettings, Standard};
+use craft_pdf::settings::{Compatibility, PdfPreset, PdfSettings, Standard};
 use craft_ui::dialog::{DialogHost, DialogId};
 use craft_ui::patterns::form_dialogs::{HostedPdfExport, PdfExportWords, summary_text};
 use craft_ui::runtime::env::Env;

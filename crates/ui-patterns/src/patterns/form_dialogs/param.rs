@@ -584,11 +584,6 @@ impl RowOptions {
         self.resettable
     }
 
-    /// The label a footer row shows while on; `Some` for a row drawn in the footer.
-    pub(crate) fn footer_on(&self) -> Option<&Label> {
-        self.footer_on.as_ref()
-    }
-
     /// The lengths a number row keeps and shows.
     pub(crate) fn length(&self) -> Option<LengthUnits> {
         self.length
@@ -994,7 +989,7 @@ impl Param {
     /// The row is shown only while `fields[key]` equals `value`, as [`enabled_when`](Param::enabled_when) enables it;
     /// otherwise it takes no space. Its value stays in the fields and in the result.
     #[must_use]
-    pub fn visible_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
+    pub fn visible_when(self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
         self.visible_when_in(key, [value])
     }
 

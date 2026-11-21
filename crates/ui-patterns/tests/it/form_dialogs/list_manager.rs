@@ -1,7 +1,8 @@
 //! `ListManager`'s in-place rename: a commit is a choice, Escape and an entry of another kind are not.
 
 use craft_ui::contract::Bind;
-use craft_ui::patterns::form_dialogs::{ActionEnabled, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry};
+use craft_ui::patterns::form_dialogs::{ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerWords};
+use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::{Cell, RefCell};
@@ -19,7 +20,7 @@ fn a_committed_rename_reports_entry_and_name_and_escape_keeps_it() {
     let (held, seen, ended) = (Rc::clone(&rows), Rc::clone(&choices), Rc::clone(&closed));
     let mut fixture = Fixture::new(move |ui| {
         let entries = held.borrow().clone();
-        let actions = vec![ListManagerAction::new("run", "Run", ActionEnabled::OnEntry { kind: None })];
+        let actions = vec![ListManagerAction::run(&Env::of(ui).words::<ListManagerWords>())];
         let out = ListManager::new("Macros", "Macro name:", entries, actions).renames(1).opened(Bind::given(true)).show(ui);
         ended.set(ended.get() || out.closed.is_some());
         if let Some(choice) = out.choice {
