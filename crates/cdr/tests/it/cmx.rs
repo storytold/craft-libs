@@ -1,7 +1,7 @@
 //! Reading synthetic `.cmx` files built from the layouts in `PROVENANCE.md` (R53 to R63), and
 //! hostile ones.
 
-use craft_cdr::model::{Cap, Color, Geometry, Join, Object, Shape};
+use craft_cdr::model::{Cap, Color, Geometry, Join, Object, Page, Shape};
 use craft_cdr::synth_cmx::*;
 use craft_cdr::{Drawing, Error, Limits, Warning, is_cdr, is_cmx, read_cmx};
 use proptest::prelude::*;
@@ -10,12 +10,25 @@ use proptest::prelude::*;
 /// stray bytes only at the first chunk id found (R53): when that read succeeds, this one does too,
 /// and every page that read holds with objects is read here unchanged and in the same order.
 fn read_checked(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
+    read_compared(bytes, limits, |p, q| p == q)
+}
+
+/// As [`read_checked`], except that a page only has to keep its layers and the number of objects
+/// on each: a header or a table that only the recovery reads may change their colors and sizes
+/// (R53).
+fn read_kept(bytes: &[u8], limits: Limits) -> Result<Drawing, Error> {
+    read_compared(bytes, limits, |p, q| {
+        p.layers.len() == q.layers.len() && p.layers.iter().zip(&q.layers).all(|(a, b)| a.name == b.name && a.objects.len() == b.objects.len())
+    })
+}
+
+fn read_compared(bytes: &[u8], limits: Limits, same: fn(&Page, &Page) -> bool) -> Result<Drawing, Error> {
     let d = read_cmx(bytes, limits);
     if let Ok(first) = read_cmx_without_recovery(bytes, limits) {
         let Ok(read) = &d else { panic!("{d:?} where the first chunk id gives {first:?}") };
         let mut rest = read.pages.iter();
         for p in first.pages.iter().filter(|p| !p.layers.is_empty()) {
-            assert!(rest.any(|q| q == p), "{p:?} is not read");
+            assert!(rest.any(|q| same(q, p)), "{p:?} is not read");
         }
     }
     d
@@ -563,11 +576,116 @@ fn a_recovered_page_spends_only_what_the_limits_leave_after_the_other_pages() {
     children.extend(tables());
     let f = riff(&children);
     let d = read_checked(&f, Limits { objects: 1, ..Limits::default() }).unwrap();
+    assert_eq!(d.pages.len(), 1, "{:?}", d.pages);
     let last = d.pages.last().unwrap();
     assert_eq!((last.layers[0].name.as_str(), last.layers[0].objects.len()), ("M", 1));
     assert!(d.warnings.contains(&Warning::TooDeep), "{:?}", d.warnings);
     let d = read_checked(&f, Limits::default()).unwrap();
     assert_eq!(d.pages.iter().map(|p| p.layers[0].name.as_str()).collect::<Vec<_>>(), ["L", "M"]);
+}
+
+#[test]
+fn chunks_only_a_recovery_reads_do_not_stop_a_read_that_fits_without_them() {
+    // A page, then letters spelling `page` whose length runs past the file and that hold another
+    // page and an empty chunk: at every chunk limit at which the file opens without the recovery,
+    // it opens with it, and where the recovered page does not fit, the warning tells of it.
+    let p = page(&[begin_page(None), begin_layer("L", None), square(&attrs(Some(1), None, false), 0, 0, 1000), end_layer()]);
+    let q = page(&[begin_page(None), begin_layer("M", None), square(&attrs(Some(1), None, false), 0, 0, 2000), end_layer()]);
+    let mut b = b"page".to_vec();
+    b.extend(0xFFFF_FF00u32.to_le_bytes());
+    b.extend(q);
+    b.extend(chunk(b"junk", &[]));
+    let mut children = vec![cont(b'4', 1e-7)];
+    children.extend(tables());
+    children.push(p);
+    children.push(b);
+    let f = riff(&children);
+    let names = |d: &Drawing| d.pages.iter().filter_map(|p| p.layers.first()).map(|l| l.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&read_checked(&f, Limits::default()).unwrap()), ["L", "M"]);
+    let mut cut = 0;
+    for chunks in 1..200 {
+        let limits = Limits { chunks, ..Limits::default() };
+        if read_cmx_without_recovery(&f, limits).is_err() {
+            continue;
+        }
+        let d = read_checked(&f, limits).unwrap();
+        if names(&d) != ["L", "M"] {
+            cut += 1;
+            assert!(d.warnings.contains(&Warning::TooDeep), "{chunks}: {:?}", d.warnings);
+        }
+    }
+    assert!(cut > 0);
+}
+
+#[test]
+fn after_stray_bytes_a_page_is_read_when_the_chunk_found_lands_inside_a_list() {
+    // Stray bytes, then letters whose length ends on the header of an empty page at the end of the
+    // page after them. That empty page's length ends on the first page inside the list that
+    // follows. Walking on from the page reads the same page inside the list, so the page is read.
+    let (name, q) = ["Q", "Qa"]
+        .iter()
+        .map(|n| {
+            let carried = long_instr(-1, &[b"page".as_slice(), &12u32.to_le_bytes()].concat());
+            (*n, [begin_page(None), begin_layer(n, None), square(&attrs(Some(1), None, false), 0, 0, 1000), end_layer(), carried].concat())
+        })
+        .find(|(_, body)| body.len() % 2 == 0)
+        .unwrap();
+    let r = page(&[begin_page(None), begin_layer("R", None), square(&attrs(Some(1), None, false), 0, 0, 2000), end_layer()]);
+    let mut b = vec![1u8; 2];
+    b.extend(b"abcd");
+    b.extend((q.len() as u32).to_le_bytes());
+    b.extend(chunk(b"page", &q));
+    b.extend(list(b"pgls", &[r]));
+    let mut children = vec![cont(b'4', 1e-7), b];
+    children.extend(tables());
+    let d = read_checked(&riff(&children), Limits::default()).unwrap();
+    assert!(d.warnings.contains(&Warning::Damaged), "{:?}", d.warnings);
+    let names: Vec<&str> = d.pages.iter().filter_map(|p| p.layers.first()).map(|l| l.name.as_str()).collect();
+    assert_eq!(names, [name, "R"]);
+}
+
+/// A page that fills with color 1, then, inside a list, letters spelling `page` whose length runs
+/// past the list and that hold another page and a color table of one red entry, then `after`.
+fn page_and_recovered_red(after: &[Vec<u8>]) -> Vec<u8> {
+    let p = page(&[begin_page(None), begin_layer("L", None), square(&attrs(Some(1), None, false), 0, 0, 1000), end_layer()]);
+    let q = page(&[begin_page(None), begin_layer("M", None), square(&attrs(Some(1), None, false), 0, 0, 2000), end_layer()]);
+    let mut b = b"page".to_vec();
+    b.extend(0xFFFF_FF00u32.to_le_bytes());
+    b.extend(q);
+    b.extend(table(b"rclr", &[color(5, &[255, 0, 0])]));
+    let mut children = vec![cont(b'4', 1e-7)];
+    children.extend(tables().into_iter().filter(|t| !t.starts_with(b"rclr")));
+    children.push(p);
+    children.push(list(b"pgls", &[b]));
+    children.extend(after.iter().cloned());
+    riff(&children)
+}
+
+/// The fill of the first object of each page.
+fn fills(d: &Drawing) -> Vec<Option<Color>> {
+    d.pages.iter().map(|p| shape(&p.layers[0].objects[0]).fill.clone()).collect()
+}
+
+#[test]
+fn a_color_table_only_the_recovery_reads_colors_every_page() {
+    let p = page(&[begin_page(None), begin_layer("L", None), square(&attrs(Some(1), None, false), 0, 0, 1000)]);
+    let red = fills(&read_checked(&file(&[p]), Limits::default()).unwrap())[0].clone();
+    assert!(red.is_some());
+    let d = read_kept(&page_and_recovered_red(&[]), Limits::default()).unwrap();
+    assert_eq!(fills(&d), [red.clone(), red]);
+}
+
+#[test]
+fn a_color_table_read_without_the_recovery_wins_over_one_only_the_recovery_reads() {
+    let green = table(b"rclr", &[color(5, &[0, 255, 0])]);
+    let mut children = vec![cont(b'4', 1e-7)];
+    children.push(page(&[begin_page(None), begin_layer("L", None), square(&attrs(Some(1), None, false), 0, 0, 1000)]));
+    children.extend(tables().into_iter().filter(|t| !t.starts_with(b"rclr")));
+    children.push(green.clone());
+    let green_fill = fills(&read_checked(&riff(&children), Limits::default()).unwrap())[0].clone();
+    let d = read_checked(&page_and_recovered_red(&[green]), Limits::default()).unwrap();
+    assert_eq!(d.pages.len(), 2);
+    assert_eq!(fills(&d), [green_fill.clone(), green_fill]);
 }
 
 #[test]
@@ -1047,7 +1165,7 @@ proptest! {
     fn never_panics_on_garbage(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
         let mut b = b"RIFF\0\0\0\0CMX1".to_vec();
         b.extend(bytes);
-        let _ = read_checked(&b, Limits::default());
+        let _ = read_kept(&b, Limits::default());
     }
 
     #[test]
@@ -1057,6 +1175,6 @@ proptest! {
         for (at, v) in edits {
             b[at % n] = v;
         }
-        let _ = read_checked(&b, Limits::default());
+        let _ = read_kept(&b, Limits::default());
     }
 }

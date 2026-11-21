@@ -92,8 +92,20 @@ struct Tables {
     quiet: bool,
 }
 
+/// The drawing in `bytes` (R53 to R63). When the chunks that only a recovery after stray bytes
+/// reads make the read stop at a limit, the file is read again without the recovery, with the
+/// warning for limits.
 pub(crate) fn drawing(bytes: &[u8], budget: &mut Budget) -> Result<Drawing, Error> {
-    read_drawing(bytes, budget, true)
+    let fresh = budget.clone();
+    match read_drawing(bytes, budget, true) {
+        Err(Error::Limit(_)) => {
+            *budget = fresh;
+            let mut d = read_drawing(bytes, budget, false)?;
+            push(&mut d.warnings, Warning::TooDeep);
+            Ok(d)
+        }
+        read => read,
+    }
 }
 
 /// The drawing as the reader reads it when it resumes after stray bytes only at the first chunk
@@ -171,7 +183,7 @@ fn chunks<'a>(b: &'a [u8], budget: &mut Budget, warn: &mut Vec<Warning>, recover
         while pos.saturating_add(8) <= end {
             let Some(id) = Rd::at(b, pos).fourcc() else { break };
             if !is_id(&id) {
-                match resync(b, pos, end, recover.then_some(&*budget), &mut left) {
+                match resync(b, pos, end, depth, recover.then_some(&*budget), &mut left) {
                     Some((next, damaged, found)) => {
                         if damaged {
                             push(warn, Warning::Damaged);
@@ -197,9 +209,9 @@ fn chunks<'a>(b: &'a [u8], budget: &mut Budget, warn: &mut Vec<Warning>, recover
                 // the reader resumes at.
                 push(warn, Warning::Damaged);
                 let resume = if !READ_IDS.contains(&id) {
-                    resync(b, pos, end, recover.then_some(&*budget), &mut left).map(|(next, _, found)| (next, found))
+                    resync(b, pos, end, depth, recover.then_some(&*budget), &mut left).map(|(next, _, found)| (next, found))
                 } else if recover && id == *b"page" {
-                    inner_page(b, pos, end, budget, &mut left)
+                    inner_page(b, pos, end, depth, budget, &mut left)
                 } else {
                     None
                 };
@@ -260,10 +272,10 @@ fn first_chunk(b: &[u8], pos: usize, end: usize) -> Option<usize> {
 /// [`first_chunk`], or, with `judge` (the read's budget), a page inside that chunk ([`inner_page`]),
 /// found with at most `left` work ([`PROBE_FLOOR`]). The flag is set when the reader resumes at an
 /// inner page, or at a chunk it passes over that is not followed by another chunk id or by the end
-/// of the list.
-fn resync(b: &[u8], pos: usize, end: usize, judge: Option<&Budget>, left: &mut usize) -> Option<(usize, bool, Vec<usize>)> {
+/// of the list. `depth` is how many lists hold the one that ends at `end`.
+fn resync(b: &[u8], pos: usize, end: usize, depth: usize, judge: Option<&Budget>, left: &mut usize) -> Option<(usize, bool, Vec<usize>)> {
     let p = first_chunk(b, pos, end)?;
-    if let Some((k, found)) = judge.and_then(|budget| inner_page(b, p, end, budget, left)) {
+    if let Some((k, found)) = judge.and_then(|budget| inner_page(b, p, end, depth, budget, left)) {
         return Some((k, true, found));
     }
     let known = id_at(b, p).is_some_and(|id| READ_IDS.contains(&id));
@@ -281,8 +293,9 @@ fn resync(b: &[u8], pos: usize, end: usize, judge: Option<&Budget>, left: &mut u
 /// that chunk. A `LIST`, the header and the tables at `p` are always kept. Walking on from `p` and
 /// from the page by the reader's rule without this recovery must meet ([`rejoins`]). The first page
 /// that meets is taken, with the chunks only the walk from it reads. The walks and the pages judged
-/// spend `left` ([`PROBE_FLOOR`]); when it runs out, no page is taken.
-fn inner_page(b: &[u8], p: usize, end: usize, budget: &Budget, left: &mut usize) -> Option<(usize, Vec<usize>)> {
+/// spend `left` ([`PROBE_FLOOR`]); when it runs out, no page is taken. `depth` is how many lists
+/// hold the one that ends at `end`.
+fn inner_page(b: &[u8], p: usize, end: usize, depth: usize, budget: &Budget, left: &mut usize) -> Option<(usize, Vec<usize>)> {
     let id = id_at(b, p)?;
     if READ_IDS.contains(&id) && id != *b"page" {
         return None;
@@ -297,9 +310,10 @@ fn inner_page(b: &[u8], p: usize, end: usize, budget: &Budget, left: &mut usize)
         .filter(|&k| k < body_end && id_at(b, k) == Some(*b"page") && reaches(k))
         .peekable();
     found.peek()?;
-    let first = walk(b, p, end, left)?;
+    let lists = budget.limits.depth.saturating_sub(depth);
+    let first = walk(b, p, end, lists, left)?;
     found.find_map(|k| {
-        let alt = walk(b, k, end, left)?;
+        let alt = walk(b, k, end, lists, left)?;
         rejoins(b, end, &first, &alt, budget, left).map(|extra| (k, extra))
     })
 }
@@ -307,28 +321,46 @@ fn inner_page(b: &[u8], p: usize, end: usize, budget: &Budget, left: &mut usize)
 /// Positions a walk through a list passes and the chunks it reads, for at most [`LOOKAHEAD`]
 /// steps.
 struct Walk {
-    /// Where the walk starts, and the position after each step.
-    at: Vec<usize>,
-    /// Where each chunk the walk read starts.
+    /// Where the walk starts, and its place after each step: the position, and for each `LIST`
+    /// chunk it is inside, where that list's body ends and where the reader goes on after it.
+    at: Vec<(usize, Vec<(usize, usize)>)>,
+    /// Where each chunk the walk read starts; a `LIST` chunk it enters counts by the chunks inside.
     read: Vec<usize>,
-    /// The walk reached the end of the list, or stray bytes with no chunk id after them.
+    /// The walk left the list it started in: at its end, or at stray bytes with no chunk id after
+    /// them, where [`chunks`] stops reading that list too.
     ended: bool,
 }
 
-/// Walk the list that ends at `end` from `from` as [`chunks`] does without recovery, spending
-/// [`STEP_COST`] of `left` for each step; `None` when `left` runs out first.
-fn walk(b: &[u8], from: usize, end: usize, left: &mut usize) -> Option<Walk> {
-    let mut w = Walk { at: vec![from], read: Vec::new(), ended: false };
+/// Walk the list that ends at `end` from `from` as [`chunks`] does without recovery, entering at
+/// most `lists` nested `LIST` chunks as it does, and spending [`STEP_COST`] of `left` for each step;
+/// `None` when `left` runs out first.
+fn walk(b: &[u8], from: usize, end: usize, lists: usize, left: &mut usize) -> Option<Walk> {
+    let mut w = Walk { at: vec![(from, Vec::new())], read: Vec::new(), ended: false };
     let mut pos = from;
+    let mut inside: Vec<(usize, usize)> = Vec::new();
     for _ in 0..LOOKAHEAD {
         *left = left.checked_sub(STEP_COST)?;
-        let Some((next, chunk)) = step(b, pos, end) else {
-            w.ended = true;
-            break;
-        };
-        w.read.extend(chunk);
-        w.at.push(next);
-        pos = next;
+        let list_end = inside.last().map_or(end, |&(stop, _)| stop);
+        match step(b, pos, list_end) {
+            Some((next, Some(chunk))) if id_at(b, chunk) == Some(LIST) && inside.len() < lists => {
+                // [`chunks`] reads the list's children before the rest of the list that holds it.
+                let stop = chunk_stop(b, chunk).map_or(list_end, |stop| stop.min(list_end));
+                inside.push((stop, next));
+                pos = chunk + 12;
+            }
+            Some((next, chunk)) => {
+                w.read.extend(chunk);
+                pos = next;
+            }
+            None => match inside.pop() {
+                Some((_, after)) => pos = after,
+                None => {
+                    w.ended = true;
+                    break;
+                }
+            },
+        }
+        w.at.push((pos, inside.clone()));
     }
     Some(w)
 }
@@ -355,13 +387,13 @@ fn step(b: &[u8], pos: usize, end: usize) -> Option<(usize, Option<usize>)> {
 }
 
 /// Where the chunks start that the walk from an inner page `alt` reads and the walk from the first
-/// chunk id `first` does not, when the two walks meet at a position both pass or both end, and
-/// `alt` reads at least what `first` reads until then (R53). The page `alt` starts at reads with
-/// objects and without damage in its instructions. Each chunk the reader uses that `first` reads
-/// before that point, `alt` reads too, unless it is a page that reads without objects. The pages
-/// judged spend `left`; when it runs out, the walks do not meet.
+/// chunk id `first` does not, when the two walks meet at a place both pass (a position inside the
+/// same lists) or both end, and `alt` reads at least what `first` reads until then (R53). The page
+/// `alt` starts at reads with objects and without damage in its instructions. Each chunk the reader
+/// uses that `first` reads before that point, `alt` reads too, unless it is a page that reads
+/// without objects. The pages judged spend `left`; when it runs out, the walks do not meet.
 fn rejoins(b: &[u8], end: usize, first: &Walk, alt: &Walk, budget: &Budget, left: &mut usize) -> Option<Vec<usize>> {
-    let meet = first.at.iter().copied().find(|q| alt.at.contains(q)).or((first.ended && alt.ended).then_some(usize::MAX))?;
+    let meet = first.at.iter().find(|q| alt.at.contains(q)).map(|(q, _)| *q).or((first.ended && alt.ended).then_some(usize::MAX))?;
     let uses = |q: usize| q < meet && id_at(b, q).is_some_and(|id| READ_IDS.contains(&id));
     let used = |w: &Walk| -> Vec<usize> { w.read.iter().copied().filter(|&q| uses(q)).collect() };
     let (kept, taken) = (used(first), used(alt));
