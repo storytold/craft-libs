@@ -160,6 +160,7 @@ impl Type1Font {
             let own_codes = *self.3.get_or_init(|| {
                 numbered_names_name_their_codes(
                     (0..=u8::MAX).filter_map(|c| Some((c, self.code_to_ps_name(c)?))),
+                    false,
                 )
             });
             own_codes
