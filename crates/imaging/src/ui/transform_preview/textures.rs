@@ -148,7 +148,7 @@ impl PreviewTextures {
     }
 
     fn over(serials: &mut Serials, name: impl Into<String>, levels: Vec<Arc<ColorImage>>, base_uv: [f32; 2]) -> Self {
-        let serial = serials.next();
+        let serial = serials.mint();
         Self { name: Arc::from(name.into()), serial, images: Arc::new(Mutex::new(levels)), base_uv }
     }
 

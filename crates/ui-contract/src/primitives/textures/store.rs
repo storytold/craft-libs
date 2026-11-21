@@ -380,8 +380,8 @@ impl<K> Default for Stores<K> {
 pub struct Serials(u64);
 
 impl Serials {
-    /// The next number: never one this `Serials` gave before.
-    pub fn next(&mut self) -> u64 {
+    /// A new number: never one this `Serials` gave before.
+    pub fn mint(&mut self) -> u64 {
         self.0 += 1;
         self.0
     }

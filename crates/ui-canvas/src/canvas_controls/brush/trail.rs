@@ -66,7 +66,7 @@ impl CoverageMask {
         let extent = |side: f64| (side / scale).ceil().max(1.0) as u32;
         let size = (extent(bounds.width()), extent(bounds.height()));
         let len = size.0 as usize * size.1 as usize;
-        CoverageMask { bounds, scale, size, texels: vec![0; len], base: vec![0; len], dirty: None, revision: 0, id: serials.next() }
+        CoverageMask { bounds, scale, size, texels: vec![0; len], base: vec![0; len], dirty: None, revision: 0, id: serials.mint() }
     }
 
     /// Stamps the capsule from `from` to `to` (document units) of radius `radius`, keeping the larger coverage.

@@ -36,7 +36,7 @@ impl HoverMask {
     /// [`MAX_TEXELS`](Self::MAX_TEXELS), then `ceil(long side / 768)` units per texel. Coverage outside 0..=1 is
     /// clamped; one that is not finite reads as 0. Empty or non-finite `bounds` give a 1 × 1 mask with no coverage.
     pub fn sampled(serials: &mut Serials, bounds: Rect, coverage: impl Fn(f64, f64) -> f32) -> HoverMask {
-        let generation = serials.next();
+        let generation = serials.mint();
         let finite = bounds.x0.is_finite() && bounds.y0.is_finite() && bounds.x1.is_finite() && bounds.y1.is_finite();
         if !finite || bounds.width() <= 0.0 || bounds.height() <= 0.0 {
             return HoverMask { bounds, size: [1, 1], coverage: Arc::from(vec![0u8]), generation };
