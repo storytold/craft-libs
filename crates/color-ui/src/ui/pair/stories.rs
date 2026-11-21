@@ -3,7 +3,7 @@
 use super::{PairWell, SwatchPair, Well};
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
-use craft_ui::contract::{Show as _, Validity};
+use craft_ui::contract::{Show as _, Tracked, Validity};
 use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -101,7 +101,7 @@ fn swatch_pair_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(SwatchPair<'static>, covers = [], drive = Drive::Never)]
 fn swatch_pair_tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (active, active_at) = data.value_at("active", Well::Primary);
-    let (slots, last): (Vec<ToolSlot<u8>>, LastUsed<u8>) = (Vec::new(), LastUsed::default());
+    let (slots, last): (Tracked<Vec<ToolSlot<u8>>>, Tracked<LastUsed<u8>>) = (Tracked::default(), Tracked::default());
     let wells = [PairWell::new("Foreground colour", Srgba::rgb(0.0, 0.0, 0.0)), PairWell::new("Background colour", Srgba::rgb(1.0, 1.0, 1.0))];
     let mut shown = None;
     ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |ui, _| {

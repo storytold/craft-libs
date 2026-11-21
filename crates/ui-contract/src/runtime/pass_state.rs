@@ -119,6 +119,8 @@ pass_state! {
         memo_log: crate::runtime::measure::MemoLog,
         #[cfg(feature = "testing")]
         pass_totals: crate::runtime::measure::PassTotals,
+        #[cfg(feature = "testing")]
+        derived_builds: crate::runtime::measure::DerivedBuilds,
     }
     records {
         focus: crate::runtime::focus::State,
@@ -126,6 +128,7 @@ pass_state! {
         cursor: crate::runtime::cursor::State,
         layout: crate::runtime::layout_memory::Entries,
         lazy: crate::runtime::lazy::Store,
+        derived: crate::runtime::derived::Store,
         arenas: crate::primitives::sensing::Arenas,
         envs: crate::runtime::env::ViewportEnvs,
         pointer: crate::runtime::pointer::Memory,

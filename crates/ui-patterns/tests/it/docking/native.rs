@@ -5,9 +5,9 @@ use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, No
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
 use craft_ui::contract::Role;
-use craft_ui::contract::{Bind, BodyCx, DropMark, Show as _, ShowContainer as _, SizeLimits};
+use craft_ui::contract::{Bind, BodyCx, DropMark, PlainData, Show as _, ShowContainer as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockGrid, DockPanels, PanelSpec};
+use craft_ui::docking::{DockConfig, DockGrid, DockPanels, PanelSpec, PanelSpecs};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
@@ -26,18 +26,41 @@ const ROOT_AT: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(300.0,
 const PALETTE_AT: Rect = Rect { min: Pos2::new(200.0, 150.0), max: Pos2::new(600.0, 450.0) };
 const PALETTE_TITLE: &str = "Tools";
 
-/// Palette panels with the given rights.
-struct Palettes(Permissions);
+/// The palettes' specs: palettes named `PALETTE_TITLE` with `rights`. `least` keeps them no smaller than
+/// `PALETTE_LEAST`; `stepped` lays panel 1's content in a grid, as a toolbar's that never collapses, beside a canvas.
+#[derive(Clone, Copy, PlainData)]
+struct Specs {
+    rights: Permissions,
+    least: bool,
+    stepped: bool,
+}
 
-impl DockPanels<u32> for Palettes {
-    fn spec(&self, _: &u32) -> PanelSpec {
-        PanelSpec::new(PALETTE_TITLE)
+impl Specs {
+    /// Palettes with `rights`.
+    fn with(rights: Permissions) -> Tracked<Specs> {
+        Tracked::new(Specs { rights, least: false, stepped: false })
+    }
+}
+
+impl PanelSpecs<u32> for Specs {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        match (self.stepped, *panel) {
+            (true, 1) => PanelSpec::new(PALETTE_TITLE).grid(tools_grid()),
+            (true, _) => PanelSpec::new("Canvas"),
+            _ if self.least => PanelSpec::new(PALETTE_TITLE).limits(SizeLimits::at_least(PALETTE_LEAST)),
+            _ => PanelSpec::new(PALETTE_TITLE),
+        }
     }
 
     fn permissions(&self, _: &u32) -> Permissions {
-        self.0
+        if self.stepped { Permissions::ALL.collapses(false) } else { self.rights }
     }
+}
 
+/// Palette panels with empty bodies.
+struct Palettes;
+
+impl DockPanels<u32> for Palettes {
     fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
 }
 
@@ -46,14 +69,6 @@ impl DockPanels<u32> for Palettes {
 struct MoveProbe(Vec<bool>);
 
 impl DockPanels<u32> for MoveProbe {
-    fn spec(&self, _: &u32) -> PanelSpec {
-        PanelSpec::new(PALETTE_TITLE)
-    }
-
-    fn permissions(&self, _: &u32) -> Permissions {
-        Permissions::ALL
-    }
-
     fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
         let ctx = ui.ctx();
         self.0.push(craft_ui::testing::windows::moved_by_app(ctx, ctx.viewport_id()));
@@ -71,11 +86,11 @@ fn a_native_dock_window_is_moved_by_the_app_from_its_first_pass() {
     let mut saved = Placement::new(PALETTE_AT.size().into(), 1.0);
     saved.position_px = Some([PALETTE_AT.min.x as i32, PALETTE_AT.min.y as i32]);
     window.native = Some(saved);
-    let mut workspace = Workspace::new(Layout::new(None, vec![window]));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![window])));
     let mut probe = MoveProbe(Vec::new());
     windows.frame(vec![], vec![], |ui| {
         let config = DockConfig::default().native_windows(true);
-        let _ = DockArea::new("Native dock", Bind::bound(&mut workspace), &mut probe, config).show(ui);
+        let _ = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut probe, config).show(ui);
     });
     assert!(!probe.0.is_empty(), "the window's first frame runs the panel's body");
     assert!(probe.0.iter().all(|known| *known), "every pass of the window knows the app moves it: {:?}", probe.0);
@@ -86,16 +101,16 @@ fn a_native_dock_window_is_moved_by_the_app_from_its_first_pass() {
 fn the_dock_records_where_the_os_put_its_native_window() {
     let windows = Windows::new();
     windows.root_info(info(true, ROOT_AT));
-    let mut window = Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::new(300.0, 200.0)));
+    let mut window = Floating::single(100, vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::new(300.0, 200.0)));
     let mut saved = Placement::new(PALETTE_AT.size().into(), 1.0);
     saved.position_px = Some([200, 150]);
     window.native = Some(saved);
-    let mut workspace = Workspace::new(Layout::new(None, vec![window]));
-    let run = |workspace: &mut Workspace<u32>| {
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![window])));
+    let run = |workspace: &mut Arc<Workspace<u32>>| {
         let mut actions = Vec::new();
         windows.frame(vec![], vec![], |ui| {
             let config = DockConfig::default().native_windows(true);
-            let shown = DockArea::new("Native dock", Bind::bound(workspace), &mut Palettes(Permissions::ALL), config).show(ui);
+            let shown = DockArea::new("Native dock", Bind::bound(workspace), &Specs::with(Permissions::ALL), &mut Palettes, config).show(ui);
             actions.extend(shown.actions);
         });
         actions
@@ -121,12 +136,13 @@ fn a_float_opens_an_os_window_where_the_host_reports_window_positions() {
     let opened = |windows: Windows| {
         windows.root_info(info(true, ROOT_AT));
         windows.child_info(info(true, PALETTE_AT));
-        let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
         let (mut child, mut recorded) = (false, false);
         for _ in 0..3 {
             let out = windows.frame(vec![], vec![], |ui| {
                 let shown =
-                    DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+                    DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, DockConfig::default())
+                        .show(ui);
                 recorded |= shown.actions.iter().any(|action| matches!(action, Action::SetNative { .. }));
             });
             child |= out.builders.iter().any(|(viewport, _)| *viewport != ViewportId::ROOT);
@@ -146,9 +162,9 @@ fn a_native_dock_window_shows_no_os_title_bar() {
         let windows = Windows::with(InstallSpec::new(ShellInfo::default().os(os).caps(Caps::native(os)), Arc::new(FakeSystem::new())));
         windows.root_info(info(true, ROOT_AT));
         windows.child_info(info(true, PALETTE_AT));
-        let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
         let out = windows.frame(vec![], vec![], |ui| {
-            DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+            DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, DockConfig::default()).show(ui);
         });
         out.builders.into_iter().find(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, builder)| builder).expect("an OS window opens")
     };
@@ -164,11 +180,11 @@ fn a_native_dock_window_shows_no_os_title_bar() {
 fn a_native_float_opens_at_its_own_size() {
     let windows = Windows::new();
     windows.root_info(info(true, ROOT_AT));
-    let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
     let mut sizes = Vec::new();
     for _ in 0..3 {
         let out = windows.frame(vec![], vec![], |ui| {
-            DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+            DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, DockConfig::default()).show(ui);
         });
         sizes.extend(out.builders.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, builder)| builder.inner_size));
     }
@@ -184,11 +200,13 @@ fn the_os_close_of_a_native_float_closes_it_when_its_panels_may_close() {
         let windows = Windows::new();
         windows.root_info(info(true, ROOT_AT));
         windows.child_info(info(true, PALETTE_AT));
-        let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
-        let run = |workspace: &mut Workspace<u32>| {
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+        let run = |workspace: &mut Arc<Workspace<u32>>| {
             let mut actions = Vec::new();
             windows.frame(vec![], vec![], |ui| {
-                actions.extend(DockArea::new("Native dock", Bind::bound(workspace), &mut Palettes(rights), DockConfig::default()).show(ui).actions);
+                actions.extend(
+                    DockArea::new("Native dock", Bind::bound(workspace), &Specs::with(rights), &mut Palettes, DockConfig::default()).show(ui).actions,
+                );
             });
             actions.iter().any(|action| matches!(action, Action::CloseWindow { .. }))
         };
@@ -224,14 +242,6 @@ fn tools_grid() -> DockGrid {
 struct SteppedPalette;
 
 impl DockPanels<u32> for SteppedPalette {
-    fn spec(&self, panel: &u32) -> PanelSpec {
-        if *panel == 1 { PanelSpec::new(PALETTE_TITLE).grid(tools_grid()) } else { PanelSpec::new("Canvas") }
-    }
-
-    fn permissions(&self, _: &u32) -> Permissions {
-        Permissions::ALL.collapses(false)
-    }
-
     fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
         if *panel == 1 {
             Text::new("One").show(ui);
@@ -243,8 +253,9 @@ impl DockPanels<u32> for SteppedPalette {
 /// A dock of one docked group and one native palette.
 struct NativeDock {
     windows: Windows,
-    workspace: Workspace<u32>,
+    workspace: Arc<Workspace<u32>>,
     stepped: bool,
+    specs: Tracked<Specs>,
     /// The palette window's builder as the integration keeps it: each frame's builder patched onto it, which sends the
     /// window only the limits a builder carries.
     builder: Option<ViewportBuilder>,
@@ -256,14 +267,14 @@ struct NativeDock {
 
 impl NativeDock {
     fn on(os: Os, system: Arc<FakeSystem>) -> Self {
-        let palette = Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
+        let palette = Floating::single(101, vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
         Self::with(os, system, palette, false)
     }
 
     /// The dock with a stepped palette of one step ([`SteppedPalette`]).
     fn stepped(os: Os, system: Arc<FakeSystem>) -> Self {
         let column = Column::new(vec![Group::new(vec![1], 0)]).with_steps(1);
-        Self::with(os, system, Floating::new(column, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size())), true)
+        Self::with(os, system, Floating::new(102, column, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size())), true)
     }
 
     fn with(os: Os, system: Arc<FakeSystem>, palette: Floating<u32>, stepped: bool) -> Self {
@@ -271,8 +282,9 @@ impl NativeDock {
         let windows = Windows::with(InstallSpec::new(shell, system));
         windows.root_info(info(true, MAIN_AT));
         windows.child_info(info(true, FLOAT_AT));
-        let workspace = Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette]));
-        let mut dock = NativeDock { windows, workspace, stepped, builder: None, palette: None, palette_tree: None };
+        let workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])));
+        let specs = Tracked::new(Specs { rights: Permissions::ALL, least: false, stepped });
+        let mut dock = NativeDock { windows, workspace, stepped, specs, builder: None, palette: None, palette_tree: None };
         for _ in 0..3 {
             dock.frame(vec![]);
         }
@@ -288,10 +300,11 @@ impl NativeDock {
     fn frame_with(&mut self, root: Vec<Event>, child: Vec<Event>) -> (Vec<Action<u32>>, Vec<ViewportCommand>) {
         let mut actions = Vec::new();
         let workspace = &mut self.workspace;
-        let (mut palettes, mut stepped) = (Palettes(Permissions::ALL), SteppedPalette);
+        let (mut palettes, mut stepped) = (Palettes, SteppedPalette);
         let panels: &mut dyn DockPanels<u32> = if self.stepped { &mut stepped } else { &mut palettes };
+        let specs = &self.specs;
         let out = self.windows.frame(root, child, |ui| {
-            actions.extend(DockArea::new("Native dock", Bind::bound(workspace), &mut *panels, DockConfig::default()).show(ui).actions);
+            actions.extend(DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default()).show(ui).actions);
         });
         if self.palette.is_none() {
             self.palette = out.builders.iter().map(|(viewport, _)| *viewport).find(|viewport| *viewport != ViewportId::ROOT);
@@ -490,7 +503,7 @@ fn a_palette_drag_resolves_the_main_windows_drops_at_the_system_pointer_not_wher
 
 /// The steps of the stepped palette's column.
 fn palette_steps(dock: &NativeDock) -> Option<u16> {
-    dock.workspace.layout.floating[0].column.steps
+    dock.workspace.layout().floating[0].column.steps
 }
 
 /// One frame of `dock` with `child` events, after which the palette's window is where the app sent it, as the OS
@@ -526,12 +539,12 @@ fn a_native_stepped_palette_resizes_in_whole_steps_that_the_app_runs() {
 
         // The right grip straddles the window's right edge.
         let grip = Pos2::new(at.width() - 1.0, at.height() / 2.0);
-        for events in [vec![moved(grip)], vec![press(grip)], vec![moved(grip + Vec2::new(1.6 * grid.step, 0.0))], vec![]] {
+        for events in [vec![moved(grip)], vec![press(grip)], vec![moved(grip + Vec2::new(1.6 * (grid.width(2) - grid.width(1)), 0.0))], vec![]] {
             sent.extend(placed_frame(&mut dock, events, &mut at));
         }
         assert_eq!(palette_steps(&dock), Some(2), "{os:?}: a drag of 1.6 steps sets the whole step it reached");
         assert_eq!(at.width(), grid.width(2), "{os:?}: the window takes the width of its steps while the drag runs");
-        let end = grip + Vec2::new(1.6 * grid.step, 0.0);
+        let end = grip + Vec2::new(1.6 * (grid.width(2) - grid.width(1)), 0.0);
         for events in [vec![release(end)], vec![], vec![]] {
             sent.extend(placed_frame(&mut dock, events, &mut at));
         }
@@ -539,7 +552,7 @@ fn a_native_stepped_palette_resizes_in_whole_steps_that_the_app_runs() {
 
         let right = at.right();
         let grip = Pos2::new(1.0, at.height() / 2.0);
-        let end = grip - Vec2::new(1.6 * grid.step, 0.0);
+        let end = grip - Vec2::new(1.6 * (grid.width(2) - grid.width(1)), 0.0);
         for events in [vec![moved(grip)], vec![press(grip)], vec![moved(end)], vec![], vec![release(end)], vec![], vec![]] {
             sent.extend(placed_frame(&mut dock, events, &mut at));
         }
@@ -577,7 +590,7 @@ fn a_native_float_the_os_resizes_or_moves_gets_no_place_back() {
         sent.extend(dock.frame(vec![]).1);
     }
     assert!(placing(&sent).is_empty(), "the OS's places come back: {:?}", placing(&sent));
-    let recorded = dock.workspace.layout.floating[0].native.clone().expect("the model records the window");
+    let recorded = dock.workspace.layout().floating[0].native.clone().expect("the model records the window");
     assert_eq!(Vec2::from(recorded.normal.size), at.size(), "the model holds the OS's last size");
 }
 
@@ -588,7 +601,7 @@ fn an_app_change_of_a_native_floats_place_moves_its_window_once() {
     let to = Rect::from_min_size(Pos2::new(1100.0, 200.0), Vec2::new(320.0, 260.0));
     let mut placement = Placement::new(to.size().into(), 1.0);
     placement.position_px = Some([to.min.x as i32, to.min.y as i32]);
-    dock.workspace.apply(Action::set_native(1, Some(placement)), false, |_| Permissions::ALL).expect("the model takes the place");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_native(1, Some(placement)), false, |_| Permissions::ALL).expect("the model takes the place");
     let mut sent = Vec::new();
     for _ in 0..3 {
         sent.extend(dock.frame(vec![]).1);
@@ -638,11 +651,11 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
         sent
     };
     let mut at = FLOAT_AT;
-    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     follow(&mut dock, &mut at, 3);
     let strip = at;
     assert!(strip.width() < expanded.x, "the OS window shows the strip: {strip:?}");
-    let recorded = |dock: &NativeDock| dock.workspace.layout.floating[0].native.clone().expect("the model records the window");
+    let recorded = |dock: &NativeDock| dock.workspace.layout().floating[0].native.clone().expect("the model records the window");
     assert_eq!(Vec2::from(recorded(&dock).normal.size), expanded, "collapsed, the model keeps the expanded size");
 
     // The OS moves the strip over the start half of the main window.
@@ -652,10 +665,10 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
     let sent = follow(&mut dock, &mut at, 4);
     assert!(placing(&sent).is_empty(), "the strip stays where it was dropped: {:?}", placing(&sent));
     assert_eq!(at, dropped);
-    assert_eq!(dock.workspace.layout.floating[0].edge, Some(DockEdge::Start), "it keeps to the edge nearer the strip");
+    assert_eq!(dock.workspace.layout().floating[0].edge, Some(DockEdge::Start), "it keeps to the edge nearer the strip");
     assert_eq!(Vec2::from(recorded(&dock).normal.size), expanded, "moved, the model keeps the expanded size");
 
-    dock.workspace.apply(Action::set_iconic(1, false), false, |_| Permissions::ALL).expect("the column expands");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, false), false, |_| Permissions::ALL).expect("the column expands");
     let sent = follow(&mut dock, &mut at, 3);
     assert!(sent.contains(&ViewportCommand::InnerSize(expanded)), "the window takes its expanded size back: {:?}", placing(&sent));
     assert_eq!(at.min, dropped.min, "it opens from the strip's place, against the start edge");
@@ -678,7 +691,7 @@ fn a_collapsed_native_palette_on_macos_is_resized_by_appkit_in_its_width_only() 
         dock.windows.child_info(info(true, *at));
         commands
     };
-    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     for _ in 0..3 {
         follow(&mut dock, &mut at, vec![]);
     }
@@ -707,7 +720,7 @@ fn a_collapsed_native_palette_on_macos_is_resized_by_appkit_in_its_width_only() 
     for _ in 0..3 {
         sent.extend(follow(&mut dock, &mut at, vec![]));
     }
-    let palette = &dock.workspace.layout.floating[0];
+    let palette = &dock.workspace.layout().floating[0];
     assert!(palette.column.iconic_width.is_some_and(|kept| (kept - width).abs() <= 0.5), "the column keeps the width: {:?}", palette.column);
     let recorded = palette.native.clone().expect("the model records the window");
     assert_eq!(Vec2::from(recorded.normal.size), FLOAT_AT.size(), "the model keeps the expanded size");
@@ -745,8 +758,8 @@ fn a_minimized_native_palette_keeps_its_width_resizable_and_comes_back_at_its_he
             sent
         };
         let recorded =
-            |dock: &NativeDock| Vec2::from(dock.workspace.layout.floating[0].native.clone().expect("the model records the window").normal.size);
-        dock.workspace.apply(Action::set_minimized(1, true), false, |_| Permissions::ALL).expect("the group minimizes");
+            |dock: &NativeDock| Vec2::from(dock.workspace.layout().floating[0].native.clone().expect("the model records the window").normal.size);
+        Arc::make_mut(&mut dock.workspace).apply(Action::set_minimized(1, true), false, |_| Permissions::ALL).expect("the group minimizes");
         follow(&mut dock, &mut at, 3);
         let strips = at;
         assert!(strips.height() < expanded.y / 4.0, "{os:?}: the window shrinks to its title row and strip: {strips:?}");
@@ -771,7 +784,7 @@ fn a_minimized_native_palette_keeps_its_width_resizable_and_comes_back_at_its_he
         assert!(!sent.iter().any(|command| matches!(command, ViewportCommand::InnerSize(_))), "{os:?}: no size goes back: {sent:?}");
         assert_eq!(recorded(&dock), Vec2::new(width, expanded.y), "{os:?}: the model takes the width and keeps the expanded height");
 
-        dock.workspace.apply(Action::set_minimized(1, false), false, |_| Permissions::ALL).expect("the group restores");
+        Arc::make_mut(&mut dock.workspace).apply(Action::set_minimized(1, false), false, |_| Permissions::ALL).expect("the group restores");
         follow(&mut dock, &mut at, 3);
         assert_eq!(at, Rect::from_min_size(FLOAT_AT.min, Vec2::new(width, expanded.y)), "{os:?}: restored, the window takes its height back");
     }
@@ -793,11 +806,11 @@ fn a_click_on_the_double_arrow_of_a_collapsed_native_palette_expands_it() {
         actions
     };
     frame(&mut dock, &mut at, vec![]);
-    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     for _ in 0..3 {
         frame(&mut dock, &mut at, vec![]);
     }
-    assert!(dock.workspace.layout.floating[0].column.iconic, "the column is collapsed");
+    assert!(dock.workspace.layout().floating[0].column.iconic, "the column is collapsed");
     assert!(at.width() < FLOAT_AT.width(), "the OS window shows the strip: {at:?}");
 
     // The double arrow is the title row's square at the end the strip keeps to: a point just inside its outer corner.
@@ -807,7 +820,7 @@ fn a_click_on_the_double_arrow_of_a_collapsed_native_palette_expands_it() {
     for events in [vec![moved(arrow)], vec![press(arrow)], vec![release(arrow)], vec![], vec![]] {
         actions.extend(frame(&mut dock, &mut at, events));
     }
-    assert!(!dock.workspace.layout.floating[0].column.iconic, "the click expands the column: {actions:?}");
+    assert!(!dock.workspace.layout().floating[0].column.iconic, "the click expands the column: {actions:?}");
     assert_eq!(at.size(), FLOAT_AT.size(), "the OS window takes its expanded size");
 }
 
@@ -816,10 +829,6 @@ fn a_click_on_the_double_arrow_of_a_collapsed_native_palette_expands_it() {
 struct BodyProbe(Vec<ViewportId>);
 
 impl DockPanels<u32> for BodyProbe {
-    fn spec(&self, _: &u32) -> PanelSpec {
-        PanelSpec::new(PALETTE_TITLE)
-    }
-
     fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
         let ctx = ui.ctx();
         if *panel == 1 && !craft_ui::testing::is_measuring(ctx) {
@@ -839,7 +848,7 @@ fn collapsed_palette() -> (NativeDock, Rect) {
     let mut at = FLOAT_AT;
     dock.windows.child_info(scaled(true, at, COLLAPSED_SCALE));
     collapsed_frame(&mut dock, &mut BodyProbe::default(), &mut at, vec![], vec![]);
-    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     for _ in 0..4 {
         collapsed_frame(&mut dock, &mut BodyProbe::default(), &mut at, vec![], vec![]);
     }
@@ -850,8 +859,9 @@ fn collapsed_palette() -> (NativeDock, Rect) {
 /// whose OS window follows its commands at `at`: the frame's output.
 fn collapsed_frame(dock: &mut NativeDock, panels: &mut dyn DockPanels<u32>, at: &mut Rect, root: Vec<Event>, child: Vec<Event>) -> Out {
     let workspace = &mut dock.workspace;
+    let specs = &dock.specs;
     let out = dock.windows.frame(root, child, |ui| {
-        let _ = DockArea::new("Native dock", Bind::bound(workspace), &mut *panels, DockConfig::default()).show(ui);
+        let _ = DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default()).show(ui);
     });
     let palette = dock.palette;
     let commands: Vec<ViewportCommand> =
@@ -1004,7 +1014,7 @@ fn a_collapsed_native_palette_on_a_1x_monitor_beside_a_2x_main_window_fits_its_i
     dock.windows.root_info(scaled(true, MAIN_AT, 2.0));
     let mut at = FLOAT_AT;
     dock.windows.child_info(scaled(true, at, 1.0));
-    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     for _ in 0..4 {
         let commands = dock.frame(vec![]).1;
         at = placed_by(&commands, at);
@@ -1060,10 +1070,6 @@ struct Least;
 const PALETTE_LEAST: Vec2 = Vec2::new(240.0, 160.0);
 
 impl DockPanels<u32> for Least {
-    fn spec(&self, _: &u32) -> PanelSpec {
-        PanelSpec::new(PALETTE_TITLE).limits(SizeLimits::at_least(PALETTE_LEAST))
-    }
-
     fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
 }
 
@@ -1074,14 +1080,21 @@ fn a_native_palette_is_never_sized_below_its_limits() {
     let windows = Windows::new();
     windows.root_info(info(true, MAIN_AT));
     windows.child_info(info(true, FLOAT_AT));
-    let mut window = Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
+    let mut window = Floating::single(103, vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), FLOAT_AT.size()));
     let mut saved = Placement::new(FLOAT_AT.size().into(), 1.0);
     saved.position_px = Some([FLOAT_AT.min.x as i32, FLOAT_AT.min.y as i32]);
     window.native = Some(saved);
-    let mut workspace = Workspace::new(Layout::new(None, vec![window]));
-    let run = |workspace: &mut Workspace<u32>| {
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![window])));
+    let run = |workspace: &mut Arc<Workspace<u32>>| {
         let out = windows.frame(vec![], vec![], |ui| {
-            let _ = DockArea::new("Native dock", Bind::bound(workspace), &mut Least, DockConfig::default().native_windows(true)).show(ui);
+            let _ = DockArea::new(
+                "Native dock",
+                Bind::bound(workspace),
+                &Tracked::new(Specs { rights: Permissions::ALL, least: true, stepped: false }),
+                &mut Least,
+                DockConfig::default().native_windows(true),
+            )
+            .show(ui);
         });
         out.commands.into_iter().filter(|(viewport, _)| *viewport != ViewportId::ROOT).map(|(_, command)| command).collect::<Vec<_>>()
     };
@@ -1090,7 +1103,7 @@ fn a_native_palette_is_never_sized_below_its_limits() {
     }
     let mut small = Placement::new([80.0, 60.0], 1.0);
     small.position_px = Some([FLOAT_AT.min.x as i32, FLOAT_AT.min.y as i32]);
-    workspace.apply(Action::set_native(1, Some(small)), false, |_| Permissions::ALL).expect("the model takes the place");
+    Arc::make_mut(&mut workspace).apply(Action::set_native(1, Some(small)), false, |_| Permissions::ALL).expect("the model takes the place");
     let mut sent = Vec::new();
     for _ in 0..3 {
         sent.extend(run(&mut workspace));
@@ -1109,11 +1122,12 @@ fn a_float_shows_and_moves_in_the_app_window_while_the_main_window_is_full_scree
     windows.root_info(ViewportInfo { fullscreen: Some(true), ..info(true, MAIN_AT) });
     windows.child_info(info(true, FLOAT_AT));
     let start = float().rect;
-    let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
     let mut child = false;
-    let mut run = |workspace: &mut Workspace<u32>, events: Vec<Event>| {
+    let mut run = |workspace: &mut Arc<Workspace<u32>>, events: Vec<Event>| {
         let out = windows.frame(events, vec![], |ui| {
-            let _ = DockArea::new("Native dock", Bind::bound(workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
+            let _ =
+                DockArea::new("Native dock", Bind::bound(workspace), &Specs::with(Permissions::ALL), &mut Palettes, DockConfig::default()).show(ui);
         });
         child |= out.builders.iter().any(|(viewport, _)| *viewport != ViewportId::ROOT);
     };
@@ -1132,7 +1146,7 @@ fn a_float_shows_and_moves_in_the_app_window_while_the_main_window_is_full_scree
         run(&mut workspace, vec![]);
     }
     assert!(!child, "no OS window opens over the full-screen window");
-    let moved_to = workspace.layout.floating[0].rect.min;
+    let moved_to = workspace.layout().floating[0].rect.min;
     assert!(
         (moved_to - (start.min + by)).length() <= by.length() / 2.0,
         "the drag moved the float with the pointer: {moved_to:?} from {:?}",
@@ -1144,10 +1158,6 @@ fn a_float_shows_and_moves_in_the_app_window_while_the_main_window_is_full_scree
 struct Veiled;
 
 impl DockPanels<u32> for Veiled {
-    fn spec(&self, _: &u32) -> PanelSpec {
-        PanelSpec::new(PALETTE_TITLE)
-    }
-
     fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
         let _ = DropVeil::new("Drop").show(ui, |_, _| {});
     }
@@ -1161,15 +1171,15 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
         let windows = Windows::new();
         windows.root_info(info(true, ROOT_AT));
         windows.child_info(info(true, PALETTE_AT));
-        let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
         let mut frame = |hovered: Vec<HoveredFile>, dropped: Vec<String>| {
             let mut files = 0;
             windows.frame_with_files(vec![], vec![], hovered, dropped, |ui| {
                 let config = DockConfig::default();
                 let shown = if veiled {
-                    DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Veiled, config).show(ui)
+                    DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Veiled, config).show(ui)
                 } else {
-                    DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), config).show(ui)
+                    DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Palettes, config).show(ui)
                 };
                 files += shown.window_files.len();
             });
@@ -1191,7 +1201,7 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
 
 /// A palette float made in the app window.
 fn float() -> Floating<u32> {
-    Floating::single(vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::new(300.0, 200.0)))
+    Floating::single(104, vec![1], 0, Rect::from_min_size(Pos2::new(40.0, 40.0), Vec2::new(300.0, 200.0)))
 }
 
 fn info(focused: bool, rect: Rect) -> ViewportInfo {

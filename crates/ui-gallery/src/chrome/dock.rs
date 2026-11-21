@@ -10,7 +10,7 @@ use craft_theme::variant::Tone;
 use craft_ui::contract::Show as _;
 use craft_ui::contract::{BodyCx, Outbox, SizeLimits, Tracked};
 use craft_ui::display::InspectLayers;
-use craft_ui::docking::{DockHeights, DockPanels, PanelSpec};
+use craft_ui::docking::{DockHeights, DockPanels, PanelSpec, PanelSpecs};
 use craft_ui::menu::PanelRow;
 use craft_ui::notices::Notice;
 use craft_window::policy::WindowKind;
@@ -62,7 +62,11 @@ impl GalleryDock<'_> {
     }
 }
 
-impl DockPanels<PanelId> for GalleryDock<'_> {
+/// The gallery's panel specs: each panel's follow from its id.
+#[derive(Clone, Copy, Debug, Default, PartialEq, craft_ui::contract::PlainData)]
+pub struct GallerySpecs;
+
+impl PanelSpecs<PanelId> for GallerySpecs {
     fn spec(&self, panel: &PanelId) -> PanelSpec {
         let spec = PanelSpec::new(panel.title()).limits(SizeLimits::default());
         match panel {
@@ -78,7 +82,9 @@ impl DockPanels<PanelId> for GalleryDock<'_> {
     fn permissions(&self, panel: &PanelId) -> Permissions {
         panel.permissions()
     }
+}
 
+impl DockPanels<PanelId> for GalleryDock<'_> {
     fn body(&mut self, panel: &PanelId, ui: &mut Ui, _: &mut BodyCx<'_>) {
         match (panel, self.preview) {
             (PanelId::Preview, Preview::App) => {

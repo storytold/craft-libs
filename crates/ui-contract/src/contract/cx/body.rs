@@ -203,6 +203,12 @@ impl<'a> BodyCx<'a> {
 }
 
 impl BodyCx<'_> {
+    /// The value this body derives from `key`: kept while `key` is unchanged, else built by `build`
+    /// ([`runtime::derived`](crate::runtime::derived::derived), under the body's id).
+    pub fn derived<K: crate::contract::MemoProps, V: Send + Sync + 'static>(&self, key: &K, build: impl FnOnce() -> V) -> std::sync::Arc<V> {
+        crate::runtime::derived::derived(self.memory.ctx(), self.id, key, build)
+    }
+
     /// Takes the Escape of this pass that no component took: a field that clears on Escape passes it on once it
     /// is empty. `true` once per Escape; the enclosing scope (a dialog, a popover) then does not act on it.
     /// Components shown earlier in the body have run by the time the body asks.

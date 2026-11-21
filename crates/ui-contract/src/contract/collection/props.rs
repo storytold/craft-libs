@@ -119,6 +119,21 @@ pub enum LeadOnOpen {
     First,
 }
 
+/// What the pointer moving over the rows changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HoverLead {
+    /// Nothing: only a press moves the lead.
+    #[default]
+    Off,
+    /// The lead moves to the row under the pointer; the selection stays until a pick (click, Enter, or a key move):
+    /// option lists, where the selection is the chosen value.
+    Lead,
+    /// The lead moves and picks the row, as the arrow keys do: menus and the undo list, where the hover range is
+    /// the point.
+    LeadAndSelection,
+}
+
 /// How tall a collection's rows are. Read-only display tables (a metadata table) take text rows; lists the user picks
 /// from or navigates keep control-high rows, a pointer target as tall as a control. A row with a thumbnail or a
 /// detail line is as tall as those need either way.
@@ -173,9 +188,8 @@ pub struct CollectionProps {
     pub allow_empty: bool,
     /// Where the lead starts.
     pub lead_on_open: LeadOnOpen,
-    /// The lead, and the selection with it as for the arrow keys, moves to the row under the pointer when the pointer
-    /// moves: menus, popup lists and the undo list.
-    pub lead_follows_hover: bool,
+    /// What the pointer moving over the rows changes: the lead, and for some lists the selection too.
+    pub hover_lead: HoverLead,
     /// The arrow keys select the row they move the lead to. Off: they move the lead only, and Space, Enter or a click
     /// selects it (a swatch table, a tab strip, a preset browser); Enter then activates it as well.
     pub arrows_select: bool,
@@ -299,7 +313,7 @@ impl CollectionProps {
             striped: false,
             allow_empty: false,
             lead_on_open: LeadOnOpen::Selected,
-            lead_follows_hover: false,
+            hover_lead: HoverLead::Off,
             arrows_select: true,
             focus_on_press: true,
             rows_stamp: None,
@@ -434,10 +448,10 @@ impl CollectionProps {
         self
     }
 
-    /// The lead follows the pointer over the rows.
+    /// What the pointer moving over the rows changes.
     #[must_use]
-    pub const fn lead_follows_hover(mut self, on: bool) -> Self {
-        self.lead_follows_hover = on;
+    pub const fn hover_lead(mut self, hover: HoverLead) -> Self {
+        self.hover_lead = hover;
         self
     }
 

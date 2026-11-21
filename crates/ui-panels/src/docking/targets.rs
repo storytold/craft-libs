@@ -4,7 +4,7 @@
 //! previous pass's registry, because a drop is decided against what was on screen when the pointer moved. Every
 //! zone is a rect. A spot names a group by an anchor panel, as the dock model does.
 
-use super::{DragUnit, PanelKey, PanelSpec, scale_widths, stepped, width_bounds};
+use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
 use crate::contract::DropMark;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::{RuleKind, RuleWidth, StyleCx};
@@ -75,6 +75,11 @@ pub struct DockSizes {
     pub iconic_least: f32,
     /// The width of an expanded column the user has not resized (the dock column width).
     pub column: f32,
+    /// A tool rail's width at one column: a rail button and the control padding on both sides
+    /// ([`DockGrid::rail`](super::DockGrid::rail)).
+    pub rail_first: f32,
+    /// The width each further column of a tool rail adds: a rail button and the tight gap before it.
+    pub rail_step: f32,
 }
 
 impl DockSizes {
@@ -82,6 +87,12 @@ impl DockSizes {
     /// `StyleCx::with_root(ctx, DockSizes::style)`.
     pub fn of(ctx: &Context) -> Self {
         StyleCx::with_root(ctx, DockSizes::style)
+    }
+
+    /// The sizes in the style of the scope `ui` is in: what a dock shown in `ui` sizes with.
+    pub fn of_scope(ui: &egui::Ui) -> Self {
+        let env = crate::runtime::env::Env::of(ui);
+        Self::style(&StyleCx::of_env(ui.ctx(), &env))
     }
 
     /// The sizes of the style context `cx`.
@@ -111,6 +122,8 @@ impl DockSizes {
             jump: cx.control().height,
             iconic_least: size.rail.width,
             column: size.dock.column,
+            rail_first: size.rail.button + 2.0 * cx.tokens.space.pad.control,
+            rail_step: size.rail.button + cx.tokens.space.gap.tight,
         }
     }
 
@@ -141,9 +154,9 @@ impl DockSizes {
 
     /// The width an expanded column's panels draw at, whether the column is expanded or iconic (its flyout and a
     /// floated iconic column use it): the stored width kept within the panels' limits, or a stepped column's width
-    /// at its steps ([`stepped`]).
+    /// at its steps ([`DockSizes::stepped`](super::DockSizes::stepped)).
     pub fn expanded_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
-        if let Some((grid, steps)) = stepped(column, spec) {
+        if let Some((grid, steps)) = self.stepped(column, spec) {
             return grid.width(steps);
         }
         let (lo, hi) = self.width_bounds(column, spec);
@@ -162,7 +175,7 @@ impl DockSizes {
     pub fn shown_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
         if column.iconic {
             self.iconic_bounds(column, spec)
-        } else if let Some((grid, _)) = stepped(column, spec) {
+        } else if let Some((grid, _)) = self.stepped(column, spec) {
             (grid.width(1), grid.width(grid.most))
         } else {
             self.width_bounds(column, spec)
@@ -196,7 +209,7 @@ impl DockSizes {
             Some(Node::Dock { columns, .. }) => columns,
             _ => return Vec::new(),
         };
-        let fixed = |column: &Column<P>| !column.iconic && stepped(column, spec).is_some();
+        let fixed = |column: &Column<P>| !column.iconic && self.stepped(column, spec).is_some();
         let current: Vec<(f32, (f32, f32))> = columns
             .iter()
             .map(|column| {
@@ -222,7 +235,7 @@ impl DockSizes {
         columns
             .iter()
             .map(|column| {
-                let keeps = column.iconic || stepped(column, spec).is_some();
+                let keeps = column.iconic || self.stepped(column, spec).is_some();
                 (self.width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
             })
             .collect()

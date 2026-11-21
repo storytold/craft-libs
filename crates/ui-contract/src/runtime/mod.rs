@@ -5,6 +5,7 @@ pub mod access;
 pub(crate) mod audit;
 pub mod commands;
 pub mod cursor;
+pub mod derived;
 pub mod drag;
 pub mod edit;
 pub mod egui;

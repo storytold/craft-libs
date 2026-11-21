@@ -257,13 +257,12 @@ impl<'a> Rulers<'a> {
         Self::content_rect_of(full, thickness(cx.tokens))
     }
 
-    /// The top and the left strip inside the canvas's rect `full`, each as thick as the canvas's own rulers, for a ruler
-    /// of another component (a text ruler, a page ruler) that lies along them.
-    pub fn strips(ui: &egui::Ui, full: Rect) -> (Rect, Rect) {
+    /// The top strip, the left strip and the corner where they meet inside the canvas's rect `full`, each as thick as
+    /// the canvas's own rulers, for a ruler of another component (a text ruler, a page ruler) that lies along them.
+    pub fn strips(ui: &egui::Ui, full: Rect) -> (Rect, Rect, Rect) {
         let env = crate::runtime::env::Env::of(ui);
         let cx = StyleCx::of_env(ui.ctx(), &env);
-        let (top, left, _) = strips(full, thickness(cx.tokens));
-        (top, left)
+        strips(full, thickness(cx.tokens))
     }
 
     /// The ticks of one ruler over `values` (ruler units from the zero point): the one tick rule of every ruler, so a
