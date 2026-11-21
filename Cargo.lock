@@ -2349,9 +2349,12 @@ version = "0.1.0"
 name = "craft-hwpx"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "craft-testkit",
  "craft-wordmodel",
  "craft-xml",
  "craft-zip",
+ "log",
  "thiserror 2.0.21",
 ]
 
