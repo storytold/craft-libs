@@ -6,7 +6,7 @@ use crate::runtime::egui::alloc;
 use crate::runtime::env::{Env, Shrink};
 use crate::runtime::focus;
 use crate::runtime::layout_memory;
-use crate::runtime::lazy::{self, Decision, Key, Place};
+use crate::runtime::lazy::{self, Call, Decision, Key, Place};
 #[cfg(feature = "testing")]
 use crate::runtime::measure::{MemoRun, count_memo_run};
 use crate::runtime::memory::sub;
@@ -71,7 +71,8 @@ impl Lazy {
     /// replays the kept run of a memoized view keyed `key`, or takes the extent of a child out of view.
     pub(super) fn run_keyed<R>(self, ui: &mut Ui, name: &'static str, key: Key, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Shown<R> {
         let ctx = ui.ctx().clone();
-        let view = Env::of(ui).view().lazy_view();
+        let env = Env::of(ui);
+        let view = env.view().lazy_view();
         let id = match view {
             Some(view) => sub(view.owner, ("lazy", self.key)),
             None => sub(ui.scope_id(), ("lazy", self.key)),
@@ -82,7 +83,7 @@ impl Lazy {
         // its measuring run settled on, the room its place then holds, so a new width runs it. A view the row does not
         // narrow shows as in no room, in the row's flow region: its room does not follow its own content's width, so a
         // new content runs it once and the discard pass its new size asks for replays that run.
-        let shrink = Env::of(ui).shrink.filter(|_| memo);
+        let shrink = env.shrink.filter(|_| memo);
         let cap = match shrink {
             Some(Shrink::Apply(row)) => crate::layout::shrink_cap(&ctx, row, id).filter(|cap| cap.narrowed),
             _ => None,
@@ -125,13 +126,14 @@ impl Lazy {
             pixels_per_point: ctx.pixels_per_point(),
             atlas: ctx.fonts(|fonts| fonts.atlas_generation()),
             opacity: ui.opacity(),
-            env: Env::of(ui).key,
-            fits: Env::of(ui).view_fits(),
+            env: env.key,
+            flow: env.flow(),
         };
         if real && memo {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
-        let settled = if memo { lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key) } else { None };
+        let call = if real { Call::Real(place) } else { Call::Measuring { room: sizing.then_some(available), flow: place.flow } };
+        let settled = if memo { lazy::settled(&ctx, owner, id, call, view, key) } else { None };
         // The replay audit runs a view that would replay for real in place of the replay, and compares the two.
         let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, shift)| *shift);
         if let Some((size, ran_at, shift)) = settled
@@ -195,7 +197,7 @@ impl Lazy {
         }
         if view.is_some() || memo {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
-            lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available }, registered);
+            lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available, flow: place.flow }, registered);
         }
         if let Some(view) = view
             && real

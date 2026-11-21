@@ -46,8 +46,11 @@ use std::sync::Arc;
 /// replay.
 ///
 /// Its other inputs are the framework's, and each reaches the key or the settled test:
-/// - its place: the room it is given, the clip, the layer, the layout, the scale and the scope's style inputs (tokens,
-///   theme, density, direction, language, window active), compared for every view;
+/// - its place: the room it is given, the clip, the layer, the layout, the scale, the scope's style inputs (tokens,
+///   theme, density, direction, language, window active) and the flow of the body around it (whether that body is a
+///   content-sized or a given column, the axes it sizes from its content, a least measure, the axes a scroll leaves
+///   unbounded, a beside label's cell, whether its leaves fit the room), compared for every view and for each kind of
+///   run on its own;
 /// - what the scope around it hands down beyond those (enabled, read-only, size, ink, the command chain, motion, every
 ///   app value, and the rest of `Scoped::scope_key`), in the key;
 /// - the framework inputs it reads outside its props (`runtime::inputs`: the modifiers, the pointer, the keys held, the
