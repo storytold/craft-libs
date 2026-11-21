@@ -1313,13 +1313,19 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 
 /// `path` filled by `rule`, as a path and the rule it is filled by. An even-odd path is
 /// rebuilt from its boundary as a path filled nonzero; if that fails it is kept closed and
-/// filled even-odd.
+/// filled even-odd. A subpath too small for the tolerance that the path's largest coordinate
+/// needs is rebuilt at that tolerance, and may be dropped.
 fn nonzero(path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
     if rule == FillRule::NonZero {
         return (path.clone(), FillRule::NonZero);
     }
     let closed = closed(path);
-    match linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union) {
+    let (empty, even_odd, union) = (BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+    let rebuilt = match linesweeper::binary_op(&closed, &empty, even_odd, union) {
+        Err(linesweeper::Error::FeatureBelowTolerance { eps }) => linesweeper::binary_op_with_eps(&closed, &empty, even_odd, union, eps),
+        other => other,
+    };
+    match rebuilt {
         Ok(contours) => {
             let mut out = BezPath::new();
             for contour in contours.contours() {
@@ -1372,6 +1378,26 @@ mod tests {
         assert!(values(cell, cell_scale, 1000) <= MAX_CELL_PIXELS * CANVAS_INKS * 1.01);
         // A CMYK page keeps its resolution.
         assert_eq!(tiling_scales(dpi, page, cell, 1.0, 4).0, dpi);
+    }
+
+    #[test]
+    fn even_odd_holes_stay_open_beside_a_far_point() {
+        // A square with a hole drawn in the same direction, a 0.3 wide sliver and a triangle at
+        // 3e13, which makes the sweep tolerance about 0.43.
+        let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
+        path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
+        path.extend(Rect::new(200.0, 0.0, 200.3, 10.0).to_path(0.0).iter());
+        path.move_to((3.0e13, 3.0e13));
+        path.line_to((3.0e13 + 1.0e3, 3.0e13));
+        path.line_to((3.0e13, 3.0e13 + 1.0e3));
+        path.close_path();
+        // linesweeper reports the sliver, and the rebuild runs again at its tolerance.
+        let swept = linesweeper::binary_op(&path, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union);
+        assert!(matches!(swept, Err(linesweeper::Error::FeatureBelowTolerance { .. })));
+        let (out, rule) = nonzero(&path, FillRule::EvenOdd);
+        assert_eq!(rule, FillRule::NonZero);
+        assert_ne!(out.winding((10.0, 10.0).into()), 0);
+        assert_eq!(out.winding((50.0, 50.0).into()), 0);
     }
 
     #[test]
