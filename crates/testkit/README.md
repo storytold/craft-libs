@@ -216,6 +216,50 @@ Changes from `craft-media-testkit`'s `hammer`:
 - `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
+## mcp
+
+The `mcp` feature adds `craft_testkit::mcp` and the `serde_json` dependency. The module is built on every target except `wasm32`, and it opens no network connection.
+
+`McpChild::spawn(path, args, env)` starts an MCP server program with its stdin and stdout piped. The variables in `env` are set for the child only; the test process's environment is not changed. `McpChild::connect(reader, writer, limits)` talks to a server that runs in the test process. Each message is one line of JSON-RPC 2.0, as the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) describes.
+
+| Call | What it does |
+|---|---|
+| `initialize(version)` | Sends `initialize` with `version` (`mcp::PROTOCOL_VERSION` is `2025-06-18`), waits for the reply, then sends `notifications/initialized`. A reply with another version returns `UnsupportedVersion` and closes the connection. |
+| `request(method, params)`, `request_within(.., timeout)` | Sends a request with a new numeric id and returns the `result` of the reply with that id. Well-formed replies with other ids are skipped. An error reply returns `Rpc` with its code, message and data, and the connection stays usable. |
+| `call_tool(name, args)`, `call_tool_within(.., timeout)` | Sends `tools/call` and returns the tool result unchanged, `content` and `isError` included. |
+| `list_tools()` | Reads `tools/list` pages through `nextCursor` and returns the tools as sent. More than `max_pages` pages returns `TooManyPages`, and tools that add up to more than `max_line_bytes` of JSON return `ToolListTooLarge`. |
+| `notify(method, params)` | Sends a notification, which has no id and gets no reply. |
+| `take_notifications()` | Returns the notifications kept so far without waiting. |
+| `close()` | Closes the child's stdin, waits for it to exit, stops it after the grace period, and returns its exit status, whether it was stopped, and the stderr kept. |
+
+While a call waits, the client answers the child's `ping` with an empty result and its other requests with error -32601. A line on stdout that is not a JSON-RPC 2.0 message, a reply with neither or both of `result` and `error`, a line over the length limit, a missed deadline and the end of stdout each return an error, close the connection and stop the child; later calls return `Closed`. Dropping an `McpChild` stops and reaps a child that is still running. Setup returns a `Result` and nothing in the module panics.
+
+`McpLimits` holds the limits. These defaults are the crate's own values:
+
+| Field | Default | Range |
+|---|---|---|
+| `max_line_bytes` | 64 MiB, for one stdout line and for the whole `list_tools` result | at least 1 |
+| `request_timeout` | 30 s | more than zero, at most 1 hour |
+| `initialize_timeout` | 60 s | more than zero, at most 1 hour |
+| `close_grace` | 2 s | at most 1 hour |
+| `max_pages` | 64 | at least 1 |
+| `max_notifications` | 0 (notifications are not kept); the oldest is dropped when the queue is full | at most 4096 |
+| `stderr_tail_bytes` | 0 (stderr goes to the null device); otherwise the last bytes written are kept | at most 16 MiB |
+
+`McpLimits::timeouts_from_var(name)` sets both deadlines from a variable that holds a whole number of seconds from 1 to 3600; `mcp::TIMEOUT_VAR` (`CRAFT_TEST_MCP_TIMEOUT_SECS`) is the default name. Any other value returns an error.
+
+```rust
+use craft_testkit::mcp::{McpChild, PROTOCOL_VERSION};
+
+let mut mcp = McpChild::spawn(env!("CARGO_BIN_EXE_my-cli"), ["mcp"], [("MYCRAFT_CONFIG_DIR", dir.path())])?;
+mcp.initialize(PROTOCOL_VERSION)?;
+let result = mcp.call_tool("doc.new", serde_json::json!({}))?;
+assert_eq!(result["isError"], false);
+assert!(mcp.close()?.status.is_some_and(|s| s.success()));
+```
+
+The tests that start a real child are in `tests/mcp_child.rs`, a target with `harness = false`: the child is that test program, and the standard harness writes its own lines on stdout. Both test targets build to nothing on `wasm32`.
+
 ## Origin
 
 ### guards
@@ -242,6 +286,14 @@ Changes from `craft-media-testkit`'s `hammer`:
 | Code | Repository | Path | SHA |
 |---|---|---|---|
 | `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
+
+### mcp
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `Conn`, `request`, `call_tool`, `MAX_LINE`, deadlines, and the 14 tests of `child_tests.rs`, written again here | storytold/craft-ai-integrations | `crates/ai-mcp/src/apps/child.rs` | `e8b31cb0` |
+| The MCP end-to-end helpers | storytold/vectorcraft | `apps/vectorcraft-cli/tests/it/mcp_e2e.rs` | `460d2119` |
+| `mcp_recv` | storytold/photocraft | `apps/photocraft-cli/tests/it/cli.rs` | `58d11d91` |
 
 ## Migration
 
@@ -276,3 +328,13 @@ An adoption keeps the variable name the app uses today.
 
 CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
 cases change, and keep the test names.
+
+### mcp
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| VectorCraft | `apps/vectorcraft-cli/tests/it/mcp_e2e.rs` | Pending |
+| PhotoCraft | `apps/photocraft-cli/tests/it/cli.rs` | Pending |
+| CADCraft, DeckCraft, DesignCraft, EffectCraft | the MCP helpers in their CLI tests | Pending |
+| FigCraft, FilmCraft, GridCraft, LightCraft, PdfCraft, SoundCraft | the MCP helpers in their CLI tests | Pending |
+| craft-ai-integrations | `crates/ai-mcp/src/apps/child.rs`, production code | Kept as it is |

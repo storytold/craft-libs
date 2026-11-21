@@ -25,6 +25,10 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! With the `mcp` feature, on targets other than `wasm32`, `mcp::McpChild` runs an MCP server as a
+//! child process and talks to it over stdin and stdout, with a deadline on every wait and a length
+//! limit on every line it reads.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -39,6 +43,8 @@
 pub mod deadline;
 pub mod guards;
 pub mod hostile;
+#[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
+pub mod mcp;
 pub mod sample_damage;
 
 #[cfg(not(target_arch = "wasm32"))]

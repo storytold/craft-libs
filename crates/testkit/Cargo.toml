@@ -8,7 +8,23 @@ repository.workspace = true
 description = "Source-level platform regression guards and verification utilities for the Craft application suite"
 publish = false
 
+[features]
+# `mcp::McpChild`: an MCP stdio test client.
+mcp = ["dep:serde_json"]
+
 [dependencies]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde_json = { workspace = true, optional = true }
+
+[[test]]
+name = "mcp"
+required-features = ["mcp"]
+
+[[test]]
+name = "mcp_child"
+harness = false
+required-features = ["mcp"]
 
 [lints]
 workspace = true
