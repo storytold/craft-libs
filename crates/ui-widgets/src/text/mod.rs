@@ -94,8 +94,8 @@ fn text_part<V>() -> TextKey<V> {
     TextKey::new(TEXT)
 }
 
-/// The text field every collection's `rename_editor` shows over an item's label: it selects the name on focus, so
-/// typing replaces it.
+/// The text field every collection's `rename_editor` and the canvas `Pasteboard`'s page-name rename show over a label:
+/// it selects the name on focus, so typing replaces it.
 pub fn rename_field(ui: &mut egui::Ui, draft: Bind<'_, String>, label: egui::Rect, name: &str) -> EditResponse<String> {
     use crate::contract::Show as _;
     TextField::new(name.to_owned(), draft).select_on_focus().show_at(ui, label)

@@ -309,7 +309,6 @@ fn artboard_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 kept.note = Some(note);
             }
         }
-        // P3(canvas-w4): cv.F24
         if let Some((index, _)) = named {
             boards.selected = vec![index];
         }

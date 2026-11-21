@@ -15,6 +15,14 @@ pub struct Rename<K> {
     pub name: String,
 }
 
+impl<K> Rename<K> {
+    // PLAN: `Rename` is `#[non_exhaustive]` and had no constructor, so a control outside this crate (the pasteboard's page-name rename) could not build one.
+    /// The rename of `key` to `name`.
+    pub fn new(key: K, name: impl Into<String>) -> Self {
+        Rename { key, name: name.into() }
+    }
+}
+
 /// A reorder: the items `keys` move together, and the first of them lands at position `to`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReorderMove<K> {
