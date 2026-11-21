@@ -40,22 +40,33 @@ if [ "$CRAFT_TESTS" = none ]; then
   exit 0
 fi
 """
-# The Windows leg runs these without the replay audit, which runs on Linux only.
-TEST_RUN = """
-cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
-cargo test --workspace --doc --all-features --locked
-cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+# A partial selection names packages with exact package(=name) terms.
+EXAMPLE_TESTS = r"""
+package_filter='^package\(=[a-zA-Z0-9_-]+\)( \| package\(=[a-zA-Z0-9_-]+\))*$'
+if [[ "$CRAFT_TESTS" != some || ! "$CRAFT_TEST_FILTER" =~ $package_filter ||
+    "$CRAFT_TEST_FILTER" == *"package(=craft-aep)"* ||
+    "$CRAFT_TEST_FILTER" == *"package(=craft-video)"* ]]; then
+  cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+fi
 """
-TEST_SOURCE = SELECT_GUARD + """
+# The Windows leg runs these without the replay audit, which runs on Linux only.
+PRIMARY_TEST = """
 cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+"""
+FINAL_TESTS = """
+cargo test --workspace --doc --all-features --locked
+if [[ "$CRAFT_TESTS" != some || ! "$CRAFT_TEST_FILTER" =~ $package_filter ||
+    "$CRAFT_TEST_FILTER" == *"package(=craft-image-codecs)"* ||
+    "$CRAFT_TEST_FILTER" == *"package(=craft-text)"* ]]; then
+  cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+fi
+"""
+TEST_RUN = PRIMARY_TEST + EXAMPLE_TESTS + FINAL_TESTS
+TEST_SOURCE = SELECT_GUARD + PRIMARY_TEST + EXAMPLE_TESTS + """
 if [ "$RUNNER_OS" = Linux ]; then
   CRAFT_UI_AUDIT_REPLAY=1 cargo nextest run --workspace --all-features --locked --profile ci -E "($CRAFT_TEST_FILTER) & (package(craft-ui-contract) | package(craft-ui-widgets) | package(craft-ui-panels) | package(craft-ui-patterns) | package(craft-ui-shell) | package(craft-ui-gallery) | package(craft-menu))" --no-tests=warn --lib --bins --tests
 fi
-cargo test --workspace --doc --all-features --locked
-cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
-"""
+""" + FINAL_TESTS
 WINDOWS_SETUP = """powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'"""
 EXPECTED_SOURCE = {
     "lint-command": LINT_SOURCE,
@@ -110,9 +121,12 @@ COMMON = [
     "clippy --workspace --all-targets --locked -- -D warnings",
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
+def cargo_lines(source):
+    return [line.strip() for line in source.splitlines() if line.strip().startswith("cargo ")]
+
+
 def test_commands(test_filter="all()"):
-    return [line.strip()[len("cargo "):].replace('"$CRAFT_TEST_FILTER"', test_filter)
-            for line in TEST_RUN.splitlines() if line.strip()]
+    return [line[len("cargo "):].replace('"$CRAFT_TEST_FILTER"', test_filter) for line in cargo_lines(TEST_RUN)]
 
 
 AUDIT_PACKAGES = " | ".join(
@@ -150,19 +164,46 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_a_selection_filters_every_nextest_run_and_none_runs_nothing(self):
-        selected = "package(=craft-geom) | package(=craft-svg)"
-        result = commands("Linux", tests="some", test_filter=selected)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), linux_test_commands(selected))
-        # The doctests stay whole-workspace; every nextest run carries the filter, and the replay
-        # audit runs only the selected UI crates.
-        self.assertIn("test --workspace --doc --all-features --locked", result.stdout.splitlines())
-        filters = [re.search(r" -E (.*) --no-tests=warn ", line)[1]
-                   for line in result.stdout.splitlines() if line.startswith("nextest")]
-        self.assertEqual(filters, [selected, selected, f"({selected}) & ({AUDIT_PACKAGES})", selected])
+        for selected in ("package(=craft-geom) | package(=craft-svg)",
+                         "package(=craft-image-codecs-tools) | package(=craft-text-tools)"):
+            with self.subTest(filter=selected):
+                result = commands("Linux", tests="some", test_filter=selected)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = linux_test_commands(selected)[:-1]
+                del expected[1]  # Neither optional phase has a selected package.
+                self.assertEqual(result.stdout.splitlines(), expected)
+                # The doctests stay whole-workspace; replay retains the selected UI crates.
+                self.assertIn("test --workspace --doc --all-features --locked", result.stdout.splitlines())
+                filters = [re.search(r" -E (.*) --no-tests=warn ", line)[1]
+                           for line in result.stdout.splitlines() if line.startswith("nextest")]
+                self.assertEqual(filters, [selected, f"({selected}) & ({AUDIT_PACKAGES})"])
         result = commands("Linux", tests="none", test_filter="none()")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["No crate changed: no tests to run."])
+
+    def test_examples_run_when_either_example_package_is_selected(self):
+        for selected in ("package(=craft-aep)", "package(=craft-video)", "package(=craft-aep) | package(=craft-video)"):
+            with self.subTest(filter=selected):
+                result = commands("Linux", tests="some", test_filter=selected)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), linux_test_commands(selected)[:-1])
+
+    def test_default_feature_tests_run_when_either_package_is_selected(self):
+        for selected in ("package(=craft-image-codecs)", "package(=craft-text)",
+                         "package(=craft-image-codecs) | package(=craft-text)"):
+            with self.subTest(filter=selected):
+                result = commands("Linux", tests="some", test_filter=selected)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = linux_test_commands(selected)
+                del expected[1]  # Neither example package was selected.
+                self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_unfamiliar_selection_filters_leave_optional_phases_enabled(self):
+        for selected in ("all()", "package(craft-video)", "package(=craft-geom) & all()", "package(=craft-text"):
+            with self.subTest(filter=selected):
+                result = commands("Linux", tests="some", test_filter=selected)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), linux_test_commands(selected))
 
     def test_each_stage_failure_remains_fatal(self):
         for name, stages in (("lint-command", COMMON), ("command", LINUX_TESTS)):
@@ -175,8 +216,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_windows_runs_the_same_tests(self):
         validate_source(WORKFLOW.read_text(), "windows-command")
         source = block(WORKFLOW.read_text(), "windows-command")
-        cargo = [line.strip() for line in source.splitlines() if line.strip().startswith("cargo ")]
-        self.assertEqual(cargo, [line.strip() for line in TEST_RUN.splitlines() if line.strip()])
+        self.assertEqual(cargo_lines(source), cargo_lines(TEST_RUN))
 
     def test_workflow_source_is_rejected_before_starting_any_process(self):
         source = WORKFLOW.read_text()
@@ -252,4 +292,3 @@ class WorkspaceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
