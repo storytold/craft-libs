@@ -92,6 +92,8 @@ pub struct SliderField<'a> {
     /// row, the Color panel's channels) instead of the number cell, and the slider takes the room it leaves.
     #[prop]
     field_sizing: Option<Sizing>,
+    /// The marks under the slider's track: one list, the last of `marks` and `marks_labelled` wins.
+    marks: Option<FieldMarks>,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
     /// The field's range alert of this pass, which `finish` reports.
@@ -146,6 +148,7 @@ impl<'a> SliderField<'a> {
             track_face: None,
             thumb: SliderThumb::Round,
             field_sizing: None,
+            marks: None,
             field_width: 0.0,
             out_of_range: None,
         }
@@ -154,16 +157,16 @@ impl<'a> SliderField<'a> {
 
     /// Values the field's slider snaps to, drawn as marks under the track: [`Slider::marks`].
     #[must_use]
-    pub fn marks(self, marks: &[f64]) -> Self {
-        let _ = marks;
-        todo!("wg.W31")
+    pub fn marks(mut self, marks: &[f64]) -> Self {
+        self.marks = Some(FieldMarks::Plain(marks.to_vec()));
+        self
     }
 
     /// [`marks`](Self::marks) at the values, each with a caption centred under its mark: [`Slider::marks_labelled`].
     #[must_use]
-    pub fn marks_labelled<L: Into<Label>>(self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
-        let _ = marks;
-        todo!("wg.W31")
+    pub fn marks_labelled<L: Into<Label>>(mut self, marks: impl IntoIterator<Item = (f64, L)>) -> Self {
+        self.marks = Some(FieldMarks::Labelled(marks.into_iter().map(|(at, caption)| (at, caption.into())).collect()));
+        self
     }
 
     /// What the children are built from, apart from the binding and the track face.
@@ -179,8 +182,18 @@ impl<'a> SliderField<'a> {
             thumb: self.thumb,
             reset: self.value.reset_value().copied(),
             field_sizing: self.field_sizing,
+            marks: self.marks.clone(),
         }
     }
+}
+
+/// The marks of a slider field's slider.
+#[derive(Clone)]
+enum FieldMarks {
+    /// Marks the thumb snaps to.
+    Plain(Vec<f64>),
+    /// Marks with a caption under each.
+    Labelled(Vec<(f64, Label)>),
 }
 
 /// What a `SliderField` builds its two children from.
@@ -196,6 +209,7 @@ struct Look {
     /// The reset value of the composite's own binding, which both children restore on a double click.
     reset: Option<f64>,
     field_sizing: Option<Sizing>,
+    marks: Option<FieldMarks>,
 }
 
 /// The composite's check on a number, as a child with the same value type reads it.
@@ -222,6 +236,11 @@ impl Look {
             bind = bind.check(check);
         }
         let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
+        let slider = match &self.marks {
+            Some(FieldMarks::Plain(marks)) => slider.marks(marks),
+            Some(FieldMarks::Labelled(marks)) => slider.marks_labelled(marks.iter().cloned()),
+            None => slider,
+        };
         let slider = match face {
             Some(face) => slider.track_face(face),
             None => slider,

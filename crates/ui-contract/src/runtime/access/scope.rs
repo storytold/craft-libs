@@ -45,6 +45,8 @@ pub struct FieldLabel {
     pub detail: Option<String>,
     /// The label was clicked or activated this pass: focus goes to its control.
     pub activated: bool,
+    /// The label is a link and was clicked this pass: the control's host is told (`Cx::link_activated`), focus stays.
+    pub link: bool,
     /// The container shows its control's validity message as its status line (`FooterRegion::status`).
     pub status: bool,
 }
@@ -61,6 +63,7 @@ impl FieldLabel {
             role: FieldLabelRole::Names,
             detail: None,
             activated: false,
+            link: false,
             status: false,
         }
     }
@@ -90,6 +93,13 @@ impl FieldLabel {
     #[must_use]
     pub fn activated(mut self, activated: bool) -> Self {
         self.activated = activated;
+        self
+    }
+
+    /// Whether the label is a link that was clicked this pass.
+    #[must_use]
+    pub fn linked(mut self, link: bool) -> Self {
+        self.link = link;
         self
     }
 

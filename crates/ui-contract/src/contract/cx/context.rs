@@ -219,7 +219,7 @@ impl<C: Component> Cx<'_, C> {
 
     /// Whether the control's link label was clicked in this pass.
     pub fn link_activated(&self) -> bool {
-        todo!("wg.W08")
+        crate::runtime::access::scope::field_label(&self.core.ctx).is_some_and(|label| label.link)
     }
 
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set.
@@ -241,8 +241,8 @@ impl<C: Component> Cx<'_, C> {
     /// activation came from (`part_activated` gives it). Returns whether the command was queued.
     pub fn fire(&mut self, command: impl Into<CommandRef>, source: FireSource) -> bool {
         let Some(resolved) = commands::resolve_scoped(&self.core.ctx, self.core.env.command_chain(), &command.into()) else { return false };
-        // P3(widgets-w3): ap.AP9
-        commands::fire_resolved(&self.core.ctx, &resolved, source, craft_keymap::Mods::NONE)
+        let mods = self.core.activation.map_or(craft_keymap::Mods::NONE, |activation| activation.mods);
+        commands::fire_resolved(&self.core.ctx, &resolved, source, mods)
     }
 
     /// Where an activation of `part` came from this pass: `Key` for a keyboard activation while `part` is the

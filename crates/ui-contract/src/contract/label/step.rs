@@ -170,6 +170,8 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     }
     leaf.colon = colon(env, input).filter(|_| leaf.named);
     leaf.after = input.side.layout == FieldLayout::After;
+    let linked = input.side.press == super::props::LabelPress::Link;
+    leaf.link = linked;
     leaf.claimed = input.claims;
     leaf.trailing = input.trailing;
     if let Some(tooltip) = input.side.tooltip.clone() {
@@ -217,8 +219,11 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     if let Some(trailing) = trailing {
         (trailing.show)(ui, placed.trailing);
     }
-    let label =
-        field_label(env, input, label_id_for_scope, placed.label).with_press(shown.press).with_hover(shown.hovered).activated(shown.activated);
+    let label = field_label(env, input, label_id_for_scope, placed.label)
+        .with_press(shown.press)
+        .with_hover(shown.hovered)
+        .activated(shown.activated && !linked)
+        .linked(shown.activated && linked);
     scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(label));
     scope::place_controls(&ctx, input.scope, placed.control.top());
     if input.claims {

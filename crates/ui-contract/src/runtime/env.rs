@@ -221,6 +221,10 @@ pub struct Inherited {
     pub(crate) today: Option<CalendarDate>,
     /// `RootEnv::tab_toggles_chrome`.
     pub(crate) tab_toggles_chrome: bool,
+    /// `RootEnv::cursor_follows_zoom`: painted cursor images follow the interface zoom.
+    pub(crate) cursor_follows_zoom: bool,
+    /// `RootEnv::tooltips`: tooltips show.
+    pub(crate) tooltips: bool,
     /// `RootEnv::canvas_pattern`: the canvas surround shows the theme's pattern.
     #[doc(hidden)]
     pub canvas_pattern: bool,
@@ -482,6 +486,8 @@ impl Env {
                     dates: host_dates(ctx, host.as_ref()),
                     today: root.today,
                     tab_toggles_chrome: root.tab_toggles_chrome,
+                    cursor_follows_zoom: root.cursor_follows_zoom,
+                    tooltips: root.tooltips,
                     canvas_pattern: root.canvas_pattern,
                     host,
                     values: root.values.clone(),

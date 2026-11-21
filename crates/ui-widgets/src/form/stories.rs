@@ -40,6 +40,15 @@ fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// A number field whose side label is a link: a click reports to the host and leaves focus alone, a drag scrubs.
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_link_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Field::new("Opacity")
+        .side(SideLabel::new().link().scrub(true))
+        .show(ui, |ui, _| NumberField::new("Opacity", Bind::bound(data.value("link", Some(100.0)))).scrub_by_label().show(ui))
+        .into()
+}
+
 /// A glyph label: the icon shows, the text only names the control.
 #[story(Field, covers = [], drive = Drive::Never)]
 fn field_icon_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

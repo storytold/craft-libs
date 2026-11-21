@@ -12,7 +12,7 @@ use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeyUse};
 use crate::style::{ComponentStyle, Flags, FocusLook, Stateful, States, StyleColor, StyleCx, SurfaceKind, SurfaceLook, UiTokens};
 use craft_behavior::{Anchor9, Metrics, NavShape, PartKey, PartRef, Roving, Sense};
-use egui::{Pos2, Rect, Vec2, vec2};
+use egui::{CornerRadius, Pos2, Rect, Vec2, vec2};
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -21,6 +21,9 @@ const CELL: PartKey = PartKey::new("cell");
 
 /// Points on each side of the grid.
 const GRID: usize = 3;
+
+/// The eight outer points in the order the `Squares` line joins them round the box; the centre point is left out.
+const RING: [usize; 8] = [0, 1, 2, 5, 8, 7, 6, 3];
 
 /// The side of the dot every point shows; the large picker draws the picked one twice as wide.
 const DOT: f32 = 3.5;
@@ -58,8 +61,12 @@ pub struct ReferencePointStyle {
     ink: Stateful<StyleColor>,
     /// The side of the square one growth arrow fits in.
     arrow: f32,
-    /// The unpicked dots and the growth arrows.
+    /// The unpicked dots and squares, the line joining the squares and the growth arrows.
     arrow_ink: Stateful<StyleColor>,
+    /// The side of a square of the `Squares` look.
+    square: f32,
+    /// The width of the `Squares` line and of the unpicked squares' outline.
+    line: StrokeWidth,
 }
 
 /// How a [`ReferencePoint`] draws its nine points.
@@ -98,7 +105,6 @@ pub struct ReferencePoint<'a> {
     /// How the nine points are drawn: dots, or squares joined by a line round the box.
     #[style_key]
     #[prop]
-    #[allow(dead_code)] // P3(widgets-w3): wg.W32
     look: ReferencePointLook,
 }
 
@@ -180,6 +186,8 @@ impl Component for ReferencePoint<'_> {
             ink: look(cx.color(colors.accent.text)),
             arrow: cx.tokens.size.icon.sm,
             arrow_ink: look(cx.color(colors.text.muted)),
+            square: cx.tokens.size.handle.sm,
+            line: StrokeWidth::Thin,
         }
     }
 
@@ -228,8 +236,28 @@ impl Component for ReferencePoint<'_> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let current = Self::position_of(cx.value());
-        debug_assert!(!(self.compact && self.growth.is_some()), "the compact picker shows no growth arrows");
+        let squares = self.look == ReferencePointLook::Squares;
+        debug_assert!(!(self.growth.is_some() && (self.compact || squares)), "the compact picker and the squares look show no growth arrows");
         let draw = ui.draw();
+        if squares {
+            let centres: Vec<Pos2> = (0..Anchor9::ALL.len()).map(|at| Self::cell_rect(cx.rect, at).center()).collect();
+            let (half, outline) = (cx.style.square / 2.0, cx.resolve(&cx.style.arrow_ink));
+            // Each side of the ring runs between the squares it joins, so the line never crosses a square.
+            for (from, to) in RING.iter().zip(RING.iter().cycle().skip(1)) {
+                let (from, to) = (centres[*from], centres[*to]);
+                let along = (to - from).normalized() * half;
+                draw.stroke(&PaintShape::Path(vec![from + along, to - along]), cx.style.line, outline);
+            }
+            for (at, centre) in centres.iter().enumerate() {
+                let square = PaintShape::Rect(Rect::from_center_size(*centre, Vec2::splat(cx.style.square)), CornerRadius::ZERO);
+                if current == Some(at) {
+                    draw.fill(&square, cx.resolve(&cx.style.ink));
+                } else {
+                    draw.stroke(&square, cx.style.line, outline);
+                }
+            }
+            return;
+        }
         for (at, point) in Anchor9::ALL.iter().enumerate() {
             let cell = Self::cell_rect(cx.rect, at);
             let (side, ink) = if current == Some(at) { (cx.style.picked_dot, &cx.style.ink) } else { (cx.style.dot, &cx.style.arrow_ink) };

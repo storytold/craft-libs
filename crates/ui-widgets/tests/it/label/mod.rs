@@ -7,9 +7,11 @@ pub mod group;
 mod hit;
 mod inside;
 pub mod kit;
+mod link;
 mod reach;
 mod reset;
 mod scheme;
+mod scrub_drags;
 mod short;
 mod tooltip;
 
