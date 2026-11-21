@@ -275,4 +275,19 @@ fn the_curves_dialog_shows_the_tone_bar_the_point_fields_and_the_hint() {
         assert!(dialog.contains_rect(rect), "{part} {rect:?} lies inside the dialog {dialog:?}");
     }
     assert!(input.top() >= graph.bottom() && hint.top() >= input.bottom(), "graph, fields, hint top to bottom: {graph:?} {input:?} {hint:?}");
+
+    // The fields read the selected point, and Input moves it.
+    let field = |fixture: &Fixture, name: &str| {
+        let target = fixture.by_label(name).unwrap_or_else(|| panic!("the {name} field"));
+        fixture.tree().value_of(target.node).map(str::to_owned)
+    };
+    assert_eq!(field(&fixture, "Input").as_deref(), Some("128"), "Input reads the selected point's input");
+    assert_eq!(field(&fixture, "Output").as_deref(), Some("160"), "Output reads the selected point's output");
+    let input = fixture.by_label("Input").expect("the Input field");
+    fixture.click(&input).settle();
+    // Tab commits the field; Enter would answer the dialog.
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("96");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let point = host.borrow().get::<CurvesDialog>().and_then(|dialog| dialog.value().0.curves[0].points().map(|points| points[1]));
+    assert_eq!(point, Some([96.0, 160.0]), "setting Input moves the point");
 }
