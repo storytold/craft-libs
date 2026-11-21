@@ -375,3 +375,24 @@ fn holding_alt_runs_the_memoized_view_of_a_menu_bar() {
     fixture.hold(Modifiers::NONE);
     assert!(frame(&mut fixture) > 0, "Alt coming up runs the view, which drops the underlines");
 }
+
+
+/// Alt left over from a Windows task-switcher round trip must not open the menu for the next letter.
+#[trial]
+fn returning_with_stale_alt_does_not_open_a_menu() {
+    use craft_ui::testing::input::key_press;
+    use egui::Event;
+
+    let mut rig = rig(Direction::Ltr);
+    rig.fixture.os(Os::Windows).settle();
+    rig.fixture.frame(vec![Event::WindowFocused(true), Event::ModifiersChanged(Modifiers::ALT)]);
+    rig.fixture.frame(vec![Event::WindowFocused(false)]);
+    rig.fixture.frame(vec![Event::WindowFocused(true), Event::ModifiersChanged(Modifiers::ALT)]);
+    rig.fixture.frame(vec![key_press(Key::F, Modifiers::ALT)]);
+    assert!(!rig.open("New"), "the switcher's Alt must not open File");
+
+    rig.fixture.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    rig.fixture.frame(vec![Event::ModifiersChanged(Modifiers::ALT), key_press(Key::AltLeft, Modifiers::ALT)]);
+    rig.fixture.frame(vec![key_press(Key::F, Modifiers::ALT)]);
+    assert!(rig.open("New"), "a fresh Alt+F still opens File");
+}
