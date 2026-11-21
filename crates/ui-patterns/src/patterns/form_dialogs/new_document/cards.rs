@@ -11,7 +11,7 @@ use crate::primitives::{ContentPainterCx, StrokeWidth};
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
-use crate::tile_grid::{Tile, TileGrid};
+use crate::tile_grid::{CardText, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
 use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
@@ -175,6 +175,8 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
         let shown = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
             .card()
+            .card_text(CardText::Preset)
+            .fill_row()
             .aspect(2.0)
             .select(SelectMode::Single)
             .detail_line()
