@@ -187,6 +187,28 @@ impl<'f, 'a> Effect<'f, 'a> {
         self.chunk.child(b"fnam")?.child(b"Utf8")?.bytes().map(text)
     }
 
+    /// The masks the instance limits itself to (Compositing Options ▸ Effect Masks): per
+    /// `ADBE Effect Mask` of `ADBE Effect Built In Params` ▸ `ADBE Effect Mask Parade`, the `u32` of
+    /// the `tdli` chunk of its `ADBE Effect Path Stream Ref`. Observed in a project saved by After
+    /// Effects 2026 with one effect mask (value 1, naming the layer's only mask, whose 1-based
+    /// index and `mkif` counter are both 1, so which of the two it names is not known); no corpus
+    /// case. An effect without effect masks has no Mask Parade. 0 is left out.
+    pub fn effect_mask_refs(&self) -> Vec<u32> {
+        let Some(values) = self.chunk.child_list(b"tdgp").and_then(PropGroup::from_chunk) else { return Vec::new() };
+        let Some(PropNode::Group(parade)) = values.find(&["ADBE Effect Built In Params", "ADBE Effect Mask Parade"]) else { return Vec::new() };
+        parade
+            .entries()
+            .into_iter()
+            .filter_map(|e| match e.node {
+                PropNode::Group(g) if e.match_name == "ADBE Effect Mask" => match g.get("ADBE Effect Path Stream Ref") {
+                    Some(PropNode::Property(p)) => be_u32(p.chunk().child(b"tdli")?.bytes()?, 0).filter(|r| *r != 0),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The name the user gave the instance: the `tdsn` of the instance's value group when it is
     /// not the placeholder `-_0_/-` (610: `My Tint`; `fnam` keeps the effect's own name `Tint`).
     /// `None` while the instance shows the effect's name.
@@ -808,5 +830,43 @@ mod tests {
         assert_eq!(index.source(&unknown), DefinitionSource::Missing);
         assert!(index.params(&unknown).is_empty());
         assert_eq!(project.definition_source(&unknown), DefinitionSource::Missing);
+    }
+
+    /// A `LIST tdgp` holding `(match name, list)` pairs.
+    fn group(entries: Vec<(&str, Chunk<'static>)>) -> Chunk<'static> {
+        let mut kids = vec![Chunk::data(*b"tdsb", vec![0, 0, 0, 1])];
+        for (name, list) in entries {
+            kids.push(tdmn(name));
+            kids.push(list);
+        }
+        kids.push(tdmn("ADBE Group End"));
+        Chunk::list(*b"tdgp", kids)
+    }
+
+    /// An instance whose Compositing Options name the masks `refs` as its effect masks.
+    fn with_effect_masks(refs: &[u32]) -> Chunk<'static> {
+        let masks = refs
+            .iter()
+            .map(|r| {
+                let stream = Chunk::list(*b"tdbs", vec![Chunk::data(*b"tdsb", vec![0, 0, 0, 1]), Chunk::data(*b"tdli", r.to_be_bytes().to_vec())]);
+                ("ADBE Effect Mask", group(vec![("ADBE Effect Path Stream Ref", stream)]))
+            })
+            .collect();
+        let built_in = group(vec![("ADBE Effect Mask Parade", group(masks))]);
+        Chunk::list(*b"sspc", vec![Chunk::list(*b"parT", Vec::new()), group(vec![("ADBE Effect Built In Params", built_in)])])
+    }
+
+    #[test]
+    fn the_effect_masks_of_an_instance() {
+        let read = |chunk: &Chunk<'static>| Effect { match_name: "X".into(), chunk: Node::from(chunk) }.effect_mask_refs();
+        assert_eq!(read(&with_effect_masks(&[1])), [1]);
+        assert_eq!(read(&with_effect_masks(&[2, 0, 3])), [2, 3], "0 names no mask");
+        assert!(read(&with_effect_masks(&[])).is_empty());
+        // No Compositing Options stored, and a cut reference: none.
+        assert!(read(&instance(&[], &[])).is_empty());
+        let cut = Chunk::list(*b"tdbs", vec![Chunk::data(*b"tdli", vec![0, 0])]);
+        let built_in = group(vec![("ADBE Effect Mask Parade", group(vec![("ADBE Effect Mask", group(vec![("ADBE Effect Path Stream Ref", cut)]))]))]);
+        let chunk = Chunk::list(*b"sspc", vec![group(vec![("ADBE Effect Built In Params", built_in)])]);
+        assert!(read(&chunk).is_empty());
     }
 }

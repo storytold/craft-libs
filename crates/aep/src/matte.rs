@@ -11,10 +11,12 @@
 //!   in 403-406 and 408, `0x1b` = `L` in 407, where the matte layer is BELOW the layer it mattes.
 //!   0 in every file without a matte.
 //!
-//! A matte mode with a matte layer id of 0 (or an `ldta` too short to hold the id) has no case in
-//! the corpus: After Effects 2026 writes the id. Before After Effects 23.0 a track matte always
-//! used the layer directly above (the documented behaviour of those versions), so such a matte is
-//! returned with [`TrackMatte::layer`] `None` and the caller decides.
+//! A matte mode with a matte layer id of 0 is no matte: a project saved by After Effects 2026 has
+//! such a layer (mode 1, id 0), which After Effects reads back without a track matte
+//! (`hasTrackMatte` false, `trackMatteType` still Alpha) and renders unmatted. An `ldta` too short
+//! to hold the id has no case: before After Effects 23.0 a track matte always used the layer
+//! directly above (the documented behaviour of those versions), so such a matte is returned with
+//! [`TrackMatte::layer`] `None` and the caller decides.
 
 use crate::Layer;
 use crate::bytes::be_u32;
@@ -52,8 +54,8 @@ impl MatteMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackMatte {
     pub mode: MatteMode,
-    /// The id of the matte layer (`u32` at `ldta` byte 160); `None` when it is 0 or the header is
-    /// too short to hold it (the older "layer above" form, see the module documentation).
+    /// The id of the matte layer (`u32` at `ldta` byte 160); `None` when the header is too short
+    /// to hold it (the older "layer above" form, see the module documentation).
     pub layer: Option<u32>,
 }
 
@@ -62,7 +64,45 @@ impl<'f, 'a> Layer<'f, 'a> {
     pub fn track_matte(&self) -> Option<TrackMatte> {
         let ldta = self.chunk().child(b"ldta")?.bytes()?;
         let mode = MatteMode::from_code(*ldta.get(107)?)?;
-        let layer = be_u32(ldta, 160).filter(|id| *id != 0);
+        let layer = match be_u32(ldta, 160) {
+            // The header holds the id but stores 0: the mode stayed behind without a matte layer,
+            // and After Effects reads the layer back without a track matte. No matte.
+            Some(0) => return None,
+            Some(id) => Some(id),
+            // Too short to hold the id: the older "layer above" form.
+            None => None,
+        };
         Some(TrackMatte { mode, layer })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Chunk;
+    use crate::index::Node;
+
+    /// The track matte of a layer whose `ldta` is `ldta`.
+    fn matte(ldta: Vec<u8>) -> Option<TrackMatte> {
+        let layr = Chunk::list(*b"Layr", vec![Chunk::data(*b"ldta", ldta)]);
+        Layer { chunk: Node::from(&layr) }.track_matte()
+    }
+
+    fn ldta(len: usize, mode: u8, matte_id: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 164];
+        b[107] = mode;
+        b[160..164].copy_from_slice(&matte_id.to_be_bytes());
+        b.truncate(len);
+        b
+    }
+
+    #[test]
+    fn a_matte_mode_with_matte_layer_id_0_is_no_matte() {
+        assert_eq!(matte(ldta(164, 1, 0x1d)), Some(TrackMatte { mode: MatteMode::Alpha, layer: Some(0x1d) }));
+        assert_eq!(matte(ldta(164, 1, 0)), None);
+        assert_eq!(matte(ldta(164, 3, 0)), None);
+        // A header too short to hold the id: the older "layer above" form, left to the caller.
+        assert_eq!(matte(ldta(160, 1, 0)), Some(TrackMatte { mode: MatteMode::Alpha, layer: None }));
+        assert_eq!(matte(ldta(164, 0, 0)), None);
     }
 }
