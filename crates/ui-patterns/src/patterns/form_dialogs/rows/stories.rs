@@ -5,8 +5,8 @@ use crate::runtime::requests::PathKind;
 
 use crate::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use crate::patterns::form_dialogs::{NumberUnit, Param, ParamKind};
-use crate::patterns::presets::PresetRow;
-use crate::runtime::env::UnitKind;
+use crate::patterns::presets::{PresetFns, PresetRow, PresetSource};
+use crate::runtime::env::{Env, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 
 use egui::Ui;
@@ -14,12 +14,16 @@ use egui::Ui;
 const SPEC: &str = r#"{"radius":0.1..1000=1,"method":"spin|zoom","smooth":bool,"seed":u32=0,"tint":color=#336699}"#;
 
 /// The patterns the pattern row offers: a group and two patterns in it.
-fn patterns() -> Vec<PresetRow<String>> {
+fn pattern_rows(_: &(), _: &Env) -> Vec<PresetRow<String>> {
     vec![
         PresetRow::group("nature".to_owned(), "Nature", 0),
         PresetRow::item("grass".to_owned(), "Grass", 1),
         PresetRow::item("sand".to_owned(), "Sand", 1),
     ]
+}
+
+fn patterns() -> PresetSource<'static, String> {
+    PresetSource::new((), PresetFns::new(pattern_rows))
 }
 
 /// One row of every kind the rows show, a section, a row that waits for a check box, a row with a unit menu, a

@@ -137,6 +137,8 @@ pub struct CxCore<'a> {
     /// For an arena root: the member activated this pass.
     pub(crate) activated_member: Option<Id>,
     pub(crate) press: PressState,
+    /// The parent layout of a standalone control, used to keep a sweep within its siblings.
+    pub(crate) pointer_group: Option<Id>,
     pub(crate) cursor: Option<(Cursor, CursorPriority)>,
     /// The declared cursors of the parts hovered this pass, recorded at step 8 and written at step 16.
     pub(crate) part_cursors: Vec<Cursor>,
@@ -187,6 +189,9 @@ pub struct CxCore<'a> {
     /// Not enabled, with `DisabledLook::Faded`: the component and its faces paint their enabled look, which step 13
     /// fades.
     pub(crate) faded: bool,
+    /// The component has an AccessKit node this pass (step 8), or as a collection member a sub-node under its
+    /// collection's: its access data, its members' and its faces' have a reader.
+    pub(crate) node: bool,
     /// Where the faded component's shapes start and the ground its veil takes (`steps::fade`).
     pub(crate) fade: Option<crate::contract::steps::Fade>,
     /// The focus ring shape each part declared (`focus_shape`), in which step 13 draws the active part's ring.

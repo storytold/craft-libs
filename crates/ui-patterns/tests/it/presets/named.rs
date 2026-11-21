@@ -1,7 +1,9 @@
 //! `NamedPresetRow`: F2 on the picker renames a user preset and nothing else; New… opens the name prompt.
 
 use craft_ui::contract::{Bind, Role};
-use craft_ui::patterns::presets::{NamedPresetEvent, NamedPresetRow, NamedPresetStyle, PresetPicker, PresetRow, PresetState};
+use craft_ui::patterns::presets::{
+    NamedPresetEvent, NamedPresetRow, NamedPresetStyle, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState,
+};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
 use std::cell::RefCell;
@@ -19,7 +21,7 @@ struct Rig {
 fn rig(style: NamedPresetStyle, current: u32) -> Rig {
     let events = Rc::new(RefCell::new(Vec::new()));
     let seen = events.clone();
-    let rows = vec![PresetRow::item(LINEAR, "Linear", 0), PresetRow::item(MINE, "Mine", 0)];
+    let rows = PresetSource::new((), PresetFns::new(|_, _| vec![PresetRow::item(LINEAR, "Linear", 0), PresetRow::item(MINE, "Mine", 0)]));
     let mut value = Some(current);
     let mut state = PresetState::<u32>::new();
     let mut fixture = Fixture::new(move |ui| {
