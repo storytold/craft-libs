@@ -63,9 +63,10 @@ pub enum Value {
     /// `convert` node's output holds the converted channels. `colorspace` is the color
     /// space in effect where the value is written: the input's own `colorspace`, else that of the
     /// nearest enclosing element (the node, then its nodegraph), else the document's. A value
-    /// whose input or `constant` node has a boolean, integer, float or vector type, and a value
-    /// with no type on a `convert` node's input, is in the document's working color space (the
-    /// root element's `colorspace`), and a `convert` node keeps the color space of its input.
+    /// written on an input with a boolean, integer, float or vector type, on such a `constant`
+    /// node, or with no type on a `convert` node's input, is in the document's working color
+    /// space (the root element's `colorspace`). A `convert` node, and a `constant` node whose
+    /// value is connected, keep the color space of their input.
     Constant { values: Vec<f32>, colorspace: Option<String> },
     /// A file from an image node, with the file prefix in effect applied: the `file` input's
     /// `fileprefix`, else the node's, its nodegraph's or the document's. `colorspace` is the
@@ -575,8 +576,10 @@ impl<'a> Resolver<'a> {
                 }
             }
             "constant" => match child("value") {
+                // A connected value keeps the color space it resolved; only a written value takes
+                // the working color space.
                 Some(i) => match self.value(i, node_scope, node_space, hops + 1, warnings)? {
-                    Some(Value::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) => {
+                    Some(Value::Constant { values, .. }) if is_numeric_non_color(node.attr("type")) && i.attr("value").is_some() => {
                         Ok(Some(Value::Constant { values, colorspace: self.working().map(str::to_owned) }))
                     }
                     value => Ok(value),
@@ -1083,17 +1086,21 @@ mod tests {
         assert_eq!(input(&m, "fuzz_color"), Some(&image("v.png", "lin_rec709")));
         assert_eq!(input(&m, "emission_color"), Some(&image("c.png", "srgb_texture")));
         assert!(m.warnings.is_empty(), "{:?}", m.warnings);
-        // A color passed through a vector keeps its color space, and a float constant node or an
-        // untyped value is in the working color space.
+        // A color passed through a vector, also by way of a vector constant node, keeps its color
+        // space, and a float constant node or an untyped value is in the working color space.
         let chain = read(
             r#"<materialx colorspace="lin_rec709">
               <open_pbr_surface name="S">
                 <input name="base_color" nodename="B"/>
                 <input name="specular_color" nodename="K2"/>
                 <input name="coat_color" nodename="U"/>
+                <input name="fuzz_color" nodename="B3"/>
               </open_pbr_surface>
               <convert name="A" type="vector3"><input name="in" type="color3" value="0.5,0.5,0.5" colorspace="srgb_texture"/></convert>
               <convert name="B" type="color3"><input name="in" nodename="A"/></convert>
+              <convert name="A3" type="vector3"><input name="in" type="color3" value="0.4,0.4,0.4" colorspace="srgb_texture"/></convert>
+              <constant name="V3" type="vector3"><input name="value" nodename="A3"/></constant>
+              <convert name="B3" type="color3"><input name="in" nodename="V3"/></convert>
               <constant name="K" type="float" colorspace="srgb_texture"><input name="value" value="0.25"/></constant>
               <convert name="K2" type="color3" colorspace="srgb_texture"><input name="in" nodename="K"/></convert>
               <convert name="U" type="color3" colorspace="srgb_texture"><input name="in" value="0.75"/></convert>
@@ -1104,6 +1111,7 @@ mod tests {
         assert_eq!(input(&chain, "base_color"), Some(&constant(&[0.5; 3], Some("srgb_texture"))));
         assert_eq!(input(&chain, "specular_color"), Some(&constant(&[0.25; 3], Some("lin_rec709"))));
         assert_eq!(input(&chain, "coat_color"), Some(&constant(&[0.75; 3], Some("lin_rec709"))));
+        assert_eq!(input(&chain, "fuzz_color"), Some(&constant(&[0.4; 3], Some("srgb_texture"))));
         assert!(chain.warnings.is_empty(), "{:?}", chain.warnings);
         // A document without a working color space leaves the converted color untagged.
         let plain = read(&open_pbr(
