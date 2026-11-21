@@ -32,6 +32,15 @@ fn notice_warning(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(Notice<'static>, covers = [], drive = Drive::Never)]
+fn notice_bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Notice::new(Tone::Info, "This document contains fillable fields.")
+        .layout(NoticeLayout::Bar)
+        .action(NoticeAction::new("Hide highlights"))
+        .show(ui)
+        .into()
+}
+
+#[story(Notice<'static>, covers = [], drive = Drive::Never)]
 fn notice_error(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Notice::new(Tone::Bad, "The export failed because the disk is full.").announce(Politeness::Assertive).show(ui).into()
 }

@@ -24,6 +24,8 @@ pub enum NoticeLayout {
     /// The icon at the reading start and the text beside it, across the width offered, with no surface.
     #[default]
     Inline,
+    /// A full-width status surface with button actions, above a document or workspace.
+    Bar,
     /// The inline layout on a floating surface, the card width wide where the room allows: a toast. A card of a status
     /// tone draws its edge and title in the tone's colour.
     Card,
@@ -382,10 +384,13 @@ impl<'a> Notice<'a> {
     /// The sizes of the actions' faces; a centred notice's buttons all take the widest one's width.
     fn action_sizes(&self, cx: &MeasureCx<'_, Self>) -> Vec<Vec2> {
         let labels = self.action_labels(cx);
-        if self.row() {
+        if self.row() && self.layout != NoticeLayout::Bar {
             return labels.into_iter().map(|label| cx.face(Self::link(cx.style.message.role, label))).collect();
         }
         let sizes: Vec<Vec2> = labels.into_iter().enumerate().map(|(at, label)| cx.face(Self::button(at, label))).collect();
+        if self.layout == NoticeLayout::Bar {
+            return sizes;
+        }
         let widest = sizes.iter().map(|size| size.x).fold(0.0, f32::max);
         sizes.into_iter().map(|size| Vec2::new(widest, size.y)).collect()
     }
@@ -402,7 +407,7 @@ impl<'a> Notice<'a> {
         let dismiss_width = dismiss.map_or(0.0, |size| size.x + gap);
         let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
         let remaining = width - icon_width - dismiss_width - actions_width - gap;
-        let inline_actions = self.layout == NoticeLayout::Inline && !actions.is_empty() && (!width.is_finite() || remaining >= actions_width);
+        let inline_actions = matches!(self.layout, NoticeLayout::Inline | NoticeLayout::Bar) && !actions.is_empty() && (!width.is_finite() || remaining >= actions_width);
         let action_width = if inline_actions { actions_width + gap } else { 0.0 };
         let column = if width.is_finite() { (width - icon_width - dismiss_width - action_width).max(0.0) } else { f32::INFINITY };
         let run = |text: &str, role: TypeRole| cx.layout_at(&self.run(text, role), column).size();
@@ -505,6 +510,25 @@ impl Component for Notice<'_> {
                 Insets::uniform(0.0),
                 0.0,
             ),
+            NoticeLayout::Bar => {
+                let colors = &cx.tokens.color;
+                let fill = match key.tone {
+                    Tone::Info => colors.status.info.bg,
+                    Tone::Good => colors.status.good.bg,
+                    Tone::Warn => colors.status.warn.bg,
+                    Tone::Bad => colors.status.bad.bg,
+                    Tone::Accent => colors.accent.soft,
+                    _ => colors.surface.panel,
+                };
+                (
+                    TextLook::new(TypeRole::BodyStrong, stateful(normal)),
+                    TextLook::new(TypeRole::Body, stateful(normal)),
+                    TextLook::new(TypeRole::Body, stateful(normal)),
+                    SurfaceLook::new(Stateful::new(cx.color(fill))),
+                    Insets::uniform(cx.tokens.space.pad.control),
+                    cx.tokens.space.gap.stack,
+                )
+            }
             NoticeLayout::Card => {
                 let fill = StyleColor(cx.surface(SurfaceKind::Floating).fill);
                 let mut surface =
@@ -793,7 +817,7 @@ impl Component for Notice<'_> {
         }
         for (at, label) in placed.labels.iter().cloned().enumerate() {
             let part = ACTION.at(at as u64);
-            if self.row() {
+            if self.row() && self.layout != NoticeLayout::Bar {
                 ui.face(part, Self::link(cx.style.message.role, label));
             } else {
                 ui.face(part, Self::button(at, label));
