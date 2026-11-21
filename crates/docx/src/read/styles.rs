@@ -63,6 +63,155 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
     digit.parse::<u8>().ok().filter(|d| digit.len() == 1 && (1..=9).contains(d)).map(|d| d - 1)
 }
 
+/// How a file's `w:latentStyles` describes one built-in style it doesn't define: the name as the
+/// file writes it, and the latent defaults its own `w:lsdException` overrides. Input to
+/// [`add_latent_gallery`].
+#[derive(Clone, Debug, Default)]
+struct LatentStyle {
+    /// `w:name` (Word writes `heading 1`, `TOC Heading`).
+    name: String,
+    /// `w:uiPriority`.
+    priority: Option<u32>,
+    /// `w:locked`: Restrict Editing keeps it out of the gallery.
+    locked: bool,
+    /// `w:qFormat`.
+    quick: bool,
+    /// `w:semiHidden`.
+    hidden: bool,
+}
+
+/// Word's gallery for the built-in styles a file leaves latent: Word writes a built-in style into
+/// the file only once it is used, and takes its gallery place from the file's `w:latentStyles`
+/// instead. `latent` is what the file says about each built-in style it doesn't define. One marked
+/// `w:qFormat` and not `w:semiHidden` gets our built-in definition, in the gallery at its
+/// `w:uiPriority` and with its lock (its linked character style comes with it), and the built-in
+/// styles it is based on come with it too — a latent style materialised alone would lose the
+/// formatting it inherits, and Word writes the base out with it (observed: using a latent TOC
+/// Heading saves `Heading1` as well, `w:semiHidden` and without `w:qFormat`). A base takes its own
+/// latent settings, so it reaches the gallery only when the file's own `w:qFormat` /
+/// `w:semiHidden` put it there. Names we have no built-in style for, and styles the document
+/// defines (whose own `w:qFormat` decides), are left as they are.
+fn add_latent_gallery(sheet: &mut StyleSheet, latent: &[LatentStyle]) {
+    /// Longest `based_on` chain followed when filling a materialised style's bases in. A file's
+    /// styles are hostile input: without this bound a chain that keeps naming a new base (or our
+    /// built-ins gaining a long one) would loop for as long as bases resolve.
+    const MAX_BASES: usize = 32;
+    let builtin = StyleSheet::builtin();
+    // Our built-in definition for a latent style, with that file's settings applied. The gallery
+    // place is the file's alone: a built-in that is quick in a new document (Heading 1) stays out
+    // unless the file's latent styles put it there.
+    let of = |b: &Style, l: Option<&LatentStyle>| {
+        let mut st = b.clone();
+        st.quick = l.is_some_and(|l| l.quick && !l.hidden);
+        st.hidden = l.map_or(st.hidden, |l| l.hidden);
+        st.priority = l.and_then(|l| l.priority).or(st.priority);
+        st.locked = l.map_or(st.locked, |l| l.locked);
+        st
+    };
+    let mut added: Vec<String> = Vec::new();
+    let mut filled: Vec<String> = Vec::new();
+    for l in latent.iter().filter(|l| l.quick && !l.hidden) {
+        let Some(b) = builtin.styles.iter().find(|s| s.kind != StyleKind::Table && s.name.eq_ignore_ascii_case(&l.name)) else { continue };
+        if sheet.get(&b.id).is_some() || sheet.find(&b.name).is_some() {
+            continue;
+        }
+        let st = of(b, Some(l));
+        let linked = st.linked.clone();
+        added.push(st.id.clone());
+        filled.push(st.id.clone());
+        sheet.styles.push(st);
+        if let Some(l) = linked.as_deref().and_then(|l| builtin.get(l))
+            && sheet.get(&l.id).is_none()
+            && sheet.find(&l.name).is_none()
+        {
+            filled.push(l.id.clone());
+            sheet.styles.push(l.clone());
+        }
+    }
+    // Each style just added brings the built-in styles it is based on, as Word does. A base the
+    // document defines, or whose name it already uses, is left alone.
+    for _ in 0..MAX_BASES {
+        let bases: Vec<String> =
+            added.iter().filter_map(|id| sheet.get(id).and_then(|s| s.based_on.clone())).filter(|b| sheet.get(b).is_none()).collect();
+        added.clear();
+        for id in bases {
+            let Some(b) = builtin.get(&id).filter(|b| b.kind != StyleKind::Table) else { continue };
+            if sheet.get(&b.id).is_some() || sheet.find(&b.name).is_some() {
+                continue;
+            }
+            let st = of(b, latent.iter().find(|l| l.name.eq_ignore_ascii_case(&b.name)));
+            added.push(st.id.clone());
+            filled.push(st.id.clone());
+            sheet.styles.push(st);
+        }
+        if added.is_empty() {
+            break;
+        }
+    }
+    // A base left out because the document already uses its name under another id (translated Word
+    // writes `heading 1` as `Título1`) would leave `based_on` pointing at nothing, since
+    // `StyleSheet::chain` resolves ids. Word opens such a file with that style renamed to the
+    // built-in id and writes the materialised style with the built-in base's own formatting on it,
+    // so its TOC Heading keeps the built-in Heading 1's font, size and colour instead of taking
+    // the document's: point `based_on` at the document's definition and flatten the built-in base's
+    // formatting under the style's own, which is the file Word saves. The document's own styles are
+    // left as they are.
+    for id in filled {
+        let Some(base) = sheet.get(&id).and_then(|s| s.based_on.clone()).filter(|b| sheet.get(b).is_none()) else { continue };
+        let Some(b) = builtin.get(&base) else { continue };
+        let found = sheet.styles.iter().find(|s| s.kind == b.kind && s.id != id && s.name.eq_ignore_ascii_case(&b.name));
+        let Some(target) = found.map(|s| s.id.clone()) else { continue };
+        let (para, chr) = (b.para.clone(), b.chr.clone());
+        if let Some(st) = sheet.get_mut(&id) {
+            st.para = para.overlaid(&st.para);
+            st.chr = chr.overlaid(&st.chr);
+            st.based_on = Some(target);
+        }
+    }
+}
+
+/// What the file's `w:latentStyles` (under the `root` `w:styles`) says about each built-in style it
+/// leaves latent, passed to [`add_latent_gallery`], which adds the ones Word's gallery shows
+/// (`w:qFormat`, not `w:semiHidden`) to `sheet`: Word writes a style out only once it is used.
+/// A file without `w:latentStyles` leaves the sheet as it is.
+fn latent_gallery(sheet: &mut StyleSheet, root: &El) {
+    let Some(l) = root.child("w:latentStyles") else { return };
+    let on = |e: &El, k: &str, default: bool| e.attr(k).map_or(default, |v| !matches!(v.trim(), "0" | "false" | "off"));
+    let (quick, hidden) = (on(l, "w:defQFormat", false), on(l, "w:defSemiHidden", false));
+    // Without `w:defUIPriority` Word sorts the latent styles at 0, not at their built-in
+    // priorities (observed: Subtitle then comes before a Title at 5).
+    let priority = l.attr("w:defUIPriority").and_then(u32_of).unwrap_or(0);
+    let locked = on(l, "w:defLockedState", false);
+    let exceptions: Vec<&El> = l.children("w:lsdException").take(10_000).collect();
+    let prio_of = |e: &El| e.attr("w:uiPriority").and_then(u32_of).unwrap_or(priority);
+    // A style the file defines without `w:uiPriority` (Word's Normal) takes the latent one.
+    for st in sheet.styles.iter_mut().filter(|s| s.priority.is_none()) {
+        if let Some(e) = exceptions.iter().find(|e| e.attr("w:name").is_some_and(|n| n.eq_ignore_ascii_case(&st.name))) {
+            st.priority = Some(prio_of(e));
+        }
+    }
+    // Each built-in style: the latent defaults, overridden by its own exception if any. Its lock
+    // comes too, so Restrict Editing still keeps a locked latent style off. The ones the file keeps
+    // out of the gallery come along as well, because a style it shows brings its bases.
+    let builtin = StyleSheet::builtin();
+    let latent: Vec<LatentStyle> = builtin
+        .styles
+        .iter()
+        .filter(|b| b.kind != StyleKind::Table)
+        .map(|b| {
+            let e = exceptions.iter().find(|e| e.attr("w:name").is_some_and(|n| n.eq_ignore_ascii_case(&b.name)));
+            LatentStyle {
+                name: b.name.clone(),
+                priority: Some(e.map_or(priority, |e| prio_of(e))),
+                locked: e.map_or(locked, |e| on(e, "w:locked", locked)),
+                quick: e.map_or(quick, |e| on(e, "w:qFormat", quick)),
+                hidden: e.map_or(hidden, |e| on(e, "w:semiHidden", hidden)),
+            }
+        })
+        .collect();
+    add_latent_gallery(sheet, &latent);
+}
+
 impl Reader<'_> {
     /// Whether a style's kept (last) definition is a default table style.
     fn has_default_table_style(&self, root: &El) -> bool {
@@ -265,6 +414,8 @@ impl Reader<'_> {
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;
         }
+        // Built-in styles the file leaves latent but shows in Word's gallery.
+        latent_gallery(&mut sheet, &root);
         // A producer that never writes `w:qFormat` (LibreOffice) still gets Word's usual gallery.
         if !sheet.styles.iter().any(|s| s.quick) {
             sheet.add_default_gallery();
