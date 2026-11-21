@@ -76,8 +76,9 @@ pub enum RenderError {
     /// The clip or view transform, the eye or the camera direction is not finite.
     #[error("the camera transform is not finite")]
     BadTransform,
-    /// A material value is not finite or out of range (an alpha mode other than 0 to 2, for
-    /// one), or names a texture that does not exist.
+    /// A material value is not finite or out of range (an alpha mode other than 0 to 2, or a
+    /// metallic, roughness or occlusion strength outside 0 to 1, for example), or names a texture
+    /// that does not exist.
     #[error("material {0} has a value that is not finite or out of range, or names a texture that does not exist")]
     BadMaterial(usize),
     /// A texture has a zero side, or its span runs past [`Scene::texels`].
@@ -87,10 +88,11 @@ pub enum RenderError {
     #[error("texel {0} is not finite or has an alpha outside 0 to 1")]
     BadTexel(usize),
     /// A light has a kind other than 0 to 2, a value that is not finite, a cone cosine outside −1
-    /// to 1, a shadow darkness outside 0 to 1, or (a parallel or spot light) a direction whose
-    /// length differs from 1 by more than 0.001.
+    /// to 1, (a spot light) an inner cone cosine below the outer one, a shadow darkness outside 0
+    /// to 1, or (a parallel or spot light) a direction whose length differs from 1 by more than
+    /// 0.001.
     #[error(
-        "light {0} has an unknown kind, a value that is not finite, a cone cosine outside -1 to 1, a shadow darkness outside 0 to 1 or a direction that is not unit length"
+        "light {0} has an unknown kind, a value that is not finite, a cone cosine outside -1 to 1 or out of order, a shadow darkness outside 0 to 1 or a direction that is not unit length"
     )]
     BadLight(usize),
     /// The light count is over [`Limits::max_lights`].

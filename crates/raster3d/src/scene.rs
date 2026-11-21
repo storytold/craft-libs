@@ -21,10 +21,13 @@ pub struct Vertex {
 pub struct Material {
     /// Linear RGBA factor.
     pub base: [f32; 4],
+    /// 0 to 1.
     pub metallic: f32,
+    /// 0 to 1.
     pub roughness: f32,
     pub emissive: [f32; 3],
     pub normal_scale: f32,
+    /// 0 to 1.
     pub occlusion_strength: f32,
     /// 0 opaque, 1 mask, 2 blend.
     pub alpha_mode: u32,
@@ -112,7 +115,8 @@ pub struct Light {
     pub dir: [f32; 3],
     /// Linear color times intensity.
     pub color: [f32; 3],
-    /// Cosine of a spot light's full-intensity half angle, −1 to 1.
+    /// Cosine of a spot light's full-intensity half angle, −1 to 1 and at least
+    /// [`Light::cos_outer`].
     pub cos_inner: f32,
     /// Cosine of a spot light's cone half angle, −1 to 1.
     pub cos_outer: f32,
@@ -285,6 +289,9 @@ fn validate_materials(s: &Scene) -> Result<(), RenderError> {
             ])
             && (0.0..=1.0).contains(&m.base[3])
             && (0.0..=1.0).contains(&m.opacity)
+            && (0.0..=1.0).contains(&m.metallic)
+            && (0.0..=1.0).contains(&m.roughness)
+            && (0.0..=1.0).contains(&m.occlusion_strength)
             && m.alpha_mode <= 2
             && [m.tex_base, m.tex_mr, m.tex_normal, m.tex_occlusion, m.tex_emissive].into_iter().all(tex_ok)
     };
@@ -319,6 +326,7 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
             && finite(&[l.cos_inner, l.cos_outer, l.radius, l.falloff_distance, l.shadow_darkness, l.shadow_diffusion])
             && (-1.0..=1.0).contains(&l.cos_inner)
             && (-1.0..=1.0).contains(&l.cos_outer)
+            && (l.kind != 1 || l.cos_inner >= l.cos_outer)
             && (0.0..=1.0).contains(&l.shadow_darkness)
             && (l.kind == 2 || unit(&l.dir))
     };

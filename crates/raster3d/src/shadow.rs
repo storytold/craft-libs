@@ -262,10 +262,14 @@ fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Vec<f32> {
             cutoff,
             masked,
         });
-        // A masked or blended caster without a base texture has one alpha; when shading discards
-        // it, it casts no shadow.
+        // A masked or blended caster without a base texture has one alpha, tested as a texel's
+        // alpha is.
         let a = mat.base[3] * mat.opacity;
-        if mat.alpha_mode != 0 && mat.tex_base < 0 && ((masked && a < cutoff) || a <= 1e-5) {
+        if mat.alpha_mode != 0 && mat.tex_base < 0 && (a < cutoff || a <= 1e-5) {
+            continue;
+        }
+        // An opaque-mode caster's alpha is its opacity alone, tested as a blended caster's is.
+        if mat.alpha_mode == 0 && mat.opacity < 0.5 {
             continue;
         }
         let poly = light_poly(s, m, ids);

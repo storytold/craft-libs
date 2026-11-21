@@ -94,9 +94,14 @@ const NEAR_CORNER: f32 = 1.0 / 4096.0;
 /// Where the edge from a corner at plane distance `da` to one at `db` crosses the plane, for an
 /// `f32` clip: `(false, t)` for `a + (b − a) × t`, or `(true, t)` for `b + (a − b) × t` when the
 /// crossing lies within [`NEAR_CORNER`] of the edge's length from `b` and `da` is finite. A
-/// distance that overflowed keeps the first form, whose corner is then not finite.
+/// distance that overflowed keeps the first form, whose corner is then not finite. A difference
+/// of finite distances that overflows `f32` is taken in `f64`.
 pub(crate) fn f32_crossing(da: f32, db: f32) -> (bool, f32) {
-    if da.is_finite() && db.abs() < da.abs() * NEAR_CORNER { (true, db / (db - da)) } else { (false, da / (da - db)) }
+    let share = |p: f32, q: f32| {
+        let d = p - q;
+        if d.is_finite() || !p.is_finite() || !q.is_finite() { p / d } else { (f64::from(p) / (f64::from(p) - f64::from(q))) as f32 }
+    };
+    if da.is_finite() && db.abs() < da.abs() * NEAR_CORNER { (true, share(db, da)) } else { (false, share(da, db)) }
 }
 
 /// Clip a polygon against `planes` (see [`plane_distance`]), interpolating in `f64` from the
@@ -547,4 +552,16 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
         return Err(RenderError::BadPixel(i));
     }
     Ok(t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::f32_crossing;
+
+    #[test]
+    fn a_crossing_whose_distance_difference_overflows_is_taken_in_f64() {
+        // −3e38 − 1e38 overflows f32; the plane lies three quarters of the way along the edge.
+        assert_eq!(f32_crossing(-3e38, 1e38), (false, 0.75));
+        assert_eq!(f32_crossing(1e38, -3e38), (false, 0.25));
+    }
 }

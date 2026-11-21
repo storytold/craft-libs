@@ -904,3 +904,72 @@ fn spot_map_near_plane_crossings_next_to_a_corner_stay_on_the_plane() {
         assert!((12_000..13_500).contains(&n), "{corners:?}: {n}");
     }
 }
+
+#[test]
+fn a_blended_caster_casts_as_it_would_with_a_white_texture() {
+    // A blended caster in a parallel light's map, at each alpha, with and without an all-white
+    // base texture.
+    let covered = |alpha: f32, textured: bool| {
+        let mut s = quad_scene(16, 16, &[([0.0, 0.0, 8.0, 8.0], 100.0, [1.0, 1.0, 1.0, alpha])]);
+        s.materials[0].casts_shadows = true;
+        if textured {
+            s.textures = vec![TexInfo { offset: 0, width: 1, height: 1, wrap_u: 0, wrap_v: 0 }];
+            s.texels = vec![[1.0; 4]];
+            s.materials[0].tex_base = 0;
+        }
+        s.lights = vec![shadow_light(0)];
+        try_shadow_maps(&mut s, true, &Limits::default()).unwrap();
+        s.shadow_texels.iter().filter(|t| t.is_finite()).count()
+    };
+    for alpha in [0.3, 0.5, 0.8] {
+        assert_eq!(covered(alpha, false), covered(alpha, true), "{alpha}");
+    }
+    assert_eq!(covered(0.3, false), 0);
+    assert!(covered(0.8, false) > 0);
+}
+
+#[test]
+fn an_opaque_mode_caster_below_half_opacity_casts_no_shadow() {
+    let covered = |opacity: f32| {
+        let mut s = quad_scene(16, 16, &[([0.0, 0.0, 8.0, 8.0], 100.0, WHITE)]);
+        (s.materials[0].casts_shadows, s.materials[0].opacity) = (true, opacity);
+        s.lights = vec![shadow_light(0)];
+        try_shadow_maps(&mut s, true, &Limits::default()).unwrap();
+        s.shadow_texels.iter().filter(|t| t.is_finite()).count()
+    };
+    assert_eq!(covered(0.0), 0);
+    assert_eq!(covered(0.3), 0);
+    assert_eq!(covered(0.5), covered(1.0));
+    assert!(covered(1.0) > 0);
+}
+
+#[test]
+fn metallic_roughness_and_occlusion_strength_outside_0_to_1_are_rejected() {
+    let set: [fn(&mut Material, f32); 3] = [|m, v| m.metallic = v, |m, v| m.roughness = v, |m, v| m.occlusion_strength = v];
+    for (k, f) in set.iter().enumerate() {
+        for v in [-0.25, 1.5] {
+            let mut s = lit_scene((16, 12), 1, false);
+            f(&mut s.materials[1], v);
+            assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadMaterial(1)), "{k} {v}");
+        }
+        for v in [0.0, 1.0] {
+            let mut s = lit_scene((16, 12), 1, false);
+            f(&mut s.materials[1], v);
+            try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+            assert!(try_render(&s, &Limits::default()).is_ok(), "{k} {v}");
+        }
+    }
+}
+
+#[test]
+fn a_spot_light_with_its_cone_cosines_out_of_order_is_rejected() {
+    let mut s = lit_scene((16, 12), 1, false);
+    (s.lights[1].cos_inner, s.lights[1].cos_outer) = (-1.0, 0.85);
+    assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(1)));
+    // Equal cosines are a cone with no feather, and a parallel or point light does not read them.
+    let mut s = lit_scene((16, 12), 1, false);
+    s.lights[1].cos_inner = s.lights[1].cos_outer;
+    (s.lights[0].cos_inner, s.lights[0].cos_outer, s.lights[2].cos_inner, s.lights[2].cos_outer) = (-1.0, 0.85, -1.0, 0.85);
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    assert!(try_render(&s, &Limits::default()).is_ok());
+}
