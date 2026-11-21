@@ -386,7 +386,8 @@ pub(crate) fn replay(ctx: &Context, transcript: &Transcript) {
     with(ctx, |state| {
         let placed = transcript.placed(state.open.last().map(|(id, _)| *id));
         for (id, mut scope) in placed.scopes {
-            // No replayed scope has a noted opener: an overlay, which notes one, blocks its record.
+            // A replayed scope keeps the opener the last pass held: an overlay's scope, the one kind that notes an opener,
+            // took it in the pass that first showed the layer, which ran.
             scope.opener = opener(state, id, None, focused);
             if scope.entering.is_none() {
                 state.seen.insert(id, frame);

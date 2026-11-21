@@ -1,6 +1,6 @@
 //! Stories of `TextStylesPanel` and of the style picker built on `PresetPicker`.
 
-use super::{NamedStyleRow, StylePreview, TextStyleKind, TextStyleRow, TextStylesPanel, style_rows};
+use super::{NamedStyleRow, StylePreview, TextStyleKind, TextStyleRow, TextStylesPanel, style_source};
 use craft_behavior::{IconId, Mixed, Selection};
 use craft_ui::patterns::presets::{PresetKey, PresetPicker, PresetState};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -54,7 +54,8 @@ fn picker_styles() -> Vec<NamedStyleRow> {
 
 #[story(TextStylesPanel<'static>, covers = [], drive = Drive::Never)]
 fn style_picker_over_style_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = style_rows(&picker_styles());
+    let styles = picker_styles();
+    let rows = style_source(&styles);
     let ((applied, state), picker_at) = data.value_at("picker", (Mixed::Same(Some(PresetKey::Item(2_u64))), PresetState::<PresetKey<u64>>::new()));
     PresetPicker::new("Style", picker_at.bind_mixed(applied), &rows, picker_at.bind(state)).show(ui).into()
 }

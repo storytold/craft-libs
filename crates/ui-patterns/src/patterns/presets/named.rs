@@ -210,7 +210,7 @@ enum Ask {
 #[must_use = "show the row with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(NamedPresetRow<'static, u32>))]
-pub struct NamedPresetRow<'a, K: Value + Eq + Hash + 'static> {
+pub struct NamedPresetRow<'a, K: Value + Eq + Hash + crate::contract::MemoProps + 'static> {
     label: Label,
     picker: PresetPicker<'a, K>,
     /// The name the New prompt starts with, and the name an empty field stands for.
@@ -230,7 +230,7 @@ pub struct NamedPresetRow<'a, K: Value + Eq + Hash + 'static> {
     style: NamedPresetStyle,
 }
 
-impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
+impl<'a, K: Value + Eq + Hash + crate::contract::MemoProps + 'static> NamedPresetRow<'a, K> {
     /// A row named `label` around `picker`.
     pub fn new(label: impl Into<Label>, picker: PresetPicker<'a, K>) -> Self {
         NamedPresetRow {
@@ -250,7 +250,8 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
         let common = env.words::<CommonWords>();
-        let rows = picker.preset_rows();
+        let kept = picker.preset_source().rows(ui.ctx(), &env);
+        let rows = kept.as_slice();
         let is_built_in = |key: &K| built_in.as_ref().is_some_and(|test| test.passes(key));
         let suggestion = suggest_name.as_deref().unwrap_or("");
         let mut picker = Some(picker);
