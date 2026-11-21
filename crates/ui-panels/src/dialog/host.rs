@@ -55,6 +55,20 @@ pub trait StackDialog: Any + Send {
         false
     }
 
+    /// Whether the dialog shows in a window of its own — an immediate viewport beside the document
+    /// window, a macOS utility panel's — when the app runs [`DialogHost::run_windowed`], instead of
+    /// in the document window's pass. `false` (the default): every dialog shows in the document
+    /// window. A windowed dialog stays on the stack and takes its input in its own window.
+    fn windowed(&self) -> bool {
+        false
+    }
+
+    /// The title of the dialog's own window when [`windowed`](StackDialog::windowed) is set;
+    /// `None` (the default) for no title.
+    fn window_title(&self) -> Option<String> {
+        None
+    }
+
     /// Shows one pass; `Some` when the dialog finished this pass.
     fn show(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<DialogResult<Self::Result>>;
 
@@ -213,6 +227,8 @@ impl std::fmt::Debug for ChildDialog {
 trait AnyStackDialog: Send {
     fn id(&self) -> DialogId;
     fn modeless(&self) -> bool;
+    fn windowed(&self) -> bool;
+    fn window_title(&self) -> Option<String>;
     fn result_type(&self) -> TypeId;
     fn key(&self) -> Option<String>;
     fn instance(&self) -> Option<DialogId>;
@@ -236,6 +252,14 @@ trait AnyStackDialog: Send {
 impl<D: StackDialog> AnyStackDialog for D {
     fn modeless(&self) -> bool {
         StackDialog::modeless(self)
+    }
+
+    fn windowed(&self) -> bool {
+        StackDialog::windowed(self)
+    }
+
+    fn window_title(&self) -> Option<String> {
+        StackDialog::window_title(self)
     }
 
     fn id(&self) -> DialogId {
@@ -463,6 +487,9 @@ impl DialogHost {
             let Some(at) = self.position_by_id(id) else { continue };
             let stack = &self.stack;
             let dialog = &mut self.open[at];
+            if dialog.windowed() {
+                continue; // shown by run_windowed in a window of its own
+            }
             let shown = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack));
             // The child is taken after every show, so a request is never left for a later pass; a dialog that just
             // finished would close its child with it, so its request is dropped.
@@ -482,6 +509,118 @@ impl DialogHost {
         }
         if self.open_next_queued() {
             crate::runtime::frame::request_repaint(&ctx);
+        }
+    }
+
+    /// Runs every open [`windowed`](StackDialog::windowed) dialog in a window of its own — an
+    /// immediate viewport beside the document window, a macOS utility panel's — once per pass,
+    /// after [`run`](DialogHost::run), which leaves windowed dialogs alone. Each window is sized to
+    /// what its dialog shows and placed at the document window's top right the first pass; closing
+    /// the window cancels the dialog. A finished dialog's result is stored exactly as `run` stores
+    /// one, so [`take`](DialogHost::take) and the `_by_id` calls see it. While a windowed dialog is
+    /// not modeless, the document window behind it stays blocked.
+    pub fn run_windowed(&mut self, ctx: &Context) {
+        // A close asked for a windowed dialog without a `Context` lands here too, when the app runs
+        // only `run_windowed` this pass.
+        for id in std::mem::take(&mut self.closing) {
+            self.cancel_by_id(ctx, id);
+        }
+        let ids: Vec<DialogId> = self.open.iter().filter(|dialog| dialog.windowed()).map(|dialog| dialog.id()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        // A windowed dialog that is not modeless blocks the document window behind it.
+        if self.open.iter().any(|dialog| dialog.windowed() && !dialog.modeless()) {
+            let screen = ctx.content_rect();
+            let viewport = ctx.viewport_id();
+            let backdrop = egui::Area::new(egui::Id::unique(("craft_windowed_modal", viewport)))
+                .order(egui::Order::Foreground)
+                .fixed_pos(screen.min)
+                .show(ctx, |ui| ui.allocate_rect(screen, egui::Sense::CLICK | egui::Sense::DRAG))
+                .inner;
+            // The panel is a separate window, so it covers no caption area of this one, but the
+            // backdrop does: a drag started on a caption move area still moves the window, as
+            // behind an in-window modal.
+            let on_caption = ctx.input(|i| {
+                i.pointer.press_origin().is_some_and(|p| {
+                    crate::runtime::windows::WindowHost::of(ctx)
+                        .caption_regions(viewport)
+                        .is_some_and(|regions| regions.moves.iter().any(|moves| moves.contains(p)))
+                })
+            });
+            if backdrop.drag_started() && on_caption {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            ctx.move_to_top(backdrop.layer_id);
+            ctx.memory_mut(|m| m.set_modal_layer(backdrop.layer_id));
+        }
+        for id in ids {
+            let Some(at) = self.position_by_id(id) else { continue };
+            if !self.stack.contains(id) {
+                continue;
+            }
+            let place = self.stack.ids().position(|open| open == id).unwrap_or_default();
+            let viewport = egui::ViewportId::from_hash_of(("craft_windowed_dialog", id));
+            let title = self.open[at].window_title();
+            let size = ctx.data(|m| m.get_temp::<egui::Vec2>(viewport.0)).unwrap_or(egui::vec2(460.0, 480.0));
+            let parent = ctx.input(|i| i.viewport().outer_rect);
+            let at_pos = ctx.data_mut(|m| {
+                *m.get_temp_mut_or_insert_with(viewport.0.with("at"), || parent.map(|r| egui::pos2(r.right() - size.x - 40.0, r.top() + 90.0)))
+            });
+            let mut builder =
+                egui::ViewportBuilder::default().with_inner_size(size).with_resizable(false).with_minimize_button(false).with_maximize_button(false);
+            if let Some(title) = title {
+                builder = builder.with_title(title);
+            }
+            if let Some(at) = at_pos {
+                builder = builder.with_position(at);
+            }
+            /// What the window's pass produced: the finished result, a child to open, and the size it wants.
+            type Taken = (Option<Box<dyn Any + Send>>, Option<Box<dyn AnyStackDialog>>, egui::Vec2);
+            let mut taken: Option<Taken> = None;
+            let close = ctx.show_viewport_immediate(viewport, builder, |ui, _| {
+                let mut close = ui.input(|i| i.viewport().close_requested());
+                let DialogHost { stack, open, .. } = &mut *self;
+                let dialog = &mut open[at];
+                let ui_ctx = ui.ctx().clone();
+                let shown = crate::runtime::overlay::stack_place(&ui_ctx, place, id, || dialog.show_erased(ui, stack));
+                let child = dialog.take_child_erased();
+                // The content's size plus the window's margins; it never asks for more than it has, so it settles.
+                // A sizing pass, or one that drew nothing across, keeps the size: the window would shrink to its
+                // margins and the content would never have the room to grow it back.
+                let drawn = ui.min_rect().size();
+                let want = if ui.is_sizing_pass() || drawn.min_elem() < 1.0 { size } else { (drawn + egui::vec2(16.0, 16.0)).round() };
+                if shown.is_some() {
+                    close = true;
+                }
+                taken = Some((shown, child, want));
+                close
+            });
+            let Some((result, child, want)) = taken else { continue };
+            if want != size {
+                ctx.data_mut(|m| m.insert_temp(viewport.0, want));
+                ctx.request_repaint();
+            }
+            if let Some(child) = child {
+                self.open_with_parent(child, Some(id));
+            }
+            match result {
+                Some(result) => {
+                    let Some(at) = self.position_by_id(id) else { continue };
+                    self.remove_tree(id);
+                    let dialog = self.open.remove(at);
+                    crate::runtime::overlay::end_stack_dialog(ctx, id);
+                    self.store_result(dialog.as_ref(), result);
+                    self.cancel_orphans(Some(ctx));
+                }
+                None if close => {
+                    ctx.data_mut(|m| m.remove::<Option<egui::Pos2>>(viewport.0.with("at")));
+                    if let Some(at) = self.position_by_id(id) {
+                        self.cancel_at(ctx, at);
+                    }
+                }
+                None => {}
+            }
         }
     }
 
