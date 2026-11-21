@@ -41,7 +41,9 @@ use super::panel::MenuTarget;
 pub trait LayerTree: PlainData {
     /// The app's layer id: the key of a row, of its thumbnails and of every event. It is plain model data
     /// (`#[derive(PlainData)]`), so the panel keys it by its `Hash`, including in the memo key of the display order
-    /// when a reveal opens groups.
+    /// when a reveal opens groups. Its `Hash` must tell distinct ids apart (as `#[memo_props(hash)]` requires):
+    /// two unequal ids that feed the same bytes would share a cached display order. Derived `Hash` on an integer or a
+    /// tuple of integers does.
     type Id: Clone + Eq + Hash + Debug + Send + Sync + PlainData + 'static;
 
     /// Children of `parent` (`None`: the top level), topmost first. The app leaves out what the
