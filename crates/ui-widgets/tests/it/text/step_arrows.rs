@@ -1,7 +1,7 @@
 //! The step arrows of a number field: one press steps once, a held press repeats by the pass time, and a field that
 //! takes no input takes no press.
 
-use craft_behavior::{HoldRepeat, PartKey};
+use craft_behavior::HoldRepeat;
 use craft_ui::contract::{Bind, Props as _, Show as _};
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::text::{NumberField, StepArrows};
@@ -14,9 +14,6 @@ const START: f64 = 50.0;
 
 /// The field's label.
 const LABEL: &str = "Size";
-
-/// The up half's part, as the field declares it.
-const UP: PartKey = PartKey::new("step_up");
 
 /// A field with leading step arrows, `enabled` and `read_only` as given, and the number it reports.
 fn field(enabled: bool, read_only: bool) -> (Fixture, Rc<Cell<f64>>) {
@@ -38,7 +35,7 @@ fn field(enabled: bool, read_only: bool) -> (Fixture, Rc<Cell<f64>>) {
 /// The middle of the up half.
 fn up(fixture: &Fixture) -> Pos2 {
     let root = fixture.root_id().expect("the field is shown");
-    fixture.part_rect(root, UP).expect("the field declares its up half").center()
+    fixture.part_rect(root, NumberField::STEP_UP).expect("the field declares its up half").center()
 }
 
 /// Presses the up half and leaves the button down.

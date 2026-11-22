@@ -1,6 +1,6 @@
 //! Stories of `NumberField`.
 
-use super::{NamedOr, NumberField, NumberName, NumberPick, STEP_UP, StepArrows, UnitPlacement};
+use super::{NamedOr, NumberField, NumberName, NumberPick, StepArrows, UnitPlacement};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -147,7 +147,7 @@ fn number_field_step_arrows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// the step-arrow trial's: every repeated step is an edit of its own, and a drive ends its edit once.
 fn hold_up(fixture: &mut Fixture) {
     fixture.settle();
-    let at = fixture.root_id().and_then(|root| fixture.part_rect(root, STEP_UP)).map(|rect| rect.center());
+    let at = fixture.root_id().and_then(|root| fixture.part_rect(root, NumberField::STEP_UP)).map(|rect| rect.center());
     if let Some(at) = at {
         fixture.frame(vec![pointer::moved(at)]);
         fixture.frame(vec![pointer::press(at)]);

@@ -92,10 +92,6 @@ fn content_sized<C: Component>(cx: &MeasureCx<'_, C>) -> bool {
 const PRESETS: PartKey = PartKey::new("presets");
 /// The chevron that opens the popup slider.
 const SLIDER: PartKey = PartKey::new("slider");
-/// The up half of the step arrows.
-const STEP_UP: PartKey = PartKey::new("step_up");
-/// The down half of the step arrows.
-const STEP_DOWN: PartKey = PartKey::new("step_down");
 
 /// The style of a number field: the field look, which the chevrons are laid out by, and the unit's text.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -200,6 +196,11 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
 }
 
 impl<'a> NumberField<'a, Option<f64>> {
+    /// The up half of the step arrows ([`step_arrows`](Self::step_arrows)): a press steps the value up once.
+    pub const STEP_UP: PartKey = PartKey::new("step_up");
+    /// The down half of the step arrows: a press steps the value down once.
+    pub const STEP_DOWN: PartKey = PartKey::new("step_down");
+
     /// A number field named `label`; empty text is `None`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<f64>>) -> Self {
         Self::of(label, value)
@@ -426,7 +427,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     fn before_text(cx: &MeasureCx<'_, Self>, arrows: StepArrows) -> Vec<Adornment> {
         let mut before = Vec::new();
         if arrows == StepArrows::Leading {
-            before.push(Adornment::steps(STEP_UP, STEP_DOWN));
+            before.push(Adornment::steps(NumberField::STEP_UP, NumberField::STEP_DOWN));
         }
         if let Some(inside) = cx.env.inside_label() {
             match (inside.icon(), inside.text()) {
@@ -654,7 +655,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let fine_shows = self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS);
         // A press on a half steps in the pass it goes down; while it is held the steps due since the last pass
         // repeat, from the press's own start time and the pass's time, so a rerun pass (no time elapsed) steps none.
-        for (key, notches) in [(STEP_UP, 1), (STEP_DOWN, -1)] {
+        for (key, notches) in [(NumberField::STEP_UP, 1), (NumberField::STEP_DOWN, -1)] {
             let Some(press) = cx.part_if_declared(key).map(|part| part.press) else { continue };
             let (start, first) = match press.phase {
                 PressPhase::Down { start, .. } => (start, true),
