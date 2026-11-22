@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn singular_transforms_give_zero_normals_that_stay_finite() {
+    fn singular_transforms_keep_normals_finite() {
         let flatten = scale_translate([1.0, 1.0, 0.0], [0.0; 3]);
         assert_eq!(flatten.determinant(), 0.0);
         let n = normalize(flatten.normal([1.0, 0.0, 0.0]));

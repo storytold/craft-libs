@@ -133,7 +133,7 @@ impl Visitor for Builder {
             p.scalar(tag, payload);
             return;
         }
-        // `Scalar::decode` only fails for container tags, which never reach this callback.
+        // `Scalar::decode` fails for container tags, which never reach this callback, and for a width the walkers never deliver.
         if let Some(s) = Scalar::decode(tag, payload) {
             self.attach(RawValue::Scalar(s));
         }

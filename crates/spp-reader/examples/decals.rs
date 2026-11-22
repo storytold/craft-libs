@@ -16,9 +16,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut lo = [f32::MAX; 3];
         let mut hi = [f32::MIN; 3];
         for p in &part.positions {
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
+            for ((low, high), v) in lo.iter_mut().zip(hi.iter_mut()).zip(p) {
+                *low = low.min(*v);
+                *high = high.max(*v);
             }
         }
         println!("part {} {} vertices {} triangles, box {lo:?}..{hi:?}", part.name, part.positions.len(), part.triangles.len());

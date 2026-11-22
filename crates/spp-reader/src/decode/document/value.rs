@@ -60,9 +60,6 @@ impl Scalar {
         Some(match tag {
             ValueTag::Float => Scalar::Float(f32::from_bits(u32_le()?)),
             ValueTag::Vec2 | ValueTag::Vec3 | ValueTag::Vec4 | ValueTag::Mat3 | ValueTag::Mat4 => {
-                if !payload.len().is_multiple_of(4) {
-                    return None;
-                }
                 Scalar::Floats(payload.as_chunks::<4>().0.iter().map(|&c| f32::from_le_bytes(c)).collect())
             }
             ValueTag::Int => Scalar::Int(u32_le()? as i32),
