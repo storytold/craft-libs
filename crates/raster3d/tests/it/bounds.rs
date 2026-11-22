@@ -60,6 +60,23 @@ fn malformed_index_lists_are_rejected() {
 }
 
 #[test]
+fn a_shadows_only_triangle_in_the_opaque_range_is_rejected() {
+    // Two opaque quads, triangles 0 and 1 then 2 and 3; the second becomes shadows-only.
+    let mut s = quad_scene(8, 8, &[([1.0, 1.0, 7.0, 7.0], 100.0, WHITE), ([0.0, 0.0, 8.0, 8.0], 50.0, WHITE)]);
+    s.materials[1].shadows_only = true;
+    assert_eq!(s.opaque_count, 12);
+    assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::ShadowsOnlyOpaque(2)));
+    assert!(matches!(try_render_cpu(&s, &Limits::default()), Err(RenderError::ShadowsOnlyOpaque(2))));
+    // A shadows-only material that is not drawn may stay in the opaque range.
+    let mut hidden = s.clone();
+    hidden.materials[1].visible = false;
+    assert!(try_render(&hidden, &Limits::default()).is_ok());
+    // In the transparent range the same triangles draw.
+    s.opaque_count = 6;
+    assert!(try_render(&s, &Limits::default()).is_ok());
+}
+
+#[test]
 fn vertices_naming_missing_materials_are_rejected() {
     let mut s = one_quad();
     s.vertices[2].material = 7;

@@ -27,7 +27,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   first and each pixel is shaded once; where the visible fragment is discarded (an alpha test or the
   back face of a single-sided material), the nearest surviving fragment under the pixel is shaded
   instead. The remaining indices are transparent triangles, which the caller sorts back to front.
-  Each is shaded per fragment, depth-tested against the opaque surfaces and blended over them.
+  Each is shaded per fragment, depth-tested against the opaque surfaces and blended over them. A
+  triangle whose material is shadows-only belongs in the transparent range; `try_render` returns an
+  error for one in the opaque range unless its material's `visible` is false.
 - **Facing.** A triangle whose screen-space winding is negative with y down
   (counterclockwise on the screen) faces the camera. A material with `double_sided` false does not
   draw back faces; a double-sided material shades a back face with its normal reversed.
@@ -102,7 +104,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   light's key outside 0 to 1, a negative shadow diffusion or shadow-map radius, a parallel or spot light direction or an environment light direction
   (other than zero) whose length differs from 1 by more than 0.001, a spot light whose inner cone
   cosine is below its outer one, a light kind
-  or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` returns
+  or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` also returns
+  `ShadowsOnlyOpaque` for a triangle in the opaque range whose material is shadows-only and
+  visible, and
   `BadPixel` when a rendered color or depth overflows `f32` (finite inputs near the top of its
   range). `try_shadow_maps` also returns an error when a map's view or a caster's
   light-space corners would not fit `f32` (vertices far from the origin).
@@ -113,7 +117,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   `try_encode` returns an error for an image whose buffer does not hold width × height pixels, a
   pixel that is not finite, an alpha below 0 or above 1 (beyond 1e-4 of rounding), or a color whose
   division by alpha overflows, and changes no pixel then; the error names the first such pixel. The renderer holds 40 bytes per raster
-  pixel and up to seven clipped triangles of about 140 bytes per scene triangle. The search for a
+  pixel (color, depth and visibility) and up to seven clipped triangles of about 140 bytes per
+  scene triangle. A band of 16 rows that has a discarded opaque pixel also holds 29 bytes per pixel
+  (a discard flag and a candidate fragment) while its opaque pixels are shaded. The search for a
   surviving fragment under discarded opaque pixels visits each opaque triangle's bounding box
   once more, so it runs no more coverage tests than the visibility pass.
 
@@ -166,6 +172,9 @@ Changes from those files:
   whose interpolated depth rounded past 1.
 - A shadows-only material that does not receive shadows draws nothing. EffectCraft drew the
   shadows on it.
+- A triangle in the opaque range whose material is shadows-only and visible is an error.
+  EffectCraft shaded it in the opaque pass, which wrote its shadow color and its depth and hid the
+  surfaces behind it. Its scene builder puts shadows-only triangles in the transparent range, so its scenes pass.
 - A texture coordinate whose value times the texture's width or height reaches 2^23 is scaled to
   texels in `f64`, after a repeated or mirrored axis reduces it by its period. EffectCraft scaled
   it in `f32`, which dropped the half-texel shift there, and from 2^24 saturated the texel index,

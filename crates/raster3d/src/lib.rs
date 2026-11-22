@@ -58,6 +58,11 @@ pub enum RenderError {
     /// [`Scene::opaque_count`] is over the index count or not a multiple of 3.
     #[error("the opaque count {opaque} does not split the {len} indices into whole triangles")]
     BadOpaqueCount { opaque: u32, len: usize },
+    /// A triangle (by number) in the first [`Scene::opaque_count`] indices has a visible
+    /// shadows-only material, which is drawn only in the transparent pass. [`try_render`] returns
+    /// it.
+    #[error("triangle {0} is in the opaque range but its material draws only shadows")]
+    ShadowsOnlyOpaque(usize),
     /// The triangle count is over [`Limits::max_triangles`].
     #[error("the scene holds {count} triangles, over the limit of {limit}")]
     TooManyTriangles { count: u64, limit: u64 },
