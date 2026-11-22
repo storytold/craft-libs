@@ -1678,7 +1678,15 @@ mod tests {
             ],
         );
         packs::set_packs_dir(Some(root.clone()));
-        assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("fr-FR")));
+        assert!(
+            nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("fr-FR")),
+            "nl={}, nl-BE={}, fr-FR={}, French file={:?}, French error={:?}",
+            nl.is_proofed(),
+            has_dictionary(Some("nl-BE")),
+            has_dictionary(Some("fr-FR")),
+            pack_dictionary_file(ProofLang::from_tag(Some("fr-FR"))),
+            dictionary_load_error(ProofLang::from_tag(Some("fr-FR"))),
+        );
         assert_eq!(pack_dictionary_file(nl), Some(pack.join("spelling.dic")));
         assert_eq!(pack_dictionary_file(ProofLang::from_tag(Some("nl"))), Some(pack.join("spelling.dic")), "a region falls back to the pack");
         for w in ["huis", "Huis", "huizen", "huisen", "fietsen", "HUIS"] {
