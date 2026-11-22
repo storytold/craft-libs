@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use craft_behavior::{CellSelection, EditEvent, PartKey, PartRef, ScrollPos};
+use craft_behavior::{CellSelection, EditEvent, Mixed, PartKey, PartRef, ScrollPos};
 use craft_table::ui::{
     CellAt, CellEdit, CellGrid, CellProblem, CellRange, ColumnEdges, ColumnFilter, GridEdit, GridModel, GridState, LineIndex, SHEET_COLUMNS,
     SHEET_ROWS, SheetGeometry,
@@ -254,6 +254,36 @@ fn a_cell_edge_resizes_its_column_in_a_sheet_without_headings() {
     let steps = resize_steps(with_headings.take_edits());
     assert_eq!(steps.first(), Some(&(1, "begin")), "{steps:?}");
     assert_eq!(steps.last(), Some(&(1, "commit")), "{steps:?}");
+}
+
+/// A drag whose only move arrives in its release's frame still resizes: the drag starts where the pointer already is.
+/// Esc on a running resize reports the width it started from.
+#[trial]
+fn an_edge_drag_moved_only_in_its_release_frame_resizes_and_esc_reports_the_start() {
+    let mut rig = rig(None, a1(), 1.0);
+    let from = rig.part_rect(PartKey::new("column_edge").at(1)).center();
+    let to = from + Vec2::X * 30.0;
+    rig.fixture.frame(vec![pointer::moved(from)]);
+    rig.fixture.frame(vec![pointer::press(from)]);
+    rig.fixture.frame(vec![pointer::moved(to), pointer::release(to)]);
+    rig.fixture.idle(2);
+    let widths = |edits: Vec<GridEdit>| {
+        edits.into_iter().find_map(|edit| match edit {
+            GridEdit::ResizeColumn { width: EditEvent::Commit { before: Mixed::Same(before), after, .. }, .. } => Some((before, after)),
+            _ => None,
+        })
+    };
+    let (before, after) = widths(rig.take_edits()).expect("the release commits a resize");
+    assert!(after > before, "the column grew by the drag: {before} -> {after}");
+
+    rig.fixture.drag_hold_at(from, Vec2::X * 30.0);
+    rig.fixture.key(Key::Escape, Modifiers::NONE);
+    rig.fixture.release_at(to);
+    let cancelled = rig.take_edits().into_iter().find_map(|edit| match edit {
+        GridEdit::ResizeColumn { width: EditEvent::Cancel { before, .. }, .. } => Some(before),
+        _ => None,
+    });
+    assert_eq!(cancelled, Some(Some(Mixed::Same(before))), "the cancel names the width the drag started from (the sheet keeps its widths)");
 }
 
 /// The test sheet, recording the rows whose cells it paints.
