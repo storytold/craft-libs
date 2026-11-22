@@ -53,7 +53,8 @@ pub use crate::codecs::png::{
     encode_pq as encode_png_pq, palette as png_palette, stereo as png_stereo,
 };
 pub use crate::codecs::tiff::{
-    PhotoshopTags as TiffPhotoshopTags, TiffBands, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian,
+    PhotoshopTags as TiffPhotoshopTags, TiffBands, encode_plain_rgba16 as encode_tiff_plain_rgba16, photoshop_tags as tiff_photoshop_tags,
+    writes_little_endian as tiff_writes_little_endian,
 };
 pub use crate::codecs::tiff_ifd::{ExtraSampleKind, InkSet, TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
