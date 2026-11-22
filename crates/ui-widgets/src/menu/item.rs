@@ -571,6 +571,7 @@ impl Component for MenuItem<'_> {
             let square = Rect::from_center_size(Flow::new(placed.mark, rtl).take_start(side).0.center(), Vec2::splat(side));
             match mark {
                 Some(Mark::Radio(true)) => draw.fill(&glyph::dot(square.center(), side), ink),
+                Some(Mark::Radio(false)) => draw.stroke(&glyph::ring(square.center(), side), StrokeWidth::Thin, ink),
                 Some(Mark::Check(true)) => draw.stroke(&glyph::check(square), StrokeWidth::Medium, ink),
                 _ => {}
             }
