@@ -498,7 +498,8 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         let reported = &mut self.reported;
         let drags = crate::runtime::drag::started(ui.ctx());
         let ctx = ui.ctx().clone();
-        let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+        let cross = if titled { egui::Align::Center } else { egui::Align::Min };
+        let layout = if rtl { egui::Layout::right_to_left(cross) } else { egui::Layout::left_to_right(cross) };
         ui.with_layout(layout, |ui| {
             ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
             let shown = panels.iter().find(|panel| panel.key == active);
