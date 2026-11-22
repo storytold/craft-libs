@@ -313,6 +313,10 @@ pub fn framework_attr(id: u32) -> Option<&'static str> {
 
 /// Decode a binary XML file.
 pub fn parse(data: &[u8]) -> Result<Document, Error> {
+    parse_with_limits(data, MAX_NODES, MAX_DEPTH)
+}
+
+fn parse_with_limits(data: &[u8], max_nodes: usize, max_depth: usize) -> Result<Document, Error> {
     let r = Reader::new(data);
     let (t, h, size) = chunk(&r, 0).ok_or_else(|| Error::Truncated("binary XML header".into()))?;
     if t != RES_XML {
@@ -342,6 +346,11 @@ pub fn parse(data: &[u8]) -> Result<Document, Error> {
             doc.warnings.push(format!("incomplete XML node at offset {pos}"));
             break;
         }
+        if matches!(ct, XML_START_NS | XML_START_ELEMENT | XML_END_ELEMENT | XML_CDATA) && doc.nodes.len() >= max_nodes {
+            doc.truncated = true;
+            doc.warnings.push("XML node limit reached; the remaining events were skipped".into());
+            break;
+        }
         match ct {
             RES_STRING_POOL => match StringPool::parse(data, pos) {
                 Ok(p) => {
@@ -368,16 +377,15 @@ pub fn parse(data: &[u8]) -> Result<Document, Error> {
                     if ns_stack.len() < MAX_DEPTH {
                         ns_stack.push((prefix.clone(), uri.clone()));
                     }
-                    if doc.nodes.len() < MAX_NODES {
-                        doc.nodes.push(Node::Namespace { prefix, uri });
-                    }
+                    doc.nodes.push(Node::Namespace { prefix, uri });
                 } else {
                     ns_stack.pop();
                 }
             }
             XML_START_ELEMENT => {
-                if doc.nodes.len() >= MAX_NODES {
+                if depth >= max_depth {
                     doc.truncated = true;
+                    doc.warnings.push("XML nesting limit reached; the remaining events were skipped".into());
                     break;
                 }
                 let line = r.u32_le(pos + 8).unwrap_or(0);
@@ -433,20 +441,16 @@ pub fn parse(data: &[u8]) -> Result<Document, Error> {
                     });
                 }
                 doc.nodes.push(Node::Start { depth, name, namespace: ns, line, attributes });
-                depth = (depth + 1).min(MAX_DEPTH);
+                depth += 1;
             }
             XML_END_ELEMENT => {
                 depth = depth.saturating_sub(1);
                 let name = r.u32_le(pos + ch + 4).and_then(|i| doc.pool.get(i)).unwrap_or("?").to_string();
-                if doc.nodes.len() < MAX_NODES {
-                    doc.nodes.push(Node::End { depth, name });
-                }
+                doc.nodes.push(Node::End { depth, name });
             }
             XML_CDATA => {
                 let text = r.u32_le(pos + ch).and_then(|i| doc.pool.get(i)).unwrap_or("").to_string();
-                if doc.nodes.len() < MAX_NODES {
-                    doc.nodes.push(Node::Text { depth, text });
-                }
+                doc.nodes.push(Node::Text { depth, text });
             }
             _ => {}
         }
@@ -748,6 +752,32 @@ mod tests {
         };
         let pairs: Vec<_> = attributes.iter().map(|a| (a.name.as_str(), a.value.as_str())).collect();
         assert_eq!(pairs, [("package", fx::PACKAGE), ("versionCode", "42"), ("versionName", "1.2.3")]);
+    }
+
+    #[test]
+    fn dropping_a_close_event_marks_the_document_partial() {
+        let bytes = fx::axml(&[fx::AxNode::Start("root", vec![]), fx::AxNode::End("root")]);
+        let complete = parse_with_limits(&bytes, 3, 1).unwrap();
+        assert!(!complete.truncated);
+        assert!(matches!(complete.nodes.last(), Some(Node::End { depth: 0, .. })));
+
+        let partial = parse_with_limits(&bytes, 2, 1).unwrap();
+        assert!(partial.truncated);
+        assert_eq!(partial.nodes, complete.nodes[..2]);
+    }
+
+    #[test]
+    fn nesting_limit_keeps_an_exact_prefix_instead_of_saturating_depth() {
+        let bytes =
+            fx::axml(&[fx::AxNode::Start("root", vec![]), fx::AxNode::Start("child", vec![]), fx::AxNode::End("child"), fx::AxNode::End("root")]);
+        let complete = parse_with_limits(&bytes, 5, 2).unwrap();
+        assert!(!complete.truncated);
+        assert!(matches!(complete.nodes[3], Node::End { depth: 1, .. }));
+        assert!(matches!(complete.nodes[4], Node::End { depth: 0, .. }));
+
+        let partial = parse_with_limits(&bytes, 5, 1).unwrap();
+        assert!(partial.truncated);
+        assert_eq!(partial.nodes, complete.nodes[..2]);
     }
 
     #[test]
