@@ -143,7 +143,7 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | Once, when the app is created | with the `CreationContext` | `embed::install(ctx, InstallSpec, &UiFonts)`: the runtime, then the app's fonts. Returns the font `Stack`. |
 | Each frame | `raw_input_hook` | `embed::before_input(ctx, \|output\| { ...; input })`: the closure receives the `FrameOutput` of the frame before (fired commands, announcements, chrome toggles) and returns the `FrameInput` for this frame (`RootEnv`, command states, the `Host`). |
 | Each frame | `logic`, after the app's own logic | `embed::logic(ctx, \|\| decision)`: the root window's close path. The closure runs only when the root window was asked to close, and returns `CloseDecision::Close` or `Hold`. |
-| Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the native window on Windows, and fits the root window to its monitor once. Needs `ui-app`. |
+| Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the root's native window (eframe's `Frame`, or any `raw_window_handle::HasWindowHandle`) on Windows, where the runtime answers the window's hit test (resize edges, the title bar's move area, snap layouts on the maximize button), and fits the root window to its monitor once. Native only; it needs no eframe feature of the facade. |
 | Each pass | `ui`, where the app draws its own document canvas | Optional: `ui::runtime::focus::host_canvas(ctx, id, KeyUse::CANVAS)` declares it as the window's canvas (Tab row below). |
 | Each pass | `ui`, last | Optional: `ui::runtime::keys::with_window_intents(ctx, rtl, \|intents\| ...)` reads the keys no component took (below). |
 
