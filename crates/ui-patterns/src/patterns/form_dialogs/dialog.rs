@@ -1099,7 +1099,7 @@ fn show_preview(
     let pane = pane.show(ui);
     // Under the pane the row is there before the picture is: a dialog sized from its first pass keeps room for it.
     let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
-    let step = extras.pager.as_ref().and_then(|pager| Row::new().align(RowAlign::Center).show(ui, |ui, _| pager.clone().show(ui)).inner.flatten());
+    let step = extras.pager.as_ref().and_then(|pager| Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| pager.clone().show(ui)).inner.flatten());
     live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown.clone());
     ShownPreview { clicked: pane.clicked, centre: picture.map(|size| pane.shown.centre(size)), step }
 }
