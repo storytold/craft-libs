@@ -244,6 +244,20 @@ fn a_refused_print_keeps_a_held_dialog_open_until_a_value_changes() {
     assert!(answered.settings.grayscale, "the dialog closes with the held answer");
 }
 
+/// The app can mark the settings it owns invalid (an empty page range): Print is disabled until they are valid again.
+#[trial]
+fn print_is_disabled_while_the_app_calls_the_settings_invalid() {
+    let twice = Rc::new(Cell::new(false));
+    let (mut fixture, host) = held_print(&twice);
+    assert!(!print_disabled(&fixture), "the settings are valid until the app says otherwise");
+    on_print(&host, |dialog| dialog.set_settings_valid(false));
+    fixture.idle(4);
+    assert!(print_disabled(&fixture), "Print is disabled on invalid settings");
+    on_print(&host, |dialog| dialog.set_settings_valid(true));
+    fixture.idle(4);
+    assert!(!print_disabled(&fixture), "valid again, Print is enabled");
+}
+
 /// Taking back a held Print, as the app does when its Save as PDF picker is cancelled, enables Print again with the
 /// values kept and no refusal, and the next Print files again.
 #[trial]

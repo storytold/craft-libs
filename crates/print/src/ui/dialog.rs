@@ -958,6 +958,9 @@ pub struct HostedPrint {
     hold: bool,
     /// The Print the app holds back until it answers, and its refusal.
     held: HeldAnswer<PrintAnswer>,
+    /// The app's say on whether the settings can print (a page range that names no page cannot): Print is disabled while
+    /// it is false, on top of the state's own readiness.
+    settings_valid: bool,
 }
 
 /// Adds the app's own keys to the automation listing of the sections' values.
@@ -985,7 +988,14 @@ impl HostedPrint {
             printer_chosen: None,
             hold: false,
             held: HeldAnswer::new(),
+            settings_valid: true,
         }
+    }
+
+    /// Tells the dialog whether the settings the app owns are valid (they are until told otherwise). While they are not,
+    /// Print is disabled and Enter prints nothing.
+    pub fn set_settings_valid(&mut self, valid: bool) {
+        self.settings_valid = valid;
     }
 
     /// Lists keys the sections' values do not show as they are: `form` gets the values and the listing, and may replace or
@@ -1173,7 +1183,7 @@ impl StackDialog for HostedPrint {
         let answers = if craft_ui::runtime::measure::active(ui.ctx()) { Vec::new() } else { self.requests.take_answers() };
         let finish_held = self.held.is_accepted();
         // Print waits for the app's answer: a second press cannot file over the held one.
-        let ready = self.state.ready() && !self.held.is_waiting();
+        let ready = self.state.ready() && self.settings_valid && !self.held.is_waiting();
         let (busy, discovering) = (self.state.busy(), self.state.discovering());
         let refusal = self.held.refusal().map(|(reason, refused)| (reason.clone(), refused.settings.clone(), refused.fields.clone()));
         let mut dialog = PrintDialog::new(Bind::bound(&mut self.state.settings), &self.state.printers, Bind::bound(&mut self.fields), sheet)
@@ -1229,7 +1239,7 @@ impl StackDialog for HostedPrint {
         if self.held.is_accepted() {
             return self.held.finish();
         }
-        if self.held.is_waiting() || !self.state.ready() {
+        if self.held.is_waiting() || !self.settings_valid || !self.state.ready() {
             return None;
         }
         let answer = self.answer(PrintFinish::Print);
