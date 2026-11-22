@@ -253,9 +253,6 @@ pub fn parse(bytes: &[u8]) -> Result<Picture, Error> {
 
 /// [`parse`] for a metafile inside the one being parsed: it draws on the same budgets.
 pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
-    if pict::is_pict(bytes) {
-        return pict::parse(bytes);
-    }
     let b = Bytes(bytes);
     let (cv, frame) = if emf::is_emf(b) {
         emf::parse(b)?
@@ -263,6 +260,8 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
         // A WMF converted from an EMF can carry the original in MFCOMMENT escapes; Office draws
         // the WMF's own records (its dx rounding shows), so the copy is not used.
         wmf::parse(b)?
+    } else if pict::is_pict(bytes) {
+        return pict::parse(bytes);
     } else {
         return Err(Error::NotMetafile);
     };

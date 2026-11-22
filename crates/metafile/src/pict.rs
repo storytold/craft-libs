@@ -6,10 +6,11 @@
 //! bounds; an extended version 2 header's source rectangle is mapped onto the frame.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Vec2};
 
-use crate::canvas::{Raw, RawClip};
+use crate::canvas::{Raw, RawClip, RawTile};
 use crate::dib::Rgba;
 use crate::geom::Op;
 use crate::text::{Font, HAlign, Text, VAlign};
@@ -139,10 +140,16 @@ pub fn is_pict(bytes: &[u8]) -> bool {
     find(bytes).is_some()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 enum Pat {
     Bits([u8; 8]),
     Rgb([u8; 3]),
+    Tile(Arc<RawTile>),
+}
+
+enum PaintChoice {
+    Solid([u8; 3]),
+    Tile(Arc<RawTile>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -801,29 +808,62 @@ impl Pict {
                 let small = w * h <= MAX_PATTERN_PIXELS && pm.row_len(w) * h <= MAX_PATTERN_ROW_BYTES;
                 let keep = small && pm.decodable(w) && self.charge(&pm, w, h);
                 let (data, _) = pm.rows(r, w, h, keep)?;
-                let avg = keep.then(|| pm.to_rgba(&data, w, h, self.fg, self.bg)).flatten().map(|img| self.average(&img));
-                Some(avg.map_or(Pat::Bits(bits), Pat::Rgb))
+                if let Some(img) = keep.then(|| pm.to_rgba(&data, w, h, self.fg, self.bg)).flatten() {
+                    let px = img.px.as_chunks::<4>().0;
+                    if px.windows(2).any(|w| w[0] != w[1]) {
+                        Some(Pat::Tile(Arc::new(RawTile { w: img.w, h: img.h, px: img.px, cell: 1.0 })))
+                    } else if let Some(first) = px.first() {
+                        Some(Pat::Rgb([first[0], first[1], first[2]]))
+                    } else {
+                        Some(Pat::Bits(bits))
+                    }
+                } else {
+                    Some(Pat::Bits(bits))
+                }
             }
             2 => Some(Pat::Rgb(r.rgb()?)),
             _ => Some(Pat::Bits(bits)),
         }
     }
 
-    fn average(&mut self, img: &Rgba) -> [u8; 3] {
-        let px = img.px.as_chunks::<4>().0;
-        let n = px.len().max(1) as u64;
-        let mut sum = [0u64; 3];
-        for p in px {
-            sum[0] += u64::from(p[0]);
-            sum[1] += u64::from(p[1]);
-            sum[2] += u64::from(p[2]);
+    fn pat_paint(&self, pat: &Pat) -> PaintChoice {
+        match pat {
+            Pat::Rgb(c) => PaintChoice::Solid(*c),
+            Pat::Tile(tile) => PaintChoice::Tile(tile.clone()),
+            Pat::Bits(b) => {
+                if *b == [0; 8] {
+                    PaintChoice::Solid(self.bg)
+                } else if *b == [0xFF; 8] {
+                    PaintChoice::Solid(self.fg)
+                } else {
+                    let mut px = Vec::with_capacity(64 * 4);
+                    for row in b {
+                        for bit in 0..8 {
+                            let is_fg = (row & (0x80 >> bit)) != 0;
+                            let c = if is_fg { self.fg } else { self.bg };
+                            px.extend([c[0], c[1], c[2], 255]);
+                        }
+                    }
+                    PaintChoice::Tile(Arc::new(RawTile { w: 8, h: 8, px, cell: 1.0 }))
+                }
+            }
         }
-        [(sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8]
     }
 
-    fn pat_color(&mut self, pat: Pat) -> [u8; 3] {
+    fn pat_color(&self, pat: &Pat) -> [u8; 3] {
         match pat {
-            Pat::Rgb(c) => c,
+            Pat::Rgb(c) => *c,
+            Pat::Tile(tile) => {
+                let px = tile.px.as_chunks::<4>().0;
+                let n = px.len().max(1) as u64;
+                let mut sum = [0u64; 3];
+                for p in px {
+                    sum[0] += u64::from(p[0]);
+                    sum[1] += u64::from(p[1]);
+                    sum[2] += u64::from(p[2]);
+                }
+                [(sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8]
+            }
             Pat::Bits(b) => {
                 let ones: u32 = b.iter().map(|x| x.count_ones()).sum();
                 mix(self.fg, self.bg, f64::from(ones) / 64.0)
@@ -835,35 +875,55 @@ impl Pict {
         if !matches!(self.pen_mode, 0 | 8) {
             self.unplayed_raster_ops = self.unplayed_raster_ops.saturating_add(1);
         }
-        self.pat_color(self.pen_pat)
+        self.pat_color(&self.pen_pat)
     }
 
-    fn area_color(&mut self, verb: Verb) -> Option<[u8; 3]> {
-        match verb {
-            Verb::Paint => Some(self.pen_color()),
-            Verb::Erase => Some(self.pat_color(self.back_pat)),
-            Verb::Fill => Some(self.pat_color(self.fill_pat)),
-            Verb::Frame | Verb::Invert => None,
-        }
+    fn area_paint(&mut self, verb: Verb) -> Option<PaintChoice> {
+        let pat = match verb {
+            Verb::Paint => {
+                if !matches!(self.pen_mode, 0 | 8) {
+                    self.unplayed_raster_ops = self.unplayed_raster_ops.saturating_add(1);
+                }
+                self.pen_pat.clone()
+            }
+            Verb::Erase => self.back_pat.clone(),
+            Verb::Fill => self.fill_pat.clone(),
+            Verb::Frame | Verb::Invert => return None,
+        };
+        Some(self.pat_paint(&pat))
     }
 
     fn has_pen(&self) -> bool {
         self.pen.x > 0.0 && self.pen.y > 0.0
     }
 
-    fn push_fill(&mut self, bp: BezPath, color: [u8; 3], even_odd: bool) {
+    fn fill_paint(&mut self, mut bp: BezPath, paint: PaintChoice, even_odd: bool) {
+        bp.apply_affine(self.xf());
         let ops = bez_to_ops(&bp);
         if ops.len() < 2 {
             return;
         }
-        self.push(Raw::Path {
-            ops,
-            fill: Some([color[0], color[1], color[2], 255]),
-            stroke: None,
-            line: LineStyle::default(),
-            even_odd,
-            region: RawClip { rects: self.clip.clone(), paths: Vec::new() },
-        });
+        let region = RawClip { rects: self.clip.clone(), paths: Vec::new() };
+        match paint {
+            PaintChoice::Solid(color) => {
+                self.push(Raw::Path {
+                    ops,
+                    fill: Some([color[0], color[1], color[2], 255]),
+                    stroke: None,
+                    line: LineStyle::default(),
+                    even_odd,
+                    region,
+                });
+            }
+            PaintChoice::Tile(tile) => {
+                self.push(Raw::Pattern {
+                    ops,
+                    even_odd,
+                    tile,
+                    region,
+                });
+            }
+        }
     }
 
     fn push_stroke(&mut self, bp: BezPath, color: [u8; 3], width: f64, cap: Cap) {
@@ -881,9 +941,8 @@ impl Pict {
         });
     }
 
-    fn fill(&mut self, mut bp: BezPath, color: [u8; 3], even_odd: bool) {
-        bp.apply_affine(self.xf());
-        self.push_fill(bp, color, even_odd);
+    fn fill(&mut self, bp: BezPath, color: [u8; 3], even_odd: bool) {
+        self.fill_paint(bp, PaintChoice::Solid(color), even_odd);
     }
 
     fn scale_factor(&self) -> f64 {
@@ -947,8 +1006,8 @@ impl Pict {
                 self.skipped_records = self.skipped_records.saturating_add(1);
             }
             _ => {
-                if let Some(c) = self.area_color(verb) {
-                    self.fill(outline(rect, self.oval, true), c, false);
+                if let Some(paint) = self.area_paint(verb) {
+                    self.fill_paint(outline(rect, self.oval, true), paint, false);
                 }
             }
         }
@@ -990,8 +1049,8 @@ impl Pict {
                     bp.line_to(*p);
                 }
                 bp.close_path();
-                if let Some(c) = self.area_color(verb) {
-                    self.fill(bp, c, true);
+                if let Some(paint) = self.area_paint(verb) {
+                    self.fill_paint(bp, paint, true);
                 }
             }
         }
@@ -1001,13 +1060,16 @@ impl Pict {
     fn read_region(&mut self, r: &mut Be) -> Option<Vec<Rect>> {
         let (rects, whole) = region(r, &mut self.region_work)?;
         if !whole {
-            self.ignored_clips = self.ignored_clips.saturating_add(1);
+            return None;
         }
         Some(rects)
     }
 
     fn region_shape(&mut self, verb: Option<Verb>, r: &mut Be) -> Option<()> {
-        let rects = self.read_region(r)?;
+        let Some(rects) = self.read_region(r) else {
+            self.skipped_records = self.skipped_records.saturating_add(1);
+            return Some(());
+        };
         let Some(verb) = verb.filter(|_| !rects.is_empty()) else { return Some(()) };
         match verb {
             Verb::Frame if self.has_pen() => {
@@ -1040,8 +1102,8 @@ impl Pict {
                 self.skipped_records = self.skipped_records.saturating_add(1);
             }
             _ => {
-                if let Some(c) = self.area_color(verb) {
-                    self.fill(rects_path(&rects), c, false);
+                if let Some(paint) = self.area_paint(verb) {
+                    self.fill_paint(rects_path(&rects), paint, false);
                 }
             }
         }
@@ -1067,6 +1129,9 @@ impl Pict {
             if [x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
                 mapped.push([x0, y0, x1, y1]);
             }
+        }
+        if mapped.len() > clip::MAX_CLIP_RECTS {
+            self.ignored_clips = self.ignored_clips.saturating_add(1);
         }
         mapped.truncate(clip::MAX_CLIP_RECTS);
         self.clip = Some(mapped);
@@ -1205,7 +1270,17 @@ impl Pict {
         let mut pm = PixMap::read(r, direct, direct)?;
         pm.packed = op >= 0x98;
         let (src, dst, mode) = (r.rect()?, r.rect()?, r.u16()?);
-        let mask = if op & 1 != 0 { Some(self.read_region(r)?) } else { None };
+        let mask = if op & 1 != 0 {
+            match self.read_region(r) {
+                Some(m) => Some(m),
+                None => {
+                    self.ignored_clips = self.ignored_clips.saturating_add(1);
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let (w, h) = pm.dims()?;
         let (wide, high) = (w as u64, h as u64);
         let fits = wide.saturating_mul(high) <= MAX_PIXELS as u64 && (pm.row_len(w) as u64).saturating_mul(high) <= MAX_ROW_BYTES;
@@ -1279,6 +1354,9 @@ impl Pict {
                 if let Some(norm) = clip::normalize([p0.x, p0.y, p1.x, p1.y]) {
                     mapped.push(norm);
                 }
+            }
+            if mapped.len() > clip::MAX_CLIP_RECTS {
+                self.ignored_clips = self.ignored_clips.saturating_add(1);
             }
             mapped.truncate(clip::MAX_CLIP_RECTS);
             let combined = match &self.clip {

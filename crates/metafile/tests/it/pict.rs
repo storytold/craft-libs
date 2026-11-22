@@ -57,6 +57,17 @@ fn path_bounds(item: &Item) -> Rect {
 fn fill_rgb(item: &Item) -> Option<[u8; 3]> {
     match item {
         Item::Path { fill: Some(c), .. } => Some([c[0], c[1], c[2]]),
+        Item::Pattern { tile, .. } => {
+            let px = tile.rgba.as_chunks::<4>().0;
+            let n = px.len().max(1) as f64;
+            let mut sum = [0.0; 3];
+            for p in px {
+                sum[0] += f64::from(p[0]);
+                sum[1] += f64::from(p[1]);
+                sum[2] += f64::from(p[2]);
+            }
+            Some([(sum[0] / n).round() as u8, (sum[1] / n).round() as u8, (sum[2] / n).round() as u8])
+        }
         _ => None,
     }
 }
@@ -185,6 +196,7 @@ fn patterns_fill_with_their_average_color() {
         &[(0x0A, gray), (0x34, rect(0, 0, 10, 10)), (0x12, [be(&[2]), vec![0; 8], be(&[0, -1, 0])].concat()), (0x32, rect(0, 0, 5, 5))],
     );
     let p = parse_pict(&bytes).unwrap();
+    assert!(matches!(&p.items[0], Item::Pattern { .. }));
     assert_eq!(fill_rgb(&p.items[0]), Some([128, 128, 128]));
     assert_eq!(fill_rgb(&p.items[1]), Some([0, 255, 0]));
 }
@@ -387,7 +399,8 @@ fn regions_past_the_picture_budget_are_left_out() {
     let body = [rect(0, 0, 1, 16_000), be(&words)].concat();
     let region = [be(&[(body.len() + 2) as i16]), body].concat();
     let p = parse_pict(&v2([0, 0, 300, 300], &[(0x81, region.clone()), (0x81, region.clone()), (0x81, region)])).unwrap();
-    assert_eq!(p.ignored_clips, 1);
+    assert_eq!(p.skipped_records, 1);
+    assert_eq!(p.ignored_clips, 0);
     assert_eq!(p.items.len(), 2);
 }
 
