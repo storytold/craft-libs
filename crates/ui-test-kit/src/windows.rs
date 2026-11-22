@@ -198,6 +198,45 @@ fn keep_tree(output: &mut FullOutput, viewport: ViewportId) {
     TREES.with(|kept| kept.borrow_mut().push((viewport, tree)));
 }
 
+/// An OS window as macOS runs egui's window commands on it through winit, in desktop points with y down: a position
+/// moves the frame's top-left corner at its current size (`setFrameOrigin`); a size keeps the frame's bottom-left
+/// corner (`setContentSize`), so a change of height moves the top edge; the largest size in force clamps the current
+/// size the same way, and every size the window takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AppKitWindow {
+    /// Where the window is.
+    pub rect: Rect,
+    max: Option<Vec2>,
+}
+
+impl AppKitWindow {
+    /// A window at `rect` whose largest size is `max`, the limit the commands of earlier frames left in force.
+    pub fn new(rect: Rect, max: Option<Vec2>) -> Self {
+        AppKitWindow { rect, max }
+    }
+
+    /// Runs `commands` in order.
+    pub fn run(&mut self, commands: &[ViewportCommand]) {
+        for command in commands {
+            match command {
+                ViewportCommand::OuterPosition(to) => self.rect = Rect::from_min_size(*to, self.rect.size()),
+                ViewportCommand::InnerSize(size) => self.content_size(*size),
+                ViewportCommand::MinInnerSize(least) => self.content_size(self.rect.size().max(*least)),
+                ViewportCommand::MaxInnerSize(most) => {
+                    self.max = Some(*most);
+                    self.content_size(self.rect.size());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn content_size(&mut self, size: Vec2) {
+        let size = self.max.map_or(size, |max| size.min(max));
+        self.rect = Rect::from_min_size(Pos2::new(self.rect.min.x, self.rect.max.y - size.y), size);
+    }
+}
+
 /// What a frame sent out.
 #[non_exhaustive]
 pub struct Out {

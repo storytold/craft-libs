@@ -25,8 +25,7 @@ use super::blending::BlendingOp;
 use super::contour::{ContourAction, ContourField, ContourKey, ContourRequest, ContourSampler, contour_source};
 use super::labels::LayerStyleWords;
 use crate::layer_style::{
-    Contour, EffectField, EffectId, EffectInstance, EffectKind, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, StyleParams,
-    StyleValue,
+    Contour, EffectField, EffectId, EffectInstance, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, StyleParams, StyleValue,
 };
 
 /// The angle field shows whole degrees.
@@ -37,12 +36,6 @@ const ANGLE_RANGE: std::ops::RangeInclusive<f64> = -180.0..=180.0;
 /// What a part of the dialog did to the style: the operation an event replays on the style it started from.
 #[derive(Clone, Debug)]
 pub(super) enum StyleOp {
-    /// [`LayerStyleDraft::toggle`].
-    Toggle(EffectId),
-    /// [`LayerStyleDraft::add_instance`] from `defaults`.
-    Add { kind: EffectKind, defaults: StyleParams },
-    /// [`LayerStyleDraft::remove_instance`].
-    Remove(EffectId),
     /// A page field: [`LayerStyleDraft::set_param`] of `key` of instance `id`.
     Param { id: EffectId, key: String, value: StyleValue },
     /// A Blending Options control.
@@ -53,11 +46,6 @@ pub(super) enum StyleOp {
 pub(super) fn apply_op(op: &StyleOp, style: &LayerStyle) -> Option<LayerStyle> {
     let mut draft = LayerStyleDraft::new(style.clone());
     match op {
-        StyleOp::Toggle(id) => draft.toggle(*id),
-        StyleOp::Add { kind, defaults } => {
-            draft.add_instance(*kind, defaults);
-        }
-        StyleOp::Remove(id) => draft.remove_instance(*id),
         StyleOp::Param { id, key, value } => draft.set_param(*id, key, value.clone()),
         StyleOp::Blending(op) => op.apply(&mut draft.style.blending),
     }

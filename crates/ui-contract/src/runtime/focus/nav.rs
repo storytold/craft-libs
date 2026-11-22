@@ -168,11 +168,14 @@ impl State {
         self.focus_stop_from(rec, FocusOrigin::Request)
     }
 
-    /// [`focus_stop`](Self::focus_stop) with what moved focus there.
+    /// [`focus_stop`](Self::focus_stop) with what moved focus there. A stop that inherits the focus from a removed one
+    /// is not revealed: nothing chose to show it.
     fn focus_stop_from(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         let key = rec.stop.key();
         let acts = self.enter_stop(rec, origin);
-        self.revealed = Some(key);
+        if origin != FocusOrigin::Removal {
+            self.revealed = Some(key);
+        }
         acts
     }
 

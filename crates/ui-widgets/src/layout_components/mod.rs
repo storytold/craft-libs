@@ -212,6 +212,11 @@ layout_component!(
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
+    ///
+    /// The cells are the grid's craft children. An egui container shown in the body (`ui.horizontal`, an
+    /// `egui::Grid`) is no cell: egui places it below the cells placed so far, and its children are not cells. The
+    /// rows after it are placed over it, since the grid's rows do not count it: show it as the last child, or put it
+    /// in a craft body (`Row`), which takes a cell.
     Grid,
     GridStyleKey,
     []
@@ -323,6 +328,14 @@ impl Row {
     /// Where the block of children sits along the row.
     pub fn align(mut self, align: RowAlign) -> Self {
         self.props.layout = std::mem::replace(&mut self.props.layout, BodyLayout::Stack).align(align);
+        self
+    }
+
+    /// The row's line is at least `points` high, as a child of more than one line that high would make it: the
+    /// children that fill the line's height take at least it. A row of command groups keeps the height of its
+    /// rows of controls while its groups are shorter. Ignored by a row that wraps.
+    pub fn least_height(mut self, points: f32) -> Self {
+        self.props = self.props.least_height(points);
         self
     }
 

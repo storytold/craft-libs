@@ -107,7 +107,7 @@ use crate::contract::{
 use crate::primitives::{EditorPurpose, ImeStamp};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
-use crate::runtime::focus::KeyUse;
+use crate::runtime::focus::{EditSet, KeyUse};
 use crate::runtime::lock_keys;
 use crate::runtime::measure;
 use crate::runtime::motion::{Animate as _, spec};
@@ -217,6 +217,12 @@ pub struct Canvas<'a> {
     /// does not apply. The body reports its editor state through [`ToolPass::editor`].
     #[prop]
     editor: Option<EditorPurpose>,
+    /// Edit commands the canvas's editor part cannot act on right now (for instance Cut and Copy with nothing
+    /// selected, or Undo and Redo with no editor-local history). Applied to [`KeyUse::inactive`] while
+    /// [`editor`](Self::editor) is set: Cut, Copy, Paste and Select All stay the editor's and resolve disabled; Undo
+    /// and Redo fall through to the app command's state. Ignored without [`editor`](Self::editor).
+    #[prop]
+    inactive_edits: EditSet,
     /// The editor part's inputs of this pass, taken once in `update`: `tool_pass` is built from a shared `Cx`.
     editor_input: Arc<[EditorInput]>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
@@ -308,6 +314,7 @@ impl<'a> Canvas<'a> {
             ruler_output: None,
             keys_to_body: false,
             editor: None,
+            inactive_edits: EditSet::NONE,
             editor_input: Arc::from([]),
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
@@ -825,7 +832,7 @@ impl Component for Canvas<'_> {
     /// nudges. It still marks its window as showing a document.
     fn keys(&self) -> KeyUse {
         match self.editor {
-            Some(_) => KeyUse::of(Input::Editor).with_chrome_key(true).with_moves(),
+            Some(_) => KeyUse::of(Input::Editor).with_chrome_key(true).with_moves().with_inactive(self.inactive_edits),
             None => Self::KEYS,
         }
     }

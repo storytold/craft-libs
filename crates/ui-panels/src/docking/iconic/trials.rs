@@ -429,3 +429,57 @@ fn icon_groups_take_the_drops_of_an_expanded_columns_groups() {
     assert_eq!(found[3], Some(DockSpot::group(3, DockSide::Center)), "a one-icon group keeps its middle for the join");
     assert_eq!(found[4], Some(DockSpot::group(3, DockSide::Bottom)), "the foot under the icons stacks below the last group");
 }
+
+/// The ticks of a grip strip in `shapes`: the quads of the one mesh that lies inside `strip`, and their colour.
+pub(crate) fn grip_ticks(shapes: &[egui::Shape], strip: Rect) -> Option<(Vec<Rect>, egui::Color32)> {
+    shapes.iter().find_map(|shape| {
+        let egui::Shape::Mesh(mesh) = shape else { return None };
+        let quads: Vec<Rect> = mesh.vertices.chunks(4).map(|quad| Rect::from_points(&quad.iter().map(|v| v.pos).collect::<Vec<_>>())).collect();
+        let inside = !quads.is_empty() && quads.iter().all(|quad| strip.expand(0.01).contains_rect(*quad));
+        inside.then(|| (quads, mesh.vertices.first().map_or(egui::Color32::TRANSPARENT, |v| v.color)))
+    })
+}
+
+/// Checks the ticks of a grip strip: ten upright marks, one point wide, four tall, one point apart, centred on the
+/// strip and darker than the panel `panel`.
+pub(crate) fn assert_grip_ticks(ticks: &[Rect], ink: egui::Color32, strip: Rect, panel: craft_theme::Rgba, what: &str) {
+    assert_eq!(ticks.len(), 10, "{what}: ten ticks: {ticks:?}");
+    for tick in ticks {
+        assert!((tick.width() - 1.0).abs() < 0.01 && (tick.height() - 4.0).abs() < 0.01, "{what}: a tick is 1 x 4 points: {tick:?}");
+    }
+    assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - 1.0).abs() < 0.01), "{what}: one point apart: {ticks:?}");
+    let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+    assert!((run.center().x - strip.center().x).abs() <= 0.5, "{what}: centred across the strip: {run:?} in {strip:?}");
+    assert!((run.center().y - strip.center().y).abs() <= 0.5, "{what}: centred in the strip's height: {run:?} in {strip:?}");
+    let [r, g, b, _] = panel.0;
+    assert!(ink.r() < r && ink.g() < g && ink.b() < b && ink.r() >= r / 2, "{what}: the ticks are a little darker than the panel {panel:?}: {ink:?}");
+}
+
+/// The grip above each icon group is the references' row of upright ticks, not a line: ten separate marks a little
+/// darker than the panel, the same under the pointer.
+#[trial]
+fn a_groups_grip_is_a_row_of_upright_ticks_darker_than_the_panel() {
+    let mut fixture =
+        Fixture::hosted(|ui| {
+            let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
+            column.iconic = true;
+            let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+            let output = IconicColumn::new("Panels", global("iconic column", "ticks"), &column, Bind::kept(), &named)
+                .within(screen())
+                .show_flyouts_at(ui, place, |_, _, _, _| None);
+            Some(output.into())
+        });
+    fixture.room(SCREEN).settle();
+    let id = fixture.root_id().expect("the column shows");
+    let panel = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.surface.panel);
+    for group in [0, 1] {
+        let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip");
+        let shapes = fixture.frame_shapes();
+        let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
+        assert_grip_ticks(&ticks, ink, strip, panel, &format!("group {group}"));
+        fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
+        let hovered = fixture.frame_shapes();
+        let (_, hover_ink) = grip_ticks(&hovered, strip).expect("the grip paints its ticks under the pointer");
+        assert_eq!(hover_ink, ink, "group {group}: the ticks keep their ink under the pointer");
+    }
+}

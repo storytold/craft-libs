@@ -65,8 +65,8 @@ pub(crate) struct Shown {
     pub content: f32,
 }
 
-/// Runs the widget at `edit.rect`.
-pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
+/// Runs the widget at `edit.rect`, under `env`, the env of the `Ui` the caller shows the field in.
+pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) -> Shown {
     let Edit {
         id,
         rect,
@@ -93,7 +93,6 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         scroll,
     } = edit;
     // The same font and optical size as a label of the same role: one text path.
-    let env = crate::runtime::env::Env::of(ui);
     let tokens = &env.tokens;
     // Behind selected text and the selected text itself: the field's roles.
     let selection = (tokens.color.accent.soft, tokens.color.text.normal);
@@ -177,7 +176,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
             super::style::disable_without_fade(ui);
         }
         // The placeholder is the faint text colour, the disabled one when the field is off.
-        let text_colors = &crate::runtime::env::Env::of(ui).tokens.color.text;
+        let text_colors = &tokens.color.text;
         super::style::set_hint_color(ui, crate::style::rgba_color(if enabled { text_colors.faint } else { text_colors.disabled }));
         super::style::set_text_cursor(ui, caret_visible);
         super::style::set_text_selection(ui, crate::style::rgba_color(selection.0), crate::style::rgba_color(selection.1));
