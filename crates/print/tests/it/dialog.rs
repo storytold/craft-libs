@@ -344,6 +344,34 @@ fn a_sheet_of_pages_places_each_page_inside_the_paper() {
     assert!(!number.clip.contains(reach), "the overhang past the paper is not shown");
 }
 
+/// The paper of a sheet of pages is one white sheet in every theme, so the gaps between its pages are paper, not the
+/// dark of a dark theme.
+#[trial]
+fn the_paper_of_a_sheet_is_white_in_a_dark_theme() {
+    use craft_theme::{Contrast, Mode};
+    let mut settings = Settings::default();
+    let mut fields = DialogFields::default();
+    let printers = vec![Printer::new("Office")];
+    let page = |at: f32| SheetPage::new([pos2(at, 100.0), pos2(at + 200.0, 100.0), pos2(at + 200.0, 400.0), pos2(at, 400.0)], "1");
+    let mut fixture = Fixture::new(move |ui| {
+        let sheet = PrintSheet::pages(LETTER, vec![page(50.0), page(300.0)], "Letter".into());
+        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture.theme(Mode::Dark, Contrast::Standard).settle();
+    let room = fixture.by_label("Print preview image").expect("the preview is in the access tree").rect;
+    let scale = (room.width() / LETTER.x).min(room.height() / LETTER.y);
+    let origin = room.center() - LETTER * scale / 2.0;
+    let gap = origin + vec2(275.0, 250.0) * scale;
+    let shapes = fixture.frame_shapes();
+    let fill_at_gap = shapes.iter().rev().find_map(|shape| match shape {
+        Shape::Rect(rect) if rect.rect.contains(gap) && rect.fill != Color32::TRANSPARENT => Some(rect.fill),
+        Shape::Mesh(mesh) if mesh.calc_bounds().contains(gap) && mesh.texture_id == TextureId::default() => mesh.vertices.first().map(|v| v.color),
+        _ => None,
+    });
+    assert_eq!(fill_at_gap, Some(Color32::WHITE), "the gap between two pages is white paper");
+}
+
 /// A message standing in for the sheet is read out as text where it is painted, inside the preview.
 #[trial]
 fn a_message_in_place_of_the_sheet_is_in_the_access_tree() {

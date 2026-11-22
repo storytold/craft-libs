@@ -508,7 +508,9 @@ impl Component for PrintPreview<'_> {
         {
             let painter = ui.content_painter(cx);
             painter.surface(cx.rect, SurfaceKind::Well, Corners::None);
-            painter.surface(paper, SurfaceKind::Canvas, Corners::None);
+            // Paper is white in every theme: the pages' own pictures are white pages, and the gaps between them are paper.
+            // design: allow[raw-colour/const](the colour of printed paper, not of the interface)
+            painter.data_shapes([Shape::rect_filled(paper, 0.0, Color32::WHITE)]);
         }
         // The box the marks stand around: the image box, or the pages' extent.
         let marked = match &sheet.content {
