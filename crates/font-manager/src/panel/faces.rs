@@ -2,9 +2,9 @@
 //! them a few per pass, keeps the ones on screen and wakes the UI while one loads.
 
 use craft_i18n::{Direction, base_direction};
+use craft_theme::Srgba;
 use craft_ui::fonts::{FaceBytes, FontRef};
 use craft_ui::primitives::{ContentPainterCx, DocRun, DocText, FacesCx};
-use craft_theme::Srgba;
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect};
 

@@ -389,15 +389,7 @@ fn filter_chips(
 /// The sample of a family row: `text` in the regular face of `family` at `points`, named "{shown}: {text}" as the font
 /// manager names its samples, so the row keeps the family's name to itself; no face for a family the catalog
 /// lacks. `on_white` sets it in black on a white paper, in every theme.
-fn sample<'a>(
-    catalog: &'a Catalog,
-    infos: &'a FamilyInfos,
-    family: &str,
-    shown: &str,
-    text: String,
-    points: f32,
-    on_white: bool,
-) -> FontSample<'a> {
+fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, shown: &str, text: String, points: f32, on_white: bool) -> FontSample<'a> {
     let face =
         infos.families.get(family).map_or(SampleFace::Missing, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
     FontSample::new(format!("{shown}: {text}"), text, face, points).on_white(on_white)
