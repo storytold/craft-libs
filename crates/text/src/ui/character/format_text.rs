@@ -339,7 +339,8 @@ impl<'a> FormatText<'a> {
             Row::new().gap(Gap::Tight).show(ui, |ui, _| {
                 let size = LengthRow {
                     label: cw.size.clone(),
-                    side: mark(GlyphLabel::text("tT"), None, FieldLayout::Inside),
+                    // Production's size field carries no glyph: the room goes to its value ("Mixed", "14 pt").
+                    side: SideLabel::new().kind(LabelKind::Hidden).layout(FieldLayout::Beside),
                     value: character.size,
                     range: size_range.clone(),
                     presets: &size_presets,
