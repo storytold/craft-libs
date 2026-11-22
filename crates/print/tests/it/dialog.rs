@@ -441,3 +441,40 @@ fn the_paper_box_is_taken_once() {
     fixture.idle(2);
     assert_eq!(on_print(&host, HostedPrint::take_paper_px).flatten(), first, "the next drawn pass files it again");
 }
+
+/// The page quads of a one-page sheet shown over `settings`.
+fn page_tint(settings: Settings) -> Color32 {
+    let made = Rc::new(Cell::new(None::<TextureId>));
+    let seen = Rc::clone(&made);
+    let mut settings = settings;
+    let mut fields = DialogFields::default();
+    let printers = vec![Printer::new("Office")];
+    let mut fixture = Fixture::new(move |ui| {
+        let texture = picture(ui).id;
+        seen.set(Some(texture));
+        let whole = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+        let page = SheetPage::new([pos2(72.0, 72.0), pos2(300.0, 72.0), pos2(300.0, 400.0), pos2(72.0, 400.0)], "1").picture(texture, whole);
+        let sheet = PrintSheet::pages(LETTER, vec![page], "Letter".into());
+        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture.settle();
+    let texture = made.get().expect("the page picture was made");
+    fixture
+        .frame_shapes()
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Mesh(mesh) if mesh.texture_id == texture => mesh.vertices.first().map(|vertex| vertex.color),
+            _ => None,
+        })
+        .expect("the page is painted as a textured quad")
+}
+
+/// The preview of a job set to print in grayscale tints the page pictures grey, as production's does; a colour job
+/// leaves the pictures' own colours.
+#[trial]
+fn the_preview_tints_the_pages_of_a_grayscale_job() {
+    assert_eq!(page_tint(Settings::default()), Color32::WHITE, "a colour job shows the pictures as they are");
+    let tint = page_tint(Settings { grayscale: true, ..Settings::default() });
+    assert!(tint.r() == tint.g() && tint.g() == tint.b() && tint.r() < 250 && tint.r() > 150, "a grayscale job tints the pictures grey: {tint:?}");
+}

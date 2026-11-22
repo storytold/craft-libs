@@ -337,14 +337,19 @@ pub(super) struct PrintPreviewStyle {
     ink: StyleColor,
 }
 
+/// What a grayscale job's pictures are multiplied by: the light grey of production's preview. The vertex colour only
+/// scales the picture's channels; the picture itself is rendered grey by the app.
+// design: allow[raw-colour/const](the tint of printed paper in grayscale, not of the interface)
+const GRAYSCALE_TINT: Color32 = Color32::from_gray(235);
+
 /// The textured quad of a page: `corners` (screen points) are the picture's top-left, top-right, bottom-right and
 /// bottom-left, paired in that order with `uv`'s corners, so a turned placement turns the picture with it.
-fn page_quad(texture: TextureId, corners: [Pos2; 4], uv: Rect) -> Mesh {
+fn page_quad(texture: TextureId, corners: [Pos2; 4], uv: Rect, tint: Color32) -> Mesh {
     let mut mesh = Mesh::with_texture(texture);
     let uvs = [uv.left_top(), uv.right_top(), uv.right_bottom(), uv.left_bottom()];
     for (pos, uv) in corners.into_iter().zip(uvs) {
         // White leaves the picture's own colours: the vertex colour multiplies the texture.
-        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: tint });
     }
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
@@ -360,10 +365,10 @@ fn centred_text(painter: &ContentPainterCx<'_>, run: &TextRun<'_>, centre: Pos2,
 }
 
 /// Paints `page` at `place`: its picture as a textured quad, or a stand-in with its number centred.
-fn paint_page(painter: &ContentPainterCx<'_>, style: &PrintPreviewStyle, place: Placement, page: &SheetPage) {
+fn paint_page(painter: &ContentPainterCx<'_>, style: &PrintPreviewStyle, place: Placement, page: &SheetPage, tint: Color32) {
     let corners = page.corners.map(|corner| place.point(corner));
     match page.picture {
-        Some(texture) => painter.data_shapes([Shape::mesh(page_quad(texture, corners, page.uv))]),
+        Some(texture) => painter.data_shapes([Shape::mesh(page_quad(texture, corners, page.uv, tint))]),
         None => {
             painter.data_shapes([Shape::mesh(fill_polygon(&corners, style.stand_in.egui(), 0.0))]);
             let centre = Pos2::ZERO + corners.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
@@ -384,14 +389,27 @@ pub(super) struct PrintPreview<'a> {
     sheet: &'a PrintSheet,
     /// The image box's top-left corner on the paper, in paper points.
     position: Bind<'a, Pos2>,
+    /// The job prints in grayscale: the pictures are tinted grey.
+    grayscale: bool,
 }
 
 impl<'a> PrintPreview<'a> {
     pub(super) fn new(label: impl Into<Label>, sheet: &'a PrintSheet, position: Bind<'a, Pos2>) -> Self {
-        PrintPreview { common: Common::new(), sheet, position }.label(label)
+        PrintPreview { common: Common::new(), sheet, position, grayscale: false }.label(label)
     }
 
     /// The paper fitted in `room`, centred; none while the paper has no area.
+    /// The preview of a job that prints in grayscale (`on`): the pictures stand tinted grey, as production's do.
+    pub(super) fn grayscale(mut self, on: bool) -> Self {
+        self.grayscale = on;
+        self
+    }
+
+    /// The colour the pictures are multiplied by.
+    fn tint(&self) -> Color32 {
+        if self.grayscale { GRAYSCALE_TINT } else { Color32::WHITE }
+    }
+
     fn place(&self, room: Rect) -> Option<Placement> {
         let paper = self.sheet.paper;
         if !(paper.x > 0.0 && paper.y > 0.0) {
@@ -504,6 +522,7 @@ impl Component for PrintPreview<'_> {
             return;
         }
         let Some(place) = self.place(cx.rect) else { return };
+        let tint = self.tint();
         let paper = place.rect(Rect::from_min_size(Pos2::ZERO, sheet.paper));
         {
             let painter = ui.content_painter(cx);
@@ -523,7 +542,7 @@ impl Component for PrintPreview<'_> {
                         pos2((visible.min.x - image.min.x) / image.width(), (visible.min.y - image.min.y) / image.height()),
                         pos2((visible.max.x - image.min.x) / image.width(), (visible.max.y - image.min.y) / image.height()),
                     );
-                    ui.content_painter(cx).picture(picture.id, visible, uv, 0.0);
+                    ui.content_painter(cx).data_shapes([Shape::mesh(page_quad(picture.id, [visible.left_top(), visible.right_top(), visible.right_bottom(), visible.left_bottom()], uv, tint))]);
                 }
                 Some(image)
             }
@@ -532,7 +551,7 @@ impl Component for PrintPreview<'_> {
                 ui.clipped(paper, |ui| {
                     let painter = ui.content_painter(cx);
                     for page in pages {
-                        paint_page(&painter, style, place, page);
+                        paint_page(&painter, style, place, page, tint);
                     }
                 });
                 let corners = pages.iter().flat_map(|page| page.corners.map(|corner| place.point(corner)));
@@ -790,6 +809,7 @@ impl<'a> PrintDialog<'a> {
         let env = Env::of(ui);
         let words = env.words::<PrintDialogWords>();
         let document = layout == PrintLayout::Document;
+        let grayscale = matches!(settings.reborrow().get(), Some(Mixed::Same(Settings { grayscale: true, .. })));
         let to_file = matches!(settings.reborrow().get(), Some(Mixed::Same(Settings { destination: Destination::File, .. })));
         let title = if document { words.title_document.clone() } else { words.title.clone() };
         let ok = if document && to_file { env.words::<PrintWords>().save_as_pdf.clone() } else { words.print.clone() };
@@ -852,7 +872,7 @@ impl<'a> PrintDialog<'a> {
             // The sheet preview, the pager under it in the `Document` layout, the readout and the notes.
             let mut sheet_column = |ui: &mut Ui| {
                 let position = sheet.image_box().map_or(Pos2::ZERO, |image| image.min);
-                let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).show(ui);
+                let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).grayscale(grayscale).show(ui);
                 moved.extend(preview.edit.events);
                 paper_px = preview.paper_px;
                 let mut step = None;
