@@ -72,6 +72,9 @@ pub enum ParamKind {
         options: Vec<(String, Label)>,
         /// The id selected when nothing is remembered; `None` selects the first option.
         default: Option<String>,
+        /// Where the list draws a separator line: before each of these option indices, in ascending order. A separator
+        /// is not an option, so it is never a value. Add one with [`ParamKind::separator_after`].
+        separators: Vec<usize>,
     },
     /// A group of radio buttons over `(id, label)` options; the field holds the id. The row is its own section, titled
     /// by the parameter's label, so it needs no `Param::section` before it.
@@ -204,7 +207,21 @@ impl ParamKind {
 
     /// A select of `(id, label)` options.
     pub fn choice(options: Vec<(String, Label)>, default: Option<String>) -> Self {
-        ParamKind::Choice { options, default }
+        ParamKind::Choice { options, default, separators: Vec::new() }
+    }
+
+    /// A [`ParamKind::Choice`] with a separator line after the option `id`. Nothing changes for another kind, an
+    /// unknown id or the last option, since a separator only goes between two options.
+    #[must_use]
+    pub fn separator_after(mut self, id: &str) -> Self {
+        if let ParamKind::Choice { options, separators, .. } = &mut self
+            && let Some(at) = options.iter().position(|(option, _)| option == id).map(|at| at + 1)
+            && at < options.len()
+            && let Err(slot) = separators.binary_search(&at)
+        {
+            separators.insert(slot, at);
+        }
+        self
     }
 
     /// A group of radio buttons over `(id, label)` options, in a section of its own titled by the parameter's label.
@@ -275,7 +292,7 @@ impl ParamKind {
             ParamKind::Int { default, .. } => FieldValue::Int(*default),
             ParamKind::Number { default, .. } => FieldValue::Number(*default),
             ParamKind::Bool { default } => FieldValue::Bool(*default),
-            ParamKind::Choice { options, default } | ParamKind::Radio { options, default } => {
+            ParamKind::Choice { options, default, .. } | ParamKind::Radio { options, default } => {
                 let initial = default.as_deref().or_else(|| options.first().map(|(id, _)| id.as_str()));
                 FieldValue::Text(initial.unwrap_or_default().to_owned())
             }

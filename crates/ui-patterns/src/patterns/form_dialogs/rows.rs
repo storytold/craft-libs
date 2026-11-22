@@ -433,7 +433,7 @@ impl<'p> Pass<'p> {
             ParamKind::Number { min, max, step, decimals, .. } => self.number(ui, line, bounds(*min, *max), *step, *decimals),
             ParamKind::Int { min, max, .. } => self.int(ui, line, *min, *max),
             ParamKind::Bool { default } => self.check(ui, line, *default),
-            ParamKind::Choice { options, .. } => self.choice(ui, line, options),
+            ParamKind::Choice { options, separators, .. } => self.choice(ui, line, options, separators),
             ParamKind::Radio { options, .. } => self.radio_options(ui, line, options),
             ParamKind::Angle { default, min, max, decimals } => self.angle(ui, line, *default, *min..=*max, *decimals),
             ParamKind::Color { .. } => self.color(ui, line),
@@ -625,10 +625,16 @@ impl<'p> Pass<'p> {
         }
     }
 
-    fn choice(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
+    /// A select of the options, with a separator line before each option index in `separators`.
+    fn choice(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)], separators: &[usize]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
-        let entries: Vec<Entry<String>> =
-            options.iter().map(|(id, label)| Entry::new(id.clone(), label.clone()).enabled(line.param.option_enabled(id))).collect();
+        let mut entries: Vec<Entry<String>> = Vec::with_capacity(options.len() + separators.len());
+        for (at, (id, label)) in options.iter().enumerate() {
+            if at > 0 && separators.contains(&at) {
+                entries.push(Entry::separator());
+            }
+            entries.push(Entry::new(id.clone(), label.clone()).enabled(line.param.option_enabled(id)));
+        }
         let searchable = line.param.option().searchable();
         line.show(ui, |ui| {
             let mut select = Select::new(line.name.clone(), Bind::given(value.clone()), &entries);

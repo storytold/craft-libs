@@ -544,3 +544,85 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
         }
     }
 }
+
+/// The Fill dialog's Contents list (#14643): three groups of options.
+fn contents() -> ParamKind {
+    let options = ["foreground", "background", "color", "contentAware", "pattern", "history", "black", "gray", "white"];
+    ParamKind::choice(options.iter().map(|id| ((*id).to_owned(), Label::from((*id).to_owned()))).collect(), None)
+}
+
+/// Separators are lines between the options: they go after the named options only, never before the first or after
+/// the last, and a plain choice has none.
+#[trial]
+fn choice_separators_go_between_the_named_options() {
+    let kind = contents().separator_after("color").separator_after("history").separator_after("color");
+    let ParamKind::Choice { separators, .. } = &kind else { panic!("a choice") };
+    assert_eq!(separators, &[3, 6], "before contentAware and black, once each");
+
+    assert_eq!(contents().separator_after("white").separator_after("nothing"), contents(), "no separator after the last or an unknown option");
+    assert_eq!(ParamKind::bool(true).separator_after("color"), ParamKind::bool(true), "another kind is unchanged");
+    let ParamKind::Choice { separators, .. } = &Param::parse_list(r#"{"method":"spin|zoom"}"#)[0].kind else { panic!("a choice") };
+    assert!(separators.is_empty(), "a parsed choice has no separator");
+}
+
+/// A separator holds no value: the options' ids are the only values a choice fits, and its default is unchanged.
+#[trial]
+fn a_choice_separator_is_never_a_value() {
+    let kind = contents().separator_after("color").separator_after("history");
+    assert_eq!(kind.default_value(), contents().default_value());
+    for id in ["foreground", "color", "contentAware", "white"] {
+        assert!(kind.fits(&FieldValue::Text(id.into())), "{id} is a value");
+    }
+    for not_an_option in ["", "-", "separator", "3"] {
+        assert!(!kind.fits(&FieldValue::Text(not_an_option.into())), "{not_an_option:?} is not a value");
+    }
+}
+
+/// The open list draws a separator after Color and after History: the gap above contentAware and above black is wider
+/// than the gap between two options of a group. The closed list's Down steps from color straight to contentAware.
+#[trial]
+fn choice_separators_show_in_the_list_and_take_no_pick() {
+    let gaps = |kind: ParamKind| {
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let params = vec![Param::new("contents", "Contents", kind)];
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+        });
+        fixture.room(Vec2::new(800.0, 800.0)).settle();
+        let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the contents field shows");
+        fixture.click(&field);
+        fixture.idle(3);
+        let tops: Vec<f32> = ["foreground", "background", "color", "contentAware", "pattern", "history", "black", "gray", "white"]
+            .iter()
+            .map(|id| fixture.by_label(id).unwrap_or_else(|| panic!("the list shows {id}")).rect.top())
+            .collect();
+        tops.windows(2).map(|pair| pair[1] - pair[0]).collect::<Vec<f32>>()
+    };
+    let plain = gaps(contents());
+    assert!(plain.iter().all(|gap| (gap - plain[0]).abs() < 0.5), "a plain choice spaces its options evenly: {plain:?}");
+    let grouped = gaps(contents().separator_after("color").separator_after("history"));
+    for (at, gap) in grouped.iter().enumerate() {
+        if at == 2 || at == 5 {
+            assert!(*gap > plain[0] + 0.5, "a separator widens the gap after option {at}: {grouped:?}");
+        } else {
+            assert!((gap - plain[0]).abs() < 0.5, "no separator after option {at}: {grouped:?}");
+        }
+    }
+
+    let values = Rc::new(RefCell::new(DialogFields::from_pairs([("contents", "color")])));
+    let shown = values.clone();
+    let params = vec![Param::new("contents", "Contents", contents().separator_after("color"))];
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    for _ in 0..4 {
+        if fixture.focused_role().is_some_and(|role| role.type_ahead && role.moves) {
+            break;
+        }
+        fixture.key(Key::Tab, Modifiers::NONE).settle();
+    }
+    fixture.key(Key::ArrowDown, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().text("contents"), Some("contentAware"), "Down passes over the separator");
+}
