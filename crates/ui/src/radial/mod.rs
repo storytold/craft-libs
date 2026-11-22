@@ -973,7 +973,7 @@ impl RadialMenu {
                 !opening_pass
                     && after_hold(at)
                     && matches!(e, Event::Key { key: Key::Enter | Key::Space, pressed: true, repeat: false, modifiers, .. }
-                        if modifiers.matches_logically(Modifiers::NONE))
+                        if !modifiers.alt && modifiers.matches_logically(Modifiers::NONE))
             };
             // What Enter or Space does to `target`: an enabled item whose slot holds the command it
             // held in the last pass is picked, and the close button closes the ring.
@@ -985,7 +985,8 @@ impl RadialMenu {
             };
             let hold = hold_key.map(|key| (key, hold_ends.unwrap_or(usize::MAX)));
             // The keys act in the order they came, up to the first that ends the ring: Esc, or
-            // Enter or Space on a target it acts on. Enter or Space acts on the highlight as it is
+            // Enter or Space on a target it acts on, each with no modifier or with Shift; with
+            // Alt, Ctrl or Command they do nothing. Enter or Space acts on the highlight as it is
             // at that press: where Tab and the arrows before it moved it, or else the widget that
             // has focus now. One that does not act leaves the keys after it to act.
             //
@@ -1017,6 +1018,7 @@ impl RadialMenu {
                 // the ring. Repeats after the release come from a new press.
                 let opener_repeat = |key: Key, repeat: bool| repeat && hold.is_some_and(|(k, end)| k == key && n_event < end);
                 if let Event::Key { key: Key::Escape, pressed: true, repeat, modifiers, .. } = e
+                    && !modifiers.alt
                     && modifiers.matches_logically(Modifiers::NONE)
                     && !opener_repeat(Key::Escape, *repeat)
                 {

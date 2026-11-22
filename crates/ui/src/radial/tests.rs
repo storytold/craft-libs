@@ -1108,8 +1108,11 @@ fn only_a_key_the_ring_acts_on_before_the_release_stops_the_flick() {
     // The ring does not take Ctrl+Right, so the release picks before the Esc after it.
     let events = flick_with(press(Key::ArrowRight, Modifiers::CTRL), press(Key::Escape, Modifiers::NONE));
     assert_eq!(events, vec![RadialEvent::Picked("lock".into())]);
-    // Esc with Alt closes the ring before the release.
+    // Nor Esc with Alt.
     let events = flick_with(press(Key::Escape, Modifiers::ALT), press(Key::Enter, Modifiers::NONE));
+    assert_eq!(events, vec![RadialEvent::Picked("lock".into())]);
+    // Esc with Shift closes the ring before the release.
+    let events = flick_with(press(Key::Escape, Modifiers::SHIFT), press(Key::Enter, Modifiers::NONE));
     assert_eq!(events, vec![RadialEvent::Closed]);
 }
 
@@ -1667,6 +1670,21 @@ fn a_key_equal_to_one_before_the_opening_press_and_one_after_counts_as_after() {
     assert_eq!(processed_before(&raw, &[press(Key::Z)], 1), 0);
     assert_eq!(processed_before(&raw, &[press(Key::Z), press(Key::Z)], 1), 1);
     assert_eq!(processed_before(&raw, &raw, 2), 2);
+}
+
+#[test]
+fn enter_space_and_esc_with_alt_do_nothing() {
+    let m = menu();
+    let mut h = harness(items(8));
+    open(&mut h, MIDDLE, false);
+    assert_eq!(focused(&h), Some(m.item_id(0)));
+    for k in [Key::Enter, Key::Space, Key::Escape] {
+        key(&mut h, k, Modifiers::ALT);
+    }
+    assert!(h.state().events.is_empty(), "{:?}", h.state().events);
+    assert!(m.is_open(&h.ctx));
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("copy".into())]);
 }
 
 /// A window whose ring opens on Ctrl+Space, taken as the README shows. `later_keys` counts the
