@@ -177,3 +177,26 @@ fn a_view_box_drag_follows_every_pointer_move_over_a_settling_canvas() {
     let moves = seen.windows(2).filter(|pair| pair[1] > pair[0]).count();
     assert!(moves >= 9, "the canvas follows each of the ten moves: {seen:?} from {:?}", before.center);
 }
+
+/// A Navigator shown over a view that the canvas, its scroll bars or the Hand put past the document (the pasteboard,
+/// with Overscroll on) leaves that view where it is: pulling it back into the document every pass stopped the scroll
+/// bars at the document's edge and ended their drags (photocraft#16328). A move of its own still keeps the centre
+/// inside the document.
+#[trial]
+fn a_view_past_the_document_stays_while_the_navigator_shows_it() {
+    let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+    let past = Point::new(DOCUMENT.width + 300.0, -200.0);
+    let view = Rc::new(Cell::new(CanvasView::new(canvas, past, 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        let _ = Navigator::new("Navigator", Bind::bound(&mut given), DOCUMENT).show(ui);
+        shown.set(given);
+    });
+    fixture.settle();
+    fixture.idle(3);
+    assert_eq!(view.get().center, past, "the Navigator leaves a view past the document where it is");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::Home, Modifiers::NONE);
+    assert_eq!(view.get().center, Point::new(DOCUMENT.width / 2.0, DOCUMENT.height / 2.0), "Home still centres the document");
+}

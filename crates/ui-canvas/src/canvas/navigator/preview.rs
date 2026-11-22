@@ -433,7 +433,11 @@ impl Component for Navigator<'_> {
 
         take_navigation(cx, &mut next, running, document);
 
-        let next = centred(&next, next.center, document);
+        // Only a centre the Navigator moved in this pass is kept inside the document. A view the canvas, its scroll
+        // bars, the Hand or the app put past the document (the pasteboard, with Overscroll on) stays where it is: pulled
+        // back here, every pass, it stopped the scroll bars at the document's edge and ended their drags
+        // (photocraft#16328, photocraft#12025).
+        let next = if next.center == view.center { next } else { centred(&next, next.center, document) };
         if next == view {
             return;
         }
