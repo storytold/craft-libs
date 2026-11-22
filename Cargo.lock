@@ -4594,6 +4594,8 @@ name = "craft-wayland"
 version = "0.1.0"
 dependencies = [
  "raw-window-handle",
+ "wayland-backend",
+ "wayland-client",
 ]
 
 [[package]]
