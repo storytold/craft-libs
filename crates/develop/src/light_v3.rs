@@ -277,17 +277,17 @@ pub struct LightOps {
 /// The fits of Contrast and Blacks, in the order they apply.
 pub const FITS: [&Fit; 2] = [&fitted::CONTRAST, &fitted::BLACKS];
 
-/// Whether `s` renders with the V4 operators: process V4 or later and a raw with its camera's tone
-/// curve (`has_camera_tone`; other sources keep the tone map's own Contrast and Blacks).
-pub fn applies(s: &DevelopSettings, has_camera_tone: bool) -> bool {
-    has_camera_tone && s.process.process() >= Process::V4
+/// Whether `s` renders with the V4 operators: process V4 or later, a raw source, and its camera tone
+/// curve. Other sources keep the tone map's own Contrast and Blacks.
+pub fn applies(s: &DevelopSettings, is_raw: bool, has_camera_tone: bool) -> bool {
+    is_raw && has_camera_tone && s.process.process() >= Process::V4
 }
 
 impl LightOps {
     /// The operators of `s` (see [`applies`]); `None` when they don't apply or every
     /// slider is at 0.
-    pub fn new(s: &DevelopSettings, has_camera_tone: bool) -> Option<LightOps> {
-        if !applies(s, has_camera_tone) {
+    pub fn new(s: &DevelopSettings, is_raw: bool, has_camera_tone: bool) -> Option<LightOps> {
+        if !applies(s, is_raw, has_camera_tone) {
             return None;
         }
         let l = &s.light;
@@ -449,14 +449,15 @@ mod tests {
     }
 
     #[test]
-    fn applies_respects_process_and_camera_tone() {
+    fn applies_respects_process_raw_source_and_camera_tone() {
         let v3 = DevelopSettings { process: Process::V3.version(), ..Default::default() };
         let v4 = DevelopSettings { process: Process::V4.version(), ..Default::default() };
         let v8 = DevelopSettings { process: Process::V8.version(), ..Default::default() };
-        assert!(!applies(&v3, true));
-        assert!(!applies(&v4, false));
-        assert!(applies(&v4, true));
-        assert!(applies(&v8, true));
+        assert!(!applies(&v3, true, true));
+        assert!(!applies(&v4, true, false));
+        assert!(!applies(&v4, false, true));
+        assert!(applies(&v4, true, true));
+        assert!(applies(&v8, true, true));
     }
 
     #[test]
@@ -498,7 +499,7 @@ mod tests {
                 let mut s = DevelopSettings::default();
                 s.light.contrast = contrast;
                 s.light.blacks = blacks;
-                let Some(exact) = LightOps::new(&s, true) else { continue };
+                let Some(exact) = LightOps::new(&s, true, true) else { continue };
                 let preview = PreviewOps::new(&exact, &linear_to_srgb);
                 assert_eq!(preview.is_some(), blacks <= 0.0);
                 for i in 0..=8192 {

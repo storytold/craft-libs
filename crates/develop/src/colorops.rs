@@ -56,12 +56,8 @@ pub fn luminance_2020(c: [f32; 3]) -> f32 {
 pub fn oklch_hue_of_srgb_hue(deg: f64) -> f32 {
     let c = hsv_to_rgb(deg as f32, 1.0, 1.0);
     let lin = c.map(srgb_to_linear);
-    let m = SRGB.to_space(&REC2020).to_f32();
-    let rec = [
-        m[0][0] * lin[0] + m[0][1] * lin[1] + m[0][2] * lin[2],
-        m[1][0] * lin[0] + m[1][1] * lin[1] + m[1][2] * lin[2],
-        m[2][0] * lin[0] + m[2][1] * lin[1] + m[2][2] * lin[2],
-    ];
+    // Match LightCraft's matrix precision: round only after the full transform.
+    let rec = SRGB.to_space(&REC2020).apply(lin.map(f64::from)).map(|v| v as f32);
     lab_to_lch(oklab_from_2020(rec))[2]
 }
 
@@ -349,7 +345,8 @@ pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
 pub const SHADOW_TINT: f32 = 0.3;
 
 /// Calibration in scene-linear light (before tone mapping): the primaries matrix, then the shadows
-/// tint (green ↔ magenta, weighted towards dark tones, luminance kept).
+/// tint (green ↔ magenta, weighted towards dark tones, luminance kept). Skip tint when either
+/// luminance is nonpositive so negative scene-linear samples cannot be inverted or amplified.
 #[inline]
 pub fn calibrate(c: [f32; 3], m: Option<&[[f32; 3]; 3]>, shadow_tint: f32) -> [f32; 3] {
     let mut c = c;
@@ -358,10 +355,14 @@ pub fn calibrate(c: [f32; 3], m: Option<&[[f32; 3]; 3]>, shadow_tint: f32) -> [f
     }
     if shadow_tint != 0.0 {
         let y0 = luminance_2020(c);
-        let w = 1.0 - smooth(-5.0, -0.5, (y0.max(1e-7) / 0.18).log2());
-        c[1] *= (1.0 - SHADOW_TINT * shadow_tint * w).max(0.0);
-        let y1 = luminance_2020(c).max(1e-9);
-        c = c.map(|v| v * y0 / y1);
+        if y0 > 0.0 {
+            let w = 1.0 - smooth(-5.0, -0.5, (y0.max(1e-7) / 0.18).log2());
+            let tinted = [c[0], c[1] * (1.0 - SHADOW_TINT * shadow_tint * w).max(0.0), c[2]];
+            let y1 = luminance_2020(tinted);
+            if y1 > 0.0 {
+                c = tinted.map(|v| v * y0 / y1.max(1e-9));
+            }
+        }
     }
     c
 }
@@ -455,6 +456,28 @@ mod tests {
         assert!((y(dark) - 0.01).abs() < 1e-5);
         let green = calibrate([0.01, 0.01, 0.01], None, -1.0);
         assert!(green[1] > green[0]);
+    }
+
+    #[test]
+    fn shadow_tint_skips_nonpositive_luminance_before_or_after_tint() {
+        let negative = [-0.01; 3];
+        assert_eq!(calibrate(negative, None, 1.0), negative);
+
+        // Positive before adjustment, negative after a full green reduction.
+        let mixed = [-0.006, 0.003, 0.0];
+        assert!(luminance_2020(mixed) > 0.0);
+        assert!(luminance_2020([mixed[0], mixed[1] * 0.7, mixed[2]]) < 0.0);
+        assert_eq!(calibrate(mixed, None, 1.0), mixed);
+    }
+
+    #[test]
+    fn hue_anchors_match_f64_matrix_accumulation() {
+        let matrix = SRGB.to_space(&REC2020).0;
+        for deg in (0..360).map(f64::from).chain(MIXER_HUES) {
+            let lin = hsv_to_rgb(deg as f32, 1.0, 1.0).map(srgb_to_linear).map(f64::from);
+            let rec = matrix.map(|r| (r[0] * lin[0] + r[1] * lin[1] + r[2] * lin[2]) as f32);
+            assert_eq!(oklch_hue_of_srgb_hue(deg), lab_to_lch(oklab_from_2020(rec))[2], "hue {deg}");
+        }
     }
 
     #[test]
