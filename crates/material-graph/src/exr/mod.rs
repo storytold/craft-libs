@@ -1,8 +1,8 @@
-//! OpenEXR read/write for the subset the app uses: single-part scanline images with HALF, FLOAT or UINT
-//! channels (no subsampling). Writes NONE, ZIPS or ZIP compression; reads those plus RLE.
+//! OpenEXR read/write for single-part scanline images with HALF, FLOAT or UINT channels at full resolution.
+//! Writes NONE, ZIPS or ZIP compression and also reads RLE.
 //!
 //! ```
-//! use texturecraft_graph::exr::{self, ExrChannel, ExrImage, SampleKind};
+//! use craft_material_graph::exr::{self, ExrChannel, ExrImage, SampleKind};
 //! let img = ExrImage { width: 2, height: 1, channels: vec![ExrChannel::new("R", SampleKind::Half, vec![0.5, 4.0])] };
 //! let back = exr::decode(&exr::encode(&img).unwrap()).unwrap();
 //! assert_eq!(back, img);

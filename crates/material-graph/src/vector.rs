@@ -891,27 +891,7 @@ pub fn render_svg(src: &str, w: usize, h: usize, fit: u32, scale: f32, dx: f32, 
             }
             // the stack keeps its base entry: closing tags never pop it
             let Some((mut st, mut xf)) = stack.last().cloned() else { continue };
-            for (k, v) in &t.attrs {
-                if k == "style" {
-                    for decl in v.split(';') {
-                        if let Some((kk, vv)) = decl.split_once(':') {
-                            apply_style(&mut st, kk.trim(), vv);
-                        }
-                    }
-                } else if k == "transform" {
-                    xf = parse_transform(v).then(xf);
-                } else {
-                    apply_style(&mut st, k, v);
-                }
-            }
-            // style="" must win over presentation attributes: apply it again last
-            if let Some((_, v)) = t.attrs.iter().find(|(k, _)| k == "style") {
-                for decl in v.split(';') {
-                    if let Some((kk, vv)) = decl.split_once(':') {
-                        apply_style(&mut st, kk.trim(), vv);
-                    }
-                }
-            }
+            apply_tag_style(t, &mut st, &mut xf);
             let segs = shape_segs(t);
             if !segs.is_empty() {
                 let polys = flatten(&segs, &xf);
@@ -948,6 +928,30 @@ pub fn render_svg(src: &str, w: usize, h: usize, fit: u32, scale: f32, dx: f32, 
         }
     }
     Ok(out)
+}
+
+fn apply_tag_style(t: &Tag, st: &mut Style, xf: &mut Xf) {
+    for (k, v) in &t.attrs {
+        if k == "style" {
+            for decl in v.split(';') {
+                if let Some((kk, vv)) = decl.split_once(':') {
+                    apply_style(st, kk.trim(), vv);
+                }
+            }
+        } else if k == "transform" {
+            *xf = parse_transform(v).then(*xf);
+        } else {
+            apply_style(st, k, v);
+        }
+    }
+    // style="" must win over presentation attributes: apply it again last
+    if let Some((_, v)) = t.attrs.iter().find(|(k, _)| k == "style") {
+        for decl in v.split(';') {
+            if let Some((kk, vv)) = decl.split_once(':') {
+                apply_style(st, kk.trim(), vv);
+            }
+        }
+    }
 }
 
 fn composite(acc: &mut [[f32; 4]], m: &Mask, c: [f32; 3], opacity: f32) {

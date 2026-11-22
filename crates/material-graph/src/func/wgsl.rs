@@ -234,6 +234,62 @@ fn suffix(lanes: usize) -> Option<&'static str> {
     })
 }
 
+fn sample_binding(
+    sample: u32,
+    input_name: &str,
+    inputs: &[(&str, SampleImage<'_>)],
+    images: &mut Vec<usize>,
+    bindings: &mut Vec<(u32, Option<usize>)>,
+) -> Option<usize> {
+    if let Some((_, binding)) = bindings.iter().find(|(i, _)| *i == sample) {
+        *binding
+    } else {
+        let binding = inputs.iter().position(|(name, _)| *name == input_name).map(|image| {
+            if let Some(slot) = images.iter().position(|&source| source == image) {
+                slot
+            } else {
+                let slot = images.len();
+                images.push(image);
+                slot
+            }
+        });
+        bindings.push((sample, binding));
+        binding
+    }
+}
+
+fn swizzle_expression(v: &str, input: usize, components: &[u8; 4], n: u8) -> Option<String> {
+    let parts = components
+        .iter()
+        .take(n as usize)
+        .map(|&component| match (input, component) {
+            (1, 0) => v.to_owned(),
+            (l, c) if usize::from(c) < l => format!("{v}[{c}u]"),
+            _ => "0.0".to_owned(),
+        })
+        .collect::<Vec<_>>();
+    if n == 1 { parts.into_iter().next() } else { Some(format!("vec{n}f({})", parts.join(", "))) }
+}
+
+fn float_expression(src: u32, src_pin: Pin, lanes: usize) -> String {
+    let mut expr = format!("r{src}");
+    if src_pin == Pin::Bool {
+        expr = format!("select(0.0, 1.0, {expr})");
+    }
+    if src_pin.lanes() == 1 && lanes > 1 {
+        expr = format!("vec{lanes}f({expr})");
+    }
+    expr
+}
+
+fn sample_expression(binding: Option<usize>, filter: u32, grey: bool, coordinates: impl FnOnce() -> Option<String>) -> Option<String> {
+    let read = match binding {
+        Some(binding) => format!("sample_{binding}({}, {filter}u)", coordinates()?),
+        None => "vec4f(0.0)".into(),
+    };
+    Some(if grey { format!("tc_lum({read})") } else { read })
+}
+
 fn expression(
     code: &Code,
     index: usize,
@@ -248,15 +304,7 @@ fn expression(
     let value = |slot: usize| Some(format!("r{}", operand(slot)?));
     let float = |slot: usize, lanes: usize| {
         let src = operand(slot)?;
-        let src_pin = pin(src)?;
-        let mut expr = format!("r{src}");
-        if src_pin == Pin::Bool {
-            expr = format!("select(0.0, 1.0, {expr})");
-        }
-        if src_pin.lanes() == 1 && lanes > 1 {
-            expr = format!("vec{lanes}f({expr})");
-        }
-        Some(expr)
+        Some(float_expression(src, pin(src)?, lanes))
     };
     let lanes = pins.get(index)?.as_ref()?.lanes();
     let input_lanes = |slot| operand(slot).and_then(pin).map_or(1, Pin::lanes);
@@ -285,41 +333,12 @@ fn expression(
         }
         Op::Swizzle => {
             let (components, n) = code.swizzles.get(instruction.x as usize)?.as_ref()?;
-            let v = float(0, 1)?;
-            let input = input_lanes(0);
-            let parts = components
-                .iter()
-                .take(*n as usize)
-                .map(|&component| match (input, component) {
-                    (1, 0) => v.clone(),
-                    (l, c) if usize::from(c) < l => format!("{v}[{c}u]"),
-                    _ => "0.0".to_owned(),
-                })
-                .collect::<Vec<_>>();
-            if *n == 1 { parts.into_iter().next()? } else { format!("vec{n}f({})", parts.join(", ")) }
+            swizzle_expression(&float(0, 1)?, input_lanes(0), components, *n)?
         }
         Op::SampleColor | Op::SampleGray => {
             let info = code.samples.get(instruction.x as usize)?;
-            let binding = if let Some((_, binding)) = bindings.iter().find(|(i, _)| *i == instruction.x) {
-                *binding
-            } else {
-                let binding = inputs.iter().position(|(name, _)| *name == info.slot).map(|image| {
-                    if let Some(slot) = images.iter().position(|&source| source == image) {
-                        slot
-                    } else {
-                        let slot = images.len();
-                        images.push(image);
-                        slot
-                    }
-                });
-                bindings.push((instruction.x, binding));
-                binding
-            };
-            let read = match binding {
-                Some(binding) => format!("sample_{binding}({}, {}u)", float(0, 2)?, info.filter.unwrap_or(1)),
-                None => "vec4f(0.0)".into(),
-            };
-            if instruction.op == Op::SampleGray { format!("tc_lum({read})") } else { read }
+            let binding = sample_binding(instruction.x, &info.slot, inputs, images, bindings);
+            sample_expression(binding, info.filter.unwrap_or(1), instruction.op == Op::SampleGray, || float(0, 2))?
         }
         Op::Clamp => {
             let (a, lo, hi) = (float(0, lanes)?, float(1, lanes)?, float(2, lanes)?);

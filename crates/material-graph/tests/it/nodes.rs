@@ -627,9 +627,9 @@ fn faster_kernels_match_straightforward_references() {
     let t = Tex::from_fn(8, 8, |u, v| [u, v, 0.3, 1.0]);
     let l = ops::levels(&t, 0.2, 0.8, 1.0, 0.1, 0.9);
     let p = t.px[11];
-    for c in 0..3 {
-        let want = 0.1 + 0.8 * ((p[c] - 0.2) / 0.6).clamp(0.0, 1.0);
-        assert!((l.px[11][c] - want).abs() < 1e-5);
+    for (&source, &computed) in p.iter().zip(&l.px[11]).take(3) {
+        let want = 0.1 + 0.8 * ((source - 0.2) / 0.6).clamp(0.0, 1.0);
+        assert!((computed - want).abs() < 1e-5);
     }
 }
 

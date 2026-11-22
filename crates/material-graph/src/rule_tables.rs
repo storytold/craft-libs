@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Runners for the rule tables in `crates/graph/tests/rules/` (see "Rule tables" in `docs/import.md`): each table holds a measured
-//! rule of the compiled format's engine as plain numbers, inputs and expected outputs, so another implementation can run
-//! the same data. The runners here run them against ours. Run them with `cargo test -p texturecraft-graph --lib rule_table_`.
+//! Each table in `tests/rules/` defines the inputs and expected outputs for one rule of the compiled graph format.
+//! Run the table checks with `cargo test -p craft-material-graph --lib rule_table_`.
 
 use crate::lcg_rand::{self, Lcg};
 use crate::tex::Tex;

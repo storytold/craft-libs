@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Constants of the compiled format's engine that more than one module uses, each measured against the reference app.
 //! Every one names the measurement it comes from; the rule tables in
-//! `crates/graph/tests/rules/` hold the rules built on them as plain numbers.
+//! `tests/rules/` hold the rules built on them as plain numbers.
 //!
 //! Constants used in one place only are named where they are used, with their own pointers.
 

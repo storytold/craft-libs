@@ -81,6 +81,34 @@ impl Prog {
         }
     }
 
+    fn eval_loop(&self, n: &PNode, env: &FnEnv, pos: [f64; 2], st: &mut State) -> Result<Value, String> {
+        self.arg(n, 0, env, pos, st)?;
+        let passes = super::loop_passes(&n.num);
+        // every pass reads the variables anew, so nothing computed in the pass before counts
+        for _ in 0..passes {
+            st.epoch += 1;
+            // a condition read back from a variable comes as a number
+            match self.opt_arg(n, 2, env, pos, st)? {
+                Some(Value::Bool(true)) => break,
+                Some(Value::Num(x)) if x.v[0] != 0.0 => break,
+                Some(Value::Str(_)) => return Err("the loop's condition must be a boolean".into()),
+                _ => {}
+            }
+            st.epoch += 1;
+            self.arg(n, 1, env, pos, st)?;
+        }
+        st.epoch += 1;
+        Ok(Value::float(0.0))
+    }
+
+    fn eval_if(&self, n: &PNode, env: &FnEnv, pos: [f64; 2], st: &mut State) -> Result<Value, String> {
+        match self.arg(n, 0, env, pos, st)? {
+            Value::Bool(true) => self.arg(n, 1, env, pos, st),
+            Value::Bool(false) => self.arg(n, 2, env, pos, st),
+            _ => Err("the condition must be a boolean".into()),
+        }
+    }
+
     fn eval_node(&self, n: &PNode, env: &FnEnv, pos: [f64; 2], st: &mut State) -> Result<Value, String> {
         let num = |k: &str| n.num.get(k).copied().unwrap_or(0.0);
         Ok(match n.op {
@@ -119,34 +147,12 @@ impl Prog {
                 let (x, y, z) = (self.arg(n, 0, env, pos, st)?, self.arg(n, 1, env, pos, st)?, self.arg(n, 2, env, pos, st)?);
                 smooth3(&x, &y, &z)?
             }
-            Op::If => match self.arg(n, 0, env, pos, st)? {
-                Value::Bool(true) => self.arg(n, 1, env, pos, st)?,
-                Value::Bool(false) => self.arg(n, 2, env, pos, st)?,
-                _ => return Err("the condition must be a boolean".into()),
-            },
+            Op::If => self.eval_if(n, env, pos, st)?,
             Op::Seq => {
                 self.arg(n, 0, env, pos, st)?;
                 self.arg(n, 1, env, pos, st)?
             }
-            Op::Loop => {
-                self.arg(n, 0, env, pos, st)?;
-                let passes = super::loop_passes(&n.num);
-                // every pass reads the variables anew, so nothing computed in the pass before counts
-                for _ in 0..passes {
-                    st.epoch += 1;
-                    // a condition read back from a variable comes as a number
-                    match self.opt_arg(n, 2, env, pos, st)? {
-                        Some(Value::Bool(true)) => break,
-                        Some(Value::Num(x)) if x.v[0] != 0.0 => break,
-                        Some(Value::Str(_)) => return Err("the loop's condition must be a boolean".into()),
-                        _ => {}
-                    }
-                    st.epoch += 1;
-                    self.arg(n, 1, env, pos, st)?;
-                }
-                st.epoch += 1;
-                Value::float(0.0)
-            }
+            Op::Loop => self.eval_loop(n, env, pos, st)?,
             Op::Set => {
                 let v = self.arg(n, 0, env, pos, st)?;
                 match st.vars.iter_mut().find(|(k, _)| *k == n.name) {
@@ -234,23 +240,7 @@ impl Prog {
             Op::Index => Value::int(env.index),
             Op::Count => Value::int(env.count),
             Op::Seed => Value::int(env.seed as i64),
-            Op::Input | Op::GraphInput => {
-                let pin = type_pin(num("type").round() as i32);
-                let default = {
-                    let g = |k: &str| num(k);
-                    match pin {
-                        Pin::Bool => Value::Bool(g("v") != 0.0),
-                        Pin::Text => Value::text(&n.text),
-                        p if p.lanes() == 1 => coerce(&Value::float(g("v")), p),
-                        p => coerce(&Value::vec(p.lanes() as u8, [g("x"), g("y"), g("z"), g("w")]), p),
-                    }
-                };
-                let from = if n.op == Op::Input { env.args.get(&n.name) } else { env.graph_inputs.get(&n.name) };
-                match from {
-                    Some(v) => coerce(v, pin),
-                    None => default,
-                }
-            }
+            Op::Input | Op::GraphInput => input_value(n, env),
             Op::ToFloat => {
                 let v = self.arg(n, 0, env, pos, st)?;
                 let nn = v.num()?;
@@ -295,5 +285,24 @@ impl Prog {
                 callee.ref_run_budget(&sub_env, pos, st.budget)?
             }
         })
+    }
+}
+
+fn input_value(n: &PNode, env: &FnEnv) -> Value {
+    let num = |k: &str| n.num.get(k).copied().unwrap_or(0.0);
+    let pin = type_pin(num("type").round() as i32);
+    let default = {
+        let g = |k: &str| num(k);
+        match pin {
+            Pin::Bool => Value::Bool(g("v") != 0.0),
+            Pin::Text => Value::text(&n.text),
+            p if p.lanes() == 1 => coerce(&Value::float(g("v")), p),
+            p => coerce(&Value::vec(p.lanes() as u8, [g("x"), g("y"), g("z"), g("w")]), p),
+        }
+    };
+    let from = if n.op == Op::Input { env.args.get(&n.name) } else { env.graph_inputs.get(&n.name) };
+    match from {
+        Some(v) => coerce(v, pin),
+        None => default,
     }
 }

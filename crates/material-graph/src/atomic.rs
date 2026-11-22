@@ -202,6 +202,49 @@ pub(crate) fn pattern_frame(n: &Node) -> crate::patterns::Frame {
     }
 }
 
+fn resident_affine(
+    n: &Node,
+    [w, h]: [usize; 2],
+    size: [usize; 2],
+    tile: [bool; 2],
+    alpha: f32,
+) -> Option<crate::accelerator::FilterOperation<'static>> {
+    use crate::accelerator::FilterOperation;
+    let value = |name, default| n.nums.get(name).copied().unwrap_or(default);
+    let (matrix, offset) = transform_matrix_coordinates(n);
+    let bilinear = value("filter", 1.0) > 0.5;
+    let mip = value("mip", MIP_AUTOMATIC as f32).round() as u32;
+    if transform_matrix_bg(n) != [0.0; 4] || matrix.into_iter().chain(offset).any(|v| !(-16.0..=16.0).contains(&v)) {
+        return None;
+    }
+    // Leave per-axis resampling and repeated doubling to their specialized paths.
+    if bilinear && mip >= MIP_AUTOMATIC_TOO && offset == [0.0; 2] && is_axis_swap(matrix) {
+        let [tw, th] = if matrix[0] == 0.0 { [size[1], size[0]] } else { size };
+        if ((w > tw || h > th) && w * th != h * tw) || (mip == MIP_AUTOMATIC && (w < size[0] || h < size[1])) {
+            return None;
+        }
+    }
+    let [m00, m01, m10, m11] = matrix;
+    let scaled = [m00 * w as f32 / size[0] as f32, m01 * h as f32 / size[0] as f32, m10 * w as f32 / size[1] as f32, m11 * h as f32 / size[1] as f32];
+    let level = transform_mip(mip, scaled);
+    let mip_side = if level == 0 {
+        None
+    } else {
+        let side = w.checked_shr(level).unwrap_or_default();
+        if w != h || side < 2 {
+            return None;
+        }
+        Some(side)
+    };
+    let reduces = math::hypot(scaled[0], scaled[1]).max(math::hypot(scaled[2], scaled[3])) > 1.0;
+    let edge = [mip_side.unwrap_or(w), mip_side.unwrap_or(h)];
+    let edge_fade = if mip < MIP_AUTOMATIC_TOO && level > 0 && reduces { edge } else { [edge[0].max(size[0]), edge[1].max(size[1])] };
+    if alpha != 0.0 && tile != [true; 2] && !affine_covers_image(matrix, offset, size, tile, bilinear.then_some(edge_fade)) {
+        return None;
+    }
+    Some(FilterOperation::Affine { matrix, offset, bilinear, mip_side, edge_fade })
+}
+
 /// The compiled grayscale filter subset that can be evaluated without leaving the GPU.
 pub(crate) fn resident_filter<'a>(
     n: &Node,
@@ -235,41 +278,7 @@ pub(crate) fn resident_filter<'a>(
     }
     let radii = |intensity: f32| [intensity * aspect[0] * w as f32 / INTENSITY_SPAN, intensity * aspect[1] * h as f32 / INTENSITY_SPAN];
     let operation = match n.kind.as_str() {
-        "transform_matrix" => {
-            let (matrix, offset) = transform_matrix_coordinates(n);
-            let bilinear = value("filter", 1.0) > 0.5;
-            let mip = value("mip", MIP_AUTOMATIC as f32).round() as u32;
-            if transform_matrix_bg(n) != [0.0; 4] || matrix.into_iter().chain(offset).any(|v| !(-16.0..=16.0).contains(&v)) {
-                return None;
-            }
-            // Leave per-axis resampling and repeated doubling to their specialized paths.
-            if bilinear && mip >= MIP_AUTOMATIC_TOO && offset == [0.0; 2] && is_axis_swap(matrix) {
-                let [tw, th] = if matrix[0] == 0.0 { [size[1], size[0]] } else { size };
-                if ((w > tw || h > th) && w * th != h * tw) || (mip == MIP_AUTOMATIC && (w < size[0] || h < size[1])) {
-                    return None;
-                }
-            }
-            let [m00, m01, m10, m11] = matrix;
-            let scaled =
-                [m00 * w as f32 / size[0] as f32, m01 * h as f32 / size[0] as f32, m10 * w as f32 / size[1] as f32, m11 * h as f32 / size[1] as f32];
-            let level = transform_mip(mip, scaled);
-            let mip_side = if level == 0 {
-                None
-            } else {
-                let side = w.checked_shr(level).unwrap_or_default();
-                if w != h || side < 2 {
-                    return None;
-                }
-                Some(side)
-            };
-            let reduces = math::hypot(scaled[0], scaled[1]).max(math::hypot(scaled[2], scaled[3])) > 1.0;
-            let edge = [mip_side.unwrap_or(w), mip_side.unwrap_or(h)];
-            let edge_fade = if mip < MIP_AUTOMATIC_TOO && level > 0 && reduces { edge } else { [edge[0].max(size[0]), edge[1].max(size[1])] };
-            if alpha != 0.0 && tile != [true; 2] && !affine_covers_image(matrix, offset, size, tile, bilinear.then_some(edge_fade)) {
-                return None;
-            }
-            FilterOperation::Affine { matrix, offset, bilinear, mip_side, edge_fade }
-        }
+        "transform_matrix" => resident_affine(n, [w, h], size, tile, alpha)?,
         "laplacian_sharpen" => {
             let weights = aspect.map(|axis| value("intensity", SHARPEN_DEFAULT_INTENSITY) * axis);
             if !weights.into_iter().all(f32::is_finite) {

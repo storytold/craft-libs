@@ -258,6 +258,32 @@ struct Inst {
     on: bool,
 }
 
+fn tile_visible(i: i32, j: i32, mask: Option<f32>, p: &TileP) -> bool {
+    let mut keep = true;
+    if let Some(m) = mask {
+        keep = if p.mask_invert { m < p.thresh } else { m >= p.thresh };
+    }
+    let mut proc_keep = true;
+    if p.mask_random > 0.0 && rnd(i, j, p.seed.wrapping_add(31)) < p.mask_random {
+        proc_keep = false;
+    }
+    match p.mask_checker {
+        1 => proc_keep &= ((i + j) & 1) == 0,
+        2 => proc_keep &= ((i + j) & 1) == 1,
+        _ => {}
+    }
+    if p.mask_h {
+        proc_keep &= (i & 1) == 0;
+    }
+    if p.mask_v {
+        proc_keep &= (j & 1) == 0;
+    }
+    if p.invert_mask {
+        proc_keep = !proc_keep;
+    }
+    keep && proc_keep
+}
+
 /// Grid of pattern instances (Tile Sampler / Tile Generator).
 pub fn tile_grid(w: usize, h: usize, pats: &Patterns, maps: &TileMaps, p: &TileP) -> Tex {
     let nx = p.nx.round().clamp(1.0, 64.0) as i32;
@@ -303,29 +329,7 @@ pub fn tile_grid(w: usize, h: usize, pats: &Patterns, maps: &TileMaps, p: &TileP
             cy += (r2 - 0.5) * p.pos_rand * p.pos_rand_y / fny + p.global_offset[1];
             let (cx0, cy0) = (cx, cy);
             // map inputs sampled at the tile centre
-            let mut keep = true;
-            if let Some(m) = samp(maps.mask, cx0, cy0) {
-                keep = if p.mask_invert { m < p.thresh } else { m >= p.thresh };
-            }
-            let mut proc_keep = true;
-            if p.mask_random > 0.0 && rnd(i, j, sd.wrapping_add(31)) < p.mask_random {
-                proc_keep = false;
-            }
-            match p.mask_checker {
-                1 => proc_keep &= ((i + j) & 1) == 0,
-                2 => proc_keep &= ((i + j) & 1) == 1,
-                _ => {}
-            }
-            if p.mask_h {
-                proc_keep &= (i & 1) == 0;
-            }
-            if p.mask_v {
-                proc_keep &= (j & 1) == 0;
-            }
-            if p.invert_mask {
-                proc_keep = !proc_keep;
-            }
-            let on = keep && proc_keep;
+            let on = tile_visible(i, j, samp(maps.mask, cx0, cy0), p);
             if let Some(d) = samp(maps.displacement, cx0, cy0) {
                 let a = p.displacement_angle * TAU;
                 let k = (d - 0.5) * 2.0 * p.displacement_intensity;
