@@ -15,6 +15,10 @@
 //!
 //! A file the OS can start is, on Windows, one whose extension is `.com`, `.exe`, `.bat` or `.cmd`
 //! in any case, and on Unix one with an execute bit set. The search skips any other file and goes on.
+//! When the OS refuses to start a file found on `PATH` or in an install folder because permission is
+//! denied (on Unix, for example, a file with an execute bit set only for users other than the current
+//! one), the search goes on to the next file it finds. When every file found is refused, the lookup
+//! returns the first refusal as [`OracleError::Start`].
 //!
 //! The program found is run once with its version argument. [`Oracle::version`] is the first
 //! non-blank line of its standard output, or of its standard error when standard output is blank.
@@ -448,13 +452,28 @@ fn lookup(s: &Search<'_>, version_arg: &str, limits: ProbeLimits) -> Result<Orac
     if let Some(hit) = cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
         return Ok(hit.clone());
     }
-    let path = locate(s)?;
-    let mut cmd = Command::new(&path);
-    cmd.arg(version_arg);
-    let out = run_bounded(cmd, &path, limits, &mut Observed::default())?;
-    let oracle = Oracle { program: s.program.to_owned(), path, version: version_line(&out.stdout, &out.stderr) };
-    cache().lock().unwrap_or_else(PoisonError::into_inner).insert(key, oracle.clone());
-    Ok(oracle)
+    let mut refused = None;
+    for path in locate(s)? {
+        let mut cmd = Command::new(&path);
+        cmd.arg(version_arg);
+        let out = match run_bounded(cmd, &path, limits, &mut Observed::default()) {
+            Ok(out) => out,
+            Err(e) if denied(&e) => {
+                refused.get_or_insert(e);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        let oracle = Oracle { program: s.program.to_owned(), path, version: version_line(&out.stdout, &out.stderr) };
+        cache().lock().unwrap_or_else(PoisonError::into_inner).insert(key, oracle.clone());
+        return Ok(oracle);
+    }
+    Err(refused.unwrap_or_else(|| OracleError::Missing { program: s.program.to_owned() }))
+}
+
+/// Whether `e` is a start that the OS refused because permission was denied.
+fn denied(e: &OracleError) -> bool {
+    matches!(e, OracleError::Start { source, .. } if source.kind() == io::ErrorKind::PermissionDenied)
 }
 
 /// Whether `name` can name an environment variable. `std::env::var_os` reads an empty name, or one
@@ -493,7 +512,9 @@ fn candidate_names(program: &str, windows: bool, pathext: Option<&OsStr>) -> Vec
 }
 
 /// Whether the OS can start the file at `p`: on Windows a file whose extension, in any case, is one of
-/// [`WINDOWS_SUFFIXES`], and on Unix a file with an execute bit set.
+/// [`WINDOWS_SUFFIXES`], and on Unix a file with an execute bit set. A file this check accepts may
+/// still be refused when it is started, such as a Unix file whose execute bit is set only for other
+/// users; [`lookup`] then goes on to the next candidate.
 fn startable(p: &Path, windows: bool) -> bool {
     if !p.is_file() {
         return false;
@@ -516,30 +537,25 @@ fn executable(_: &Path) -> bool {
     true
 }
 
-/// The absolute path of `s.program`, in the search order the module documentation gives.
-fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
+/// The absolute paths of the startable files named `s.program`, in the search order the module
+/// documentation gives. An explicit path gives exactly one. The folders are visited only as the
+/// iterator is advanced, so a later folder is not read when an earlier file is used.
+fn locate<'s>(s: &'s Search<'_>) -> Result<Box<dyn Iterator<Item = PathBuf> + 's>, OracleError> {
     if !valid_name(s.program) {
         return Err(OracleError::InvalidName { program: s.program.to_owned() });
     }
     if let Some(explicit) = s.explicit.filter(|e| !e.is_empty()) {
         let given = PathBuf::from(explicit);
         return match anchored(&given, s.cwd) {
-            Some(p) if startable(&p, s.windows) => Ok(p),
+            Some(p) if startable(&p, s.windows) => Ok(Box::new(std::iter::once(p))),
             _ => Err(OracleError::InvalidExplicitPath { variable: s.explicit_label.to_owned(), path: given }),
         };
     }
     let names = candidate_names(s.program, s.windows, s.pathext);
     let on_path = s.path_list.map(|list| std::env::split_paths(list).collect::<Vec<_>>()).unwrap_or_default();
-    let dirs = on_path.iter().chain(s.known_dirs).filter(|d| !d.as_os_str().is_empty()).filter_map(|d| anchored(d, s.cwd));
-    for dir in dirs {
-        for name in &names {
-            let p = dir.join(name);
-            if startable(&p, s.windows) {
-                return Ok(p);
-            }
-        }
-    }
-    Err(OracleError::Missing { program: s.program.to_owned() })
+    let dirs = on_path.into_iter().chain(s.known_dirs.iter().cloned()).filter(|d| !d.as_os_str().is_empty());
+    let files = dirs.filter_map(move |d| anchored(&d, s.cwd)).flat_map(move |dir| names.iter().map(|name| dir.join(name)).collect::<Vec<_>>());
+    Ok(Box::new(files.filter(move |p| startable(p, s.windows))))
 }
 
 /// The first non-blank line of `stdout`, or of `stderr` when `stdout` is blank, trimmed.
@@ -826,6 +842,12 @@ mod tests {
         Search { program, explicit_label: "CRAFT_TEST_EXPLICIT", explicit, path_list, pathext: None, windows: false, cwd: None, known_dirs }
     }
 
+    /// The first candidate [`super::locate`] gives, the file a lookup probes first, or
+    /// [`OracleError::Missing`] when it gives none.
+    fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
+        super::locate(s)?.next().ok_or_else(|| OracleError::Missing { program: s.program.to_owned() })
+    }
+
     /// A shell script named `name` in `dir` that runs `body`.
     #[cfg(unix)]
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
@@ -1052,6 +1074,37 @@ mod tests {
         assert_eq!(locate(&search("ffmpeg", None, Some(&path), &[])).unwrap(), exe);
         let found = locate(&search("ffmpeg", Some(data.as_os_str()), None, &[]));
         assert!(matches!(found, Err(OracleError::InvalidExplicitPath { .. })), "{found:?}");
+    }
+
+    /// A file the current user may not run that comes earlier on `PATH` than a usable copy is passed
+    /// over for the usable copy. As an explicit path, or as the only file found, it is a start error.
+    /// The test skips when the user can open a mode-000 file, as root can, since such a user may also
+    /// run a mode-001 file.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_the_user_may_not_run_is_passed_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let a = Scratch::new("denied-a");
+        let b = Scratch::new("denied-b");
+        let unreadable = a.file("unreadable");
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&unreadable).is_ok() {
+            eprintln!("SKIPPED: file permissions do not apply to this user");
+            return;
+        }
+        let refused = script(a.path(), "tool", "echo refused 1.0");
+        std::fs::set_permissions(&refused, std::fs::Permissions::from_mode(0o001)).unwrap();
+        let usable = script(b.path(), "tool", "echo usable 1.0");
+        let is_denied = |r: &Result<Oracle, OracleError>| matches!(r, Err(e) if denied(e));
+
+        let path = std::env::join_paths([a.path(), b.path()]).unwrap();
+        let found = find_in("tool", "-v", None, Some(&path), &[], ProbeLimits::VERSION).unwrap();
+        assert_eq!((found.path(), found.version()), (usable.as_path(), "usable 1.0"));
+
+        let explicit = find_in("tool", "-v", Some(refused.as_os_str()), None, &[], ProbeLimits::VERSION);
+        assert!(is_denied(&explicit), "{explicit:?}");
+        let only = find_on(a.path(), "tool", "-v", ProbeLimits::VERSION);
+        assert!(is_denied(&only), "{only:?}");
     }
 
     /// On Windows only a `.com`, `.exe`, `.bat` or `.cmd` file, in any case, is found or accepted.
