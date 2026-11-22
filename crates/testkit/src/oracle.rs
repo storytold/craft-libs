@@ -1360,9 +1360,9 @@ mod tests {
     }
 
     /// Passes at once in a normal run. As `parent` it starts a `grandchild`, which inherits the
-    /// parent's standard output and error, waits for the grandchild's marker and then for the
-    /// grandchild to exit. As `grandchild` it writes its process id to the marker and sleeps for
-    /// 60 seconds.
+    /// parent's standard output and error, waits for the grandchild's marker and then writes to
+    /// standard output until a write fails. As `grandchild` it writes its process id to the marker
+    /// and sleeps for 60 seconds.
     #[test]
     fn tree_member() {
         let (Some(role), Some(marker)) = (std::env::var_os(TREE_ROLE), std::env::var_os(TREE_MARKER)) else {
@@ -1380,6 +1380,8 @@ mod tests {
         while !marker.exists() {
             std::thread::sleep(Duration::from_millis(10));
         }
+        let mut out = io::stdout().lock();
+        while io::Write::write_all(&mut out, &[b'x'; 8192]).is_ok() {}
         let _ = grandchild.wait();
     }
 
@@ -1401,21 +1403,22 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).contains(&format!(",\"{pid}\","))
     }
 
-    /// A process the child started holds both pipes and outlives the probe's timeout. Ending the
-    /// child's process group (Unix) or process tree (Windows) ends it too, so both pipe readers
-    /// finish and the process is gone.
+    /// A process the child started holds both pipes when the probe fails. Ending the child's process
+    /// group (Unix) or process tree (Windows) ends it too, so both pipe readers finish and the
+    /// process is gone. The child passes the output limit only after the grandchild has written its
+    /// marker, so the result does not depend on how fast the processes start.
     #[cfg(any(unix, windows))]
     #[test]
-    fn descendant_holding_the_pipes_ends_at_the_timeout() {
+    fn descendant_holding_the_pipes_ends_when_the_probe_fails() {
         let d = Scratch::new("tree");
         let marker = d.path().join("grandchild-pid");
         let exe = std::env::current_exe().unwrap();
         let mut seen = Observed::default();
-        // The grandchild starts within the timeout; it then lives far longer than `PIPE_GRACE`.
-        let limits = ProbeLimits { max_output_bytes: 1024 * 1024, timeout: Duration::from_secs(10) };
+        // The timeout only bounds a broken run; the output limit ends a working one.
+        let limits = ProbeLimits { max_output_bytes: 64 * 1024, timeout: Duration::from_secs(60) };
         let got = run_bounded(tree_member_command("parent", &marker), &exe, limits, &mut seen);
-        assert!(matches!(got, Err(OracleError::Timeout { .. })), "{got:?}");
-        let pid: u32 = std::fs::read_to_string(&marker).expect("the grandchild did not start before the timeout").trim().parse().unwrap();
+        assert!(matches!(got, Err(OracleError::OutputLimit { .. })), "{got:?}");
+        let pid: u32 = std::fs::read_to_string(&marker).expect("the grandchild wrote no marker").trim().parse().unwrap();
         assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe the grandchild holds");
         assert!(!process_running(pid), "grandchild {pid} is still running");
     }
