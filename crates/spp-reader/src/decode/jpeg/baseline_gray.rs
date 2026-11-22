@@ -158,6 +158,35 @@ fn read_huffman_tables(body: &[u8], tables: &mut [Huffman; 8]) -> Option<()> {
     Some(())
 }
 
+fn read_coefficients(bits: &mut Bits<'_>, dc: &Huffman, ac: &Huffman, quantization: &[i32; 64], predictor: &mut i32) -> Option<([f64; 64], bool)> {
+    let mut coefficients = [0f64; 64];
+    let size = u32::from(bits.symbol(dc)?);
+    *predictor = predictor.checked_add(bits.signed(size)?)?;
+    coefficients[0] = f64::from(predictor.checked_mul(quantization[0])?);
+    let mut at = 1;
+    let mut flat = true;
+    while at < 64 {
+        let symbol = bits.symbol(ac)?;
+        let (run, size) = (usize::from(symbol >> 4), u32::from(symbol & 15));
+        if size == 0 {
+            if run == 15 {
+                at += 16;
+                continue;
+            }
+            break;
+        }
+        at += run;
+        if at > 63 {
+            return None;
+        }
+        let value = f64::from(bits.signed(size)?.checked_mul(*quantization.get(at)?)?);
+        *coefficients.get_mut(*ZIGZAG.get(at)?)? = value;
+        flat = false;
+        at += 1;
+    }
+    Some((coefficients, flat))
+}
+
 /// Samples of a JPEG if it is baseline, 8 bits and one channel: (width, height, samples); `None` for anything else.
 pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     if jpeg.get(..2)? != SOI {
@@ -215,31 +244,7 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
             bits.restart()?;
             pred = 0;
         }
-        let mut c = [0f64; 64];
-        let s = u32::from(bits.symbol(dc)?);
-        pred = pred.checked_add(bits.signed(s)?)?;
-        c[0] = f64::from(pred.checked_mul(q[0])?);
-        let mut k = 1;
-        let mut flat = true;
-        while k < 64 {
-            let rs = bits.symbol(ac)?;
-            let (run, size) = (usize::from(rs >> 4), u32::from(rs & 15));
-            if size == 0 {
-                if run == 15 {
-                    k += 16;
-                    continue;
-                }
-                break;
-            }
-            k += run;
-            if k > 63 {
-                return None;
-            }
-            let value = f64::from(bits.signed(size)?.checked_mul(*q.get(k)?)?);
-            *c.get_mut(*ZIGZAG.get(k)?)? = value;
-            flat = false;
-            k += 1;
-        }
+        let (c, flat) = read_coefficients(&mut bits, dc, ac, &q, &mut pred)?;
         let (bx, by) = (block % columns, block / columns);
         let mut rows_done = [0f64; 64];
         if !flat {
