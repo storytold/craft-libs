@@ -422,11 +422,19 @@ pub fn band_weights(h: f32) -> [f32; 8] {
     let mut w = [0.0f32; 8];
     for k in 0..8 {
         let (c, prev, next) = (HSL_BANDS[k], HSL_BANDS[(k + 7) % 8], HSL_BANDS[(k + 1) % 8]);
-        let diff = ((h - c + 540.0) % 360.0) - 180.0;
+        let diff = (h - c + 540.0).rem_euclid(360.0) - 180.0;
         let span = if diff >= 0.0 { (next - c).rem_euclid(360.0) } else { (c - prev).rem_euclid(360.0) };
         w[k] = (1.0 - diff.abs() / span.max(1e-3)).max(0.0);
     }
     w
+}
+
+#[cfg(test)]
+#[test]
+fn band_weights_wrap_equivalent_hues_in_both_directions() {
+    let weights = band_weights(320.0);
+    assert_eq!(band_weights(-400.0), weights);
+    assert_eq!(band_weights(680.0), weights);
 }
 
 /// Contrast, Highlights, Shadows, Texture and Clarity (the luminance stage) at rest.
