@@ -204,9 +204,13 @@ fn multi_selection_ranges_toggles_and_reports_select_only_for_a_plain_pick() {
 
 #[trial]
 fn a_payload_dropped_onto_a_preset_reports_dropped_and_wins_over_an_enclosing_drop_action() {
-    // (row grabbed, row released over, the preset reported)
-    let cases: [(&str, &str, Option<u32>); 2] = [("Preset 1", "Preset 2", Some(2)), ("Preset 1", "Group", None)];
-    for (grabbed, over, expected) in cases {
+    // (view, row grabbed, row released over, the preset reported)
+    let cases: [(PresetView, &str, &str, Option<u32>); 3] = [
+        (PresetView::List, "Preset 1", "Preset 2", Some(2)),
+        (PresetView::List, "Preset 1", "Group", None),
+        (PresetView::Grid, "Preset 1", "Preset 2", Some(2)),
+    ];
+    for (view, grabbed, over, expected) in cases {
         let events: Events = Rc::new(RefCell::new(Vec::new()));
         let seen = events.clone();
         let rows = PresetSource::new(
@@ -224,7 +228,7 @@ fn a_payload_dropped_onto_a_preset_reports_dropped_and_wins_over_an_enclosing_dr
         let mut fixture = Fixture::new(move |ui| {
             ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
                 let out = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
-                    .view_lock(PresetView::List)
+                    .view_lock(view)
                     .drags(true)
                     .takes_drop(PresetDrop::new::<ListDrag<u32>>(DropPlace::Onto, |drag, at| matches!(at, DropAt::Onto(key) if *key != drag.grabbed)))
                     .show(ui);
@@ -245,7 +249,72 @@ fn a_payload_dropped_onto_a_preset_reports_dropped_and_wins_over_an_enclosing_dr
             })
             .collect();
         let expected: Vec<(DropAt<u32>, bool)> = expected.into_iter().map(|key| (DropAt::Onto(key), true)).collect();
-        assert_eq!(dropped, expected, "{grabbed} released over {over}");
+        assert_eq!(dropped, expected, "{grabbed} released over {over} in {view:?}");
+    }
+}
+
+/// Art dragged from another list (a layer row) onto the browser, in each view: released on a preset it reports
+/// `Dropped` onto that preset, and released on the notice of an empty browser the drop slot around it takes it.
+#[trial]
+fn a_payload_from_another_list_drops_on_a_preset_or_on_an_empty_browser_in_each_view() {
+    use craft_ui::contract::{ShowCollection as _, ShowContainer as _};
+    use craft_ui::list::{List, ListRow};
+    use craft_ui::sections::DropAction;
+    #[derive(Clone, Debug, PartialEq)]
+    struct Art(u32);
+    const LAYERS: Rect = Rect { min: Pos2::new(260.0, 0.0), max: Pos2::new(460.0, 120.0) };
+    for view in [PresetView::List, PresetView::Grid] {
+        for filled in [true, false] {
+            let events: Events = Rc::new(RefCell::new(Vec::new()));
+            let slot = Rc::new(RefCell::new(None::<Art>));
+            let (seen, taken) = (events.clone(), slot.clone());
+            let rows = PresetSource::new(
+                filled,
+                PresetFns::new(
+                    |filled: &bool, _| if *filled { vec![PresetRow::item(1, "Leaf", 0), PresetRow::item(2, "Dot", 0)] } else { Vec::new() },
+                ),
+            );
+            let mut state = PresetState::<u32>::new();
+            let mut fixture = Fixture::new(move |ui| {
+                ui.scope_builder(UiBuilder::new().max_rect(LAYERS), |ui| {
+                    let keys = [7_u32];
+                    let source = craft_behavior::keyed(&keys, |key: &u32| *key);
+                    List::<u32>::new("Layers")
+                        .drag_payload(|drag: &ListDrag<u32>| Some(Art(drag.grabbed)))
+                        .show_items(ui, &source, &mut |_, _| ListRow::new("Art"));
+                });
+                ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                    let out = DropAction::<Art>::new(|_| true).show(ui, |ui, _| {
+                        let out = PresetBrowser::new("Symbols", Bind::bound(&mut state), &rows)
+                            .view_lock(view)
+                            .takes_drop(PresetDrop::new::<Art>(DropPlace::Onto, |_, _| true))
+                            .empty("No symbols")
+                            .show(ui);
+                        seen.borrow_mut().extend(out.events);
+                    });
+                    if let Some(art) = out.output.dropped {
+                        *taken.borrow_mut() = Some(art);
+                    }
+                });
+            });
+            fixture.room(vec2(480.0, 320.0)).settle();
+            let from = fixture.by_label("Art").expect("the layer row").center();
+            let to = fixture.by_label(if filled { "Dot" } else { "No symbols" }).expect("the preset or the notice").center();
+            fixture.drag_at(from, to - from);
+            let onto: Vec<DropAt<u32>> = events
+                .borrow()
+                .iter()
+                .filter_map(|event| match event {
+                    PresetEvent::Dropped { at, .. } => Some(at.clone()),
+                    _ => None,
+                })
+                .collect();
+            if filled {
+                assert_eq!(onto, vec![DropAt::Onto(2)], "{view:?}: the drop on a preset is the browser's");
+            } else {
+                assert_eq!(*slot.borrow(), Some(Art(7)), "{view:?}: the slot around an empty browser takes the drop");
+            }
+        }
     }
 }
 
