@@ -161,6 +161,8 @@ thread_local! {
 /// A PAPX too large for its formatting page is stored as a PrcData in the Data stream.
 const P_HUGE_PAPX: u16 = 0x6646;
 const MAX_PRC_DATA: usize = 0x3FA2;
+/// Reader limit on Data stream lookups per PAPX, including cyclic chains.
+const MAX_PAPX_REFERENCES: usize = 16;
 
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
@@ -562,20 +564,32 @@ fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
     Some((base.checked_add(a)?, base.checked_add(b)?))
 }
 
-/// A standalone sprmPHugePapx replaces the inline properties with one length-prefixed
-/// PrcData. Resolve it once and account for repeated references across paragraphs.
+/// Follow leading sprmPHugePapx references. A reference replaces the remainder of
+/// its record; only the terminal PrcData supplies the style and paragraph properties.
 fn external_papx<'a>((istd, inline): (u16, &'a [u8]), data: &'a [u8], work: &Work) -> (u16, &'a [u8]) {
-    let [lo, hi, a, b, c, d] = inline else { return (istd, inline) };
-    if u16::from_le_bytes([*lo, *hi]) != P_HUGE_PAPX {
+    // A reference must be the sole property in the formatting page.
+    if inline.len() != 6 || !inline.starts_with(&P_HUGE_PAPX.to_le_bytes()) {
         return (istd, inline);
     }
-    let offset = u32::from_le_bytes([*a, *b, *c, *d]) as usize;
-    let Some([lo, hi, rest @ ..]) = data.get(offset..) else { return (istd, &[]) };
-    let size = usize::from(u16::from_le_bytes([*lo, *hi]));
-    let Some(properties) = rest.get(..size) else { return (istd, &[]) };
-    if !(10..=MAX_PRC_DATA).contains(&size) || !work.charge(size as u64, Cost::Formatting) {
-        return (istd, &[]);
+    let mut properties = inline;
+    for _ in 0..MAX_PAPX_REFERENCES {
+        let [_, _, a, b, c, d, ..] = properties else { return (istd, &[]) };
+        let offset = u32::from_le_bytes([*a, *b, *c, *d]) as usize;
+        let Some([lo, hi, rest @ ..]) = data.get(offset..) else { return (istd, &[]) };
+        let size = usize::from(u16::from_le_bytes([*lo, *hi]));
+        let Some(record) = rest.get(..size) else { return (istd, &[]) };
+        if !(10..=MAX_PRC_DATA).contains(&size) || !work.charge(size as u64, Cost::Formatting) {
+            return (istd, &[]);
+        }
+        properties = record;
+        if !properties.starts_with(&P_HUGE_PAPX.to_le_bytes()) {
+            return terminal_papx(istd, properties);
+        }
     }
+    (istd, &[])
+}
+
+fn terminal_papx(istd: u16, properties: &[u8]) -> (u16, &[u8]) {
     // A huge PAPX has inline istd zero. Its first sprmPIstd can name the actual style.
     if let [lo, hi, style_lo, style_hi, rest @ ..] = properties
         && u16::from_le_bytes([*lo, *hi]) == P_ISTD

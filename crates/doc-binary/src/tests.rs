@@ -608,10 +608,18 @@ fn papx_fkp(entries: &[(u32, u16, Vec<u8>)]) -> Vec<u8> {
         let half = (data_at / 2) as u8;
         page[rgbx_at + i * 13] = half;
         let grp = [e.1.to_le_bytes().as_slice(), e.2.as_slice()].concat();
-        let cb = ((grp.len() + 2) / 2) as u8;
-        page[data_at] = cb;
-        page[data_at + 1..data_at + 1 + grp.len()].copy_from_slice(&grp);
-        data_at += 1 + grp.len() + ((1 + grp.len()) & 1);
+        // PapxInFkp uses a second size byte for even lengths. Padding inside
+        // the grpprl would turn a standalone six-byte reference into seven bytes.
+        if grp.len().is_multiple_of(2) {
+            page[data_at] = 0;
+            data_at += 1;
+            page[data_at] = (grp.len() / 2) as u8;
+        } else {
+            page[data_at] = grp.len().div_ceil(2) as u8;
+        }
+        data_at += 1;
+        page[data_at..data_at + grp.len()].copy_from_slice(&grp);
+        data_at += grp.len();
     }
     page[511] = n as u8;
     page
@@ -3325,4 +3333,54 @@ fn merged_cell_uses_outer_source_borders() {
         assert_eq!(borders.left.expect("first cell left").width, 1.0);
         assert_eq!(borders.right.expect("last cell right"), crate::fmt::brc_bytes(&outer).expect("expected border"));
     }
+}
+
+/// Append a length-prefixed PrcData and return its sprmPHugePapx reference.
+fn store_papx(data: &mut Vec<u8>, properties: &[u8]) -> Vec<u8> {
+    let reference = grpprl(&[(0x6646, &(data.len() as u32).to_le_bytes())]);
+    data.extend_from_slice(&(properties.len() as u16).to_le_bytes());
+    data.extend_from_slice(properties);
+    reference
+}
+
+#[test]
+fn chained_papx_uses_terminal_style_and_row_properties() {
+    let mut data = Vec::new();
+    let row = [grpprl(&[(0x2416, &[1]), (0x2417, &[1])]), t_def_edges(&[0, 400])].concat();
+    let terminal = [grpprl(&[(0x4600, &7u16.to_le_bytes())]), row.clone()].concat();
+    let next = store_papx(&mut data, &terminal);
+    // The tail of a replaced record must not change the terminal style or end-of-row mark.
+    let intermediate = [next, grpprl(&[(0x4600, &9u16.to_le_bytes()), (0x2417, &[0])])].concat();
+    let inline = store_papx(&mut data, &intermediate);
+    let bytes = (terminal.len() + intermediate.len()) as u64;
+    assert_eq!(super::external_papx((0, &inline), &data, &super::Work::new(bytes)), (7, row.as_slice()));
+    assert!(super::external_papx((0, &inline), &data, &super::Work::new(bytes - 1)).1.is_empty());
+
+    let mut spec = one_section("a\u{7}tail\r", vec![], vec![(0, 0, inline), (2, 0, vec![])]);
+    spec.data_stream = data;
+    let doc = read(&struct_doc(&spec)).expect("read DOC");
+    let table = doc.body[0].as_table().expect("terminal row definition");
+    assert_eq!(table.grid, [20.0]);
+}
+
+#[test]
+fn chained_papx_bounds_references_and_rejects_incomplete_records() {
+    let terminal = grpprl(&[(0x4600, &7u16.to_le_bytes()), (0x2416, &[1]), (0x2417, &[1])]);
+    let mut data = Vec::new();
+    let mut reference = store_papx(&mut data, &terminal);
+    for _ in 1..super::MAX_PAPX_REFERENCES {
+        reference.extend_from_slice(&[0, 0x46, 0, 0]);
+        reference = store_papx(&mut data, &reference);
+    }
+    let work = super::Work::new(u64::MAX);
+    assert_eq!(super::external_papx((0, &reference), &data, &work), (7, &terminal[4..]));
+    reference.extend_from_slice(&[0, 0x46, 0, 0]);
+    let too_deep = store_papx(&mut data, &reference);
+    assert_eq!(super::external_papx((0, &too_deep), &data, &work), (0, &[][..]));
+
+    let mut cycle = Vec::new();
+    let start = store_papx(&mut cycle, &[0x46, 0x66, 0, 0, 0, 0, 0, 0x46, 7, 0]);
+    assert_eq!(super::external_papx((0, &start), &cycle, &work), (0, &[][..]));
+    cycle[4] = 11; // The nested reference now points to an incomplete length field.
+    assert_eq!(super::external_papx((0, &start), &cycle, &work), (0, &[][..]));
 }
