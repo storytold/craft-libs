@@ -1,0 +1,8 @@
+craft-material-graph-wgpu
+
+The GPU material graph backend and compute shaders were moved from TextureCraft's
+SPP import work in https://github.com/storytold/texturecraft/pull/777. They build
+on the original SPP importer and graph integration by xilefenko in
+https://github.com/storytold/texturecraft/pull/521.
+
+Copyright TextureCraft contributors. MIT OR Apache-2.0.
