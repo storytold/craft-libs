@@ -47,15 +47,14 @@ impl<Id: Clone + 'static, C: Show, B: Fn(&Id, &LayerInfo) -> C, O: FnMut(&Id, C:
     }
 }
 
+/// Where a drop at a row or gap lands among the layers, when it lands on a place the host may take.
+pub(super) type HostPlace<'l, Id> = dyn Fn(&DropAt<LayerRowKey<Id>>) -> Option<(Id, LayerPosition)> + 'l;
+
 /// The host's payload type dragged from outside the rows (`LayersPanel::takes_drop`), with its type erased so the panel
 /// holds one.
 pub(super) trait HostDrops<Id> {
     /// `list` taking the payload between rows and onto them where `place` names a layer place the host accepts.
-    fn kinds<'l>(
-        &'l self,
-        list: List<'l, LayerRowKey<Id>>,
-        place: &'l dyn Fn(&DropAt<LayerRowKey<Id>>) -> Option<(Id, LayerPosition)>,
-    ) -> List<'l, LayerRowKey<Id>>
+    fn kinds<'l>(&'l self, list: List<'l, LayerRowKey<Id>>, place: &'l HostPlace<'l, Id>) -> List<'l, LayerRowKey<Id>>
     where
         Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static;
 }
@@ -67,11 +66,7 @@ pub(super) struct HostDrop<P, A> {
 }
 
 impl<Id, P: Send + Sync + 'static, A: Fn(&P, &Id, LayerPosition) -> bool> HostDrops<Id> for HostDrop<P, A> {
-    fn kinds<'l>(
-        &'l self,
-        list: List<'l, LayerRowKey<Id>>,
-        place: &'l dyn Fn(&DropAt<LayerRowKey<Id>>) -> Option<(Id, LayerPosition)>,
-    ) -> List<'l, LayerRowKey<Id>>
+    fn kinds<'l>(&'l self, list: List<'l, LayerRowKey<Id>>, place: &'l HostPlace<'l, Id>) -> List<'l, LayerRowKey<Id>>
     where
         Id: Clone + Eq + std::hash::Hash + Send + Sync + 'static,
     {

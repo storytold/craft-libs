@@ -65,7 +65,7 @@ pub(super) fn show_body<T: LayerTree>(
     let parent_of = |id: &T::Id| tree.parent(id);
     let ctx = ui.ctx().clone();
     let list_id = cx.list;
-    let host_place = |at: &DropAt<LayerRowKey<T::Id>>| host_drop_place(&order, &parent_of, at);
+    let host_place = |at: &DropAt<LayerRowKey<T::Id>>| host_drop_place(order, &parent_of, at);
 
     let mut list = List::new(cx.words.list.clone())
         .id(cx.list)

@@ -247,6 +247,28 @@ fn paint_mask_marks(painter: &ContentPainterCx<'_>, rect: Rect, mask: &MaskInfo,
     }
 }
 
+/// `row` with the layer's eye cell, its icon by the layer's view and filled with its label colour unless the row shows
+/// a colour bar (`bar`), then its lock cell when the panel shows the lock column.
+fn with_toggles<'r, T: LayerTree>(cx: &PanelContext<'_, T>, info: &LayerInfo, row: ListRow<'r>, bar: bool) -> ListRow<'r> {
+    let words = cx.words;
+    let on = match info.view {
+        LayerView::Preview => "eye",
+        LayerView::Outline => "eye_outline",
+        LayerView::Template => "layer_template",
+    };
+    let face = ToggleFace::icons(IconId::new(on), IconId::new("eye_off"));
+    // A hidden layer's eye box stays empty, also under the pointer (the reference application, photocraft#16321).
+    let mut eye = ToggleCell::new(EYE, face, ToggleState::of(info.visible), named(&words.visibility, &info.name)).empty_off();
+    if !bar && let Some(color) = info.label {
+        eye = eye.fill(DataColor::new(paint_color(color.fill())));
+    }
+    let mut row = row.toggle(eye);
+    if cx.lock_column {
+        row = row.toggle(ToggleCell::lock(LOCK, info.locks.any()).name(named(&words.lock_cell, &info.name)));
+    }
+    row
+}
+
 fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListRow<'r> {
     let info = cx.tree.info(id);
     let words = cx.words;
@@ -260,21 +282,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
 
     let mut row = ListRow::new(info.name.clone()).layer(true);
     if !spine {
-        let on = match info.view {
-            LayerView::Preview => "eye",
-            LayerView::Outline => "eye_outline",
-            LayerView::Template => "layer_template",
-        };
-        let face = ToggleFace::icons(IconId::new(on), IconId::new("eye_off"));
-        // A hidden layer's eye box stays empty, also under the pointer (the reference application, photocraft#16321).
-        let mut eye = ToggleCell::new(EYE, face, ToggleState::of(info.visible), named(&words.visibility, &info.name)).empty_off();
-        if !bar && let Some(color) = info.label {
-            eye = eye.fill(DataColor::new(paint_color(color.fill())));
-        }
-        row = row.toggle(eye);
-        if cx.lock_column {
-            row = row.toggle(ToggleCell::lock(LOCK, info.locks.any()).name(named(&words.lock_cell, &info.name)));
-        }
+        row = with_toggles(cx, &info, row, bar);
     }
     row = row.clipped(info.clipped).highlight(cx.tree.hovered().as_ref() == Some(id)).italic(info.italic).underline(info.underline);
     if bar {
