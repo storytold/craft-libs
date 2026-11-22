@@ -266,7 +266,6 @@ pub struct ListRow<'a> {
     /// keeps the disclosure column and paints no disclosure.
     pub(super) disclosure_by_host: bool,
     /// How the row's tree lines up its leaves: the collection gives it (`List::tree_leaves`).
-    #[prop]
     pub(super) leaves: TreeLeaves,
     /// The row is an option of a listbox, not an item of a list: inset and rounded, the chosen option outlined.
     #[style_key]
@@ -395,6 +394,13 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn disclosure_by_host(mut self) -> Self {
         self.disclosure_by_host = true;
+        self
+    }
+
+    /// How the collection's tree lines up its leaves (`List::tree_leaves`).
+    #[must_use]
+    pub(crate) fn leaves(mut self, leaves: TreeLeaves) -> Self {
+        self.leaves = leaves;
         self
     }
 
