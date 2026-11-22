@@ -328,6 +328,8 @@ fn name_rect(view: &CanvasView, page: &PageFrame, gap: f32, size: Vec2) -> Rect 
 struct Renaming {
     open: Option<RenameOpen>,
     draft: String,
+    /// Where the field showed last: a field that closes fades out there, with no name left to place it by.
+    shown: Option<Rect>,
 }
 
 /// The fixed part of an open rename.
@@ -430,7 +432,7 @@ impl Component for Pasteboard<'_> {
                 let gesture = crate::runtime::edit::next_gesture_id(&cx.core.ctx);
                 let open = RenameOpen { at, gesture, name: name.clone() };
                 self.rename = Some(EditEvent::begin(gesture, open.before(), cx.core.label_arc(), None));
-                *cx.keep::<Renaming>() = Renaming { draft: name.clone(), open: Some(open) };
+                *cx.keep::<Renaming>() = Renaming { draft: name.clone(), open: Some(open), shown: None };
                 popup.open(cx);
             }
         }
@@ -554,10 +556,11 @@ impl Component for Pasteboard<'_> {
             // Typing needs room beyond a name cut to its page: the field is as wide as the page.
             Some(Rect::from_min_size(rect.min, Vec2::new(rect.width().max(bounds(&space.view.quad(page.rect)).width()), rect.height())))
         });
-        let layer = Overlay::popover()
-            .placed(field.unwrap_or(Rect::NOTHING))
-            .dismiss(Dismiss::new().outside(Outside::Keep))
-            .focus(FocusPolicy::POPUP.initial(Initial::First));
+        let layer = Overlay::popover().dismiss(Dismiss::new().outside(Outside::Keep)).focus(FocusPolicy::POPUP.initial(Initial::First));
+        let layer = match field.or(state.shown) {
+            Some(rect) => layer.placed(rect),
+            None => layer,
+        };
         let mut draft = state.draft;
         let editor = ui.show(popup, layer, |ui, _| {
             let (open, field) = (state.open.as_ref()?, field?);
@@ -588,10 +591,14 @@ impl Component for Pasteboard<'_> {
         match end {
             Some(end) => {
                 self.rename = Some(end);
-                *cx.keep::<Renaming>() = Renaming::default();
+                *cx.keep::<Renaming>() = Renaming { shown: field.or(state.shown), ..Renaming::default() };
                 popup.close(cx);
             }
-            None => cx.keep::<Renaming>().draft = draft,
+            None => {
+                let kept = cx.keep::<Renaming>();
+                kept.draft = draft;
+                kept.shown = field;
+            }
         }
     }
 
