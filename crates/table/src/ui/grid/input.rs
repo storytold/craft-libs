@@ -415,7 +415,7 @@ impl CellGrid<'_> {
         if selection.active() != before.active() {
             self.reveal = selection.active().map(|cell| cell.row);
         }
-        let (pointer_edits, swapped) = self.run_pointer(cx, &mut selection, &mut grab, &mut preview, &order, &hidden_rows, &hidden_columns);
+        let (pointer_edits, swapped) = self.run_pointer(cx, &mut selection, &mut grab, &mut preview, &order, &hidden_rows, &hidden_columns, escape);
         self.pass.edits.extend(pointer_edits);
         self.pass.fill_swapped |= swapped;
         self.claim_keys(cx, &state, grab.is_some());
@@ -460,7 +460,7 @@ impl CellGrid<'_> {
         }
     }
 
-    /// Header, edge, corner, fill and border presses.
+    /// Header, edge, corner, fill and border presses; `escape` (the pass's claimed Escape) cancels a running grab.
     #[allow(clippy::too_many_arguments)]
     fn run_pointer(
         &self,
@@ -471,6 +471,7 @@ impl CellGrid<'_> {
         order: &Positions,
         hidden_rows: &dyn Fn(u32) -> bool,
         hidden_columns: &dyn Fn(u32) -> bool,
+        escape: bool,
     ) -> (Vec<GridEdit>, bool) {
         let mut edits = Vec::new();
         let mut swapped = false;
@@ -598,11 +599,20 @@ impl CellGrid<'_> {
                 _ => {}
             }
         }
+        // Escape ends a resize, fill or move here: the part's press runs on, and its release finds no grab to commit.
+        if escape && let Some(held) = grab.take_if(|held| !matches!(held, Grab::Lines { .. })) {
+            let reason = craft_behavior::CancelReason::Escape;
+            edits.extend(match held {
+                Grab::Resize { rows: true, line, id, .. } => Some(GridEdit::ResizeRow { row: line, height: EditEvent::cancel(id, reason, None) }),
+                Grab::Resize { line, id, .. } => Some(GridEdit::ResizeColumn { column: line, width: EditEvent::cancel(id, reason, None) }),
+                Grab::Fill { id, .. } => Some(GridEdit::Fill { range: EditEvent::cancel(id, reason, None) }),
+                Grab::Move { id, .. } => Some(GridEdit::MoveCells { to: EditEvent::cancel(id, reason, None) }),
+                Grab::Lines { .. } => None,
+            });
+            cx.cancel_press(PressCancel::Escape);
+        }
         if let Some(Grab::Fill { last, .. }) = grab {
             preview.fill = Some(last.clone());
-        }
-        if grab.is_some() && cx.take_claimed(ESCAPE) {
-            cx.cancel_press(PressCancel::Escape);
         }
         (edits, swapped)
     }
