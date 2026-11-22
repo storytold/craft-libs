@@ -187,10 +187,11 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)], held
         Event::Key { pressed: false, .. } => read(event).map_or(KeyEvent::Other, |input| KeyEvent::Release { input }),
         Event::Text(text) => KeyEvent::Text(text.clone()),
         Event::ModifiersChanged(modifiers) => KeyEvent::Modifiers(Mods::from_egui(modifiers, os)),
-        // PLAN: kb.C10c maps `Event::PasteImage` here; this egui has no such event that I could verify.
         Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None, mods: held },
         Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None, mods: held },
         Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()), mods: held },
+        // The platform sends it in place of `Paste` for a clipboard with a picture and no text.
+        Event::PasteImage(_) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: None, mods: held },
         Event::PointerButton { pressed: true, .. } => KeyEvent::PointerPress,
         Event::AccessKitActionRequest(request) => KeyEvent::Access(Action(request.clone())),
         _ => KeyEvent::Other,

@@ -472,7 +472,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         if press {
             overlay::note_dropped_press(ctx, viewport);
         }
-        with(ctx, viewport, |stage| stage.keyed = false);
+        with(ctx, viewport, |stage| {
+            stage.keyed = false;
+            stage.textless_paste = false;
+        });
         return (removed || trimmed, Vec::new());
     }
     let os = crate::runtime::windows::os_of(ctx);
@@ -519,6 +522,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let mut visible = None;
         let mut later = Vec::new();
         stage.keyed = false;
+        stage.textless_paste = false;
         let mut place = 0;
         events.retain(|arrived| {
             // Every event the IME engine left counts, as the engine counts them (`ime::take_placed`).
@@ -533,6 +537,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             batch.focus_lost |= matches!(arrived.event, egui::Event::WindowFocused(false));
             note_down(&mut stage.down, &read);
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
+            stage.textless_paste |= matches!(read, KeyEvent::Clip { command: EditCommand::Paste, text: None, .. });
             visible = match &read {
                 KeyEvent::PointerPress => Some(false),
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
@@ -613,10 +618,11 @@ pub fn held(ctx: &Context) -> Vec<Key> {
     down
 }
 
-/// The key state, as the tracked input `Keys` compares it: the keys down, whether a key arrived and Caps Lock.
-pub(crate) fn keys_state(ctx: &Context) -> (Vec<Key>, bool, bool) {
-    let (down, keyed) = current(ctx, |stage| (stage.down.clone(), stage.keyed));
-    (down, keyed, crate::runtime::lock_keys::caps_on(ctx))
+/// The key state, as the tracked input `Keys` compares it: the keys down, whether a key arrived, whether a paste with no
+/// text arrived and Caps Lock.
+pub(crate) fn keys_state(ctx: &Context) -> (Vec<Key>, bool, bool, bool) {
+    let (down, keyed, textless_paste) = current(ctx, |stage| (stage.down.clone(), stage.keyed, stage.textless_paste));
+    (down, keyed, textless_paste, crate::runtime::lock_keys::caps_on(ctx))
 }
 
 /// Counts an input of `viewport` whose `events` hold one sent to the focus: a key, text, IME, clipboard or AccessKit
@@ -651,6 +657,14 @@ pub(crate) fn sent(ctx: &Context) -> u64 {
 pub fn keyed(ctx: &Context) -> bool {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.keyed)
+}
+
+/// Whether the running viewport's input hook read a paste with no text in this pass: the paste chord came while the
+/// clipboard held no text (a picture, a PDF), so the platform sent no text to paste. A focused text field takes the
+/// event, so an app asks this, not egui's events.
+pub fn textless_paste(ctx: &Context) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
+    current(ctx, |stage| stage.textless_paste)
 }
 
 /// Takes the Tab and F6 moves the input hook recorded, for the focus service's begin hook. The pass's root env is

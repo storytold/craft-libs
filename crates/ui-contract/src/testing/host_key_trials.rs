@@ -477,6 +477,29 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// A clipboard with a picture and no text sends a paste with no text: it fires the app's Paste as the chord does, and
+/// `textless_paste` reads it in that pass only.
+#[trial]
+fn a_paste_with_no_text_is_the_paste_chord_and_reads_as_textless() {
+    let picture = Event::PasteImage(Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::WHITE)));
+    assert!(!clipboard_with_canvas(KeyUse::CANVAS, picture.clone()).1.is_empty(), "the picture's paste fires the app's Paste");
+    let read = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&read);
+    let (_, mut base) = host_window();
+    let mut show = move |ui: &mut Ui| {
+        seen.set(crate::runtime::keys::textless_paste(ui.ctx()));
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.frame(Vec::new(), &mut show);
+    frames.frame(vec![Event::Paste("x".to_owned())], &mut show);
+    assert!(!read.get(), "a paste with text");
+    frames.frame(vec![picture], &mut show);
+    assert!(read.get(), "a paste with no text");
+    frames.frame(Vec::new(), &mut show);
+    assert!(!read.get(), "the pass after it");
+}
+
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
 fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
     let (host, mut show) = host_window();

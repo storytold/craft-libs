@@ -32,6 +32,7 @@ pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 pub use input::held;
 #[doc(hidden)]
 pub use input::keyed;
+pub use input::textless_paste;
 pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
@@ -266,6 +267,8 @@ pub(crate) struct Stage {
     down: Vec<Key>,
     /// The input hook read a key press, typed text or a clipboard event in this pass, withheld ones included.
     keyed: bool,
+    /// The input hook read a paste with no text (the clipboard held none) in this pass.
+    textless_paste: bool,
     /// How many inputs of the viewport held an event sent to the focus (`count_sent`).
     sent: u64,
     /// The keys whose press the strip took and whose release it is still to drop.
