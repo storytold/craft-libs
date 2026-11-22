@@ -1925,7 +1925,8 @@ impl HalfScanLineOrder {
             }
 
             if let Some(other_seg) = other_seg {
-                let order = cmp.compare_segments(segs, orig_seg[seg], orig_seg[other_seg]);
+                let order =
+                    cmp.compare_non_horizontal_segments(segs, orig_seg[seg], orig_seg[other_seg]);
                 let next_ish = order
                     .iter()
                     .take_while(|(order_y0, _, _)| *order_y0 < y1)

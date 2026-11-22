@@ -50,10 +50,26 @@ impl ComparisonCache {
 
     /// Compares two segments, returning their order.
     ///
-    /// # Panics
-    ///
-    /// Panics if either segment is horizontal.
+    /// Returns `None` if either segment is horizontal.
     pub fn compare_segments(
+        &mut self,
+        segments: &Segments,
+        i: SegIdx,
+        j: SegIdx,
+    ) -> Option<&mut CurveOrder> {
+        // Craft patch (horizontal comparison): horizontal segments are
+        // rejected with `None` instead of reaching the comparison.
+        if segments[i].is_horizontal() || segments[j].is_horizontal() {
+            return None;
+        }
+        Some(self.compare_non_horizontal_segments(segments, i, j))
+    }
+
+    /// Compares two segments that are not horizontal, returning their order.
+    ///
+    /// The sweep line, `position` and `topology` hold only segments that are
+    /// not horizontal, and call this directly.
+    pub(crate) fn compare_non_horizontal_segments(
         &mut self,
         segments: &Segments,
         i: SegIdx,
@@ -78,12 +94,7 @@ impl ComparisonCache {
             Entry::Vacant(v) => {
                 let segi = &segments[i];
                 let segj = &segments[j];
-                // Craft patch (horizontal comparison): horizontal segments are
-                // rejected with a message in every build profile.
-                assert!(
-                    !segi.is_horizontal() && !segj.is_horizontal(),
-                    "compare_segments does not take horizontal segments"
-                );
+                debug_assert!(!segi.is_horizontal() && !segj.is_horizontal());
 
                 let forward =
                     if let (Some(l0), Some(l1)) = (segi.as_kurbo_line(), segj.as_kurbo_line()) {
@@ -130,6 +141,7 @@ mod tests {
         assert_eq!(
             cmp_cache
                 .compare_segments(&segments, SegIdx(0), SegIdx(1))
+                .unwrap()
                 .iter()
                 .next()
                 .unwrap()
@@ -139,7 +151,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "compare_segments does not take horizontal segments")]
     fn horizontal_and_cubic() {
         let mut segments = Segments::default();
         segments.add_points([(-1.0, 1.0), (2.0, 1.0)]);
@@ -148,16 +159,33 @@ mod tests {
         path.curve_to((1.0, 0.5), (-1.0, 1.5), (0.0, 2.0));
         segments.add_non_closed_bez_path(&path).unwrap();
         let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
-        cmp_cache.compare_segments(&segments, SegIdx(0), SegIdx(1));
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(0), SegIdx(1))
+                .is_none()
+        );
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(1), SegIdx(0))
+                .is_none()
+        );
     }
 
     #[test]
-    #[should_panic(expected = "compare_segments does not take horizontal segments")]
     fn horizontal_and_line() {
         let mut segments = Segments::default();
         segments.add_points([(-1.0, 1.0), (2.0, 1.0)]);
         segments.add_points([(0.0, 0.0), (0.0, 2.0)]);
         let mut cmp_cache = ComparisonCache::new(0.1, 0.05);
-        cmp_cache.compare_segments(&segments, SegIdx(1), SegIdx(0));
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(1), SegIdx(0))
+                .is_none()
+        );
+        assert!(
+            cmp_cache
+                .compare_segments(&segments, SegIdx(0), SegIdx(1))
+                .is_none()
+        );
     }
 }

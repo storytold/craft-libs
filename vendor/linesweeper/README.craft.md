@@ -11,15 +11,15 @@ file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` dow
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
 holds `upstream_revision`. `local_patches` describes each local change.
 
-The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs`, `src/order.rs`, `src/curve/mod.rs`,
-`src/curve/line.rs` and `docs/sweep.typ`.
+The patched files are `src/sweep/sweep_line.rs`, `src/topology.rs`, `src/order.rs`, `src/position.rs`,
+`src/curve/mod.rs`, `src/curve/line.rs` and `docs/sweep.typ`.
 
 ## Local changes
 
 | Change | Code comment label | Touches | Tests |
 |---|---|---|---|
 | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out | `Craft patch (exited slots)` | `src/sweep/sweep_line.rs` | none |
-| `ComparisonCache::compare_segments` panics with a message when either segment is horizontal, in every build profile, and its doc comment states it | `Craft patch (horizontal comparison)` | `src/order.rs` | `horizontal_and_cubic`, `horizontal_and_line` |
+| `ComparisonCache::compare_segments` returns `Option<&mut CurveOrder>`, and returns `None` when either segment is horizontal, in every build profile; its doc comment states it. The sweep line, `position` and `topology` hold only segments that are not horizontal and call the crate-private `compare_non_horizontal_segments`, which checks that with a `debug_assert` | `Craft patch (horizontal comparison)` | `src/order.rs`, `src/sweep/sweep_line.rs`, `src/position.rs`, `src/topology.rs` | `horizontal_and_cubic`, `horizontal_and_line` |
 | When the chord that `fit_quadratic` takes for a very short curve gives a constant term that is not finite, `fit_quadratic` takes the line through the curve's start point with the chord's slope instead. Before, a curve near x = 1e305 with heights near 1e4 and less than about 3e-12 tall gave a product of an x coordinate and a height above `f64::MAX`, and the chord's constant term was NaN | `Craft patch (huge chord)` | `src/curve/mod.rs` | `short_curve_chord_with_huge_x` fits vertical curves one ulp tall at y = 1e4 and x = 1e305, -1e305 and 5e307 |
 | `line_at_ys` multiplies the x coordinates by 2^600 before the weighted sum and the sum by 2^-600 after it when both x coordinates have a magnitude below 2^-500. Before, a vertical line at x = 5e-324 gave x = 0 halfway along its height | `Craft patch (subnormal x)` | `src/curve/line.rs` | `subnormal_x` checks that line and a line from x = -1.5e-323 to 1.5e-323 |
 | Clippy 1.100.0 with `-D warnings` and every feature passes on the library, its unit tests and the `regression` test: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change | `Craft patch (clippy lints)` | `src/sweep/sweep_line.rs`, `src/topology.rs` | none |

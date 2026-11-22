@@ -388,13 +388,13 @@ impl<'segs> Sweeper<'segs> {
 
     fn compare_segments(&self, i: SegIdx, j: SegIdx) -> RefMut<'_, CurveOrder> {
         RefMut::map(self.comparisons.borrow_mut(), |c| {
-            c.compare_segments(self.segments, i, j)
+            c.compare_non_horizontal_segments(self.segments, i, j)
         })
     }
 
     fn compare_segments_conservatively(&self, i: SegIdx, j: SegIdx) -> RefMut<'_, CurveOrder> {
         RefMut::map(self.conservative_comparisons.borrow_mut(), |c| {
-            c.compare_segments(self.segments, i, j)
+            c.compare_non_horizontal_segments(self.segments, i, j)
         })
     }
 
@@ -1259,7 +1259,7 @@ impl SegmentOrder {
                     continue;
                 }
 
-                let order = cmp.compare_segments(segments, segi, segj);
+                let order = cmp.compare_non_horizontal_segments(segments, segi, segj);
                 if order.order_at(y) == Order::Right {
                     return Some((segi, segj));
                 }
@@ -1298,7 +1298,8 @@ impl SegmentOrder {
             // will be in the future, so as to minimize swapping.
             // (We could also try checking whether the new segment is a contour neighbor of
             // the segment at pos. That should be a pretty common case.)
-            let cmp = comparer.compare_segments(segments, seg_idx, self.segs[pos].seg);
+            let cmp =
+                comparer.compare_non_horizontal_segments(segments, seg_idx, self.segs[pos].seg);
             return match cmp.order_after(y) {
                 Order::Right => pos + 1,
                 Order::Ish => pos,
@@ -1308,7 +1309,7 @@ impl SegmentOrder {
 
         // A predicate that tests whether `other` is definitely to the left of `seg` at `y`.
         let lower_pred = |other: &SegmentOrderEntry| -> bool {
-            let cmp = comparer.compare_segments(segments, other.seg, seg_idx);
+            let cmp = comparer.compare_non_horizontal_segments(segments, other.seg, seg_idx);
             cmp.order_at(y) == Order::Left
         };
 
@@ -1323,7 +1324,7 @@ impl SegmentOrder {
         let search_start = self.segs.partition_point(lower_pred);
         let mut idx = search_start;
         for i in search_start..self.segs.len() {
-            let cmp = comparer.compare_segments(segments, self.segs[i].seg, seg_idx);
+            let cmp = comparer.compare_non_horizontal_segments(segments, self.segs[i].seg, seg_idx);
             match cmp.order_at(y) {
                 Order::Right => {
                     // The segment at i is definitely to the right of the new one.
