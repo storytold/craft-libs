@@ -80,6 +80,9 @@ pub struct ToggleCell {
     pub fill: Option<DataColor>,
     /// The off icon shows in every row, not only under the pointer. No effect on a check face.
     pub always_visible: bool,
+    /// The off icon never shows, also under the pointer: an off cell stays empty (a hidden layer's eye box). Wins
+    /// over `always_visible`. No effect on a check face.
+    pub empty_off: bool,
     /// A screen reader announces a check box instead of a toggle button: for a setting the row carries rather than
     /// an action on the row.
     pub check_box: bool,
@@ -99,6 +102,7 @@ impl ToggleCell {
             tooltip: None,
             fill: None,
             always_visible: false,
+            empty_off: false,
             check_box: false,
             row_press: false,
         }
@@ -162,10 +166,37 @@ impl ToggleCell {
         self
     }
 
+    /// The off icon never shows, also under the pointer: an off cell stays an empty box.
+    #[must_use]
+    pub fn empty_off(mut self) -> Self {
+        self.empty_off = true;
+        self
+    }
+
     /// A press on the row's own area shows on the cell, for a row whose click turns on what the cell shows.
     #[must_use]
     pub fn row_press(mut self) -> Self {
         self.row_press = true;
         self
+    }
+
+    /// Whether an off cell draws its off icon, under the pointer when `hovered`.
+    pub(super) fn shows_off(&self, hovered: bool) -> bool {
+        !self.empty_off && (self.always_visible || hovered)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_off_cell_never_draws_its_off_icon() {
+        let eye = ToggleCell::eye(ColumnKey::new("eye"), false);
+        assert!(!eye.shows_off(false) && eye.shows_off(true), "a plain off cell shows its off icon only under the pointer");
+        assert!(eye.clone().always_visible().shows_off(false), "always_visible shows it in every row");
+        let empty = eye.empty_off();
+        assert!(!empty.shows_off(true), "an empty_off cell stays empty under the pointer");
+        assert!(!empty.always_visible().shows_off(true), "empty_off wins over always_visible");
     }
 }

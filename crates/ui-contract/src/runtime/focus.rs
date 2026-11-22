@@ -563,12 +563,17 @@ pub fn takes_letters(keys: &KeyUse) -> bool {
 }
 
 /// A registered menu bar takes the keyboard (F10, a lone Alt): focus moves to `target`, a stop of the bar, in this
-/// pass, and the stop that held it is remembered for [`give_back_bar`]. Focus already inside the bar leaves the
-/// remembered stop as it is.
+/// pass, and the stop that held it is remembered for [`give_back_bar`]. With nothing focused, that is the window's
+/// document canvas, the key target then: a shortcut pressed on the bar (Space, the canvas's momentary Hand) matches
+/// there and gives the keyboard back to it, as Escape does. Focus already inside the bar leaves the remembered stop
+/// as it is.
 #[doc(hidden)]
 pub fn take_for_bar(ctx: &Context, bar: Id, target: FocusTarget) {
     let held = focused_stop(ctx).filter(|(id, _)| *id != bar);
+    let in_bar = held.is_none() && is_focused(ctx, bar);
     with(ctx, |state| {
+        let canvas = || state.stops.iter().chain(&state.last_stops).find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.key());
+        let held = held.or_else(|| (!in_bar).then(canvas).flatten());
         if held.is_some() || state.bar_return.is_none() {
             state.bar_return = held.map(|held| (bar, held));
         }

@@ -266,7 +266,8 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             LayerView::Template => "layer_template",
         };
         let face = ToggleFace::icons(IconId::new(on), IconId::new("eye_off"));
-        let mut eye = ToggleCell::new(EYE, face, ToggleState::of(info.visible), named(&words.visibility, &info.name));
+        // A hidden layer's eye box stays empty, also under the pointer (the reference application, photocraft#16321).
+        let mut eye = ToggleCell::new(EYE, face, ToggleState::of(info.visible), named(&words.visibility, &info.name)).empty_off();
         if !bar && let Some(color) = info.label {
             eye = eye.fill(DataColor::new(paint_color(color.fill())));
         }
@@ -403,7 +404,7 @@ fn sub_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id, group: Sub
         row = row.ink(RowInk::Dimmed);
     }
     if sub.eye_shown {
-        row = row.toggle(ToggleCell::eye(EYE, sub.on).name(named(&words.visibility, &sub.label)));
+        row = row.toggle(ToggleCell::eye(EYE, sub.on).empty_off().name(named(&words.visibility, &sub.label)));
     }
     let size = cx.options.thumbnail_size;
     let header_mask = group == SubRowGroup::SmartFilters && index.is_none() && sub.mask && size != ThumbSize::None;

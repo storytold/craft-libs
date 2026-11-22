@@ -91,7 +91,7 @@ impl ListRow<'_> {
                 ToggleFace::Icons { on, off } => {
                     let shown = match toggle.state {
                         ToggleState::On | ToggleState::Mixed => Some(on),
-                        ToggleState::Off if toggle.always_visible || cx.part(part).hovered => Some(off),
+                        ToggleState::Off if toggle.shows_off(cx.part(part).hovered) => Some(off),
                         ToggleState::Off => None,
                     };
                     if let Some(id) = shown {
