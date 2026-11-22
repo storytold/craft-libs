@@ -99,7 +99,7 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   irradiance map that does not exist, a texture or shadow-map span past its array, a value that is
   not finite, a material or texel alpha, a material opacity, metallic, roughness or occlusion
   strength, a shadow darkness or an environment
-  light's key outside 0 to 1, a negative shadow diffusion, a parallel or spot light direction or an environment light direction
+  light's key outside 0 to 1, a negative shadow diffusion or shadow-map radius, a parallel or spot light direction or an environment light direction
   (other than zero) whose length differs from 1 by more than 0.001, a spot light whose inner cone
   cosine is below its outer one, a light kind
   or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` returns

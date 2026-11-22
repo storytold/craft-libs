@@ -603,6 +603,11 @@ fn supplied_shadow_maps_are_checked() {
     let mut bad = s.clone();
     bad.shadows[0].focal = 0.0;
     assert_eq!(try_render(&bad, &Limits::default()), Err(RenderError::BadShadowMap(0)));
+    let mut bad = s.clone();
+    bad.shadows[0].radius = -1.0;
+    assert_eq!(try_render(&bad, &Limits::default()), Err(RenderError::BadShadowMap(0)));
+    bad.shadows[0].radius = 0.0;
+    assert!(try_render(&bad, &Limits::default()).is_ok(), "a radius of 0 is valid");
     let mut bad = s;
     bad.shadow_texels[5] = f32::NAN;
     assert_eq!(try_render(&bad, &Limits::default()), Err(RenderError::BadShadowTexel(5)));

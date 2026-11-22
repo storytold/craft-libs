@@ -110,9 +110,9 @@ pub enum RenderError {
         "the environment light has a value that is not finite or out of range, a direction that is not unit length or names a texture that does not exist"
     )]
     BadEnvironment,
-    /// A shadow map has a zero size, a scale or transform that is not finite, or a span that
-    /// runs past [`Scene::shadow_texels`].
-    #[error("shadow map {0} has a bad size, scale, transform or span")]
+    /// A shadow map has a zero size, a scale or transform that is not finite, a negative penumbra
+    /// radius, or a span that runs past [`Scene::shadow_texels`].
+    #[error("shadow map {0} has a bad size, scale, transform, radius or span")]
     BadShadowMap(usize),
     /// A shadow texel is NaN.
     #[error("shadow texel {0} is NaN")]

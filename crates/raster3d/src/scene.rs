@@ -375,6 +375,7 @@ fn validate_shadows(s: &Scene) -> Result<(), RenderError> {
             && m.focal.is_finite()
             && m.focal > 0.0
             && finite(&[m.bias, m.radius])
+            && m.radius >= 0.0
             && end.is_some_and(|e| e <= s.shadow_texels.len() as u64);
         if !ok {
             return Err(RenderError::BadShadowMap(i));
