@@ -3,6 +3,7 @@
 
 use craft_behavior::Mixed;
 use craft_text::ui::character::{AsianTypography, LineBreakOptions, ParagraphDialog, ParagraphFormat, ParagraphTab};
+use craft_text::ui::tabs_dialog::TabStopsDialog;
 use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::testing::{Fixture, trial};
 use std::cell::RefCell;
@@ -93,4 +94,29 @@ fn a_bare_dialog_has_no_close_box_of_its_own_and_ok_answers() {
     let ok = fixture.by_label("OK").expect("OK is shown");
     fixture.click(&ok).idle(4);
     assert!(dialog.borrow_mut().take_ok().is_some(), "OK filed its answer");
+}
+
+/// With a Tabs page (the dialog in a window of its own), Tabs is a fourth page instead of the Tabs… button: a stop
+/// set there comes back in OK's answer with the paragraph's format.
+#[trial]
+fn a_tabs_page_replaces_the_button_and_ok_answers_its_stops() {
+    let format = ParagraphFormat { breaks: Some(LineBreakOptions::default()), asian: Some(AsianTypography::default()), ..ParagraphFormat::default() };
+    let dialog = ParagraphDialog::new(format).word(true).held_ok().bare(true).tabs_page(TabStopsDialog::new(Vec::new(), 36.0));
+    let dialog = Rc::new(RefCell::new(dialog));
+    let shown = dialog.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = shown.borrow_mut().show(ui, &DialogStack::default());
+    });
+    fixture.idle(30);
+    assert!(fixture.by_label("Tabs…").is_none(), "the page takes the button's place");
+    let page = fixture.by_label("Tabs").expect("the Tabs page's tab is shown");
+    fixture.click(&page).idle(4);
+    let set = fixture.by_label("Set").expect("the Tabs page shows the stops' buttons");
+    fixture.click(&set).idle(4);
+    let ok = fixture.by_label("OK").expect("OK is shown");
+    fixture.click(&ok).idle(4);
+    let answer = dialog.borrow_mut().take_ok().expect("OK filed its answer");
+    let tabs = answer.tabs.expect("the answer carries the Tabs page");
+    assert!(!tabs.stops.is_empty(), "the stop set on the page is in the answer");
+    assert!(!answer.open_tabs, "no second dialog is asked for");
 }
