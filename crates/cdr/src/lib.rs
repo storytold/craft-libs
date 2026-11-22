@@ -3,7 +3,7 @@
 //! packages of versions 14 on with their data streams, then pages, layers, guidelines, groups,
 //! curves, rectangles, ellipses, arcs and polygons with uniform fills and outlines. It also reads
 //! `.cmx` exchange files with 32-bit coordinates ([`read_cmx`]): their pages, layers, groups and
-//! curves with uniform fills and outlines. [`preview`] gives the picture a `.cdr` file keeps of its
+//! curves with uniform fills and outlines. [`preview()`] gives the picture a `.cdr` file keeps of its
 //! drawing, without reading the drawing.
 //!
 //! Every record layout the reader relies on is listed in `PROVENANCE.md` with its public source
@@ -64,7 +64,9 @@ pub enum Error {
     /// Past one of the [`Limits`].
     Limit(&'static str),
     /// A file this reader doesn't open: an encrypted, ZIP64 or split package, or a RIFF file that
-    /// names a version before 3; a big-endian `.cmx` file or one with 16-bit coordinates.
+    /// names a version before 3; a big-endian `.cmx` file or one with 16-bit coordinates; a
+    /// `DISP` preview that is not an uncompressed bitmap with a 40-byte header; a version 2 file's
+    /// picture.
     Unsupported(&'static str),
 }
 
