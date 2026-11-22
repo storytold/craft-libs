@@ -178,9 +178,6 @@ pub struct ListRow<'a> {
     /// or thumbnail.
     #[prop]
     pub(super) clipped: bool,
-    /// A divider rule along the row's bottom edge, in a plain row too.
-    #[prop]
-    pub(super) rule: bool,
     /// The rename editor replaces the label; `state` sets it from the collection's row state.
     pub(super) renaming: bool,
     /// Where the collection holds a press on the row, from its row state: the toggle cell it acts on shows it.
@@ -315,7 +312,6 @@ impl<'a> ListRow<'a> {
             label_spans: Vec::new(),
             highlight: false,
             clipped: false,
-            rule: false,
             renaming: false,
             pressed: None,
             menu_open: false,

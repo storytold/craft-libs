@@ -110,8 +110,7 @@ impl Component for ListRow<'_> {
             cell_muted: TextLook::new(role, ink(muted)),
             thumb_frame: c(colors.line.frame),
             thumb_frame_width: tokens.stroke.thin,
-            separator: cx.rule(RuleKind::Divider).width,
-            separator_pad: tokens.space.gap.inline,
+            separator: crate::display::divider::SeparatorRule::of(cx),
             sizes,
         }
     }
@@ -120,7 +119,7 @@ impl Component for ListRow<'_> {
         self.adopt_facts(&cx.env, cx.resolved.id);
         let sizes = &cx.style.sizes;
         if self.separator {
-            return Vec2::new(0.0, cx.style.separator.points(cx.ui.ctx().pixels_per_point()) + 2.0 * cx.style.separator_pad);
+            return Vec2::new(0.0, cx.style.separator.height(cx.ui.ctx().pixels_per_point()));
         }
         if self.spacer {
             return Vec2::ZERO;
@@ -505,7 +504,7 @@ impl Component for ListRow<'_> {
         self.label_rect = placed.label;
         {
             let draw = ui.draw();
-            if self.rule || (self.layer && self.divider_below) {
+            if self.layer && self.divider_below {
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             if self.layer {
