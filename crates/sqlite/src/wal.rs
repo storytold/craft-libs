@@ -97,6 +97,20 @@ mod tests {
     }
 
     #[test]
+    fn committed_prefix_stops_at_a_frame_checksum_mismatch() {
+        for big in [false, true] {
+            let (main, wal) = fixture(big);
+            let mut second_checksum_wrong = wal;
+            second_checksum_wrong[32 + 536 + 16] ^= 1;
+            assert_eq!(committed_prefix_len(&main, &second_checksum_wrong), Ok(32 + 536));
+
+            let mut first_checksum_wrong = wal;
+            first_checksum_wrong[32 + 16] ^= 1;
+            assert_eq!(committed_prefix_len(&main, &first_checksum_wrong), Ok(0));
+        }
+    }
+
+    #[test]
     fn committed_prefix_stops_before_uncommitted_or_partial_frame() {
         for big in [false, true] {
             let (main, wal) = fixture(big);
