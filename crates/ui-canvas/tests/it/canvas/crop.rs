@@ -248,6 +248,20 @@ impl Rig {
         (!points.is_empty()).then(|| egui::Rect::from_points(&points))
     }
 
+    /// The shield's meshes this frame: those with a translucent vertex.
+    fn shield_meshes(&mut self) -> Vec<egui::Mesh> {
+        let room = egui::Rect::from_min_size(Pos2::ZERO, ROOM);
+        let show = &mut self.show;
+        let shapes = self.frames.frame_shapes(|ui| layout::in_region(ui, room, |ui| show(ui)));
+        shapes
+            .into_iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| (1..255).contains(&v.color.a())) => Some((*mesh).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn view(&self) -> CanvasView {
         self.setup.borrow().view
     }
@@ -888,4 +902,19 @@ fn an_object_crop_is_bounded_by_its_source_and_a_press_outside_it_reaches_what_l
     assert!(rig.seen.borrow().applied, "Enter applies");
     rig.frame(vec![input::key_press(egui::Key::Escape, Modifiers::NONE)]);
     assert!(rig.seen.borrow().discarded, "Escape discards");
+}
+
+/// photocraft#16410: the shield is one unfeathered mesh. Its pieces used to be feathered one by one, so each faded
+/// out along the edges it shares with the next and the canvas showed through as a line under the translucent shield,
+/// from the frame's corners to the canvas's edges.
+#[trial]
+fn the_shield_is_one_unfeathered_mesh_with_no_seam_between_its_pieces() {
+    for (what, setup) in [("classic", Setup::new()), ("image mode", Setup::image(0.0, false)), ("turned", Setup::image(10.0, false))] {
+        let angle = if what == "turned" { 10.0 } else { 0.0 };
+        let mut rig = Rig::new(CropBox::new(RECT, angle), setup);
+        let meshes = rig.shield_meshes();
+        assert_eq!(meshes.len(), 1, "{what}: the shield is one mesh: {} meshes", meshes.len());
+        let alpha = meshes[0].vertices[0].color.a();
+        assert!(meshes[0].vertices.iter().all(|v| v.color.a() == alpha), "{what}: no vertex of the shield fades out (a feathered edge)");
+    }
 }
