@@ -1,24 +1,20 @@
 //! `SwatchesPanel`: the panel body, its state and what it reports.
 
-use std::collections::HashMap;
-
 use craft_cms::convert::CmykConverter;
 use craft_i18n::Format;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
-use craft_ui::choice::SwatchFace;
 use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, ShowContainer as _, request_rename};
 use craft_ui::layout_components::Stack;
-use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetWords, ThumbInfo};
-use craft_ui::primitives::ContentPainterCx;
+use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetWords};
 use craft_ui::runtime::env::{Count, Env};
-use egui::{Rect, Response, Ui};
+use egui::{Response, Ui};
 
 use super::library::{find_swatch, has};
 use super::menu::event_edits;
-use super::{SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords, swatch_rows};
-use crate::palette::{SwatchColor, SwatchGroup, SwatchNote, SwatchReport};
+use super::{SWATCH_ZOOM, SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords, swatch_source};
+use crate::palette::{SwatchGroup, SwatchNote, SwatchReport};
 
 /// What [`SwatchesPanel::show`] reports.
 #[derive(Debug)]
@@ -99,20 +95,13 @@ impl<'a> SwatchesPanel<'a> {
             if st.selected.as_ref().is_some_and(|k| !has(groups, k)) {
                 st.selected = None;
             }
-            let rows = swatch_rows(groups, &words);
+            let source = swatch_source(groups, cmyk);
             let out = {
-                let colors: HashMap<&str, &SwatchColor> = groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
-                let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &rows)
+                let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &source)
+                    .thumb_range(SWATCH_ZOOM)
                     .toolbar(true)
                     .reorder(PresetReorder::items_and_groups())
-                    .footer(PresetFooterOptions::new().can_delete(st.selected.is_some()))
-                    .thumb(|cx: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
-                        if let SwatchKey::Swatch(name) = info.key
-                            && let Some(color) = colors.get(name.as_str())
-                        {
-                            SwatchFace::new(color.to_srgb(cmyk)).selected(info.selected).paint(cx, rect);
-                        }
-                    });
+                    .footer(PresetFooterOptions::new().can_delete(st.selected.is_some()));
                 if let Some(key) = &st.selected {
                     browser = browser.selected(key.clone());
                 }

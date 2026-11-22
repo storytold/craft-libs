@@ -49,18 +49,21 @@ fn monitor(files: &Arc<Disk>, jobs: &Arc<ManualJobs>) -> LinkMonitor<u32> {
     LinkMonitor::new(files.clone(), jobs.clone(), Wake::none())
 }
 
+/// Absolute on every platform: a link path that is not is refused as invalid.
+const FILE: &str = if cfg!(windows) { r"C:\p\a.png" } else { "/p/a.png" };
+
 // A file changes once: one LinkChange Ok -> Modified, and nothing on the following passes.
 #[trial]
 fn the_monitor_reports_a_change_once() {
-    let files = Disk::new(FakeLinkFiles::new().with("/p/a.png", b"abc", 1));
-    let a = link(1, "/p/a.png", files.identity_of("/p/a.png"));
+    let files = Disk::new(FakeLinkFiles::new().with(FILE, b"abc", 1));
+    let a = link(1, FILE, files.identity_of(FILE));
     let jobs = Arc::new(ManualJobs::new());
     let mut m = monitor(&files, &jobs);
     m.set(&[a], None);
     jobs.run_all();
     assert_eq!(m.take_changes(), vec![LinkChange { key: 1, before: None, status: LinkStatus::Ok }]);
 
-    files.change(FakeLinkFiles::new().with("/p/a.png", b"abcd", 2));
+    files.change(FakeLinkFiles::new().with(FILE, b"abcd", 2));
     m.window_focused();
     jobs.run_all();
     assert_eq!(m.take_changes(), vec![LinkChange { key: 1, before: Some(LinkStatus::Ok), status: LinkStatus::Modified }]);
@@ -77,10 +80,10 @@ fn the_monitor_reports_a_change_once() {
 // A check that finished before the link was updated is stale when it is taken in: it reports nothing, and the newer check decides.
 #[trial]
 fn a_check_older_than_known_now_is_dropped() {
-    let files = Disk::new(FakeLinkFiles::new().with("/p/a.png", b"abc", 1));
-    let old = link(1, "/p/a.png", files.identity_of("/p/a.png"));
-    files.change(FakeLinkFiles::new().with("/p/a.png", b"abcd", 2));
-    let updated = link(1, "/p/a.png", files.identity_of("/p/a.png"));
+    let files = Disk::new(FakeLinkFiles::new().with(FILE, b"abc", 1));
+    let old = link(1, FILE, files.identity_of(FILE));
+    files.change(FakeLinkFiles::new().with(FILE, b"abcd", 2));
+    let updated = link(1, FILE, files.identity_of(FILE));
     let jobs = Arc::new(ManualJobs::new());
     let mut m = monitor(&files, &jobs);
     m.set(&[old], None);

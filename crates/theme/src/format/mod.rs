@@ -41,6 +41,8 @@ const OFFSET: &str = "a number";
 const KNOB: &str = "\"round\" or \"tab\"";
 /// What `shape.wells` takes.
 const WELLS: &str = "\"square\" or \"round\"";
+/// What `icon_pack` takes.
+const ICON_PACK: &str = "an icon pack id: 2 to 64 of a-z, 0-9, '.', '_' or '-', starting with a-z or 0-9";
 const EDGE: &str = "\"flat\" or {\"bevel\": {\"width\": n}} with n above 0";
 
 /// A parsed theme file: the theme and the JSON it came from, so that [`fn@write`] keeps unknown keys.

@@ -39,6 +39,12 @@ pub trait ItemLayout {
         None
     }
 
+    /// `NavShape::RaggedGrid`: the columns a vertical move from row `from` to row `to` shifts the column by, when the rows
+    /// are offset against each other; 0 when they line up.
+    fn column_shift(&self, _from: usize, _to: usize) -> isize {
+        0
+    }
+
     /// Whether item `at` takes a place in the layout; a hidden item (in a closed group) cannot take the lead.
     fn shown(&self, _at: usize) -> bool {
         true

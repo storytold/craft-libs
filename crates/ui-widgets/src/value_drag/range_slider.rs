@@ -16,8 +16,8 @@ use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The track both thumbs ride on.
 pub(crate) const TRACK: PartKey = PartKey::new("track");

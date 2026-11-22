@@ -55,12 +55,15 @@ pub fn column_cells<P>(
         .collect()
 }
 
-/// The grid and steps of a stepped column: its [`Column::steps`] and the [`DockGrid`] of its first panel that
-/// declares a valid one. `None` for a column without steps or whose panels declare none, which sizes as any other.
-pub fn stepped<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> Option<(DockGrid, u16)> {
-    let steps = column.steps?;
-    let grid = column.panels().find_map(|panel| spec(panel).grid.filter(|grid| grid.valid()))?;
-    Some((grid, grid.clamp(steps)))
+impl DockSizes {
+    /// The grid and steps of a stepped column: its [`Column::steps`] and the [`DockGrid`] of its first panel that
+    /// declares a valid one, in these sizes (a [`DockGrid::rail`] takes their rail widths). `None` for a column without
+    /// steps or whose panels declare none, which sizes as any other. Every dock reads a panel's grid through here.
+    pub fn stepped<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> Option<(DockGrid, u16)> {
+        let steps = column.steps?;
+        let grid = column.panels().find_map(|panel| spec(panel).grid.map(|grid| grid.resolved(self)).filter(|grid| grid.valid()))?;
+        Some((grid, grid.clamp(steps)))
+    }
 }
 
 /// Column widths that add up to `total` as far as their bounds allow. Each entry is `(width, (lo, hi))`. The

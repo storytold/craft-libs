@@ -162,6 +162,8 @@ fn a_list_with_one_tab_stop_moves_its_lead_and_selects() {
     let seen = Seen::default();
     let selection = RefCell::new(Selection::<usize>::default());
     let mut frames = Frames::new();
+    // The PC keys: on a Mac, Command with an arrow goes to the first or last row.
+    craft_ui::testing::windows::set_os(&frames.ctx, craft_host::target::Os::Linux);
     let mut show = |ui: &mut Ui| {
         let mut held = selection.borrow().clone();
         let list = List::new(SelectMode::Multi).type_ahead().selection(Bind::bound(&mut held));

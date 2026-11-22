@@ -82,8 +82,7 @@ fn apex_radius_after_drag(down: f32) -> f64 {
     fixture.settle();
     let widget = fixture.by_label("Corner 1 of 3").expect("the apex has a widget");
     fixture.drag(&widget, vec2(0.0, down));
-    let radius = host.borrow()[0].corners[0].radius;
-    radius
+    host.borrow()[0].corners[0].radius
 }
 
 /// The apex of a triangle is a corner like any other: pulling its widget inward rounds it, and the further the

@@ -250,7 +250,7 @@ pub enum EndKey {
 }
 
 /// A component's declared keys.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyUse {
     /// The keys kept from the key stage.
@@ -463,6 +463,13 @@ impl KeyUse {
     pub const fn with_chrome_key(mut self, chrome_key: bool) -> Self {
         self.chrome_key = chrome_key;
         self
+    }
+
+    /// Whether the component is a document canvas's editor part: the document (`chrome_key`) holding its editor's
+    /// text keys. It types letters as a text field does, but it is the document the window's menu keys act over, not
+    /// a field inside the chrome.
+    pub const fn is_document_editor(&self) -> bool {
+        self.chrome_key && matches!(self.owner, OwnerClass::Text)
     }
 
     /// Whether the component claims `chord`.

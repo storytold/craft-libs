@@ -21,8 +21,8 @@ use egui::load::SizedTexture;
 use egui::{Pos2, Rect, Response, Ui, Vec2, pos2};
 use std::ops::RangeInclusive;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The well: a drag on it pans the picture and a click centres the view on the point clicked.
 const WELL: PartKey = PartKey::new("well");
@@ -441,8 +441,11 @@ impl Component for PreviewPane<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let width = cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY);
-        Vec2::new(width, self.aspect.filter(|aspect| *aspect > 0.0).map_or(0.0, |aspect| width / aspect))
+        let least = cx.tokens.size.plot.width;
+        match self.aspect.filter(|aspect| *aspect > 0.0) {
+            Some(aspect) => cx.picture_size(least, f32::INFINITY, |width| width / aspect),
+            None => Vec2::new(cx.picture_width(least, f32::INFINITY), 0.0),
+        }
     }
 
     fn sense(&self) -> Sense {

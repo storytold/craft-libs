@@ -315,7 +315,8 @@ pub fn read_preview(bytes: &[u8], preview_entry: &str) -> Option<Vec<u8>> {
     archive.read(preview_entry, PREVIEW_LIMIT).ok().flatten()
 }
 
-/// Read a bounded preview from a seekable file without loading the full bundle into memory.
+/// Read a preview from a seekable ZIP, including archives with a leading prefix.
+/// The decompressed preview is limited to 4 MiB; archive discovery may perform substantial I/O.
 pub fn read_preview_from<R: Read + Seek>(reader: R, preview_entry: &str) -> Option<Vec<u8>> {
     const PREVIEW_LIMIT: u64 = 4 << 20;
     let mut zip = zip::ZipArchive::new(reader).ok()?;
@@ -326,6 +327,22 @@ pub fn read_preview_from<R: Read + Seek>(reader: R, preview_entry: &str) -> Opti
     let mut preview = Vec::new();
     entry.take(PREVIEW_LIMIT.saturating_add(1)).read_to_end(&mut preview).ok()?;
     (u64::try_from(preview.len()).ok()? <= PREVIEW_LIMIT).then_some(preview)
+}
+
+/// Read a preview only from a ZIP with a local-file header at byte zero.
+///
+/// Use for native formats whose contract excludes prefixed/self-extracting archives.
+/// Nonmatching inputs require at most four bytes read, regardless of the initial cursor position.
+/// Matching ZIPs still require directory I/O; this is not an overall read/time budget.
+pub fn read_unprefixed_preview_from<R: Read + Seek>(mut reader: R, preview_entry: &str) -> Option<Vec<u8>> {
+    reader.seek(std::io::SeekFrom::Start(0)).ok()?;
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic).ok()?;
+    if &magic != b"PK\x03\x04" {
+        return None;
+    }
+    reader.seek(std::io::SeekFrom::Start(0)).ok()?;
+    read_preview_from(reader, preview_entry)
 }
 
 fn read_legacy(bytes: &[u8], spec: Spec<'_>) -> Result<Package, Error> {
@@ -407,6 +424,67 @@ mod tests {
         assert_eq!(loaded.version, 4);
         assert_eq!(loaded.assets, [("7".to_owned(), payload.to_vec())]);
         assert_eq!(read_preview(&bytes, SPEC.preview_entry).as_deref(), Some(&b"png"[..]));
+    }
+
+    /// Counts the bytes read through it.
+    struct Counting<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: Read> Read for Counting<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: Seek> Seek for Counting<R> {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn preview_from_a_reader_reads_a_bundle() {
+        let bytes = write(br#"{}"#, 4, "Test 0.1", Some(b"png"), &[], &[], SPEC).unwrap();
+        assert_eq!(read_preview_from(Cursor::new(&bytes), SPEC.preview_entry).as_deref(), Some(&b"png"[..]));
+    }
+
+    #[test]
+    fn prefixed_bundle_admission_is_explicit() {
+        let bundle = write(br#"{}"#, 4, "Test 0.1", Some(b"png"), &[], &[], SPEC).unwrap();
+        let mut bytes = b"MZsynthetic-prefix".to_vec();
+        bytes.extend(bundle);
+        let mut original = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut preview = Vec::new();
+        original.by_name(SPEC.preview_entry).unwrap().read_to_end(&mut preview).unwrap();
+        assert_eq!(preview, b"png");
+        assert!(has_document(&bytes, SPEC));
+        assert!(!starts_with_mimetype(&bytes, SPEC));
+        assert_eq!(read_preview_from(Cursor::new(&bytes), SPEC.preview_entry), Some(preview));
+        assert_eq!(read_unprefixed_preview_from(Cursor::new(&bytes), SPEC.preview_entry), None);
+    }
+
+    #[test]
+    fn preview_from_an_advanced_reader_still_reads_the_bundle() {
+        let bytes = write(br#"{}"#, 4, "Test 0.1", Some(b"png"), &[], &[], SPEC).unwrap();
+        for offset in [1, 4, bytes.len() / 2, bytes.len()] {
+            let mut reader = Cursor::new(&bytes);
+            reader.set_position(offset as u64);
+            assert_eq!(read_preview_from(reader.clone(), SPEC.preview_entry).as_deref(), Some(&b"png"[..]), "offset {offset}");
+            assert_eq!(read_unprefixed_preview_from(reader, SPEC.preview_entry).as_deref(), Some(&b"png"[..]), "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn preview_from_a_non_zip_reads_only_its_signature() {
+        let mut file = Counting { inner: Cursor::new(vec![0x42u8; 1 << 20]), read: 0 };
+        assert_eq!(read_unprefixed_preview_from(&mut file, SPEC.preview_entry), None);
+        assert!(file.read <= 4, "read {} bytes of a file that is not a zip", file.read);
+        let mut empty = Counting { inner: Cursor::new(Vec::new()), read: 0 };
+        assert_eq!(read_unprefixed_preview_from(&mut empty, SPEC.preview_entry), None);
     }
 
     #[test]

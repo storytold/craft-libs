@@ -1,6 +1,7 @@
 //! Pages for stories and tests: a document of US Letter pages with generated pictures.
 
 use super::view::{PageSource, PlacedPage};
+use craft_behavior::CanvasView;
 use craft_ui::primitives::textures::{FakeThumbSource, Revision, ThumbRender, ThumbRequest, ThumbSource};
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Vec2, pos2};
@@ -12,6 +13,18 @@ const LETTER_WIDTH: f64 = 612.0;
 const LETTER_HEIGHT: f64 = 792.0;
 /// The gap between pages in [`demo_placed`], screen points.
 const GAP: f32 = 12.0;
+
+/// The room around the page [`fitted_page`] leaves, screen points: the margin handles sit just outside the page.
+const FIT_MARGIN: f64 = 24.0;
+
+/// Fits `view` to one US Letter page and returns that page as the view places it, so every edge of the page is on
+/// screen whatever the size of `view.rect`.
+pub fn fitted_page(view: &mut CanvasView, pixels_per_point: f32) -> PlacedPage {
+    let size = Size::new(LETTER_WIDTH, LETTER_HEIGHT);
+    craft_behavior::canvas::zoom::fit(view, size, pixels_per_point, FIT_MARGIN);
+    let rect = Rect::from_min_max(view.to_screen(kurbo::Point::ZERO), view.to_screen(kurbo::Point::new(LETTER_WIDTH, LETTER_HEIGHT)));
+    PlacedPage::new(0, rect, view.zoom, (0.0, rect.height()))
+}
 
 /// The paper of the demo document.
 pub const PAPER: DataColor = DataColor::new(Color32::from_rgb(0xfa, 0xf8, 0xf2));

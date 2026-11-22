@@ -1,7 +1,7 @@
 //! Stories of `TitleRow`.
 
 use super::{HeaderAction, HeaderStrength, TitleRow};
-use crate::contract::{Bind, Pad, Show as _, ShowContainer as _, Validity};
+use crate::contract::{Pad, Show as _, ShowContainer as _, Validity};
 use crate::display::{Divider, Text};
 use crate::layout_components::Stack;
 use crate::primitives::IconSpec;
@@ -33,18 +33,18 @@ fn title_row(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(TitleRow<'static>, covers = [Default])]
 fn title_row_with_disclosure(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TitleRow::new("Layers").disclosure(Bind::bound(data.value("open", false))).show(ui).edit.into()
+    TitleRow::new("Layers").disclosure(data.bind("open", false)).show(ui).edit.into()
 }
 
 #[story(TitleRow<'static>, covers = [Mixed], drive = Drive::Never)]
 fn title_row_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TitleRow::new("Grid").gate(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).edit.into()
+    TitleRow::new("Grid").gate(data.bind_mixed("mixed", Mixed::Mixed)).show(ui).edit.into()
 }
 
 #[story(TitleRow<'static>, covers = [Invalid], drive = Drive::Never)]
 fn title_row_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_on = |on: &bool| if *on { Validity::Refuse(Message::new("Not available")) } else { Validity::Ok };
-    TitleRow::new("Grid").gate(Bind::bound(data.value("gate", true)).check(refuse_on)).show(ui).edit.into()
+    TitleRow::new("Grid").gate(data.bind("gate", true).check(refuse_on)).show(ui).edit.into()
 }
 
 #[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
@@ -55,4 +55,10 @@ fn title_row_with_icon_and_subtitle(ui: &mut Ui, _: &mut StoryData) -> StoryOutp
 #[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
 fn title_row_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TitleRow::new("Preset details").strength(HeaderStrength::Caption).show(ui).edit.into()
+}
+
+#[story(TitleRow<'static>, covers = [], drive = Drive::Never)]
+fn title_row_bar(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    // A floating window's drag bar: no title, the Close action at the end.
+    TitleRow::new("").strength(HeaderStrength::Bar).actions([HeaderAction::Close]).show(ui).edit.into()
 }

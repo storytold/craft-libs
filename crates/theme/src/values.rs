@@ -481,3 +481,6 @@ pub const MOTION_OUTLINE_MS: u32 = 120;
 /// Easing of a selection outline's glide. GridCraft's `ease_out` is `1 - (1 - t)^3` (0.875 at the
 /// half way); `Standard` reaches 0.878 there and is the closest of the three curves.
 pub const MOTION_OUTLINE_EASING: Easing = Easing::Standard;
+
+/// How far switched content slides in, in points (WordCraft's ribbon `CONTENT_SWITCH_SLIDE`, 14 points).
+pub const MOTION_SLIDE_PT: u32 = 14;

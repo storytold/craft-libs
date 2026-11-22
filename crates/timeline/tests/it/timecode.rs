@@ -1,9 +1,10 @@
 //! The timecode field: a drag scrubs a field that is not in edit, and the arrows on the selected text start from its
 //! end. The Timecode panel: each row's menu opens from that row and acts on it.
 
+use craft_keymap::Platform;
 use craft_timeline::ui::{TimecodeField, TimecodePanel, TimecodePanelSettings, TimecodeRow, TimecodeRowKind, TimecodeSource, TimecodeText};
 use craft_timeline::{FrameRate, Tick, TimeFormat};
-use craft_ui::contract::{Bind, Role, Show as _};
+use craft_ui::contract::{Role, Show as _};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, pointer, trial};
 use egui::{Key, Modifiers, Ui, Vec2};
 
@@ -13,7 +14,7 @@ fn start() -> Tick {
 }
 
 fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TimecodeField::new("Time", Bind::bound(data.value("time", start())), TimeFormat::timecode(FrameRate::FPS_30)).show(ui).edit.into()
+    TimecodeField::new("Time", data.bind("time", start()), TimeFormat::timecode(FrameRate::FPS_30)).show(ui).edit.into()
 }
 
 fn fixture() -> Fixture {
@@ -59,7 +60,7 @@ fn rows() -> TimecodePanelSettings {
 
 fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let text = TimecodeText::new(|row| format!("{:?}", row.kind));
-    TimecodePanel::new("Timecode", Bind::bound(data.value("settings", rows())), text).show(ui).into()
+    TimecodePanel::new("Timecode", data.bind("settings", rows()), text).show(ui).into()
 }
 
 fn kinds(fixture: &mut Fixture) -> Vec<TimecodeRowKind> {
@@ -78,6 +79,8 @@ fn open_menu_by_key(fixture: &mut Fixture, readout: &str, key: Key, modifiers: M
 fn a_rows_menu_opens_from_a_secondary_click_or_the_menu_keys_and_acts_on_that_row() {
     use TimecodeRowKind::{CurrentTime, Duration, MediaTime, Remaining};
     let mut fixture = Fixture::story(&Story::new("timecode panel", panel));
+    // The Menu key is a PC key: a Mac keyboard has none, and the shell does not read it there.
+    fixture.os(Platform::Linux);
     fixture.settle();
     let second = "Duration \u{b7} Program: Duration";
     let target = fixture.by_label(second).expect("the second readout");

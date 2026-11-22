@@ -130,6 +130,8 @@ pub(crate) struct ViewMotion {
     pub(crate) animation: ZoomAnimation,
     /// What the tool host or the Navigator asked of the ease since the canvas's last pass.
     pub(crate) steer: Option<Steer>,
+    /// The middle button's autoscroll, with the pass clock of its last step: gesture state, as the ease is.
+    pub(crate) autoscroll: super::navigate::MiddleAutoscroll,
 }
 
 impl ViewMotion {
@@ -163,7 +165,7 @@ pub fn easing_view(ctx: &Context, canvas: Id) -> Option<CanvasView> {
 /// tool host for a tool's view, the Navigator for a preview zoom. The canvas applies it in its next pass.
 pub(crate) fn steer(ctx: &Context, canvas: Id, steer: Steer) {
     with_session(ctx, ViewMotion::id(canvas), |slot: &mut ViewMotion| slot.steer = Some(steer));
-    frame::request_own_repaint(ctx);
+    frame::request_repaint(ctx);
 }
 
 /// The Zoom tool's press held still: past [`DELAY`](Self::DELAY) it zooms in continuously about the press point (out

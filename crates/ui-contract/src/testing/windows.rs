@@ -24,8 +24,9 @@ pub fn applied_actions(ctx: &egui::Context) -> Vec<(egui::ViewportId, crate::run
     crate::runtime::windows::take_sent(ctx)
 }
 
-/// Whether the window of `viewport` has a component that runs its own drag from the window's move band.
-pub fn keeps_app_drag(ctx: &egui::Context, viewport: egui::ViewportId) -> bool {
+/// Whether the app runs the move of `viewport`'s window from its move band (`Overlay::moved_by_app`), as the window
+/// host knows it in the running pass.
+pub fn moved_by_app(ctx: &egui::Context, viewport: egui::ViewportId) -> bool {
     crate::runtime::windows::app_moves(ctx, viewport)
 }
 

@@ -13,6 +13,7 @@
 
 pub mod annotate;
 pub mod avatar;
+pub mod balloons;
 pub mod chat;
 pub mod comments;
 pub mod join;
@@ -25,6 +26,7 @@ pub mod vote;
 
 pub use annotate::{AnnotateTool, AnnotateWords, AnnotationOverlay, AnnotationToolbar, AnnotationToolbarOutput, PALETTE};
 pub use avatar::{Avatar, AvatarOutput, paint_avatar};
+pub use balloons::{BalloonItem, BalloonPlace, BalloonWords, CommentBalloons, CommentBalloonsOutput};
 pub use chat::{ChatWords, CursorChatBox, CursorChatBoxOutput, ReviewCommand, paint_chat_bubble};
 pub use comments::{CommentEdit, CommentsPanel, CommentsPanelOutput, CommentsPanelState, CommentsWords};
 pub use join::{JoinField, JoinFieldOutput, JoinWords};

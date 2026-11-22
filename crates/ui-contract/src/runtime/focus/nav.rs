@@ -117,6 +117,7 @@ impl Lists<'_> {
 impl State {
     pub(super) fn rotate(&mut self) {
         self.last_stops = std::mem::take(&mut self.stops);
+        self.stop_ids.clear();
         self.last_scopes = std::mem::take(&mut self.scopes);
         self.last_scope_order = std::mem::take(&mut self.scope_order);
         self.last_groups = std::mem::take(&mut self.groups);
@@ -167,11 +168,14 @@ impl State {
         self.focus_stop_from(rec, FocusOrigin::Request)
     }
 
-    /// [`focus_stop`](Self::focus_stop) with what moved focus there.
+    /// [`focus_stop`](Self::focus_stop) with what moved focus there. A stop that inherits the focus from a removed one
+    /// is not revealed: nothing chose to show it.
     fn focus_stop_from(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         let key = rec.stop.key();
         let acts = self.enter_stop(rec, origin);
-        self.revealed = Some(key);
+        if origin != FocusOrigin::Removal {
+            self.revealed = Some(key);
+        }
         acts
     }
 
@@ -254,7 +258,26 @@ impl State {
     }
 
     fn entries(&self, scope_root: Option<Id>, all_controls: bool) -> Vec<Entry> {
-        self.last().entries(|rec| self.in_scope(rec.scope, scope_root), all_controls)
+        self.last().entries(|rec| self.reaches(rec.scope, scope_root), all_controls)
+    }
+
+    /// Whether Tab and F6 inside the scope `root` reach a stop of `scope`: it lies inside `root`, and not inside a
+    /// layer opened within `root` that takes no focus, traps nothing and restores nothing (a menu's companion bar).
+    fn reaches(&self, scope: Option<Id>, root: Option<Id>) -> bool {
+        let Some(root) = root else { return true };
+        let mut at = scope;
+        while let Some(id) = at {
+            if id == root {
+                return true;
+            }
+            let Some(rec) = self.last_scopes.get(&id) else { return false };
+            let unreached = rec.entering.is_some() && !rec.policy.trap && !rec.policy.restore && rec.policy.initial == Initial::Keep;
+            if unreached {
+                return false;
+            }
+            at = rec.parent;
+        }
+        false
     }
 
     /// The stops of the running pass that keyboard focus reaches, among those `keep` takes, in Tab order: every member
@@ -315,15 +338,20 @@ impl State {
         self.focus_stop(arrival)
     }
 
-    /// F6: the first stop of the next pane, with its label as the announcement.
+    /// F6: the first stop of the next pane, with its label as the announcement. Inside a trapping scope (a modal
+    /// dialog or a popup, also when nothing in it is focused) F6 moves nothing and announces nothing: a pane move
+    /// would carry the focus out of the trap, which only closing the dialog may do.
     pub(super) fn pane(&mut self, forward: bool, all_controls: bool) -> (Vec<Act>, Vec<String>) {
+        let current = self.stop_of_focus();
+        if self.trap_of(current.as_ref()).is_some() {
+            return (Vec::new(), Vec::new());
+        }
         let panes: Vec<Id> = self
             .last_scope_order
             .iter()
             .copied()
             .filter(|id| self.last_scopes.get(id).is_some_and(|scope| scope.policy.kind == ScopeKind::Pane))
             .collect();
-        let current = self.stop_of_focus();
         let here = current.as_ref().and_then(|rec| self.pane_of(rec));
         let at = here.and_then(|pane| panes.iter().position(|id| *id == pane));
         let next = match (at, forward) {
@@ -362,8 +390,10 @@ impl State {
         let found = self.find_stop(key).or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.id == key.0).cloned());
         match found {
             Some(rec) => self.focus_stop(rec),
+            // An app's own widget, or a stop that registers later in this pass, which then takes the focus.
             None => {
                 self.revealed = Some(key);
+                self.awaited = Some(key);
                 self.focus_now = Some(key.0);
                 vec![Act::Focus(key.0, Default::default())]
             }
@@ -641,7 +671,7 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
     match pick.cloned() {
         Some(rec) => {
             state.entered = true;
-            state.focus_stop(rec)
+            state.focus_stop_from(rec, FocusOrigin::Open)
         }
         None => Vec::new(),
     }
@@ -713,6 +743,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),
+        menu_bar_by_claim: std::mem::take(&mut state.menu_bar_by_claim),
         foreign: false,
         host_focus: false,
         host_text: false,

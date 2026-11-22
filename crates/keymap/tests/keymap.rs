@@ -2,7 +2,7 @@
 
 use craft_keymap::{
     Active, Binding, Chord, CommandDef, CommandRef, DropReason, Key, KeyInput, Keymap, Layout, Lookup, MAX_COMMANDS, Matcher, Mods, Overrides,
-    Platform, Press, Problem, Scope, Scopes,
+    Platform, Policy, Press, Problem, Scope, Scopes,
 };
 use serde_json::json;
 
@@ -95,6 +95,28 @@ fn a_command_shows_only_the_chords_the_lookup_runs_it_for() {
 
     let alone = Keymap::new(vec![app("layer.hide", &["Cmd+,"]), app("edit.settings", &["Cmd+,"])], Scopes::new(), Platform::Mac);
     assert_eq!(alone.shown_chord(&cmd("edit.settings")), None, "every key shadowed");
+}
+
+/// The shown chords are worked out when the bindings change, not per call, and follow every change: a key freed by one
+/// command shows on the command it no longer shadows, and a stolen key leaves the command it was taken from.
+#[test]
+fn shown_chords_follow_binding_changes_and_reads_work_out_nothing() {
+    let catalog = vec![app("layer.hide", &["Cmd+,"]), app("edit.settings", &["Cmd+,", "Cmd+Alt+,"]), app("view.extras", &["Cmd+H"])];
+    let mut km = Keymap::new(catalog, Scopes::new(), Platform::Mac);
+    let built = km.shown_builds();
+    for _ in 0..100 {
+        assert_eq!(km.shown_chord(&cmd("edit.settings")), Some(chord("Cmd+Alt+,")));
+    }
+    assert_eq!(km.shown_builds(), built, "reads work out no chord");
+
+    assert!(km.clear(&cmd("layer.hide")));
+    assert_eq!(km.shown_chord(&cmd("edit.settings")), Some(chord("Cmd+,")), "the freed key shows on the command it no longer shadows");
+    km.assign(&cmd("view.extras"), b("Cmd+,"), Policy::Steal).expect("steal");
+    assert_eq!(km.shown_chord(&cmd("view.extras")), Some(chord("Cmd+H")));
+    assert_eq!(km.shown_chord(&cmd("edit.settings")), Some(chord("Cmd+Alt+,")), "a stolen key leaves the command it was taken from");
+    km.reset_all();
+    assert_eq!(km.shown_chord(&cmd("layer.hide")), Some(chord("Cmd+,")));
+    assert_eq!(km.shown_chord(&cmd("edit.settings")), Some(chord("Cmd+Alt+,")));
 }
 
 #[test]
@@ -194,4 +216,68 @@ fn the_alt_variant_follows_the_commands_key_and_yields_to_a_bound_alt_chord() {
 
     let km = Keymap::new(vec![app("layer.new.layer", &["F2"])], Scopes::new(), Platform::Mac);
     assert!(hit(&km, &alt(Key::F2, false, false)).is_none(), "a command that did not opt in has no Alt variant");
+}
+
+/// A press passes over the binding of a command the caller refuses (one disabled where it lands): the chord's binding
+/// in an outer scope runs instead, the lookup says the same, and with every holder refused the press runs nothing.
+#[test]
+fn a_refused_command_leaves_its_chord_to_the_next_binding() {
+    let km = Keymap::new(
+        vec![in_scope("view.zoomIn", "Canvas", &["Cmd+="]), app("format.subscript", &["Cmd+="])],
+        Scopes::new().with_panel("Canvas"),
+        Platform::Linux,
+    );
+    let input = KeyInput::new(Mods { cmd: true, ctrl: false, alt: false, shift: false }).with_physical(Key::Equals);
+    let active = Active::panel("Canvas");
+    let press = Press { input: &input, repeat: false, now: 0.0, active: &active, outer: &[] };
+    let hit = |accept: &dyn Fn(&CommandRef) -> bool| Matcher::new().press_where(&Layout::new(), &km, &press, accept).map(|hit| hit.command);
+    assert_eq!(hit(&|_| true), Some(cmd("view.zoomIn")), "the canvas's binding ranks first");
+    assert_eq!(hit(&|c| c.id != "view.zoomIn"), Some(cmd("format.subscript")), "refused, it leaves the chord to the app's binding");
+    assert_eq!(hit(&|_| false), None, "with every holder refused the press runs nothing");
+    let refused = |c: &CommandRef| c.id != "view.zoomIn";
+    assert_eq!(km.lookup_where(&chord("Cmd+="), false, &active, &[], &refused), Lookup::Run(cmd("format.subscript")));
+    let all = Matcher::new().press(&Layout::new(), &km, &press).map(|hit| hit.command);
+    assert_eq!(all, Some(cmd("view.zoomIn")), "a plain press accepts every command");
+}
+
+/// Rule 3's exception (lead ruling): on a layout where `=` is ⇧0 (German), Ctrl+Shift+0 types `=` with Shift held.
+/// Rule 3 reads it as Ctrl+=, but when the keymap binds Ctrl+Shift+= that binding runs (Word's Superscript, not
+/// Subscript), as the old app did; with Ctrl+Shift+= unbound the press is Ctrl+= as before. The layout's own reading,
+/// which recording and claims use, keeps rule 3.
+#[test]
+fn a_held_shift_runs_the_shift_kept_binding_before_rule_3_drops_it() {
+    let shift_zero = KeyInput::new(Mods { cmd: true, ctrl: false, alt: false, shift: true }).with_typed(Key::Equals).with_physical(Key::Num0);
+    let ran = |defs: Vec<CommandDef>| {
+        let km = Keymap::new(defs, Scopes::new(), Platform::Linux);
+        let press = Press { input: &shift_zero, repeat: false, now: 0.0, active: &Active::NONE, outer: &[] };
+        Matcher::new().press(&Layout::new(), &km, &press).map(|hit| hit.command)
+    };
+    let both = vec![app("format.subscript", &["Cmd+="]), app("format.superscript", &["Cmd+Shift+="])];
+    assert_eq!(ran(both), Some(cmd("format.superscript")), "the Shift-kept binding wins");
+    assert_eq!(ran(vec![app("format.subscript", &["Cmd+="])]), Some(cmd("format.subscript")), "unbound, rule 3 holds");
+    assert_eq!(Layout::new().resolve(&shift_zero), Some(chord("Cmd+=")), "the press is still recorded as rule 3 reads it");
+}
+
+/// Tools that share a chord: within one group a press cycles through them, so each shows the chord; across groups the
+/// first in catalog order runs, so only it shows the chord. `shown_chord` decides on catalog positions (#15493) and
+/// must answer as the lookup does.
+#[test]
+fn tools_sharing_a_chord_show_it_as_the_lookup_runs_them() {
+    use craft_keymap::CommandKind;
+    let tool = |id: &str, group: &str, keys: &[&str]| app(id, keys).with_kind(CommandKind::Tool { group: Some(group.into()) });
+    let catalog = vec![
+        tool("tool.marquee", "select", &["M"]),
+        tool("tool.ellipse", "select", &["M"]),
+        tool("tool.move", "move", &["V"]),
+        tool("tool.artboard", "board", &["V"]),
+    ];
+    let km = Keymap::new(catalog, scopes(), Platform::Mac);
+    assert_eq!(press(&km, "M", &Active::NONE), Lookup::Cycle(vec![cmd("tool.marquee"), cmd("tool.ellipse")]));
+    assert_eq!(km.shown_chord(&cmd("tool.marquee")), Some(chord("M")), "a cycle runs its first tool");
+    assert_eq!(km.shown_chord(&cmd("tool.ellipse")), Some(chord("M")), "and its other tools");
+    assert_eq!(press(&km, "V", &Active::NONE), run("tool.move"));
+    assert_eq!(km.shown_chord(&cmd("tool.move")), Some(chord("V")), "of two groups the first runs");
+    assert_eq!(km.shown_chord(&cmd("tool.artboard")), None, "the other group's tool never runs on V");
+    // A command with empty parameters is the same command.
+    assert_eq!(km.shown_chord(&CommandRef::with_params("tool.move", serde_json::json!({}))), Some(chord("V")));
 }

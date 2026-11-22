@@ -16,8 +16,8 @@ use egui::{Response, Ui};
 use std::cell::RefCell;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The commands of a section, run on the section that holds the focus: its header menu rows and any chord the keymap
 /// binds. Showing a hidden section is a row of the menu, one per section, because a hidden section cannot hold focus.

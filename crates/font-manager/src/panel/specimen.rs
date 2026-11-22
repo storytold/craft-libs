@@ -1,5 +1,7 @@
 //! `FontSample`: text in a font face at the user's sample size, on one line at the reading start of its rect.
 
+use std::borrow::Cow;
+
 use craft_behavior::Sense;
 use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::fonts::FontRef;
@@ -12,8 +14,8 @@ use crate::Catalog;
 use crate::FaceInfo;
 use crate::panel::faces::{self, Owner, Shown};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The ink of a sample: the text colour for a face that drew, the muted one for the interface face standing in.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -37,7 +39,7 @@ pub(crate) enum SampleFace<'a> {
 }
 
 impl SampleFace<'_> {
-    fn shown(&self, at: &impl craft_ui::primitives::FacesCx) -> Shown {
+    pub(crate) fn shown(&self, at: &impl craft_ui::primitives::FacesCx) -> Shown {
         match self {
             SampleFace::Face { catalog, owner, face } => faces::shown(at, catalog, *owner, face),
             SampleFace::Interface => Shown::Unavailable,
@@ -57,15 +59,15 @@ impl SampleFace<'_> {
 pub(crate) struct FontSample<'a> {
     #[common]
     common: Common,
-    text: &'a str,
+    text: Cow<'a, str>,
     face: SampleFace<'a>,
     points: f32,
 }
 
 impl<'a> FontSample<'a> {
     /// A sample of `text` in `face` at `points`, named `label`.
-    pub(crate) fn new(label: impl Into<Label>, text: &'a str, face: SampleFace<'a>, points: f32) -> Self {
-        FontSample { common: Common::new(), text, face, points }.label(label)
+    pub(crate) fn new(label: impl Into<Label>, text: impl Into<Cow<'a, str>>, face: SampleFace<'a>, points: f32) -> Self {
+        FontSample { common: Common::new(), text: text.into(), face, points }.label(label)
     }
 }
 
@@ -93,7 +95,7 @@ impl Component for FontSample<'_> {
             Shown::Ready(font) => font,
             _ => FontRef::proportional(),
         };
-        let runs = [DocRun::new(self.text, font, self.points, DataColor::new(Color32::PLACEHOLDER))];
+        let runs = [DocRun::new(self.text.as_ref(), font, self.points, DataColor::new(Color32::PLACEHOLDER))];
         cx.layout_doc(&faces::sample_text(&runs, cx.room)).size()
     }
 
@@ -101,9 +103,9 @@ impl Component for FontSample<'_> {
         let painter = ui.content_painter(cx);
         let ink = |color: StyleColor| DataColor::new(color.egui());
         match self.face.shown(cx) {
-            Shown::Ready(font) => faces::paint_sample(&painter, cx.content_rect, &font, self.text, self.points, ink(cx.style.ink)),
+            Shown::Ready(font) => faces::paint_sample(&painter, cx.content_rect, &font, &self.text, self.points, ink(cx.style.ink)),
             Shown::Unavailable => {
-                faces::paint_sample(&painter, cx.content_rect, &FontRef::proportional(), self.text, self.points, ink(cx.style.muted));
+                faces::paint_sample(&painter, cx.content_rect, &FontRef::proportional(), &self.text, self.points, ink(cx.style.muted));
             }
             _ => {}
         }

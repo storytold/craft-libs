@@ -63,7 +63,7 @@ fn a_side_label_stays_on_the_first_line_of_its_control() {
     let fixture = settled_in(|ui| {
         Field::new("Light theme").show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
-                Swatch::new("Light", GREY).show(ui);
+                Swatch::new("Light", GREY).keeps_name(true).show(ui);
                 Text::new("Active").show(ui);
             });
         });

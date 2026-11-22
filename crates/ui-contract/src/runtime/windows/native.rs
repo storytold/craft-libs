@@ -5,11 +5,11 @@ use super::host::scale_of;
 #[cfg(doc)]
 use super::logic;
 use super::shell::{base_shell, os_of, window_info};
-use super::spec::WindowLevel;
+use super::spec::{Standing, WindowLevel};
 use super::{HandOff, Record, SEARCH_EVERY, shared};
 use crate::runtime::egui::{pass, viewports};
 use crate::runtime::frame::{PerViewport, Stored};
-use craft_host::target::{Caps, DoubleClick, WindowState};
+use craft_host::target::{Caps, DoubleClick, Os, WindowState};
 use craft_window::native::NativeWindow;
 use craft_window::policy::Frame;
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
@@ -40,14 +40,21 @@ pub enum WindowAction {
     SetMaximized(bool),
     /// Raises the window and gives it OS focus.
     Focus,
+    /// Brings the window in front of the app's other windows without giving it focus, as the window holding an
+    /// app-modal layer comes in front of the palettes the modal lowered.
+    Raise,
     /// The OS starts moving the window with the pointer.
     StartMove,
     /// The OS starts resizing the window from `edge`.
     StartResize(ResizeEdge),
     /// Moves the window's outer top-left corner to a desktop position in points.
     SetOuterPosition(Pos2),
-    /// Sizes the window's inner area in points.
+    /// Sizes the window's inner area in points; its outer top-left corner stays where it is known to be.
     SetInnerSize(Vec2),
+    /// Restores a minimized window.
+    Restore,
+    /// Sets the smallest inner size the window can be given, in points.
+    SetMinInnerSize(Vec2),
     /// Changes the window's level.
     SetLevel(WindowLevel),
     /// Changes the window's title.
@@ -93,8 +100,11 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
         | WindowAction::StartMove
         | WindowAction::SetOuterPosition(_)
         | WindowAction::SetInnerSize(_)
+        | WindowAction::Restore
+        | WindowAction::SetMinInnerSize(_)
         | WindowAction::SetLevel(_)
-        | WindowAction::SetTitle(_) => commands,
+        | WindowAction::SetTitle(_)
+        | WindowAction::Raise => commands,
         WindowAction::SetOpacity(_) => false,
     };
     if !allowed {
@@ -103,6 +113,7 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
     match action {
         WindowAction::Close => viewports::close(ctx, viewport),
         WindowAction::Focus => viewports::raise(ctx, viewport),
+        WindowAction::Raise => viewports::raise_above(ctx, viewport, standing(ctx, viewport, level_of(ctx, viewport)).level),
         WindowAction::Minimize => viewports::command(ctx, viewport, egui::ViewportCommand::Minimized(true)),
         WindowAction::ToggleMaximize => viewports::command(ctx, viewport, egui::ViewportCommand::Maximized(window.state != WindowState::Maximized)),
         WindowAction::ToggleFullscreen => {
@@ -127,8 +138,21 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
         }
         WindowAction::SetInnerSize(size) => {
             viewports::command(ctx, viewport, egui::ViewportCommand::InnerSize(size));
-            PerViewport::<Record>::with(ctx, viewport, |record| record.known = record.known.map(|known| Rect::from_min_size(known.min, size)));
+            let known = PerViewport::<Record>::with(ctx, viewport, |record| {
+                record.known = record.known.map(|known| Rect::from_min_size(known.min, size));
+                record.known
+            });
+            // AppKit keeps a window's bottom-left corner when its size changes (`setContentSize`), so a new height
+            // moves its top edge: the window goes back to the top-left corner its caller knows it at, which a position
+            // sent before the size has already set.
+            if base.os == Os::Mac
+                && let Some(known) = known
+            {
+                viewports::command(ctx, viewport, egui::ViewportCommand::OuterPosition(known.min));
+            }
         }
+        WindowAction::Restore => viewports::command(ctx, viewport, egui::ViewportCommand::Minimized(false)),
+        WindowAction::SetMinInnerSize(size) => viewports::command(ctx, viewport, egui::ViewportCommand::MinInnerSize(size)),
         WindowAction::SetLevel(level) => {
             // A window opened by `show_viewport` gets its level with the next build of its viewport; any other (the
             // root) is told now.
@@ -139,11 +163,13 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
             if opened {
                 ctx.request_repaint_of(viewport);
             } else {
-                let active = !shared(ctx, |shared| shared.away);
-                viewports::command(ctx, viewport, egui::ViewportCommand::WindowLevel(level.for_egui(active, os_of(ctx))));
+                viewports::command(ctx, viewport, egui::ViewportCommand::WindowLevel(standing(ctx, viewport, level).level));
             }
         }
         WindowAction::SetTitle(title) => {
+            // X11 rejects a title holding a NUL, so the host drops it before the compare: a title that differs only by
+            // NULs is the one already sent.
+            let title: String = title.chars().filter(|c| *c != '\0').collect();
             // `ViewportInfo::title` is empty on X11 and Wayland, so the host remembers what it set itself.
             let fresh = PerViewport::<SentTitle>::with(ctx, viewport, |sent| {
                 let fresh = sent.0.as_deref() != Some(title.as_str());
@@ -159,6 +185,16 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
         WindowAction::SetOpacity(_) => {}
     }
     true
+}
+
+/// The level `viewport`'s window was opened with or last set to.
+fn level_of(ctx: &Context, viewport: ViewportId) -> WindowLevel {
+    PerViewport::<Record>::with(ctx, viewport, |record| record.level.unwrap_or_default())
+}
+
+/// How `viewport`'s window at `level` stands in the app's current state.
+fn standing(ctx: &Context, viewport: ViewportId, level: WindowLevel) -> Standing {
+    level.standing(viewport, shared(ctx, |shared| shared.app), os_of(ctx))
 }
 
 /// Applies `opacity` to the OS window. A faded window is told again in every pass, because the window system's own
@@ -196,20 +232,11 @@ fn native_of(ctx: &Context, viewport: ViewportId) -> Option<NativeWindow> {
     found
 }
 
-/// Records that the app runs the move of `viewport`'s window from its move band, as the floating dock group does to
-/// dock its window, on every platform: the band's press starts the window's move gesture (Begin, Update, Commit or
-/// Cancel through `placement_changed`, as a layer's move reports), not the OS's move, and the Windows hit test leaves
-/// the band to the app. Runs in each pass of the component.
-#[doc(hidden)]
-pub fn keeps_app_drag(ctx: &Context, viewport: ViewportId) {
-    PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag = true);
-}
-
 /// Routes the Windows hit test of `viewport`'s window to its hit sink, once, when the OS window exists and the app
 /// draws its frame. A platform without the routing leaves the sink uninstalled, so the app moves and resizes the
 /// window itself.
 pub(super) fn route_hit_test(ctx: &Context, viewport: ViewportId) {
-    if hit_sink_installed(ctx, viewport) || PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag) {
+    if hit_sink_installed(ctx, viewport) || PerViewport::<Record>::with(ctx, viewport, |record| record.moved_by_app) {
         return;
     }
     let Some(native) = native_of(ctx, viewport) else { return };

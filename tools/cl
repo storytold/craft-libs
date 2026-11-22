@@ -9,7 +9,7 @@
                                                   the component's stories (--card: its Overview cards) as PNGs through the story-render bin
     cl features <crate>                           print the --features value cl adds for <crate>
     cl doctor                                     check the manifests for drift from the one feature resolution
-    cl cargo <args...>                            cargo through the job pool, nothing added
+    cl cargo <args...>                            cargo through the job pool, the dev profile settings added
 
 In an app workspace (one whose root Cargo.toml has `[workspace.metadata.cl]`) the commands are different; see "App
 workspaces" below:
@@ -31,7 +31,7 @@ the story renderer each pull in different crates, which turn on different featur
 others below the framework, so each would build its own copy of the framework (minutes, and wgpu again). cl selects
 the `feature-root` package beside every command's package: its dependencies are the gallery's, with every domain
 crate, so every command resolves features as the gallery does and builds only the targets it names. The crate's own
-test feature (`screen-testing`, else `testing`) is added on top. Builds that take other features (CI's
+test feature (`suite`, else `screen-testing`, else `testing`) is added on top. Builds that take other features (CI's
 `--all-features`, wasm checks) belong on GitHub. docs/development.md has the whole picture.
 
 Records: every build cl composes passes cargo's --timings (a report per build in <target>/cargo-timings/, the newest
@@ -68,7 +68,7 @@ ROOT = "feature-root"
 # Domain crates the story renderer can link, by the crate's short name.
 RENDER_FEATURES = {
     "automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
-    "theme-store", "timeline", "dialogs", "font-manager", "update",
+    "theme-editor", "theme-store", "timeline", "dialogs", "font-manager", "update",
 }
 REFUSED = {
     "--all-features": "it enables snapshot, system_fonts, color_fonts, all-languages and more, a set no loop uses, which rebuilds every dependency and the whole framework once; CI runs it",
@@ -95,6 +95,21 @@ APP_FEATURE_FLAGS = ("--features", "-F", "--no-default-features")
 # Set by main() from the workspace's `[workspace.metadata.cl]` in an app workspace; None in craft-libs.
 APP = None
 DRY_RUN = bool(os.environ.get("CL_DRY_RUN"))
+# The dev-build tuning of craft-libs, passed to every cargo command as `--config`. It lives here and not in Cargo.toml
+# because CI builds with the `[profile]` table of main (its cache key hashes that table), so CI's artifacts and cache
+# match main's; these settings speed up local screen tests, the debug gallery and design-lint.
+# lto off: with cargo's default rustc runs thin-local LTO across every optimised crate's codegen units on each rebuild;
+# off, a one-line edit re-optimises only the changed units. Dependencies build at opt-level 2, once per target dir.
+# craft-theme, craft-behavior and craft-proof run in every screen-test frame or in dictionary-sized tests and are rarely
+# edited, so they build at opt-level 1; every other workspace crate stays at 0, where rustc shares generic
+# instantiations across crates and an edit to the runtime (craft-ui-contract) rebuilds in seconds.
+DEV_PROFILE_CONFIG = [
+    'profile.dev.lto="off"',
+    'profile.dev.package."*".opt-level=2',
+    "profile.dev.package.craft-theme.opt-level=1",
+    "profile.dev.package.craft-behavior.opt-level=1",
+    "profile.dev.package.craft-proof.opt-level=1",
+]
 # What cl.log records about this command; filled in as it runs.
 RECORD = {"start": time.time(), "target": None, "build": None, "run": 0.0, "report": ""}
 # The manifest lines the one feature set rests on: (file, regex that must match, what its absence brings back).
@@ -168,6 +183,8 @@ def package(packages, name):
 def canonical(packages, name):
     """The package's name and the features cl adds for it, qualified: its own test feature."""
     p = package(packages, name)
+    if "suite" in p["features"]:
+        return p["name"], [p["name"] + "/suite"]
     if "screen-testing" in p["features"]:
         return p["name"], [p["name"] + "/screen-testing"]
     if "testing" in p["features"] and p["name"] != "craft-ui-test-kit":
@@ -204,7 +221,7 @@ def doctor(top, packages, quiet=False):
     gallery = packages.get("craft-ui-gallery")
     if gallery:
         for d in gallery["dependencies"]:
-            if d["name"].startswith("craft-") and "screen-testing" in d["features"] and not d["optional"]:
+            if d["name"].startswith("craft-") and "suite" in d["features"] and not d["optional"]:
                 problems.append(f"crates/ui-gallery/Cargo.toml: {d['name']} must be optional (one feature per domain crate), or the story renderer links every crate")
     root = packages.get(ROOT)
     if not root:
@@ -334,7 +351,9 @@ def cargo(top, cargo_args, json_out=False, timings=True):
         RECORD["target"] = target
     if timings:
         cargo_args = cargo_args[:1] + ["--timings"] + cargo_args[1:]
-    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + cargo_args
+    # An app workspace keeps its own profile settings.
+    config = [] if APP else [x for c in DEV_PROFILE_CONFIG for x in ("--config", c)]
+    cmd = shlex.split(env.get("CL_LAUNCHER", "")) + ["cargo"] + config + cargo_args
     print("cl: " + " ".join(cmd) + f"  (target {target})", file=sys.stderr)
     sys.stdout.flush()
     if DRY_RUN:
@@ -697,7 +716,8 @@ def app_main(top, packages, command, rest):
     if command == "test":
         app_test(top, packages, rest)
     if command == "check":
-        app_package(name)
+        if name != "all":
+            app_package(name)
         run(top, ["check", "--lib", "--tests"] + app_selected() + args)
     if command == "build":
         # An example builds in the dev profile with the dev-dependencies' features, the units the test build resolved.

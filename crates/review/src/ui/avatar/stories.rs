@@ -11,6 +11,11 @@ fn avatar_accent(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(Avatar, covers = [], drive = Drive::Never)]
+fn avatar_initials(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Avatar::new("Ana Reyes").initials("Q").show(ui).into()
+}
+
+#[story(Avatar, covers = [], drive = Drive::Never)]
 fn avatar_filled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Avatar::new("Bo Chen").fill([232, 160, 40]).show(ui).into()
 }

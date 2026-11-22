@@ -11,9 +11,10 @@ use crate::contract::{
     Collection, Common, Component, Cx, DragPreview, DropMark, DropTarget, Focus as _, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role,
     Show as _, WordSetCx as _,
 };
-use crate::primitives::{DataWidth, PaintShape};
+use crate::primitives::{DataMode, DataWidth, PaintShape};
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::access::items::{HeaderCell, report_header};
+use crate::runtime::access::{Name, SubDecl, SubNode, report_sub};
 use crate::runtime::commands::{self, CommandRef, CommandSet, CommandState};
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Label};
@@ -34,6 +35,8 @@ const HEADER: PartKey = PartKey::new("header");
 const GRIP: PartKey = PartKey::new("header_grip");
 /// The empty header after the last column: a secondary click on it asks for the header menu.
 const ROOM: PartKey = PartKey::new("header_room");
+/// A column's remove control at the end of its header cell.
+const REMOVE: PartKey = PartKey::new("header_remove");
 /// The narrowest a resized column gets, in control heights.
 const MIN_COLUMN: f32 = 2.0;
 
@@ -139,6 +142,8 @@ struct Cell {
     spec: usize,
     rect: Rect,
     hash: u64,
+    /// The remove control's rect inside the cell, for a column with one.
+    remove: Option<Rect>,
 }
 
 #[derive(Default)]
@@ -149,8 +154,12 @@ pub(super) struct Header {
     /// The collection binds its column layout (`column_layout`): the binding holds the arrangement, not the memory.
     bound: bool,
     specs: Vec<ColumnSpec>,
-    /// The widest cell of each `Content` column among all rows, or its header label when wider, from the items'
-    /// measure of this pass (`content_id`); zero for the other columns and while unknown.
+    /// The columns whose header cell the collection hosts a component in (`Collection::hosts_header`): they paint no
+    /// label and are no sort target.
+    hosted: Vec<ColumnKey>,
+    /// The widest cell of each `Content` column among all rows, or its header label or its least width
+    /// (`ColumnSpec::min_width`) when wider, from the items' measure of this pass (`content_id`); zero for the other
+    /// columns and while unknown.
     content: Vec<f32>,
     /// The column a double click on its edge fits to its widest cell in view, with its width as shown.
     pub(super) fit: Option<(ColumnKey, f32)>,
@@ -185,7 +194,8 @@ fn hash_of(key: &ColumnKey) -> u64 {
 impl Header {
     /// Step 4: the columns in their display order and the header's session memory. A `bound` layout (the
     /// collection's `column_layout`) is the arrangement; the session memory keeps the menu and the resizes.
-    pub(super) fn read(&mut self, stage: &mut MemoryStage, id: Id, props: &CollectionProps, bound: Option<ColumnLayout>) {
+    pub(super) fn read(&mut self, stage: &mut MemoryStage, id: Id, props: &CollectionProps, bound: Option<ColumnLayout>, hosted: Vec<ColumnKey>) {
+        self.hosted = hosted;
         self.memory = stage.session::<HeaderMemory>(sub(id, "columns")).clone();
         self.bound = bound.is_some();
         if let Some(layout) = bound {
@@ -262,8 +272,10 @@ impl Header {
             .specs
             .iter()
             .map(|spec| {
-                let measured = matches!(spec.width, ColumnWidth::Content).then(|| layout_memory::measured(ctx, content_id(id, &spec.key))).flatten();
-                measured.map_or(0.0, |measured| measured.took.x)
+                if !matches!(spec.width, ColumnWidth::Content) {
+                    return 0.0;
+                }
+                layout_memory::measured(ctx, content_id(id, &spec.key)).map_or(0.0, |measured| measured.took.x).max(spec.min_width)
             })
             .collect();
     }
@@ -396,16 +408,16 @@ impl Header {
             let (rect, rest) = flow.take_start(width);
             flow = rest;
             let hash = hash_of(&spec.key);
-            let mut sense = Sense::CLICK | Sense::FOCUS;
-            if spec.movable {
+            let hosted = self.hosted.contains(&spec.key);
+            // A hosted cell is covered by its component, which takes every press and is the cell's keyboard stop (it
+            // joins this group where it is shown): the cell's own part only hovers, so it has no pointer path to name.
+            let mut sense = if hosted { Sense::empty() } else { Sense::CLICK | Sense::FOCUS };
+            if spec.movable && !hosted {
                 sense |= Sense::DRAG;
             }
-            pcx.part(HEADER.at(hash), shown(rect))
-                .sense(sense)
-                .focusable()
-                .priority(HitPriority::new(HitLevel::Body, 0))
-                .state_layer()
-                .tooltip(spec.tip.clone().unwrap_or_else(|| help.clone()));
+            let part = pcx.part(HEADER.at(hash), shown(rect)).sense(sense);
+            let part = if hosted { part } else { part.focusable() };
+            part.priority(HitPriority::new(HitLevel::Body, 0)).state_layer().tooltip(spec.tip.clone().unwrap_or_else(|| help.clone()));
             if spec.resizable {
                 let edge = if rtl {
                     Rect::from_min_size(rect.min, Vec2::new(grip, rect.height()))
@@ -418,7 +430,24 @@ impl Header {
                     .cursor(CursorIcon::ResizeHorizontal)
                     .pointer_only("Resize Column… resizes from the keyboard");
             }
-            self.cells.push(Cell { spec: at, rect, hash });
+            let remove = spec.remove.as_ref().map(|remove| {
+                let side = self.height.min(rect.width());
+                let end = if rtl { rect.min.x + grip } else { rect.max.x - grip };
+                let place = if rtl {
+                    Rect::from_min_max(Pos2::new(end, rect.min.y), Pos2::new(end + side, rect.max.y))
+                } else {
+                    Rect::from_min_max(Pos2::new(end - side, rect.min.y), Pos2::new(end, rect.max.y))
+                };
+                pcx.part(REMOVE.at(hash), shown(place))
+                    .sense(Sense::CLICK | Sense::FOCUS)
+                    .focusable()
+                    .inactive(!remove.enabled)
+                    .priority(HitPriority::new(HitLevel::Body, 2))
+                    .state_layer()
+                    .tooltip(remove.name.clone());
+                place
+            });
+            self.cells.push(Cell { spec: at, rect, hash, remove });
         }
         let room = shown(flow.rect());
         self.room = (room.width() > 0.0).then_some(room);
@@ -498,8 +527,14 @@ impl Header {
     pub(super) fn apply_fit(&mut self, ui: &Ui, env: &crate::runtime::env::EnvView<'_>, widest: f32) {
         let Some((key, shown)) = self.fit.take() else { return };
         let Some(at) = self.specs.iter().position(|spec| spec.key == key) else { return };
-        let label = self.label_width(ui, env, at);
+        let label = self.label_width(ui, env, at) + self.remove_side(at);
         self.resize(&key, widest.max(label), shown);
+    }
+
+    /// The width the remove control of the column at `at` takes from its cell: the header's height, or nothing for a
+    /// column without one.
+    fn remove_side(&self, at: usize) -> f32 {
+        if self.specs[at].remove.is_some() { self.height } else { 0.0 }
     }
 
     /// Moves `key` to display position `to`: the session order changes and the move is reported.
@@ -549,18 +584,28 @@ impl Header {
         let active =
             cx.active_part().filter(|part| part.key == HEADER).and_then(|part| self.cells.iter().position(|cell| Some(cell.hash) == part.index));
         let keyed = active.is_some() && (cx.core.intents.take(Intent::Activate) || cx.activation().is_some_and(|activation| activation.by_key));
+        let remove_at = cx.active_part().filter(|part| part.key == REMOVE).and_then(|part| part.index);
+        let keyed_remove =
+            remove_at.is_some() && (cx.core.intents.take(Intent::Activate) || cx.activation().is_some_and(|activation| activation.by_key));
         for at in 0..self.cells.len() {
             let (rect, hash, spec) = (self.cells[at].rect, self.cells[at].hash, self.cells[at].spec);
             let (key, sortable, movable, resizable) = {
                 let spec = &self.specs[spec];
-                (spec.key.clone(), spec.sortable, spec.movable, spec.resizable)
+                (spec.key.clone(), spec.sortable && !self.hosted.contains(&spec.key), spec.movable, spec.resizable)
             };
             let phase = cx.part(HEADER.at(hash)).press.phase;
             let primary = phase.start().is_some_and(|start| start.button == PointerButton::Primary);
             if sortable && ((phase.is_click() && primary) || (keyed && active == Some(at))) {
                 self.sort(&key);
             }
-            if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary) {
+            if self.specs[spec].remove.as_ref().is_some_and(|remove| remove.enabled) {
+                let phase = cx.part(REMOVE.at(hash)).press.phase;
+                let pressed = phase.start().is_some_and(|start| start.button == PointerButton::Primary);
+                if (phase.is_click() && pressed) || (keyed_remove && remove_at == Some(hash)) {
+                    self.events.push(ColumnEvent::Removed { key: key.clone() });
+                }
+            }
+            if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary) {
                 self.ask_menu(&ctx, Some(key.clone()), ctx.pointer_latest_pos().unwrap_or(rect.left_bottom()));
             }
             if movable && primary && matches!(phase, PressPhase::DragStart { .. }) {
@@ -606,14 +651,14 @@ impl Header {
         }
         if let Some(room) = self.room
             && cx.part(ROOM).hovered
-            && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary)
+            && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary)
         {
             self.ask_menu(&ctx, None, ctx.pointer_latest_pos().unwrap_or(room.left_bottom()));
         }
         self.column_drop(cx, id, rtl);
         self.keyboard_resize(cx);
         self.commands(cx, id, active, rtl);
-        active.is_some() || self.memory.resizing.is_some()
+        active.is_some() || remove_at.is_some() || self.memory.resizing.is_some()
     }
 
     /// Asks for the header menu at `at`, for `column` or for the empty header.
@@ -749,22 +794,48 @@ impl Header {
     }
 
     /// Step 14, I0: the header labels, with the sort mark on the sorted column.
-    pub(super) fn paint<C: Collection>(&self, ui: &mut Ui, cx: &Cx<'_, C>, env: &Env, id: Id, rtl: bool) {
+    ///
+    /// A hosted column's cell shows the collection's component (`Collection::header_cell`) in the part of the cell the
+    /// remove control leaves, in the header's roving group. The cell's label component shows it from its own paint,
+    /// where the `PaintUi` the hosting needs exists.
+    pub(super) fn paint<C: Collection>(&self, ui: &mut Ui, cx: &Cx<'_, C>, comp: &mut C, env: &Env, id: Id, rtl: bool) {
         let ctx = ui.ctx().clone();
+        let group = crate::contract::steps::parts_group(id, env.roving.filter(|_| cx.core.roving_member));
         for cell in &self.cells {
             let spec = &self.specs[cell.spec];
+            let hosted = self.hosted.contains(&spec.key);
             let text = cx.core.env.resolve(&spec.header).as_str().to_owned();
             let sort = self.sort_of(&spec.key);
             let builder = UiBuilder::new().max_rect(cell.rect).layout(child::column_layout(rtl)).scope_id(sub(id, ("header_cell", cell.hash)));
             let mut cell_ui = alloc::child(ui, builder);
             cell_ui.set_clip_rect(self.view.map_or(cell.rect, |view| cell.rect.intersect(view)).intersect(ui.clip_rect()));
-            let installed = Env::install_for(&cell_ui, env.derive_local(|scoped| scoped.arena = None));
+            let installed = Env::install_for(
+                &cell_ui,
+                env.derive_local(|scoped| {
+                    scoped.arena = None;
+                    if hosted {
+                        scoped.row = Some(group);
+                    }
+                }),
+            );
             let edge = spec
                 .resizable
                 .then(|| HeaderEdge { state: cx.core.part_state(GRIP.at(cell.hash)), keyed: self.memory.resizing.as_ref() == Some(&spec.key) });
             let mut label = HeaderText::new(Label::from(text), self.inset, sort).id(sub(id, ("header_text", cell.hash)));
             label.edge = edge;
             label.align = spec.align;
+            label.remove = cell.remove.zip(spec.remove.as_ref()).map(|(rect, remove)| RemoveMark { rect, enabled: remove.enabled });
+            if hosted && let Some(declared) = comp.items().columns.iter().position(|held| held.key == spec.key) {
+                let body = match cell.remove {
+                    Some(remove) if rtl => Rect::from_min_max(Pos2::new(remove.max.x, cell.rect.min.y), cell.rect.max),
+                    Some(remove) => Rect::from_min_max(cell.rect.min, Pos2::new(remove.min.x, cell.rect.max.y)),
+                    None => cell.rect,
+                };
+                let column = spec.key.clone();
+                let comp = &mut *comp;
+                let field: HeaderField<'_> = Box::new(move |ui: &mut PaintUi<'_>| comp.header_cell(ui, &column, ("header", declared), body));
+                label.field = Some(field);
+            }
             label.show_at(&mut cell_ui, cell.rect);
             Env::restore(&ctx, installed);
         }
@@ -783,12 +854,36 @@ impl Header {
                 part: HEADER.at(cell.hash),
                 name,
                 rect: cell.rect,
-                clickable: self.specs[cell.spec].sortable,
+                clickable: self.specs[cell.spec].sortable && !self.hosted.contains(&self.specs[cell.spec].key),
                 active: focused == Some(at),
                 sort: self.sort_of(&self.specs[cell.spec].key),
             })
             .collect();
         report_header(ctx, id, cx.core.resolved.enabled, &cells);
+        for cell in &self.cells {
+            let (Some(rect), Some(remove)) = (cell.remove, &self.specs[cell.spec].remove) else { continue };
+            let name = cx.core.env.resolve(&remove.name).as_str().to_owned();
+            let enabled = cx.core.resolved.enabled && remove.enabled;
+            let part = REMOVE.at(cell.hash);
+            let mut node = SubNode::new(part, Role::BUTTON);
+            node.name = Name::Text(name.clone());
+            report_sub(
+                ctx,
+                &SubDecl {
+                    owner: id,
+                    component: "Collection",
+                    node: &node,
+                    rect,
+                    enabled,
+                    focusable: enabled,
+                    clickable: enabled,
+                    active: cx.active_part() == Some(part),
+                    face: None,
+                    label: &name,
+                    parent: id,
+                },
+            );
+        }
     }
 
     /// The display position of the header part that holds focus.
@@ -848,10 +943,20 @@ struct HeaderEdge {
     keyed: bool,
 }
 
+/// A column's remove control as the header cell paints it.
+#[derive(Clone, Copy)]
+struct RemoveMark {
+    rect: Rect,
+    enabled: bool,
+}
+
+/// A component the collection hosts in a header cell, shown from the label's paint.
+type HeaderField<'a> = Box<dyn FnOnce(&mut PaintUi<'_>) + 'a>;
+
 /// A header cell's label.
 #[derive(crate::contract::Component)]
 #[component(sample = HeaderText::sample)]
-struct HeaderText {
+struct HeaderText<'a> {
     #[common]
     common: Common,
     inset: f32,
@@ -864,20 +969,34 @@ struct HeaderText {
     node: bool,
     /// The column's alignment: an end-aligned column's label and sort mark end at the cell's end, over its cells.
     align: ColumnAlign,
+    /// The collection's own component for the cell: the cell shows it in place of a label and a sort mark.
+    field: Option<HeaderField<'a>>,
+    /// The column's remove control.
+    remove: Option<RemoveMark>,
 }
 
-impl HeaderText {
+impl HeaderText<'static> {
     fn sample() -> Self {
         HeaderText { node: true, ..HeaderText::new(Label::from("Name"), 0.0, Some(false)) }
     }
+}
 
+impl HeaderText<'_> {
     fn new(text: Label, inset: f32, sort: Option<bool>) -> Self {
-        HeaderText { common: Common::new(), inset, sort, edge: None, node: false, align: ColumnAlign::Start }.label(text)
+        HeaderText { common: Common::new(), inset, sort, edge: None, node: false, align: ColumnAlign::Start, field: None, remove: None }.label(text)
     }
 
     /// The label on one line, cut with an ellipsis when its column is narrower than the text.
     fn run<'t>(&self, text: &'t str) -> TextRun<'t> {
         TextRun::new(text).role(HEADER_ROLE).elide()
+    }
+
+    /// The remove control's mark, dimmed while the control is disabled.
+    fn paint_remove(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let Some(mark) = self.remove else { return };
+        let draw = ui.draw();
+        let draw = if mark.enabled { draw } else { draw.data(DataMode::Inactive) };
+        draw.icon(Rect::from_center_size(mark.rect.center(), Vec2::splat(cx.style.mark)), &IconSpec::svg(IconId::new("close")));
     }
 
     /// The line of the column's end edge, inside the cell `rect`: the grip's line under the pointer and while dragged,
@@ -897,7 +1016,7 @@ impl HeaderText {
     }
 }
 
-impl Component for HeaderText {
+impl Component for HeaderText<'_> {
     const ROLE: Role = Role::LABEL;
     const ALT_ROLES: &'static [Role] = &[Role::None];
     const PARTS: bool = false;
@@ -935,22 +1054,31 @@ impl Component for HeaderText {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let rtl = cx.core.env.direction().is_rtl();
+        if let Some(field) = self.field.take() {
+            self.paint_remove(ui, cx);
+            self.paint_edge(ui, cx, rtl);
+            field(ui);
+            return;
+        }
         let inner = Flow::new(Flow::new(cx.rect, rtl).inset(Insets::horizontal(self.inset)), rtl);
         let ink = if self.sort.is_some() { cx.style.sorted } else { cx.style.ink };
         let run = self.run(cx.core.resolved.label).color(ink);
         // The mark follows the label's end; a label too long for the cell is cut to leave the mark its room. An
         // end-aligned column puts the two at the cell's end.
         let mark = self.sort.map(|descending| (descending, cx.style.mark, cx.style.gap));
-        let room = (inner.rect().width() - mark.map_or(0.0, |(_, side, gap)| side + gap)).max(0.0);
+        // The remove control sits at the cell's end: the label and the mark keep clear of it.
+        let width = inner.rect().width() - self.remove.map_or(0.0, |remove| remove.rect.width());
+        let room = (width - mark.map_or(0.0, |(_, side, gap)| side + gap)).max(0.0);
         let label = ui.draw().layout(&run, room).size().x.min(room);
         let lead = if self.align == ColumnAlign::End { room - label } else { 0.0 };
-        let (text, rest) = Flow::new(inner.span(lead, inner.rect().width() - lead), rtl).take_start(label);
+        let (text, rest) = Flow::new(inner.span(lead, width - lead), rtl).take_start(label);
         ui.draw().text(text, &run);
         if let Some((descending, side, gap)) = mark {
             let slot = Flow::new(rest.span(gap, side), rtl);
             let id = IconId::new(if descending { "sort_descending" } else { "sort_ascending" });
             ui.draw().icon(slot.align(Vec2::splat(side), Align::Min, Align::Center), &IconSpec::svg(id));
         }
+        self.paint_remove(ui, cx);
         self.paint_edge(ui, cx, rtl);
     }
 

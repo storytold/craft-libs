@@ -8,7 +8,7 @@ use crate::{
 
 use crate::desktop::DesktopKind;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 /// The value of `key` in `[section]` of an INI-style file (GTK's `settings.ini`, KDE's `kwinrc`).
 pub(crate) fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
     let mut inside = false;
@@ -25,7 +25,7 @@ pub(crate) fn ini_value(text: &str, section: &str, key: &str) -> Option<String> 
     None
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 /// KWin's button order (`[org.kde.kdecoration2]` `ButtonsOnLeft` / `ButtonsOnRight`, one letter a
 /// button: `I` minimize, `A` maximize, `X` close) as a GTK layout string. Missing keys keep KWin's
 /// defaults: the window menu on the left, minimize, maximize and close on the right.
@@ -46,7 +46,7 @@ pub(crate) fn kwin_layout(kwinrc: &str) -> String {
     format!("{}:{}", side("ButtonsOnLeft", "MS"), side("ButtonsOnRight", "HIAX"))
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 /// The `gtk-decoration-layout` and `gtk-theme-name` of a GTK 3 `settings.ini`.
 pub(crate) fn gtk_settings(settings_ini: &str) -> (Option<String>, Option<String>) {
     (ini_value(settings_ini, "Settings", "gtk-decoration-layout"), ini_value(settings_ini, "Settings", "gtk-theme-name"))
@@ -219,7 +219,7 @@ pub(crate) fn read_gtk_theme(var: &dyn Fn(&str) -> Option<String>) -> Option<Str
     from_env.or_else(|| read_config(var, "gtk-3.0/settings.ini").and_then(|ini| gtk_settings(&ini).1))
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 /// The icon theme name for `kind`'s own setting (`kdeglobals` `[Icons] Theme` on KDE, GTK's
 /// `gtk-icon-theme-name` elsewhere), else the desktop's default theme.
 pub(crate) fn icon_theme(kind: DesktopKind, kdeglobals: &str, settings_ini: &str) -> String {

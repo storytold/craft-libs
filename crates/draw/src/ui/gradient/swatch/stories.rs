@@ -1,6 +1,7 @@
 //! Stories of `GradientSwatch`.
 
 use super::GradientSwatch;
+use crate::ui::gradient::{FocusOutline, GradientStyle, GradientTile};
 use craft_color_ui::ui::gradient::{ColorStop, GradientStops, OpacityStop, StopRows};
 use craft_theme::Srgba;
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
@@ -57,6 +58,26 @@ fn gradient_swatch(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         *clicks += 1;
     }
     StoryOutput { clicked, ..StoryOutput::default() }.readout(craft_i18n::fmt(words.clicked.as_str(), &[("count", clicks.to_string().as_str())]))
+}
+
+/// One square tile per gradient style at an angle, and a focus tile in each outline, each with its name.
+#[story(GradientSwatch, covers = [], drive = Drive::Never, title = "Tiles")]
+fn gradient_swatch_tiles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let stops = GradientStops::new(vec![stop(0.0, [0.96, 0.65, 0.14]), stop(1.0, [0.24, 0.39, 0.87])]);
+    let focus = egui::Rect::from_min_max(egui::pos2(0.25, 0.25), egui::pos2(0.5, 0.5));
+    let mut tiles: Vec<(String, GradientTile)> =
+        GradientStyle::ALL.into_iter().map(|style| (format!("{style:?}"), GradientTile::Style { style, angle: -45.0 })).collect();
+    tiles.push(("Focus, circle".to_owned(), GradientTile::Focus { outline: FocusOutline::Circle, focus }));
+    tiles.push(("Focus, rectangle".to_owned(), GradientTile::Focus { outline: FocusOutline::Rect, focus }));
+    Stack::new().show(ui, |ui, _| {
+        for (name, tile) in &tiles {
+            Row::new().show(ui, |ui, _| {
+                GradientSwatch::new(name.clone(), &stops).tile(*tile).show(ui);
+                Text::new(name.clone()).shade(Shade::Muted).show(ui);
+            });
+        }
+    });
+    StoryOutput::default()
 }
 
 /// A gradient fading in, enabled and disabled, each with its name.

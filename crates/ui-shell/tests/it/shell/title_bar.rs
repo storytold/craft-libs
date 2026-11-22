@@ -1,4 +1,5 @@
-//! A title bar in an embedded shell is a picture of a window: it reports its captions and acts on no window.
+//! A title bar in an embedded shell is a picture of a window: it reports its captions and acts on no window. An action
+//! title is a button that reports its activation.
 
 use craft_host::target::ShellInfo;
 use craft_ui::contract::Role;
@@ -6,12 +7,13 @@ use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::trial;
 use craft_ui::testing::windows::NoWindows;
+use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
 use egui::{Event, Pos2, Rect, Ui, ViewportCommand, ViewportId, ViewportInfo, vec2};
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// The window commands a title bar sends for a click on its Maximize button, a drag of its free band and a double
@@ -127,4 +129,66 @@ fn the_window_title_is_sent_once_per_change() {
         let _ = AppShell::embedded(WindowKey::new("preview")).window_title("C").show(ui, &mut ());
     });
     assert!(titles(&out).is_empty(), "an embedded shell sends no title");
+}
+
+/// What the action-title trial saw: the passes that reported an activation, and the bar's rect.
+#[derive(Clone, Copy)]
+struct TitleSeen {
+    activations: usize,
+    bar: Rect,
+}
+
+impl Default for TitleSeen {
+    fn default() -> Self {
+        Self { activations: 0, bar: Rect::NOTHING }
+    }
+}
+
+/// A settled title bar whose title `title` is an action; what each pass reported.
+fn titled(title: &'static str) -> (Fixture, Rc<Cell<TitleSeen>>) {
+    let seen = Rc::new(Cell::new(TitleSeen::default()));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        // The title shows whatever frame the trial's host decides.
+        let shown = TitleBar::new().title_when_native().show_titled(ui, Title::new(title).action("Rename the document"), |_, _| {}, |_, _| {});
+        let mut now = out.get();
+        now.bar = shown.response.rect;
+        now.activations += usize::from(shown.title_activated);
+        out.set(now);
+    });
+    fixture.room(vec2(600.0, 200.0)).settle();
+    (fixture, seen)
+}
+
+const LONG: &str = "A very long document title that cannot fit in the free gap of a title bar six hundred points wide, \
+                    so the bar cuts it with an ellipsis and keeps the whole of it for the tooltip and the name.psd";
+
+/// An action title is a focusable button named by the shown title. A click and Enter (on the title Tab focused) each
+/// report it in the pass they land in and no later pass. The button sits on the window's centre line, and a title too long for the gap is cut to
+/// fit inside the bar.
+#[trial]
+fn an_action_title_is_a_button_and_reports_its_activation() {
+    let (mut fixture, seen) = titled("Landscape.psd");
+    let title = fixture.by_label("Landscape.psd").expect("the title is a named control");
+    assert_eq!(fixture.tree().role_of(title.node), Some(Role::BUTTON), "the title is a button");
+    let bar = seen.get().bar;
+    assert!((title.rect.center().x - bar.center().x).abs() <= 1.0, "the title {:?} sits on the centre line of {bar:?}", title.rect);
+    assert_eq!(seen.get().activations, 0, "nothing is activated before input");
+
+    fixture.click(&title).idle(3);
+    assert_eq!(seen.get().activations, 1, "a click reports the title once, in its pass only");
+    // A button takes no focus from a click (it senses no `TAKE_FOCUS`); Tab reaches the title, and Enter then reports it.
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).idle(3);
+    assert!(fixture.focused_stop().is_some(), "Tab focuses the title");
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).idle(3);
+    assert_eq!(seen.get().activations, 2, "Enter on the focused title reports it once");
+
+    let (fixture, seen) = titled(LONG);
+    let title = fixture.by_label(LONG).expect("the long title is named in full");
+    let bar = seen.get().bar;
+    assert!(
+        bar.contains_rect(title.rect) && title.rect.width() < bar.width(),
+        "the long title {:?} is cut to fit inside the bar {bar:?}",
+        title.rect
+    );
 }

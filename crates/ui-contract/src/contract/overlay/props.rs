@@ -137,6 +137,11 @@ pub struct Overlay {
     /// Whether the layer's move band moves the OS window the layer is shown in, in place of the layer: the chrome a
     /// modal puts over the part of a title bar it covers. The layer stays where it is placed.
     pub moves_window: bool,
+    /// Whether the app moves the OS window a viewport mount shows in from the move band, never the operating system's
+    /// move loop: a press on the band reaches the container, which reports each step of the move (a dock window's
+    /// title row, whose move docks the window). The window is opened knowing it, so its hit test never hands the band
+    /// to the system. A layer is always moved by the app.
+    pub moved_by_app: bool,
     /// Set only by [`Overlay::full_window`].
     full_window: bool,
 }
@@ -174,6 +179,7 @@ impl Overlay {
             opacity: 1.0,
             body_scroll: true,
             moves_window: false,
+            moved_by_app: false,
             full_window: false,
         }
     }
@@ -189,7 +195,7 @@ impl Overlay {
         mapped.placed = mapped.placed.map(|rect| to_screen * rect);
         mapped.placed_at = mapped.placed_at.map(|pos| to_screen * pos);
         mapped.bounds = mapped.bounds.map(|rect| to_screen * rect);
-        if let Place::Float(FloatPlace { pos: Some(pos) }) = &mut mapped.place {
+        if let Place::Float(FloatPlace { pos: Some(pos), .. }) = &mut mapped.place {
             *pos = to_screen * *pos;
         }
         Cow::Owned(mapped)
@@ -278,7 +284,7 @@ impl Overlay {
     }
 
     /// The chrome of a modal over a part of the window the modal covers, placed at `rect`: above the modal, with no
-    /// focus scope and no dismissal of its own. Its move band moves the window the layer is shown in.
+    /// focus policy and no dismissal of its own. Its move band moves the window the layer is shown in.
     pub fn modal_chrome(rect: Rect) -> Overlay {
         let mut overlay =
             Overlay::base(Rank::ModalChrome, Place::Float(FloatPlace::centred()), OverlayFit::Content, OwnerClass::Widget, FocusPolicy::NONE);
@@ -430,6 +436,12 @@ impl Overlay {
     /// Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
     pub fn moves_window(mut self, on: bool) -> Overlay {
         self.moves_window = on;
+        self
+    }
+
+    /// The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
+    pub fn moved_by_app(mut self) -> Overlay {
+        self.moved_by_app = true;
         self
     }
 

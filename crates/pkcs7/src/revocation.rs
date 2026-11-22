@@ -63,6 +63,27 @@ pub struct CertificateList {
     pub revoked: Vec<(Vec<u8>, Time)>,
 }
 
+/// Owned parsed components for adapters. This is not a signature or trust verdict.
+/// Consuming conversion moves buffers without reparsing or cloning signed material.
+pub struct CertificateListParts {
+    pub tbs: Vec<u8>,
+    pub sig_alg: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub issuer_raw: Vec<u8>,
+    pub this_update: Time,
+    pub next_update: Option<Time>,
+    /// (serial, revocation date), top to bottom.
+    pub revoked: Vec<(Vec<u8>, Time)>,
+}
+
+impl CertificateList {
+    /// Move parsed fields into a caller-owned representation; verification remains separate.
+    pub fn into_parts(self) -> CertificateListParts {
+        let Self { tbs, sig_alg, signature, issuer_raw, this_update, next_update, revoked } = self;
+        CertificateListParts { tbs, sig_alg, signature, issuer_raw, this_update, next_update, revoked }
+    }
+}
+
 impl CertificateList {
     pub fn parse(bytes: &[u8]) -> Result<CertificateList, Error> {
         if bytes.is_empty() || bytes.len() > MAX_EVIDENCE {
@@ -144,7 +165,8 @@ impl CertId {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum CertStatus {
+/// Parsed certificate status; not authenticated until the response is verified.
+pub enum CertStatus {
     Good,
     Revoked(Time),
     Unknown,
@@ -159,7 +181,15 @@ pub struct SingleResponse {
     pub next_update: Option<Time>,
 }
 
-enum ResponderId {
+impl SingleResponse {
+    /// Consume this unverified record without cloning its owned identifier fields.
+    pub fn into_parts(self) -> (CertId, CertStatus, Time, Option<Time>) {
+        (self.cert_id, self.status, self.this_update, self.next_update)
+    }
+}
+
+/// Parsed OCSP responder identifier, not proof of identity.
+pub enum ResponderId {
     ByName(Vec<u8>),
     ByKey(Vec<u8>),
 }
@@ -173,6 +203,25 @@ pub struct OcspResponse {
     responder_id: ResponderId,
     pub responses: Vec<SingleResponse>,
     responder_cert: Option<Certificate>,
+}
+
+/// Owned parsed components for adapters. This is not a signature or trust verdict.
+/// Consuming conversion moves buffers without reparsing or cloning signed material.
+pub struct OcspResponseParts {
+    pub tbs: Vec<u8>,
+    pub sig_alg: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub responder_id: ResponderId,
+    pub responses: Vec<SingleResponse>,
+    pub responder_cert: Option<Certificate>,
+}
+
+impl OcspResponse {
+    /// Move parsed fields into a caller-owned representation; verification remains separate.
+    pub fn into_parts(self) -> OcspResponseParts {
+        let Self { tbs, sig_alg, signature, responder_id, responses, responder_cert } = self;
+        OcspResponseParts { tbs, sig_alg, signature, responder_id, responses, responder_cert }
+    }
 }
 
 impl OcspResponse {
@@ -200,10 +249,21 @@ impl OcspResponse {
         for t in it {
             if t.tag == tag::ctx(0) {
                 for c in t.children()? {
-                    if c.tag == tag::SEQUENCE
-                        && let Ok(cert) = Certificate::parse(c.raw)
-                    {
+                    if c.tag != tag::SEQUENCE {
+                        continue;
+                    }
+                    // Preserve the historical direct-certificate form. RFC 6960 instead wraps
+                    // certificates in one SEQUENCE OF inside [0]; unwrap only that one level.
+                    if let Ok(cert) = Certificate::parse(c.raw) {
                         responder_cert.get_or_insert(cert);
+                    } else if let Ok(certs) = c.children() {
+                        for cert in certs {
+                            if cert.tag == tag::SEQUENCE
+                                && let Ok(cert) = Certificate::parse(cert.raw)
+                            {
+                                responder_cert.get_or_insert(cert);
+                            }
+                        }
                     }
                 }
             }

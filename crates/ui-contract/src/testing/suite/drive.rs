@@ -292,13 +292,15 @@ struct Runs {
     ran: Vec<&'static str>,
     /// Some run changed the value.
     changed: bool,
+    /// Each run that changed nothing, with the edits it sent, for the message when no run changed the value.
+    unchanged: Vec<String>,
     failures: Vec<String>,
 }
 
 /// Runs each way of `story`'s drive `plan` in its own fixture: a run that changes the value ends its gesture once, a
 /// cancelled run leaves the value as it was, and the runs that are not cancelled agree on changing it.
 fn runs_of(story: &Story, probe: &Probe, plan: Plan) -> Runs {
-    let mut runs = Runs { ran: Vec::new(), changed: false, failures: Vec::new() };
+    let mut runs = Runs { ran: Vec::new(), changed: false, unchanged: Vec::new(), failures: Vec::new() };
     let mut changed_by = Vec::new();
     let mut unchanged_by = Vec::new();
     for variant in variants(plan, probe) {
@@ -324,6 +326,7 @@ fn runs_of(story: &Story, probe: &Probe, plan: Plan) -> Runs {
         }
         if !changed {
             unchanged_by.push(name);
+            runs.unchanged.push(format!("{}: {name} sent {kinds:?}", story.name));
             continue;
         }
         changed_by.push(name);
@@ -351,7 +354,7 @@ pub fn values_case(probe: &Probe, story: &Story) -> Result<Vec<&'static str>, St
         return Err(runs.failures.join("; "));
     }
     if !runs.changed {
-        return Err(format!("{}: no drive changed the value", story.name));
+        return Err(format!("{}: no drive changed the value ({})", story.name, runs.unchanged.join("; ")));
     }
     Ok(runs.ran)
 }
@@ -361,15 +364,17 @@ fn a_drive_ends_each_gesture_once(subject: &Subject) -> Result<(), String> {
         return Ok(());
     }
     let mut changed_any = false;
+    let mut unchanged = Vec::new();
     let mut failures = Vec::new();
     for story in &subject.stories {
         let runs = runs_of(story, subject.probe, subject.base(story).plan);
         changed_any |= runs.changed;
+        unchanged.extend(runs.unchanged);
         failures.extend(runs.failures);
     }
     // That some story's drive changes the value is the type's to show, in its home package.
     if !changed_any && subject.home {
-        failures.push("no drive changed the value".to_owned());
+        failures.push(format!("no drive changed the value ({})", unchanged.join("; ")));
     }
     if failures.is_empty() { Ok(()) } else { Err(failures.join("; ")) }
 }

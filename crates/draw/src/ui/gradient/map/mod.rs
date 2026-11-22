@@ -4,16 +4,19 @@
 //! It lives here rather than with the other adjustment editors in craft-imaging because it picks from the palette's
 //! [`GradientGroup`] presets, and a family crate depends on no other family crate but craft-color-ui.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvent, Mixed};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Pattern, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::display::{Shade, Text};
+use craft_ui::form::Field;
 use craft_ui::layout_components::Stack;
-use craft_ui::patterns::presets::{PresetPicker, PresetRow};
+use craft_ui::patterns::presets::{PickerField, PresetFns, PresetPicker, PresetRow, PresetSource};
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::style::TypeRole;
 use egui::{Response, Ui};
 use std::sync::Arc;
 
@@ -24,6 +27,10 @@ use super::{GradientGroup, GradientRef};
 
 const MAX_STOPS: usize = 64;
 const MIN_STOPS: usize = 2;
+
+/// An explicit pick wins when two presets have the same colour stops.
+#[derive(Clone, Copy, Default)]
+struct PickedPreset(Option<GradientRef>);
 
 /// The Gradient Map adjustment's value: the gradient the image's luminance maps through, and its two options.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -56,6 +63,8 @@ craft_ui::words! {
         preset: "gradientMap.preset" = "Preset";
         /// The picker's placeholder while the stops are no preset.
         custom: "gradientMap.custom" = "Custom";
+        /// How to add another stop on the gradient.
+        add_stop_hint: "gradientMap.addStopHint" = "Click below the ramp to add a stop.";
         /// The command that imports presets.
         import_presets: "gradientMap.importPresets" = "Import .GRD";
         /// The Reverse option.
@@ -101,22 +110,17 @@ impl<'a> GradientMapEditor<'a> {
         GradientMapEditor { label: label.into(), value, presets: &[], sampler: None }
     }
 
-    /// The stops of preset `key`, as the map takes them: colour stops only, opaque, midpoints centred, at most 64.
-    fn preset_stops(&self, key: GradientRef) -> Option<GradientStops> {
+    /// A preset as Gradient Map uses it: opaque colour stops with centred midpoints.
+    fn preset_colors(&self, key: GradientRef) -> Option<impl Iterator<Item = ColorStop> + '_> {
         let GradientRef::Item { group, item } = key else { return None };
-        let preset = self.presets.get(group)?.items.get(item)?;
-        let color: Vec<ColorStop> = preset
-            .stops
-            .color
-            .iter()
-            .take(MAX_STOPS)
-            .map(|s| {
+        let colors = &self.presets.get(group)?.items.get(item)?.stops.color;
+        (colors.len() >= MIN_STOPS).then(|| {
+            colors.iter().take(MAX_STOPS).map(|s| {
                 let mut stop = s.with_midpoint(0.5);
                 stop.color.a = 1.0;
                 stop
             })
-            .collect();
-        (color.len() >= MIN_STOPS).then(|| GradientStops::new(color))
+        })
     }
 
     /// Shows the editor across the available width.
@@ -131,25 +135,37 @@ impl<'a> GradientMapEditor<'a> {
         let (preset_label, custom, import_label, stops_label) =
             (words.preset.clone(), words.custom.clone(), words.import_presets.clone(), words.stops.clone());
         let (reverse_label, dither_label) = (words.reverse.clone(), words.dither.clone());
-        let shown = Stack::new().label(self.label.clone()).show(ui, |ui, _| {
-            let rows: Vec<PresetRow<GradientRef>> = self
-                .presets
-                .iter()
-                .enumerate()
-                .flat_map(|(group, g)| {
-                    let header = PresetRow::group(GradientRef::Item { group, item: usize::MAX }, g.name.clone(), 0);
-                    let items =
-                        g.items.iter().enumerate().map(move |(item, p)| PresetRow::item(GradientRef::Item { group, item }, p.name.clone(), 1));
-                    std::iter::once(header).chain(items)
+        let shown = Stack::new().label(self.label.clone()).show(ui, |ui, cx| {
+            let source = PresetSource::new(self.presets, PresetFns::new(preset_rows));
+            // Stop tags identify host data, so they do not determine which preset's colours match.
+            let matches = |&key: &GradientRef| {
+                self.preset_colors(key).is_some_and(|colors| colors.map(|s| s.with_tag(0)).eq(base.stops.color.iter().map(|s| s.with_tag(0))))
+            };
+            let preferred = cx.keep::<PickedPreset>().0.filter(matches);
+            let mut items =
+                self.presets.iter().enumerate().flat_map(|(group, g)| (0..g.items.len()).map(move |item| GradientRef::Item { group, item }));
+            let current = preferred.or_else(|| items.find(matches));
+            let picked = Field::new(preset_label.clone())
+                .show(ui, |ui, _| {
+                    PresetPicker::new(preset_label.clone(), Bind::given(current), &source, Bind::kept())
+                        .field(PickerField::Name)
+                        .placeholder(custom.clone())
+                        .show(ui)
+                        .picked
                 })
-                .collect();
-            let picker =
-                PresetPicker::new(preset_label.clone(), Bind::given(None::<GradientRef>), &rows, Bind::kept()).placeholder(custom.clone()).show(ui);
-            if let Some(stops) = picker.picked.and_then(|key| self.preset_stops(key)) {
-                event = Some(set(GradientMap { stops, ..base.clone() }));
+                .inner
+                .flatten();
+            if let Some(key) = picked
+                && let Some(colors) = self.preset_colors(key)
+            {
+                cx.keep::<PickedPreset>().0 = Some(key);
+                event = Some(set(GradientMap { stops: GradientStops::new(colors.collect()), ..base.clone() }));
             }
             if clicked(&Button::new(import_label.clone()).show(ui)) {
                 import = true;
+            }
+            if base.stops.color.len() < MAX_STOPS {
+                Text::new(words.add_stop_hint.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
             }
             let rules = StopRules::new(StopRows::ColorOnly).stops(MIN_STOPS, MAX_STOPS);
             let mut editor =
@@ -175,4 +191,17 @@ impl<'a> GradientMapEditor<'a> {
         });
         GradientMapOutput { response: shown.output, event, color_requested, import }
     }
+}
+
+/// The picker's rows: each group's header, then its presets. A header's key names no preset (`item == usize::MAX`).
+fn preset_rows(presets: &&[GradientGroup], _: &Env) -> Vec<PresetRow<GradientRef>> {
+    presets
+        .iter()
+        .enumerate()
+        .flat_map(|(group, g)| {
+            let header = PresetRow::group(GradientRef::Item { group, item: usize::MAX }, g.name.clone(), 0);
+            let items = g.items.iter().enumerate().map(move |(item, p)| PresetRow::item(GradientRef::Item { group, item }, p.name.clone(), 1));
+            std::iter::once(header).chain(items)
+        })
+        .collect()
 }

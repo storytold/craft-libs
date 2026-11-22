@@ -30,6 +30,9 @@ struct Strip<'a> {
     /// The chords bound to the window's keys (`commands::window_shortcuts`).
     window_shortcuts: &'a [(WindowShortcut, Chord)],
     menu_bar: bool,
+    /// The registered bar takes only the Alt+letter chords it claims (`FocusedRecord::menu_bar_by_claim`): every other
+    /// Alt+letter is an ordinary press.
+    menu_bar_by_claim: bool,
     /// The focused stop holds drafts (`KeyUse::holds_drafts`): a lone Alt alerts instead of focusing the menu bar.
     holds_drafts: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
@@ -47,9 +50,24 @@ struct Strip<'a> {
     no_stops: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
+    /// An Alt release in this input ended an Alt+numpad code (`raw_input::take_alt_code_ended`): the code's digits
+    /// never reach this stage, so without this the release would read as a lone Alt.
+    alt_code_ended: bool,
+    /// Whether the window's keymap binds a chord to a command that is enabled now (`commands::runs_now`).
+    bound: &'a dyn Fn(&Chord) -> bool,
 }
 
 impl Strip<'_> {
+    /// Whether the text the platform sends with the press `input` stands for is a shortcut's own and belongs to no
+    /// field: Alt is held and the keymap binds the press to a command that is enabled, so it fires (S-L177). A platform
+    /// sends its key's text with an Alt shortcut (Alt+Q on Linux). A bound Alt chord whose command is disabled does
+    /// nothing, so its text is typed, as Word types Option+Shift+-'s em dash where Collapse does not apply. A plain key's
+    /// text is typing, which a focused field or list takes before any shortcut (`route::holds_press`), and Cmd and Ctrl
+    /// chords type nothing.
+    fn shortcut_text(&self, input: &KeyInput) -> bool {
+        input.mods.alt && self.layout.candidates(input).iter().any(|chord| (self.bound)(chord))
+    }
+
     /// Records `event` in `batch` and returns whether egui keeps it.
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
@@ -67,13 +85,14 @@ impl Strip<'_> {
                 }
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
+                let shortcut_text = self.shortcut_text(&input);
                 let kept = self.press(batch, key, &input, repeat, at);
                 // The canvas's Space keeps its text from every field, as a claim does.
                 let canvas = batch.presses.get(pushed).is_some_and(|press| press.canvas);
                 batch.last_press = Some(LastPress {
                     input,
                     pressed: (batch.presses.len() > pushed).then_some(pushed),
-                    claimed: batch.claimed.len() > claims || canvas,
+                    claimed: batch.claimed.len() > claims || canvas || shortcut_text,
                 });
                 if kept {
                     if let Some(press) = batch.presses.get_mut(pushed) {
@@ -121,7 +140,7 @@ impl Strip<'_> {
                     }
                 }
                 // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
-                batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts) });
+                batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts), place: batch.place });
                 batch.egui_texts += 1;
                 true
             }
@@ -164,6 +183,11 @@ impl Strip<'_> {
             }
             KeyEvent::RightAlt(down) => {
                 alt.right = down;
+                // AltGr types characters: its Alt is no lone Alt, whichever of this event and the modifier change
+                // arrives first.
+                if down {
+                    alt.other_key = true;
+                }
                 true
             }
             KeyEvent::Modifiers(held) => {
@@ -179,12 +203,13 @@ impl Strip<'_> {
     }
 
     /// A lone Alt press, pressed and released with no other key between, focuses the menu bar (9.7). In a field that
-    /// holds drafts it only alerts, so the draft keeps its focus (L-52).
+    /// holds drafts it only alerts, so the draft keeps its focus (L-52). A release that ended an Alt+numpad code is no
+    /// lone Alt: the code's digits were the keys between.
     fn alt_change(&self, batch: &mut Batch, alt: &mut AltTrack, held: bool) {
         if held && !alt.down {
-            alt.other_key = false;
+            alt.other_key = alt.right;
         }
-        if !held && alt.down && !alt.other_key && self.os != Os::Mac {
+        if !held && alt.down && !alt.other_key && !self.alt_code_ended && self.os != Os::Mac {
             if self.holds_drafts {
                 batch.refused = true;
             } else if self.menu_bar {
@@ -205,7 +230,7 @@ impl Strip<'_> {
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
         // scope escape.
         let escape = key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none());
-        let mnemonic = self.menu_bar && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
+        let mnemonic = self.menu_bar && !self.menu_bar_by_claim && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
         let canvas_edit = self.canvas.is_some_and(|canvas| {
             self.edit_chords.iter().any(|(command, chord)| canvas.edits.contains(*command) && self.layout.matches(chord, input, self.os))
@@ -259,7 +284,7 @@ impl Strip<'_> {
                 // The canvas has Space while the pointer is over it (`runtime::sampler`): only the shortcut dispatcher reads
                 // it, so the dialog's focused control does not activate, and a focused field neither types its space nor
                 // keeps its momentary command from firing (production pans under a dialog whatever has focus).
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true, place: batch.place });
                 if !repeat {
                     batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true, at });
                 }
@@ -278,7 +303,7 @@ impl Strip<'_> {
                 false
             }
             PressUse::CtrlTab => {
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false, place: batch.place });
                 false
             }
             PressUse::Pane(forward) => {
@@ -298,7 +323,7 @@ impl Strip<'_> {
                 false
             }
             PressUse::Press => {
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false, place: batch.place });
                 if !repeat {
                     batch.shortcuts.push(Shortcut {
                         input: *input,
@@ -355,7 +380,7 @@ enum PressUse {
 /// component, its arena root and its menu level, and a bare End where it declares `EndKey::EndMode`.
 pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
     let mut claims = record.claims.clone();
-    let holds = |owner: Id| [record.focused, record.root, record.menu].contains(&Some(owner));
+    let holds = |owner: Id| [record.focused, record.root, record.menu, record.menu_bar].contains(&Some(owner));
     claims.extend(stage.claims.iter().filter(|(owner, _)| holds(*owner)).map(|(_, chord)| *chord));
     // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles its
     // mode, so no collection navigation or scroll owner takes it as a move to the end.
@@ -421,6 +446,9 @@ pub(super) fn chrome_toggle_of(ctx: &Context, input: &KeyInput) -> Option<Chrome
 /// the events that wait for the next frame (`Strip::ends_pass`), in order.
 pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arrived>) -> (bool, Vec<Arrived>) {
     let viewport = input.viewport_id;
+    // Taken first, before any early return: the raw-input step set it in this hook call, and it must not reach a later
+    // one.
+    let alt_code_ended = raw_input::take_alt_code_ended(ctx, viewport);
     // The canvas a modal layer keeps open takes the events its reach admits and nothing else (`runtime::sampler`).
     let (hole, trimmed) = sampler::hook(ctx, input, events);
     // A modal layer in another viewport blocks this one (app-modal, 15.5): nothing below reaches the key stage.
@@ -436,7 +464,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let os = crate::runtime::windows::os_of(ctx);
     let record = focus::record(ctx, viewport);
     let keys = record.keys;
-    let menu_bar = record.menu_bar && keys.is_none_or(|keys| !matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder));
+    let menu_bar = record.menu_bar.is_some() && keys.is_none_or(|keys| !focus::takes_letters(&keys));
     let before = events.len();
     let canvas = focus::canvas_keys(ctx, viewport).filter(|_| keys.is_none() && !record.foreign);
     let lists_edits = |keys: &KeyUse| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit)));
@@ -444,9 +472,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let window_shortcuts = commands::window_shortcuts(ctx);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = &input.latin_layout_chars;
+    // S-L177: an Alt chord's text is withheld only when the press can run its command; a bound command that is
+    // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
+    let bound = |chord: &Chord| commands::runs_now(ctx, chord);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
-        let mut claims = focused_claims(&record, stage);
-        claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
+        let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
         stage.layout.set_latin(input.keyboard_layout_is_latin);
         let strip = Strip {
@@ -460,18 +490,25 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             edit_chords: &edit_chords,
             window_shortcuts: &window_shortcuts,
             menu_bar,
+            menu_bar_by_claim: record.menu_bar_by_claim,
             holds_drafts: keys.is_some_and(|keys| keys.holds_drafts),
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
             canvas,
             no_stops,
             label_selection: record.label_selection,
+            alt_code_ended,
+            bound: &bound,
         };
         let mut batch = Batch::default();
         let mut visible = None;
         let mut later = Vec::new();
         stage.keyed = false;
+        let mut place = 0;
         events.retain(|arrived| {
+            // Every event the IME engine left counts, as the engine counts them (`ime::take_placed`).
+            batch.place = place;
+            place += 1;
             let read = raw_input::key_event(&arrived.event, os, latin);
             if !later.is_empty() || strip.ends_pass(&batch, &read) {
                 later.push(arrived.clone());
@@ -503,6 +540,30 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     (trimmed || events.len() != before, later)
 }
 
+/// The chords the key stage takes as claimed (`PressUse::Claimed`): the focused component's (`focused_claims`) and
+/// every capture's.
+fn stage_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
+    let mut claims = focused_claims(record, stage);
+    claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
+    claims
+}
+
+/// Whether the key stage of `input`'s viewport will take a press as a claimed chord (`PressUse::Claimed`), read before
+/// the stage runs in the same hook call: the raw-input step leaves such an Alt+digit to its owner instead of folding it
+/// into an Alt code (`alt_code::fold`).
+pub(crate) fn claims_press(ctx: &Context, input: &RawInput) -> impl Fn(&egui::Event) -> bool + use<> {
+    let viewport = input.viewport_id;
+    let os = crate::runtime::windows::os_of(ctx);
+    let record = focus::record(ctx, viewport);
+    let (claims, mut layout) = with(ctx, viewport, |stage| (stage_claims(&record, stage), stage.layout.clone()));
+    layout.set_latin(input.keyboard_layout_is_latin);
+    let latin = input.latin_layout_chars.clone();
+    move |event: &egui::Event| match raw_input::key_event(event, os, &latin) {
+        KeyEvent::Press { input: pressed, .. } => claims.iter().any(|chord| layout.matches(chord, &pressed, os)),
+        _ => false,
+    }
+}
+
 /// Updates the keys held after `event`: a press adds its key, a release removes it, and the window losing focus
 /// (which also reads as the right Alt coming up) forgets them all, since their releases go to another window.
 fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
@@ -522,12 +583,47 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
 /// down).
 #[doc(hidden)]
 pub fn down(ctx: &Context) -> Vec<Key> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.down.clone())
+}
+
+/// The key state, as the tracked input `Keys` compares it: the keys down, whether a key arrived and Caps Lock.
+pub(crate) fn keys_state(ctx: &Context) -> (Vec<Key>, bool, bool) {
+    let (down, keyed) = current(ctx, |stage| (stage.down.clone(), stage.keyed));
+    (down, keyed, crate::runtime::lock_keys::caps_on(ctx))
+}
+
+/// Counts an input of `viewport` whose `events` hold one sent to the focus: a key, text, IME, clipboard or AccessKit
+/// action event (`Input::Sent`). Read before any stage takes events, so the IME's and the ones a shortcut takes count.
+pub(crate) fn count_sent(ctx: &Context, viewport: ViewportId, events: &[Arrived]) {
+    let sent = events.iter().any(|arrived| {
+        matches!(
+            arrived.event,
+            egui::Event::Key { .. }
+                | egui::Event::Text(_)
+                | egui::Event::Ime(_)
+                | egui::Event::Copy
+                | egui::Event::Cut
+                | egui::Event::Paste(_)
+                | egui::Event::PasteImage(_)
+                | egui::Event::MiddleClickPaste { .. }
+                | egui::Event::AccessKitActionRequest(_)
+        )
+    });
+    if sent {
+        with(ctx, viewport, |stage| stage.sent += 1);
+    }
+}
+
+/// How many inputs of the running viewport held an event sent to the focus: its value moves with each one.
+pub(crate) fn sent(ctx: &Context) -> u64 {
+    current(ctx, |stage| stage.sent)
 }
 
 /// Whether the running viewport's input hook read a key press, typed text or a clipboard event in this pass, the ones
 /// the key stage took from egui's input included: an app that redraws state after input asks this, not egui's events.
 pub fn keyed(ctx: &Context) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.keyed)
 }
 

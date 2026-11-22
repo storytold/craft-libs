@@ -180,7 +180,8 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
     let mut preset = set.base;
     sizes.apply_base(appearance.size, &mut preset);
 
-    let seed = theme.shape;
+    // An app's own shape replaces the theme's for that app.
+    let seed = app.and_then(|id| theme.apps.get(id)).and_then(|own| own.shape).or(theme.shape);
     let radius = seed.and_then(|s| s.radius).unwrap_or(preset.radius);
     let radius = seed.and_then(|s| s.radius_offset).map_or(radius, |o| o.apply(radius));
     let radius = RadiusSet { button: seed.and_then(|s| s.button_radius).unwrap_or(radius.button), ..radius };
@@ -219,6 +220,7 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
             r#move: motion(move_),
             caret: motion_ms(values::MOTION_CARET_MS, values::MOTION_CARET_EASING),
             outline: motion_ms(values::MOTION_OUTLINE_MS, values::MOTION_OUTLINE_EASING),
+            slide: values::MOTION_SLIDE_PT,
             reduced: appearance.reduced_motion,
         },
     };

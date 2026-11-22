@@ -2,12 +2,12 @@
 //! host adds. A container: its body lays the parts out with the form layouts, the "Field shows" choice is a
 //! `RadioGroup` and the channel rows share one label column.
 
-mod channel;
+pub(crate) mod channel;
 mod compact;
 mod full;
-mod screen_pick;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod screen_pick;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod value;
 
 use std::sync::Arc;
@@ -19,9 +19,8 @@ use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
 use egui::{Pos2, Response, Ui};
 
-use super::AreaMode;
+use super::{AreaMode, ColorWarning};
 pub(crate) use channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
-pub use full::{ColorWarning, ColorWarningChip, ColorWarningChipOutput};
 pub use value::ColorConstraint;
 use value::Rules;
 
@@ -57,17 +56,19 @@ impl PickedColor {
     }
 }
 
-/// How a [`ColorPicker`] lays out its parts.
+/// How a [`ColorPicker`] lays out its parts. Each layout has one arrangement, the same in every room, theme and
+/// density; the host's options choose what fills its cells, never where they stand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ColorPickerLayout {
-    /// The Color panel and compact popup: the area over the channel slider rows of one model, a model switch, the hex
-    /// row and the optional alpha row.
+    /// The compact popup of a colour well (Photoshop's and Illustrator's Color panel in a popover): the area at plot
+    /// proportions and the strip, which set the width, over the channel slider rows of one model, the opacity row, a
+    /// model switch and the hex row with the screen-pick button at its end.
     #[default]
     Compact,
-    /// The Color Picker dialog: the square area and the strip, the compare swatch and the host's warnings beside them
-    /// over the channel grid, every model's channels at once with radios choosing what the area shows, and the hex
-    /// field.
+    /// The Color Picker dialog every app's "choose a colour" modal shows (Photoshop's): the square area and the strip
+    /// over Only Web Colors; beside them the compare block with its warnings column and the actions cell (the dialog's
+    /// buttons), over two field groups, every model's channels at once with radios choosing what the area shows.
     Full,
 }
 
@@ -157,11 +158,15 @@ craft_ui::words! {
 /// What the picker keeps between passes.
 #[derive(Clone, Default)]
 struct Memo {
-    /// The model of the Compact rows.
+    /// The model of the Compact rows while the host binds none ([`ColorPicker::shown_model`]).
     model: Option<&'static str>,
     /// What the area and strip show while the host holds no mode.
     mode: AreaMode,
-    /// The Full layout has taken the focus for the hex field.
+    /// Only Web Colors while the host holds none.
+    web: bool,
+    /// The colour at the picker's first show: the compare block's current half when the host gives none.
+    first: Option<PickedColor>,
+    /// The picker has shown, and taken the focus for the hex field.
     opened: bool,
     /// The running gesture of a child and the colour when it began, for the `before` of its end.
     gesture: Option<(GestureId, PickedColor)>,
@@ -219,9 +224,11 @@ struct Pass<'a> {
     mode: AreaMode,
     /// The model of the Compact rows.
     model: Option<&'static str>,
-    /// Only Web Colors, as the host holds it.
+    /// Only Web Colors, as the host or the picker holds it.
     web: bool,
-    /// Whether the hex field takes the focus in this pass: the Full layout's first show.
+    /// The compare block's current half: the host's colour, or the colour at the first show.
+    compare: Mixed<PickedColor>,
+    /// Whether the hex field takes the focus in this pass: the picker's first show.
     focus_hex: bool,
 }
 
@@ -233,26 +240,30 @@ impl Pass<'_> {
 }
 
 /// A colour picker's body: a [`ColorArea`](super::ColorArea) and a [`ColorStrip`](super::ColorStrip), the channel
-/// fields of its [`ColorModel`]s, the hex field and the host's hooks, in the Color panel and compact popup layout
-/// ([`ColorPickerLayout::Compact`]) or the Color Picker dialog's ([`ColorPickerLayout::Full`]).
+/// fields of its [`ColorModel`]s, the hex field and the host's hooks, in the compact popup layout
+/// ([`ColorPickerLayout::Compact`]) or the Color Picker dialog's ([`ColorPickerLayout::Full`]). Every size comes from
+/// tokens and content, never from the room, so neither layout wraps, stacks or stretches.
 ///
-/// - Compact: the area over the channel rows of one model (a label that scrubs, a slider whose track shows the
-///   channel's colours, a number field), a model switch, the hex row with the screen-pick button, and with
-///   [`alpha`](ColorPicker::alpha) an "Opacity" row over the checkerboard.
-/// - Full: the area square, the strip at its reading end, the opacity row and the screen-pick button under them.
-///   Beside them the [`compare`](ColorPicker::compare) swatch (new over current) and the host's
-///   [`warnings`](ColorPicker::warnings), over the channel grid: H S B, R G B, then "#" and the hex field; L a b and
-///   the host's models; OKLCH in a column of its own when the host turns it on. A radio before each built-in
-///   channel's label chooses the [`AreaMode`]; it edits no colour. The hex field takes the focus, its text selected,
-///   when the layout first shows ([`focus_on_open`](ColorPicker::focus_on_open)).
+/// - Compact: the area at plot proportions and the strip, then rows as wide as they are: the channel rows of one
+///   model (a label that scrubs, a slider whose track shows the channel's colours, a number field), with
+///   [`alpha`](ColorPicker::alpha) an "Opacity" row over the checkerboard, a model switch when there is more than one
+///   model, and the hex row with the screen-pick button at its end.
+/// - Full: the square area and the strip at its reading end, over Only Web Colors with the screen-pick button at the
+///   row's end. Beside them the [`CompareSwatch`](super::CompareSwatch) (new over current: the
+///   [`compare`](ColorPicker::compare) colour, else the colour at the first show) with the host's
+///   [`warnings`](ColorPicker::warnings) in its column, and the actions cell, a `FooterSlot` where a dialog that puts
+///   its buttons in its body (`ButtonPlace::Body`) shows them; under both the two field groups: H S B, R G B, then "#"
+///   and the hex field; L a b, OKLCH when the host offers it, and the host's other models (CMYK). A radio before a
+///   channel's letter chooses the [`AreaMode`]; it edits no colour. Full has no opacity row.
+/// - The hex field takes the focus, its text selected, when the picker first shows.
 /// - Edits: every child's gesture is the picker's, with the whole colour as its value: an area or strip drag, a slider
 ///   drag, a scrub or a typing run is one Begin to Commit (or Cancel); keys, the wheel, Enter, a sample, a compare or
 ///   warning click are `Set`s.
 /// - Kept components: the picker keeps the values the user last edited, in that model, while they still give the
 ///   colour's 8-bit sRGB: greys keep their hue, black its hue and saturation, a typed Lab colour outside sRGB its
 ///   values. [`PickedColor::model`] carries them, and the host's binding holds them between passes.
-/// - Only Web Colors ([`web_colors`](ColorPicker::web_colors)): every colour reported has each of red, green and blue
-///   on a multiple of 0x33, whichever child made it. The Full layout shows the check box.
+/// - Only Web Colors ([`web_colors`](ColorPicker::web_colors), else kept by the picker): every colour reported has each
+///   of red, green and blue on a multiple of 0x33, whichever child made it. The Full layout shows the check box.
 ///
 /// AccessKit: a `Group` named by the label; channel fields and sliders are named by the channel's name ("Hue"), or
 /// `<model> <channel>` ("OKLCH hue") while another shown model has a channel of that name.
@@ -268,14 +279,15 @@ pub struct ColorPicker<'a> {
     /// What the area and the strip show, held by the host; kept per picker without it.
     #[prop]
     mode: Option<Bind<'a, AreaMode>>,
-    /// Only Web Colors, held by the host (kept across opens). The Full layout shows its check box; the Compact layout
-    /// has none, the host sets it.
+    /// Only Web Colors, held by the host (kept across opens); the picker keeps it itself without one. The Full layout
+    /// shows its check box; the Compact layout has none, the host sets it.
     #[prop]
     web_colors: Option<Bind<'a, bool>>,
-    /// Whether the picker edits the alpha: an "Opacity" row, and eight hex digits.
+    /// Compact only: whether the picker edits the alpha, with an "Opacity" row and eight hex digits.
     #[prop]
     alpha: bool,
-    /// Whether the channel sliders' tracks show the channel's colours with the others fixed (Dynamic Color Sliders).
+    /// Compact only: whether the channel sliders' tracks show the channel's colours with the others fixed (the Color
+    /// panel's Dynamic Color Sliders).
     #[prop]
     dynamic_tracks: bool,
     /// Shows the screen-pick button.
@@ -284,8 +296,9 @@ pub struct ColorPicker<'a> {
     /// Disables the screen-pick button while the host samples.
     #[prop]
     eyedropper_busy: bool,
-    /// The Full layout's compare swatch: the colour being edited over this one, the colour the host started from; a
-    /// click on it sets it again, with the model values it carries.
+    /// The Full layout's compare block: the colour being edited over this one, the colour the host started from; a
+    /// click on it sets it again, with the model values it carries. Without it the block shows the colour at the
+    /// picker's first show.
     #[prop(into)]
     compare: Option<Mixed<PickedColor>>,
     warnings: Vec<ColorWarning>,
@@ -295,9 +308,9 @@ pub struct ColorPicker<'a> {
     /// The host's answer to a screen or canvas pick, for this pass; a `Set` that keeps the picker's alpha.
     #[prop]
     sampled: Option<Srgba>,
-    /// Whether the Full layout focuses its hex field when it first shows; on by default.
+    /// The Compact rows' model, held by the host; kept per picker without it.
     #[prop]
-    focus_on_open: bool,
+    shown_model: Option<Bind<'a, Option<&'static str>>>,
 }
 
 impl<'a> ColorPicker<'a> {
@@ -318,7 +331,7 @@ impl<'a> ColorPicker<'a> {
             warnings: Vec::new(),
             constrain: None,
             sampled: None,
-            focus_on_open: true,
+            shown_model: None,
         }
     }
 
@@ -345,8 +358,8 @@ impl<'a> ColorPicker<'a> {
         self
     }
 
-    /// The warnings beside the Full layout's compare swatch (out-of-gamut and web-colour warnings); a click on one
-    /// sets its nearest passing colour. The host gives this pass's warnings for the colour it shows.
+    /// The warnings in the column beside the Full layout's compare block (out-of-gamut and web-colour warnings); a
+    /// click on one sets its nearest passing colour. The host gives this pass's warnings for the colour it shows.
     pub fn warnings(mut self, warnings: impl IntoIterator<Item = ColorWarning>) -> Self {
         self.warnings = warnings.into_iter().collect();
         self
@@ -376,7 +389,7 @@ impl<'a> ColorPicker<'a> {
             warnings,
             constrain,
             sampled,
-            focus_on_open,
+            mut shown_model,
         } = self;
         let full = layout == ColorPickerLayout::Full;
         let models: Vec<&'a dyn ColorModel> = models
@@ -385,12 +398,11 @@ impl<'a> ColorPicker<'a> {
             layout,
             models: models.clone(),
             warnings,
-            compare,
+            compare: compare.is_some(),
             alpha,
             dynamic_tracks,
             eyedropper,
             eyedropper_busy,
-            has_web_check: web_colors.is_some(),
         };
         let mut run = Run {
             name: Arc::from(label.as_str()),
@@ -399,9 +411,10 @@ impl<'a> ColorPicker<'a> {
             value: value.reborrow(),
             mode: mode.as_mut().map(|held| held.reborrow()),
             web: web_colors.as_mut().map(|held| held.reborrow()),
+            shown_model: shown_model.as_mut().map(|held| held.reborrow()),
             constrain,
             sampled,
-            focus_on_open,
+            compare,
             parts: &parts,
             latest: PickedColor::rgb(Srgba::BLACK),
             empty: false,
@@ -423,9 +436,12 @@ struct Run<'s, 'a> {
     value: BindMut<'s, PickedColor>,
     mode: Option<BindMut<'s, AreaMode>>,
     web: Option<BindMut<'s, bool>>,
+    /// The host's model of the Compact rows; without it `Memo.model` holds it.
+    shown_model: Option<BindMut<'s, Option<&'static str>>>,
     constrain: Option<ColorConstraint<'a>>,
     sampled: Option<Srgba>,
-    focus_on_open: bool,
+    /// The host's compare colour.
+    compare: Option<Mixed<PickedColor>>,
     parts: &'s compact::Body<'a>,
     /// The colour after the edits landed so far.
     latest: PickedColor,
@@ -440,7 +456,10 @@ impl<'a> Run<'_, 'a> {
         let memo = body.memory::<Memo>().clone();
         let held_mode = self.mode.as_ref().and_then(|held| held.read(&mut *body)).and_then(|held| held.same().copied());
         let mut mode = held_mode.unwrap_or(memo.mode);
-        let held_web = self.web.as_ref().and_then(|held| held.read(&mut *body)).and_then(|held| held.same().copied()).unwrap_or(false);
+        let held_web = match self.web.as_ref() {
+            Some(held) => held.read(&mut *body).and_then(|held| held.same().copied()).unwrap_or(false),
+            None => memo.web,
+        };
         let rules = Rules { web: held_web, constrain: self.constrain.clone() };
 
         // The Full layout shows a mode its models offer.
@@ -454,15 +473,22 @@ impl<'a> Run<'_, 'a> {
         }
 
         let first_show = !memo.opened;
-        let model = memo.model.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
+        let held_model = self.shown_model.as_ref().and_then(|held| held.read(&mut *body)).and_then(|held| held.same().copied()).flatten();
+        let wanted = if self.shown_model.is_some() { held_model } else { memo.model };
+        let model = wanted.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
+        let focus_hex = first_show && body.resolved.enabled;
+        let held = self.value.read(&mut *body).and_then(|held| held.same().copied());
+        let first = if first_show { held } else { memo.first };
         {
             let memo = body.memory::<Memo>();
             memo.mode = mode;
-            memo.model = model;
+            if self.shown_model.is_none() {
+                memo.model = model;
+            }
             memo.opened = true;
+            memo.first = first;
         }
-        let focus_hex = self.full && self.focus_on_open && first_show && body.resolved.enabled;
-        let held = self.value.read(&mut *body).and_then(|held| held.same().copied());
+        let compare = self.compare.unwrap_or_else(|| first.map_or(Mixed::Mixed, Mixed::Same));
         let empty = held.is_none();
         self.empty = empty;
         self.latest = held.unwrap_or(PickedColor::rgb(Srgba::BLACK));
@@ -471,7 +497,7 @@ impl<'a> Run<'_, 'a> {
             self.set(body, next);
         }
 
-        let pass = Pass { shown: self.latest, empty, rules: rules.clone(), mode, model, web: held_web, focus_hex };
+        let pass = Pass { shown: self.latest, empty, rules: rules.clone(), mode, model, web: held_web, compare, focus_hex };
         let mut got = Collected { empty, ..Collected::default() };
         self.parts.run(ui, &pass, &mut got);
 
@@ -486,9 +512,12 @@ impl<'a> Run<'_, 'a> {
             body.memory::<Memo>().mode = next;
         }
         if let Some(on) = got.web_pick.filter(|on| *on != held_web) {
-            if let Some(held) = self.web.as_mut() {
-                let event = EditEvent::set(Mixed::Same(held_web), on, Arc::from("Only Web Colors"), None);
-                let _ = held.write(&mut *body, &event);
+            match self.web.as_mut() {
+                Some(held) => {
+                    let event = EditEvent::set(Mixed::Same(held_web), on, Arc::from("Only Web Colors"), None);
+                    let _ = held.write(&mut *body, &event);
+                }
+                None => body.memory::<Memo>().web = on,
             }
             if on {
                 let snapped_rules = Rules { web: true, constrain: self.constrain.clone() };
@@ -499,8 +528,14 @@ impl<'a> Run<'_, 'a> {
                 }
             }
         }
-        if let Some(model) = got.model_pick {
-            body.memory::<Memo>().model = Some(model);
+        if let Some(next) = got.model_pick {
+            match self.shown_model.as_mut() {
+                Some(held) => {
+                    let event = EditEvent::set(Mixed::Same(model), Some(next), Arc::from("Color model"), None);
+                    let _ = held.write(&mut *body, &event);
+                }
+                None => body.memory::<Memo>().model = Some(next),
+            }
         }
         (std::mem::take(&mut self.events), got.screen_pick)
     }

@@ -18,7 +18,7 @@ pub(crate) fn takes_activation(resolved: &Resolved<'_>) -> bool {
 /// `Intent::Activate` carries them, and the pass's pointer frame reads them from the same input a pointer activation's
 /// modifiers come from (Alt+Enter adds the way Alt+click does).
 pub(crate) fn key_activation(ctx: &egui::Context) -> crate::contract::Activation {
-    crate::contract::Activation { by_key: true, mods: crate::runtime::pointer::frame(ctx).mods }
+    crate::contract::Activation { by_key: true, mods: crate::runtime::pointer::frame_raw(ctx).mods }
 }
 
 /// Step 9, update, the part the library writes: the keyboard activation.
@@ -49,7 +49,16 @@ pub(crate) fn gesture_gate<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
 pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
     use crate::contract::cx::Edit as _;
     if cx.gesture().is_some_and(|phase| matches!(phase, GesturePhase::Begin | GesturePhase::Update)) {
-        let reason = if !cx.core.escape_to_list && cx.core.intents.take(Intent::Cancel) {
+        // Typing in a dialog whose Escape closes it ends with the dialog: the typing is cancelled and the Escape is
+        // left for the dialog, so one Escape cancels both (`focus::escape_closes_dialog`).
+        let dialog_escape = !cx.core.escape_to_list
+            && matches!(C::INPUT, Input::Text)
+            && cx.core.intents.untaken(&Intent::Cancel)
+            && focus::escape_closes_dialog(&cx.core.ctx);
+        let reason = if dialog_escape {
+            cx.cancel(CancelReason::Escape);
+            None
+        } else if !cx.core.escape_to_list && cx.core.intents.take(Intent::Cancel) {
             Some(CancelReason::Escape)
         } else {
             cx.core.press_cancelled().map(|reason| match reason {
@@ -66,7 +75,7 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
         }
     }
     let reset = cx.core.intents.take_reset();
-    let double = double_click(&cx.core).filter(|_| !matches!(C::INPUT, Input::Text | Input::Editor));
+    let double = double_click(cx.core).filter(|_| !matches!(C::INPUT, Input::Text | Input::Editor));
     if reset.is_some() || double.is_some() {
         let part = match reset {
             Some(whole) => cx.core.active.filter(|_| !whole),
@@ -95,7 +104,7 @@ fn double_click(core: &CxCore<'_>) -> Option<Option<PartRef>> {
 /// Whether this pass releases the secondary button over the component, its text part included (a widget of its own
 /// over it): a right click on it.
 pub(crate) fn secondary_click(core: &CxCore<'_>) -> bool {
-    crate::runtime::pointer::frame(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary)
+    crate::runtime::pointer::frame_raw(&core.ctx).release == Some(craft_behavior::PointerButton::Secondary)
         && (core.response.hovered()
             || core.texts.as_ref().is_some_and(|(key, _)| {
                 core.ctx.read_response(crate::primitives::text_adapter::text_id(core.id, *key)).is_some_and(|text| text.hovered())

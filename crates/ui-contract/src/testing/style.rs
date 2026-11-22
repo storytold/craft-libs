@@ -97,7 +97,7 @@ pub fn with_cx<R>(ctx: &Context, tokens: &UiTokens, variant: Variant, size: Cont
         Scale::default(),
         Os::Linux,
         true,
-        env_key(tokens).with_line(line_ratio),
+        env_key(tokens).with_line(line_ratio).with_words(0),
         line_ratio,
     );
     f(&cx)

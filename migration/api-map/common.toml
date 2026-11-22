@@ -98,3 +98,28 @@ note = "`EnvView::text_direction()` is the paragraph direction of text (the inte
 old = "commands::take_for_instance(ctx, instance, from_ref)"
 new = "commands::take_for_instance(ctx, instance, app, from_ref)"
 note = "Crate-internal: the signature is `take_for_instance(ctx: &Context, instance: Option<Id>, app: bool, from_ref: fn(&CommandRef) -> Option<S>)`; `app` is true for an app-scope command set, which takes from the frame's output."
+
+[[call]]
+old = "Lazy::new(_, _).settles(_)"
+new = "MemoView::new(_, props, show).show(ui)"
+note = "A view that runs only when its inputs change is a memoized view: `show` is a `fn(&mut P, &mut Ui) -> R` that captures nothing and `props` (`#[derive(MemoProps)]`) hold every input it reads. While its props key and the framework inputs it read are unchanged it replays its last run. `Lazy` keeps only the in-view rule of a scroll area's child."
+
+[[call]]
+old = "_.content(version)"
+new = ""
+note = "Removed with `Lazy::settles`: the app data a view shows goes into its props, large data as a `Tracked<T>`, which keys by revision."
+
+[[call]]
+old = "frame::request_own_repaint(ctx)"
+new = "frame::request_repaint(ctx)"
+note = "One repaint request: asked in a memoized view's run, it runs that view (and the views around it) in the next pass; asked outside every view, every view replays."
+
+[[call]]
+old = "DockPanels::content(_, _)"
+new = ""
+note = "Removed, with `DockPanels::spec_version`, `DockColumn::content` and `IconicColumn::content`: the dock's chrome is memoized from the panel specs, and a host memoizes a panel's content inside `DockPanels::body` with a `MemoView`."
+
+[[call]]
+old = "Slot::content(_)"
+new = ""
+note = "Removed, with `Slot::content_version` and `AppShell::content`: a slot's body runs every pass, and the app memoizes what it shows there with a `MemoView`."

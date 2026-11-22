@@ -78,6 +78,10 @@ pub(crate) enum CardEvent {
     /// A "..." button was pressed: the menu of message `index` hangs from `anchor`.
     /// The checkmark button was pressed.
     Mark { thread: ThreadId, marked: bool },
+    /// The Resolve (`resolved`) or Reopen button of a balloon card was pressed.
+    Resolve { thread: ThreadId, resolved: bool },
+    /// The Delete button of a balloon card was pressed: the whole thread goes.
+    Delete { thread: ThreadId },
     /// The inline editor's text changed.
     EditText(String),
     /// The inline editor's Post.

@@ -1,7 +1,7 @@
 //! `MeasureCx`: step 5's read view of a component.
 
 use crate::contract::{Component, Resolved, Show, ValueOf};
-use crate::primitives::{TextEnv, TextLayout, TextRun};
+use crate::primitives::{LeastLayout, TextEnv, TextLayout, TextRun};
 use crate::runtime::commands::{self, CommandRef, ResolvedCommand};
 use crate::runtime::env::{EnvView, Label};
 use crate::runtime::layout_memory;
@@ -52,7 +52,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
     /// the component, and the enabled state of its instance. `None` when the command is scoped and no instance of
     /// its scope is above the component.
-    pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<ResolvedCommand> {
+    pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<std::sync::Arc<ResolvedCommand>> {
         commands::resolve_scoped(self.ui.ctx(), self.env.command_chain(), &command.into())
     }
 
@@ -78,16 +78,33 @@ impl<C: Component> MeasureCx<'_, C> {
         }
     }
 
-    /// The width a picture sizes at (a plot, a wheel, a well): it takes the room it is offered, down to `least` and up
-    /// to `most`. At its least, where the width is unbounded, and in a measuring run of a column that sizes its width
-    /// from its content (which offers no room), it is `least`: a picture needs no width of its own, so it never sets
-    /// that column's width, and the real run shows it across the width the column settles on. A band picture keeps a
-    /// height of its own; a square one is as tall as this.
+    /// The width a band picture sizes at (a plot, a strip), one whose height is its own whatever its width: it takes
+    /// the room it is offered, down to `least` and up to `most`. At its least, where the width is unbounded, and in a
+    /// measuring run of a column that sizes its width from its content (which offers no room), it is `least`: a
+    /// picture needs no width of its own, so it never sets that column's width, and the real run shows it across the
+    /// width the column settles on.
     pub fn picture_width(&self, least: f32, most: f32) -> f32 {
         match self.room.filter(|_| self.proposal != Proposal::Min) {
             Some(room) => room.clamp(least, most.max(least)),
             None => least,
         }
+    }
+
+    /// The size of a picture whose height follows from its width (a square graph, a wheel, an image at its aspect):
+    /// [`picture_width`](Self::picture_width)'s width, and `height` of it. Where a content column's measuring run
+    /// offers it no room, it is a held child of the column (`layout::HeldKind::Picture`): when the column settles
+    /// wider than the picture, the column sweeps again and offers it that width, so the picture is measured as tall
+    /// as it shows.
+    pub fn picture_size(&self, least: f32, most: f32, height: impl FnOnce(f32) -> f32) -> Vec2 {
+        // The width it reports is its placed width, which the place step gives (`run::place_root`).
+        if self.room.is_none()
+            && self.proposal != Proposal::Min
+            && let Some(column) = self.env.column_first_sweep()
+        {
+            crate::layout::report_held(self.ui.ctx(), column, self.id, crate::layout::HeldKind::Picture, f32::INFINITY);
+        }
+        let width = self.picture_width(least, most);
+        Vec2::new(width, height(width))
     }
 
     /// The label as given.
@@ -112,10 +129,10 @@ impl<C: Component> MeasureCx<'_, C> {
         run.layout(self.ui.ctx(), &self.text_env(), width)
     }
 
-    /// The width of `run`, a run that elides, at its readable least ([`TextRun::READABLE_CHARACTERS`]): the least
-    /// width an elidable text reports at `Proposal::Min`.
-    pub fn least_width(&self, run: &TextRun<'_>) -> f32 {
-        run.least_width(self.ui.ctx(), &self.text_env())
+    /// `run`, a run that elides, laid out whole and its width at its readable least
+    /// ([`TextRun::READABLE_CHARACTERS`]): what an elidable text reports at `Proposal::Min`. Each is laid out once.
+    pub fn least(&self, run: &TextRun<'_>) -> LeastLayout {
+        run.least(self.ui.ctx(), &self.text_env())
     }
 
     fn text_env(&self) -> TextEnv<'_> {
@@ -131,7 +148,7 @@ impl<C: Component> MeasureCx<'_, C> {
     /// editor draws past its last letter, so the caret stays inside the control and the text never scrolls.
     pub fn field_text(&self, run: &TextRun<'_>) -> Vec2 {
         let text = self.layout(run).size();
-        Vec2::new(text.x + self.ui.visuals().text_cursor.stroke.width, text.y)
+        Vec2::new(text.x + crate::runtime::egui::style::caret_width(self.ui.ctx()), text.y)
     }
 
     /// Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content
@@ -162,6 +179,9 @@ impl<C: Component> MeasureCx<'_, C> {
     /// The size `face` has when `PaintUi::face` shows it as the look of a part: steps 1, 2 and 4 of the face run
     /// under the composite's resolved `enabled`, `size` and sizing. A composite measured at its least measures the face at
     /// its least; otherwise the face has no proposal.
+    /// The face is measured inside the composite's own run (measure, parts or header parts). Only the composite's
+    /// measure call sizes the composite: its answer and the inputs the face read are what the layout memory keeps,
+    /// and the face keeps no entry of its own.
     pub fn face<S: Show>(&self, mut face: S) -> Vec2 {
         // The face is the composite's look: a composite sized to its content sizes its face so.
         if let Some(sizing) = self.resolved.sizing {
@@ -169,7 +189,7 @@ impl<C: Component> MeasureCx<'_, C> {
         }
         let id = self.id.with("face");
         let proposal = if self.proposal == Proposal::Min { Proposal::Min } else { Proposal::Ideal };
-        crate::contract::measure_under(&mut face, self.ui, Some(id), proposal, Some(&self.under()))
+        crate::contract::run::measure_face(&mut face, self.ui, id, proposal, &self.under())
     }
 
     /// The icon side of the component's size.

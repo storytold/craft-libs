@@ -36,6 +36,8 @@ pub(crate) struct TextNode<'a> {
     /// The text; `None` for a node that exposes none (a masked field).
     pub value: Option<&'a str>,
     pub editable: bool,
+    /// The node is disabled.
+    pub disabled: bool,
     /// The anchor and focus of the selection, `None` while the text has no runs.
     pub selection: Option<(Id, usize, Id, usize)>,
 }
@@ -113,6 +115,9 @@ pub(crate) fn write_text(ctx: &Context, id: Id, text: &TextNode<'_>) {
             node.set_value(value.to_owned());
         }
         node.add_action(accesskit::Action::SetTextSelection);
+        if text.disabled {
+            node.set_disabled();
+        }
         if text.editable {
             node.add_action(accesskit::Action::SetValue);
             node.add_action(accesskit::Action::ReplaceSelectedText);

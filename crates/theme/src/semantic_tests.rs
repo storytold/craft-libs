@@ -26,6 +26,7 @@ fn theme(id: &str, neutral: &str, accent: &str, status: [&str; 4]) -> ThemeDef {
         pins: ModePins::default(),
         high_contrast: ModePins::default(),
         contrast_intent: ContrastIntent::Standard,
+        icon_pack: None,
         apps: BTreeMap::new(),
     }
 }

@@ -199,10 +199,10 @@ job) and `an_installed_printer_prints_a_file`
 (`CRAFT_PRINT_TEST_PRINTER`, `CRAFT_PRINT_TEST_FILE`, optional `CRAFT_PRINT_TEST_SCALING=shrink`
 and `CRAFT_PRINT_TEST_DUPLEX=long`). Physical printer fidelity remains a hardware check.
 
-The cross-platform GitHub Actions workflow is defined in `.github/workflows/print.yml`.
-It runs formatting, Clippy and this crate's own tests on Windows, Linux and macOS when print
-code changes, and supports manual runs. The Windows job executes the spooler regression above;
-physical printer fidelity still requires hardware verification.
+The Workspace gate (`.github/workflows/workspace.yml`) runs formatting, Clippy and this crate's
+tests on Windows, Linux and macOS. Its Windows leg installs the test print queue and runs the
+spooler regression above with `CRAFT_PRINT_REQUIRE_QUEUE=1`; physical printer fidelity still
+requires hardware verification.
 
 Windows discovery reports driver duplex support in `Printer::two_sided` (a two-sided option in
 the driver's PrintCapabilities); CUPS leaves it unknown. Explicit simplex/duplex choices that the driver

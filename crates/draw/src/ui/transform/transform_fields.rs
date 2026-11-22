@@ -1,8 +1,8 @@
 //! `TransformFields`: the X, Y, W, H, angle and skew fields of a transform box, as an options-bar strip or a panel's
 //! rows.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod units;
 
 use self::units::Conversion;
@@ -359,9 +359,9 @@ struct Cells<'a> {
 }
 
 /// The panel form's columns: a field, the link, a field; the fields share the width.
-static FIELD_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
+const FIELD_COLUMNS: [ColumnWidth; 3] = [ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
 /// The panel form's columns with the reference point before them.
-static REFERENCE_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
+const REFERENCE_COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::fill(1.0), ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
 /// Which form the cells show in.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -485,12 +485,12 @@ impl Cells<'_> {
     /// The reference point picker; a pick moves the reference point to that point of the box.
     fn reference(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &Pass, compact: bool) {
         let anchor = pass.before.state.anchor_of_pivot().unwrap_or(Anchor9::Centre);
-        let mut picker = ReferencePoint::new(self.words.reference.clone(), Bind::given(anchor)).enabled(self.enabled);
+        let mut picker = ReferencePoint::new(self.words.reference.clone(), Bind::given(Some(anchor))).enabled(self.enabled);
         if compact {
             picker = picker.compact();
         }
         let shown = picker.show(ui);
-        let Some(picked) = shown.value().copied() else { return };
+        let Some(picked) = shown.value().copied().flatten() else { return };
         let before = pass.before;
         let state = BoxState::new(before.state.quad, before.state.point_at(picked));
         let event = EditEvent::set(Mixed::Same(before), TransformRow { state, skew_v: before.skew_v }, self.name.clone(), None);

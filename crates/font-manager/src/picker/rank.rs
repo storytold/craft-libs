@@ -2,11 +2,12 @@
 //! traits read from the faces' tables, the filtered list and its order, and the sample text of a row.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines};
+use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines, is_private_family};
 use craft_i18n::matcher::{Matcher, Rank};
 use craft_i18n::{Collator, Folder};
+use skrifa::GlyphId;
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FontRef, TableProvider};
 
@@ -53,8 +54,10 @@ impl Traits {
     }
 }
 
-/// The families of one catalog generation with their traits and sample texts, filled on first use.
-pub(super) struct Infos {
+/// The families of one catalog generation with their traits and sample texts, filled on first use. Built by
+/// [`FamilyInfos::of`] and held by the one that lists with it: the picker keeps it in a derived value keyed by the
+/// catalog's generation, and an app that calls [`family_rows`](super::family_rows) keeps its own while the catalog is unchanged.
+pub struct FamilyInfos {
     pub(super) families: HashMap<String, Info>,
     traits: Mutex<HashMap<String, Option<Traits>>>,
     samples: Mutex<HashMap<(String, String, String), Samples>>,
@@ -78,8 +81,9 @@ fn has_arabic_sample(drawn: &dyn Fn(&str) -> bool, latin: &str, arabic: &str) ->
     drawn(latin) && drawn(ARABIC_CORE) && drawn(arabic)
 }
 
-impl Infos {
-    fn build(catalog: &Catalog) -> Infos {
+impl FamilyInfos {
+    /// The family data of `catalog` as it is now; build it again when the catalog's generation moves.
+    pub fn of(catalog: &Catalog) -> FamilyInfos {
         let mut groups: HashMap<String, Vec<FaceInfo>> = HashMap::new();
         for face in catalog.faces().iter() {
             groups.entry(face.family.clone()).or_default().push(face.clone());
@@ -99,7 +103,7 @@ impl Infos {
                 Some((family, Info { localized, format, styles: faces.len(), regular }))
             })
             .collect();
-        Infos { families, traits: Mutex::new(HashMap::new()), samples: Mutex::new(HashMap::new()) }
+        FamilyInfos { families, traits: Mutex::new(HashMap::new()), samples: Mutex::new(HashMap::new()) }
     }
 
     /// The family's traits, read from its regular face on first use.
@@ -135,7 +139,8 @@ fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: 
     let data = catalog.load(face).ok()?;
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
     let map = font.charmap();
-    let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some());
+    let inked = inked(&font);
+    let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some_and(&inked));
     if drawn(sample) {
         let arabic = has_arabic_sample(&drawn, sample, arabic).then(|| arabic.to_owned());
         return Some(Samples { latin: sample.to_owned(), arabic });
@@ -143,26 +148,25 @@ fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: 
     if drawn(shown) {
         return Some(Samples { latin: shown.to_owned(), arabic: None });
     }
-    let first = map.mappings().filter_map(|(cp, _)| char::from_u32(cp)).filter(|c| !c.is_whitespace() && !c.is_control()).take(6).collect();
+    let first = map
+        .mappings()
+        .filter(|(_, glyph)| inked(*glyph))
+        .filter_map(|(cp, _)| char::from_u32(cp))
+        .filter(|c| !c.is_whitespace() && !c.is_control())
+        .take(6)
+        .collect();
     Some(Samples { latin: first, arabic: None })
 }
 
-type CacheEntry = (Weak<Catalog>, u64, Arc<Infos>);
-static CACHE: Mutex<Vec<CacheEntry>> = Mutex::new(Vec::new());
-
-/// The family data of `catalog`, rebuilt when its generation moves.
-pub(super) fn infos(catalog: &Arc<Catalog>) -> Arc<Infos> {
-    let generation = catalog.generation();
-    let same = |w: &Weak<Catalog>| std::ptr::eq(w.as_ptr(), Arc::as_ptr(catalog));
-    let mut cache = lock(&CACHE);
-    cache.retain(|(w, _, _)| w.strong_count() > 0);
-    if let Some((_, _, infos)) = cache.iter().find(|(w, g, _)| *g == generation && same(w)) {
-        return Arc::clone(infos);
+/// Whether a glyph of `font` has an outline, which is all the sample painter draws: a TrueType glyph with contours, or
+/// any glyph of a CFF face. A colour bitmap face (sbix, CBDT) maps its characters to glyphs without outlines.
+fn inked<'a>(font: &FontRef<'a>) -> impl Fn(GlyphId) -> bool + 'a {
+    let truetype = font.loca(None).ok().zip(font.glyf().ok());
+    let cff = font.cff().is_ok() || font.cff2().is_ok();
+    move |glyph| match &truetype {
+        Some((loca, glyf)) => loca.get_glyf(glyph, glyf).ok().flatten().is_some(),
+        None => cff,
     }
-    cache.retain(|(w, _, _)| !same(w));
-    let infos = Arc::new(Infos::build(catalog));
-    cache.push((Arc::downgrade(catalog), generation, Arc::clone(&infos)));
-    infos
 }
 
 /// The upright face nearest weight 400.
@@ -291,7 +295,13 @@ pub(super) struct Language<'a> {
 /// The rows the list shows for `listing` and whether Show Similar Fonts had a reference to compare with: recents
 /// first (when the query is empty and no filter is on), then the matching families, the best match first and ties
 /// in the interface language's order. A list that is not `narrowed` has no filters and no recents.
-pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>, language: &Language<'_>, narrowed: bool) -> (Vec<FamilyRow>, bool) {
+pub(super) fn list(
+    catalog: &Arc<Catalog>,
+    infos: &FamilyInfos,
+    listing: &Listing<'_>,
+    language: &Language<'_>,
+    narrowed: bool,
+) -> (Vec<FamilyRow>, bool) {
     let default_filters = FontFilters::default();
     let filters = if narrowed { listing.filters } else { &default_filters };
     let settings = listing.settings;
@@ -300,6 +310,7 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
     let mut ranked: Vec<(Rank, FamilyRow)> = catalog
         .families()
         .iter()
+        .filter(|family| !is_private_family(family))
         .filter_map(|family| {
             let info = infos.families.get(family)?;
             let shown = shown_name(info, family, listing.language, english);
@@ -377,7 +388,7 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use craft_ui::testing::trial;
 
     use super::{ARABIC_CORE, has_arabic_sample};

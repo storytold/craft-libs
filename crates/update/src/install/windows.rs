@@ -79,6 +79,8 @@ pub fn remove_product(product_code: &str, log: &Path) -> Result<(), String> {
     explain(status.code()).map_err(|e| format!("{e}. Its log is at {}", log.display()))
 }
 
+/// Uninstalls every MSI install of `app` registered with the Windows Installer, one at a time, with a
+/// progress window and no restart. Fails when none is registered.
 pub fn uninstall_msi(app: &App, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
     let installs = crate::detect::windows::msi_installs(app);
     if installs.is_empty() {

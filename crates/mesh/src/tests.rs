@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[cfg(feature = "abc")]
+mod abc;
+#[cfg(feature = "dae")]
+mod dae;
 #[cfg(feature = "fbx")]
 mod fbx;
 #[cfg(feature = "gltf")]
@@ -14,6 +18,7 @@ mod ply;
 mod stl;
 #[cfg(feature = "threemf")]
 mod threemf;
+mod triangulate;
 
 /// Every truncation of `good` and two mutations of every byte go through `read`: it may refuse
 /// them, it must not panic, and what it accepts must be a valid scene.

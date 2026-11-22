@@ -9,14 +9,15 @@
 //!
 //! Keys follow spec 9.7: Alt and a letter open the menu with that mnemonic (also while another is open). F10 or a
 //! lone Alt closes an open menu; with none open it moves focus to the first title, and the next F10 or lone Alt, an
-//! Escape, or running a row returns focus to where it was. A `&` in a title's words row marks its mnemonic; without
+//! Escape, a shortcut (Space, a canvas's momentary Hand, among them) or running a row returns focus to where it was.
+//! Down and Enter open the focused title's menu; Space opens none. A `&` in a title's words row marks its mnemonic; without
 //! one the title takes the first letter no earlier title holds. The mnemonic is underlined while Alt is held.
 //!
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
-//! matches by label, English label or menu path, each as a command row with its path as detail.
+//! matches by label, English label, menu path or command id, each as a command row with its path as detail.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::search::{HelpEntry, search_order};
 use super::words::MenuWords;
@@ -37,7 +38,7 @@ use crate::runtime::words::common::CommonWords;
 use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole};
 use crate::text::TextField;
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
-use craft_behavior::{Arrows, Axis, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Roving, Sense};
+use craft_behavior::{Arrows, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic;
 use craft_theme::Flags;
@@ -114,9 +115,11 @@ impl Component for TitleFace {
         face::measure(
             cx,
             &FaceSpec {
+                arrangement: crate::buttons::Arrangement::Inline,
                 label: cx.resolved.label,
                 role: None,
                 lead: None,
+                picture: None,
                 trail: None,
                 loading: false,
                 mnemonic: None,
@@ -135,9 +138,11 @@ impl Component for TitleFace {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let spec = FaceSpec {
+            arrangement: crate::buttons::Arrangement::Inline,
             label: cx.resolved.label,
             role: None,
             lead: None,
+            picture: None,
             trail: None,
             loading: false,
             mnemonic: self.mnemonic,
@@ -173,16 +178,24 @@ impl<'a> MenuTitle<'a> {
 }
 
 /// The Help menu's search: the index of the menu that starts with the field, and the commands it searches.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct MenuHelp<'a> {
     menu: usize,
-    entries: &'a [HelpEntry],
+    entries: &'a dyn Fn() -> Vec<HelpEntry>,
+}
+
+impl std::fmt::Debug for MenuHelp<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MenuHelp").field("menu", &self.menu).finish_non_exhaustive()
+    }
 }
 
 impl<'a> MenuHelp<'a> {
-    /// A search field at the top of the menu `menu` (its position among the titles) over `entries`.
-    pub fn new(menu: usize, entries: &'a [HelpEntry]) -> Self {
+    /// A search field at the top of the menu `menu` (its position among the titles) over the commands `entries`
+    /// lists. The bar runs it only in a pass that shows the Help menu, so an app whose command list is costly to
+    /// collect (every row of its menus) pays nothing while the menu is closed.
+    pub fn new(menu: usize, entries: &'a dyn Fn() -> Vec<HelpEntry>) -> Self {
         MenuHelp { menu, entries }
     }
 }
@@ -225,8 +238,10 @@ struct BarState {
 #[derive(Clone, Debug, Default)]
 struct Query(String, u32, bool);
 
+craft_ui_contract::stays!(BarFact);
+
 /// What the bar published for `is_open` and `is_focused`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct BarFact {
     open: bool,
     focused: bool,
@@ -399,14 +414,14 @@ impl<'a> MenuBar<'a> {
         Self::open_only(cx, slots, declared, slots[to]);
     }
 
-    /// The help search's entries as `[label, English label, path]` texts.
-    fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 3]> {
+    /// The help search's entries as `[label, English label, path, command id]` texts.
+    fn help_texts(entries: &[HelpEntry], env: &EnvView<'_>, separator: &str) -> Vec<[String; 4]> {
         entries
             .iter()
             .map(|entry| {
                 let path: Vec<String> = entry.path().iter().map(|label| env.resolve(label).as_str().to_owned()).collect();
                 let english = entry.english().map(|label| env.resolve(label).as_str().to_owned());
-                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator)]
+                [env.resolve(entry.label()).as_str().to_owned(), english.unwrap_or_default(), path.join(separator), entry.command().id.clone()]
             })
             .collect()
     }
@@ -414,7 +429,10 @@ impl<'a> MenuBar<'a> {
 
 impl Component for MenuBar<'_> {
     const ROLE: Role = Role::MENU_BAR;
-    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
+    // Enter and Down open the focused title's menu; Space does not. Space is a canvas's momentary Hand, so it goes on
+    // to the app's shortcuts, and a shortcut pressed on the bar gives the keyboard back to where it was.
+    const KEYS: crate::runtime::focus::KeyUse =
+        crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves().with_activate(crate::runtime::focus::ActivateKeys::Enter);
     type Style = MenuBarStyle;
     type Output = MenuBarOutput;
 
@@ -422,18 +440,15 @@ impl Component for MenuBar<'_> {
         MenuBarStyle { metrics: Metrics::new() }
     }
 
-    /// Every title's width when the room allows it; the bar fills the row, so what is left over is room for the
-    /// overflow.
+    /// Every title's width; at its least (`Proposal::Min`) the width of the "…" title alone. A row that has less room
+    /// than every title needs narrows the bar, and the titles that no longer fit go into "…".
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         if !Self::in_window(&cx.env) {
             return Vec2::ZERO;
         }
-        let (widths, height, _) = self.widths(cx);
-        Vec2::new(widths.iter().sum(), height)
-    }
-
-    fn fills(&self) -> Option<Axis> {
-        Some(Axis::X)
+        let (widths, height, more) = self.widths(cx);
+        let width = if cx.proposal == Proposal::Min { more } else { widths.iter().sum() };
+        Vec2::new(width, height)
     }
 
     fn sense(&self) -> Sense {
@@ -524,9 +539,10 @@ impl Component for MenuBar<'_> {
         let folder = cx.env.folder();
         let texts = self.texts(&cx.env);
         let help = self.help;
-        let help_rows = help
-            .filter(|help| opened == Some(Open::Title(help.menu)))
-            .map(|help| Self::help_texts(help.entries, &cx.env, cx.env.words::<CommonWords>().path_separator.as_str()));
+        // Only a pass that shows the Help menu needs its commands: the entries function runs here and nowhere else.
+        let help_entries = help.filter(|help| opened == Some(Open::Title(help.menu))).map(|help| (help.entries)());
+        let help_rows =
+            help_entries.as_deref().map(|entries| Self::help_texts(entries, &cx.env, cx.env.words::<CommonWords>().path_separator.as_str()));
         // The search starts empty each time the Help menu opens.
         let mut query = if help_rows.is_some() { cx.memory::<Query>().clone() } else { Query::default() };
         let mut stepped = None;
@@ -542,7 +558,9 @@ impl Component for MenuBar<'_> {
                 Menu::inline(Label::from(name.clone()))
                     .show(ui, |ui, menu| match slot {
                         Open::Title(at) => {
-                            if let (Some(help), Some(rows)) = (help.filter(|help| help.menu == *at), help_rows.as_ref()) {
+                            if let (Some(_), Some(rows), Some(entries)) =
+                                (help.filter(|help| help.menu == *at), help_rows.as_ref(), help_entries.as_deref())
+                            {
                                 // The field sits in a padded frame: its edge lines up with the row labels and it keeps clear of the first row.
                                 // The field drives the menu: Up, Down, Home and End move its active row and Enter runs
                                 // it, or the first enabled match, while typing stays in the field.
@@ -568,20 +586,22 @@ impl Component for MenuBar<'_> {
                                     }
                                 }
                                 query.1 = query.1.saturating_add(1);
-                                let refs: Vec<[&str; 3]> =
-                                    rows.iter().map(|[label, english, path]| [label.as_str(), english.as_str(), path.as_str()]).collect();
+                                let refs: Vec<[&str; 4]> = rows
+                                    .iter()
+                                    .map(|[label, english, path, id]| [label.as_str(), english.as_str(), path.as_str(), id.as_str()])
+                                    .collect();
                                 let mut seen: Vec<&CommandRef> = Vec::new();
                                 let listed: Vec<usize> = search_order(&folder, &query.0, &refs)
                                     .into_iter()
                                     .filter(|at| {
-                                        let command = help.entries[*at].command();
+                                        let command = entries[*at].command();
                                         let fresh = !seen.contains(&command);
                                         seen.push(command);
                                         fresh
                                     })
                                     .collect();
                                 for at in &listed {
-                                    let entry = &help.entries[*at];
+                                    let entry = &entries[*at];
                                     let row = MenuItem::command(entry.command().clone()).label(entry.label().clone());
                                     if entry.path().is_empty() {
                                         row.show(ui)

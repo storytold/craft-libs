@@ -33,7 +33,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                 .selection(Bind::given(selection))
                 .show_items(ui, &source, &mut |at, _| {
                     if rows[*at].is_separator() {
-                        ListRow::spacer()
+                        ListRow::separator()
                     } else if rows[*at].is_heading() {
                         ListRow::new(labels[*at].clone()).heading()
                     } else {
@@ -64,7 +64,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         let start = cx.value().and_then(NumberValue::number).unwrap_or_else(|| self.settle_stored((range.start() + range.end()) / 2.0));
         let mut shown = start;
         let name = cx.label();
-        let step = self.step.map(|step| self.to_stored(step));
+        let step = self.step.filter(|_| self.snap_popup_slider).map(|step| self.to_stored(step));
         let (rule, scale) = (self.rule(), self.scale);
         let edit = ui.show(popup, Overlay::popover(), |ui, _| {
             let slider = Slider::new(Bind::bound(&mut shown), range.clone()).label(name.clone());

@@ -220,7 +220,7 @@ new = ""
 [[setter]]
 type = "MenuBar"
 old = "help_search(usize)"
-new = "help(MenuHelp::new(usize, &[HelpEntry]))"
+new = "help(MenuHelp::new(usize, &dyn Fn() -> Vec<HelpEntry>))"
 
 [[setter]]
 type = "MenuBar"

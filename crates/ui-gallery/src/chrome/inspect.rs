@@ -1,12 +1,13 @@
 //! The inspector: while the Inspect panel is in front, the selected card's stories are shown as inspected regions
 //! with the inspector's drawing over each, and the panel lists what each region showed.
 
-use super::overview::{SpecStory, selected_type, target_story};
-use super::panels::Panels;
-use crate::viewer::PanelId;
+use super::overview::SpecStory;
+use super::panels::view_id;
+use crate::viewer::{Browser, Catalog, PanelId};
 use craft_theme::variant::Tone;
+
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Tracked, bind_tracked};
 use craft_ui::display::{InspectLayers, Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::Env;
@@ -15,28 +16,27 @@ use craft_ui::sections::Section;
 use craft_ui::style::TypeRole;
 use egui::{Id, Ui};
 
-/// What the inspector shows in a pass.
+/// Where the inspector is on in a pass, as the dock layout says.
+#[derive(Clone, Debug, Default, PartialEq, MemoProps)]
 #[non_exhaustive]
-pub struct Inspect<'a> {
+pub struct Inspect {
     /// The Inspect panel is in front in the components workspace, with no Variants view open: the selected card's
     /// stories are recorded and drawn over.
     pub on: bool,
     /// The centre tabs in front whose selected card is inspected: the Overview, the selected component's tab.
     pub front: Vec<PanelId>,
-    /// The drawings shown.
-    pub layers: &'a mut InspectLayers,
 }
 
-impl Inspect<'_> {
-    /// What the selected card of `tab` inspects, when the inspector is on and the tab is in front.
-    pub fn of(&self, tab: Option<PanelId>, selected: bool) -> Option<Inspected> {
-        let tab = tab.filter(|tab| self.on && selected && self.front.contains(tab))?;
-        Some(Inspected { tab, layers: *self.layers })
+impl Inspect {
+    /// How the selected card of `tab` is inspected with the drawings `layers`, when the inspector is on and the tab is
+    /// in front.
+    pub fn of(&self, tab: &PanelId, layers: InspectLayers) -> Option<Inspected> {
+        (self.on && self.front.contains(tab)).then(|| Inspected { tab: tab.clone(), layers })
     }
 }
 
 /// How a card's stories are inspected: the tab the card is in, which keys their regions, and the drawings shown.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Inspected {
     /// The centre tab the card is in.
@@ -46,21 +46,40 @@ pub struct Inspected {
 }
 
 /// The inspected region of the story at catalog index `story` on the selected card of `tab`.
-pub fn region_key(tab: PanelId, story: usize) -> Id {
+pub fn region_key(tab: &PanelId, story: usize) -> Id {
     Id::NULL.with("gallery.inspect").with(tab).with(story)
+}
+
+/// What the Inspect panel reads and edits. The records it lists are read through `inspect::recorded`, which the
+/// framework tracks: a changed record runs the view.
+#[derive(MemoProps)]
+struct InspectProps<'a> {
+    catalog: &'a Catalog,
+    /// The selected component.
+    selected: Option<&'static str>,
+    /// The catalog index of the story it shows.
+    target: Option<usize>,
+    inspect: &'a Inspect,
+    layers: &'a mut Tracked<InspectLayers>,
 }
 
 /// The Inspect panel: the drawing switches, then for each front tab one section per story of the selected card with the
 /// elements its region showed, then the selected component's declared facts.
-pub(super) fn panel(ui: &mut Ui, p: &mut Panels<'_>) {
-    let sections = regions(p);
+pub(super) fn panel(ui: &mut Ui, browser: &mut Browser, inspect: &Inspect, layers: &mut Tracked<InspectLayers>) {
+    let (selected, target) = (browser.selected_type(), browser.target_story());
+    let props = InspectProps { catalog: &browser.catalog, selected, target, inspect, layers };
+    let _ = MemoView::new(view_id(&PanelId::Inspect), props, panel_view).show(ui);
+}
+
+fn panel_view(props: &mut InspectProps<'_>, ui: &mut Ui) {
+    let sections = regions(props);
     let least = Env::of(ui).tokens.size.control.sm;
-    let (catalog, selected) = (p.catalog, selected_type(p));
-    let layers = &mut *p.inspect.layers;
+    let InspectProps { catalog, selected, layers, .. } = props;
     Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
-        Checkbox::new(Bind::bound(&mut layers.padding)).label("Padding").show(ui);
-        Checkbox::new(Bind::bound(&mut layers.hits)).label("Hit areas").show(ui);
-        Checkbox::new(Bind::bound(&mut layers.focus)).label("Focus order").show(ui);
+        let (padding, hits, focus) = bind_tracked!(layers => padding, hits, focus);
+        Checkbox::new(padding).label("Padding").show(ui);
+        Checkbox::new(hits).label("Hit areas").show(ui);
+        Checkbox::new(focus).label("Focus order").show(ui);
         Text::new(format!("Hit areas under {least} pt (size.control.sm) are flagged.")).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
         for (at, (key, caption)) in sections.iter().enumerate() {
             Section::new(caption.clone()).id_salt(*key).initially_open(at == 0).show(ui, |ui, _| {
@@ -72,19 +91,21 @@ pub(super) fn panel(ui: &mut Ui, p: &mut Panels<'_>) {
                 });
             });
         }
-        super::panels::declared(ui, catalog, selected);
+        super::panels::declared(ui, catalog, *selected);
     });
 }
 
 /// The regions the panel lists, with their captions: the stories of the selected card of each front tab.
-fn regions(p: &Panels<'_>) -> Vec<(Id, String)> {
-    let Some(type_name) = selected_type(p).filter(|_| p.inspect.on) else { return Vec::new() };
-    let (Some(component), Some(target)) = (p.catalog.component(type_name), target_story(p, type_name)) else { return Vec::new() };
-    let Some(group) = p.catalog.group_at(type_name, target) else { return Vec::new() };
-    let stories = p.catalog.group_stories(type_name, group);
-    let tabs = p.inspect.front.iter().filter(|tab| matches!(tab, PanelId::Overview) || **tab == PanelId::Component(type_name));
+fn regions(props: &InspectProps<'_>) -> Vec<(Id, String)> {
+    let InspectProps { catalog, selected, target, inspect, .. } = props;
+    let Some(type_name) = selected.filter(|_| inspect.on) else { return Vec::new() };
+    let (Some(component), Some(target)) = (catalog.component(type_name), *target) else { return Vec::new() };
+    let Some(group) = catalog.group_at(type_name, target) else { return Vec::new() };
+    let stories = catalog.group_stories(type_name, group);
+    let tab = PanelId::component(type_name);
+    let tabs = inspect.front.iter().filter(|front| matches!(front, PanelId::Overview) || **front == tab);
     tabs.flat_map(|tab| {
-        stories.iter().map(|&index| (region_key(*tab, index), SpecStory::of(p.catalog, index, &component.name).caption)).collect::<Vec<_>>()
+        stories.iter().map(|&index| (region_key(tab, index), SpecStory::of(catalog, index, &component.name).caption)).collect::<Vec<_>>()
     })
     .collect()
 }

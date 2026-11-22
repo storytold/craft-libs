@@ -68,6 +68,11 @@ impl Tone {
         tokens.color.get(ToneTokens::of(self).soft_fill)
     }
 
+    /// The ink text and icons of the tone read in: `accent.text`, the status foreground, and the normal text for no status.
+    pub fn ink(self, tokens: &Tokens) -> Rgba {
+        tokens.color.get(ToneTokens::of(self).fg)
+    }
+
     /// The ink text and icons read in on the tone's [`soft_fill`](Self::soft_fill): `accent.on_soft`, the status
     /// foreground, and the normal text for no status.
     pub fn on_soft(self, tokens: &Tokens) -> Rgba {
