@@ -1,7 +1,7 @@
 //! AccessKit nodes and requests of item rows, section rows and toggle cells.
 
 use super::{ITEM_NODE, ItemsHooks, Placement, SECTION, TOGGLE_CELL, key_hash, section_part};
-use crate::contract::collection::{CollectionEvent, LeadSource, OpenChange};
+use crate::contract::collection::{ActivateOn, CollectionEvent, LeadSource, OpenChange};
 use crate::contract::cx::Pointer as _;
 use crate::contract::{Collection, Cx};
 use crate::runtime::access::{self, Role};
@@ -74,8 +74,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// AccessKit requests on an item row's node or on a section row's collection node (`report_section_node`): Focus
-    /// moves the lead to the row and key focus to the collection; Click does that and picks an item or activates a
-    /// section, as a press does; Expand and Collapse open and close a row that has children.
+    /// moves the lead to the row and key focus to the collection; Click does that and picks an item (and activates it
+    /// in a collection that activates on a click) or activates a section, as a press does; Expand and Collapse open and close a row that has children.
     pub(super) fn node_by_access(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: Placement) {
         use craft_behavior::AccessAction;
         let (_, built) = self.built(layout, place.rect, place.offset);
@@ -109,6 +109,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                             self.events.push(CollectionEvent::Activate(key));
                         } else {
                             self.pick(comp, at, false, false);
+                            if comp.items().activate == ActivateOn::Click {
+                                self.activation_clicks = 1;
+                                self.events.push(CollectionEvent::Activate(key));
+                            }
                         }
                     }
                 }

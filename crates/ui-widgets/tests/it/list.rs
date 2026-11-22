@@ -615,6 +615,32 @@ fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
     assert_eq!(*typed.borrow(), Some(12.0), "the field's edit reaches the output");
 }
 
+/// A screen reader's click on an item of a list that activates on a click picks and activates it, as a pointer click
+/// does; one on a list that activates on a double click only picks it.
+#[trial]
+fn an_access_click_activates_an_item_where_a_click_does() {
+    use craft_ui::contract::ActivateOn;
+    use craft_ui::testing::focus::AccessActionKind;
+    for (activate, activates) in [(ActivateOn::Click, true), (ActivateOn::DoubleClick, false)] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let held = events.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let keys = [0_usize, 1, 2];
+            let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+            let out = List::new("Swatches").activate(activate).show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]));
+            held.borrow_mut().extend(out.events);
+        });
+        fixture.room(Vec2::new(300.0, 200.0)).settle();
+        events.borrow_mut().clear();
+        let row = fixture.by_label(NAMES[1]).expect("the second row");
+        fixture.access(AccessActionKind::Click, &row).settle();
+        let events = events.borrow();
+        assert!(events.iter().any(|event| matches!(event, CollectionEvent::Selection { .. })), "{activate:?}: the click picks: {events:?}");
+        let activated = events.iter().any(|event| matches!(event, CollectionEvent::Activate(1)));
+        assert_eq!(activated, activates, "{activate:?}: {events:?}");
+    }
+}
+
 /// A link in the label's column is only as wide as its text, as a label is: a press on it follows the link, and a
 /// press past it acts on the row (selects it, and would start its drag), as production's rows named by a link did.
 #[trial]
