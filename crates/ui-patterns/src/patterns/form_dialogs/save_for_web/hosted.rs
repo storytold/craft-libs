@@ -282,6 +282,11 @@ impl HostedSaveForWeb {
         std::mem::take(&mut self.wanted)
     }
 
+    /// The Original pane's picture from the next pass, for a document the app has rendered anew.
+    pub fn set_original(&mut self, original: SizedTexture) {
+        self.pictures.original = Some(original);
+    }
+
     /// An encoded pane; one for an older revision than the last asked for is dropped.
     pub fn set_variant(&mut self, variant: WebVariant) {
         if variant.revision >= self.taken {
