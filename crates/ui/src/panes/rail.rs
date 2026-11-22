@@ -226,7 +226,11 @@ impl Rail {
                     response
                 })
                 .inner;
-            let response = if item.enabled { response.on_hover_text(&item.label) } else { response.on_disabled_hover_text(&item.label) };
+            let response = if item.enabled {
+                response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&item.label)
+            } else {
+                response.on_disabled_hover_text(&item.label)
+            };
             if !item.enabled {
                 if had_focus {
                     lost_focus = Some(place);
