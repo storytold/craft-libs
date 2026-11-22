@@ -375,6 +375,9 @@ pub(crate) struct Native<'a> {
     info: AudioInfo,
     /// Whether `info.frames` came from the container (else it is 0 until decoded).
     frames_known: bool,
+    /// Whether a known length of 0 means the stream is empty, so decoding nothing is not an error.
+    /// False for Ogg Vorbis, whose length is inferred from the pages' granule positions.
+    empty_ok: bool,
     /// Decoded frames at the start that are not presented (AAC priming, Opus pre-skip).
     skip: u64,
     /// Presented frames, when the container says.
@@ -542,7 +545,7 @@ impl<'a> Native<'a> {
     /// At the end of the stream: an error when no packet decoded, unless the track declares no
     /// frames (an empty WAV or AIFF is empty, not broken) or a seek reached the end.
     fn check_decoded(&mut self) -> Result<()> {
-        let empty = self.frames_known && self.info.frames == 0 && self.errors == 0;
+        let empty = self.frames_known && self.empty_ok && self.info.frames == 0 && self.errors == 0;
         if self.decoded || empty || self.seeked && self.errors == 0 {
             return Ok(());
         }
@@ -610,6 +613,7 @@ fn with_decoder(container: Container, packets: Packets<'_>, dec: TrackDecoder, s
         packets,
         info,
         frames_known: frames.is_some() && dec.channels() > 0 && dec.sample_rate() > 0,
+        empty_ok: true,
         dec,
         skip,
         limit,
@@ -1160,7 +1164,10 @@ fn open_ogg_vorbis<'a>(src: &Src<'a>, file: ogg::OggFile, stream: usize) -> Opti
     let skip = u64::try_from(starts.first().copied().unwrap_or(0).saturating_neg()).unwrap_or(0);
     let limit = u64::try_from(total).ok();
     let packets = Packets::Ogg { file: Box::new(file), src: src.clone(), stream, next: 0, starts, primers: Some(primers), jumps };
-    Some(Ok(with_decoder(Container::Ogg, packets, dec, skip, limit, limit)))
+    let mut n = with_decoder(Container::Ogg, packets, dec, skip, limit, limit);
+    // a stream with no audio packets, or only the first (which decodes to no frames), is an error
+    n.empty_ok = false;
+    Some(Ok(n))
 }
 
 /// The frames each Vorbis packet decodes to: none for the first, then a quarter of the previous
@@ -1196,13 +1203,16 @@ const MAX_GRANULE: i64 = ogg::MAX_OPUS_GRANULE;
 /// decodes to) have negative places. A last page whose granule position is below its frames trims
 /// the end. A granule position outside `0..=MAX_GRANULE` is treated as missing. The third value
 /// is true when the first page's granule position is above where the next page places its end;
-/// that page is then placed to end where the next one starts.
+/// that page is then placed to end where the next one starts. When the next page is the last and
+/// its granule position is below the first page's, the first page is placed from 0 instead, and
+/// the last page trims the end as usual.
 fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64, bool) {
     let n = durations.len().min(stream.packets.len());
     let dur = |k: usize| i64::try_from(durations[k]).unwrap_or(i64::MAX);
     let granule_of = |k: usize| stream.packets.get(k).and_then(|p| p.granule).filter(|g| (0..=MAX_GRANULE).contains(g));
     let mut ends: Vec<i64> = vec![0; n];
-    let (mut i, mut cursor, mut trimmed_end) = (0, None::<i64>, None::<i64>);
+    let (mut i, mut cursor, mut trimmed_end, mut pages) = (0, None::<i64>, None::<i64>, 0usize);
+    let mut first_damaged = false;
     while i < n {
         // packets completing on the same page: i..=j, the last carries the page's granule position
         let Some(j) = (i..n).find(|&k| granule_of(k).is_some()) else {
@@ -1218,6 +1228,17 @@ fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64, bo
         let g = granule_of(j).unwrap_or(0);
         let sum = (i..=j).fold(0i64, |a, k| a.saturating_add(dur(k)));
         let eos = stream.packets[j].eos;
+        // A last page after the first whose granule position is below the first page's: the
+        // first page's granule position is damaged, so that page is placed from 0.
+        if eos && pages == 1 && cursor.is_some_and(|c| g < c) {
+            let mut e = 0i64;
+            for (k, end) in ends.iter_mut().enumerate().take(i) {
+                e = e.saturating_add(dur(k));
+                *end = e;
+            }
+            cursor = Some(e);
+            first_damaged = true;
+        }
         let end = match cursor.map(|c| c.saturating_add(sum)) {
             // end trimming on the last page: the packets keep their forward places
             Some(f) if eos && g < f => {
@@ -1240,11 +1261,11 @@ fn granule_starts(stream: &ogg::Stream, durations: &[u64]) -> (Vec<i64>, i64, bo
             e = e.saturating_sub(dur(k));
         }
         cursor = Some(end);
+        pages += 1;
         i = j + 1;
     }
     // A first page placed after where the next page starts (the granule positions come back down
     // after it) has a damaged granule position: it ends where the next page starts.
-    let mut first_damaged = false;
     if let Some(j) = (0..n).find(|&k| granule_of(k).is_some()).filter(|&j| j + 1 < n) {
         let back = ends[j].saturating_sub(ends[j + 1].saturating_sub(dur(j + 1)));
         if back > 0 {

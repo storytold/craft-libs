@@ -344,8 +344,40 @@ fn damaged_and_cut_files_are_errors_or_results() {
     // headers and no audio
     let empty = remux(&broken, &[], 8, 0, 0);
     let _ = decode(&empty, None);
+    // headers and no audio packets, or only the first (which decodes to no frames): no audio
     let headers_only = remux(&p, &[], 8, 0, 0);
-    if let Ok((_, buf)) = decode(&headers_only, None) {
-        assert_eq!(buf.frames(), 0);
+    assert!(decode(&headers_only, None).is_err());
+    let primer_only = remux(&p, &p.packets[..1], 8, 0, 0);
+    assert!(decode(&primer_only, None).is_err());
+}
+
+/// Two audio pages, the second the last: a first page whose granule position is above the last
+/// page's is damaged, not trimmed by the last page. The first page is then placed from 0, the last
+/// page keeps its end trimming, and the whole stream decodes.
+#[test]
+fn a_raised_first_granule_before_the_last_page_is_damage() {
+    let ogg = encode(44_100, 2, 20_000, 4.0);
+    let p = parts(&ogg);
+    let clean = decode_ogg(&ogg).expect("decode_ogg").channels;
+    let first_page = p.packets.len() / 2;
+    let mut w = PageWriter::new(7).with_page_target(1 << 20, p.packets.len());
+    let mut file = Vec::new();
+    for h in &p.headers {
+        file.extend(w.header(h));
     }
+    let mut end = 0i64;
+    for (k, (packet, &n)) in p.packets.iter().zip(&p.frames).enumerate() {
+        if k == first_page {
+            file.extend(w.flush());
+        }
+        end += n as i64;
+        // the first page's granule position is raised past the last page's
+        file.extend(w.packet(packet, if k < first_page { end + p.last_granule } else { end }));
+    }
+    file.extend(w.finish(Some(p.last_granule)));
+    let pages = craft_media::ogg::open(&file[..]).expect("open").streams[0].packets.iter().filter(|q| q.granule.is_some()).count();
+    assert_eq!(pages, 2);
+    let (info, buf) = decode(&file, None).expect("decode");
+    assert_eq!((info.frames, info.damaged), (p.last_granule as u64, 1));
+    assert_eq!(buf.channels, clean);
 }
