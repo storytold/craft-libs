@@ -445,3 +445,33 @@ fn a_grid_drop_in_the_left_half_of_a_tile_lands_before_it_under_a_group_header()
         assert_eq!(places, [usize::from(grouped)], "Preset 3 takes Preset 1's row (grouped: {grouped})");
     }
 }
+
+/// The host's rows of a `PresetRowMenu::Host` row menu are plain menu items, and a checked one a check box: a screen
+/// reader hears no unchecked check box on a command row.
+#[trial]
+fn host_row_menu_rows_are_menu_items_and_only_a_checked_row_a_check_box() {
+    use craft_ui::contract::{Entry, Role};
+    use craft_ui::patterns::presets::PresetRowMenu;
+    let rows = PresetSource::new((), PresetFns::new(|_, _| vec![PresetRow::item(ALPHA, "Alpha", 0)]));
+    let mut state = PresetState::<u32>::new();
+    let mut fixture = Fixture::new(move |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+            let _ = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
+                .view_lock(PresetView::List)
+                .row_menu(PresetRowMenu::Host)
+                .row_items(|_| vec![Entry::new(String::from("options"), "Options…"), Entry::new(String::from("lock"), "Locked").checked(true)])
+                .show(ui);
+        });
+    });
+    fixture.room(vec2(480.0, 320.0)).settle();
+    let alpha = fixture.by_label("Alpha").expect("the preset").center();
+    let button = |pressed| Event::PointerButton { pos: alpha, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![Event::PointerMoved(alpha)]);
+    fixture.frame(vec![button(true)]);
+    fixture.frame(vec![button(false)]);
+    fixture.idle(2);
+    let tree = fixture.tree();
+    let names = |role| fixture.by_role(role).iter().filter_map(|row| tree.name_of(row.node).map(str::to_owned)).collect::<Vec<_>>();
+    assert_eq!(names(Role::MENU_ITEM), ["Options…"], "a plain host row is a menu item");
+    assert_eq!(names(Role::MENU_ITEM_CHECK_BOX), ["Locked"], "a checked host row is a check box");
+}

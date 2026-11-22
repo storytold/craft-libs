@@ -1360,7 +1360,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
                 if entry.is_separator() {
                     Divider::horizontal().show(ui);
                 } else if let Some(value) = entry.value() {
-                    let mut row = MenuItem::new(entry.label().clone()).enabled(entry.is_enabled()).check(entry.is_checked());
+                    let mut row = MenuItem::new(entry.label().clone()).enabled(entry.is_enabled()).entry_checked(entry.is_checked());
                     if let Some(reason) = entry.why_disabled() {
                         row = row.tooltip(TooltipSpec::new(reason.clone()).disabled_text(reason.clone()));
                     }
