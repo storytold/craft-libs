@@ -34,6 +34,8 @@ impl Patterns {
     /// Read UTF-8 Libhyphen patterns, including replacement/start/cut declarations.
     /// Malformed replacement records are logged and skipped, without rewriting data.
     /// At most eight detailed warnings and one summary are emitted per file.
+    /// Omitting both start and cut selects the whole Unicode pattern span, without
+    /// digit weights or boundary dots, as in README.nonstandard's short-form examples.
     ///
     /// # Errors
     /// Rejects oversized or unsupported patterns and files with no usable records.
@@ -95,10 +97,8 @@ impl Patterns {
         if skipped > 8 {
             warn(&format!("{} additional malformed replacement records skipped", skipped - 8));
         }
-        if out.is_empty()
-            && let Some(error) = first_error
-        {
-            return Err(error);
+        if out.is_empty() {
+            return Err(first_error.unwrap_or_else(|| "no patterns".into()));
         }
         Ok(out)
     }
@@ -177,19 +177,6 @@ fn parse_change(raw: &str, replacement: &str) -> Result<Change, String> {
     if !left.chars().chain(right.chars()).all(char::is_alphabetic) || left.len() + right.len() > 64 {
         return Err("replacement must contain bounded letters".into());
     }
-    let start = args
-        .next()
-        .ok_or("missing start")?
-        .parse::<usize>()
-        .map_err(|_| "invalid start")?
-        .checked_sub(1)
-        .and_then(|x| x.checked_add(usize::from(raw.starts_with('.'))))
-        .ok_or("invalid start")?;
-    let cut = args.next().ok_or("missing cut")?.parse::<usize>().map_err(|_| "invalid cut")?;
-    if args.next().is_some() {
-        return Err("unexpected replacement fields".into());
-    }
-    let end = start.checked_add(cut).ok_or("replacement overflow")?;
     let mut pos = 0usize;
     let mut values = FxMap::default();
     for c in raw.chars() {
@@ -199,15 +186,33 @@ fn parse_change(raw: &str, replacement: &str) -> Result<Change, String> {
             pos += 1;
         }
     }
+    let (start, cut) = if let Some(start) = args.next() {
+        let start = start
+            .parse::<usize>()
+            .map_err(|_| "invalid start")?
+            .checked_sub(1)
+            .and_then(|x| x.checked_add(usize::from(raw.trim_start_matches(|c: char| c.is_ascii_digit()).starts_with('.'))))
+            .ok_or("invalid start")?;
+        let cut = args.next().ok_or("missing cut")?.parse::<usize>().map_err(|_| "invalid cut")?;
+        if args.next().is_some() {
+            return Err("unexpected replacement fields".into());
+        }
+        (start, cut)
+    } else {
+        // The short form changes the whole matched source span, not boundary sentinels.
+        let start = usize::from(raw.trim_start_matches(|c: char| c.is_ascii_digit()).starts_with('.'));
+        let tail = usize::from(raw.trim_end_matches(|c: char| c.is_ascii_digit()).ends_with('.'));
+        (start, pos.saturating_sub(start + tail))
+    };
+    let end = start.checked_add(cut).ok_or("replacement overflow")?;
     if end > pos || cut == 0 {
         return Err("replacement outside pattern".into());
     }
-    let locus = values
-        .iter()
-        .filter(|(i, w)| start <= **i && **i <= end && **w % 2 == 1)
-        .max_by_key(|(i, w)| (**w, std::cmp::Reverse(**i)))
-        .map(|(i, _)| *i)
-        .ok_or("no odd point in replacement")?;
+    let mut points = values.iter().filter(|(i, w)| start <= **i && **i <= end && **w % 2 == 1).map(|(i, _)| *i);
+    let locus = points.next().ok_or("no odd point in replacement")?;
+    if points.next().is_some() {
+        return Err("multiple odd points in replacement".into());
+    }
     Ok(Change { start, cut, locus, left: left.into(), right: right.into() })
 }
 
@@ -282,6 +287,56 @@ mod tests {
         assert_eq!(warnings.len(), 9);
         assert!(warnings[8].contains("22 additional"));
         assert_eq!(p.points(&['a', 'a']).unwrap(), vec![1]);
+    }
+
+    /// Original grammar controls use README.nonstandard, not a language corpus.
+    #[test]
+    fn omitted_window_covers_unicode_characters_without_weights_or_boundary_dots() {
+        for (short, full, word, at, suffix) in [
+            ("f1f/ff=f", "f1f/ff=f,1,2", "ff", 1, "f"),
+            ("a1bc/aa=bc", "a1bc/aa=bc,1,3", "abc", 1, "a"),
+            (".a1bc./aa=bc", ".a1bc./aa=bc,1,3", "abc", 1, "a"),
+            ("2.a1bc./aa=bc", "2.a1bc./aa=bc,1,3", "abc", 1, "a"),
+            (".é1bc./éé=bc", ".é1bc./éé=bc,1,3", "ébc", 1, "é"),
+        ] {
+            let chars: Vec<char> = word.chars().collect();
+            let explicit = Patterns::from_huhyphn(full).unwrap().opportunities(&chars).unwrap();
+            assert_eq!(explicit, vec![Opportunity { at, suffix: suffix.into() }], "{full}");
+            assert_eq!(Patterns::from_huhyphn(short).unwrap().opportunities(&chars).unwrap(), explicit, "{short}");
+        }
+        for rule in ["a1bc/aa=bc,1", "a1bc/aa=bc,", "a1bc/aa=bc,,3", "a1bc/aa=bc,0,3", "a1bc/aa=bc,1,0"] {
+            assert!(Patterns::from_huhyphn(rule).is_err(), "{rule}");
+        }
+    }
+
+    #[test]
+    fn no_usable_records_returns_the_first_error_or_no_patterns() {
+        for text in ["", "UTF-8\n# comment\n", "\u{feff}UTF-8\n% comment\nLEFTHYPHENMIN 2\n"] {
+            assert_eq!(Patterns::from_huhyphn(text).unwrap_err(), "no patterns");
+        }
+        let mut warnings = Vec::new();
+        let error = Patterns::read_huhyphn("UTF-8\nas5szony/sz=,0,1\na1b/aa=b,1\n", |w| warnings.push(w.to_owned())).unwrap_err();
+        assert!(error.starts_with("line 2:"), "{error}");
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(error, warnings[0]);
+        let p = Patterns::read_huhyphn("UTF-8\na1b\nas5szony/sz=,0,1\n", |_| {}).unwrap();
+        assert_eq!(p.points(&['a', 'b']).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn replacement_windows_have_one_odd_point_but_keep_ordinary_points_outside() {
+        let bad = "as5s3zony/sz=,2,2";
+        assert!(Patterns::from_huhyphn(bad).unwrap_err().contains("multiple odd points"));
+        let mut warnings = Vec::new();
+        let p = Patterns::read_huhyphn(&format!("UTF-8\n{bad}\na1b\n"), |w| warnings.push(w.to_owned())).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("line 2:"));
+        assert_eq!(p.points(&['a', 'b']).unwrap(), vec![1]);
+        let p = Patterns::from_huhyphn("as5szon1y/sz=,2,1").unwrap();
+        assert_eq!(
+            p.opportunities(&"asszony".chars().collect::<Vec<_>>()).unwrap(),
+            vec![Opportunity { at: 2, suffix: "z".into() }, Opportunity { at: 6, suffix: "".into() }],
+        );
     }
 
     /// Regression: a higher even weight suppresses the replacement.

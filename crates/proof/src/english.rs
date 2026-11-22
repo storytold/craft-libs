@@ -218,12 +218,13 @@ fn already_read(state: &RwLock<State>, dic: &DictionarySource) -> Option<Arc<Aff
     state.read().unwrap_or_else(PoisonError::into_inner).files.iter().find(|(p, _)| p == dic).map(|(_, d)| d.clone())
 }
 
-/// Forget what `state` holds, so the next check looks again.
-fn forget(state: &RwLock<State>) {
+/// Forget what `state` holds and clear its errors before another load is accepted.
+fn forget(state: &RwLock<State>, clear: impl FnOnce()) {
     let mut s = state.write().unwrap_or_else(PoisonError::into_inner);
     s.slots = [None, None, None, None];
     s.files.clear();
     s.reloads = s.reloads.wrapping_add(1);
+    clear();
 }
 
 /// The key load errors of `lang` are kept under ([`crate::hunspell::load_error`]).
@@ -277,10 +278,11 @@ fn note_error(lang: ProofLang, error: Option<(DictionarySource, String)>) {
 /// Forget the loaded dictionaries, so the next check looks for them again (the dictionaries
 /// folder changed).
 pub(crate) fn reload() {
-    forget(&HUNSPELL);
-    for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::EnAu] {
-        crate::hunspell::clear_load_error(key(lang));
-    }
+    forget(&HUNSPELL, || {
+        for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::EnAu] {
+            crate::hunspell::clear_load_error(key(lang));
+        }
+    });
 }
 
 /// Where the spelling of `lang` (an English) comes from now, in the order of the module docs.
@@ -746,7 +748,7 @@ mod tests {
         let dict = || Arc::new(AffixDict::from_hunspell("", "1\nzzyzx\n", &[]).unwrap());
         let file = DictionarySource::Files { aff: PathBuf::from("/old/folder/en_US.aff"), dic: PathBuf::from("/old/folder/en_US.dic") };
         let before = state.read().unwrap().reloads;
-        forget(&state); // The folder changes while the load runs.
+        forget(&state, || {}); // The folder changes while the load runs.
         let got = keep(&state, slot(ProofLang::En), before, Some((dict(), file.clone())), || noted.set(true));
         assert_eq!(got.map(|(_, p)| p), Some(file.clone()), "the stale load still answers its own check");
         assert!(state.read().unwrap().slots.iter().all(Option::is_none), "but it isn't kept");
@@ -762,7 +764,7 @@ mod tests {
         let b = keep(&state, slot(ProofLang::EnGb), now, Some((dict(), file.clone())), || {}).unwrap();
         assert!(Arc::ptr_eq(&a.0, &b.0), "one copy of a file for every English that reads it");
         assert!(already_read(&state, &file).is_some());
-        forget(&state);
+        forget(&state, || {});
         assert!(already_read(&state, &file).is_none() && state.read().unwrap().slots.iter().all(Option::is_none));
     }
 }

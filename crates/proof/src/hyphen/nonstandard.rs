@@ -51,17 +51,21 @@ fn opportunities_with(word: &str, lim: &Limits, lang: ProofLang, patterns: &supe
                 continue;
             }
             let (nfc, starts) = composed_chars(run);
-            let lower: Vec<char> = nfc.iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+            let lower: Vec<char> = nfc.iter().map(|&c| if is_apostrophe(c) { '\'' } else { c.to_lowercase().next().unwrap_or(c) }).collect();
             if let Some(points) = super::pack_patterns_fit(lang, patterns, &lower).then(|| patterns.opportunities(&lower)).flatten() {
+                // Prefix counts use the original source, including decomposed character offsets.
+                let mut letters_before = Vec::with_capacity(run.len() + 1);
+                letters_before.push(0usize);
+                for c in run {
+                    letters_before.push(letters_before.last().copied().unwrap_or(0) + usize::from(c.is_alphabetic()));
+                }
                 for mut point in points {
                     let Some(at) = starts.get(point.at).copied().flatten() else { continue };
                     let (Some(left), Some(right)) = (run.get(..at), run.get(at..)) else { continue };
                     if left.last().is_some_and(|c| is_apostrophe(*c)) || right.first().is_some_and(|c| is_apostrophe(*c)) {
                         continue;
                     }
-                    if left.iter().filter(|c| c.is_alphabetic()).count() < lim.after_first.max(1)
-                        || right.iter().filter(|c| c.is_alphabetic()).count() < lim.before_last.max(1)
-                    {
+                    if letters_before[at] < lim.after_first.max(1) || letters - letters_before[at] < lim.before_last.max(1) {
                         continue;
                     }
                     if left.iter().rev().find(|c| c.is_alphabetic()).is_some_and(|c| c.is_uppercase()) {
@@ -159,6 +163,30 @@ mod tests {
             }
         }
     }
+    /// Original one-word rules exercise source offsets, not borrowed language data.
+    #[test]
+    fn curly_apostrophes_match_straight_rules_without_changing_source_offsets() {
+        let patterns = Patterns::from_huhyphn("UTF-8\na'b5c/bz=,3,1\n").unwrap();
+        let lim = Limits { min_word: 2, after_first: 1, before_last: 1, capitalized: true };
+        let lang = ProofLang::from_tag(Some("hu"));
+        let expected = vec![Opportunity { at: 4, suffix: "z".into() }];
+        assert_eq!(opportunities_with("aa'bcaa", &lim, lang, &patterns, false), expected);
+        assert_eq!(opportunities_with("aa’bcaa", &lim, lang, &patterns, false), expected);
+        assert_eq!(opportunities_with("..aa’bcaa", &lim, lang, &patterns, false), vec![Opportunity { at: 6, suffix: "z".into() }]);
+    }
+
+    #[test]
+    fn letter_limits_use_original_source_offsets_for_decomposed_text() {
+        let patterns = Patterns::from_huhyphn("UTF-8\né'b5c/bz=,3,1\n").unwrap();
+        let lim = Limits { min_word: 2, after_first: 2, before_last: 3, capitalized: true };
+        let lang = ProofLang::from_tag(Some("hu"));
+        for (word, at) in [("é'bcaa", 3), ("e\u{301}’bcaa", 4)] {
+            assert_eq!(opportunities_with(word, &lim, lang, &patterns, false), vec![Opportunity { at, suffix: "z".into() }]);
+            assert!(opportunities_with(word, &Limits { after_first: 3, ..lim }, lang, &patterns, false).is_empty());
+            assert!(opportunities_with(word, &Limits { before_last: 4, ..lim }, lang, &patterns, false).is_empty());
+        }
+    }
+
     /// Regression: soft hyphens separate automatic pattern runs.
     #[test]
     fn soft_hyphens_separate_automatic_pattern_runs() {

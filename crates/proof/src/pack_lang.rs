@@ -451,7 +451,7 @@ mod tests {
         assert!(dictionary.check("word") && !dictionary.check("wrongword"));
         assert!(file.is_none());
         assert_eq!(bytes, ((packs[1].aff.len() + packs[1].dic.len()) as u64) * BYTES_PER_FILE_BYTE);
-        assert!(crate::hunspell::load_error(key).is_none());
+        assert!(crate::hunspell::source_load_error(key).is_none());
     }
 
     /// Review follow-up (craft-libs#485): a full list of locales with no dictionary forgets its

@@ -334,6 +334,12 @@ fn memory_pack_failed_registration_preserves_the_previous_pack() {
     input.hyphenation = Some(vec![0xFF]);
     invalid.push(("patterns not UTF-8", input));
     let mut input = files("qaa", "vornel");
+    input.hyphenation_nonstandard = Some(Vec::new());
+    invalid.push(("empty replacement patterns", input));
+    let mut input = files("qaa", "vornel");
+    input.hyphenation_nonstandard = Some(b"UTF-8\n# no replacement records\n".to_vec());
+    invalid.push(("replacement file without records", input));
+    let mut input = files("qaa", "vornel");
     input.pack_toml.resize((1 << 20) + 1, b' ');
     invalid.push(("manifest per-file cap", input));
     let mut input = files("qaa", "vornel");
@@ -435,10 +441,19 @@ fn memory_pack_hungarian_replacements_survive_removal() {
     assert_eq!(hyphen::hyphenate_word_in("asszony", &limits, lang), "asz-szony");
     eprintln!("memory_pack_hu: memory_verified");
     assert!(packs::remove_from_memory("hu"));
-    if packs::embedded_locales().contains(&"hu") {
+    // A supported hu build may contain only ordinary patterns, or a different corpus.
+    // Only the original dedicated fixture promises this particular replacement.
+    let embedded = packs::embedded(&["hu".to_string()], |p| !p.patterns.is_empty() || !p.nonstandard.is_empty());
+    let original_fixture = embedded.first().is_some_and(|p| {
+        p.patterns == include_str!("../tests/data/memory-packs/hu/hyphenation.pat")
+            && p.nonstandard == include_str!("../tests/data/memory-packs/hu/hyphenation.nonstandard")
+    });
+    if original_fixture {
         assert_eq!(hyphen::hyphenate_word_in("asszony", &limits, lang), "asz-szony", "removal reveals the embedded Hungarian replacement rules");
         eprintln!("memory_pack_hu: embedded_fallback_verified");
     } else {
-        eprintln!("memory_pack_hu: embedded_fallback_absent; build with CRAFT_PROOF_EMBED_PACKS=hu and the original tiny pack fixture");
+        eprintln!(
+            "memory_pack_hu: embedded_fallback_absent; original fixture contents not embedded; build with CRAFT_PROOF_EMBED_PACKS=hu and the original tiny pack fixture"
+        );
     }
 }
