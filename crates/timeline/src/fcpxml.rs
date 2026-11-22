@@ -1656,6 +1656,79 @@ fn marker_xml(m: &Marker, local: Tick, rate: FrameRate) -> String {
 mod tests {
     use super::*;
 
+    fn replay_fixture<'a, 'r>(opts: &'a ImportOptions<'a>, report: &'r mut Report) -> (Imp<'a, 'a, 'r>, ItemId, Vec<PendingAudio>) {
+        let mut imp = Imp {
+            b: Builder::new("Budget fixture", opts.catalog),
+            opts,
+            report,
+            report_limit: None,
+            formats: HashMap::new(),
+            asset_nodes: HashMap::new(),
+            assets: HashMap::new(),
+            media_nodes: HashMap::new(),
+            media_items: HashMap::new(),
+            media_active: HashSet::new(),
+            pending_audio: HashMap::new(),
+            audio_replay: HashMap::new(),
+            depth_hits: 0,
+            media_truncated_at: HashMap::new(),
+            reimports_left: MAX_REIMPORTS,
+            cache_edges_left: MAX_CACHE_EDGES,
+            depth: 0,
+            effects: HashMap::new(),
+        };
+        let settings = settings_for(FrameRate::default(), 1920, 1080, false);
+        let leaf = imp.b.reserve_sequence("Leaf", settings.clone(), None);
+        let child = imp.b.reserve_sequence("Child", settings.clone(), None);
+        let mut child_seq = empty_sequence(settings.clone());
+        let sound = imp.b.clip(leaf, TrackKind::Audio, "Child sound", Tick(0), Tick(20), Tick(0));
+        assert_eq!(imp.b.place(&mut child_seq, TrackKind::Audio, 0, sound), Some(0));
+        imp.b.put_sequence(child, child_seq);
+        let parent = imp.b.reserve_sequence("Parent", settings.clone(), None);
+        let mut seq = empty_sequence(settings);
+        let deferred = imp.b.clip(child, TrackKind::Audio, "Deferred", Tick(0), Tick(5), Tick(0));
+        let video = imp.b.clip(child, TrackKind::Video, "Deferred video", Tick(0), Tick(5), Tick(0));
+        let video_id = video.id;
+        assert_eq!(imp.b.place(&mut seq, TrackKind::Video, 0, video), Some(0));
+        let ordinary0 = imp.b.clip(leaf, TrackKind::Audio, "Ordinary 0", Tick(0), Tick(10), Tick(0));
+        let ordinary1 = imp.b.clip(leaf, TrackKind::Audio, "Ordinary 1", Tick(9), Tick(3), Tick(0));
+        let mut state = AudioReplay::default();
+        state.order = vec![(deferred.id, 0), (ordinary0.id, 0), (ordinary1.id, 0)];
+        assert_eq!(imp.b.place(&mut seq, TrackKind::Audio, 0, ordinary0), Some(0));
+        assert_eq!(imp.b.place(&mut seq, TrackKind::Audio, 0, ordinary1), Some(1));
+        seq.start_timecode = 7;
+        seq.audio_tracks[0].name = "Original A1".into();
+        seq.audio_tracks[0].locked = true;
+        seq.audio_tracks[0].enabled = false;
+        imp.b.put_sequence(parent, seq);
+        imp.audio_replay.insert(parent, state);
+        let pending = vec![PendingAudio { parent, child, audio: deferred, video: Some(video_id) }];
+        (imp, parent, pending)
+    }
+
+    #[test]
+    fn audio_replay_budget_refusal_preserves_parent_and_ledger() {
+        let catalog = crate::fx::Standard;
+        let opts = ImportOptions { base_dir: None, name: None, catalog: &catalog, namespace: "test" };
+        let mut report = Report::default();
+        let (mut imp, parent, intents) = replay_fixture(&opts, &mut report);
+        assert_eq!(intents.len(), 1);
+        assert!(imp.b.p.sequence(intents[0].child).unwrap().audio_tracks.iter().any(|t| !t.items.is_empty()));
+        let original = imp.b.p.sequence(parent).unwrap().clone();
+        let state = imp.audio_replay.get(&parent).unwrap();
+        let ledger = (state.order.clone(), state.unplaced.clone(), state.paired.clone(), state.video_index.clone());
+        // Old linear charging admits this run; full indexed planning must also pay the final sort.
+        imp.cache_edges_left = 54;
+        let result = imp.replay_parent_audio(parent, intents);
+        let parent_unchanged = imp.b.p.sequence(parent) == Some(&original);
+        let state = imp.audio_replay.get(&parent).unwrap();
+        let ledger_unchanged = (&state.order, &state.unplaced, &state.paired, &state.video_index) == (&ledger.0, &ledger.1, &ledger.2, &ledger.3);
+        assert!(
+            result.is_none() && parent_unchanged && ledger_unchanged,
+            "audio replay budget refusal: result={result:?}, parent_unchanged={parent_unchanged}, ledger_unchanged={ledger_unchanged}",
+        );
+    }
+
     #[test]
     fn rational_times_are_exact() {
         let r = FrameRate::FPS_23_976;
