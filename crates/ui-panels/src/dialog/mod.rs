@@ -2,24 +2,24 @@
 //! configurations (`Alert`, `StandardPrompt`, `UnsavedChangesDialog`, `RecoveryDialog`) and the values an app routes
 //! its dialogs by (`DialogStack`, `DialogHost`). Form dialogs build on the shells.
 
-mod alert;
-mod blocking;
+pub(crate) mod alert;
+pub(crate) mod blocking;
 #[doc(hidden)]
 pub mod frame;
 mod held;
 mod host;
-mod modal;
-mod prompt;
-mod prompts;
-mod recovery;
+pub(crate) mod modal;
+pub(crate) mod prompt;
+pub(crate) mod prompts;
+pub(crate) mod recovery;
 mod serde_fields;
 mod stack;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 #[doc(hidden)]
 pub mod stories;
-#[cfg(feature = "testing")]
-mod trials;
-mod unsaved;
+#[cfg(feature = "suite")]
+pub(crate) mod trials;
+pub(crate) mod unsaved;
 mod words;
 
 pub use alert::{Alert, AlertOutput, HostedAlert};

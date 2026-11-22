@@ -19,6 +19,8 @@ pub(super) struct BodyScope {
     pub(super) label_width: f32,
     /// The width the regions beside the body take on its line (`Regions::beside`).
     pub(super) beside: f32,
+    /// The id the body's layout runs under (`BodyPlan::layout_id`).
+    pub(super) layout: Id,
 }
 
 /// The surface a container paints under its regions: its props' surface, else its style's in its current state.
@@ -68,7 +70,13 @@ impl BodyHooks<'_> {
         if core.resolved.ltr_axis {
             scoped.direction = Direction::Ltr;
         }
-        scoped.ink = core.ink;
+        // A container that paints a fill reads in that fill's ink, so what it holds (an app icon's accent parts, text with
+        // no colour of its own) does too: OnDark on a brand rail or scrim, OnPanel on a panel nested inside one. A frame
+        // paints no fill, and a container with no surface paints none either: both keep the ink they sit in.
+        scoped.ink = match props.surface {
+            None | Some(SurfaceKind::Frame) => core.ink,
+            Some(kind) => kind.ink(),
+        };
         scoped.start_room();
         // An inside label and a filling cell are their control's alone: a container shows neither to what it holds.
         scoped.inside_label = None;
@@ -96,9 +104,28 @@ impl BodyHooks<'_> {
 
     /// What the body inherits on top of the line's env: arena, transform, the room it is offered and its scroll axes.
     pub(super) fn scope_body(&self, scoped: &mut Scoped, props: &ContainerProps, id: Id, body: BodyScope) {
-        let BodyScope { room, real, content_column, scroll, label_width, beside } = body;
+        let BodyScope { room, real, content_column, scroll, label_width, beside, layout } = body;
         if props.arena {
             scoped.arena = Some(ArenaId::new(id));
+        }
+        // The body's flow starts after a rule when the container draws one under its header, or when the container
+        // draws nothing of its own (no header, surface or mount) and itself started after a rule.
+        scoped.after_rule = props.header.is_some_and(|header| header.rule && !header.inline)
+            || (props.header.is_none() && props.surface.is_none() && props.mount == Mount::Inline && self.after_rule);
+        scoped.flow_body = None;
+        scoped.column_row =
+            self.in_column && matches!(props.layout, crate::layout::BodyLayout::Row { wrap: false, align: crate::layout::RowAlign::Start });
+        // Children side by side share the layer's width, so none of them spans it: a collection in a row or a grid takes
+        // its own content width, not the layer's floor. Only a floor that is set is cleared, so the bodies of rows
+        // outside a layer share their scope and memo key with their parent's.
+        if !matches!(props.layout, crate::layout::BodyLayout::Stack) && scoped.values.get::<crate::contract::overlay::LayerFloor>().0 != 0.0 {
+            scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor(0.0));
+        }
+        // A bracketed row's rows report to it up to the first labelled container, whose body is its own control.
+        if props.bracket.is_some() {
+            scoped.bracket = Some(layout);
+        } else if props.label.is_some() {
+            scoped.bracket = None;
         }
         scoped.transform = props.transform;
         scoped.content_column = content_column;

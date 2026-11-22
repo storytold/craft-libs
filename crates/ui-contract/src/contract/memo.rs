@@ -204,6 +204,102 @@
 //! }
 //! ```
 //!
+//! A field another field stands for feeds nothing: `#[memo_props(covered_by = "<field>", reason = "why")]`. The named
+//! field must be one of the same struct or variant that feeds the key itself, and the reason is required. A closure the
+//! caller's revision covers:
+//!
+//! ```
+//! # extern crate craft_ui_contract as craft_ui;
+//! use craft_ui::contract::{MemoKey, MemoProps};
+//! use std::sync::Arc;
+//! #[derive(MemoProps)]
+//! struct Rules {
+//!     #[memo_props(covered_by = "revision", reason = "the caller moves the revision with every rule change")]
+//!     allows: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+//!     revision: u64,
+//! }
+//! let rules = |revision, allows: fn(&str) -> bool| Rules { allows: Arc::new(allows), revision };
+//! assert_eq!(MemoKey::of(&rules(1, |_| true)), MemoKey::of(&rules(1, |_| false)));
+//! assert_ne!(MemoKey::of(&rules(1, |_| true)), MemoKey::of(&rules(2, |_| true)));
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! struct Rules {
+//!     #[memo_props(covered_by = "generation", reason = "no such field")]
+//!     allows: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+//!     revision: u64,
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! struct Rules {
+//!     #[memo_props(covered_by = "revision")]
+//!     allows: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+//!     revision: u64,
+//! }
+//! ```
+//!
+//! A `&'static` reference to a static item feeds where it points: `#[memo_props(address = "why")]`. Any other field
+//! type is an error:
+//!
+//! ```
+//! # extern crate craft_ui_contract as craft_ui;
+//! use craft_ui::contract::{MemoKey, MemoProps};
+//! struct Registration(&'static str);
+//! // Equal registrations at two places: two items.
+//! static FIRST: Registration = Registration("Button");
+//! static SECOND: Registration = Registration("Button");
+//! #[derive(MemoProps)]
+//! struct Card {
+//!     #[memo_props(address = "registrations are static items")]
+//!     story: &'static Registration,
+//! }
+//! assert_eq!(MemoKey::of(&Card { story: &FIRST }), MemoKey::of(&Card { story: &FIRST }));
+//! assert_ne!(MemoKey::of(&Card { story: &FIRST }), MemoKey::of(&Card { story: &SECOND }));
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! struct Card<'a> {
+//!     #[memo_props(address = "a borrowed value")]
+//!     story: &'a u32,
+//! }
+//! ```
+//!
+//! A handle to state written during the pass, or a context rebuilt each pass, is keyed in every pass:
+//! `#[memo_props(every_pass = "why")]` on the type. It feeds no field (a field attribute there is an error), and a view
+//! whose key holds it runs in every pass; outside a view's key it feeds nothing:
+//!
+//! ```
+//! # extern crate craft_ui_contract as craft_ui;
+//! use craft_ui::contract::{MemoKey, MemoProps};
+//! use std::sync::{Arc, Mutex};
+//! #[derive(MemoProps)]
+//! #[memo_props(every_pass = "its members write the shared state during the pass")]
+//! struct Handle(Arc<Mutex<Vec<u32>>>);
+//! let handle = Handle(Arc::default());
+//! assert_eq!(MemoKey::of(&handle), MemoKey::of(&handle));
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! #[memo_props(every_pass = "")]
+//! struct Handle(std::sync::Arc<std::sync::Mutex<Vec<u32>>>);
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! #[memo_props(every_pass = "rebuilt each pass")]
+//! struct Handle(#[memo_props(hash = "a number")] u32);
+//! ```
+//!
 //! Plain props derive, recursive types included:
 //!
 //! ```
@@ -259,15 +355,33 @@ pub use craft_ui_macros::MemoProps;
 pub trait MemoProps {
     /// Feeds every input the view reads into `key`.
     fn key(&self, key: &mut MemoKey);
+
+    /// The props type with its lifetimes erased (`Props<'a>` and `Props<'b>` are one type): a memoized view seeds its
+    /// key with it, so two views at one id whose props feed the same bytes, such as two empty props types, key apart.
+    fn identity() -> TypeId
+    where
+        Self: Sized,
+    {
+        typeid::of::<Self>()
+    }
 }
 
 /// A 128-bit hash of a memoized view's props (SipHash-1-3 with a 128-bit output, a fixed key). A collision has a chance
 /// of about 2⁻¹²⁸ per compare. A [`Stateless`] callback feeds the 64 bits its `TypeId` hashes, so two callbacks key
 /// apart unless those collide.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct MemoKey {
     hasher: SipHasher13,
     bytes: usize,
+    /// The context of the view that takes the key: framework values whose writes the context counts (kept and saved
+    /// bindings) feed that count.
+    context: Option<egui::Context>,
+}
+
+impl std::fmt::Debug for MemoKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoKey").field("bytes", &self.bytes).finish_non_exhaustive()
+    }
 }
 
 impl MemoKey {
@@ -276,11 +390,36 @@ impl MemoKey {
         MemoKey::default()
     }
 
+    /// An empty key of a view shown in `ctx`.
+    pub(crate) fn of_view(ctx: &egui::Context) -> MemoKey {
+        MemoKey { context: Some(ctx.clone()), ..MemoKey::default() }
+    }
+
+    /// An empty key of the same view as this one.
+    pub(crate) fn child(&self) -> MemoKey {
+        MemoKey { context: self.context.clone(), ..MemoKey::default() }
+    }
+
+    /// The context of the view that takes the key; `None` for a key taken outside a view (`MemoKey::of`).
+    pub(crate) fn context(&self) -> Option<&egui::Context> {
+        self.context.as_ref()
+    }
+
     /// The key of `props`.
     pub fn of<P: MemoProps + ?Sized>(props: &P) -> u128 {
         let mut key = MemoKey::new();
         props.key(&mut key);
         key.finish()
+    }
+
+    /// Feeds an input whose value a key cannot follow (a handle to state shared and written elsewhere, a context a
+    /// container rebuilds each pass): a view whose key holds it runs in every pass. Outside a view's key it feeds
+    /// nothing.
+    pub fn changes_every_pass(&mut self) {
+        if let Some(ctx) = &self.context {
+            let pass = ctx.cumulative_pass_nr();
+            self.write(&pass.to_le_bytes());
+        }
     }
 
     /// Feeds `bytes`.
@@ -604,6 +743,15 @@ impl<T: PlainData> MemoProps for Tracked<T> {
     }
 }
 
+/// A view's write access to a model: by revision, as `Tracked<T>`. A write the view makes moves the key, so the view
+/// runs once more, from the written value, and replays from then on. `&mut` of any other type is not props: a write to
+/// it would not move a key.
+impl<T: PlainData> MemoProps for &mut Tracked<T> {
+    fn key(&self, key: &mut MemoKey) {
+        self.revision().key(key);
+    }
+}
+
 /// A callback in props: a fn item or a capture-free closure, which is zero-sized, so its type alone says what it
 /// does, and its `TypeId` keys it. A capturing closure is not zero-sized and fails to build where `Stateless::new` is
 /// called (not at `cargo check`: the assertion is evaluated when the call is compiled):
@@ -679,6 +827,46 @@ impl MemoProps for crate::runtime::env::Label {
 impl MemoProps for craft_i18n::Word {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
+    }
+}
+
+impl<T: MemoProps> MemoProps for craft_behavior::Mixed<T> {
+    fn key(&self, key: &mut MemoKey) {
+        match self {
+            craft_behavior::Mixed::Same(value) => {
+                key.write_u32(0);
+                value.key(key);
+            }
+            craft_behavior::Mixed::Mixed => key.write_u32(1),
+        }
+    }
+}
+
+/// The translator (`Words::generation`): words with the same generation read every word the same.
+impl MemoProps for craft_i18n::Words {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
+    }
+}
+
+/// The format (`Format::generation`): a format writes every number the same for its whole life.
+impl MemoProps for craft_i18n::Format {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
+    }
+}
+
+/// The format (`DateFormat::generation`): a format and its clones write every date the same.
+impl MemoProps for craft_i18n::DateFormat {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
+    }
+}
+
+/// The host (`Host::generation`): a host and its clones hold the same services and language.
+impl MemoProps for craft_host::Host {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
     }
 }
 
@@ -763,8 +951,36 @@ impl MemoProps for craft_theme::Srgba {
     }
 }
 
+impl MemoProps for craft_theme::Rgba {
+    fn key(&self, key: &mut MemoKey) {
+        let craft_theme::Rgba(channels) = *self;
+        channels.key(key);
+    }
+}
+
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::TypeRole {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 /// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_theme::variant::Tone {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::LabelColor {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash`.
+impl MemoProps for craft_theme::ComponentSet {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }
@@ -778,6 +994,47 @@ impl MemoProps for craft_behavior::IconId {
 }
 
 /// Derived `Hash` (`#[non_exhaustive]`).
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the screen rect, the document
+/// point at its centre, the zoom, the turn, the mirror and the pixel aspect.
+impl MemoProps for craft_behavior::canvas::CanvasView {
+    fn key(&self, key: &mut MemoKey) {
+        self.rect.key(key);
+        for value in [self.center.x, self.center.y, self.zoom, self.rotation, self.aspect] {
+            value.key(key);
+        }
+        self.flip_x.key(key);
+    }
+}
+
+/// The width and the height.
+impl MemoProps for craft_behavior::kurbo::Size {
+    fn key(&self, key: &mut MemoKey) {
+        self.width.key(key);
+        self.height.key(key);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_behavior::Axis {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_behavior::overlay::Side {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_behavior::PixelSize {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 impl MemoProps for craft_behavior::fit::FitKeep {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
@@ -785,7 +1042,21 @@ impl MemoProps for craft_behavior::fit::FitKeep {
 }
 
 /// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_host::target::Os {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_host::target::WindowKind {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (the layer's order and id).
+impl MemoProps for crate::runtime::egui::areas::LayerKey {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }

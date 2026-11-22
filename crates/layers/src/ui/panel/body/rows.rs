@@ -2,9 +2,10 @@
 
 use craft_behavior::{ColumnKey, DisplayOrder, ItemSource, Selection};
 use craft_keymap::Mods;
-use craft_ui::contract::{OpenChange, SweepApply};
+use craft_ui::contract::{BodyCx, MemoKey, MemoProps, OpenChange, Revision, SweepApply, Tracked};
 use craft_ui::list::{ThumbTarget, tree_steps};
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use super::super::context::PanelContext;
 use super::super::events::LayerColumn;
@@ -27,55 +28,92 @@ pub(in crate::ui::panel) struct DisplayRow<Id> {
     pub(super) open: bool,
 }
 
-/// The rows of the tree as the list shows them: layers, and under each layer whose effects are open
-/// the Smart Filter and effect rows.
-pub(in crate::ui::panel) struct LayerRows<'t, T: LayerTree> {
-    tree: &'t T,
-    pub(in crate::ui::panel) rows: Vec<DisplayRow<T::Id>>,
-    /// The filter left a layer out: rows list at their shown depth, so a drop finds its place by its neighbours.
-    pub(in crate::ui::panel) filtered: bool,
-    revision: Option<u64>,
+/// What the display order derives from: the tree's tracked revision, the filter and the groups a reveal opens. A
+/// change of any of them builds the rows again; nothing else does.
+#[derive(MemoProps)]
+pub(in crate::ui::panel) struct RowsKey<'a, Id> {
+    pub(in crate::ui::panel) tree: Revision,
+    pub(in crate::ui::panel) filter: &'a LayerFilter,
+    #[memo_props(hash = "tree ids are plain model ids (LayerTree::Id: PlainData); Hash covers them")]
+    pub(in crate::ui::panel) opened: &'a [Id],
 }
 
-impl<'t, T: LayerTree> LayerRows<'t, T> {
-    /// The rows for `filter`, with the groups in `opened` shown open besides the tree's own.
-    pub(in crate::ui::panel) fn new(tree: &'t T, filter: &LayerFilter, opened: &[T::Id]) -> Self {
+/// The display order of the tree, derived from a [`RowsKey`] and kept across passes.
+pub(in crate::ui::panel) struct RowsModel<Id> {
+    pub(in crate::ui::panel) rows: Vec<DisplayRow<Id>>,
+    /// The row keys in display order.
+    keys: Vec<LayerRowKey<Id>>,
+    /// The filter left a layer out: rows list at their shown depth, so a drop finds its place by its neighbours.
+    pub(in crate::ui::panel) filtered: bool,
+    /// The number the list keeps its display order by: it follows the key.
+    revision: u64,
+}
+
+impl<Id: Clone + PartialEq> RowsModel<Id> {
+    /// The rows of `tree` for `filter`, with the groups in `opened` shown open besides the tree's own.
+    fn walk<T: LayerTree<Id = Id>>(tree: &T, filter: &LayerFilter, opened: &[Id], revision: u64) -> Self {
         let active = filter.active();
         let mut walk = Walk { tree, filter, active, open_all: active && filter.lists_closed_contents(), opened, left_out: false };
         let mut rows = Vec::new();
         push_level(&mut walk, tree.children(None), Level { shown: 0, true_depth: 0 }, &mut rows);
-        let revision = tree.revision().filter(|_| !active && opened.is_empty());
-        LayerRows { tree, rows, filtered: walk.left_out, revision }
+        let keys = rows.iter().map(|row| row.key.clone()).collect();
+        RowsModel { rows, keys, filtered: walk.left_out, revision }
+    }
+}
+
+/// The rows of the tree as the list shows them: layers, and under each layer whose effects are open
+/// the Smart Filter and effect rows.
+pub(in crate::ui::panel) struct LayerRows<'t, T: LayerTree> {
+    tree: &'t T,
+    model: Arc<RowsModel<T::Id>>,
+}
+
+impl<'t, T: LayerTree> LayerRows<'t, T> {
+    /// The rows for `filter` and `opened`, derived by the body `cx` from the tracked `tree`.
+    pub(in crate::ui::panel) fn new(cx: &BodyCx<'_>, tree: &'t Tracked<T>, filter: &LayerFilter, opened: &[T::Id]) -> Self {
+        let key = RowsKey { tree: tree.revision(), filter, opened };
+        // The low half of the key's hash tells the list when the order changed.
+        let revision = MemoKey::of(&key) as u64;
+        let model = cx.derived(&key, || RowsModel::walk(&**tree, filter, opened, revision));
+        LayerRows { tree: &**tree, model }
     }
 
-    pub(in crate::ui::panel) fn keys(&self) -> Vec<LayerRowKey<T::Id>> {
-        self.rows.iter().map(|row| row.key.clone()).collect()
+    pub(in crate::ui::panel) fn rows(&self) -> &[DisplayRow<T::Id>] {
+        &self.model.rows
+    }
+
+    pub(in crate::ui::panel) fn filtered(&self) -> bool {
+        self.model.filtered
+    }
+
+    pub(in crate::ui::panel) fn keys(&self) -> &[LayerRowKey<T::Id>] {
+        &self.model.keys
     }
 }
 
 impl<T: LayerTree> DisplayOrder<LayerRowKey<T::Id>> for LayerRows<'_, T> {
     fn len(&self) -> usize {
-        self.rows.len()
+        self.model.rows.len()
     }
 
     fn key(&self, at: usize) -> LayerRowKey<T::Id> {
-        self.rows[at].key.clone()
+        self.model.rows[at].key.clone()
     }
 
     fn depth(&self, at: usize) -> usize {
-        self.rows[at].depth
+        self.model.rows[at].depth
     }
 
     fn has_children(&self, at: usize) -> bool {
-        self.rows[at].has_children
+        self.model.rows[at].has_children
     }
 
     fn open(&self, at: usize) -> bool {
-        self.rows[at].open
+        self.model.rows[at].open
     }
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {
-        match &self.rows[at].key {
+        match &self.model.rows[at].key {
             LayerRowKey::Layer(id) | LayerRowKey::Mask(id, _) => Some(Cow::Owned(self.tree.info(id).name)),
             LayerRowKey::Effects(id, index) => sub_label(self.tree, id, SubRowGroup::Effects, *index),
             LayerRowKey::Filters(id, index) => sub_label(self.tree, id, SubRowGroup::SmartFilters, *index),
@@ -83,13 +121,13 @@ impl<T: LayerTree> DisplayOrder<LayerRowKey<T::Id>> for LayerRows<'_, T> {
     }
 
     fn revision(&self) -> Option<u64> {
-        self.revision
+        Some(self.model.revision)
     }
 }
 
 impl<T: LayerTree> ItemSource<LayerRowKey<T::Id>> for LayerRows<'_, T> {
     fn toggled(&self, at: usize, column: &ColumnKey) -> bool {
-        match &self.rows[at].key {
+        match &self.model.rows[at].key {
             LayerRowKey::Layer(id) if *column == EYE => self.tree.info(id).visible,
             LayerRowKey::Layer(id) if *column == LOCK => self.tree.info(id).locks.any(),
             LayerRowKey::Effects(id, index) if *column == EYE => sub_on(self.tree, id, SubRowGroup::Effects, *index),
@@ -99,7 +137,7 @@ impl<T: LayerTree> ItemSource<LayerRowKey<T::Id>> for LayerRows<'_, T> {
     }
 
     fn sub_row(&self, at: usize) -> Option<usize> {
-        self.rows[at].sub_steps
+        self.model.rows[at].sub_steps
     }
 }
 

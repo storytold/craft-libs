@@ -18,7 +18,7 @@ const COLUMN_WIDTH: f32 = 200.0;
 fn layout() -> Layout<u32> {
     let column = Column::new(vec![Group::new(vec![TOP_GROUP, TOP_SECOND_TAB], 0), Group::new(vec![LOWER_GROUP], 0)]).with_width(COLUMN_WIDTH);
     let dock = Node::dock(DockEdge::Start, vec![column]);
-    let window = Floating::single(vec![WINDOW], 0, Rect::from_min_size(at(500.0, 0.0), Vec2::new(200.0, 150.0)));
+    let window = Floating::single(100, vec![WINDOW], 0, Rect::from_min_size(at(500.0, 0.0), Vec2::new(200.0, 150.0)));
     Layout::new(Some(Node::split(Axis::X, SplitSize::FixedFirst(COLUMN_WIDTH), dock, Node::tabs(vec![CANVAS], 0))), vec![window])
 }
 

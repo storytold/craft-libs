@@ -23,7 +23,7 @@ impl<T: Value + 'static> GroupKind for RadioKind<T> {
 }
 
 /// Whether the group's value is refused or an error, read by its members so each radio shows the invalid look.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 struct GroupInvalid(bool);
 
 impl EnvValue for GroupInvalid {
@@ -223,5 +223,5 @@ impl<T: Value + 'static> Component for Radio<T> {
     }
 }
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

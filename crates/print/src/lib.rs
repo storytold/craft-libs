@@ -17,19 +17,19 @@ pub mod cups;
 pub mod spool;
 
 #[cfg(any(test, windows))]
-mod progress;
+pub(crate) mod progress;
 #[cfg(any(test, windows))]
-mod sheets;
+pub(crate) mod sheets;
 #[cfg(test)]
-mod spool_tests;
+pub(crate) mod spool_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 #[cfg(any(test, windows))]
-mod ticket;
+pub(crate) mod ticket;
 #[cfg(windows)]
-mod windows;
+pub(crate) mod windows;
 #[cfg(any(test, windows))]
-mod xml;
+pub(crate) mod xml;
 
 /// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
@@ -45,7 +45,9 @@ pub mod ui;
 /// The registrations of this crate's UI types, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 /// A system spooler failure. Document permissions belong to the caller.
@@ -1093,9 +1095,10 @@ pub fn command_preview(job: &Job) -> Result<Vec<String>, Error> {
 extern crate self as craft_print;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

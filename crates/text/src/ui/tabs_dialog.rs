@@ -31,8 +31,8 @@ use egui::Ui;
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The OK footer button's index, in the order the buttons are given.
 const OK: usize = 0;

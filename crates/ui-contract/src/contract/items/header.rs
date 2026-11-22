@@ -157,8 +157,9 @@ pub(super) struct Header {
     /// The columns whose header cell the collection hosts a component in (`Collection::hosts_header`): they paint no
     /// label and are no sort target.
     hosted: Vec<ColumnKey>,
-    /// The widest cell of each `Content` column among all rows, or its header label when wider, from the items'
-    /// measure of this pass (`content_id`); zero for the other columns and while unknown.
+    /// The widest cell of each `Content` column among all rows, or its header label or its least width
+    /// (`ColumnSpec::min_width`) when wider, from the items' measure of this pass (`content_id`); zero for the other
+    /// columns and while unknown.
     content: Vec<f32>,
     /// The column a double click on its edge fits to its widest cell in view, with its width as shown.
     pub(super) fit: Option<(ColumnKey, f32)>,
@@ -271,8 +272,10 @@ impl Header {
             .specs
             .iter()
             .map(|spec| {
-                let measured = matches!(spec.width, ColumnWidth::Content).then(|| layout_memory::measured(ctx, content_id(id, &spec.key))).flatten();
-                measured.map_or(0.0, |measured| measured.took.x)
+                if !matches!(spec.width, ColumnWidth::Content) {
+                    return 0.0;
+                }
+                layout_memory::measured(ctx, content_id(id, &spec.key)).map_or(0.0, |measured| measured.took.x).max(spec.min_width)
             })
             .collect();
     }
@@ -602,7 +605,7 @@ impl Header {
                     self.events.push(ColumnEvent::Removed { key: key.clone() });
                 }
             }
-            if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary) {
+            if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary) {
                 self.ask_menu(&ctx, Some(key.clone()), ctx.pointer_latest_pos().unwrap_or(rect.left_bottom()));
             }
             if movable && primary && matches!(phase, PressPhase::DragStart { .. }) {
@@ -648,7 +651,7 @@ impl Header {
         }
         if let Some(room) = self.room
             && cx.part(ROOM).hovered
-            && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary)
+            && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary)
         {
             self.ask_menu(&ctx, None, ctx.pointer_latest_pos().unwrap_or(room.left_bottom()));
         }
@@ -797,7 +800,7 @@ impl Header {
     /// where the `PaintUi` the hosting needs exists.
     pub(super) fn paint<C: Collection>(&self, ui: &mut Ui, cx: &Cx<'_, C>, comp: &mut C, env: &Env, id: Id, rtl: bool) {
         let ctx = ui.ctx().clone();
-        let group = crate::contract::steps::parts_group(&ctx, id);
+        let group = crate::contract::steps::parts_group(id, env.roving.filter(|_| cx.core.roving_member));
         for cell in &self.cells {
             let spec = &self.specs[cell.spec];
             let hosted = self.hosted.contains(&spec.key);

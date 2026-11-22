@@ -1,6 +1,7 @@
 //! The menu tree, the flat rows it can be built from, and the keys that tell a backend what
 //! changed.
 
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::BitOr;
 
@@ -8,7 +9,7 @@ use craft_keymap::{Chord, CommandRef, Mods};
 use craft_theme::Srgba;
 
 /// The app's menus, in order, and its open documents.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct MenuBar {
     /// The top-level menus, left to right.
@@ -18,7 +19,7 @@ pub struct MenuBar {
 }
 
 /// An open document, listed in the Window menu.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct Document {
     /// What choosing it runs (bring the document to the front).
@@ -51,11 +52,14 @@ impl Document {
 }
 
 /// A top-level menu.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct Menu {
     /// The title in the bar.
     pub title: String,
+    /// The title's English name, when `title` is a translation: the bar takes the mnemonic of a title the keyboard
+    /// can't type from it.
+    pub english: Option<String>,
     /// What the menu is for.
     pub role: MenuRole,
     /// The menu's entries, top to bottom.
@@ -64,7 +68,7 @@ pub struct Menu {
 
 /// What a top-level menu is for, set by the app. macOS treats the app, Window and Help menus
 /// specially; File is where the system Close Window item goes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum MenuRole {
     /// Any menu without a fixed place.
@@ -85,7 +89,7 @@ pub enum MenuRole {
 }
 
 /// The platforms an item or submenu is shown on. All of them by default.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 pub struct Platforms(u8);
 
 impl Platforms {
@@ -132,7 +136,7 @@ impl BitOr for Platforms {
 }
 
 /// One entry of a menu.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum Node {
     /// An item the user can choose.
@@ -144,6 +148,8 @@ pub enum Node {
     Submenu {
         /// The submenu's title.
         label: String,
+        /// The title's English name, when `label` is a translation ([`Menu::english`]).
+        english: Option<String>,
         /// The submenu's entries.
         children: Vec<Node>,
         /// The place a layout gives it, if any.
@@ -162,7 +168,7 @@ pub enum Node {
 }
 
 /// One menu item: a command with its label, shortcut and state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct Item {
     /// What the item runs: the app's command (`file.open`), with its parameters
@@ -171,6 +177,9 @@ pub struct Item {
     pub command: CommandRef,
     /// The text shown.
     pub label: String,
+    /// The label's English name, when `label` is a translation. A label the keyboard can't type (Chinese, Japanese,
+    /// Korean…) takes its mnemonic from it in the in-window bar, and the Help search matches it on every target.
+    pub english: Option<String>,
     /// `cmd` is ⌘ and `ctrl` the Control key: ⌃⌘M and ⌘M are different shortcuts.
     pub shortcut: Option<Chord>,
     /// Whether the item can be chosen.
@@ -198,7 +207,7 @@ pub struct Item {
 
 /// The command a row runs while `mods` are held as it is chosen (Alt on Merge Visible runs Stamp
 /// Visible).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct Alternate {
     /// The modifiers that select the alternate.
@@ -222,7 +231,7 @@ impl Alternate {
 }
 
 /// A plain item, or one with a checked state.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum ItemKind {
     /// An ordinary item.
@@ -247,7 +256,7 @@ impl ItemKind {
 
 /// Items the layouts put in fixed places. The app tags its own About, Settings, Quit, Appearance
 /// and Language items; the Mac layout adds Hide and Minimize.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum ItemRole {
     /// The About item.
@@ -268,7 +277,7 @@ pub enum ItemRole {
 }
 
 /// The items AppKit provides.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum Standard {
     #[allow(missing_docs)]
@@ -307,7 +316,7 @@ pub(crate) fn label_or_system(label: &str, english: &str, system: impl FnOnce(&s
 
 /// The commands of the items the crate adds itself. The crate runs them; an app sees them only
 /// in a layout's result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum Builtin {
     /// Hide the app: a custom item, because AppKit's own always takes ⌘H, which apps often bind.
@@ -353,6 +362,7 @@ impl Item {
         Item {
             command: command.into(),
             label: label.into(),
+            english: None,
             shortcut: None,
             enabled: true,
             kind: ItemKind::Plain,
@@ -401,6 +411,12 @@ impl Item {
         self
     }
 
+    /// Set the label's English name ([`Item::english`] field).
+    pub fn english(mut self, english: impl Into<String>) -> Item {
+        self.english = Some(english.into());
+        self
+    }
+
     /// Show the item only on `platforms`.
     pub fn platforms(mut self, platforms: Platforms) -> Item {
         self.platforms = platforms;
@@ -434,7 +450,17 @@ impl Node {
 
     /// A submenu shown on every platform.
     pub fn submenu(label: impl Into<String>, children: Vec<Node>) -> Node {
-        Node::Submenu { label: label.into(), children, role: None, platforms: Platforms::ALL }
+        Node::Submenu { label: label.into(), english: None, children, role: None, platforms: Platforms::ALL }
+    }
+
+    /// Set the English name of an item's label or a submenu's title.
+    pub fn english(mut self, english: impl Into<String>) -> Node {
+        match &mut self {
+            Node::Item(it) => it.english = Some(english.into()),
+            Node::Submenu { english: e, .. } => *e = Some(english.into()),
+            Node::Separator | Node::Standard { .. } => {}
+        }
+        self
     }
 
     /// Give an item or a submenu a role: `Node::submenu("Theme", pages).role(ItemRole::Appearance)`.
@@ -461,7 +487,13 @@ impl Node {
 impl Menu {
     /// A menu with no special role.
     pub fn new(title: impl Into<String>, children: Vec<Node>) -> Menu {
-        Menu { title: title.into(), role: MenuRole::Other, children }
+        Menu { title: title.into(), english: None, role: MenuRole::Other, children }
+    }
+
+    /// Set the title's English name ([`Menu::english`] field).
+    pub fn english(mut self, english: impl Into<String>) -> Menu {
+        self.english = Some(english.into());
+        self
     }
 
     /// Set the menu's role.
@@ -579,6 +611,8 @@ pub struct Row {
     pub command: CommandRef,
     /// The text shown.
     pub label: String,
+    /// The label's English name, when `label` is a translation ([`Item::english`]).
+    pub english: Option<String>,
     /// The row's shortcut.
     pub shortcut: Option<Chord>,
     /// Whether the row can be chosen.
@@ -600,6 +634,7 @@ impl Row {
             path: path.iter().map(|s| (*s).to_owned()).collect(),
             command: command.into(),
             label: label.into(),
+            english: None,
             shortcut: None,
             enabled: true,
             kind: ItemKind::Plain,
@@ -607,6 +642,12 @@ impl Row {
             tooltip: None,
             alternate: None,
         }
+    }
+
+    /// Set the label's English name.
+    pub fn english(mut self, english: impl Into<String>) -> Row {
+        self.english = Some(english.into());
+        self
     }
 
     /// Whether the row can be chosen.
@@ -653,73 +694,79 @@ impl Row {
 
 /// The menus as a tree, from flat rows, in the order an in-window bar draws them: one menu per
 /// entry of `tops`, and at each depth leaves and separators in order, with a submenu where its
-/// first row is. The result is [`tidy`].
+/// first row is. The result is [`tidy`]. Each row is visited once per depth of its path.
 pub fn from_items(tops: &[&str], rows: &[Row]) -> MenuBar {
+    /// One entry of a level in order: a row of the level itself, or the group of rows under a submenu name.
+    enum Slot<'r> {
+        Leaf(&'r Row),
+        Group(&'r str, Vec<&'r Row>),
+    }
     fn level(rows: &[&Row], depth: usize) -> Vec<Node> {
-        let mut out = Vec::new();
-        let mut shown: Vec<&str> = Vec::new();
+        let mut slots: Vec<Slot<'_>> = Vec::new();
+        let mut groups: HashMap<&str, usize> = HashMap::new();
         for it in rows {
             if it.path.len() == depth {
-                if it.label == "---" {
-                    out.push(Node::Separator);
-                } else {
-                    out.push(Node::Item(Item {
-                        shortcut: it.shortcut,
-                        enabled: it.enabled,
-                        kind: it.kind,
-                        tint: it.tint,
-                        tooltip: it.tooltip.clone(),
-                        alternate: it.alternate.clone(),
-                        ..Item::new(it.command.clone(), it.label.clone())
-                    }));
-                }
+                slots.push(Slot::Leaf(it));
             } else if let Some(name) = it.path.get(depth) {
-                let name = name.as_str();
-                if shown.contains(&name) {
-                    continue;
+                let at = *groups.entry(name.as_str()).or_insert_with(|| {
+                    slots.push(Slot::Group(name.as_str(), Vec::new()));
+                    slots.len() - 1
+                });
+                if let Slot::Group(_, members) = &mut slots[at] {
+                    members.push(it);
                 }
-                shown.push(name);
-                let child: Vec<&Row> = rows.iter().copied().filter(|c| c.path.get(depth).map(String::as_str) == Some(name)).collect();
-                out.push(Node::submenu(name, level(&child, depth + 1)));
             }
         }
-        tidy(out)
+        let mut out = Vec::with_capacity(slots.len());
+        for slot in slots {
+            match slot {
+                Slot::Leaf(it) if it.label == "---" => out.push(Node::Separator),
+                Slot::Leaf(it) => out.push(Node::Item(Item {
+                    english: it.english.clone(),
+                    shortcut: it.shortcut,
+                    enabled: it.enabled,
+                    kind: it.kind,
+                    tint: it.tint,
+                    tooltip: it.tooltip.clone(),
+                    alternate: it.alternate.clone(),
+                    ..Item::new(it.command.clone(), it.label.clone())
+                })),
+                Slot::Group(name, members) => out.push(Node::submenu(name, level(&members, depth + 1))),
+            }
+        }
+        tidy(&mut out);
+        out
     }
-    let menus = tops
-        .iter()
-        .map(|top| {
-            let rows: Vec<&Row> = rows.iter().filter(|r| r.path.first().map(String::as_str) == Some(*top)).collect();
-            Menu::new(*top, level(&rows, 1))
-        })
-        .collect();
+    let mut by_top: HashMap<&str, Vec<&Row>> = HashMap::new();
+    for row in rows {
+        if let Some(top) = row.path.first() {
+            by_top.entry(top.as_str()).or_default().push(row);
+        }
+    }
+    let menus = tops.iter().map(|top| Menu::new(*top, level(by_top.get(top).map_or(&[][..], Vec::as_slice), 1))).collect();
     MenuBar { menus, documents: Vec::new() }
 }
 
 /// Drop separators at the start or end of a level and collapse runs of them, and drop empty
-/// submenus, at every depth. A submenu holding only a disabled placeholder (`No Recent Files`)
+/// submenus, at every depth, in place. A submenu holding only a disabled placeholder (`No Recent Files`)
 /// stays.
-pub fn tidy(nodes: Vec<Node>) -> Vec<Node> {
-    let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
-    for n in nodes {
-        let n = match n {
-            Node::Submenu { label, children, role, platforms } => {
-                let children = tidy(children);
-                if children.is_empty() {
-                    continue;
-                }
-                Node::Submenu { label, children, role, platforms }
+pub fn tidy(nodes: &mut Vec<Node>) {
+    let mut previous_separator = true;
+    nodes.retain_mut(|node| {
+        if let Node::Submenu { children, .. } = node {
+            tidy(children);
+            if children.is_empty() {
+                return false;
             }
-            other => other,
-        };
-        if matches!(n, Node::Separator) && matches!(out.last(), None | Some(Node::Separator)) {
-            continue;
         }
-        out.push(n);
+        let separator = matches!(node, Node::Separator);
+        let keep = !(separator && previous_separator);
+        previous_separator = separator;
+        keep
+    });
+    while matches!(nodes.last(), Some(Node::Separator)) {
+        nodes.pop();
     }
-    while matches!(out.last(), Some(Node::Separator)) {
-        out.pop();
-    }
-    out
 }
 
 /// A hash of everything a native menu can only change by rebuilding: menus, roles, item

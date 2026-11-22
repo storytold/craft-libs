@@ -412,7 +412,6 @@ pub(crate) fn type_on(pen: &Pen, path: bool) {
 
 /// The locator: a square frame centred on the pointer between halo frames a hairline outside and inside it.
 pub(crate) fn locator(pen: &Pen) {
-    // design: allow[literal-size/vec2](pointer art is a fixed bitmap-like drawing around the hotspot, not a layout size)
     let rect = Rect::from_center_size(Pos2::ZERO, Vec2::splat(LOCATOR_SIDE));
     let halo = Stroke::new(pen.thin, pen.halo);
     pen.push(Mark::Frame(rect.expand(pen.thin), halo));

@@ -1,26 +1,29 @@
-//! The app shell's named slots: a bar in a top or bottom slot fills it
-//! with its members on the slot's middle, and a slot with a content version settles. A full-window page hides the
-//! slots and the body, and its band keeps the window's ends and moves the window.
+//! The app shell's named slots: a bar in a top or bottom slot fills it with its members on the slot's middle, and a
+//! slot whose content is a memoized view runs only when its props change. A full-window page hides the slots and the
+//! body, and its band keeps the window's ends and moves the window.
 
 use craft_host::target::ShellInfo;
+use craft_theme::Size;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet, Scroll, Show as _, ShowContainer as _};
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::{CommandScope, Commands as _};
-use craft_ui::runtime::env::{PageBandRoom, WindowKey};
+use craft_ui::runtime::env::{Env, PageBandRoom, RevealEdge, ShellEntry, WindowKey};
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar, slots};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar};
+use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::windows::NoWindows;
-use craft_ui::testing::{Fixture, Frames, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, last_pass_memo_runs, trial};
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
-use egui::{Event, Key, Modifiers, Rect, Vec2, ViewportId};
-use std::cell::Cell;
+use egui::{Event, Key, Modifiers, Rect, Ui, Vec2, ViewportId};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -136,6 +139,227 @@ fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
     assert!(body.min.y >= row.max.y - SLACK, "the body {body:?} starts under the row {row:?}");
 }
 
+/// The labels of a column of buttons taller than a slot's default extent.
+const TALL: [&str; 6] = ["Paste", "Cut", "Copy", "Format Painter", "Clipboard", "Styles"];
+
+/// The rect of the fill-height column a content slot holds and of each of its buttons, from the last run.
+type Column = Rc<RefCell<(Rect, Vec<Rect>)>>;
+
+fn column() -> Column {
+    Rc::new(RefCell::new((Rect::NOTHING, Vec::new())))
+}
+
+/// A column of `labels` that fills its height, as a ribbon group does, recording its rects in `seen`.
+fn fill_column(ui: &mut Ui, labels: &[&'static str], seen: &Column) {
+    let mut buttons = Vec::new();
+    let column = Stack::new()
+        .sizing(Sizing::FillHeight)
+        .show(ui, |ui, _| {
+            for label in labels {
+                buttons.push(Button::new(*label).show(ui).rect);
+            }
+        })
+        .output
+        .rect;
+    *seen.borrow_mut() = (column, buttons);
+}
+
+/// A content slot whose content fills its height grows to that content, at the top and at the bottom edge: its
+/// content runs in the room the slot can grow into, not in the extent it was first laid out at, so the column takes
+/// its buttons' height and the slot takes the column's.
+#[trial]
+fn a_slot_sized_by_its_content_grows_to_a_child_that_fills_its_height() {
+    let (top, bottom) = (column(), column());
+    let regions = Rc::new(RefCell::new(None));
+    let (top_seen, bottom_seen, out) = (Rc::clone(&top), Rc::clone(&bottom), Rc::clone(&regions));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &top_seen))
+            .bottom(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| fill_column(ui, &TALL, &bottom_seen))
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        *out.borrow_mut() = Some(shown.regions);
+    });
+    fixture.room(Vec2::new(600.0, 700.0)).settle();
+    let regions = regions.borrow().clone().expect("the shell shows");
+    const SLACK: f32 = 1.0;
+    for (key, seen) in [("ribbon", &top), ("findBar", &bottom)] {
+        let slot = regions.slots.iter().find(|(shown, _)| *shown == key).map(|(_, rect)| *rect).expect("the slot shows");
+        let (column, buttons) = seen.borrow().clone();
+        assert_eq!(buttons.len(), TALL.len(), "{key}: every button shows");
+        for button in &buttons {
+            assert!(column.expand(SLACK).contains_rect(*button), "{key}: the button {button:?} lies in its column {column:?}");
+        }
+        assert!(slot.expand(SLACK).contains_rect(column), "{key}: the slot {slot:?} holds its column {column:?}");
+    }
+    let (top_slot, bottom_slot) = (regions.slots[0].1, regions.slots[1].1);
+    assert!(
+        regions.body.min.y >= top_slot.max.y - SLACK && regions.body.max.y <= bottom_slot.min.y + SLACK,
+        "the body {:?} lies between the slots",
+        regions.body
+    );
+    assert!((bottom_slot.max.y - 700.0).abs() <= SLACK, "the bottom slot {bottom_slot:?} stands on the window's bottom edge");
+}
+
+/// A settled frame runs a content slot's content once, in one pass: its measure is reused while its inputs are
+/// unchanged. A frame where the content grows (a roomier density makes every button taller) lays the window out again
+/// at most once, shows the new extent in that frame and leaves the next frame settled.
+#[trial]
+fn a_content_slot_runs_its_content_once_per_settled_frame_and_grows_in_one_frame() {
+    let runs = Rc::new(Cell::new(0_u32));
+    let seen = column();
+    let regions = Rc::new(RefCell::new(None));
+    let (count, column, out) = (Rc::clone(&runs), Rc::clone(&seen), Rc::clone(&regions));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AppShell::new(WindowKey::main())
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                count.set(count.get() + 1);
+                fill_column(ui, &TALL, &column);
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        *out.borrow_mut() = Some(shown.regions);
+    });
+    fixture.room(Vec2::new(600.0, 700.0)).density(Size::Compact).settle();
+    let before = seen.borrow().0;
+    runs.set(0);
+    fixture.frame(Vec::new());
+    assert_eq!(fixture.passes(), 1, "a settled frame runs one pass");
+    assert_eq!(runs.get(), 1, "a settled frame runs the slot's content once");
+    fixture.density(Size::Comfortable).frame(Vec::new());
+    assert!(fixture.passes() <= 2, "the frame the content grows in lays the window out again at most once: {} passes", fixture.passes());
+    let slot = regions.borrow().as_ref().and_then(|regions| regions.slots.first().map(|(_, rect)| *rect)).expect("the slot shows");
+    let grown = seen.borrow().0;
+    assert!(grown.height() > before.height() + 1.0, "the roomier density makes the column taller: {before:?} to {grown:?}");
+    assert!(slot.expand(1.0).contains_rect(grown), "in the frame it grows in, the slot {slot:?} holds the grown column {grown:?}");
+    runs.set(0);
+    fixture.frame(Vec::new());
+    assert_eq!(fixture.passes(), 1, "the frame after the grow is settled: one pass");
+    assert_eq!(runs.get(), 1, "the frame after the grow runs the slot's content once");
+}
+
+/// Content rails sit at their own sides in either reading direction, each as wide as the column it holds, and a
+/// settled frame runs one pass with each rail's content once: the start rail at the reading start, the end rail at the
+/// reading end, the body between them.
+#[trial]
+fn content_rails_sit_at_their_sides_and_settle_in_one_pass() {
+    const RAIL: [&str; 3] = ["Move", "Brush", "Eraser"];
+    for rtl in [false, true] {
+        let direction = if rtl { craft_i18n::Direction::Rtl } else { craft_i18n::Direction::Ltr };
+        let (start, end) = (column(), column());
+        let (start_runs, end_runs) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(0_u32)));
+        let regions = Rc::new(RefCell::new(None));
+        let (start_seen, end_seen, start_count, end_count, out) =
+            (Rc::clone(&start), Rc::clone(&end), Rc::clone(&start_runs), Rc::clone(&end_runs), Rc::clone(&regions));
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .start(Slot::new("tools").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    start_count.set(start_count.get() + 1);
+                    fill_column(ui, &RAIL, &start_seen);
+                })
+                .end(Slot::new("inspector").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    end_count.set(end_count.get() + 1);
+                    fill_column(ui, &RAIL, &end_seen);
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            *out.borrow_mut() = Some(shown.regions);
+        });
+        fixture.direction(direction).room(Vec2::new(600.0, 400.0)).settle();
+        let regions = regions.borrow().clone().expect("the shell shows");
+        const SLACK: f32 = 1.0;
+        let rect_of = |key| regions.slots.iter().find(|(shown, _)| *shown == key).map(|(_, rect)| *rect).expect("the rail shows");
+        let (start_rail, end_rail) = (rect_of("tools"), rect_of("inspector"));
+        for (key, rail, seen) in [("tools", start_rail, &start), ("inspector", end_rail, &end)] {
+            let (column, buttons) = seen.borrow().clone();
+            assert_eq!(buttons.len(), RAIL.len(), "RTL {rtl}, {key}: every button shows");
+            for button in &buttons {
+                assert!(column.expand(SLACK).contains_rect(*button), "RTL {rtl}, {key}: the button {button:?} lies in its column {column:?}");
+            }
+            assert!(rail.expand(SLACK).contains_rect(column), "RTL {rtl}, {key}: the rail {rail:?} holds its column {column:?}");
+        }
+        let body = regions.body;
+        let (left, right) = if rtl { (end_rail, start_rail) } else { (start_rail, end_rail) };
+        assert!(left.max.x <= body.min.x + SLACK, "RTL {rtl}: the rail {left:?} lies left of the body {body:?}");
+        assert!(right.min.x >= body.max.x - SLACK, "RTL {rtl}: the rail {right:?} lies right of the body {body:?}");
+        start_runs.set(0);
+        end_runs.set(0);
+        fixture.frame(Vec::new());
+        assert_eq!(fixture.passes(), 1, "RTL {rtl}: a settled frame runs one pass");
+        assert_eq!((start_runs.get(), end_runs.get()), (1, 1), "RTL {rtl}: a settled frame runs each rail's content once");
+    }
+}
+
+/// A content slot holding a list that scrolls along its height is as tall as the list's rows, whether the list sizes
+/// from its content or fills its height: the slot offers its content no bound along its edge, so the list shows all
+/// of its rows instead of taking the window's height, and the body keeps the rest of the window.
+#[trial]
+fn a_content_slot_holding_a_scrolling_list_takes_the_list_height() {
+    for sizing in [Sizing::Content, Sizing::FillHeight, Sizing::Fill] {
+        let rows = Rc::new(RefCell::new(Vec::new()));
+        let regions = Rc::new(RefCell::new(None));
+        let (seen, out) = (Rc::clone(&rows), Rc::clone(&regions));
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .top(Slot::new("findBar").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                    let mut buttons = Vec::new();
+                    Stack::new().sizing(sizing).scroll(Scroll::vertical()).show(ui, |ui, _| {
+                        for label in ["First", "Second", "Third"] {
+                            buttons.push(Button::new(label).show(ui).rect);
+                        }
+                    });
+                    *seen.borrow_mut() = buttons;
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            *out.borrow_mut() = Some(shown.regions);
+        });
+        fixture.room(Vec2::new(600.0, 700.0)).settle();
+        let regions = regions.borrow().clone().expect("the shell shows");
+        let slot = regions.slots.iter().find(|(key, _)| *key == "findBar").map(|(_, rect)| *rect).expect("the slot shows");
+        let rows = rows.borrow().iter().fold(Rect::NOTHING, |all, row| all.union(*row));
+        const SLACK: f32 = 1.0;
+        // The rule toward the body, the stack's padding and rounding.
+        const AROUND: f32 = 24.0;
+        assert!(slot.expand(SLACK).contains_rect(rows), "{sizing:?}: the slot {slot:?} holds the list's rows {rows:?}");
+        assert!(slot.height() <= rows.height() + AROUND, "{sizing:?}: the slot {slot:?} is as tall as the list's rows {rows:?}, not the window");
+        let body = regions.body;
+        assert!(
+            body.min.y >= slot.max.y - SLACK && (body.max.y - 700.0).abs() <= SLACK,
+            "{sizing:?}: the body {body:?} keeps the window under the slot {slot:?}"
+        );
+    }
+}
+
+/// A check box with its label after it sits on the options slot's middle, as a button beside it does: the slot is
+/// shorter than the bar asks for, and the bar centres its members in it.
+#[trial]
+fn a_labelled_check_box_in_the_options_slot_sits_on_its_middle() {
+    let seen = Rc::new(Cell::new(None::<(Rect, Rect, Rect)>));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut check, mut button) = (Rect::NOTHING, Rect::NOTHING);
+        let mut on = true;
+        let shown = AppShell::new(WindowKey::main())
+            .options_bar(true, |ui, _, _: &mut ()| {
+                let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+                    check = Checkbox::new(Bind::bound(&mut on)).label("Anti-alias").show(ui).response.rect;
+                    button = Button::new("Select and Mask").show(ui).rect;
+                });
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect) {
+            out.set(Some((slot, check, button)));
+        }
+    });
+    fixture.room(Vec2::new(600.0, 300.0)).settle();
+    let (slot, check, button) = seen.get().expect("the options slot shows");
+    assert!(check.height() > 0.0 && button.height() > 0.0, "both members show (check box {check:?}, button {button:?})");
+    assert!((button.center().y - slot.center().y).abs() <= 1.0, "the button {button:?} sits on the slot's middle {slot:?}");
+    assert!((check.center().y - slot.center().y).abs() <= 1.0, "the check box {check:?} sits on the slot's middle {slot:?}");
+}
+
 /// A title bar in the title slot shows its leading content inside the slot, on the slot's middle.
 #[trial]
 fn a_title_bar_in_the_title_slot_shows_its_content_there() {
@@ -174,40 +398,133 @@ fn a_title_bar_in_the_title_slot_shows_its_content_there() {
     assert!((member.center().y - slot.center().y).abs() <= 1.0, "the member {member:?} sits on the slot's middle {slot:?}");
 }
 
-/// A status slot that gives a content version runs only in the frame its version changes: frames with no input and a
-/// click in the body leave it settled.
+thread_local! {
+    /// The memoized slots that ran on this trial's thread, in order.
+    static SLOT_RUNS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Takes the memoized slots that ran since the last call.
+fn slot_runs() -> Vec<&'static str> {
+    SLOT_RUNS.with(|runs| std::mem::take(&mut *runs.borrow_mut()))
+}
+
+/// What a memoized slot shows.
+#[derive(MemoProps)]
+struct SlotText {
+    name: &'static str,
+    text: String,
+}
+
+fn slot_text(props: &mut SlotText, ui: &mut Ui) {
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        SLOT_RUNS.with(|runs| runs.borrow_mut().push(props.name));
+    }
+    Text::new(props.text.clone()).show(ui);
+}
+
+/// Slots whose content is a memoized view run only when their props change: at rest and for a click in the body they
+/// replay, a new status runs the status slot alone (one real run, one measuring run), and a slot the app does not
+/// memoize runs every pass.
 #[trial]
-fn a_slot_with_a_content_version_runs_only_when_its_version_changes() {
-    let (runs, version, body) = (Cell::new(0), Cell::new(1), Cell::new(Rect::NOTHING));
+fn memoized_slots_run_only_when_their_props_change() {
+    let (version, plain, body) = (Cell::new(1), Cell::new(0), Cell::new(Rect::NOTHING));
     let frame = |frames: &mut Frames, events| {
-        runs.set(0);
+        plain.set(0);
         frames.frame(events, |ui| {
             let out = AppShell::new(WindowKey::main())
-                .status(true, |ui, _, _: &mut ()| {
-                    runs.set(runs.get() + 1);
-                    Text::new("Ready").show(ui);
+                .options_bar(true, |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("options", SlotText { name: "options", text: "Options".to_owned() }, slot_text).show(ui);
                 })
-                .content(slots::STATUS, version.get())
+                .status(true, |ui, _, _| {
+                    let _ = MemoView::new("status", SlotText { name: "status", text: format!("Ready {}", version.get()) }, slot_text).show(ui);
+                })
+                .start(Slot::new("tools"), |ui, _, _| {
+                    plain.set(plain.get() + 1);
+                    Text::new("Tools").show(ui);
+                })
                 .body(|ui, _, _| {
                     Button::new("Body").show(ui);
                 })
                 .show(ui, &mut ());
             body.set(out.regions.body);
         });
-        runs.get()
+        (slot_runs(), plain.get())
     };
     let mut frames = Frames::new();
     for _ in 0..30 {
         frame(&mut frames, vec![]);
     }
-    assert_eq!(frame(&mut frames, vec![]), 0, "the status slot settles");
+    let (ran, plain_runs) = frame(&mut frames, vec![]);
+    assert_eq!(ran, Vec::<&str>::new(), "the memoized slots replay at rest");
+    assert!(plain_runs > 0, "the slot the app does not memoize runs every pass");
     let at = body.get().center();
     for events in [vec![press(at)], vec![release(at)], vec![]] {
-        assert_eq!(frame(&mut frames, events.clone()), 0, "a click in the body ({events:?}) leaves the slot settled");
+        assert_eq!(frame(&mut frames, events.clone()).0, Vec::<&str>::new(), "a click in the body ({events:?}) leaves the slots replaying");
     }
     version.set(2);
-    assert!(frame(&mut frames, vec![]) > 0, "a new version runs the slot");
-    assert_eq!(frame(&mut frames, vec![]), 0, "and it settles at it");
+    // One real run, then one measuring run in the first sizing pass that measures the new content: the discard pass its
+    // new size asks for, whose real run replays the first. A container that measures before the real run of one pass
+    // makes the same two runs in the other order (ui-widgets body::memo_view, the stack measured first).
+    assert_eq!(
+        frame(&mut frames, vec![]).0,
+        vec!["status", "status"],
+        "a new status runs the status slot alone: one real run and one measuring run in the sizing pass that measures it"
+    );
+    assert!(
+        last_pass_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed),
+        "the discard pass's real run replays every slot: {:?}",
+        last_pass_memo_runs(&frames.ctx)
+    );
+    assert_eq!(frame(&mut frames, vec![]).0, Vec::<&str>::new(), "and it replays at it");
+}
+
+/// What a slot that registers a revealed rect shows: the rect.
+#[derive(MemoProps)]
+struct Revealing {
+    at: Rect,
+}
+
+fn revealing(props: &mut Revealing, ui: &mut Ui) {
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        SLOT_RUNS.with(|runs| runs.borrow_mut().push("revealing"));
+    }
+    if let Some(shell) = Env::of(ui).view().get::<ShellEntry>().0 {
+        shell.reveal_rect(ui.ctx(), RevealEdge::Start, props.at);
+    }
+    Text::new("Tools").show(ui);
+}
+
+/// A memoized view in a slot that registers a revealed rect registers it again when it replays: the shell reads the
+/// same rects in a replayed pass as in the run.
+#[trial]
+fn a_replayed_view_in_a_slot_registers_its_revealed_rects() {
+    let at = Rect::from_min_size(egui::pos2(0.0, 40.0), Vec2::new(40.0, 120.0));
+    let seen = RefCell::new(Vec::new());
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            AppShell::new(WindowKey::main())
+                .start(Slot::new("tools"), |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("tools", Revealing { at }, revealing).show(ui);
+                })
+                .body(|ui, bcx, _| {
+                    *seen.borrow_mut() = bcx.shell().map(|shell| shell.revealed_rects(ui.ctx())).unwrap_or_default();
+                })
+                .show(ui, &mut ());
+        });
+        (slot_runs(), seen.borrow().clone())
+    };
+    let mut frames = Frames::new();
+    let (ran, first) = frame(&mut frames);
+    assert!(ran.contains(&"revealing"), "the slot runs in its first frame");
+    assert_eq!(first, vec![(RevealEdge::Start, at)], "its run registers the rect");
+    for _ in 0..30 {
+        frame(&mut frames);
+    }
+    let (ran, replayed) = frame(&mut frames);
+    assert_eq!(ran, Vec::<&str>::new(), "the slot replays");
+    assert_eq!(replayed, first, "the replay registers the same rects as the run");
 }
 
 /// What the page trial's shell ran in one frame, and the band room the page read.

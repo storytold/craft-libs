@@ -1,7 +1,7 @@
 //! `TaskBar`: the contextual task bar over a canvas, hung below its anchor until the user moves it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::CanvasControlWords;
 use crate::bars::{Bar, BarKind};
@@ -20,7 +20,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::kurbo::Point;
 use craft_behavior::overlay::{Align, Side};
-use craft_behavior::{EditEvent, IconId, Metrics, Mixed, Sense};
+use craft_behavior::{EditEvent, GesturePhase, IconId, Metrics, Mixed, Sense};
 use egui::{Pos2, Rect, Response, Ui};
 use std::sync::Arc;
 
@@ -245,8 +245,7 @@ impl<'a> TaskBar<'a> {
         let rect = shown.output.response.rect;
         let pick = menu.pick;
         if shows && kind == TaskBarKind::Task {
-            let moved = shown.output.moved.filter(|moved| moved.min != rect.min);
-            let next = settled(held, rect, area, moved, pick);
+            let next = settled(held, rect, area, shown.output.moved, pick);
             if next != held {
                 let word = match pick {
                     Some(MenuPick::Reset) => &words.task_bar_reset,
@@ -303,8 +302,8 @@ fn layer_overlay(held: &TaskBarPlace, hang: Option<Rect>, area: Rect, side: Side
     }
 }
 
-/// The place after a pass that showed the bar at `shown`. A move (`moved`, a rect other than `shown`) keeps the bar
-/// where it was dropped; Reset clears the place; Pin, and a pinned bar with no place, keep the bar at `shown`. A
+/// The place after a pass that showed the bar at `shown`. A move that ended (`moved`, where it was dropped) keeps the
+/// bar there; Reset clears the place; Pin, and a pinned bar with no place, keep the bar at `shown`. A
 /// non-finite place is cleared. With no move and no pick, the place stays unchanged; the overlay host keeps the layer
 /// inside the area.
 fn settled(held: TaskBarPlace, shown: Rect, area: Rect, moved: Option<Rect>, pick: Option<MenuPick>) -> TaskBarPlace {
@@ -333,7 +332,7 @@ pub struct TaskBarLayerStyle {
     metrics: Metrics,
 }
 
-/// What the task bar's layer reports: its response, the last move of this pass and why it closed.
+/// What the task bar's layer reports: its response, the move that ended in this pass and why it closed.
 #[derive(Debug)]
 struct TaskBarLayerOutput {
     response: Response,
@@ -361,6 +360,8 @@ struct TaskBarLayer {
     props: ContainerProps,
     /// Open while the bar shows; the caller shows the bar again each pass it wants it.
     open: Bind<'static, bool>,
+    /// Where a move by the grip ended in this pass. The layer host shows the bar under the pointer while the move
+    /// runs, so the place is written once, on the drop.
     moved: Option<Rect>,
     /// Why the layer closed, once it has.
     closed: Option<CloseReason>,
@@ -411,7 +412,7 @@ impl Container for TaskBarLayer {
     }
 
     fn placement_changed(&mut self, change: &PlacementChange) {
-        if change.kind == PlacementKind::Move {
+        if change.kind == PlacementKind::Move && change.phase == GesturePhase::Commit {
             self.moved = Some(change.rect);
         }
     }

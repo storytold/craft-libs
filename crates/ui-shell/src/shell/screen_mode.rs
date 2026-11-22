@@ -31,7 +31,7 @@ pub enum ScreenMode {
 }
 
 /// Which screen modes the F key cycles through. The shell publishes its set to its regions as an env value.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui_macros::EnvValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui_macros::EnvValue, crate::contract::MemoProps)]
 #[env(style)]
 #[non_exhaustive]
 pub enum ScreenModeSet {

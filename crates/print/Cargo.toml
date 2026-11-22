@@ -14,6 +14,7 @@ autotests = false
 harness = false
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The printer and job settings widgets (`craft_print::ui`).
 ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
@@ -74,7 +75,7 @@ wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlElement", "Element", "Node", "Document", "Window", "CssStyleDeclaration"] }
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 tempfile = "3"
 roxmltree = "0.21"
 miniz_oxide = "0.9"

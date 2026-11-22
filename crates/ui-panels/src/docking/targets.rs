@@ -4,10 +4,10 @@
 //! previous pass's registry, because a drop is decided against what was on screen when the pointer moved. Every
 //! zone is a rect. A spot names a group by an anchor panel, as the dock model does.
 
-use super::{DragUnit, PanelKey, PanelSpec, scale_widths, stepped, width_bounds};
+use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
 use crate::contract::DropMark;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
-use crate::style::StyleCx;
+use crate::style::{RuleKind, RuleWidth, StyleCx};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Layout, Node, ZoneSize, node_at, zones};
 use egui::{Context, Id, Pos2, Rect, Vec2};
@@ -51,9 +51,18 @@ pub struct DockSizes {
     pub strip: f32,
     /// The height of a column bar (a small control).
     pub bar: f32,
-    /// The height of a floating window's title row, which is the bar of the column the window holds: every height of
-    /// a window's body or content is the window's height less this.
+    /// The height of a floating window's title row, which is the bar of the column the window holds.
     pub title_row: f32,
+    /// The divider rule a floating window draws under its title row, which the container lays out in a band of its
+    /// own: the rule's width in whole physical pixels on the window's display ([`Self::pixels_per_point`]).
+    pub title_rule: RuleWidth,
+    /// The display scale the sizes that depend on it are for: the running window's, or with [`Self::at_scale`] an OS
+    /// window's own.
+    pub pixels_per_point: f32,
+    /// The band a floating window in the app window keeps clear over its title row for its top grip
+    /// (`contract::grip_band`); an OS window keeps none. Every height of a window's body or content is the window's
+    /// height less its chrome ([`Self::window_chrome`]).
+    pub top_band: f32,
     /// The least body size of a column's group and the least width of an expanded column (the panel header height).
     pub least: f32,
     /// How thick a divider is across its boundary (the least hit size).
@@ -66,6 +75,15 @@ pub struct DockSizes {
     pub iconic_least: f32,
     /// The width of an expanded column the user has not resized (the dock column width).
     pub column: f32,
+    /// A tool rail's width at one column: a rail button and the control padding on both sides
+    /// ([`DockGrid::rail`](super::DockGrid::rail)).
+    pub rail_first: f32,
+    /// The width each further column of a tool rail adds: a rail button and the tight gap before it.
+    pub rail_step: f32,
+    /// The height of a grip strip, the band with the dock's grip marks: above each icon group of a collapsed column,
+    /// and under the column bar of a tool rail (a group whose panel has a [`DockGrid`](super::DockGrid)) that the host
+    /// shows itself (the least hit size).
+    pub grip: f32,
 }
 
 impl DockSizes {
@@ -73,6 +91,12 @@ impl DockSizes {
     /// `StyleCx::with_root(ctx, DockSizes::style)`.
     pub fn of(ctx: &Context) -> Self {
         StyleCx::with_root(ctx, DockSizes::style)
+    }
+
+    /// The sizes in the style of the scope `ui` is in: what a dock shown in `ui` sizes with.
+    pub fn of_scope(ui: &egui::Ui) -> Self {
+        let env = crate::runtime::env::Env::of(ui);
+        Self::style(&StyleCx::of_env(ui.ctx(), &env))
     }
 
     /// The sizes of the style context `cx`.
@@ -93,13 +117,38 @@ impl DockSizes {
             strip: size.panel_header,
             bar: size.control.sm,
             title_row: super::floating::title_row(cx.tokens),
+            title_rule: cx.rule(RuleKind::Divider).width,
+            pixels_per_point: cx.frame_ctx().pixels_per_point(),
+            top_band: crate::contract::grip_band(cx.tokens),
             least: size.panel_header,
             reach: size.hit.target,
             step: cx.control().gap,
             jump: cx.control().height,
             iconic_least: size.rail.width,
             column: size.dock.column,
+            rail_first: size.rail.button + 2.0 * cx.tokens.space.pad.control,
+            rail_step: size.rail.button + cx.tokens.space.gap.tight,
+            grip: size.hit.target,
         }
+    }
+
+    /// The height above a floating window's body: its title row, the rule under it and, for a window in the app
+    /// window (`in_app`), the band over it.
+    pub fn window_chrome(&self, in_app: bool) -> f32 {
+        self.title_row + self.title_rule.points(self.pixels_per_point) + if in_app { self.top_band } else { 0.0 }
+    }
+
+    /// The sizes for a window on a display of `pixels_per_point`: an OS window lays out at its own monitor's scale.
+    #[must_use]
+    pub fn at_scale(mut self, pixels_per_point: f32) -> Self {
+        self.pixels_per_point = pixels_per_point;
+        self
+    }
+
+    /// The height of a column whose every group is minimized: their tab strips, as the column stacks them. `None`
+    /// while a group is open.
+    pub fn minimized_height<P>(&self, column: &Column<P>) -> Option<f32> {
+        column.groups.iter().all(|group| group.minimized).then_some(self.strip * column.groups.len() as f32)
     }
 
     /// The width bounds of an expanded column from the limits of its panels.
@@ -110,23 +159,28 @@ impl DockSizes {
 
     /// The width an expanded column's panels draw at, whether the column is expanded or iconic (its flyout and a
     /// floated iconic column use it): the stored width kept within the panels' limits, or a stepped column's width
-    /// at its steps ([`stepped`]).
+    /// at its steps ([`DockSizes::stepped`](super::DockSizes::stepped)).
     pub fn expanded_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
-        if let Some((grid, steps)) = stepped(column, spec) {
+        if let Some((grid, steps)) = self.stepped(column, spec) {
             return grid.width(steps);
         }
         let (lo, hi) = self.width_bounds(column, spec);
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
+    /// The width bounds of a column collapsed to icons, docked or floating: the rail width up to the width it expands
+    /// to. A docked column's inner edge and a floating window's sides resize it within them.
+    pub fn iconic_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
+        (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
+    }
+
     /// The bounds [`width`](Self::width) keeps a column in: an expanded column's [`width_bounds`](Self::width_bounds);
-    /// a stepped one's width at one step up to its width at all its grid's columns; an iconic column's rail width up
-    /// to the width it expands to.
+    /// a stepped one's width at one step up to its width at all its grid's columns; an iconic column's
+    /// [`iconic_bounds`](Self::iconic_bounds).
     pub fn shown_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
         if column.iconic {
-            // Widening an iconic column stops at the width it expands to.
-            (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
-        } else if let Some((grid, _)) = stepped(column, spec) {
+            self.iconic_bounds(column, spec)
+        } else if let Some((grid, _)) = self.stepped(column, spec) {
             (grid.width(1), grid.width(grid.most))
         } else {
             self.width_bounds(column, spec)
@@ -160,7 +214,7 @@ impl DockSizes {
             Some(Node::Dock { columns, .. }) => columns,
             _ => return Vec::new(),
         };
-        let fixed = |column: &Column<P>| !column.iconic && stepped(column, spec).is_some();
+        let fixed = |column: &Column<P>| !column.iconic && self.stepped(column, spec).is_some();
         let current: Vec<(f32, (f32, f32))> = columns
             .iter()
             .map(|column| {
@@ -186,10 +240,21 @@ impl DockSizes {
         columns
             .iter()
             .map(|column| {
-                let keeps = column.iconic || stepped(column, spec).is_some();
+                let keeps = column.iconic || self.stepped(column, spec).is_some();
                 (self.width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
             })
             .collect()
+    }
+}
+
+/// A spot names panels and sides: it has no place, so a replay at another place keeps it.
+impl<P: Clone> crate::runtime::Shift for DockSpot<P> {
+    fn shifted(&self, _: &egui::RecordShift) -> Self {
+        self.clone()
+    }
+
+    fn snapped(&self, _: &Self, _: f32) -> Self {
+        self.clone()
     }
 }
 
@@ -454,8 +519,8 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     }
 }
 
-/// The registrations of a pass. A settled region's run record keeps each one to make it again and compares it with a
-/// real run's, so the panel type is `Sync`, `PartialEq` and `Debug`.
+/// The registrations of a pass. A settled memoized view's run record keeps each one to make it again and compares it
+/// with a real run's, so the panel type is `Sync`, `PartialEq` and `Debug`.
 impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
     /// Registers `spot` over `rect` for the dock `dock` in the running pass of this viewport. Group and column
     /// rendering call it; it does nothing outside a pass. A floating window registers on its own egui layer, and
@@ -509,12 +574,12 @@ impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
         Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
     }
 
-    /// Notes a registration in the records of the settling regions around the running code, so a region that settles
+    /// Notes a registration in the records of the memoized views around the running code, so a region that settles
     /// registers its drop spots again when it replays its last run.
     fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
     where
-        A: PartialEq + Debug + Send + Sync + 'static,
-        F: Fn(&Context, &A) + Send + Sync + 'static,
+        A: PartialEq + Debug + crate::runtime::Shift + Send + Sync + 'static,
+        F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
     {
         crate::runtime::journal(ctx, args, again);
     }

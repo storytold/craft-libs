@@ -17,7 +17,7 @@ use super::{Probe, ShapeKind};
 use std::collections::BTreeMap;
 
 /// Where a type sits in the design system, in the order a viewer lists them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, craft_ui_macros::PlainData)]
 #[non_exhaustive]
 pub enum Level {
     /// Colours, the edit lifecycle, stock egui.
@@ -56,7 +56,7 @@ impl Level {
 }
 
 /// The surface a type's stories sit on in an app; a viewer draws a story on it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Surface {
     /// A dock panel (`surface.panel`): most types.
@@ -71,7 +71,7 @@ pub enum Surface {
 }
 
 /// How a viewer lays out the stories of one type together, as the old gallery's story of the type laid out its cases.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum StoryLayout {
     /// One under the other, each under its caption.
@@ -215,7 +215,7 @@ fn pascal(segment: &str) -> String {
 #[non_exhaustive]
 pub struct CatalogEntry {
     /// The registration (the first of a generic type's instantiations).
-    pub registration: &'static Registration,
+    pub registration: Registration,
     /// The type's level.
     pub level: Level,
     /// The surface its stories sit on.
@@ -230,7 +230,7 @@ impl CatalogEntry {
     /// How a viewer lays out the type's story group named `group` (`Story::group_name`): the layout `STORY_LAYOUTS`
     /// declares for it, else stacked.
     pub fn story_layout(&self, group: &str) -> StoryLayout {
-        let (target, short) = table_key(self.registration);
+        let (target, short) = table_key(&self.registration);
         STORY_LAYOUTS.iter().find(|row| row.0 == target && row.1 == short && row.2 == group).map_or(StoryLayout::Stacked, |row| row.3)
     }
 }
@@ -267,10 +267,10 @@ fn kit_module(module: &str) -> bool {
 /// The display name is the type's name without module path or type arguments. Two registered types that share it
 /// each take the last module segments of their paths in front of it (`DockButton`, then `DockGroupButton`)
 /// until the names differ.
-pub fn catalog(registrations: &[&'static Registration]) -> Catalog {
-    let mut types: BTreeMap<&'static str, &'static Registration> = BTreeMap::new();
+pub fn catalog(registrations: &[&Registration]) -> Catalog {
+    let mut types: BTreeMap<&'static str, Registration> = BTreeMap::new();
     for &registration in registrations.iter().filter(|registration| !kit_module(parts(registration).0)) {
-        types.entry(base_path(parts(registration).1)).or_insert(registration);
+        types.entry(base_path(parts(registration).1)).or_insert(*registration);
     }
     let mut by_short: BTreeMap<&str, Vec<&'static str>> = BTreeMap::new();
     for &path in types.keys() {
@@ -281,13 +281,13 @@ pub fn catalog(registrations: &[&'static Registration]) -> Catalog {
         for &path in &paths {
             let registration = types[path];
             let name = qualified(path, short, &paths);
-            match level_of(registration) {
+            match level_of(&registration) {
                 Some(level) => {
-                    let surface = surface_of(registration);
-                    let type_name = parts(registration).1;
+                    let surface = surface_of(&registration);
+                    let type_name = parts(&registration).1;
                     out.entries.push(CatalogEntry { registration, level, surface, type_name, name });
                 }
-                None => out.unleveled.push(parts(registration).1),
+                None => out.unleveled.push(parts(&registration).1),
             }
         }
     }
@@ -351,18 +351,13 @@ pub fn story_title(type_name: &str, story: &str) -> String {
     text[..1].to_uppercase() + &text[1..]
 }
 
-/// Every library registration linked into the running binary: the types of the library crates, not the fixtures of
-/// an integration binary.
-fn linked() -> Vec<&'static Registration> {
-    super::registrations().into_iter().filter(|registration| registration.crate_target() == registration.crate_name().replace('-', "_")).collect()
-}
-
 /// The rows of the surface and story layout tables whose type is not among `linked`, in every crate that has a type
 /// there, and the layout rows whose story group none of the type's linked stories has. The library's crates are
 /// linked together only above them, so the craft-ui facade's trials run it with every registration of the library.
 #[cfg(feature = "testing")]
 #[doc(hidden)]
-pub fn stale_table_rows(linked: &[&'static Registration]) -> Vec<String> {
+pub fn stale_table_rows(registry: &crate::testing::Registry) -> Vec<String> {
+    let linked: Vec<_> = registry.registrations().iter().collect();
     let named: std::collections::HashSet<(&str, &str)> = linked.iter().map(|registration| table_key(registration)).collect();
     let mut crates: std::collections::HashSet<&str> = named.iter().map(|(target, _)| *target).collect();
     // The library's rows are checked whenever one of its crates is linked, whatever key its types get.
@@ -376,7 +371,7 @@ pub fn stale_table_rows(linked: &[&'static Registration]) -> Vec<String> {
     let keys: std::collections::HashMap<&str, (&str, &str)> =
         linked.iter().map(|registration| (parts(registration).1, table_key(registration))).collect();
     let mut groups: std::collections::HashMap<(&str, &str), Vec<String>> = std::collections::HashMap::new();
-    for entry in crate::testing::stories() {
+    for entry in registry.stories() {
         if let Some(&key) = keys.get((entry.type_name)()) {
             groups.entry(key).or_default().push(entry.story.group_name(key.1));
         }
@@ -388,25 +383,6 @@ pub fn stale_table_rows(linked: &[&'static Registration]) -> Vec<String> {
             .map(|row| format!("{:?}: no such story group", (row.0, row.1, row.2))),
     );
     stale
-}
-
-/// Guards against a registered type that no row places (it would list under no level) and against names a
-/// viewer cannot show as one identifier or that two types share (the tree would list two rows alike).
-#[crate::testing::trial]
-fn catalog_names_are_unique_pascal_case_and_every_type_has_a_level() {
-    let catalog = catalog(&linked());
-    assert!(catalog.unleveled.is_empty(), "types with no level: {:?}", catalog.unleveled);
-    let mut seen = std::collections::HashSet::new();
-    for entry in &catalog.entries {
-        let mut chars = entry.name.chars();
-        assert!(
-            chars.next().is_some_and(|first| first.is_ascii_uppercase()) && chars.all(|c| c.is_ascii_alphanumeric()),
-            "`{}` ({}) is not a PascalCase identifier",
-            entry.name,
-            entry.type_name
-        );
-        assert!(seen.insert((entry.level, entry.name.to_lowercase())), "`{}` is listed twice in {:?}", entry.name, entry.level);
-    }
 }
 
 /// Guards the story title rule: the type's words come off the front, the rest reads as a sentence.

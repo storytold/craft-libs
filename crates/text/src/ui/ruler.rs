@@ -8,7 +8,7 @@
 //! edit of the whole [`RulerValues`], so one drag is one undo step.
 //!
 //! ```ignore
-//! let out = TextRuler::new("ruler", Bind::given(values.clone()), column_width).unit(unit).kind(tab_kind).show_at(ui, strip);
+//! let out = TextRuler::new("ruler", Bind::given(values.clone()), column_width).unit(unit).kind(tab_kind).corner(corner).show_at(ui, band);
 //! if let Some(EditEvent::Commit { after, .. }) = out.edit.event { doc.set_paragraph_tabs(after); }
 //! if let Some(kind) = out.kind { tab_kind = kind; }
 //! if out.open_tabs_dialog { dialogs.open(TabStopsDialog::new(values.stops.clone(), default_tab)); }
@@ -16,20 +16,22 @@
 
 use super::length::DocUnit;
 use craft_behavior::{Axis, GesturePhase, HitLevel, HitPriority, Metrics, NavShape, Roving, Sense};
+use craft_theme::over;
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx, Props as _,
     Role, WordSetCx as _,
 };
+use craft_ui::primitives::RulerFace;
 use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeyUse};
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, TextLook, TypeRole};
-use egui::{Rect, Response, Vec2};
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, States, StyleColor, StyleCx, TextLook, TypeRole, UiTokens};
+use egui::{CornerRadius, Rect, Response, Vec2};
 
 mod geometry;
 mod items;
 mod paint;
 mod run;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The ruler's number writing and snap step, which the page rulers share so every ruler counts one unit alike.
 pub use run::{nudge_size, ruler_text, snap_step};
@@ -282,6 +284,10 @@ pub struct TextRulerStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
+    /// The face: the prop's, else the component set's.
+    face: RulerFace,
+    /// The strip round the centred face's bar.
+    strip: StyleColor,
     /// The column.
     fill: StyleColor,
     /// The margins beside the column.
@@ -297,6 +303,12 @@ pub struct TextRulerStyle {
     /// The tick numbers.
     #[style(text)]
     label: TextLook,
+    /// The tab selector's box: the column's colour, the state layer over it under the pointer and pressed.
+    selector: Stateful<StyleColor>,
+    /// The side of the tab selector's box.
+    selector_side: f32,
+    /// The rounding of the tab selector's box.
+    selector_radius: CornerRadius,
     /// The strip's depth.
     thickness: f32,
     /// The gap between a tick and its number.
@@ -326,15 +338,17 @@ pub struct TextRulerStyle {
 ///
 /// - Ticks and numbers in the unit through the canvas rulers' tick rule (inches follow Word's sixteenths), from the
 ///   column's start edge; numbers keep clear of the markers. The column takes the ruler's fill, the margins the
-///   margin shade.
+///   margin shade. The face ([`RulerFace`]) is the prop's, else the component set's: the edge face hangs the ticks
+///   from the strip's bottom with each number beside its whole-unit tick; the centred face (Word's) draws a bar inset
+///   in the strip with the ticks centred on it and the numbers in place of the whole-unit ticks.
 /// - Indent markers (Word's): the first-line triangle down at the top, the hanging triangle up and the left box under
 ///   it at the bottom, the right triangle at the right. Dragging the box moves first-line and left together; Alt drags
 ///   freely (no snap).
 /// - A click on the empty column sets a stop of the selector's kind at the snapped position (1/16 in, or the unit's
 ///   minor tick); dragging a stop moves it; dragging it off the ruler ([`dropped_off`]) clears it on release, the stop
 ///   drawn faded meanwhile. Each gesture is one edit of the whole values; Escape restores the start.
-/// - The tab selector ([`kind`](Self::kind)) sits in the corner square at the interface's start edge of the rect:
-///   click for the next kind, secondary click for the previous one.
+/// - The tab selector ([`kind`](Self::kind)) sits in the corner the host gives ([`corner`](Self::corner)), where its
+///   rulers meet: click for the next kind, secondary click for the previous one.
 /// - A table's column borders ([`columns`](Self::columns)): a grip marker on each border of the caret row; dragging
 ///   one reports a [`ColumnDrag`] gesture, snapped like a stop (Alt free). While Alt is held in the drag, each column's
 ///   width shows between its borders. A border is a slider too: the arrows and the screen reader's Increment,
@@ -364,7 +378,7 @@ pub struct TextRuler<'a> {
     #[prop]
     gaps_draggable: bool,
     /// The screen x where the ruler's zero sits: a page-wide ruler is measured from the page's text origin. Unset, zero
-    /// is the strip's start edge. Given against the screen so the corner square, which only the ruler places, does not
+    /// is the strip's start edge. Given against the screen so the corner, which the rect may hold, does not
     /// enter the caller's arithmetic.
     #[prop(quantity = "screen x of the ruler's zero, a position")]
     origin: Option<f32>,
@@ -374,9 +388,15 @@ pub struct TextRuler<'a> {
     /// The unit the markers' values and the ticks show.
     #[prop]
     unit: DocUnit,
-    /// Shows Word's tab selector in the corner, with the kind a click sets. Without it a click sets a left stop.
+    /// The kind of stop a click sets, which Word's tab selector shows in the [`corner`](Self::corner). Without it a
+    /// click sets a left stop.
     #[prop]
     kind: Option<TabAlign>,
+    /// The square at one end of the rect where the host's rulers meet (the canvas rulers' corner): the tab selector
+    /// shows there and the strip is the rest of the rect. The host places it, so it sits where the host's corner is in
+    /// either direction. Without it the whole rect is the strip and no selector shows.
+    #[prop]
+    corner: Option<Rect>,
     /// Screen points per point (the view's zoom when the ruler sits over a text frame on the canvas); without it the
     /// column fits into the strip.
     #[prop(quantity = "scale")]
@@ -388,6 +408,10 @@ pub struct TextRuler<'a> {
     /// The stop shown picked.
     #[prop(name = "picked_stop")]
     selected: Option<usize>,
+    /// The face; unset, the scope's component set picks it ([`RulerFace::of`]).
+    #[style_key]
+    #[prop]
+    face: Option<RulerFace>,
     report: Report,
 }
 
@@ -405,27 +429,28 @@ impl<'a> TextRuler<'a> {
             extent: None,
             unit: DocUnit::points(),
             kind: None,
+            corner: None,
             scale: None,
             right_to_left: None,
             selected: None,
+            face: None,
             report: Report::default(),
         }
         .label(label)
     }
 
-    /// The corner square, the strip and the markers' sizes inside `rect`.
+    /// The part of the host's corner inside `rect`, if any.
+    fn corner_in(&self, rect: Rect) -> Option<Rect> {
+        self.corner.map(|corner| corner.intersect(rect)).filter(|corner| corner.is_positive())
+    }
+
+    /// The host's corner, the strip beside it and the markers' sizes inside `rect`.
     fn layout(&self, rect: Rect, style: &TextRulerStyle, interface_rtl: bool) -> Layout {
-        let corner_width = if self.kind.is_some() { rect.height().min(rect.width()) } else { 0.0 };
-        let (corner, strip) = if interface_rtl {
-            (
-                Rect::from_min_max(egui::pos2(rect.max.x - corner_width, rect.min.y), rect.max),
-                Rect::from_min_max(rect.min, egui::pos2(rect.max.x - corner_width, rect.max.y)),
-            )
-        } else {
-            (
-                Rect::from_min_max(rect.min, egui::pos2(rect.min.x + corner_width, rect.max.y)),
-                Rect::from_min_max(egui::pos2(rect.min.x + corner_width, rect.min.y), rect.max),
-            )
+        let corner = self.corner_in(rect);
+        let strip = match corner {
+            Some(corner) if corner.center().x < rect.center().x => Rect::from_min_max(egui::pos2(corner.max.x, rect.min.y), rect.max),
+            Some(corner) => Rect::from_min_max(rect.min, egui::pos2(corner.min.x, rect.max.y)),
+            None => rect,
         };
         let fit = if self.width > 0.0 { strip.width() / self.width } else { 1.0 };
         let scale = self.scale.filter(|scale| scale.is_finite() && *scale > 0.0).unwrap_or(fit).max(f32::EPSILON);
@@ -464,11 +489,11 @@ impl<'a> TextRuler<'a> {
     }
 }
 
-/// The corner, the strip with its column and the marker sizes.
+/// The host's corner, the strip with its column and the marker sizes.
 pub(super) struct Layout {
     g: Geometry,
     shapes: Shapes,
-    corner: Rect,
+    corner: Option<Rect>,
 }
 
 impl Component for TextRuler<'_> {
@@ -478,12 +503,14 @@ impl Component for TextRuler<'_> {
     type Style = TextRulerStyle;
     type Output = TextRulerOutput;
 
-    fn style(cx: &StyleCx<'_>, _: TextRulerStyleKey) -> TextRulerStyle {
+    fn style(cx: &StyleCx<'_>, key: TextRulerStyleKey) -> TextRulerStyle {
         let tokens = cx.tokens;
         let colors = &tokens.color;
         TextRulerStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
+            face: key.face.unwrap_or(RulerFace::of(cx.set())),
+            strip: cx.color(colors.surface.chrome),
             // The column is the light well the text goes in; the margins are shaded as the desk round the page, so the
             // column reads lighter than the margins in both modes.
             fill: cx.color(colors.surface.sunken),
@@ -493,6 +520,13 @@ impl Component for TextRuler<'_> {
             marker_off: cx.color(colors.text.faint),
             marker: Stateful::new(cx.color(colors.text.normal)).when(Flags::SELECTED, cx.color(colors.accent.strong)),
             label: TextLook::new(TypeRole::Caption, Stateful::new(cx.color(colors.text.muted))),
+            selector: {
+                let (rest, column) = (cx.color(colors.surface.sunken), colors.surface.sunken);
+                let (hover, pressed) = (cx.color(over(colors.state.hover, column)), cx.color(over(colors.state.pressed, column)));
+                Stateful::new(rest).off(States::new(rest, hover, pressed, rest))
+            },
+            selector_side: tokens.size.icon.sm,
+            selector_radius: UiTokens::corner(tokens.shape.radius.sm),
             thickness: tokens.typography.get(TypeRole::Caption).line_height,
             pad: tokens.space.gap.tight,
             marker_width: tokens.size.handle.md,
@@ -564,8 +598,8 @@ impl Component for TextRuler<'_> {
             }
         }
         cx.roving(Roving::new(NavShape::Flat).page(Some(1)).home_end(false));
-        if self.kind.is_some() {
-            cx.part(SELECTOR, layout.corner)
+        if let (Some(_), Some(corner)) = (self.kind, layout.corner) {
+            cx.part(SELECTOR, corner)
                 .sense(Sense::CLICK | Sense::CONTEXT_CLICK)
                 .priority(handle)
                 .pointer_only("the Tabs dialog sets the alignment of a stop");
@@ -601,7 +635,7 @@ impl Component for TextRuler<'_> {
             node.name = Name::Text(words.table_column.as_str().to_owned());
             node.numeric = Some(Numeric::new(at, range.clone()).step(step).text(text.format_value(&numbers, at, 0.0)));
         }
-        if let Some(kind) = self.kind {
+        if let Some(kind) = self.kind.filter(|_| self.corner_in(cx.rect).is_some()) {
             let name = Self::tab_name(&words, kind);
             let node = access.node(SELECTOR, Role::BUTTON);
             node.name = Name::Text(words.tab_selector.fill(&[("kind", name)]));

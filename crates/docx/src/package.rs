@@ -114,6 +114,8 @@ pub const CUSTOM_XML_ROOTS: &str = "wordcraft:customXml.roots";
 /// The original `word/settings.xml` when it holds settings the model doesn't (merged into on
 /// save by `write::settings_merge`). Not a package part: WordCraft's own bookkeeping.
 pub const SETTINGS_ORIG: &str = "wordcraft:settings.orig";
+/// Retained relationship map for mail-merge sources referenced by the original settings.
+pub const MAIL_MERGE_RELS: &str = "wordcraft:settings.mailMerge.rels";
 /// The theme's East Asian, complex-script and per-script fonts (`a:ea`, `a:cs`, `a:font
 /// script="Hans"` in `a:majorFont` / `a:minorFont`), which the model doesn't hold: `major|minor
 /// \tface\tea|cs\ttypeface` and `major|minor\tscript\t<script>\ttypeface` lines (per font, at

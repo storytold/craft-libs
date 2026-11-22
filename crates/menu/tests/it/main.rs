@@ -2,14 +2,19 @@
 
 #[cfg(target_os = "macos")]
 mod appkit;
-mod keytips;
-mod layout;
-mod mnemonic;
-mod native;
-mod ribbon;
-mod ribbon_gallery;
+pub(crate) mod from_items;
+pub(crate) mod keytips;
+pub(crate) mod layout;
+pub(crate) mod memo;
+pub(crate) mod mnemonic;
+pub(crate) mod native;
+pub(crate) mod ribbon;
+pub(crate) mod ribbon_gallery;
 mod sample;
-mod shortcuts;
+pub(crate) mod shortcuts;
+pub(crate) mod title_bar;
+
+craft_ui::registry!();
 
 #[cfg(target_os = "macos")]
 const APPKIT_CHILD: &str = "--craft-menu-appkit-child";
@@ -30,5 +35,9 @@ fn main() {
     if std::env::args_os().skip(1).eq([std::ffi::OsString::from(APPKIT_CHILD)]) {
         return appkit::run();
     }
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_menu::testing::registered());
+    #[cfg(feature = "suite")]
+    let registry = craft_ui::testing::Registry::of(&[register, craft_menu::testing::register]);
+    #[cfg(not(feature = "suite"))]
+    let registry = craft_ui::testing::Registry::of(&[register]);
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &registry);
 }

@@ -68,7 +68,7 @@ impl Opener {
         // arena member alike: whether the open press is on it and whether a click released on it.
         let pressed_on = response::is_pressed(anchor);
         let request = keys::context_request(&anchor.ctx, anchor.id);
-        let (fired, opening, pressed, clicked) = pointer::with_pass_pointer(&anchor.ctx, |pass| {
+        let (fired, opening, pressed, clicked) = pointer::with_pass_raw(&anchor.ctx, |pass| {
             let Some(frame) = pass.frame.as_ref() else { return (false, Opening::Plain, false, false) };
             let inside = frame
                 .pos
@@ -125,14 +125,14 @@ impl Opener {
     }
 }
 
-/// Whether a secondary-button release lands inside `response`'s rect in this pass: the secondary click a
+/// Whether a secondary-button release lands inside `response`'s rect, where its clip shows it, in this pass: the secondary click a
 /// `Trigger::Press` opener opens on.
 pub(super) fn secondary_release_in(response: &Response) -> bool {
-    pointer::with_pass_pointer(&response.ctx, |pass| {
+    pointer::with_pass_raw(&response.ctx, |pass| {
         pass.frame.as_ref().is_some_and(|frame| {
             frame.release == Some(PointerButton::Secondary)
                 && frame.pos.is_some_and(|pos| {
-                    response.rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
+                    response.interact_rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
                 })
         })
     })
@@ -168,8 +168,9 @@ pub(crate) fn anchor_floor(overlay: &Overlay) -> f32 {
 }
 
 /// The least width of the layer the content runs in ([`anchor_floor`]), which a layer's container gives its regions:
-/// a content-sized collection in the layer is at least this wide, so its rows fill the layer. 0 outside a layer.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// a content-sized collection in the layer is at least this wide, so its rows fill the layer. 0 outside a layer, and
+/// inside a row or grid, whose children share the layer's width.
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 pub(crate) struct LayerFloor(pub(crate) f32);
 
 impl crate::runtime::env::EnvValue for LayerFloor {

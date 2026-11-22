@@ -114,16 +114,16 @@ fn start() -> PickedColor {
 /// The compact popup's picker: the default models and the screen-pick button.
 #[story(ColorPicker<'static>, covers = [Default], drive = Drive::Never)]
 fn color_picker_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let color = data.value("color", start());
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).eyedropper(true).show(ui);
+    let (color, color_at) = data.value_at("color", start());
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).eyedropper(true).show(ui);
     with_readout(data, shown)
 }
 
 /// The compact picker with the opacity row.
 #[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
 fn color_picker_compact_alpha(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let color = data.value("color", start());
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).alpha(true).eyedropper(true).show(ui);
+    let (color, color_at) = data.value_at("color", start());
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).alpha(true).eyedropper(true).show(ui);
     with_readout(data, shown)
 }
 
@@ -132,8 +132,8 @@ fn color_picker_compact_alpha(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
 fn color_picker_web_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let web = *data.value("web", true);
     let mut web = web;
-    let color = data.value("color", start());
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).web_colors(Bind::bound(&mut web)).show(ui);
+    let (color, color_at) = data.value_at("color", start());
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).web_colors(Bind::bound(&mut web)).show(ui);
     with_readout(data, shown)
 }
 
@@ -143,9 +143,9 @@ fn color_picker_web_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn color_picker_full(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut mode = *data.value("mode", AreaMode::default());
     let current = Srgba::rgb(0.9, 0.2, 0.1);
-    let color = data.value("color", PickedColor::rgb(Srgba::rgb(1.0, 0.0, 1.0)));
+    let (color, color_at) = data.value_at("color", PickedColor::rgb(Srgba::rgb(1.0, 0.0, 1.0)));
     let models: [&'static dyn ColorModel; 4] = [&HsbModel, &RgbModel, &LabModel, &CMYK_MODEL];
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color))
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color))
         .layout(ColorPickerLayout::Full)
         .models(models)
         .mode(Bind::bound(&mut mode))
@@ -162,9 +162,9 @@ fn color_picker_full(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// An InDesign-like model set: RGB in the first group; Lab, OKLCH (with its radios) and the host's CMYK in the second.
 #[story(ColorPicker<'static>, covers = [Many], drive = Drive::Never)]
 fn color_picker_full_models(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let color = data.value("color", start());
+    let (color, color_at) = data.value_at("color", start());
     let models: [&'static dyn ColorModel; 4] = [&RgbModel, &LabModel, &OklchModel, &CMYK_MODEL];
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).layout(ColorPickerLayout::Full).models(models).show(ui);
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).layout(ColorPickerLayout::Full).models(models).show(ui);
     with_readout(data, shown)
 }
 
@@ -187,9 +187,9 @@ fn track_ramp(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
 fn channel_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("value", 40.0_f64);
+    let (value, value_at) = data.value_at("value", 40.0_f64);
     let channel = HsbModel.channels()[1];
-    let row = ChannelRow::new("Saturation", Bind::bound(value), ChannelRule::of(&channel))
+    let row = ChannelRow::new("Saturation", value_at.bind(value), ChannelRule::of(&channel))
         .track(vec![Srgba::rgb(1.0, 1.0, 1.0), Srgba::rgb(1.0, 0.0, 0.0)]);
     match row.show(ui) {
         Some(edit) => StoryOutput::from(edit),

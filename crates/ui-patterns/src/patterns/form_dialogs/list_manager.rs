@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 type UnderList<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The standard words of the list manager; the app's own actions bring their labels.

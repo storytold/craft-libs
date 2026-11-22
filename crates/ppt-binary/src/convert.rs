@@ -31,7 +31,7 @@ const EMU: f64 = 12700.0;
 
 /// The eight colours of a `.ppt` colour scheme: background, text, shadow, title text, fill,
 /// accent, accent and hyperlink, accent and followed hyperlink.
-type Scheme = [Rgba; 8];
+pub(crate) type Scheme = [Rgba; 8];
 
 const DEFAULT_SCHEME: Scheme = [
     Rgba::rgb(0xFF, 0xFF, 0xFF),
@@ -95,14 +95,17 @@ struct Ctx<'a> {
     used_notes: HashSet<usize>,
 }
 
+/// A page side in master units as points, else `fallback` when it is missing or out of range.
+pub(crate) fn page_side(v: Option<i32>, fallback: f64) -> f64 {
+    v.map(|v| f64::from(v) / MU).filter(|v| v.is_finite() && *v >= 1.0 && *v <= 56.0 * 72.0).unwrap_or(fallback)
+}
+
 pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Presentation {
     let atom = d.document_atom();
-    let side =
-        |v: Option<i32>, fallback: f64| v.map(|v| f64::from(v) / MU).filter(|v| v.is_finite() && *v >= 1.0 && *v <= 56.0 * 72.0).unwrap_or(fallback);
-    let size = Size::new(side(atom.as_ref().map(|a| a.slide_w), 720.0), side(atom.as_ref().map(|a| a.slide_h), 540.0));
+    let size = Size::new(page_side(atom.as_ref().map(|a| a.slide_w), 720.0), page_side(atom.as_ref().map(|a| a.slide_h), 540.0));
     // Ids above 256, as a new presentation's are.
     let mut p = Presentation { slide_size: size, default_text_style: app.default_text_style(), next_id: 256, ..Default::default() };
-    p.notes_size = Size::new(side(atom.as_ref().map(|a| a.notes_w), 540.0), side(atom.as_ref().map(|a| a.notes_h), 720.0));
+    p.notes_size = Size::new(page_side(atom.as_ref().map(|a| a.notes_w), 540.0), page_side(atom.as_ref().map(|a| a.notes_h), 720.0));
     p.first_slide_number = atom.as_ref().map_or(1, |a| u32::from(a.first_slide_number));
     let dgg = d.document.child(rt::DRAWING_GROUP).and_then(|g| g.child(rt::DGG_CONTAINER));
     let mut cx = Ctx {
@@ -174,10 +177,45 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
     cx.p
 }
 
-/// A master's first layout of each layout type, and its first layout.
-type LayoutTable = (Vec<(LayoutType, LayoutId)>, Option<LayoutId>);
+/// A main master's placeholder of `kind` at `x`: the box of the default master's placeholder of
+/// the same family. The footer row (date, footer, slide number) sits in the same place on every
+/// layout, with the master's look: `look` gives its first paragraph, whose alignment and first
+/// run's size and colour (its end mark's, when it is empty) the master's and layouts' footer
+/// placeholders take. `look` is called only
+/// for the footer row, and only when the default master has such a placeholder.
+pub(crate) fn place_placeholder(master: &mut Master, kind: PhType, x: Xfrm, look: impl FnOnce() -> Option<Paragraph>) {
+    let Some(s) = master.shapes.iter_mut().find(|s| s.ph_type().is_some_and(|t| same_family(t, kind))) else { return };
+    s.xfrm = Some(x);
+    if matches!(kind, PhType::Date | PhType::Footer | PhType::SlideNum) {
+        let look = look();
+        let style = |t: &mut TextBody| {
+            if let Some(p) = &look {
+                let mut level = t.list_style.level(0).cloned().unwrap_or_default();
+                level.para.align = p.props.align.or(level.para.align);
+                let first = p.runs.first().map_or(&p.end_props, |r| &r.props);
+                level.run.size = first.size.or(level.run.size);
+                level.run.fill = first.fill.clone().or(level.run.fill.take());
+                t.list_style.set(0, level);
+            }
+        };
+        if let Some(t) = s.text.as_mut() {
+            style(t);
+        }
+        for l in &mut master.layouts {
+            for ls in l.shapes.iter_mut().filter(|ls| ls.ph_type() == Some(kind)) {
+                ls.xfrm = Some(x);
+                if let Some(t) = ls.text.as_mut() {
+                    style(t);
+                }
+            }
+        }
+    }
+}
 
-fn layout_table(m: &Master, skip: &HashSet<LayoutId>) -> LayoutTable {
+/// A master's first layout of each layout type, and its first layout.
+pub(crate) type LayoutTable = (Vec<(LayoutType, LayoutId)>, Option<LayoutId>);
+
+pub(crate) fn layout_table(m: &Master, skip: &HashSet<LayoutId>) -> LayoutTable {
     let mut kinds: Vec<(LayoutType, LayoutId)> = vec![];
     let layouts = m.layouts.iter().filter(|l| !skip.contains(&l.id));
     let first = layouts.clone().next().map(|l| l.id);
@@ -196,6 +234,26 @@ struct Find<'f> {
     first_main: Option<&'f MasterInfo>,
     layouts: &'f [LayoutTable],
     notes_of: &'f HashMap<u32, usize>,
+}
+
+/// A theme named "Imported" carrying a `.ppt` colour scheme's eight colours.
+pub(crate) fn scheme_theme(scheme: &Scheme) -> Theme {
+    let mut t = Theme { name: "Imported".into(), ..Default::default() };
+    for (slot, i) in [
+        (SchemeSlot::Lt1, 0),
+        (SchemeSlot::Dk1, 1),
+        (SchemeSlot::Lt2, 2),
+        (SchemeSlot::Dk2, 3),
+        (SchemeSlot::Accent1, 4),
+        (SchemeSlot::Accent2, 5),
+        (SchemeSlot::Hlink, 6),
+        (SchemeSlot::FolHlink, 7),
+    ] {
+        if let Some(c) = scheme.get(i) {
+            t.colors.set(slot, *c);
+        }
+    }
+    t
 }
 
 /// A converted master: where it went and what its slides inherit.
@@ -244,37 +302,10 @@ impl<'a> Ctx<'a> {
         for raw in &drawing.shapes {
             if let Some(ph) = raw.placeholder.filter(|p| p.kind != 0) {
                 // The master's placeholders set where new slides' placeholders go.
-                if let (Some(kind), Some(x)) = (ph_type(ph.kind), raw.anchor.map(|a| xfrm(&a, TOP, 0.0, false, false)))
-                    && let Some(s) = master.shapes.iter_mut().find(|s| s.ph_type().is_some_and(|t| same_family(t, kind)))
-                {
-                    s.xfrm = Some(x);
-                    // The footer row sits in the same place on every layout, with the master's look:
-                    // its first paragraph's alignment and its first run's size and colour.
-                    if matches!(kind, PhType::Date | PhType::Footer | PhType::SlideNum) {
-                        let look = self.shape(raw, &scope, 0, TOP).and_then(|c| c.text).and_then(|t| t.paragraphs.into_iter().next());
-                        let style = |t: &mut TextBody| {
-                            if let Some(p) = &look {
-                                let mut level = t.list_style.level(0).cloned().unwrap_or_default();
-                                level.para.align = p.props.align.or(level.para.align);
-                                if let Some(run) = p.runs.first() {
-                                    level.run.size = run.props.size.or(level.run.size);
-                                    level.run.fill = run.props.fill.clone().or(level.run.fill.take());
-                                }
-                                t.list_style.set(0, level);
-                            }
-                        };
-                        if let Some(t) = s.text.as_mut() {
-                            style(t);
-                        }
-                        for l in &mut master.layouts {
-                            for ls in l.shapes.iter_mut().filter(|ls| ls.ph_type() == Some(kind)) {
-                                ls.xfrm = Some(x);
-                                if let Some(t) = ls.text.as_mut() {
-                                    style(t);
-                                }
-                            }
-                        }
-                    }
+                if let (Some(kind), Some(x)) = (ph_type(ph.kind), raw.anchor.map(|a| xfrm(&a, TOP, 0.0, false, false))) {
+                    place_placeholder(&mut master, kind, x, || {
+                        self.shape(raw, &scope, 0, TOP).and_then(|c| c.text).and_then(|t| t.paragraphs.into_iter().next())
+                    });
                 }
                 continue;
             }
@@ -370,21 +401,7 @@ impl<'a> Ctx<'a> {
 
     /// A theme carrying the master's colours and fonts, so shapes added later match the deck.
     fn theme(&self, scheme: &Scheme, styles: &StyleSheet) -> Theme {
-        let mut t = Theme { name: "Imported".into(), ..Default::default() };
-        for (slot, i) in [
-            (SchemeSlot::Lt1, 0),
-            (SchemeSlot::Dk1, 1),
-            (SchemeSlot::Lt2, 2),
-            (SchemeSlot::Dk2, 3),
-            (SchemeSlot::Accent1, 4),
-            (SchemeSlot::Accent2, 5),
-            (SchemeSlot::Hlink, 6),
-            (SchemeSlot::FolHlink, 7),
-        ] {
-            if let Some(c) = scheme.get(i) {
-                t.colors.set(slot, *c);
-            }
-        }
+        let mut t = scheme_theme(scheme);
         if let Some(f) = styles.resolve(ty::TITLE, 0).1.font.and_then(|i| self.fonts.get(usize::from(i))) {
             t.fonts.major.latin = f.clone();
         }
@@ -922,7 +939,9 @@ impl<'a> Ctx<'a> {
                 para.runs.push(Run::with(String::from_utf16_lossy(&units), props));
                 i = j;
             }
-            para.end_props = first;
+            // The paragraph mark's own formatting, as PowerPoint reads it: the character run at the
+            // CR, or at the text's end for the last paragraph.
+            para.end_props = self.run_props(&cf_at(end), &scope.scheme);
             para.normalize();
             out.push(para);
             if end >= total {
@@ -1139,13 +1158,13 @@ fn ph_type(kind: u8) -> Option<PhType> {
     })
 }
 
-fn same_family(a: PhType, b: PhType) -> bool {
+pub(crate) fn same_family(a: PhType, b: PhType) -> bool {
     let title = |t| matches!(t, PhType::Title | PhType::CtrTitle);
     a == b || (title(a) && title(b))
 }
 
 /// `SlideLayoutType` as a layout type.
-fn layout_kind(geom: u32) -> LayoutType {
+pub(crate) fn layout_kind(geom: u32) -> LayoutType {
     match geom {
         0 => LayoutType::Title,
         7 => LayoutType::TitleOnly,

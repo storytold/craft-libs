@@ -490,6 +490,112 @@ fn cmd_d_answers_dont_save_on_macos() {
     }
 }
 
+/// The unsaved-changes buttons run Yes, No, Cancel on Windows and Don't Save, Cancel, Save on macOS; on every OS Escape
+/// answers Cancel, and the Yes and No letters answer Save and Don't Save.
+#[trial]
+fn the_unsaved_question_orders_its_buttons_by_platform_and_answers_by_role() {
+    let order = |os: Os, names: [&str; 3]| {
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.os(os);
+        host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+        fixture.idle(6);
+        let lefts = names.map(|name| fixture.by_label(name).unwrap_or_else(|| panic!("{os:?}: {name} shows")).rect.left());
+        assert!(lefts.windows(2).all(|pair| pair[0] < pair[1]), "{os:?}: {names:?} run left to right, at {lefts:?}");
+    };
+    order(Os::Windows, ["Yes", "No", "Cancel"]);
+    order(Os::Mac, ["Don't Save", "Cancel", "Save"]);
+
+    for (key, expected) in [(egui::Key::Escape, CloseAnswer::Cancel), (egui::Key::Y, CloseAnswer::Save), (egui::Key::N, CloseAnswer::DontSave)] {
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&host);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.os(Os::Windows);
+        host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+        fixture.idle(6);
+        fixture.key(key, Modifiers::NONE).idle(4);
+        let answered = host.borrow_mut().take::<UnsavedChangesDialog>().and_then(DialogResult::ok).map(|answer| answer.answer);
+        assert_eq!(answered, Some(expected), "{key:?} answers {expected:?}");
+    }
+}
+
+/// The unsaved-changes dialog exposes Role::ALERT_DIALOG, with its title as its accessible name and its consequence
+/// message and save-failure reason in its AccessKit description.
+#[trial]
+fn the_unsaved_dialog_exposes_alert_dialog_role_and_folds_reason_into_description() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+
+    // 1. Without reason: Role::ALERT_DIALOG, label is "Unsaved changes", description contains the closing question.
+    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+    fixture.idle(6);
+    let dialogs = fixture.by_role(Role::ALERT_DIALOG);
+    assert_eq!(dialogs.len(), 1, "the unsaved changes dialog exposes Role::ALERT_DIALOG");
+    let dialog = dialogs[0];
+    assert_eq!(fixture.tree().name_of(dialog.node), Some("Unsaved changes"), "accessible name is the dialog title");
+    let desc_without_reason = fixture.tree().description_of(dialog.node).expect("dialog has an accessible description").to_owned();
+    assert!(desc_without_reason.contains("poster.psd"), "description mentions the document name: {desc_without_reason}");
+    assert!(desc_without_reason.contains("before closing"), "description conveys closing consequence: {desc_without_reason}");
+
+    // Cancel to close
+    assert!(host.borrow_mut().cancel::<UnsavedChangesDialog>(fixture.ctx()));
+    fixture.idle(4);
+
+    // 2. With reason: Role::ALERT_DIALOG, description contains both the closing question and the save-failure reason.
+    let reason_text = "Disk full or permission denied";
+    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").reason(reason_text));
+    fixture.idle(6);
+    let dialogs = fixture.by_role(Role::ALERT_DIALOG);
+    assert_eq!(dialogs.len(), 1, "reopened unsaved dialog with reason exposes Role::ALERT_DIALOG");
+    let dialog = dialogs[0];
+    assert_eq!(fixture.tree().name_of(dialog.node), Some("Unsaved changes"));
+    let desc_with_reason = fixture.tree().description_of(dialog.node).expect("dialog has an accessible description");
+    assert!(desc_with_reason.contains("poster.psd"), "description mentions document name: {desc_with_reason}");
+    assert!(desc_with_reason.contains(reason_text), "description includes save failure reason: {desc_with_reason}");
+    assert_eq!(desc_with_reason, format!("{desc_without_reason} {reason_text}"));
+}
+
+/// Apply, an auxiliary action, stands after Cancel on Windows; the Alternate role does not move it.
+#[trial]
+fn windows_puts_an_auxiliary_apply_after_cancel() {
+    let mut fixture = Fixture::new(|ui| {
+        let mut open = true;
+        Dialog::new("Options")
+            .opened(Bind::bound(&mut open))
+            .buttons([
+                FooterButton::new("OK", DialogRole::Accept),
+                FooterButton::new("Apply", DialogRole::Other).stays_open(true),
+                FooterButton::new("Cancel", DialogRole::Cancel),
+            ])
+            .show(ui, |_, _| {});
+    });
+    fixture.os(Os::Windows);
+    fixture.idle(30);
+    let left = |name: &str| fixture.by_label(name).expect("the button shows").rect.left();
+    assert!(left("OK") < left("Cancel") && left("Cancel") < left("Apply"), "OK, Cancel, Apply from the start edge");
+}
+
+/// A destructive proceed is a committing button: Windows puts it first, before Cancel; macOS keeps Cancel nearer the
+/// end edge than Delete.
+#[trial]
+fn a_delete_prompt_reads_delete_then_cancel_on_windows() {
+    for os in [Os::Windows, Os::Mac] {
+        let mut fixture = Fixture::new(|ui| {
+            let mut open = true;
+            Dialog::new("Delete Layer")
+                .opened(Bind::bound(&mut open))
+                .buttons([FooterButton::new("Cancel", DialogRole::Cancel), FooterButton::new("Delete", DialogRole::Destructive)])
+                .show(ui, |_, _| {});
+        });
+        fixture.os(os);
+        fixture.idle(30);
+        let left = |name: &str| fixture.by_label(name).expect("the button shows").rect.left();
+        assert!(left("Delete") < left("Cancel"), "{os:?}: Delete, then Cancel, from the start edge");
+    }
+}
+
 /// Each open of a dialog has its own serial, kept while it stays open, though its id is the same at every open: a
 /// reopened dialog is told apart from the one cancelled before it.
 #[trial]

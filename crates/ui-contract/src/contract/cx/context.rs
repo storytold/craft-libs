@@ -137,6 +137,8 @@ pub struct CxCore<'a> {
     /// For an arena root: the member activated this pass.
     pub(crate) activated_member: Option<Id>,
     pub(crate) press: PressState,
+    /// The parent layout of a standalone control, used to keep a sweep within its siblings.
+    pub(crate) pointer_group: Option<Id>,
     pub(crate) cursor: Option<(Cursor, CursorPriority)>,
     /// The declared cursors of the parts hovered this pass, recorded at step 8 and written at step 16.
     pub(crate) part_cursors: Vec<Cursor>,
@@ -167,6 +169,8 @@ pub struct CxCore<'a> {
     pub(crate) roving_arrival: Option<Id>,
     /// The member of the container's roving group that moves start from, set by `Cx::roving_lead`.
     pub(crate) roving_lead: Option<Id>,
+    /// The component joined the roving group of the body it is shown in this pass (`Cx::join_roving`).
+    pub(crate) roving_member: bool,
     /// The collection's selection (a `Selection<K>`) and lead as the item step holds them, for `Cx::collection_selection`.
     pub(crate) collection_selection: Option<Box<dyn std::any::Any>>,
     /// The events and visible range the item step left for `collection_response`.
@@ -185,6 +189,9 @@ pub struct CxCore<'a> {
     /// Not enabled, with `DisabledLook::Faded`: the component and its faces paint their enabled look, which step 13
     /// fades.
     pub(crate) faded: bool,
+    /// The component has an AccessKit node this pass (step 8), or as a collection member a sub-node under its
+    /// collection's: its access data, its members' and its faces' have a reader.
+    pub(crate) node: bool,
     /// Where the faded component's shapes start and the ground its veil takes (`steps::fade`).
     pub(crate) fade: Option<crate::contract::steps::Fade>,
     /// The focus ring shape each part declared (`focus_shape`), in which step 13 draws the active part's ring.
@@ -236,13 +243,11 @@ impl<C: Component> Cx<'_, C> {
         crate::runtime::egui::output::open_url(&self.core.ctx, url, new_tab);
     }
 
-    /// Makes this component a member of the roving group of the body it is shown in: its stop joins the group and
-    /// Tab visits the group once. A component that never calls it keeps its own Tab stop.
+    /// Makes this component a member of the roving group of the body it is shown in: its stop and its focusable parts
+    /// join the group, and Tab visits the group once. Called from `update`: the stops register after it, in the same
+    /// pass. A component that does not call it in a pass keeps its own Tab stop in that pass.
     pub fn join_roving(&mut self) {
-        if let Some(group) = self.core.env.roving() {
-            crate::contract::steps::join_group(&self.core.ctx, group, self.core.id);
-            focus::registration::join_part_group(&self.core.ctx, group, self.core.id, crate::runtime::memory::sub(self.core.id, "roving"));
-        }
+        self.core.roving_member = true;
     }
 
     /// Runs `command` as this component's own activation would, for a command that is not the component's bound
@@ -414,12 +419,13 @@ impl Under {
 }
 
 /// An env derived for children `PaintUi` builds: the composite's resolved `enabled` and `size`, and only the inside
-/// label `under` gives.
+/// label `under` gives. The composite places its children itself, so they are in no egui grid's cell.
 pub(crate) fn child_env(env: &Env, under: &Under) -> Env {
     env.derive_local(|scoped| {
         scoped.enabled &= under.enabled;
         scoped.size = under.size;
         scoped.inside_label = under.inside.clone().map(|inside| inside as crate::runtime::env::Held);
         scoped.cell_fills = false;
+        scoped.egui_cell = false;
     })
 }

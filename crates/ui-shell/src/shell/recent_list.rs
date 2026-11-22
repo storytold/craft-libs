@@ -3,7 +3,8 @@
 
 use super::recent::{RecentFile, RecentView, ThumbKey};
 use super::start::{
-    Leads, PICTURE_HIGH, PICTURE_WIDE, Page, REMOVE, StartAction, StartOutput, StartRecentCommands, ThumbHost, folder_of, paint_thumb, read_events,
+    HOME_RECENT_PICTURE_ASPECT, Leads, PICTURE_HIGH, PICTURE_WIDE, Page, REMOVE, StartAction, StartOutput, StartRecentCommands, ThumbHost, folder_of,
+    paint_thumb, read_events,
 };
 use super::words::ShellWords;
 use crate::buttons::Button;
@@ -37,12 +38,13 @@ pub struct RecentList<'a> {
     empty: Option<Label>,
     now: Option<i64>,
     thumbnails: Option<ThumbHost<'a>>,
+    picture: (u16, u16),
 }
 
 impl<'a> RecentList<'a> {
     /// A list of `recent` files.
     pub fn new(recent: &'a [RecentFile]) -> Self {
-        RecentList { recent, max_recent: usize::MAX, empty: None, now: None, thumbnails: None }
+        RecentList { recent, max_recent: usize::MAX, empty: None, now: None, thumbnails: None, picture: (PICTURE_WIDE, PICTURE_HIGH) }
     }
 
     /// At most this many recent files show.
@@ -69,13 +71,21 @@ impl<'a> RecentList<'a> {
         self
     }
 
+    /// The shape of the row pictures, wide to high (default 16:9). A zero part keeps the default.
+    pub fn picture_aspect(mut self, wide: u16, high: u16) -> Self {
+        if wide > 0 && high > 0 {
+            self.picture = (wide, high);
+        }
+        self
+    }
+
     /// Shows the rows in their own section and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let RecentList { recent, max_recent, empty, now, thumbnails } = self;
+        let RecentList { recent, max_recent, empty, now, thumbnails, picture } = self;
         let env = Env::of(ui);
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, drop_hint: None, now, actions: &actions };
+        let page = Page { env: &env, words: &words, thumbnails, picture, card_zoom: None, paper: None, drop_hint: None, now, actions: &actions };
         let files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
         let empty = empty.unwrap_or_else(|| words.no_recent.clone());
         let shown = Section::fixed(words.recent.clone()).header_gap(Gap::Section).command_scope(StartRecentCommands::SCOPE).show(ui, |ui, cx| {
@@ -84,7 +94,7 @@ impl<'a> RecentList<'a> {
             if files.is_empty() {
                 let _ = Text::new(empty.clone()).shade(Shade::Muted).show(ui);
             } else {
-                recent_body(&page, ui, cx, &files, RecentView::List, &empty);
+                recent_body(&page, ui, cx, &files, RecentView::List, &empty, false);
             }
         });
         StartOutput { response: shown.output.response, actions: actions.into_inner() }
@@ -93,7 +103,16 @@ impl<'a> RecentList<'a> {
 
 /// The body of a recent section: the commands of the recent files, the rows as a grid or a list, the events as
 /// actions and the context menu. `empty` is the text of the no-files state when the page has no drop card.
-pub(super) fn recent_body(page: &Page<'_>, ui: &mut Ui, cx: &mut BodyCx<'_>, files: &[RecentFile], current: RecentView, empty: &Label) {
+/// `desktop_home` gives the grid's cards the desktop Home page's wider pictures and regular padding.
+pub(super) fn recent_body(
+    page: &Page<'_>,
+    ui: &mut Ui,
+    cx: &mut BodyCx<'_>,
+    files: &[RecentFile],
+    current: RecentView,
+    empty: &Label,
+    desktop_home: bool,
+) {
     let words = page.words;
     let mut lead = cx.keep::<Leads>().recent.clone().filter(|path| files.iter().any(|file| &file.path == path));
     // One rule for the menu row, the palette and the keys: where the platform cannot reveal a file, the command is disabled.
@@ -128,7 +147,14 @@ pub(super) fn recent_body(page: &Page<'_>, ui: &mut Ui, cx: &mut BodyCx<'_>, fil
     let file_of = |path: &PathBuf| files.iter().find(|file| &file.path == path);
     let source = keyed(files, |file: &RecentFile| file.path.clone()).with_text(|file| Cow::Borrowed(file.name.as_str()));
     let (response, (opened, removed)) = if current == RecentView::Grid {
-        let out = page.grid::<PathBuf>(words.recent.clone(), true).show_items(ui, &source, &mut |path, _| {
+        let grid = page.grid::<PathBuf>(words.recent.clone(), true);
+        // An app that set its own picture shape keeps it; the 3:2 Home picture is for the default 16:9.
+        let grid = match (desktop_home, page.picture == (PICTURE_WIDE, PICTURE_HIGH)) {
+            (true, true) => grid.aspect(HOME_RECENT_PICTURE_ASPECT).regular_card_padding(),
+            (true, false) => grid.regular_card_padding(),
+            _ => grid,
+        };
+        let out = grid.show_items(ui, &source, &mut |path, _| {
             let Some(file) = file_of(path) else { return Tile::new(Label::Empty) };
             page.tile(&file.name, page.age(file.opened), ThumbKey::Recent(file.path.clone()))
                 .corner_action(IconId::new("close"), StartRecentCommands::Remove)
@@ -168,8 +194,8 @@ pub(super) fn recent_body(page: &Page<'_>, ui: &mut Ui, cx: &mut BodyCx<'_>, fil
                 match page.thumbnails {
                     Some((thumbnails, source)) => {
                         let key = ThumbKey::Recent(file.path.clone());
-                        row.thumb_aspect(ThumbSize::Medium, ThumbAspect::new(PICTURE_WIDE, PICTURE_HIGH), move |cx, rect| {
-                            paint_thumb(cx, rect, thumbnails, source, &key);
+                        row.thumb_aspect(ThumbSize::Medium, ThumbAspect::new(page.picture.0, page.picture.1), move |cx, rect| {
+                            paint_thumb(cx, rect, thumbnails, source, &key, page.paper);
                         })
                     }
                     None => row.icon(IconSpec::svg(IconId::new("file"))),

@@ -57,7 +57,7 @@ impl BezierTool {
         matches!(self, BezierTool::AddAnchor | BezierTool::DeleteAnchor | BezierTool::AutoAddDelete)
     }
 
-    /// Whether the tool has the arrow, ⌘A and Esc keys: Direct, Convert and Curvature. Add and Delete have Delete
+    /// Whether the tool has the arrow and ⌘A keys: Direct, Convert and Curvature. Add and Delete have Delete
     /// only, Auto Add/Delete none.
     pub(super) fn keyed(self) -> bool {
         matches!(self, BezierTool::Direct | BezierTool::Convert | BezierTool::Curvature)

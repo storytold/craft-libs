@@ -18,6 +18,7 @@ struct FixtureDir(PathBuf);
 impl FixtureDir {
     fn new(test: &str) -> Self {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR"));
+        std::fs::create_dir_all(root).unwrap_or_else(|error| panic!("create tmp root {}: {error}", root.display()));
         for attempt in 0..1000 {
             let path = root.join(format!("decode-report-{test}-{}-{attempt}", std::process::id()));
             // Only clean up a directory this test created, even if a process ID was reused.

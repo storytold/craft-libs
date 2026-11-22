@@ -3,7 +3,7 @@
 use super::{TaskBar, TaskBarDismiss, TaskBarPlace};
 use crate::buttons::{Button, IconButton};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
-use crate::contract::{Bind, Props as _, Show as _};
+use crate::contract::{Props as _, Show as _};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
 use craft_behavior::kurbo::{Point, Vec2};
@@ -69,8 +69,8 @@ fn selection_bar_kept_while_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOut
 fn crop_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let corners = turned_frame();
     on_canvas(ui, |ui, area, _| {
-        let place = data.value("place", TaskBarPlace::default());
-        TaskBar::new("Crop", &corners, Bind::bound(place))
+        let (place, place_at) = data.value_at("place", TaskBarPlace::default());
+        TaskBar::new("Crop", &corners, place_at.bind(place))
             .show(ui, area, |ui, cx| {
                 for (icon, name) in [("rotate_ccw", "Rotate left"), ("rotate_cw", "Rotate right"), ("grid", "Overlay")] {
                     let _ = IconButton::new(IconId::new(icon)).label(name).show(ui);
@@ -88,8 +88,8 @@ fn crop_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn placed_and_pinned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let corners = turned_frame();
     on_canvas(ui, |ui, area, _| {
-        let place = data.value("place", TaskBarPlace { pinned: true, at: Some([24.0, 24.0]) });
-        TaskBar::new("Crop", &corners, Bind::bound(place))
+        let (place, place_at) = data.value_at("place", TaskBarPlace { pinned: true, at: Some([24.0, 24.0]) });
+        TaskBar::new("Crop", &corners, place_at.bind(place))
             .show(ui, area, |ui, _| {
                 let _ = Button::new("Done").show(ui);
             })

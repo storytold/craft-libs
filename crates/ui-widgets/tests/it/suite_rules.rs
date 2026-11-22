@@ -1,7 +1,7 @@
 //! The suite's own rules: which states a type must show, and the runs a drag drive makes.
 
 use craft_behavior::Mixed;
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::story::{Story, StoryData, StoryOutput};
 use craft_ui::testing::suite::{measure_pure_case, required_states, values_case};
 use craft_ui::testing::{Drive, Grip, Probe, Registration, Required, trial};
@@ -11,8 +11,11 @@ use egui::{Ui, vec2};
 
 fn probe_of<T: 'static>() -> &'static Probe {
     let name = std::any::type_name::<T>();
-    craft_ui::contract::registrations()
-        .into_iter()
+    static REGISTRY: std::sync::OnceLock<craft_ui::testing::Registry> = std::sync::OnceLock::new();
+    REGISTRY
+        .get_or_init(|| craft_ui::testing::Registry::of(&[crate::register, craft_ui::testing::register]))
+        .registrations()
+        .iter()
         .filter_map(Registration::probe)
         .find(|probe| probe.type_name() == name)
         .expect("the type is registered")
@@ -25,8 +28,8 @@ fn a_field_that_carries_a_value_needs_an_invalid_story() {
 
 fn four_thumbs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let thumbs = [Thumb::new("First"), Thumb::new("Second"), Thumb::new("Third"), Thumb::new("Fourth")];
-    let value = data.value("levels", Mixed::each([30.0, 60.0, 190.0, 220.0]));
-    ThumbRow::new(Bind::bound(value), 0.0..=255.0).thumbs(thumbs).label("Levels").show(ui).into()
+    let (value, value_at) = data.value_at("levels", Mixed::each([30.0, 60.0, 190.0, 220.0]));
+    ThumbRow::new(value_at.bind(value), 0.0..=255.0).thumbs(thumbs).label("Levels").show(ui).into()
 }
 
 #[trial]

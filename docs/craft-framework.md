@@ -143,7 +143,7 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 | Once, when the app is created | with the `CreationContext` | `embed::install(ctx, InstallSpec, &UiFonts)`: the runtime, then the app's fonts. Returns the font `Stack`. |
 | Each frame | `raw_input_hook` | `embed::before_input(ctx, \|output\| { ...; input })`: the closure receives the `FrameOutput` of the frame before (fired commands, announcements, chrome toggles) and returns the `FrameInput` for this frame (`RootEnv`, command states, the `Host`). |
 | Each frame | `logic`, after the app's own logic | `embed::logic(ctx, \|\| decision)`: the root window's close path. The closure runs only when the root window was asked to close, and returns `CloseDecision::Close` or `Hold`. |
-| Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the native window on Windows, and fits the root window to its monitor once. Needs `ui-app`. |
+| Each pass | `ui`, before the app's UI | `embed::before_ui(ctx, frame)`: hands the runtime the root's native window (eframe's `Frame`, or any `raw_window_handle::HasWindowHandle`) on Windows, where the runtime answers the window's hit test (resize edges, the title bar's move area, snap layouts on the maximize button), and fits the root window to its monitor once. Native only; it needs no eframe feature of the facade. |
 | Each pass | `ui`, where the app draws its own document canvas | Optional: `ui::runtime::focus::host_canvas(ctx, id, KeyUse::CANVAS)` declares it as the window's canvas (Tab row below). |
 | Each pass | `ui`, last | Optional: `ui::runtime::keys::with_window_intents(ctx, rtl, \|intents\| ...)` reads the keys no component took (below). |
 
@@ -323,6 +323,8 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 
 **Layout memory.** A record of layout memory holds a measure or a text. A body whose inputs did not change takes its kept measurement instead of running a measuring run. A text that a measuring run found for content outside the body (a value readout beside a story, for example) is kept with the measurement: `layout_memory::emit_text` hands it forward, `layout_memory::text` reads it, and a body that takes its kept measurement gives the text its measuring run found. A real run that finds another text marks the kept transcript as changed.
 
+**Memoized views.** A memoized view (`MemoView::new(id, props, show).show(ui)`) runs only when one of its inputs changed, and otherwise adds its last real run to the pass again: its paint, widgets, accessibility nodes, focus stops and the other per-pass registrations, and the value its run returned. Its content is a `fn` that captures nothing, and its props (`#[derive(MemoProps)]`) hold every app input it reads, so the compiler checks that the framework sees them; large app data goes in a `Tracked<T>`, which keys by revision. The view runs when its props key differs from its last run's, when its place or environment differs (room, clip, layer, scale, theme, density, language, the scope's inherited values), when a framework input it read moved (modifiers, pointer, keymap, focus, a bound value, a command state), when it is engaged (the pointer over it, focus in it, a press or drag in it, an intent routed to it), and while something in it still moves (an animation, a loading texture, a repaint asked in its run with `frame::request_repaint`, a wake time). Input elsewhere in the window and repaint requests outside every view run no view: what changed reaches a view through its props. Content outside every memoized view runs in every pass.
+
 **Out-of-view content.** Content inside a scroll area that is out of view this pass does not run. It keeps what it last showed: the extent it had in the last pass that showed it, which changes only in a pass that shows the content, and the stops it registered there. One mechanism (`runtime::lazy`, one store) serves every use:
 
 - Only content that meets the view runs. A `Lazy` child out of view registers the focus records of its last real run again in its place (its stops, the scopes it pushed and the roving groups of its stops; `focus::Transcript`), so Tab and F6 reach its stops; Tab onto one runs the child and the reveal scrolls it in.
@@ -353,7 +355,7 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 - `Context::set_layer_order`, which moves unlisted sublayers with their listed parent
 - OpenType features per text section (epaint)
 - `IdTypeMap::insert_temp_boxed` keeps the allocation of a value taken out, and `Context::ptr_eq`
-- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled region replays its last pass's records
+- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled memoized view replays its last run's records
 - `Event::SystemTheme` reports the OS's light or dark preference
 - `egui_kittest`'s eframe harness runs `App::raw_input_hook` before each pass, as eframe does, so an app's `embed::before_input` runs in its tests
 
@@ -440,11 +442,10 @@ An app has one layout in every theme and size. A theme never changes the layout.
 Use the first step that works.
 
 1. **Density.** Compact or Comfortable.
-2. **Size overrides.** The app ships a `sizes.json` that overrides base sizes (for example `size.control.md`). A base override carries to every size derived from it. To change one component, pin that component's token. Overrides stay within the validator's limits.
-3. **Component tokens.** One named value changes a component app-wide.
-4. **Builder options.** Options cover structural differences. A new need gets a new option, not a new component.
-5. **Per-app colour overrides.** A theme file can carry a section per app. Values are theme roles or literal colours, so themes, dark mode and high contrast keep working.
-6. **One-off app components.** A last resort, built from shared pieces. Allowed and not policed.
+2. **Size overrides.** The app ships a `sizes.json` that overrides base sizes (for example `size.control.md`). A base override carries to every size derived from it. Overrides stay within the validator's limits.
+3. **Builder options.** Options cover structural differences. A new need gets a new option, not a new component.
+4. **Per-app colour overrides.** A theme file can carry a section per app. Values are theme roles or literal colours, so themes, dark mode and high contrast keep working.
+5. **One-off app components.** A last resort, built from shared pieces. Allowed and not policed.
 
 ### 4.7 Themes
 
@@ -501,9 +502,9 @@ Sizes are runtime tokens. The rule runs from the general to the specific:
 
 1. A **scale** holds the allowed values: spacing 0, 2, 4, 6, 8, 12, 16, 20, 24, 32; radius 0, 2, 3, 4, 6, 8, 12 and full; strokes hairline, 1, 1.5, 2, 3.
 2. **Semantic role tokens** pick from the scale by meaning: control height, icon size, gap, padding, radius, bar height.
-3. **Components** derive their own dimensions from the role tokens in their style: a role, or a role times a ratio named in the component's style with the rule it comes from. There are no component-specific theme values.
+3. **Components** take their layout sizes (heights, widths, padding, gaps between parts) from role tokens. A dimension that belongs to one component's own drawing, such as tick lengths, glyph geometry, a notch or an inset inside its art, is a named constant in the component's file with a doc comment (a ruler's `TICK_MINOR`), never a literal at the draw site. When it must follow density, the constant is a ratio of a role token (a story stage is 15 control heights tall). No theme or size-preset token exists for one component.
 
-Components name semantic tokens and never a pixel value or shape of their own. [Appendix A](#appendix-a-component-tokens) says which component takes which role. Only drawing details (stroke widths, chevron geometry, dash lengths) stay constants.
+[Appendix A](#appendix-a-component-tokens) says which component takes which role.
 
 **Semantic role tokens (pt).**
 
@@ -686,6 +687,7 @@ How to run each locally, and which of them CI runs, is in [development.md](devel
 ### 8.3 Design lint
 
 - Rules: `literal-size/*`, `raw-colour/const`, `style-mutation`, `tooltip/stock`, `clippy/inner-allow`.
+- `literal-size/*` flags literal sizes at a call site and names of consts with literal values, except a module- or impl-level `const` with a doc comment: that is a component constant ([5.4](#54-dimensions)), and its initializer is its definition.
 - Exemption marker: `// design: allow(reason)`. Empty, invalid and unused markers are findings.
 - Baselines and `--deny-unused` are supported.
 - Exit 0 clean, 1 findings, 2 error.
@@ -893,7 +895,7 @@ The library replaces upstream's `craft-ui` crate, and changes public items in `c
 
 ## Appendix A. Component tokens
 
-Maintainer reference. The rule is in [5.4 Dimensions](#54-dimensions): components name semantic tokens, and semantic tokens pick from the scale. This page lists which role each component takes.
+Maintainer reference. The rule is in [5.4 Dimensions](#54-dimensions): components take their layout sizes from semantic tokens, semantic tokens pick from the scale, and a dimension of one component's own drawing is a constant in its file. This page lists which role each component takes.
 
 ### Semantic colour tokens
 
@@ -990,7 +992,6 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.bar.title`, `size.bar.tab`, `size.bar.status`, `size.bar.options`, `size.bar.options_narrow` | Title bar, document tab bar, status bar, options bar |
 | `size.panel_header` | Panel headers |
 | `size.popup_min` | Least width of a popup surface (menus only; popup lists such as Select and ComboBox take their anchor's width) |
-| `size.scroll_fade` | Length of the fade at an edge of a scroll region past which its content continues |
 | `size.groove` | Groove of a value track |
 | `size.ramp.bar` | Colour band: a gradient ramp drawn as a bar of its own (levels output bar, gradient thumb row) or as the face of a triangle-pointer channel slider |
 | `size.ramp.groove` | Gradient drawn as the groove of a value track (faced sliders) and the span between two thumbs of a gradient's thumb row |
@@ -999,10 +1000,8 @@ A theme with its own shape replaces the radii or adds an offset to control, surf
 | `size.length.number.sm`, `size.length.number.md` | Number field and the number cell over a slider, one width per control size |
 | `size.length.track`, `size.length.short` | Value track, short field |
 | `size.row.text` | A row that shows text only: one body line and `space.gap.tight`; read-only display tables take it, lists the user picks from keep control-high rows |
-| `size.notice.width` | Width of a toast card where the room allows |
 | `size.dialog.least`, `size.dialog.wrap` | A dialog's content: the least width it opens at, and the line length its paragraphs wrap at (`LeastWidth::Dialog`, `WrapWidth::Dialog`); content that cannot wrap widens it past that |
 | `size.dialog.button`, `size.dialog.side_button` | Least width of a dialog's footer button and of a button in its column beside the body |
-| `size.story.height`, `size.story.width_min`, `size.story.width_max` | The stage a story of a canvas control draws its canvas on: its height and the range of its width; `width_min` is also the least width of a column of a story grid |
 | `size.hit.edge` | The band inside the edge of a canvas's view in which a tool that autoscrolls on hover scrolls the view (a Polygonal Lasso's rubber band), at most a quarter of the view's shorter side |
 | `size.thumb.card` | The picture side of a tile card at zoom 1 (tile grids, preset browsers, the start screen) |
 | `size.thumb.sample.sm`, `size.thumb.sample.md`, `size.thumb.sample.lg` | The sample beside each thumbnail size choice in a panel's options dialog (Layers, Channels, Paths): larger than the panel's thumbnails, so the choices read apart (`PictureSize::Sample`) |
@@ -1631,7 +1630,6 @@ The theme model: colour, scale and token primitives, semantic tokens, contrast r
 | `app_sizes` | An app's size overrides (`sizes.json`) | exists |
 | `builtins` | The ten built-in themes | exists |
 | `color`, `color_model` | sRGB, OKLab and OKLCH with gamut mapping; colour models a picker edits in; hex helpers | exists |
-| `components` | Component tokens, one struct per family | exists |
 | `contrast` | WCAG contrast and repair | exists |
 | `derive`, `ramp` | Seeds to ramps to tokens; 12-step ramps | exists |
 | `dump`, `explain`, `report` | Token text dump, why each colour has its value, contrast sweep | exists |

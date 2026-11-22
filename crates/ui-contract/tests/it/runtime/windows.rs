@@ -1,8 +1,8 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
-//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows,
-//! injected keys across a focus loss, non-finite injected points, a repeated injected press, the window that has the
-//! keys, and `act`.
+//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
+//! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
+//! loss, non-finite injected points, a repeated injected press, the window that has the keys, and `act`.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -300,6 +300,81 @@ fn a_palette_drops_its_level_while_the_app_is_inactive() {
     assert_eq!(frame(false, false), inactive, "the frame after focus left every window");
     frame(true, false);
     assert_eq!(frame(true, false), on_top, "the frame after the main window took focus again");
+}
+
+/// A palette stands as an ordinary window while an app-modal layer in the main window blocks it, so the modal is never
+/// behind a palette: the frame after the modal opens builds the palette's window at the ordinary level, a later frame
+/// raises the main window above it once, by its level (egui ignores `Focus` for a window that has focus), and the
+/// palette stands above the app's windows again once the modal closes.
+#[trial]
+fn a_palette_stands_behind_the_window_that_holds_a_modal() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    let frame = |modal: bool| {
+        let out = windows.frame(vec![], vec![], |ui| {
+            windows.child_info(ViewportInfo { focused: Some(false), ..ViewportInfo::default() });
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("save prompt").show(ui, |_, _| {});
+            }
+        });
+        let raise: Vec<ViewportCommand> = out
+            .commands
+            .iter()
+            .filter(|(id, command)| *id == ViewportId::ROOT && matches!(command, ViewportCommand::WindowLevel(_) | ViewportCommand::Focus))
+            .map(|(_, command)| command.clone())
+            .collect();
+        (builder_titled(&out, "tool").1.window_level, raise)
+    };
+    let (on_top, normal) = (Some(egui::WindowLevel::AlwaysOnTop), Some(egui::WindowLevel::Normal));
+    assert_eq!(frame(false), (on_top, vec![]), "no modal: the palette stands above the main window");
+    let frames: Vec<_> = (0..4).map(|_| frame(true)).collect();
+    assert_eq!(frames.last().map(|(level, _)| *level), Some(normal), "the modal open: the palette is an ordinary window");
+    let raises: Vec<usize> = frames.iter().enumerate().filter(|(_, (_, raise))| !raise.is_empty()).map(|(at, _)| at).collect();
+    let lowered = frames.iter().position(|(level, _)| *level == normal);
+    assert_eq!(raises.len(), 1, "the main window is raised once: {frames:?}");
+    assert!(lowered.is_some_and(|lowered| raises[0] > lowered), "the raise follows the frame that lowered the palette: {frames:?}");
+    let level = |level| ViewportCommand::WindowLevel(level);
+    assert_eq!(
+        frames[raises[0]].1,
+        vec![level(egui::WindowLevel::AlwaysOnTop), level(egui::WindowLevel::Normal)],
+        "the raise stands the main window above every window and back, without focus"
+    );
+    frame(false);
+    assert_eq!(frame(false), (on_top, vec![]), "the modal closed: the palette stands above again");
+}
+
+/// A palette's window is hidden while the main window is minimized and shown again at its place when the main window
+/// is restored, on Windows and Linux; a document window stays. On macOS a minimized main window leaves the app active,
+/// and its palettes stay.
+#[trial]
+fn palettes_hide_while_the_main_window_is_minimized() {
+    for os in [Os::Windows, Os::Linux, Os::Mac] {
+        let windows = Windows::with(InstallSpec::new(ShellInfo::default().os(os).caps(Caps::native(os)), Arc::new(FakeSystem::new())));
+        let frame = |minimized: bool| {
+            windows.root_info(ViewportInfo { minimized: Some(minimized), ..ViewportInfo::default() });
+            windows.frame(vec![], vec![], |ui| {
+                Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+                Palette::new("doc", Some(WindowSpec::document())).show(ui, |_, _| {});
+            })
+        };
+        let first = frame(false);
+        let (tool, doc) = (builder_titled(&first, "tool").0, builder_titled(&first, "doc").0);
+        frame(false);
+        let commands = |minimized: bool| -> Vec<(ViewportId, ViewportCommand)> { (0..3).flat_map(|_| frame(minimized).commands).collect() };
+        let sent = |commands: &[(ViewportId, ViewportCommand)], to: ViewportId| -> Vec<ViewportCommand> {
+            commands.iter().filter(|(id, _)| *id == to).map(|(_, command)| command.clone()).collect()
+        };
+        let (minimized, restored) = (commands(true), commands(false));
+        let hides = os != Os::Mac;
+        let visible = |on: bool| if hides { vec![ViewportCommand::Visible(on)] } else { vec![] };
+        let (tool_minimized, doc_minimized) = (sent(&minimized, tool), sent(&minimized, doc));
+        let (tool_restored, doc_restored) = (sent(&restored, tool), sent(&restored, doc));
+        assert_eq!(tool_minimized, visible(false), "{os:?}: the main window minimized: the palette is hidden, and nothing else is sent");
+        assert_eq!(tool_restored, visible(true), "{os:?}: the main window restored: the palette is shown where it was");
+        assert_eq!((doc_minimized, doc_restored), (vec![], vec![]), "{os:?}: a document window is left as it is");
+    }
 }
 
 /// A full-window container mounted in its own window opens a resizable OS window titled as the container where

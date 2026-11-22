@@ -210,6 +210,25 @@ fn a_secondary_click_on_the_text_reports_a_context_click_and_starts_no_drag() {
     assert_eq!(editor.commits.get() + editor.cancels.get(), 0, "the session stays open");
 }
 
+/// The I-beam is the editor's only over its text and while its own press is held: elsewhere the pointer is the
+/// canvas's or the rest of the UI's.
+#[trial]
+fn the_i_beam_shows_over_the_text_and_during_its_drag_but_not_elsewhere() {
+    let mut editor = session("abc def", None);
+    editor.focus();
+    let i_beam = Some(craft_behavior::Cursor::System(craft_behavior::CursorIcon::Text));
+    let cursor = |editor: &Session| craft_ui::runtime::cursor::current(editor.fixture.ctx());
+    let (on_text, away) = (pos2(40.0, 10.0), pos2(300.0, 300.0));
+    editor.fixture.frame(vec![pointer::moved(on_text)]).settle();
+    assert_eq!(cursor(&editor), i_beam, "over the text");
+    editor.fixture.frame(vec![pointer::moved(away)]).settle();
+    assert_ne!(cursor(&editor), i_beam, "away from the text, with the session open");
+    editor.fixture.frame(vec![pointer::moved(on_text)]).frame(vec![pointer::press(on_text)]).frame(vec![pointer::moved(away)]);
+    assert_eq!(cursor(&editor), i_beam, "a drag that leaves the text keeps it");
+    editor.fixture.frame(vec![pointer::release(away)]).settle();
+    assert_ne!(cursor(&editor), i_beam, "after the release");
+}
+
 fn preedit(text: &str) -> Event {
     Event::Ime(ImeEvent::Preedit { text: text.to_owned(), active_range_chars: None })
 }
@@ -345,4 +364,52 @@ fn formatting_keys_follow_the_flow_and_fall_back_to_caret_moves() {
     plain.fixture.key(Key::ArrowUp, Modifiers::ALT).settle();
     assert!(!plain.host.borrow().styles.is_empty(), "the host was asked for the leading step");
     assert_eq!(plain.selection.borrow().caret, before.saturating_sub(LINE), "the step the host did not take moved the caret a line up");
+}
+
+/// #15555: a session the app ends (Cmd+Enter, then the editor is not shown) on a canvas with rulers hands the focus back
+/// to the canvas it came from, not to the stop before the editor (the rulers' corner, whose arrows move the zero point),
+/// and the view stays where it was. Without rulers the canvas is that stop anyway.
+#[trial]
+fn an_ended_session_returns_the_focus_to_the_canvas_and_the_view_stays() {
+    const EDITOR: craft_behavior::DocKey = craft_behavior::DocKey::new("trial.type-editor");
+    use craft_ui::canvas::Rulers;
+    use craft_ui::contract::Props as _;
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use craft_ui::testing::access::{focused_key, name};
+
+    for rulers in [true, false] {
+        let editing = Rc::new(Cell::new(false));
+        let view = Rc::new(Cell::new(None::<CanvasView>));
+        let (shown_editing, shown_view) = (Rc::clone(&editing), Rc::clone(&view));
+        let mut host = Host { text: "abc".to_owned(), ..Host::default() };
+        let mut selection = TextSelection::caret_at(3);
+        let mut zero = Point::ZERO;
+        let mut fixture = Fixture::new(move |ui| {
+            let room = ui.available_rect_before_wrap();
+            let given = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(100.0, 100.0), 1.0));
+            let strips = rulers.then(|| Rulers::new("Rulers", Bind::bound(&mut zero)));
+            let canvas = Canvas::new("Document").view(given).with_rulers(strips).show(ui, |ui, body| {
+                if shown_editing.get() {
+                    let bounds = Rect::from_min_size(body.rect.min + vec2(40.0, 40.0), vec2(200.0, 20.0));
+                    drop(TextEditor::new("Text", &mut host, Bind::bound(&mut selection)).doc_key(EDITOR).show_at(ui, bounds));
+                }
+            });
+            shown_view.set(Some(canvas.output.view.unwrap_or(given)));
+        });
+        fixture.room(vec2(600.0, 400.0)).settle();
+        let focused = |fixture: &Fixture| name(fixture.tree(), focused_key(fixture.tree())).map(str::to_owned);
+        // A press on the canvas focuses it, and the session that press starts asks for the editor's focus.
+        fixture.click_at(pos2(400.0, 300.0)).settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Document"), "rulers {rulers}: the press focused the canvas");
+        editing.set(true);
+        fixture.settle();
+        request(fixture.ctx(), FocusTarget::Doc(EDITOR));
+        fixture.settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Text"), "rulers {rulers}: the editor took the focus");
+        let before = view.get();
+        editing.set(false);
+        fixture.settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Document"), "rulers {rulers}: the focus went back to the canvas");
+        assert_eq!(view.get(), before, "rulers {rulers}: the view stays");
+    }
 }

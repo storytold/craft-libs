@@ -3,7 +3,7 @@
 use super::{CropOverlay, CropOverlayOutput, CropScope, FRAME};
 use crate::canvas::RasterSource as _;
 use crate::canvas::testing::canvas_story::{self, StoryDocument, StoryPicture, StoryShape, paint_shapes};
-use crate::contract::{Bind, Show as _, Validity};
+use crate::contract::{Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;
@@ -70,73 +70,73 @@ fn drag_top_left(fixture: &mut Fixture) {
 
 #[story(CropOverlay<'static>, covers = [Default], drive = Drive::Custom(drag_top_left))]
 fn upright(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", crop());
-    on_canvas(ui, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", crop());
+    on_canvas(ui, |ui, at| CropOverlay::new("Crop", rect_at.bind(&mut *rect)).show_at(ui, at))
 }
 
 #[story(CropOverlay<'static>, covers = [Default], drive = Drive::Custom(drag_top_left))]
 fn object_scope(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     // One placed picture's crop: the frame stays inside its source, and the shield dims only the source.
     let source = DocRect::new(180.0, 110.0, 460.0, 290.0);
-    let rect = data.value("crop", crop());
-    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).scope(CropScope::Object { source }).show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", crop());
+    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", rect_at.bind(&mut *rect)).scope(CropScope::Object { source }).show_at(ui, at))
 }
 
 #[story(CropOverlay<'static>, covers = [Mixed], drive = Drive::Custom(drag_top_left))]
 fn crops_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", Mixed::<CropBox>::Mixed);
-    on_canvas(ui, |ui, at| CropOverlay::new("Crop", Bind::bound_mixed(&mut *rect)).show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", Mixed::<CropBox>::Mixed);
+    on_canvas(ui, |ui, at| CropOverlay::new("Crop", rect_at.bind_mixed(&mut *rect)).show_at(ui, at))
 }
 
 #[story(CropOverlay<'static>, covers = [Invalid], drive = Drive::Custom(drag_top_left))]
 fn too_narrow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", CropBox::upright(DocRect::new(240.0, 145.0, 240.0 + LEAST_WIDTH / 2.0, 225.0)));
+    let (rect, rect_at) = data.value_at("crop", CropBox::upright(DocRect::new(240.0, 145.0, 240.0 + LEAST_WIDTH / 2.0, 225.0)));
     on_canvas(ui, |ui, at| {
         let narrow = |crop: &CropBox| {
             if crop.rect.width() < LEAST_WIDTH { Validity::Refuse(Message::new("The crop is too narrow")) } else { Validity::Ok }
         };
-        CropOverlay::new("Crop", Bind::bound(&mut *rect).check(narrow)).show_at(ui, at)
+        CropOverlay::new("Crop", rect_at.bind(&mut *rect).check(narrow)).show_at(ui, at)
     })
 }
 
 #[story(CropOverlay<'static>, covers = [Default])]
 fn turned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", CropBox::new(DocRect::new(260.0, 165.0, 380.0, 235.0), 15.0));
-    on_canvas(ui, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", CropBox::new(DocRect::new(260.0, 165.0, 380.0, 235.0), 15.0));
+    on_canvas(ui, |ui, at| CropOverlay::new("Crop", rect_at.bind(&mut *rect)).show_at(ui, at))
 }
 
 #[story(CropOverlay<'static>, covers = [Default])]
 fn ratio_held(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", CropBox::upright(DocRect::new(240.0, 145.0, 400.0, 235.0)));
-    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).ratio(16.0 / 9.0).show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", CropBox::upright(DocRect::new(240.0, 145.0, 400.0, 235.0)));
+    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", rect_at.bind(&mut *rect)).ratio(16.0 / 9.0).show_at(ui, at))
 }
 
 #[story(CropOverlay<'static>, covers = [Default])]
 fn guide_shown(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", crop());
+    let (rect, rect_at) = data.value_at("crop", crop());
     on_canvas(ui, |ui, at| {
-        CropOverlay::new("Crop", Bind::bound(&mut *rect)).guide((CropGuide::Thirds, 0)).guide_show(GuideShow::Always).show_at(ui, at)
+        CropOverlay::new("Crop", rect_at.bind(&mut *rect)).guide((CropGuide::Thirds, 0)).guide_show(GuideShow::Always).show_at(ui, at)
     })
 }
 
 #[story(CropOverlay<'static>, covers = [Default])]
 fn straighten_armed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", crop());
-    on_landscape(ui, STRAIGHTEN_TILT, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).straighten().show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", crop());
+    on_landscape(ui, STRAIGHTEN_TILT, |ui, at| CropOverlay::new("Crop", rect_at.bind(&mut *rect)).straighten().show_at(ui, at))
 }
 
 #[story(CropOverlay<'static>, covers = [Default])]
 fn image_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", crop());
-    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).image_mode().auto_center().show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", crop());
+    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", rect_at.bind(&mut *rect)).image_mode().auto_center().show_at(ui, at))
 }
 
 /// The default frame over the whole picture before any drag changed it: a dashed outline, no shield, no guide.
 #[story(CropOverlay<'static>, covers = [Default], drive = Drive::Custom(drag_top_left))]
 fn untouched(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", CropBox::upright(StoryDocument::STANDARD.rect()));
+    let (rect, rect_at) = data.value_at("crop", CropBox::upright(StoryDocument::STANDARD.rect()));
     on_landscape(ui, 0.0, |ui, at| {
-        CropOverlay::new("Crop", Bind::bound(&mut *rect))
+        CropOverlay::new("Crop", rect_at.bind(&mut *rect))
             .default_frame()
             .image_mode()
             .guide((CropGuide::Thirds, 0))
@@ -148,6 +148,6 @@ fn untouched(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The frame hidden: nothing shows over the picture, and a press anywhere draws a new frame.
 #[story(CropOverlay<'static>, covers = [Default])]
 fn hidden(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rect = data.value("crop", CropBox::upright(StoryDocument::STANDARD.rect()));
-    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).default_frame().image_mode().hidden().show_at(ui, at))
+    let (rect, rect_at) = data.value_at("crop", CropBox::upright(StoryDocument::STANDARD.rect()));
+    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", rect_at.bind(&mut *rect)).default_frame().image_mode().hidden().show_at(ui, at))
 }

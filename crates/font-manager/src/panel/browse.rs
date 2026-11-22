@@ -1,9 +1,9 @@
 //! The tabs and search, the filters, the sample toolbar and the list of family cards.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
-mod cards;
+pub(crate) mod cards;
 
 use std::borrow::Cow;
 use std::sync::Arc;

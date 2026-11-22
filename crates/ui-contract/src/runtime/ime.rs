@@ -236,8 +236,13 @@ pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
                     engine.edits.push((EditorInput::delete_surrounding_bytes(before, after), place));
                 }
                 os::Raw::Commit(text) => {
-                    engine.composing = false;
+                    let marked = std::mem::take(&mut engine.composing);
                     engine.preedit.clear();
+                    // An empty commit with nothing marked inserts nothing, so it replaces no selection either, and
+                    // ends no composition whose confirming key needs the guard.
+                    if text.is_empty() && !marked {
+                        continue;
+                    }
                     engine.guard = GUARD_FRAMES;
                     engine.edits.push((EditorInput::ImeCommit, place));
                     engine.edits.push((EditorInput::Text(text.into()), place));
@@ -373,8 +378,14 @@ pub(crate) fn composing(ctx: &Context, owner: Id) -> bool {
     current(ctx, |engine| engine.owner == Some(owner) && engine.composing)
 }
 
-/// Records the caret rect for the OS candidate window.
+/// Records the caret rect for the OS candidate window. A replay of the run that recorded it records it again, so the
+/// pass writes the IME output and the OS keeps the IME open for a focused field that replays.
 pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, password: bool) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (owner, field, caret, password),
+        |ctx, &(owner, field, caret, password)| note_caret(ctx, owner, field, caret, password),
+    );
     current(ctx, |engine| engine.caret = Some((owner, field, caret, password)));
 }
 

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
-use craft_ui::contract::MemoProps;
+use craft_ui::contract::{MemoKey, MemoProps};
 use craft_ui::runtime::windows::{KeyEquivalent, WindowAction, WindowHost};
 
 use crate::layout::{Clash, Layout};
@@ -203,8 +203,8 @@ pub trait Backend {
 /// The native menu bar, while the app uses one (its in-window menus are hidden then).
 pub struct NativeMenu {
     backend: Box<dyn Backend>,
-    /// The state the menus were last built from.
-    state: Option<u64>,
+    /// The key the menus were last built from.
+    state: Option<u128>,
     clicks: Vec<CommandRef>,
     /// An event arrived (AppKit may have toggled a check item itself): re-sync.
     dirty: bool,
@@ -388,23 +388,18 @@ impl NativeMenu {
         out
     }
 
-    /// Bring the native menu up to date. `state` is a hash of what the menus show (see
-    /// [`had_input`]); `build` lays them out ([`crate::mac_layout`]) and runs only when `state`
-    /// changed or a menu event arrived since the last sync, since building the rows usually walks
-    /// every command's enabled state. A menu event re-syncs because AppKit flips a check or radio
-    /// item's state itself when it is chosen: the sync sets it back to the app's state. A gate
-    /// change ([`NativeMenu::set_gate`]) re-syncs the menus last laid out, greyed or not, without
-    /// calling `build`.
-    ///
-    /// `state` must cover everything the menus show. A change that comes without input, such as
-    /// a load or save finishing on a worker or a timer, leaves the menus stale until the next
-    /// input or menu event unless it is in the hash. An app that can't keep the hash complete
-    /// uses [`NativeMenu::sync`] instead.
+    /// Bring the native menu up to date. `key` is everything the layout reads, as a [`MemoProps`] value (the
+    /// app's `Tracked` menu model, the language's `Words`, the keymap generation): `build` lays the menus out
+    /// ([`crate::mac_layout`]) and runs only when the key changed or a menu event arrived since the last sync, since
+    /// building the rows usually walks every command's enabled state. A menu event re-syncs because AppKit flips a
+    /// check or radio item's state itself when it is chosen: the sync sets it back to the app's state. A gate change
+    /// ([`NativeMenu::set_gate`]) re-syncs the menus last laid out, greyed or not, without calling `build`.
     ///
     /// Returns the layout's clashes when they differ from the last ones returned, for the app to
     /// log; otherwise nothing.
-    pub fn sync_with(&mut self, state: u64, build: impl FnOnce() -> Layout) -> Vec<Clash> {
-        let relayout = self.state != Some(state) || self.dirty;
+    pub fn sync_with<K: MemoProps + ?Sized>(&mut self, key: &K, build: impl FnOnce() -> Layout) -> Vec<Clash> {
+        let key = MemoKey::of(key);
+        let relayout = self.state != Some(key) || self.dirty;
         if !relayout && self.synced_gate == Some(self.gate) {
             return Vec::new();
         }
@@ -413,23 +408,8 @@ impl NativeMenu {
             let mut layout = build();
             self.keep_kinds(&mut layout.bar);
             clashes = self.keep(layout);
-            self.state = Some(state);
+            self.state = Some(key);
         }
-        self.push();
-        clashes
-    }
-
-    /// [`NativeMenu::sync_with`] without a state hash: the app lays the menus out every frame
-    /// and they are synced when the layout differs from the last one (or a menu event or gate
-    /// change calls for it), so they never go stale. It costs a layout per frame.
-    pub fn sync(&mut self, mut layout: Layout) -> Vec<Clash> {
-        self.keep_kinds(&mut layout.bar);
-        if !self.dirty && self.bar.as_ref() == Some(&layout.bar) && self.clashes == layout.clashes && self.synced_gate == Some(self.gate) {
-            return Vec::new();
-        }
-        let clashes = self.keep(layout);
-        // A later `sync_with` lays the menus out again.
-        self.state = None;
         self.push();
         clashes
     }
@@ -513,12 +493,4 @@ fn text_editing_key(c: &Chord) -> bool {
 /// They are shown but not made key equivalents.
 pub(crate) fn native_ok(c: &Chord) -> bool {
     c.has_command()
-}
-
-/// A key press, typed text or click this frame. It may have changed state an app's menu hash
-/// doesn't list, so apps fold it into the `state` passed to [`NativeMenu::sync_with`], for
-/// example as `had_input(ctx).then_some(ctx.cumulative_frame_nr())`. Keys come from the key
-/// stage (`keys::keyed`), which also counts the presses a focused component took from egui.
-pub fn had_input(ctx: &egui::Context) -> bool {
-    craft_ui::runtime::keys::keyed(ctx) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. })))
 }

@@ -168,11 +168,14 @@ impl State {
         self.focus_stop_from(rec, FocusOrigin::Request)
     }
 
-    /// [`focus_stop`](Self::focus_stop) with what moved focus there.
+    /// [`focus_stop`](Self::focus_stop) with what moved focus there. A stop that inherits the focus from a removed one
+    /// is not revealed: nothing chose to show it.
     fn focus_stop_from(&mut self, rec: StopRec, origin: FocusOrigin) -> Vec<Act> {
         let key = rec.stop.key();
         let acts = self.enter_stop(rec, origin);
-        self.revealed = Some(key);
+        if origin != FocusOrigin::Removal {
+            self.revealed = Some(key);
+        }
         acts
     }
 
@@ -387,8 +390,10 @@ impl State {
         let found = self.find_stop(key).or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.id == key.0).cloned());
         match found {
             Some(rec) => self.focus_stop(rec),
+            // An app's own widget, or a stop that registers later in this pass, which then takes the focus.
             None => {
                 self.revealed = Some(key);
+                self.awaited = Some(key);
                 self.focus_now = Some(key.0);
                 vec![Act::Focus(key.0, Default::default())]
             }

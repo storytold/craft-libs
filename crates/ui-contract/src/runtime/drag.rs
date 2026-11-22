@@ -74,6 +74,33 @@ pub enum DropMark {
     },
 }
 
+crate::stays!(Arc<crate::style::UiTokens>);
+
+impl crate::runtime::Shift for DropMark {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        self.mapped(|point| by.pos(point))
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        let pos = |value: Pos2, to: Pos2| crate::runtime::Shift::snapped(&value, &to, within);
+        let rect = |value: Rect, to: Rect| Rect::from_min_max(pos(value.min, to.min), pos(value.max, to.max));
+        match (self, to) {
+            (DropMark::Line { from, to: end }, DropMark::Line { from: to_from, to: to_end }) => {
+                DropMark::Line { from: pos(*from, *to_from), to: pos(*end, *to_end) }
+            }
+            (DropMark::Into(target), DropMark::Into(to_target)) => DropMark::Into(rect(*target, *to_target)),
+            (DropMark::Region { area, line }, DropMark::Region { area: to_area, line: to_line }) => DropMark::Region {
+                area: rect(*area, *to_area),
+                line: match (line, to_line) {
+                    (Some([a, b]), Some([to_a, to_b])) => Some([pos(*a, *to_a), pos(*b, *to_b)]),
+                    _ => *line,
+                },
+            },
+            _ => *self,
+        }
+    }
+}
+
 impl DropMark {
     /// An insertion line from `from` to `to`.
     pub const fn line(from: Pos2, to: Pos2) -> Self {
@@ -153,7 +180,7 @@ pub trait WindowDropTarget<P> {
 /// Where a drop target lies: a rect on an egui layer, in that layer's space. A component's own target lies over its
 /// visible rect on its layer; a component that takes drops over an area it does not draw (a preset browser's canvas)
 /// names the area with [`DropZone::new`] and registers with [`zone_target`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct DropZone {
     layer: Layer,
     rect: Rect,
@@ -328,12 +355,14 @@ pub fn amend<P: Clone + Send + Sync + 'static>(ctx: &Context, change: impl FnOnc
 
 /// The active drag payload of type `P`, from any viewport. For code without a `Cx`.
 pub fn active<P: Send + Sync + 'static>(ctx: &Context) -> Option<Arc<P>> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Drag);
     active_of(ctx, TypeId::of::<P>())?.downcast::<P>().ok()
 }
 
 /// The active drag payload whose type is `payload`: the session's own payload, else its `also`. For a target that
 /// picks the payload types it takes at run time.
 pub(crate) fn active_of(ctx: &Context, payload: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Drag);
     let (own, also) = board(ctx, |board| board.session.as_ref().map(|session| (session.payload.clone(), session.also.clone())))?;
     if Any::type_id(&*own) == payload {
         return Some(own);
@@ -344,7 +373,19 @@ pub(crate) fn active_of(ctx: &Context, payload: TypeId) -> Option<Arc<dyn Any + 
 /// How many sessions have started on this context.
 #[doc(hidden)]
 pub fn started(ctx: &Context) -> u64 {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Drag);
     board(ctx, |board| board.started)
+}
+
+/// What a drag reader sees of the session, as the tracked input `Drag` compares it: the sessions started, and the
+/// payloads of the running one.
+pub(crate) fn state(ctx: &Context) -> (u64, Option<(usize, Option<usize>)>) {
+    board(ctx, |board| {
+        let payloads = board.session.as_ref().map(|session| {
+            (Arc::as_ptr(&session.payload) as *const () as usize, session.also.as_ref().map(|also| Arc::as_ptr(also) as *const () as usize))
+        });
+        (board.started, payloads)
+    })
 }
 
 /// The mark of the target that would take a drop now.
@@ -374,7 +415,7 @@ pub fn cancel(ctx: &Context, reason: CancelReason) {
 
 /// The begin hook: the window losing focus ends the session.
 pub(crate) fn begin(ctx: &Context) {
-    if source_viewport(ctx) == Some(pass::current_viewport(ctx)) && pointer::with_pass_pointer(ctx, |pointer| pointer.focus_lost) {
+    if source_viewport(ctx) == Some(pass::current_viewport(ctx)) && pointer::with_pass_raw(ctx, |pointer| pointer.focus_lost) {
         cancel(ctx, CancelReason::Blur);
     }
     os_files(ctx);
@@ -460,7 +501,7 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
 pub(crate) fn dragging_of(ctx: &Context, payload: TypeId) -> Option<(Arc<dyn Any + Send + Sync>, Pos2)> {
     let payload = active_of(ctx, payload)?;
     let os = board(ctx, |board| board.session.as_ref().is_some_and(|session| session.os));
-    let frame = pointer::frame(ctx).pos;
+    let frame = pointer::frame_raw(ctx).pos;
     let host = WindowHost::of(ctx);
     let pointer = if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { frame };
     Some((payload, pointer?))
@@ -537,7 +578,7 @@ pub fn next_ordinal(ctx: &Context, owner: Id) -> u32 {
 
 /// The operation the held modifiers pick now.
 pub(crate) fn current_operation(ctx: &Context) -> DropOperation {
-    operation(ctx, pointer::frame(ctx).mods)
+    operation(ctx, pointer::frame_raw(ctx).mods)
 }
 
 /// Whether the session's button was released in this pass.
@@ -549,7 +590,7 @@ fn released(ctx: &Context) -> bool {
     if os {
         return board(ctx, |board| board.session.as_ref().is_some_and(|session| session.dropped == Some(frame)));
     }
-    pointer::frame(ctx).release == Some(button)
+    pointer::frame_raw(ctx).release == Some(button)
         || board(ctx, |board| board.session.as_ref().is_some_and(|session| session.released.is_some() && session.viewport != viewport))
 }
 
@@ -667,9 +708,9 @@ pub(crate) fn end_pass(ctx: &Context) {
         best.map(|(_, mark)| mark)
     });
     let op = current_operation(ctx);
-    let over_this_window = pointer::frame(ctx).pos.is_some();
-    let primary_down = pointer::with_pass_pointer(ctx, |pointer| pointer.primary_down);
-    let buttons = pointer::frame(ctx).buttons;
+    let over_this_window = pointer::frame_raw(ctx).pos.is_some();
+    let primary_down = pointer::with_pass_raw(ctx, |pointer| pointer.primary_down);
+    let buttons = pointer::frame_raw(ctx).buttons;
     let frame = pass::root_frame_nr(ctx);
     let held = board(ctx, |board| board.session.as_ref().map(|session| (session.os, session.button, session.dropped))).is_none_or(
         |(os, button, dropped)| match (os, button) {
@@ -681,7 +722,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     let source = source_viewport(ctx);
     let is_source = source == Some(viewport);
     if is_source {
-        windows::note_source_pointer(ctx, viewport, pointer::frame(ctx).pos);
+        windows::note_source_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
     }
     let foreign_target = is_source && !held && foreign_winner(ctx, viewport);
     let running = board(ctx, |board| {

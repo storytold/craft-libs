@@ -3,7 +3,6 @@
 use crate::contract::cx::CxCore;
 use crate::runtime::egui::repaint;
 use crate::runtime::pass_state;
-use crate::runtime::wheel;
 use craft_behavior::{MoveMods, NavMove};
 use egui::{Context, Id, Rect, Vec2};
 
@@ -20,7 +19,7 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     if moves.is_empty() && !reveal {
         return;
     }
-    let Some(owner) = core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&core.ctx, core.rect)) else { return };
+    let Some(owner) = core.env.scroll_owner() else { return };
     pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods))));
     if reveal {
         pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(core.rect) }));

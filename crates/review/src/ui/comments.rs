@@ -11,11 +11,11 @@
 //! }
 //! ```
 
-mod list;
+pub(crate) mod list;
 mod menus;
-mod row;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod row;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::collections::BTreeMap;
 

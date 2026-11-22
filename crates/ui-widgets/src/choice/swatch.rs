@@ -14,8 +14,8 @@ use craft_behavior::{Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Opacity of the black or white ring that stands out from a well's colour.
 const INNER_EDGE_ALPHA: u8 = 0x80;
@@ -324,7 +324,7 @@ pub(super) fn hexagon(rect: Rect) -> Vec<Pos2> {
     ]
 }
 
-/// The face of a swatch outside a `Swatch`: a preset thumbnail of a colour (`PresetBrowser::thumb`). It paints
+/// The face of a swatch outside a `Swatch`: a preset thumbnail of a colour (`PresetFns::thumb`). It paints
 /// what a non-cell `Swatch` of the same colour paints, from the style that `Swatch` resolves, with the selected
 /// ring when `selected`.
 #[derive(Clone, Copy, Debug)]

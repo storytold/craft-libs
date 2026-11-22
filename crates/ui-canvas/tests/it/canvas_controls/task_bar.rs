@@ -6,6 +6,7 @@ use craft_ui::buttons::Button;
 use craft_ui::canvas_controls::{TaskBar, TaskBarDismiss, TaskBarPlace};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::canvas_story::on_canvas;
+use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Vec2};
 use std::cell::RefCell;
@@ -271,4 +272,40 @@ fn the_grip_sits_on_the_members_line() {
     fixture.drag(&grip, by).settle();
     let dropped = seen(&scene);
     assert!((dropped.rect.min - (bar.min + by)).length() < 2.0 * SLACK, "a drag on the grip moves the bar: {:?}", dropped.rect);
+}
+
+/// A drag of the grip moves the bar under the pointer in the frame of each step, in one pass, and writes its place
+/// once, on the drop: one edit for the whole move.
+#[trial]
+fn a_dragged_task_bar_stands_under_the_pointer_in_each_frame_and_writes_its_place_on_the_drop() {
+    let scene = Rc::new(RefCell::new(Scene {
+        anchor: frame(DocVec::ZERO),
+        place: TaskBarPlace::default(),
+        bounds: Rect::NOTHING,
+        area: Rect::NOTHING,
+        rect: Rect::NOTHING,
+    }));
+    let mut fixture = fixture(&scene);
+    fixture.settle();
+    let start = seen(&scene).rect;
+    let from = fixture.by_label("Move bar").expect("the grip is named").center();
+    fixture.frame(vec![moved(from)]);
+    fixture.frame(vec![press(from)]);
+    let step = Vec2::new(-30.0, 15.0);
+    for n in 1..=4 {
+        let to = start.min + step * n as f32;
+        fixture.frame(vec![moved(from + step * n as f32)]);
+        let now = seen(&scene);
+        assert!((now.rect.min - to).length() < SLACK, "step {n}: the bar stands under the pointer in its frame: {:?}, wanted {to:?}", now.rect);
+        assert_eq!(fixture.passes(), 1, "step {n}: the frame runs one pass");
+        assert_eq!(now.place, TaskBarPlace::default(), "step {n}: the place is not written while the drag runs");
+    }
+    let dropped_at = start.min + step * 4.0;
+    fixture.frame(vec![release(from + step * 4.0)]);
+    let dropped = seen(&scene);
+    assert!((dropped.rect.min - dropped_at).length() < SLACK, "the bar stays where it was dropped: {:?}", dropped.rect);
+    let at = dropped.place.at.map(|at| dropped.area.min + Vec2::from(at));
+    assert!(at.is_some_and(|at| (at - dropped_at).length() < SLACK), "the drop writes the place: {:?}", dropped.place);
+    fixture.settle();
+    assert!((seen(&scene).rect.min - dropped_at).length() < SLACK, "the written place keeps the bar there: {:?}", seen(&scene).rect);
 }

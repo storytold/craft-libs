@@ -6,12 +6,12 @@
 //! `craft_behavior::canvas::zoom` and clamp to the [`ZoomLadder`](craft_behavior::ZoomLadder). With Overscroll off
 //! the caller clamps the result with the canvas's scroll limits.
 
-mod autoscroll;
-mod bar;
+pub(crate) mod autoscroll;
+pub(crate) mod bar;
 mod keys;
 mod options;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod wheel;
 
 pub(crate) use autoscroll::{MiddleAutoscroll, paint_mark};

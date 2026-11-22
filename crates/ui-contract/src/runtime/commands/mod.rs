@@ -14,6 +14,8 @@ pub use library::{EditCommands, NavCommand, WindowCommand};
 pub use registry::CommandDefError;
 #[doc(hidden)]
 pub use registry::{SetEntry, sets};
+#[cfg(feature = "suite")]
+pub(crate) use registry::{StorySelection, configure_story_sets, with_story_sets};
 
 #[doc(hidden)]
 pub use board::declare_child;
@@ -29,11 +31,12 @@ pub(crate) use board::{
     begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
 };
 #[doc(hidden)]
-pub use board::{bound_around, take_around};
+pub use board::{bound_around, keymap_generation, take_around};
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use board::{chord_text_builds, keymap_builds};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
+pub(crate) use board::{keymap_built, queued_for};
 
 use crate::contract::{MemoKey, MemoProps, PlainData, Revision, Tracked};
 use craft_behavior::CommandFlags;
@@ -450,6 +453,8 @@ impl CommandInput {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CommandChain(Arc<[(CommandScope, Id)]>);
 
+crate::stays!(CommandChain, CommandState, CommandRef, CommandScope);
+
 impl CommandChain {
     pub(crate) fn pushed(&self, scope: CommandScope, id: Id) -> Self {
         CommandChain(self.0.iter().copied().chain([(scope, id)]).collect())
@@ -563,6 +568,16 @@ pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -
 /// resolves disabled.
 pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> Arc<ResolvedCommand> {
     board::resolve_global(ctx, &command.into())
+}
+
+/// A resolver for the commands as the context of `ui` shows them, as [`Commands::resolve_command`] does for a
+/// component's context: the label, icon, chord and state with the scoped bindings of the scopes above `ui`, `None`
+/// for a scoped command with no instance above. For a memoized view, which has no component context to ask; the
+/// answer is a tracked read of the command's state.
+pub fn resolver_in(ui: &egui::Ui) -> impl Fn(CommandRef) -> Option<Arc<ResolvedCommand>> + 'static {
+    let ctx = ui.ctx().clone();
+    let chain = crate::runtime::env::Env::of(ui).view().command_chain().clone();
+    move |command| board::resolve_scoped(&ctx, &chain, &command)
 }
 
 /// The keys `command` has in the runtime's keymap: its defaults under the user's overrides (`CommandInput`), on the

@@ -4,7 +4,6 @@ use super::{
     ExportAsDialog, ExportOptions, ExportOptionsKind, ExportPreview, FormatOptions, FormatOptionsDialog, HostedExportAs, HostedFormatOptions,
     JpegOptions, OutputPathRow, SizeEstimate, TargaOptions,
 };
-use crate::contract::Bind;
 use crate::dialog::stories::{hosted, hosted_with};
 use crate::patterns::form_dialogs::PreviewState;
 use crate::patterns::presets::{GroupPath, PresetLibrary};
@@ -150,11 +149,11 @@ const CHOSEN_PATH: &str = "/renders/poster_final.mov";
 fn output_path_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let with_templates = *data.value("templates", true);
     let chosen = *data.value("file_chosen", false);
-    let path = data.value("path", TEMPLATE_PATH.to_owned());
+    let (path, path_at) = data.value_at("path", TEMPLATE_PATH.to_owned());
     if chosen != (*path == CHOSEN_PATH) {
         *path = if chosen { CHOSEN_PATH } else { TEMPLATE_PATH }.to_owned();
     }
-    let mut row = OutputPathRow::new(Bind::bound(&mut *path));
+    let mut row = OutputPathRow::new(path_at.bind(&mut *path));
     if with_templates {
         row = row.templates(vec![
             (TEMPLATE_PATH.to_owned(), Label::from("Comp name")),

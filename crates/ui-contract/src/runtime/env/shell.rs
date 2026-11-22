@@ -2,10 +2,12 @@
 //! carries them to the slots and the body.
 
 use super::{AppValues, EnvValue};
+use crate::runtime::egui::pass;
+use crate::runtime::frame::{PerViewport, Stamped, Stored};
 use egui::Rect;
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
 
 /// The stable key of a slot.
 pub type SlotKey = &'static str;
@@ -123,14 +125,16 @@ struct Inner {
     regions: ShellRegions,
     float_bounds: Rect,
     region: Option<Rect>,
-    revealed_rects: RevealedRects,
+    /// The key of the shell's revealed rects: the same in every pass of the shell, so a replayed view registers its
+    /// rects for the shell that shows it.
+    reveals: egui::Id,
     dialog: DialogRecord,
     page_band: Option<PageBandRoom>,
 }
 
 /// The room of the page band while a full-window page shows: the title-bar-high strip at the window's top and the room
 /// the window's ends take in it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PageBandRoom {
     /// The band's rect.
@@ -149,15 +153,24 @@ impl PageBandRoom {
     }
 }
 
-/// The rects that body content registered this pass for the edge it was revealed from. The registry is shared by the
-/// clones of one `ShellCx`.
-#[derive(Clone, Debug, Default)]
-struct RevealedRects(Arc<Mutex<Vec<(RevealEdge, Rect)>>>);
+/// The rects that content registered on the running pass of a viewport for the edge it was revealed from, each with
+/// the key of its shell.
+#[derive(Default)]
+struct RevealedRects(Vec<(egui::Id, RevealEdge, Rect)>);
 
-impl PartialEq for RevealedRects {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
+impl Stored for RevealedRects {}
+
+fn with_revealed<R>(ctx: &egui::Context, f: impl FnOnce(&mut RevealedRects) -> R) -> R {
+    let viewport = pass::current_viewport(ctx);
+    PerViewport::<Stamped<RevealedRects>>::with_pass(ctx, viewport, pass::pass_nr(ctx, viewport), |rects, _| rects.0.clear(), f)
+}
+
+crate::stays!(RevealEdge);
+
+/// Registers `rect` for `edge` with the shell keyed `reveals`, on the running pass. A replayed view registers it again.
+fn note_reveal(ctx: &egui::Context, reveals: egui::Id, edge: RevealEdge, rect: Rect) {
+    crate::runtime::replay::journal(ctx, || (reveals, edge, rect), |ctx, &(reveals, edge, rect)| note_reveal(ctx, reveals, edge, rect));
+    with_revealed(ctx, |rects| rects.0.push((reveals, edge, rect)));
 }
 
 /// How many dialogs, modals and windows the body showed on this pass. The record is shared by the clones of one
@@ -176,6 +189,7 @@ impl ShellCx {
     /// mode allows and floating frames may go over the body.
     pub fn new(window: WindowKey, mode: BodyMode, regions: ShellRegions) -> Self {
         let float_bounds = regions.body;
+        let reveals = crate::runtime::memory::global("shell reveals", &window);
         let inner = Inner {
             window,
             mode,
@@ -186,7 +200,7 @@ impl ShellCx {
             regions,
             float_bounds,
             region: None,
-            revealed_rects: RevealedRects::default(),
+            reveals,
             dialog: DialogRecord::default(),
             page_band: None,
         };
@@ -278,17 +292,28 @@ impl ShellCx {
         !self.inner.panels_hidden && (self.inner.mode == BodyMode::Normal || self.inner.tab_reveal)
     }
 
+    /// The same skeleton with its revealed rects registered under `id`, which stays the same across passes. Without
+    /// it they are keyed by the window; `AppShell` passes its own id, so an embedded shell keeps its rects apart from
+    /// the shell of the window around it.
+    #[must_use]
+    pub fn with_reveals_key(mut self, id: egui::Id) -> Self {
+        Arc::make_mut(&mut self.inner).reveals = id;
+        self
+    }
+
     /// Registers `rect`, a revealed panel the body drew on this pass, as part of the revealed `edge`: the edge reveal
-    /// lasts while the pointer is over it, as it does over a revealed slot. Call it in the pass that draws the panel.
-    pub fn reveal_rect(&self, edge: RevealEdge, rect: Rect) {
-        if let Ok(mut rects) = self.inner.revealed_rects.0.lock() {
-            rects.push((edge, rect));
+    /// lasts while the pointer is over it, as it does over a revealed slot. Call it in the pass that draws the panel; a
+    /// memoized view that replays registers it again. A measuring run registers nothing.
+    pub fn reveal_rect(&self, ctx: &egui::Context, edge: RevealEdge, rect: Rect) {
+        if crate::runtime::measure::effect(ctx, "shell::reveal_rect") {
+            note_reveal(ctx, self.inner.reveals, edge, rect);
         }
     }
 
     /// The rects registered with [`reveal_rect`](Self::reveal_rect) on this pass, in registration order.
-    pub fn revealed_rects(&self) -> Vec<(RevealEdge, Rect)> {
-        self.inner.revealed_rects.0.lock().map(|rects| rects.clone()).unwrap_or_default()
+    pub fn revealed_rects(&self, ctx: &egui::Context) -> Vec<(RevealEdge, Rect)> {
+        let reveals = self.inner.reveals;
+        with_revealed(ctx, |rects| rects.0.iter().filter(|(shell, _, _)| *shell == reveals).map(|&(_, edge, rect)| (edge, rect)).collect())
     }
 
     /// Records that a container in this shell shows as a dialog, a modal, a full-window layer or an OS window. Every
@@ -350,6 +375,30 @@ impl ShellCx {
 #[derive(Clone, PartialEq)]
 #[doc(hidden)]
 pub struct ShellEntry(#[doc(hidden)] pub Option<ShellCx>);
+
+/// The shell's input fields: the window, the body's mode, the reveal and visibility flags, the regions, the float
+/// bounds and the room of a full-window page's band. The registries the body writes into (revealed rects, the dialog count) are its output, not an input; the
+/// revealed rects' key is fixed for the shell's life.
+impl crate::contract::MemoProps for ShellEntry {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        let Some(shell) = &self.0 else { return key.write_u32(0) };
+        let Inner { window, mode, tab_reveal, edges, tabs, panels_hidden, regions, float_bounds, region, page_band, reveals: _, dialog: _ } =
+            &*shell.inner;
+        key.write_u32(1);
+        key.feed_hash(window);
+        key.feed_hash(&std::mem::discriminant(mode));
+        (*tab_reveal, *edges, *tabs, *panels_hidden).key(key);
+        regions.body.key(key);
+        key.write_u32(regions.slots.len() as u32);
+        for (slot, rect) in &regions.slots {
+            slot.key(key);
+            rect.key(key);
+        }
+        float_bounds.key(key);
+        region.key(key);
+        page_band.key(key);
+    }
+}
 
 impl EnvValue for ShellEntry {
     fn root() -> Self {

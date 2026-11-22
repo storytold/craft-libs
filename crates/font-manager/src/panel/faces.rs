@@ -37,7 +37,7 @@ fn key(owner: Owner, face: &FaceInfo) -> String {
 
 /// The bytes of `face` from `catalog`, unless its file is too large to draw with.
 fn load(catalog: &Catalog, face: &FaceInfo) -> Option<FaceBytes> {
-    let too_large = face.path.as_ref().and_then(|path| std::fs::metadata(path).ok()).is_some_and(|meta| meta.len() > MAX_FILE_BYTES);
+    let too_large = face.file_bytes.is_some_and(|bytes| bytes > MAX_FILE_BYTES);
     if too_large {
         return None;
     }

@@ -65,9 +65,9 @@ Before marking a part `missing component`, walk this ladder and stop at the firs
 
 1. **An existing component as is.** Search components-index.md by purpose and by shape, and look at the component's stories in the gallery.
 2. **An existing component with a new story or variant.** If the component already does the job and only lacks a shown state, add the story (authoring.md, "Stories"). A story is a state of an existing type, not a new type.
-3. **A builder option on an existing component.** A structural difference gets a new option on the component, not a new component (craft-framework.md 4.6, step 4).
-4. **Density, size overrides or component tokens.** Visual differences an app needs are tokens and size overrides, never component-specific theme values (craft-framework.md 4.6, steps 1–3).
-5. **Per-app colour overrides** in the theme file (craft-framework.md 4.6, step 5).
+3. **A builder option on an existing component.** A structural difference gets a new option on the component, not a new component (craft-framework.md 4.6, step 3).
+4. **Density or size overrides.** Visual differences an app needs are tokens and size overrides, never a theme value for one component (craft-framework.md 4.6, steps 1–2).
+5. **Per-app colour overrides** in the theme file (craft-framework.md 4.6, step 4).
 6. **A family component** in the crate that owns the document concept, when the part names one (layer, colour model, path): craft-framework.md 4.3.
 7. **A new library component**, when its inputs are general data and no existing component fits. Place it in the lowest crate of its layer (craft-framework.md 4.3).
 8. **A one-off app component**, built from shared pieces, as a last resort.

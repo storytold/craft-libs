@@ -32,8 +32,8 @@ use std::ops::RangeInclusive;
 /// How far a thumb's width runs past the standard handle side, in small handle sides (the old levels thumb: 8 + 6 / 2).
 const THUMB_WIDTH_IN_SMALL_HANDLES: f32 = 0.5;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The row-wide part: a press off the thumbs lands here.
 pub(crate) const ROW: PartKey = PartKey::new("row");

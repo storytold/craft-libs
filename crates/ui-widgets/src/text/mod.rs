@@ -1,16 +1,16 @@
 //! Text and number fields: `TextField<C>` and `NumberField` on the text part (18.3).
 
 mod adorn;
-mod alt_text;
-mod chips;
+pub(crate) mod alt_text;
+pub(crate) mod chips;
 mod completions;
-mod hex;
-mod linked;
-mod number;
-mod selectable_text;
-mod text_field;
+pub(crate) mod hex;
+pub(crate) mod linked;
+pub(crate) mod number;
+pub(crate) mod selectable_text;
+pub(crate) mod text_field;
 mod words;
-mod zoom_field;
+pub(crate) mod zoom_field;
 
 pub use adorn::{Adornment, Placed, place, reserve};
 pub use alt_text::{AltText, AltTextField, AltTextFieldStyle, AltTextWords};

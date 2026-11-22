@@ -23,8 +23,8 @@ use crate::release::{Release, safe_web_link};
 use crate::self_update;
 use crate::updater::Status;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 const PROMPT_KEY: &str = "updateDialog.prompt";
 const CHECK_KEY: &str = "updateDialog.check";

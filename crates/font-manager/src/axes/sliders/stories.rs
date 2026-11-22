@@ -1,7 +1,6 @@
 //! Stories of `AxisSliders`: the Weight and Width axes of a variable face with three named instances.
 
-use craft_ui::contract::Bind;
-use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
+use craft_ui::testing::{Drive, StoryData, StoryOutput, ValueAt, story};
 use egui::Ui;
 
 use super::{AxisSliders, AxisValues};
@@ -18,6 +17,6 @@ fn axis_sliders(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ];
     let instance = |name: &str, weight: f32, width: f32| NamedInstance { name: name.to_owned(), coordinates: vec![(WGHT, weight), (WDTH, width)] };
     let instances = [instance("Light", 300.0, 100.0), instance("Regular", 400.0, 100.0), instance("Bold Condensed", 700.0, 75.0)];
-    let values: &mut AxisValues = data.value("values", vec![(WGHT, 400.0), (WDTH, 100.0)]);
-    AxisSliders::new("Axes", &axes, Bind::bound(values)).instances(&instances).show(ui).into()
+    let (values, values_at): (&mut AxisValues, ValueAt<'_>) = data.value_at("values", vec![(WGHT, 400.0), (WDTH, 100.0)]);
+    AxisSliders::new("Axes", &axes, values_at.bind(values)).instances(&instances).show(ui).into()
 }

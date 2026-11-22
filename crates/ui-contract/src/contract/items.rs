@@ -61,7 +61,7 @@ where
 mod drag;
 mod edge;
 pub(super) mod empty_text;
-mod header;
+pub(crate) mod header;
 mod marquee;
 mod request;
 
@@ -229,6 +229,10 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     /// The bound column layout as the read step found it; `None` while the header keeps its own memory.
     column_layout_at_read: Option<ColumnLayout>,
     lead: Lead<C::Key>,
+    /// The lead row and the renaming row as step 4 read them: a row's measure at step 5 reads them
+    /// (`known_row`).
+    lead_at_read: Option<C::Key>,
+    renaming_at_read: Option<C::Key>,
     renaming: Renaming<C::Key>,
     ended_rename: bool,
     /// The editor of the rename that ended still held focus, so focus goes back to the collection.
@@ -241,8 +245,6 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     page_reveal: Option<usize>,
     /// The row this pass scrolls into view, placed before the rows are built (`place_reveal`).
     revealing: Option<usize>,
-    /// The rows `place_reveal` built and measured this pass: the build places them by that measure.
-    measured_for_reveal: Vec<usize>,
     /// The row the collection's own press is held on this pass, and where on it.
     pressed: Option<(usize, crate::contract::collection::RowPressed)>,
     /// The rows above and below the edge-press band declared this pass.
@@ -306,7 +308,8 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             drags: Drags::default(),
             page_reveal: None,
             revealing: None,
-            measured_for_reveal: Vec::new(),
+            lead_at_read: None,
+            renaming_at_read: None,
             pressed: None,
             edge: None,
         }

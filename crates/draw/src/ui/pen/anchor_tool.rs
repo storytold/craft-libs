@@ -10,7 +10,6 @@ use craft_ui::primitives::{Draw, ToolIcon};
 use egui::Vec2;
 
 /// The apex of the Convert Point icon's caret, in the units of the icon's box.
-// design: allow[literal-size/vec2](the cursor art's hot spot offset in icon units, not a layout size)
 const CONVERT_TIP: Vec2 = Vec2::new(ICON_BOX / 2.0, 5.5);
 
 /// The canvas tool of Add Anchor Point, Delete Anchor Point, Convert Point and Direct Selection. Every press of these

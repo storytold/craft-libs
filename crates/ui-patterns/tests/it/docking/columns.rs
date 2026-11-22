@@ -2,14 +2,15 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
-use craft_ui::contract::{Bind, BodyCx, Role, Show as _, SizeLimits};
+use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, PanelSpec, group_heights};
+use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, PanelSpec, PanelSpecs, group_heights};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 const STRIP: f32 = 20.0;
 const MIN: f32 = 60.0;
@@ -82,9 +83,9 @@ fn a_dock_sides_total_width_scales_its_columns_within_their_bounds() {
     let sizes = super::sizes(4.0, 100.0, STRIP);
     let spec: &dyn Fn(&u32) -> PanelSpec = &spec;
     let mut live = Workspace::new(end_dock_layout());
-    let widths = |live: &Workspace<u32>| end_columns(&live.layout).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
+    let widths = |live: &Workspace<u32>| end_columns(live.layout()).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
     let within = |live: &Workspace<u32>| {
-        end_columns(&live.layout).iter().zip(widths(live)).all(|(column, width)| {
+        end_columns(live.layout()).iter().zip(widths(live)).all(|(column, width)| {
             let (lo, hi) = sizes.shown_bounds(column, spec);
             (lo - 0.01..=hi + 0.01).contains(&width)
         })
@@ -92,20 +93,20 @@ fn a_dock_sides_total_width_scales_its_columns_within_their_bounds() {
     let start = widths(&live);
 
     for total in [sum(&start) + 120.0, sum(&start) - 60.0] {
-        let actions = sizes.resize_side(&live.layout, DockEdge::End, spec, total);
+        let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, total);
         live.apply_all(actions, true, |_| Permissions::ALL).expect("resizing works while the workspace is locked");
         assert!((sum(&widths(&live)) - total).abs() < 0.5, "the columns add up to {total}: {:?}", widths(&live));
         assert!(within(&live), "every column stays within its bounds: {:?}", widths(&live));
     }
 
-    let actions = sizes.resize_side(&live.layout, DockEdge::End, spec, 10.0);
+    let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, 10.0);
     live.apply_all(actions, false, |_| Permissions::ALL).unwrap();
-    let least: f32 = end_columns(&live.layout).iter().map(|column| sizes.shown_bounds(column, spec).0).sum();
+    let least: f32 = end_columns(live.layout()).iter().map(|column| sizes.shown_bounds(column, spec).0).sum();
     assert!((sum(&widths(&live)) - least).abs() < 0.5, "a total below the bounds stops at their sum");
-    let iconic = &end_columns(&live.layout)[2];
+    let iconic = &end_columns(live.layout())[2];
     assert_eq!(iconic.width, Some(300.0), "an iconic column keeps the width it expands to");
-    assert!(sizes.resize_side(&live.layout, DockEdge::End, spec, least).is_empty(), "the width it has asks for nothing");
-    assert!(sizes.resize_side(&live.layout, DockEdge::Start, spec, 500.0).is_empty(), "a side without a dock asks for nothing");
+    assert!(sizes.resize_side(live.layout(), DockEdge::End, spec, least).is_empty(), "the width it has asks for nothing");
+    assert!(sizes.resize_side(live.layout(), DockEdge::Start, spec, 500.0).is_empty(), "a side without a dock asks for nothing");
 }
 
 /// The panel that lays its content in a grid, as a toolbar does.
@@ -125,10 +126,10 @@ fn a_stepped_column_keeps_its_width_while_the_others_scale() {
     let columns = vec![Column::new(vec![Group::new(vec![2], 0)]).with_width(250.0), Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2)];
     let root = Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
     let mut live = Workspace::new(Layout::new(Some(root), Vec::new()));
-    let widths = |live: &Workspace<u32>| end_columns(&live.layout).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
+    let widths = |live: &Workspace<u32>| end_columns(live.layout()).iter().map(|column| sizes.width(column, spec)).collect::<Vec<f32>>();
     let before = widths(&live);
     assert_eq!(before[1], grid().width(2), "a stepped column is as wide as its steps");
-    let actions = sizes.resize_side(&live.layout, DockEdge::End, spec, sum(&before) + 80.0);
+    let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, sum(&before) + 80.0);
     let touches_tools = |action: &Action<u32>| matches!(action, Action::ResizeColumn { panel: TOOLS, .. } | Action::SetColumnSteps { .. });
     assert!(!actions.iter().any(touches_tools), "the side's width leaves the stepped column alone: {actions:?}");
     live.apply_all(actions, false, |_| Permissions::ALL).expect("the side resizes");
@@ -143,10 +144,28 @@ fn a_stepped_column_keeps_its_width_while_the_others_scale() {
     assert_eq!(grid.steps_within(f32::MAX), grid.most, "no more steps than the grid has columns");
 }
 
+/// A tool rail's grid is sized by the dock's own style: a column of two rail steps is a rail button and its padding
+/// plus one more button and gap wide, and the side's width leaves it alone.
+#[trial]
+fn a_rail_column_steps_in_the_docks_rail_cells() {
+    let sizes = super::sizes(4.0, 100.0, STRIP);
+    let with_rail = |panel: &u32| if *panel == TOOLS { PanelSpec::new("Tools").grid(DockGrid::rail(6)) } else { spec(panel) };
+    let spec: &dyn Fn(&u32) -> PanelSpec = &with_rail;
+    let columns = vec![Column::new(vec![Group::new(vec![2], 0)]).with_width(250.0), Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2)];
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
+    let live = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let rail = end_columns(live.layout())[1].clone();
+    assert_eq!(sizes.width(&rail, spec), sizes.rail_first + sizes.rail_step, "two rail steps in the dock's sizes");
+    let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, sum(&[250.0, sizes.rail_first + sizes.rail_step]) + 80.0);
+    let touches_tools = |action: &Action<u32>| matches!(action, Action::ResizeColumn { panel: TOOLS, .. } | Action::SetColumnSteps { .. });
+    assert!(!actions.is_empty() && !actions.iter().any(touches_tools), "the side's width leaves the rail column alone: {actions:?}");
+}
+
 /// A toolbar: a panel whose two lines of content lay out in a grid and never collapse.
+#[derive(PlainData)]
 struct Tools;
 
-impl DockPanels<u32> for Tools {
+impl PanelSpecs<u32> for Tools {
     fn spec(&self, panel: &u32) -> PanelSpec {
         if *panel == TOOLS { PanelSpec::new("Tools").grid(grid()) } else { PanelSpec::new("Canvas") }
     }
@@ -154,7 +173,9 @@ impl DockPanels<u32> for Tools {
     fn permissions(&self, panel: &u32) -> Permissions {
         if *panel == TOOLS { Permissions::ALL.collapses(false) } else { Permissions::ALL }
     }
+}
 
+impl DockPanels<u32> for Tools {
     fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
         if *panel == TOOLS {
             Text::new("One").show(ui);
@@ -169,12 +190,12 @@ impl DockPanels<u32> for Tools {
 fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_and_two_steps() {
     let dock = Node::dock(DockEdge::Start, vec![Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1)]);
     let root = Node::split(Axis::X, SplitSize::FixedFirst(120.0), dock, Node::tabs(vec![1], 0));
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
     let placed: Rc<RefCell<Vec<(u32, Rect)>>> = Rc::default();
-    let (held, seen) = (Rc::clone(&workspace), Rc::clone(&placed));
+    let (held, seen, specs) = (Rc::clone(&workspace), Rc::clone(&placed), Tracked::new(Tools));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
-        let out = DockArea::new("Stepped dock", Bind::bound(&mut workspace), &mut Tools, DockConfig::default()).show(ui);
+        let out = DockArea::new("Stepped dock", Bind::bound(&mut workspace), &specs, &mut Tools, DockConfig::default()).show(ui);
         *held.borrow_mut() = workspace;
         *seen.borrow_mut() = out.columns;
     });
@@ -184,7 +205,7 @@ fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_an
         fixture.by_role(Role::TAB_PANEL).into_iter().map(|group| group.rect).find(|rect| !tools.contains_rect(*rect)).expect("the canvas shows");
     assert!(tools.bottom() < canvas.bottom() - 10.0, "the column ends below its content, above the dock's foot: {tools:?}, canvas {canvas:?}");
 
-    let steps = |workspace: &Workspace<u32>| match &workspace.layout.root {
+    let steps = |workspace: &Workspace<u32>| match &workspace.layout().root {
         Some(Node::Split { first, .. }) => match first.as_ref() {
             Node::Dock { columns, .. } => columns[0].steps,
             other => panic!("{other:?}"),
@@ -204,13 +225,13 @@ fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_an
 }
 
 /// A dock area showing only a floating window at `at` with the toolbar in a column of one step.
-fn floating_tools(at: Rect) -> (Fixture, Rc<RefCell<Workspace<u32>>>) {
-    let window = Floating::new(Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1), at);
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(None, vec![window]))));
-    let held = Rc::clone(&workspace);
+fn floating_tools(at: Rect) -> (Fixture, Rc<RefCell<Arc<Workspace<u32>>>>) {
+    let window = Floating::new(100, Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1), at);
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(None, vec![window])))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Tools));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
-        DockArea::new("Floating tools", Bind::bound(&mut workspace), &mut Tools, DockConfig::default()).show(ui);
+        DockArea::new("Floating tools", Bind::bound(&mut workspace), &specs, &mut Tools, DockConfig::default()).show(ui);
         *held.borrow_mut() = workspace;
     });
     fixture.settle();
@@ -230,9 +251,9 @@ fn a_floating_stepped_windows_left_and_top_edge_drags_keep_the_opposite_edge() {
     let (mut fixture, workspace) = floating_tools(at);
     let before = shown_tools(&fixture);
     // The left grip straddles the window's left edge, which is its rect's.
-    fixture.drag_at(Pos2::new(at.left(), before.center().y), Vec2::new(-1.5 * grid().step, 0.0)).settle();
+    fixture.drag_at(Pos2::new(at.left(), before.center().y), Vec2::new(-1.5 * (grid().width(2) - grid().width(1)), 0.0)).settle();
     let after = shown_tools(&fixture);
-    let steps = workspace.borrow().layout.floating[0].column.steps;
+    let steps = workspace.borrow().layout().floating[0].column.steps;
     assert!(steps.is_some_and(|steps| steps > 1), "the drag widened the window by whole steps: {steps:?}");
     assert!((after.right() - before.right()).abs() <= 1.5, "the right edge stays: {before:?}, then {after:?}");
     assert!(after.left() < before.left(), "the window grew to the left: {before:?}, then {after:?}");

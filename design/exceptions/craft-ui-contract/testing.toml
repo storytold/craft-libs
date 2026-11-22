@@ -6,7 +6,7 @@ kind = "marker"
 rule = "raw-colour/const"
 path = "crates/ui-contract/src/testing/icon_trials.rs"
 reason = "A fixed layer keeps the colours it is drawn in: the trial expects the white tint that leaves them unchanged."
-count = 2
+count = 3
 
 [[exception]]
 name = "face-runs-text-size"

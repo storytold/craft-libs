@@ -96,6 +96,8 @@ pass_state! {
         held_widths: crate::layout::body::HeldWidths,
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,
+        flow_starts: crate::layout::body::FlowStarts,
+        brackets: crate::layout::body::Brackets,
         cursors: crate::layout::body::Cursors,
         footer_slots: crate::contract::footer_slot::Slots,
         column_groups: crate::layout::column_group::Open,
@@ -116,9 +118,11 @@ pass_state! {
         #[cfg(feature = "testing")]
         type_runs: crate::runtime::measure::TypeRuns,
         #[cfg(feature = "testing")]
-        settle_log: crate::runtime::measure::SettleLog,
+        memo_log: crate::runtime::measure::MemoLog,
         #[cfg(feature = "testing")]
         pass_totals: crate::runtime::measure::PassTotals,
+        #[cfg(feature = "testing")]
+        derived_builds: crate::runtime::measure::DerivedBuilds,
     }
     records {
         focus: crate::runtime::focus::State,
@@ -126,6 +130,7 @@ pass_state! {
         cursor: crate::runtime::cursor::State,
         layout: crate::runtime::layout_memory::Entries,
         lazy: crate::runtime::lazy::Store,
+        derived: crate::runtime::derived::Store,
         arenas: crate::primitives::sensing::Arenas,
         envs: crate::runtime::env::ViewportEnvs,
         pointer: crate::runtime::pointer::Memory,
@@ -321,8 +326,8 @@ fn park(held: Held) {
     Service::<Parked>::run(&held.ctx, |parked| parked.0 = Some(held.state));
 }
 
-#[cfg(feature = "testing")]
-mod binding_tests {
+#[cfg(all(feature = "testing", any(test, feature = "suite")))]
+pub(crate) mod binding_tests {
     use super::{PassState, bound, hold, in_component_tree, visit, with_component_tree};
     use crate::testing::trial;
     use egui::Context;

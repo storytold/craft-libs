@@ -25,8 +25,8 @@ use egui::{Id, Response, Ui};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The most commands the empty query lists when the app has run none.
 const FIRST_ROWS: usize = 12;
@@ -44,13 +44,14 @@ struct Session {
     announced: Option<usize>,
 }
 
-/// The key of a row of the list: the suggested heading, a command by its position in the app's entries, or the
-/// fallback row.
+/// The key of a row of the list: the suggested heading, a command by its position in the app's entries, the line that
+/// sets the fallback row off from the commands, or the fallback row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Line {
     #[default]
     Heading,
     Entry(usize),
+    Separator,
     Fallback,
 }
 
@@ -329,7 +330,7 @@ fn show_rows(ui: &mut Ui, input: &RowsInput<'_>, state: &mut Session, env: &crat
             match key {
                 Line::Entry(at) => chosen.picked = input.entries.get(at).map(|entry| entry.command().clone()),
                 Line::Fallback => chosen.fallback = Some(found.clone()),
-                Line::Heading => {}
+                Line::Heading | Line::Separator => {}
             }
         }
     }
@@ -430,6 +431,9 @@ fn layout(
     }
     let mut rows: Vec<Line> = listing(entries, query, folder, texts, recent).into_iter().map(Line::Entry).collect();
     if with_fallback {
+        if !rows.is_empty() {
+            rows.push(Line::Separator);
+        }
         rows.push(Line::Fallback);
     }
     rows
@@ -454,8 +458,8 @@ struct RowData {
     enabled: bool,
     /// The row heads the rows after it.
     heading: bool,
-    /// A rule under the row sets it off from the fallback row that follows.
-    rule: bool,
+    /// The row is the line between the commands and the fallback row.
+    separator: bool,
 }
 
 impl RowData {
@@ -465,7 +469,10 @@ impl RowData {
         if self.heading {
             return ListRow::new(self.label.clone()).heading();
         }
-        let row = ListRow::new(self.label.clone()).option().command_row().enabled(self.enabled).rule(self.rule);
+        if self.separator {
+            return ListRow::separator();
+        }
+        let row = ListRow::new(self.label.clone()).option().command_row().enabled(self.enabled);
         // The first trailing item is the outermost: the chord ends the row and the path sits before it.
         let row = match &self.chord {
             Some(chord) => row.trailing(chord.clone()),
@@ -488,11 +495,13 @@ fn row_data(
     env: &crate::runtime::env::EnvView<'_>,
 ) -> Vec<RowData> {
     let (os, layout) = (env.shell().os, env.keyboard_layout());
+    let line =
+        |label: &str, heading: bool, separator: bool| RowData { label: label.to_owned(), path: None, chord: None, enabled: true, heading, separator };
     keys.iter()
-        .enumerate()
-        .map(|(index, key)| match key {
-            Line::Heading => RowData { label: heading.to_owned(), path: None, chord: None, enabled: true, heading: true, rule: false },
-            Line::Fallback => RowData { label: fallback.to_owned(), path: None, chord: None, enabled: true, heading: false, rule: false },
+        .map(|key| match key {
+            Line::Heading => line(heading, true, false),
+            Line::Separator => line("", false, true),
+            Line::Fallback => line(fallback, false, false),
             Line::Entry(at) => {
                 let resolved = commands::resolve_beneath(ctx, entries[*at].command().clone());
                 RowData {
@@ -501,7 +510,7 @@ fn row_data(
                     chord: resolved.chord.as_ref().map(|chord| chord.display_for(os, layout)),
                     enabled: resolved.enabled,
                     heading: false,
-                    rule: keys.get(index + 1) == Some(&Line::Fallback),
+                    separator: false,
                 }
             }
         })
@@ -524,7 +533,7 @@ impl DisplayOrder<Line> for Listed<'_> {
     }
 
     fn is_section(&self, at: usize) -> bool {
-        self.rows[at].heading
+        self.rows[at].heading || self.rows[at].separator
     }
 
     fn enabled(&self, at: usize) -> bool {
@@ -532,7 +541,7 @@ impl DisplayOrder<Line> for Listed<'_> {
     }
 
     fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
-        (!self.rows[at].heading).then(|| std::borrow::Cow::Borrowed(self.rows[at].label.as_str()))
+        (!self.is_section(at)).then(|| std::borrow::Cow::Borrowed(self.rows[at].label.as_str()))
     }
 }
 

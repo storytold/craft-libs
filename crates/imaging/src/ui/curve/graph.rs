@@ -516,7 +516,7 @@ impl Component for CurveGraph<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.picture_width(cx.style.least, cx.style.most))
+        cx.picture_size(cx.style.least, cx.style.most, |width| width)
     }
 
     fn sense(&self) -> Sense {

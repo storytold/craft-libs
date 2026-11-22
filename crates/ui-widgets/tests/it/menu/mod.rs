@@ -1,24 +1,25 @@
 //! `Menu` and `MenuItem`: the columns of an inline menu's rows.
 
-mod bar;
+pub(crate) mod bar;
 
-mod closed;
+pub(crate) mod closed;
 
-mod companion;
+pub(crate) mod companion;
 
-mod native;
+pub(crate) mod native;
 
-mod openers;
+pub(crate) mod openers;
 
-mod overflow;
+pub(crate) mod overflow;
 
-mod pick_focus;
+pub(crate) mod pick_focus;
 
-mod rows;
+pub(crate) mod rows;
 
-mod search;
+pub(crate) mod runs_per_row;
+pub(crate) mod search;
 
-mod submenus;
+pub(crate) mod submenus;
 
 use craft_behavior::IconId;
 use craft_ui::contract::{Show as _, ShowContainer as _};

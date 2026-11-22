@@ -463,10 +463,12 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    pub(crate) popup_slider: bool,
     randomize: bool,
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    beside_next: bool,
     /// A radio row's options stand in one row with no caption ([`Param::options_in_row`]).
     options_in_row: bool,
     not_remembered: bool,
@@ -814,6 +816,13 @@ impl Param {
         self
     }
 
+    /// Shows a Range row's slider in a linear popup opened from the number field.
+    #[must_use]
+    pub fn popup_slider(mut self) -> Self {
+        self.options.get_or_insert_default().popup_slider = true;
+        self
+    }
+
     /// A Random button after the field of a [`ParamKind::Int`] row (a seed): it sets a random value within the row's
     /// bounds (an open side is `0` or `i32::MAX`); other kinds are unchanged.
     #[must_use]
@@ -871,6 +880,18 @@ impl Param {
     pub fn not_remembered(mut self) -> Self {
         self.options.get_or_insert_default().not_remembered = true;
         self
+    }
+
+    /// Pairs this field with the next one in its section, wrapping when they cannot fit together.
+    /// If only one is visible, it keeps the content width it takes in a pair.
+    #[must_use]
+    pub fn beside_next(mut self) -> Self {
+        self.options.get_or_insert_default().beside_next = true;
+        self
+    }
+
+    pub(super) fn pairs_with_next(&self) -> bool {
+        self.option().beside_next
     }
 
     /// Sets the unit shown after the number.

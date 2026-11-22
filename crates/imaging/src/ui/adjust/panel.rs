@@ -1,7 +1,7 @@
 //! [`AdjustmentsPanel`]: the grid of adjustment buttons a document panel offers for adding an adjustment layer.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{Metrics, NavShape, Roving, Sense};
 use craft_ui::buttons::IconButton;

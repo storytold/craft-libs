@@ -128,6 +128,8 @@ pub(crate) struct PartDecl {
     pub inactive: bool,
     /// The component holds a press on the part (`PartBuilder::held`).
     pub held: bool,
+    /// The hit area is the shape as declared, never grown to the pointer's target size (`PartBuilder::exact_hit`).
+    pub exact: bool,
 }
 
 impl PartDecl {
@@ -144,11 +146,17 @@ impl PartDecl {
             flags: Flags::default(),
             inactive: false,
             held: false,
+            exact: false,
         }
     }
 
     fn part_ref(&self) -> PartRef {
         PartRef { key: self.key, index: self.index }
+    }
+
+    /// The least size across the part's hit area, given the pointer's target size `target`.
+    fn min_across(&self, target: f32) -> f32 {
+        if self.exact { 0.0 } else { target }
     }
 }
 
@@ -252,13 +260,14 @@ struct ArenaState {
     /// The stack position of the root's own `over` parts: above the members its body showed and below the ones
     /// `paint_over` shows (`place_over_widgets`). Above everything until the owner has placed them.
     own_over_at: u32,
-    /// The senses and bounds of the members that joined this pass and last pass.
+    /// The senses of the members that joined this pass: the root's widgets take them once its body has run
+    /// (`widen_root`).
     union_sense: Sense,
-    previous_union_sense: Sense,
+    /// The root takes its members' senses: it was enabled at its step 8 this pass.
+    widens: bool,
     layer: Option<Layer>,
-    /// The layer and the egui sense the root's widgets had at its last step 8, for `sense_early`.
+    /// The layer the root's widgets had at its last step 8, for `sense_early`.
     last_layer: Option<Layer>,
-    last_sense: Sense,
     /// The pass whose outcome `sense_early` stepped before the root's step 8.
     early: u64,
     root: Option<RootInfo>,
@@ -305,13 +314,14 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
         std::mem::swap(&mut state.previous_own, &mut state.own);
         state.own.clear();
         state.own_over_at = u32::MAX;
-        state.previous_union_sense = std::mem::take(&mut state.union_sense);
+        state.union_sense = Sense::empty();
+        state.widens = false;
         state.pass = pass_nr;
     }
 }
 
 fn own_part_shape(part: &PartDecl, root: Id, position: u32, target: f32) -> Shape<Id> {
-    Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).min_across(target)
+    Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).min_across(part.min_across(target))
 }
 
 /// The root's own parts but the `over` ones, at position 0.
@@ -336,7 +346,9 @@ fn over_position(count: usize) -> u32 {
 }
 
 fn member_part_shape(member: &MemberDecl, part: &PartDecl, position: u32, target: f32) -> Shape<Id> {
-    Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position).local(member.local).min_across(target)
+    Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position)
+        .local(member.local)
+        .min_across(part.min_across(target))
 }
 
 /// The member's root shape and its parts but the `over` ones, at its stack position.
@@ -401,34 +413,76 @@ pub(crate) fn set_layer(ctx: &Context, arena: ArenaId, layer: Layer) {
     with_arena(ctx, arena, pass_nr, |state| state.layer = Some(layer));
 }
 
-// The arena registrations below are hit records like the shape record (`pointer::record_shapes`): a settled region
-// that replays its last run (`runtime::replay`) makes them again, so the arenas it shows resolve the next pass's
+// The arena registrations below are hit records like the shape record (`pointer::record_shapes`): a settled memoized
+// view that replays its last run (`runtime::replay`) makes them again, so the arenas it shows resolve the next pass's
 // press over the members, parts and roots it shows. Without them a replayed pass leaves its members out of the arena
-// around it, and an arena inside it is dropped once it has not run for two passes, while the shape record still
-// names their shapes as the press winner.
+// around it, and an arena inside it is dropped once it has not run for two passes, while the shape record still names
+// their shapes as the press winner.
 
-/// What a root registers in its arena at step 8, kept for a replay.
+crate::stays!(ArenaId);
+
+impl crate::runtime::Shift for PartDecl {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        PartDecl { shape: self.shape.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        PartDecl { shape: self.shape.snapped(&to.shape, within), ..self.clone() }
+    }
+}
+
+impl crate::runtime::Shift for MemberDecl {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        MemberDecl { rect: by.rect(self.rect), parts: self.parts.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        MemberDecl { rect: self.rect.snapped(&to.rect, within), parts: self.parts.snapped(&to.parts, within), ..self.clone() }
+    }
+}
+
+impl crate::runtime::Shift for RootInfo {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        RootInfo { rect: by.rect(self.rect), ..*self }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        RootInfo { rect: self.rect.snapped(&to.rect, within), ..*self }
+    }
+}
+
+impl crate::runtime::Shift for RootRegistration {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        RootRegistration { info: self.info.shifted(by), own: self.own.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        RootRegistration { info: self.info.snapped(&to.info, within), own: self.own.snapped(&to.own, within), ..self.clone() }
+    }
+}
+
+/// What a root registers in its arena at step 8, kept for a replay. The egui widgets, with the senses they take,
+/// are in egui's pass records.
 #[derive(Clone, Debug, PartialEq)]
 struct RootRegistration {
     info: RootInfo,
     own: Vec<PartDecl>,
     widgets: Vec<Id>,
     layer: Layer,
-    sense: Sense,
 }
 
 /// Notes a root's step-8 registration in the open records.
-fn journal_root(ctx: &Context, arena: ArenaId, info: RootInfo, own: &[PartDecl], widgets: &[Id], (layer, sense): (Layer, Sense)) {
+fn journal_root(ctx: &Context, arena: ArenaId, info: RootInfo, own: &[PartDecl], widgets: &[Id], layer: Layer) {
     crate::runtime::replay::journal(
         ctx,
-        || (arena, RootRegistration { info, own: own.to_vec(), widgets: widgets.to_vec(), layer, sense }),
+        || (arena, RootRegistration { info, own: own.to_vec(), widgets: widgets.to_vec(), layer }),
         |ctx, (arena, registration)| register_root_again(ctx, *arena, registration.clone()),
     );
 }
 
-/// A replayed root's step-8 registration: its own parts, rect, widgets, layer and sense, with no press run.
+/// A replayed root's step-8 registration: its own parts, rect, widgets and layer, with no press run.
 fn register_root_again(ctx: &Context, arena: ArenaId, registration: RootRegistration) {
-    journal_root(ctx, arena, registration.info, &registration.own, &registration.widgets, (registration.layer, registration.sense));
+    journal_root(ctx, arena, registration.info, &registration.own, &registration.widgets, registration.layer);
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
     with_arena(ctx, arena, pass_nr, |state| {
         rotate(state, pass_nr);
@@ -436,7 +490,6 @@ fn register_root_again(ctx: &Context, arena: ArenaId, registration: RootRegistra
         state.root = Some(registration.info);
         state.widgets = registration.widgets;
         state.last_layer = Some(registration.layer);
-        state.last_sense = registration.sense;
     });
 }
 
@@ -445,8 +498,8 @@ fn register_root_again(ctx: &Context, arena: ArenaId, registration: RootRegistra
 fn journal_join(ctx: &Context, arena: ArenaId, layer: Layer, clip: Rect, joined: &[MemberDecl]) {
     crate::runtime::replay::journal(
         ctx,
-        || (arena, layer, clip, joined.to_vec()),
-        |ctx, (arena, layer, clip, joined)| join_again(ctx, *arena, *layer, *clip, joined),
+        || (arena, layer, crate::runtime::Clip::new(clip), joined.to_vec()),
+        |ctx, (arena, layer, clip, joined)| join_again(ctx, *arena, *layer, clip.rect(), joined),
     );
 }
 
@@ -479,7 +532,11 @@ fn join_member(state: &mut ArenaState, mut decl: MemberDecl, layer: Layer, targe
 /// so far, as `place_over_widgets` does, and records their shapes on `layer` through `clip`; journaled, so a replay
 /// places them above the members joined in the replaying pass.
 fn place_over(ctx: &Context, (arena, id, member, layer, clip): (ArenaId, Id, bool, Layer, Rect)) {
-    crate::runtime::replay::journal(ctx, || (arena, id, member, layer, clip), |ctx, &args| place_over(ctx, args));
+    crate::runtime::replay::journal(
+        ctx,
+        || (arena, id, member, layer, crate::runtime::Clip::new(clip)),
+        |ctx, &(arena, id, member, layer, clip)| place_over(ctx, (arena, id, member, layer, clip.rect())),
+    );
     let read = PassRead::of(ctx);
     let shapes = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
         rotate(state, read.pass_nr);
@@ -523,7 +580,7 @@ impl PassRead {
 }
 
 /// Steps the press machine of the root `id` before its measuring run, from what last pass registered: the root rect,
-/// widgets, layer and sense. A body reads the parts' presses of this pass in both of its runs through
+/// widgets and layer. A body reads the parts' presses of this pass in both of its runs through
 /// [`part_press`]; step 8 finds the memoised outcome. Does nothing on a root's first pass and when the root was not
 /// drawn last pass. `enabled` is what is known before the root's step 5; step 8 ends a press of a root that turns out
 /// to be inert.
@@ -537,11 +594,10 @@ pub(crate) fn sense_early(ctx: &Context, id: Id, enabled: bool) {
         rotate(state, read.pass_nr);
         let root = state.root?;
         let layer = state.last_layer?;
-        (root.rect.is_positive() && root.rect.is_finite() && !state.previous_own.is_empty())
-            .then_some((layer, state.last_sense | state.previous_union_sense))
+        (root.rect.is_positive() && root.rect.is_finite() && !state.previous_own.is_empty()).then_some(layer)
     });
-    let Some((layer, sense)) = last else { return };
-    outcome_in(ctx, &read, arena, layer, enabled, sense);
+    let Some(layer) = last else { return };
+    outcome_in(ctx, &read, arena, layer, enabled);
     with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| state.early = read.pass_nr);
 }
 
@@ -584,7 +640,8 @@ pub(crate) struct RootResult {
     pub activation: bool,
     /// The member a click activated.
     pub activated_member: Option<Id>,
-    /// The sense the root's egui widget carries.
+    /// The sense the root's egui widget carries at step 8: its own and its parts', and focus while it holds key focus
+    /// for a member. Its members' senses join it once its body has run (`widen_root`).
     pub sense: Sense,
 }
 
@@ -596,24 +653,20 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     let arena = ArenaId::new(spec.id);
     let read = PassRead::of(ctx);
     let (clip, layer) = (ui.clip_rect(), ui.layer_id());
-    let last_union = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
-        rotate(state, read.pass_nr);
-        state.previous_union_sense
-    });
     // A disabled root only hovers, whatever its parts and members sense; it keeps the focus stop its own sense or a part's grants.
-    let sense = if spec.enabled {
-        spec.own.iter().fold(spec.own_sense | last_union, |sense, part| sense | part.sense)
-    } else {
-        Sense::HOVER | spec.own.iter().fold(spec.own_sense, |sense, part| sense | part.sense).intersection(Sense::FOCUS)
-    };
-    // A root outside its clip gets an empty response rect at its corner, never an inverted one.
-    let shown = spec.rect.intersect(clip);
-    let response = response::widget(ui, spec.id, Rect::from_min_max(shown.min, shown.max.max(shown.min)), sense);
+    let own = spec.own.iter().fold(spec.own_sense, |sense, part| sense | part.sense);
+    let sense = if spec.enabled { own } else { Sense::HOVER | own.intersection(Sense::FOCUS) };
+    // A root that holds key focus for a member's stop senses focus now: egui drops the focus of a widget registered
+    // without it, before the members, which read it, run and join their senses (`widen_root`).
+    let sense = if crate::runtime::focus::held_for_member(ctx, spec.id) { sense | Sense::FOCUS } else { sense };
+    // The response rect is the root's whole rect and egui's hit test uses its part inside the clip (`interact_rect`),
+    // as for any egui widget: a root the clip cuts reports and reveals where it is, not where it shows.
+    let response = response::widget(ui, spec.id, spec.rect, sense);
     // Each edge or handle part that reaches outside the root rect gets its own widget, resolved as the root.
     let mut widgets = vec![spec.id, sub(spec.id, "transform")];
     for part in spec.own.iter().filter(|part| reaches_out(spec.rect, part)) {
         let id = sub(spec.id, ("edge", part.key, part.index));
-        response::widget(ui, id, part.shape.bounds().intersect(clip), part.sense);
+        response::widget(ui, id, part.shape.bounds(), part.sense);
         crate::runtime::egui::access::hide(ctx, id);
         widgets.push(id);
     }
@@ -623,15 +676,16 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     let background = background_shape(spec.id, spec.rect, spec.own_sense | Sense::HOVER);
     pointer::record_widgets_in(ctx, read.viewport, layer, spec.id, &widgets, sense.contains(Sense::CLICK));
     let info = RootInfo { id: spec.id, rect: spec.rect };
-    journal_root(ctx, arena, info, spec.own, &widgets, (layer, sense));
+    journal_root(ctx, arena, info, spec.own, &widgets, layer);
     // The parts last pass registered, which this pass's results read.
     let known = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
+        rotate(state, read.pass_nr);
+        state.widens = spec.enabled;
         state.own.clear();
         state.own.extend_from_slice(spec.own);
         state.root = Some(info);
         state.widgets = widgets;
         state.last_layer = Some(layer);
-        state.last_sense = sense;
         // A root that stepped early while it was not yet known to be inert: an open press ends as the disabled root's
         // would, by stepping again with the cancel.
         if !spec.enabled && state.early == read.pass_nr && state.outcome.is_some_and(|outcome| outcome.pass == read.pass_nr) {
@@ -648,7 +702,7 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         std::iter::once(background).chain(own_shapes(spec.own, spec.id, read.target())),
     );
     let mut response = response;
-    let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled, sense);
+    let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled);
     // The root is hovered while a shape of its arena shows hover (`pointer::Under`): its background, a part or a member;
     // it contains the pointer while any shape of the arena lies under it.
     response::hover_flags(&mut response, outcome.hover.any(), outcome.contains);
@@ -699,7 +753,7 @@ pub(crate) fn place_over_widgets(ui: &Ui, id: Id, member: Option<ArenaId>, decls
     let widgets: Vec<Id> = over_parts(decls)
         .map(|part| {
             let widget = over_widget(id, part);
-            response::widget(ui, widget, part.shape.bounds().intersect(clip), part.sense);
+            response::widget(ui, widget, part.shape.bounds(), part.sense);
             crate::runtime::egui::access::hide(ctx, widget);
             widget
         })
@@ -716,11 +770,38 @@ pub(crate) fn place_over_widgets(ui: &Ui, id: Id, member: Option<ArenaId>, decls
     }
 }
 
+/// The root `id`, once its body and `paint_over` have run, takes the senses of the members that joined its arena this
+/// pass into its egui widget and its transformed body's forwarding widget (egui adds the sense of a widget registered
+/// again in a pass), so egui's hit test in the next pass names the root wherever a member takes a press. A root whose
+/// widget has no node (`hidden`) keeps it hidden. Nothing for a disabled root, which only hovers, or a root with no
+/// arena this pass.
+pub(crate) fn widen_root(ctx: &Context, id: Id, hidden: bool) {
+    let read = PassRead::of(ctx);
+    let found = PerViewport::<Arenas>::with(ctx, read.viewport, |arenas| {
+        arenas.by_root.get(&id).filter(|state| state.pass == read.pass_nr && state.widens).map(|state| (state.union_sense, state.last_layer))
+    });
+    let Some((union, Some(layer))) = found else { return };
+    if union.is_empty() {
+        return;
+    }
+    let sense = response::to_egui(union);
+    if response::widen(ctx, id, sense) && hidden {
+        crate::runtime::egui::access::hide(ctx, id);
+    }
+    let forward = sub(id, "transform");
+    if response::widen(ctx, forward, sense) {
+        crate::runtime::egui::access::hide(ctx, forward);
+    }
+    if union.contains(Sense::CLICK) {
+        pointer::record_widgets_in(ctx, read.viewport, layer, id, &[], true);
+    }
+}
+
 /// Step 8 for a root with no sense, no parts and no members: nothing can hit it, so it has no arena entry, shape
 /// record or press lifecycle, only its egui widget and its entry in the widget record.
 pub(crate) fn sense_none(ui: &Ui, id: Id, rect: Rect) -> RootResult {
     let ctx = ui.ctx();
-    let response = response::widget(ui, id, rect.intersect(ui.clip_rect()), Sense::empty());
+    let response = response::widget(ui, id, rect, Sense::empty());
     pointer::record_widgets(ctx, ui.layer_id(), id, &[id, sub(id, "transform")], false);
     RootResult { response, parts: PartResults::new(), press: PressState::IDLE, activation: false, activated_member: None, sense: Sense::empty() }
 }
@@ -815,9 +896,8 @@ fn press_view(outcome: &Outcome, holds: impl Fn(&Hit) -> bool, clicks: impl Fn(&
 }
 
 /// Runs the press lifecycle for this pass, once: later calls in the pass return the same outcome. A repeated
-/// pass has no events, so phases hold and a release, click or activation does not repeat. `union_sense` is
-/// what the root's egui widgets sense.
-fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enabled: bool, union_sense: Sense) -> Outcome {
+/// pass has no events, so phases hold and a release, click or activation does not repeat.
+fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enabled: bool) -> Outcome {
     let pass_nr = read.pass_nr;
     let done = with_arena_in(ctx, read.viewport, arena, pass_nr, |state| state.outcome.filter(|outcome| outcome.pass == pass_nr));
     if let Some(outcome) = done {
@@ -863,12 +943,13 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             // is on top under it for that kind (`pointer::press_winners`); the root starts it for the kinds it won. A
             // root under a modal layer starts none; where egui names no target of the root's kind (its click target,
             // its drag target for a drag-only root; a root whose widgets sense neither is never named), only a root the
-            // modal's canvas admits does.
+            // modal's canvas admits does. The root's kind is what its widget sensed in the pass egui's targets come from.
             let root = state.root.map(|root| root.id);
             let targets = pass_pointer.press_targets;
-            let untargeted = if union_sense.contains(Sense::CLICK) {
+            let sensed = crate::runtime::egui::widgets::sensed_last_pass(ctx, arena.0);
+            let untargeted = if sensed.senses_click() {
                 targets.click.is_none()
-            } else if union_sense.contains(Sense::DRAG) {
+            } else if sensed.senses_drag() {
                 targets.drag.is_none()
             } else {
                 true

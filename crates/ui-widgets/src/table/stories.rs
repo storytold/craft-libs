@@ -120,7 +120,7 @@ fn table(
         .striped(striped)
         .sort(sort)
         .empty("No files")
-        .selection(Bind::bound(data.value("selection", selected)))
+        .selection(data.bind("selection", selected))
         .show_items(ui, &Files(&rows), &mut |key, icx| {
             let file = &rows[*key];
             let (units, format) = (icx.env.units(), icx.env.format());

@@ -18,8 +18,8 @@ use serde_json::{Value, json};
 
 use crate::display::MonitorProblem;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The profile prompts' words, English by default.

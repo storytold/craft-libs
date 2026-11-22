@@ -2,24 +2,26 @@
 //! button, over the body of the active panel. The band and the button are the group's own parts.
 
 use super::commands::DockCommands;
-use super::drop::{self, DragUnit, start_group_drag, start_icon_drag};
+use super::drop::{self, DragUnit, start_group_drag};
 use super::targets::{DockSizes, DockSpot, DockTargets, ZoneRule};
 use super::words::DockWords;
-use super::{PanelDrag, PanelKey, PanelTitle};
+use super::{PanelDrag, PanelKey, PanelTitle, Titles};
 use crate::buttons::IconButton;
+use crate::contract::overlay::Anchor;
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, HeaderEdge, HeaderParts, HeaderRegion,
-    ListDrag, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, ShowCollection as _,
-    ShowContainer as _, Sizing, WordSetCx as _,
+    ListDrag, MeasureCx, MemoProps, MemoView, Name, Outbox, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _,
+    Role, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
-use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
+use crate::runtime::memory::sub;
+use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
-use craft_theme::{ControlSize, Tokens};
+use craft_theme::{ControlSize, Rgba, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::fmt::Debug;
@@ -31,6 +33,49 @@ use std::hash::Hash;
 pub struct GroupGripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The marks a grip with [`ticks`](GroupGrip::ticks) shows.
+    marks: GripMarks,
+}
+
+/// How many ticks a grip's row of marks has, at every display scale.
+const GRIP_TICKS: u16 = 10;
+/// How tall a grip's tick is, in points.
+const GRIP_TICK_LENGTH: f32 = 4.0;
+/// The share of the panel's lightness a grip's ticks keep: the references' marks are a little darker than the panel
+/// they sit on in every interface colour (`#454545` on `#535353`, `#272727` on `#323232`, `#9e9e9e` on `#b8b8b8`).
+const GRIP_INK_SHARE: f32 = 0.83;
+
+/// The row of marks a dock grip shows, as the references draw it: ten upright ticks, a thin stroke wide, four points
+/// tall and a thin stroke apart, centred on the grip, a little darker than the panel. They keep their ink under the
+/// pointer, as the references' do. A toolbar's grip under its column bar and the grip above each icon group of a
+/// collapsed column paint the same marks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GripMarks {
+    ink: StyleColor,
+    /// The width of a tick and the gap between two of them.
+    side: f32,
+    /// The height of a tick.
+    length: f32,
+}
+
+impl GripMarks {
+    /// The marks in the tokens of `cx`.
+    pub(super) fn style(cx: &StyleCx<'_>) -> Self {
+        GripMarks { ink: cx.color(grip_ink(cx.tokens.color.surface.panel)), side: cx.tokens.stroke.thin, length: GRIP_TICK_LENGTH }
+    }
+
+    /// Paints the row centred on `centre`.
+    pub(super) fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
+        let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(self.side) };
+        ui.draw().grip_ticks(&look, centre, GRIP_TICKS, self.side, self.length);
+    }
+}
+
+/// The ink of a grip's ticks on a `panel` surface: the panel's channels at [`GRIP_INK_SHARE`].
+fn grip_ink(panel: Rgba) -> Rgba {
+    let [r, g, b, a] = panel.0;
+    let darker = |channel: u8| (f32::from(channel) * GRIP_INK_SHARE).round().clamp(0.0, 255.0) as u8;
+    Rgba([darker(r), darker(g), darker(b), a])
 }
 
 /// What a group grip reports: its response, the second press of a double click and whether it started a group
@@ -55,7 +100,9 @@ impl Outcome for GroupGripOutput {
 }
 
 /// The handle a group is dragged by: an unmarked band over the empty room of the group's header. A drag starts through [`start_group_drag`] with the grip's unit; a double
-/// click is reported for the group to minimize.
+/// click is reported for the group to minimize. The drag starts with no extent: a caller whose unit has one sets it on
+/// the drag (`GroupDrag::source`, or `strip` for a collapsed column's icons) with `drag::amend` in the pass the grip
+/// reports `drag_started`. A grip in a memoized view so holds no size in its props, which a measuring run sees as zero.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(probe(GroupGrip<usize>))]
 pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
@@ -63,16 +110,15 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     common: Common,
     unit: DragUnit<P>,
     active: PanelKey,
-    /// The unit's extent where the drag starts and the name its drop region shows.
+    /// The name the unit's drop region shows.
     #[prop]
-    ghost: Option<(Vec2, Label)>,
+    ghost: Option<Label>,
     /// A drag on the grip drags the unit.
     #[prop]
     movable: bool,
-    /// The grip is a collapsed column's: its drag is an icon drag ([`start_icon_drag`]) whose strip is the ghost's
-    /// extent, so a float of the unit lands collapsed under the pointer.
+    /// The grip shows the dock's row of grip marks in its middle; else it is an unmarked band.
     #[prop]
-    icons: bool,
+    ticks: bool,
     double: bool,
     started: bool,
 }
@@ -80,7 +126,7 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
 impl<P: Clone + Send + Sync + 'static> GroupGrip<P> {
     /// The grip of `unit`, whose shown panel is `active`.
     pub fn new(unit: DragUnit<P>, active: PanelKey) -> Self {
-        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, icons: false, double: false, started: false }
+        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, ticks: false, double: false, started: false }
     }
 }
 
@@ -92,8 +138,8 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     type Style = GroupGripStyle;
     type Output = GroupGripOutput;
 
-    fn style(_: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
-        GroupGripStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
+        GroupGripStyle { metrics: Metrics::new(), marks: GripMarks::style(cx) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -107,12 +153,14 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
         if self.movable && matches!(cx.press().phase, PressPhase::DragStart { .. }) {
-            match self.ghost.clone() {
-                Some((strip, label)) if self.icons => start_icon_drag(cx, self.unit.clone(), self.active, strip, label),
-                // The ghost's extent is the group's own.
-                ghost => start_group_drag(cx, self.unit.clone(), self.active, ghost.as_ref().map(|(size, _)| *size), ghost.map(|(_, label)| label)),
-            }
+            start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
             self.started = true;
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.ticks {
+            cx.style.marks.paint(ui, cx.rect.center());
         }
     }
 
@@ -131,8 +179,34 @@ fn grip_width(tokens: &Tokens) -> f32 {
 }
 /// The panel menu button at the header's end edge.
 pub(super) const MENU: PartKey = PartKey::new("panel_menu");
+/// Where the group menu hangs while a context request on a tab holds it open: the request's point.
+const MENU_AT: &str = "menu_at";
+/// The point of a context request on a tab in the last pass, which opens the group menu.
+const MENU_ASKED: &str = "menu_asked";
+
+#[derive(Clone, Copy, Default)]
+struct MenuAt(Option<Pos2>);
+
+#[derive(Clone, Copy, Default)]
+struct MenuAsked(Option<Pos2>);
 
 type HeaderHookFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
+type MenuRowsFn<'a> = Box<dyn FnMut() -> Vec<PanelRow> + 'a>;
+
+/// The rows of a group's menu, built while the menu is open: the panel menu button and a context request on a tab open
+/// it.
+pub struct MenuRows<'a>(MenuRowsFn<'a>);
+
+impl<'a> MenuRows<'a> {
+    /// Rows that `rows` builds each pass the menu shows.
+    pub fn new(rows: impl FnMut() -> Vec<PanelRow> + 'a) -> Self {
+        MenuRows(Box::new(rows))
+    }
+
+    fn rows(&mut self) -> Vec<PanelRow> {
+        (self.0)()
+    }
+}
 
 /// A closure that adds the host's items to a group's header, before the tab strip.
 pub struct HeaderHook<'a>(HeaderHookFn<'a>);
@@ -223,7 +297,7 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     #[container]
     props: ContainerProps,
     anchor: P,
-    panels: &'a [PanelTitle],
+    panels: Titles,
     active: PanelKey,
     /// Only the header shows; the body and its drop spots are left out.
     #[prop(flag)]
@@ -249,9 +323,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// sides take no drop, and its top, bottom and middle zones reach across them.
     #[prop(flag)]
     in_window: bool,
-    /// The rows of the group menu: the panel menu button and a context request on a tab open them.
-    #[prop]
-    menu: Vec<PanelRow>,
+    /// The rows of the group menu, read while it is open: the panel menu button and a context request on a tab open
+    /// it.
+    #[prop(func = "FnMut() -> Vec<PanelRow>")]
+    menu: Option<MenuRows<'a>>,
     /// Whether the panel menu button shows beside the tabs; a context request on a tab opens the menu either way.
     #[prop]
     panel_menu_shown: bool,
@@ -269,10 +344,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
 impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<'a, P> {
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
-    pub fn new(anchor: P, panels: &'a [PanelTitle], active: PanelKey) -> Self {
+    pub fn new(anchor: P, panels: Titles, active: PanelKey) -> Self {
         let props =
             ContainerProps::new().sizing(Sizing::Fill).header(HeaderRegion::new().fill(SurfaceKind::Background)).command_scope(DockCommands::SCOPE);
-        let title = panels.iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
+        let title = panels.as_slice().iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
         DockGroup {
             common: Common::new(),
             props,
@@ -287,7 +362,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
-            menu: Vec::new(),
+            menu: None,
             panel_menu_shown: true,
             command_states: Vec::new(),
             extra: None,
@@ -297,9 +372,9 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         .label(title)
     }
 
-    /// Whether the panel menu button shows: it is asked for and the menu has rows.
+    /// Whether the panel menu button shows: it is asked for and the group has a menu.
     fn shows_menu_button(&self) -> bool {
-        self.panel_menu_shown && !self.menu.is_empty()
+        self.panel_menu_shown && self.menu.is_some()
     }
 
     /// The panel menu button's face.
@@ -367,15 +442,25 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         }
     }
 
-    /// The panel menu, opened by its button.
+    /// The group menu, opened by the panel menu button, under it, or by a context request on a tab, at the request's
+    /// point. Its rows are built only while it is open.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
-        if cx.part_if_declared(MENU).is_none() {
+        let Some(menu) = self.menu.as_mut() else { return };
+        let popup = cx.popup("panel_menu");
+        let at_id = sub(cx.core.id, MENU_AT);
+        if !popup.is_open(cx) {
+            cx.core.memory.shown::<MenuAt>(at_id).0 = None;
             return;
         }
-        let popup = cx.popup("panel_menu");
+        let at = cx.core.memory.shown::<MenuAt>(at_id).0;
+        let anchor = match at {
+            Some(at) => Anchor::Point(at),
+            None if cx.part_if_declared(MENU).is_some() => ui.anchor_part(MENU),
+            None => Anchor::Pointer,
+        };
         let name = cx.words::<DockWords>().panel_menu.clone();
-        let rows = self.menu.clone();
-        let layer = crate::menu::layer(false).anchor(ui.anchor_part(MENU));
+        let rows = menu.rows();
+        let layer = crate::menu::layer(false).anchor(anchor);
         if let Some(item) = ui.show(popup, layer, |ui, _| {
             Menu::inline(name.clone()).show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked).inner.flatten()
         }) {
@@ -394,6 +479,15 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.size = cx.rect.size();
+        // A context request on a tab in the last pass opens the group menu at its point.
+        let asked = std::mem::take(&mut cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0);
+        if self.menu.is_some() {
+            let popup = cx.popup("panel_menu");
+            if let Some(at) = asked {
+                cx.core.memory.shown::<MenuAt>(sub(cx.core.id, MENU_AT)).0 = Some(at);
+                popup.open(cx);
+            }
+        }
         if let Some(grip) = cx.part_if_declared(GRIP).map(|grip| grip.press) {
             self.reported.toggle_minimized |= grip.double_pressed();
             if self.movable && matches!(grip.phase, PressPhase::DragStart { .. }) {
@@ -403,7 +497,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         let Some(dock) = self.dock else { return };
         let (rect, rtl, header) = (cx.rect, cx.flow.is_rtl(), cx.style.header);
         let strip = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header));
-        DockTargets::<P>::register(&cx.core.ctx, dock, DockSpot::tab(self.anchor.clone(), self.panels.len()), strip);
+        DockTargets::<P>::register(&cx.core.ctx, dock, DockSpot::tab(self.anchor.clone(), self.panels.as_slice().len()), strip);
         if self.minimized {
             return;
         }
@@ -418,10 +512,14 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         }
     }
 
-    /// A drag that started on the strip's empty room in the header starts here: the header runs after `update`.
+    /// A drag that started on the strip's empty room in the header starts here, and a context request on a tab is kept
+    /// for the next pass's `update` to open the group menu: the header runs after `update`.
     fn finish(mut self, mut cx: Cx<'_, Self>) -> DockGroupOutput {
         if self.reported.empty_drag && self.movable {
             self.start_drag(&mut cx);
+        }
+        if let Some(request) = &self.reported.menu {
+            cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0 = Some(request.at);
         }
         let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, .. } = self.reported;
         DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started }
@@ -446,7 +544,8 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         HeaderParts::NONE.end(band + button)
     }
 
-    /// The host's items and the tab strip, on one line.
+    /// The host's items, then the tab row, on one line. The tab row is a memoized view (`tab_row`): it runs when its
+    /// tabs, its room or the input on it change, else it replays, and what the user did on it comes out of its outbox.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         for (command, state) in self.command_states.drain(..) {
             cx.publish(command, state);
@@ -454,76 +553,159 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         while let Some((command, _)) = cx.take_command::<DockCommands>() {
             self.reported.commands.push(command);
         }
-        let words = cx.words::<DockWords>();
-        let from = PanelKey::of(&self.anchor);
         let started = drop::started(&cx.env);
-        let (panels, active, closable, wheel_selects) = (self.panels, self.active, self.closable, self.wheel_selects_tabs);
-        let menu_rows = self.menu.clone();
-        let panel_menu = words.panel_menu.clone();
         let mut extra = self.extra.take();
-        let name = Label::from(words.panels.as_str().to_owned());
         let env = crate::runtime::env::Env::of(ui);
-        let (dock, anchor, rtl) = (self.dock, self.anchor.clone(), env.direction.is_rtl());
+        let rtl = env.direction.is_rtl();
         let (line, gap) = (env.tokens.size.panel_header, env.tokens.space.gap.item);
         ui.set_min_height(line);
         let surface_pressed = cx.surface_pressed();
+        // A raw egui layout: the host's items and the tab row sit side by side, and the header column's flow facts are
+        // not theirs. The tab row takes the rest of the line, so the strip's empty room is its own, and nothing but the
+        // memoized tab row runs in it, so a settled header replays.
+        let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+        let mut sent = Vec::new();
+        let strip = ui
+            .with_layout(layout, |ui| {
+                ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
+                if let Some(hook) = extra.as_mut() {
+                    hook.run(ui, cx);
+                }
+                let row = TabRow {
+                    anchor: self.anchor.clone(),
+                    panels: self.panels.clone(),
+                    active: self.active,
+                    closable: self.closable,
+                    wheel_selects: self.wheel_selects_tabs,
+                    dock: self.dock,
+                    sent: Outbox::new(&mut sent),
+                };
+                // The env around the tab row holds only values its key follows (the shell, the dock's arrangement, a
+                // floating window's layer), no handle or context rebuilt each pass, so it replays at rest.
+                MemoView::new(("tabs", cx.id), row, tab_row::<P>).show(ui)
+            })
+            .inner;
+        self.extra = extra;
+        // A press on the group's empty body focuses its panel, as in Photoshop.
+        if surface_pressed && let Some(strip) = strip {
+            focus::request(ui.ctx(), FocusTarget::Id(strip));
+        }
         let size = self.size;
         let reported = &mut self.reported;
-        let drags = crate::runtime::drag::started(ui.ctx());
-        let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
-        ui.with_layout(layout, |ui| {
-            ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
-            if let Some(hook) = extra.as_mut() {
-                hook.run(ui, cx);
-            }
-            let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
-            let closes = |panel: &PanelTitle| closable && panel.closable;
-            let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
-            let mut strip = TabStrip::new(name.clone())
-                .kind(kind)
-                .shown(active)
-                .tear_off()
-                .natural_height(true)
-                .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started }));
-            if wheel_selects {
-                strip = strip.wheel_selects();
-            }
-            let strip = strip.show_items(ui, &source, &mut |key, _| {
-                let panel = panels.iter().find(|panel| &panel.key == key);
-                let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
-                Tab::new(title).closable(panel.is_some_and(closes))
-            });
-            let strip_id = strip.response.response.id;
-            // A press on the group's empty body focuses its panel, as in Photoshop.
-            if surface_pressed {
-                focus::request(ui.ctx(), FocusTarget::Id(strip_id));
-            }
-            for event in strip.response.events {
-                if let crate::contract::CollectionEvent::Selection(craft_behavior::SelectionChange::Set(keys)) = event {
-                    reported.picked = keys.last().copied().or(reported.picked);
+        for event in sent {
+            match event {
+                TabEvent::Picked(key) => reported.picked = Some(key),
+                TabEvent::Closed(key) => reported.closed.push(key),
+                TabEvent::Menu(request) => reported.menu = Some(request),
+                TabEvent::TornOff(torn) => reported.torn_off = Some(torn),
+                // The strip's empty room is a handle the group is dragged by; a double click on it minimizes the group.
+                TabEvent::EmptyDrag => reported.empty_drag = true,
+                TabEvent::EmptyDouble => reported.toggle_minimized = true,
+                // The tab's drag records the arrangement it started on and the group's size, which only the group reads:
+                // the tab row's measuring runs see no size.
+                TabEvent::DragStarted => {
+                    reported.drag_started = true;
+                    crate::runtime::drag::amend::<PanelDrag>(ui.ctx(), |drag| {
+                        drag.started = started;
+                        drag.source = Some(size);
+                    });
                 }
             }
-            if let Some(dock) = dock {
-                register_insertions(ui.ctx(), dock, &anchor, panels, &strip.tab_rects, rtl);
-            }
-            reported.drag_started |= crate::runtime::drag::started(ui.ctx()) != drags
-                && crate::runtime::drag::active::<PanelDrag>(ui.ctx()).is_some_and(|drag| drag.from == from);
-            reported.picked = strip.picked.or(reported.picked);
-            reported.closed.extend(strip.closed);
-            reported.menu = strip.menu.or(reported.menu.take());
-            reported.torn_off = strip.torn_off.or(reported.torn_off.take());
-            // The strip's empty room is a handle the group is dragged by; a double click on it minimizes the group.
-            reported.empty_drag |= strip.empty_drag;
-            reported.toggle_minimized |= strip.empty_double;
-            if !menu_rows.is_empty() {
-                let rows = menu_rows.clone();
-                let shown = Menu::context(panel_menu.clone(), &strip.response.response)
-                    .show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked);
-                reported.item = shown.inner.flatten().or(reported.item);
-            }
-        });
-        self.extra = extra;
+        }
     }
+}
+
+/// What the user did on a group's tab row, in the order the row reported it.
+enum TabEvent {
+    /// A tab was picked (a click, the wheel, the overflow menu); the last pick wins.
+    Picked(PanelKey),
+    /// A tab's close button or a middle click closed it.
+    Closed(PanelKey),
+    /// A context request on a tab: the group menu opens at its point.
+    Menu(ContextMenuRequest<PanelKey>),
+    /// A tab was dragged out of the dock's windows.
+    TornOff(TornOff<PanelKey>),
+    /// A drag started on the strip's empty room: the group's drag.
+    EmptyDrag,
+    /// A double click on the strip's empty room.
+    EmptyDouble,
+    /// A tab's drag started.
+    DragStarted,
+}
+
+/// The props of a group's tab row: the tabs and how they show, the group's size where a tab's drag starts, and the
+/// outbox for what the user did.
+#[derive(MemoProps)]
+struct TabRow<'a, P> {
+    /// The group's anchor panel, which names its drop spots.
+    #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
+    anchor: P,
+    #[memo_props(hash = "its Hash is the content key taken when the titles were made")]
+    panels: Titles,
+    active: PanelKey,
+    closable: bool,
+    wheel_selects: bool,
+    dock: Option<Id>,
+    sent: Outbox<'a, TabEvent>,
+}
+
+/// A group's tab strip with its tab insertion spots. Returns the strip's id.
+fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> Id {
+    let env = crate::runtime::env::Env::of(ui);
+    let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
+    let rtl = env.direction.is_rtl();
+    let (panels, active, closable) = (row.panels.as_slice(), row.active, row.closable);
+    let from = PanelKey::of(&row.anchor);
+    let drags = crate::runtime::drag::started(ui.ctx());
+    let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
+    let closes = |panel: &PanelTitle| closable && panel.closable;
+    let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
+    let mut strip = TabStrip::new(name)
+        .kind(kind)
+        .shown(active)
+        .tear_off()
+        .natural_height(true)
+        .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
+    if row.wheel_selects {
+        strip = strip.wheel_selects();
+    }
+    let strip = strip.show_items(ui, &source, &mut |key, _| {
+        let panel = panels.iter().find(|panel| &panel.key == key);
+        let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
+        Tab::new(title).closable(panel.is_some_and(closes))
+    });
+    for event in strip.response.events {
+        if let crate::contract::CollectionEvent::Selection(craft_behavior::SelectionChange::Set(keys)) = event
+            && let Some(key) = keys.last()
+        {
+            row.sent.send(TabEvent::Picked(*key));
+        }
+    }
+    if let Some(dock) = row.dock {
+        register_insertions(ui.ctx(), dock, &row.anchor, panels, &strip.tab_rects, rtl);
+    }
+    if crate::runtime::drag::started(ui.ctx()) != drags && crate::runtime::drag::active::<PanelDrag>(ui.ctx()).is_some_and(|drag| drag.from == from) {
+        row.sent.send(TabEvent::DragStarted);
+    }
+    if let Some(key) = strip.picked {
+        row.sent.send(TabEvent::Picked(key));
+    }
+    for key in strip.closed {
+        row.sent.send(TabEvent::Closed(key));
+    }
+    if let Some(request) = strip.menu {
+        row.sent.send(TabEvent::Menu(request));
+    }
+    if let Some(torn) = strip.torn_off {
+        row.sent.send(TabEvent::TornOff(torn));
+    }
+    if strip.empty_drag {
+        row.sent.send(TabEvent::EmptyDrag);
+    }
+    if strip.empty_double {
+        row.sent.send(TabEvent::EmptyDouble);
+    }
+    strip.response.response.id
 }
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before

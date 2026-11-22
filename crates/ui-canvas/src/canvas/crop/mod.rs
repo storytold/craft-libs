@@ -5,8 +5,8 @@
 mod gesture;
 mod paint;
 mod shield;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::CanvasWords;
 use super::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_snap, canvas_space, context_click, readout};
@@ -154,7 +154,8 @@ pub struct CropOverlay<'a> {
     #[prop(flag)]
     straighten: bool,
     /// The area the frame may not leave, in document units. An image-mode turn moves or shrinks the frame to keep it
-    /// inside (Command keeps it as it was at the press).
+    /// inside (Command keeps it as it was at the press). An edge or corner drag of a document crop may still take it
+    /// past them: the crop grows the canvas.
     #[prop]
     bounds: Option<DocRect>,
     /// Image mode: the frame stays upright on screen and a move or turn moves or turns the view instead.
@@ -232,6 +233,7 @@ impl<'a> CropOverlay<'a> {
             image: self.image_mode,
             auto_center: self.auto_center,
             fills_uncovered: self.fills_uncovered,
+            resize_grows: matches!(self.scope, CropScope::Document),
             snap: canvas_snap(env),
             os: env.shell().os,
         }

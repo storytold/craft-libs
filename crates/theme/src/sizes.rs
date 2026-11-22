@@ -107,7 +107,6 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.bar.options_narrow" Num 16.0..=80.0 => s.bar.options_narrow;
         "base.size.panel_header" Num 16.0..=64.0 => s.panel_header;
         "base.size.popup_min" Num 64.0..=640.0 => s.popup_min;
-        "base.size.scroll_fade" Num 4.0..=64.0 => s.scroll_fade;
         "base.size.thumb.sm" Num 12.0..=96.0 => s.thumb.sm;
         "base.size.thumb.md" Num 12.0..=96.0 => s.thumb.md;
         "base.size.thumb.lg" Num 12.0..=96.0 => s.thumb.lg;
@@ -140,13 +139,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.float.height" Num 48.0..=1024.0 => s.float.height;
         "base.size.window.cascade" Num 8.0..=96.0 => s.window.cascade;
         "base.size.pane.least" Num 16.0..=128.0 => s.pane.least;
-        "base.size.ruler.tick.mid" Num 1.0..=32.0 => s.ruler.tick.mid;
-        "base.size.ruler.tick.minor" Num 1.0..=32.0 => s.ruler.tick.minor;
-        "base.size.story.height" Num 120.0..=1024.0 => s.story.height;
-        "base.size.story.width_min" Num 120.0..=1024.0 => s.story.width_min;
-        "base.size.story.width_max" Num 120.0..=2048.0 => s.story.width_max;
         "base.size.dock.column" Num 120.0..=640.0 => s.dock.column;
-        "base.size.notice.width" Num 120.0..=1024.0 => s.notice.width;
         "base.size.dialog.least" Num 120.0..=1024.0 => s.dialog.least;
         "base.size.dialog.wrap" Num 120.0..=1024.0 => s.dialog.wrap;
         "base.size.dialog.button" Num 24.0..=240.0 => s.dialog.button;

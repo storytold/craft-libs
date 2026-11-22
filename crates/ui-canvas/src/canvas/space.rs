@@ -364,7 +364,8 @@ pub(crate) fn context_menu<C: Component>(cx: &mut Cx<'_, C>, part: impl Into<Par
 
 /// The env value that carries the space of the innermost canvas; `None` outside a canvas and inside a canvas that
 /// has no view.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InCanvas(Option<CanvasSpace>);
 
 impl EnvValue for InCanvas {
@@ -373,8 +374,9 @@ impl EnvValue for InCanvas {
     }
 }
 
-/// The env value that carries the guide a drag out of the canvas's rulers is placing in this pass.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The env value that carries the guide a drag out of the canvas's rulers is placing in this pass: a view under the
+/// canvas runs in every pass of the drag (`GuideDrag` keys in every pass), and replays when no drag is placing one.
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 struct InRulerGuide(Option<super::GuideDrag>);
 
 impl EnvValue for InRulerGuide {

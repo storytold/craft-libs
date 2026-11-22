@@ -11,8 +11,8 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
 use egui::{ColorImage, Id, Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// How large a picture is: its height, from a token.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

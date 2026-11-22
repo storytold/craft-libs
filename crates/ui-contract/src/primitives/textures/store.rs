@@ -371,6 +371,22 @@ impl<K> Default for Stores<K> {
     }
 }
 
+/// The numbers that keep apart the textures one owner makes: a mask or preview made anew gets a number no earlier one
+/// of the same `Serials` had, so an entry kept under its key is never taken for the new one's. The owner of what the
+/// textures show (a tool's state, a model) holds the `Serials`. The numbers are unique per owner, not per context: a
+/// texture store that several owners share keys each entry by the owner's component id as well as the serial. Plain
+/// data, so it can sit in tracked or model state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Serials(u64);
+
+impl Serials {
+    /// A new number: never one this `Serials` gave before.
+    pub fn mint(&mut self) -> u64 {
+        self.0 += 1;
+        self.0
+    }
+}
+
 /// Textures by key and revision, with byte and entry budgets: the one place an app's pictures become egui
 /// textures. The app never holds a `TextureHandle`. The state lives in runtime memory of the context under the
 /// salt; the value is a cheap handle that clones share.

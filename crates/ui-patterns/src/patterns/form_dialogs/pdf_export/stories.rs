@@ -1,7 +1,6 @@
 //! Stories of `PdfExportDialog`.
 
 use super::PdfExportDialog;
-use crate::contract::Bind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_pdf::settings::{PdfSettings, builtin_preset};
 use egui::Ui;
@@ -16,12 +15,12 @@ const PRESETS: [(&str, &str); 4] =
 #[story(PdfExportDialog<'static>, covers = [], drive = Drive::Never)]
 fn pdf_export_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let preset = *data.choice("preset", "default", &PRESETS);
-    let (settings, open, applied) = data.value("pdf", (PdfSettings::default(), true, "default"));
+    let (((settings, applied), pdf_at), (open, open_at)) = data.pair_at(("pdf", (PdfSettings::default(), "default")), ("open", true));
     if *applied != preset {
         if let Some(found) = builtin_preset(preset, "Story") {
             *settings = found.settings;
         }
         *applied = preset;
     }
-    PdfExportDialog::new("Story", Bind::bound(settings)).opened(Bind::bound(open)).artboard_count(ARTBOARDS).show(ui).into()
+    PdfExportDialog::new("Story", pdf_at.bind(settings)).opened(open_at.bind(open)).artboard_count(ARTBOARDS).show(ui).into()
 }
