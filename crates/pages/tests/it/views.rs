@@ -1621,3 +1621,20 @@ fn the_wheel_over_the_pages_scrolls_and_reports_it_while_a_field_beside_them_has
     assert!(state.borrow().offset.1 > before, "the wheel scrolls the pages");
     assert!(scrolled.get(), "the view reports the reader's scroll");
 }
+
+/// A page fitted to the width stands the theme's page side margin from each edge of the view, and the first page stands
+/// the theme's page margin below its top: the spacing is the theme's (production's 70 and 28 points at the comfortable
+/// density), not a size derived from the tool rail.
+#[trial]
+fn a_page_fitted_to_the_width_keeps_the_theme_side_margin() {
+    use craft_theme::{Contrast, Mode};
+    let tokens = craft_ui::testing::style::tokens(Mode::Dark, Contrast::Standard);
+    let (side, margin) = (f64::from(tokens.space.inset.page_side), f64::from(tokens.space.inset.page_margin));
+    let view = rig(3, state_with(|s| s.fit = Fit::Width));
+    let out = view.out.borrow();
+    let page = out.rects[0];
+    let left = page.x0 - out.offset.0;
+    let right = f64::from(out.view.width()) - (page.x1 - out.offset.0);
+    assert!((left - side).abs() < 1.0 && (right - side).abs() < 1.0, "side margins {left} and {right}, not the theme's {side}");
+    assert!((page.y0 - out.offset.1 - margin).abs() < 1.0, "the first page's margin: {} not {margin}", page.y0 - out.offset.1);
+}
