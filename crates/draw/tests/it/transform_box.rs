@@ -1347,6 +1347,49 @@ fn an_alt_click_puts_the_reference_point_half_a_unit_up_and_left() {
     assert!(pivot.distance(Point::new(149.5, 119.5)) < 1e-6, "{pivot:?}");
 }
 
+/// With the reference point hidden, an ⌥ press away from the handles draws no point while the button is down, neither at
+/// the old place nor at the new one, as in the reference application; the click moves it, still hidden, and an ⌥ drag
+/// draws it where the drag has it.
+#[trial]
+fn a_held_alt_press_draws_no_hidden_reference_point_until_it_drags() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.reference_point = false;
+        config.mods = Some(Mods::ALT);
+    });
+    let glyphs = |h: &mut Harness| {
+        let mut found = Vec::new();
+        circles(&h.fixture.frame_shapes(), &mut found);
+        found
+    };
+    let at = h.screen(Point::new(150.0, 120.0));
+    frame(&mut h, vec![pointer::moved(at)]);
+    frame(&mut h, vec![pointer::press(at)]);
+    frame(&mut h, Vec::new());
+    assert_eq!(glyphs(&mut h), Vec::new(), "no point while the press is held, the old one included");
+    frame(&mut h, vec![pointer::release(at)]);
+    assert_eq!(glyphs(&mut h), Vec::new(), "the hidden point stays hidden after the click");
+    assert!(h.state().pivot.distance(Point::new(149.5, 119.5)) < 1e-6, "the click moved it: {:?}", h.state().pivot);
+
+    let to = h.screen(Point::new(180.0, 140.0));
+    frame(&mut h, vec![pointer::press(at)]);
+    frame(&mut h, vec![pointer::moved(at + by(6.0, 4.0))]);
+    frame(&mut h, vec![pointer::moved(to)]);
+    let drawn = glyphs(&mut h);
+    let pivot = h.screen(h.state().pivot);
+    assert!(!drawn.is_empty() && drawn.iter().all(|c| (*c - pivot).length() < 0.5), "drawn at the dragged point {pivot:?}: {drawn:?}");
+    frame(&mut h, vec![pointer::release(to)]);
+}
+
+fn circles(shapes: &[egui::Shape], out: &mut Vec<egui::Pos2>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => circles(inner, out),
+            egui::Shape::Circle(circle) => out.push(circle.center),
+            _ => {}
+        }
+    }
+}
+
 /// A corner that keeps the box's proportions stops where the drag puts it, as in the reference application (a corner
 /// dragged to 2 px from the document's centre, or 3 px from its edge, is not drawn to them); one that stretches
 /// freely still snaps.

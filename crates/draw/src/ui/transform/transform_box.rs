@@ -494,7 +494,9 @@ pub struct TransformBox<'a> {
     /// Crate-private: the public entry is `TransformOverlay::reach`.
     #[prop(vis = "pub(crate)")]
     reach: TransformReach,
-    /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
+    /// Whether this pass holds a drag of the reference point that has begun, so the hidden point is drawn while it
+    /// moves. An Alt press that has not moved yet draws no point: the reference application shows none there, and the
+    /// stored point is still the old one until the click lands.
     pivot_held: bool,
     /// Whether this pass holds a drag that began, so a live line's box shows as it scales.
     dragging: bool,
@@ -1312,7 +1314,7 @@ impl Component for TransformBox<'_> {
         if let Some(line) = self.line.filter(|line| line.ends == LineEnds::Free) {
             self.run_line_ends(cx, &space, &line);
         }
-        self.pivot_held = cx.press_slot::<Grip>().is_some_and(|grip| grip.part == BoxPart::Pivot);
+        self.pivot_held = cx.press_slot::<Grip>().is_some_and(|grip| grip.part == BoxPart::Pivot && (grip.began || !grip.moves_pivot));
         self.dragging = cx.press_slot::<Grip>().is_some_and(|grip| grip.began);
         self.report.held = cx.press_slot::<Grip>().map(|grip| grip.part);
         let pressing = held || cx.press_slot::<Grip>().is_some() || cx.press_slot::<EndGrip>().is_some();
