@@ -112,6 +112,13 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Whether `path` names an entry: a file, a folder or a symlink, a dangling one too (`exists`
+/// follows the link and says no, so a save would replace the link's name without asking).
+// pc: apps/wordcraft/src/portal_save.rs:259 entry_exists (storytold/wordcraft 09faec42e)
+pub(crate) fn entry_exists(path: &Path) -> bool {
+    path.symlink_metadata().map_or_else(|e| e.kind() != std::io::ErrorKind::NotFound, |_| true)
+}
+
 /// Whether `a` and `b` name one entry in one folder: another spelling of a name on a file system
 /// that ignores letter case is the same entry; a hard link is another entry.
 // pc: apps/photocraft/src/services.rs:392 same_entry
@@ -584,7 +591,7 @@ impl FilePanels {
     /// make a new collision.
     // pc: crates/ui-egui/src/file_dialog.rs:193 replaces_unasked
     pub fn replaces_unasked(answered: &Path, settled: &Path) -> bool {
-        answered != settled && settled.exists() && !same_entry(answered, settled)
+        answered != settled && entry_exists(settled) && !same_entry(answered, settled)
     }
 
     /// The replace question as a native message box with Replace (default) and Cancel.
@@ -861,6 +868,20 @@ pub(crate) mod service_tests {
         panels.pump(NONE);
         assert_eq!(answered(&service, asked), Picked::Paths(vec![dir.join("Photo.png")]));
         assert_eq!(log.borrow().len(), 3, "no question for a path the panel asked about");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A name that is a dangling symlink counts as taken: `exists` follows the link and says no.
+    #[cfg(unix)]
+    #[trial]
+    fn a_dangling_symlink_is_a_replace_to_ask_about() {
+        let dir = std::env::temp_dir().join(format!("craft-dialogs-dangling-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let link = dir.join("Photo.png");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(dir.join("missing"), &link).expect("dangling link");
+        assert!(!link.exists() && entry_exists(&link) && !entry_exists(&dir.join("absent.png")));
+        assert!(FilePanels::replaces_unasked(&dir.join("Photo"), &link), "an extension change onto the link is asked about");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -54,3 +54,14 @@ fn the_picked_file_type_gives_a_bare_name_its_extension_and_a_typed_extension_wi
         assert_eq!(with_chosen_type(Path::new(path), opened, chosen, filters), PathBuf::from(expected), "{path} with type {picked:?}");
     }
 }
+
+// pc: apps/wordcraft/src/portal_save.rs:852 is_document_portal_detects_portal_fuse_paths
+#[trial]
+fn document_portal_paths_are_told_from_others() {
+    assert!(is_document_portal(Path::new("/run/user/1000/doc/1234abcd/test.docx")));
+    assert!(is_document_portal(Path::new("/var/run/user/1000/doc/by-app/app/test.docx")));
+    assert!(is_document_portal(Path::new("/run/flatpak/doc/1234abcd/test.docx")));
+    assert!(!is_document_portal(Path::new("/home/user/Documents/test.docx")));
+    assert!(!is_document_portal(Path::new("/tmp/doc/test.docx")));
+    assert!(!is_document_portal(Path::new("/run/flatpak/other/test.docx")));
+}

@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use raw_window_handle::RawWindowHandle;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
+use crate::service::entry_exists;
 use crate::{FileDialog, Filter};
 
 /// How soon an empty answer means the dialog never showed: a portal that fails answers at once
@@ -396,10 +397,20 @@ pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &
     }
 }
 
+/// Whether `path` is in the XDG document portal's FUSE mount (`/run/user/<uid>/doc/…`, or
+/// `/run/flatpak/doc/…` inside a Flatpak sandbox). A file there that the sandbox is not shown
+/// reads as absent, so the answer cannot say whether a changed name replaces something.
+// pc: apps/wordcraft/src/portal_save.rs:400 is_document_portal (storytold/wordcraft 09faec42e)
+fn is_document_portal(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    ((s.starts_with("/run/user/") || s.starts_with("/var/run/user/")) && s.contains("/doc/")) || s.starts_with("/run/flatpak/doc/")
+}
+
 /// Save on Linux and the BSDs: the portal's dialog, with the name given the extension of the file
 /// type picked. When that changes the name to one that already exists, the dialog opens again
 /// under the new name, so the portal asks before replacing it (it asked only about the typed
-/// name). A portal that can't be reached or can't show the dialog answers
+/// name). Inside the document portal it opens again for any changed name, since an existing file
+/// may not show there, and a dangling symlink counts as existing. A portal that can't be reached or can't show the dialog answers
 /// [`SaveOutcome::UseRfd`]; an answer whose file type nothing tells answers
 /// [`SaveOutcome::Unavailable`], never a guess.
 // pc: apps/photocraft/src/portal_save.rs:174 save_as, services.rs:244-280; apps/wordcraft/src/portal_save.rs:471 save_as
@@ -423,7 +434,9 @@ pub(crate) fn save_as(mut req: SaveRequest, cancel: &Cancel) -> SaveOutcome {
         // A typed extension is the user's own: `with_chosen_type` keeps one it recognises.
         let exts: &[String] = chosen.and_then(|i| req.filters.get(i)).map_or(&[], |f| f.extensions.as_slice());
         let path = with_chosen_type(&saved.path, req.suggested.as_deref(), exts, &req.filters);
-        if path == saved.path || !path.exists() {
+        // pc: apps/wordcraft/src/portal_save.rs:483 needs_reopen
+        let needs_reopen = entry_exists(&path) || (path != saved.path && is_document_portal(&saved.path));
+        if path == saved.path || !needs_reopen {
             return SaveOutcome::Saved(path);
         }
         req.name = path.file_name().map(|n| n.to_string_lossy().into_owned());
