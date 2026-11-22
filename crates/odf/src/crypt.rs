@@ -350,14 +350,14 @@ fn decrypt_whole(z: &mut craft_zip::Archive<'_>, p: &Params, size: Option<usize>
     let inner = decrypt_file(&data, p, size, password)?;
     // The inside is a plain package (its entry count checked before it is indexed); one encrypted
     // again inside it isn't opened. Its manifest is read strictly: a lenient read stops at
-    // `MAX_ENTRIES` and could miss an encrypted entry past them.
+    // `MAX_ENTRIES` and could miss an encrypted entry past them, and one that can't be read
+    // (damaged, or past `MAX_ENTRY`) can't show there is none. No manifest at all is a plain package.
     let not_plain = || CryptError::Unsupported("the encrypted package doesn't hold a plain document".into());
     let mut z = open_zip(&inner).map_err(|_| not_plain())?;
-    if let Some(m) = read_entry(&mut z, MANIFEST_PATH) {
-        let m = Manifest::parse_strict(&m).map_err(|_| not_plain())?;
-        if m.entries.iter().any(|e| e.encryption.is_some()) {
-            return Err(not_plain());
-        }
+    let Some(m) = z.read(MANIFEST_PATH, MAX_ENTRY).map_err(|_| not_plain())? else { return Ok(inner) };
+    let m = Manifest::parse_strict(&m).map_err(|_| not_plain())?;
+    if m.entries.iter().any(|e| e.encryption.is_some()) {
+        return Err(not_plain());
     }
     Ok(inner)
 }

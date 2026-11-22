@@ -154,7 +154,21 @@ fn hostile_whole_package_encryption_is_refused() {
         ("content.xml", &[0u8; 32]),
     ]);
     assert!(matches!(decrypt(&whole_package(&hidden, "pw", SMALL_COSTS, None), "pw"), Err(CryptError::Unsupported(_))));
+    // Or behind a manifest that can't be read: its stored bytes damaged.
+    let name = b"META-INF/manifest.xml";
+    let mut damaged = zip_of(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.text"),
+        ("META-INF/manifest.xml", ENCRYPTED_MANIFEST.as_bytes()),
+        ("content.xml", &[0u8; 32]),
+    ]);
+    let at = damaged.windows(name.len()).position(|w| w == name).unwrap();
+    let extra = usize::from(u16::from_le_bytes([damaged[at - 2], damaged[at - 1]]));
+    damaged[at + name.len() + extra + 2] ^= 0xff;
+    assert!(matches!(decrypt(&whole_package(&damaged, "pw", SMALL_COSTS, None), "pw"), Err(CryptError::Unsupported(_))));
 }
+
+/// A manifest saying `content.xml` is encrypted.
+const ENCRYPTED_MANIFEST: &str = r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"><manifest:encryption-data><manifest:algorithm manifest:algorithm-name="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/></manifest:encryption-data></manifest:file-entry></manifest:manifest>"#;
 
 #[test]
 fn a_package_declaring_too_many_entries_is_refused_before_it_is_decrypted() {
