@@ -403,6 +403,13 @@ status = "moved"
 [[type]]
 name = "ZoomLadder"
 old = "craft_ui::canvas::zoom::ZoomLadder"
+new = ""
+status = "removed"
+note = "`ZoomScheme` holds the rungs."
+
+[[type]]
+name = "ZoomScheme"
+old = ""
 new = "craft_behavior::ZoomScheme"
 status = "replaced"
 note = "A scheme of rungs, range and 100 % (`PHOTOSHOP`, `ILLUSTRATOR`) with a `ZoomFloor`, read from the root env; the zoom functions take it as their last argument."
