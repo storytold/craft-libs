@@ -215,7 +215,12 @@ impl Look {
         if let Some(check) = check {
             bind = bind.check_with(check, BindCheck::validity);
         }
-        let slider = Slider::new(bind, self.range.clone()).propose_on_primary_down(self.propose_on_primary_down).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
+        let slider = Slider::new(bind, self.range.clone())
+            .propose_on_primary_down(self.propose_on_primary_down)
+            .scale(self.scale)
+            .fill(self.fill)
+            .thumb(self.thumb)
+            .label(name.clone());
         let slider = match face {
             Some(face) => slider.track_face(face),
             None => slider,

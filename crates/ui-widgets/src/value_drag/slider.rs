@@ -260,15 +260,19 @@ impl Component for Slider<'_> {
         let at = |position: f64| marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)));
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or_else(|| scale.middle());
         let press_at = |cx: &Cx<'_, Self>, x: f32| pick.press(&[along.x(scale.position(current(cx)))], x);
-        if self.propose_on_primary_down {
+        // Multi-clicks keep the legacy track path: reset wins on Down, and a later drag
+        // can still begin from the reset value through the existing DragStart handling.
+        let follow_track_on_down = self.propose_on_primary_down
+            && cx.part(TRACK).press.phase.start().is_none_or(|start| start.button != craft_behavior::PointerButton::Primary || start.clicks < 2);
+        if follow_track_on_down {
             let press = cx.part(TRACK).press;
             if let Some(start) = press.phase.start().filter(|start| start.button == craft_behavior::PointerButton::Primary) {
                 let absolute = craft_behavior::ValueDrag::absolute(travel.track.clone(), travel.units.clone());
-                if matches!(press.phase, PressPhase::Down { .. }) {
-                    if let Some(position) = absolute.at(start.origin, rtl) {
-                        // Fine/coarse travel continues from this real snapped landing, not the value before the press.
-                        *cx.memory::<Held>() = Held { from: scale.position(at(position)), press: Some(Press::Jump(0)) };
-                    }
+                if matches!(press.phase, PressPhase::Down { .. })
+                    && let Some(position) = absolute.at(start.origin, rtl)
+                {
+                    // Fine/coarse travel continues from this real snapped landing, not the value before the press.
+                    *cx.memory::<Held>() = Held { from: scale.position(at(position)), press: Some(Press::Jump(0)) };
                 }
                 let held = cx.memory::<Held>().clone();
                 // The existing shared primitive owns Begin/update/commit and the cancelled-held-release latch.
@@ -283,7 +287,7 @@ impl Component for Slider<'_> {
             }
         }
         for key in [Self::THUMB, TRACK] {
-            if key == TRACK && self.propose_on_primary_down {
+            if key == TRACK && follow_track_on_down {
                 continue;
             }
             let press = cx.part(key).press;
