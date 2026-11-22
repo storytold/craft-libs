@@ -111,18 +111,7 @@ fn unpack_code(b: &[u8], base: u8) -> String {
     }
 }
 
-/// Qualifier string and locale for a `ResTable_config` at `off`.
-fn config_qualifiers(r: &Reader<'_>, off: usize) -> (String, String) {
-    let size = r.u32_le(off).unwrap_or(0) as usize;
-    let get8 = |o: usize| if o < size { r.u8(off + o) } else { None };
-    let get16 = |o: usize| if o + 1 < size { r.u16_le(off + o) } else { None };
-    let mut q: Vec<String> = Vec::new();
-    if let Some(mcc) = get16(4).filter(|&v| v != 0) {
-        q.push(format!("mcc{mcc}"));
-    }
-    if let Some(mnc) = get16(6).filter(|&v| v != 0) {
-        q.push(format!("mnc{}", if mnc == u16::MAX { 0 } else { mnc }));
-    }
+fn locale_qualifier(r: &Reader<'_>, off: usize, size: usize, get8: impl Fn(usize) -> Option<u8>) -> String {
     let lang = if size >= 12 { r.slice(off + 8, 2).map(|b| unpack_code(b, b'a')).unwrap_or_default() } else { String::new() };
     let region = if size >= 12 { r.slice(off + 10, 2).map(|b| unpack_code(b, b'0')).unwrap_or_default() } else { String::new() };
     // Extended locale fields were appended to ResTable_config. Older
@@ -147,6 +136,22 @@ fn config_qualifiers(r: &Reader<'_>, off: usize) -> (String, String) {
     } else if !locale.is_empty() && !region.is_empty() {
         locale.push_str(&format!("-r{region}"));
     }
+    locale
+}
+
+/// Qualifier string and locale for a `ResTable_config` at `off`.
+fn config_qualifiers(r: &Reader<'_>, off: usize) -> (String, String) {
+    let size = r.u32_le(off).unwrap_or(0) as usize;
+    let get8 = |o: usize| if o < size { r.u8(off + o) } else { None };
+    let get16 = |o: usize| if o + 1 < size { r.u16_le(off + o) } else { None };
+    let mut q: Vec<String> = Vec::new();
+    if let Some(mcc) = get16(4).filter(|&v| v != 0) {
+        q.push(format!("mcc{mcc}"));
+    }
+    if let Some(mnc) = get16(6).filter(|&v| v != 0) {
+        q.push(format!("mnc{}", if mnc == u16::MAX { 0 } else { mnc }));
+    }
+    let locale = locale_qualifier(r, off, size, get8);
     if !locale.is_empty() {
         q.push(locale.clone());
     }
