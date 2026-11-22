@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 craft-eps = { workspace = true }
+craft-cfb = { workspace = true, optional = true }
 craft-image-codecs = { workspace = true, optional = true }
 craft-raw = { workspace = true, optional = true }
 craft-ora = { workspace = true, optional = true }
@@ -39,6 +40,7 @@ affinity = []
 pcraft = ["dep:craft-pcraft-bundle"]
 ase = []
 office = []
+publisher = ["dep:craft-cfb"]
 designcraft = []
 stencilcraft = []
 plotter = []
