@@ -14,7 +14,7 @@ pub const MAX_DEPTH: usize = 8;
 /// header made 2 million cells and took 3 to 5 GB to convert; past this, rows are left out.
 pub const MAX_TABLE_CELLS: usize = 1 << 18;
 
-/// Deepest groups in groups kept (hostile files).
+/// Deepest subgroup level kept, with the outer group at depth 0 (hostile files).
 pub const MAX_GROUP_DEPTH: usize = 8;
 
 /// Longest font name the importers keep, in bytes (as the .docx reader); a longer one (no real

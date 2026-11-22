@@ -423,7 +423,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 crop: if opts.paras { *crop } else { [0.0; 4] },
             }))
         }
-        InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if depth < MAX_GROUP_DEPTH => {
+        InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if depth <= MAX_GROUP_DEPTH => {
             let ratio = |outer: f32, inner: f32| {
                 let r = outer / inner;
                 if r.is_finite() && r > 0.0 { r } else { 1.0 }

@@ -499,7 +499,7 @@ impl<'a> Builder<'a> {
                 };
                 Some(obj)
             }
-            Inline::Group { w, h, float, members, .. } if depth < MAX_GROUP_DEPTH => {
+            Inline::Group { w, h, float, members, .. } if depth <= MAX_GROUP_DEPTH => {
                 let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
                 let (w, h) = (fit(*w), fit(*h));
                 let off = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };

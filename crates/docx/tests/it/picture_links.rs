@@ -511,6 +511,7 @@ fn group_picture_links_require_their_own_external_hyperlink_relationship() {
         rels.replace(type_name, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"),
         rels.replace(" TargetMode=\"External\"", ""),
         rels.replace("Target=\"https://example.com/Child\"", "Target=\"   \""),
+        rels.replace("https://example.com/Child", &format!("https://example.com/{}", "x".repeat(8 << 10))),
     ] {
         assert_ne!(modified, rels);
         check(&replacing_picture_part(&saved, "word/_rels/document.xml.rels", &modified), None);
@@ -598,4 +599,103 @@ fn linked_groups_share_one_retained_member_budget() {
     let dml = replacing_picture_part(&saved_small, "word/document.xml", &xml.to_xml());
     let doc = craft_docx::read(&dml).unwrap();
     assert_eq!(count(&doc.body[0].as_para().unwrap().objects[0]), max, "DrawingML must share the same root-wide bound");
+}
+
+#[test]
+fn linked_group_coordinates_keep_their_scale() {
+    fn image_rect(object: &InlineObject, x: f32, scale: f32) -> (f32, f32) {
+        match object {
+            InlineObject::Image { w, .. } => (x, w * scale),
+            InlineObject::Group { w, ch_w, children, .. } => {
+                assert_eq!(children.len(), 1);
+                let inner = scale * w / ch_w;
+                image_rect(&children[0].obj, x + children[0].x * inner, inner)
+            }
+            _ => panic!("expected a picture or its group"),
+        }
+    }
+    let picture = picture_run(1, "");
+    let picture = &picture[picture.find("<pic:pic>").unwrap()..picture.find("</pic:pic>").unwrap() + "</pic:pic>".len()];
+    let picture = picture
+        .replace(r#"<a:off x="0" y="0"/><a:ext cx="254000" cy="254000"/>"#, r#"<a:off x="114300000" y="0"/><a:ext cx="12700000" cy="12700000"/>"#);
+    for linked in [false, true] {
+        let vml_link = if linked { r#"href="https://example.com/subgroup""# } else { "" };
+        let dml_link = if linked { r#"<a:hlinkClick r:id="rIdWeb"/>"# } else { "" };
+        let vml = format!(
+            r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:group style="width:200pt;height:200pt" coordsize="200,200"><v:group style="width:100pt;height:100pt" coordsize="10000,10000" coordorigin="-7000,0" {vml_link}><v:shape style="left:9000;width:1000;height:1000"><v:imagedata r:id="rIdPic"/></v:shape></v:group></v:group></w:pict></w:r></w:p>"#,
+        );
+        let dml = format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="2540000" cy="2540000"/><wp:docPr id="1" name="Group"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:wgp xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="2540000"/><a:chOff x="0" y="0"/><a:chExt cx="2540000" cy="2540000"/></a:xfrm></wpg:grpSpPr><wpg:grpSp><wpg:cNvPr id="2" name="Subgroup">{dml_link}</wpg:cNvPr><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="1270000"/><a:chOff x="-88900000" y="0"/><a:chExt cx="127000000" cy="127000000"/></a:xfrm></wpg:grpSpPr>{picture}</wpg:grpSp></wpg:wgp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+        );
+        for body in [vml, dml] {
+            let doc = craft_docx::read(&package(&body)).unwrap();
+            let reopened = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+            for current in [&doc, &reopened] {
+                let (x, w) = image_rect(&current.body[0].as_para().unwrap().objects[0], 0.0, 1.0);
+                assert!((x - 160.0).abs() < 0.01, "the rebased offset must be scaled before clipping: {x}");
+                assert!((w - 10.0).abs() < 0.01, "the picture keeps its size in the same coordinate system: {w}");
+            }
+        }
+    }
+}
+
+#[test]
+fn inherited_drawing_targets_share_a_document_byte_budget() {
+    let target = format!("https://example.com/{}", "x".repeat((8 << 10) - "https://example.com/".len()));
+    let leaf = r##"<v:shape type="#Target" style="width:1pt;height:1pt"><v:imagedata r:id="rIdPic"/></v:shape>"##.repeat(1000);
+    let paragraph = format!(
+        r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shapetype id="Target" href="{target}"/><v:group style="width:100pt;height:100pt" coordsize="100,100">{leaf}</v:group></w:pict></w:r></w:p>"#,
+    );
+    let doc = craft_docx::read(&package(&paragraph.repeat(9))).unwrap();
+    let mut bytes = 0;
+    let mut retained = 0;
+    let mut dropped = 0;
+    for block in &doc.body {
+        let InlineObject::Group { children, .. } = &block.as_para().unwrap().objects[0] else { panic!() };
+        assert_eq!(children.len(), 1000, "a target budget must not discard the drawing");
+        for child in children {
+            assert!(matches!(child.obj, InlineObject::Image { .. }));
+            if let Some(link) = &child.link {
+                assert_eq!(link, &target);
+                bytes += link.len();
+                retained += 1;
+            } else {
+                dropped += 1;
+            }
+        }
+    }
+    assert!(retained > 0 && dropped > 0, "the same budget must span every group in the document");
+    assert!(bytes <= 64 << 20);
+}
+
+#[test]
+fn native_ink_keeps_its_vml_preview_target_without_overriding_its_own() {
+    for own_target in [false, true] {
+        let input = super::fixtures::ink_docx(true, false);
+        let mut xml = part(&input, "word/document.xml");
+        xml = xml.replace(r#"<v:shape id="preview""#, r#"<v:shape id="preview" href="https://example.com/preview""#);
+        let mut input = replacing_picture_part(&input, "word/document.xml", &xml);
+        if own_target {
+            let xml = xml.replace(
+                r#"<wp:docPr id="1" name="Study ink"/>"#,
+                r#"<wp:docPr id="1" name="Study ink"><a:hlinkClick r:id="rNativeLink"/></wp:docPr>"#,
+            );
+            let rels = part(&input, "word/_rels/document.xml.rels").replace(
+                "</Relationships>",
+                r#"<Relationship Id="rNativeLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/native" TargetMode="External"/></Relationships>"#,
+            );
+            input = replacing_picture_part(&input, "word/document.xml", &xml);
+            input = replacing_picture_part(&input, "word/_rels/document.xml.rels", &rels);
+        }
+        let mut doc = craft_docx::read(&input).unwrap();
+        for _ in 0..2 {
+            let paragraph = doc.body[1].as_para().unwrap();
+            let InlineObject::Graphic { graphic, .. } = &paragraph.objects[0] else { panic!() };
+            assert_eq!(graphic.kind.noun(), "ink");
+            assert!(graphic.source.is_some() && !graphic.items.is_empty());
+            let expected = if own_target { "https://example.com/native" } else { "https://example.com/preview" };
+            assert_eq!(paragraph.props_of_char(0).link.as_deref(), Some(expected));
+            doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
 }

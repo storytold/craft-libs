@@ -195,4 +195,67 @@ fn vml_hyperlinks_survive_flow_for_roots_and_nested_members() {
     let Inline::Group { link: own, members: inner, .. } = &members[1].inline else { panic!("nested group") };
     assert!(own.is_none(), "the nested group's target is carried by its Member, not duplicated on descendants");
     assert_eq!(inner[0].link.as_deref(), Some("#nested-place"));
+
+    fn check_depth_boundary(image: impl Fn(Option<&str>) -> Inline) {
+        // DOCX retains an outer group at depth 0 and eight nested subgroups. Flow must
+        // keep that complete tree rather than lose its last drawable member.
+        fn linked_chain(leaf: Inline, deepest: usize) -> Inline {
+            let mut inline = leaf;
+            for level in (0..=deepest).rev() {
+                let target = if level == deepest { "#last-picture".to_string() } else { format!("https://example.com/level{}", level + 1) };
+                inline = Inline::Group {
+                    w: 12.0,
+                    h: 8.0,
+                    float: None,
+                    link: (level == 0).then(|| "https://example.com/deep-root".into()),
+                    members: vec![Member { x: 0.0, y: 0.0, inline, link: Some(target) }],
+                };
+            }
+            inline
+        }
+        let boundary = Flow { blocks: vec![FBlock::Para(para(Kind::Normal, vec![linked_chain(image(None), 8)]))], ..Default::default() };
+        let boundary_doc = to_doc(&boundary);
+        let boundary_para = boundary_doc.body[0].as_para().unwrap();
+        assert_eq!(boundary_para.objects.len(), 1, "root plus eight subgroups remains drawable");
+        assert_eq!(boundary_para.props_of_char(0).link.as_deref(), Some("https://example.com/deep-root"));
+        let mut object = &boundary_para.objects[0];
+        for level in 0..=8 {
+            let craft_wordmodel::para::InlineObject::Group { children, .. } = object else { panic!("group at level {level}") };
+            assert_eq!(children.len(), 1);
+            let target = if level == 8 { "#last-picture".to_string() } else { format!("https://example.com/level{}", level + 1) };
+            assert_eq!(children[0].link.as_deref(), Some(target.as_str()), "document target at level {level}");
+            object = &children[0].obj;
+        }
+        let craft_wordmodel::para::InlineObject::Image { media, .. } = object else { panic!("last picture") };
+        assert_eq!(boundary_doc.media.get(media).unwrap().as_slice(), PNG);
+        let boundary_back = from_doc_with(&boundary_doc, FlowOpts { boxes: true, paras: true, ..Default::default() });
+        let boundary_paras = paras(&boundary_back.blocks);
+        assert_eq!(boundary_paras[0].inlines.len(), 1);
+        let mut inline = &boundary_paras[0].inlines[0];
+        for level in 0..=8 {
+            let Inline::Group { members, link, .. } = inline else { panic!("flow group at level {level}") };
+            assert_eq!(link.as_deref(), (level == 0).then_some("https://example.com/deep-root"));
+            assert_eq!(members.len(), 1);
+            let target = if level == 8 { "#last-picture".to_string() } else { format!("https://example.com/level{}", level + 1) };
+            assert_eq!(members[0].link.as_deref(), Some(target.as_str()), "flow target at level {level}");
+            inline = &members[0].inline;
+        }
+        let Inline::Image(last) = inline else { panic!("last flow picture") };
+        assert_eq!(last.data.as_slice(), PNG);
+
+        // One further subgroup still exceeds the existing limit. Its root's separate
+        // drawable sibling survives, so dropping the over-deep branch cannot pass vacuously.
+        let mut beyond = linked_chain(image(None), 9);
+        let Inline::Group { members, .. } = &mut beyond else { panic!() };
+        members.push(Member { x: 0.0, y: 0.0, inline: image(None), link: Some("https://example.com/sibling".into()) });
+        let beyond_flow = Flow { blocks: vec![FBlock::Para(para(Kind::Normal, vec![beyond]))], ..Default::default() };
+        let beyond_doc = to_doc(&beyond_flow);
+        let beyond_para = beyond_doc.body[0].as_para().unwrap();
+        assert_eq!(beyond_para.objects.len(), 1);
+        let craft_wordmodel::para::InlineObject::Group { children, .. } = &beyond_para.objects[0] else { panic!() };
+        assert_eq!(children.len(), 1, "the ninth subgroup is still excluded");
+        assert_eq!(children[0].link.as_deref(), Some("https://example.com/sibling"));
+        assert!(matches!(&children[0].obj, craft_wordmodel::para::InlineObject::Image { .. }));
+    }
+    check_depth_boundary(image);
 }

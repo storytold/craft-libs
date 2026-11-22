@@ -468,6 +468,43 @@ fn pasted_box_copies_count_the_objects_they_copy() {
         math: crate::math::Math { nodes: crate::math::parse_linear(&"z".repeat(5000)), ..Default::default() },
     };
     assert!(object_cost(&eq) >= 5000);
+
+    // Retaining a linked subgroup must not hide its text box from fragment part
+    // collection or from the story-ID remapping when pasted into another document.
+    let mut source = doc(&[""]);
+    let direct = source.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Direct story", CharProps::default()))]);
+    let nested = source.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Nested story", CharProps::default()))]);
+    let group = |children| InlineObject::Group { w: 20.0, h: 10.0, float: Default::default(), ch_w: 20.0, ch_h: 10.0, children, canvas: None };
+    let subgroup = group(vec![member(box_shape(Some(nested)))]);
+    let object = group(vec![
+        member(box_shape(Some(direct))),
+        crate::para::GroupChild { x: 5.0, y: 0.0, obj: subgroup, link: Some("https://example.com/subgroup".into()) },
+    ]);
+    assert_eq!(object.text_boxes(), [direct, nested], "depth-first direct and nested stories");
+    source.insert_object(&Pos::body(0, 0), object, &CharProps::default()).unwrap();
+    let fragment = source.copy_range(&Pos::body(0, 0), &Pos::body(0, 3));
+    assert!(fragment.parts.contains_key(&direct), "the direct member's story is copied");
+    assert!(fragment.parts.contains_key(&nested), "the linked subgroup's story is copied");
+
+    let mut target = doc(&["target"]);
+    let direct_collision = target.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("First header", CharProps::default()))]);
+    let nested_collision = target.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Second header", CharProps::default()))]);
+    assert_eq!((direct_collision, nested_collision), (direct, nested));
+    target.insert_fragment(&Pos::body(0, 6), &fragment).unwrap();
+    let InlineObject::Group { children, .. } = &target.body[0].as_para().unwrap().objects[0] else { panic!() };
+    let copied_direct = children[0].obj.text_box().expect("the direct member keeps its story");
+    assert_eq!(children[1].link.as_deref(), Some("https://example.com/subgroup"));
+    let InlineObject::Group { children, .. } = &children[1].obj else { panic!("the linked subgroup remains nested") };
+    let copied_nested = children[0].obj.text_box().expect("the nested member keeps its story");
+    assert_ne!(copied_direct, direct_collision);
+    assert_ne!(copied_nested, nested_collision, "the nested slot must be remapped, not point at a header");
+    assert_ne!(copied_direct, copied_nested);
+    assert!(target.parts.contains_key(&copied_direct));
+    assert!(target.parts.contains_key(&copied_nested));
+    assert_eq!(target.plain_text(StoryRef::Part(copied_direct)), "Direct story");
+    assert_eq!(target.plain_text(StoryRef::Part(copied_nested)), "Nested story");
+    assert_eq!(target.plain_text(StoryRef::Part(direct_collision)), "First header");
+    assert_eq!(target.plain_text(StoryRef::Part(nested_collision)), "Second header");
 }
 
 #[test]

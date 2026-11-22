@@ -115,15 +115,26 @@ impl Reader<'_> {
     /// Part 1 §20.4.2.5, §21.1.2.3.5) naming an external hyperlink relationship. Word stores a
     /// picture's link there rather than in a `w:hyperlink` around its run (#5267). Its `#name`
     /// part, when the address has one, stays part of the address.
-    pub(super) fn drawing_link(d: &El, rels: &Rels) -> Option<String> {
+    pub(super) fn drawing_link(&mut self, d: &El, rels: &Rels) -> Option<String> {
         let frame = d.child("wp:inline").or_else(|| d.child("wp:anchor"))?;
-        Self::drawing_property_link(frame.child("wp:docPr"), rels)
+        self.drawing_property_link(frame.child("wp:docPr"), rels)
     }
 
-    fn drawing_property_link(nv: Option<&El>, rels: &Rels) -> Option<String> {
+    fn drawing_property_link(&mut self, nv: Option<&El>, rels: &Rels) -> Option<String> {
         let id = nv?.child("a:hlinkClick")?.attr("r:id")?;
         let rel = rels.by_id(id).filter(|r| r.external && crate::package::rel_is(&r.kind, rt::HYPERLINK))?;
-        Some(rel.target.trim().to_string()).filter(|u| !u.is_empty())
+        self.keep_drawing_link(&rel.target)
+    }
+
+    /// A template or relationship can be referenced many times. Charge each retained copy
+    /// before allocating, using the same target and string ceilings as Flow.
+    pub(super) fn keep_drawing_link(&mut self, target: &str) -> Option<String> {
+        let target = target.trim();
+        if target.is_empty() || target.len() > 8 << 10 || target.len() > (64 << 20) - self.drawing_link_bytes {
+            return None;
+        }
+        self.drawing_link_bytes += target.len();
+        Some(target.to_string())
     }
 
     /// Native ink or an Office 2016 chart kept with its fallback (`mc:AlternateContent`), and the
@@ -135,7 +146,7 @@ impl Reader<'_> {
         }
         let (object, choice) = (self.read_chartex_alternate(sc, ac, rels)?, chartex_choice(ac));
         let link =
-            [choice, ac.child("mc:Fallback")].into_iter().flatten().filter_map(|e| e.child("w:drawing")).find_map(|d| Self::drawing_link(d, rels));
+            [choice, ac.child("mc:Fallback")].into_iter().flatten().filter_map(|e| e.child("w:drawing")).find_map(|d| self.drawing_link(d, rels));
         Some((object, link))
     }
 
@@ -149,10 +160,13 @@ impl Reader<'_> {
         }
         let fallback = ac.child("mc:Fallback");
         let preview = fallback.and_then(|f| f.child("w:pict")).and_then(|p| self.read_vml(sc, p, rels));
-        let Some(mut object) = self.read_drawing(sc, drawing, rels) else { return preview };
+        let Some(mut object) = self.read_drawing(sc, drawing, rels) else {
+            return preview.map(|(object, target)| (object, target.and_then(|target| self.keep_drawing_link(target))));
+        };
+        let (preview, preview_link) = preview.map(|(object, link)| (Some(object), link)).unwrap_or_default();
         if let InlineObject::Graphic { w, h, graphic, .. } = &mut object {
             let graphic = Arc::make_mut(graphic);
-            if let Some((InlineObject::Image { media, .. }, _)) = preview {
+            if let Some(InlineObject::Image { media, .. }) = preview {
                 graphic.items = vec![GraphicItem::Image { rect: [0.0, 0.0, *w, *h], media }];
             }
             if let Some(fallback) = fallback {
@@ -164,8 +178,10 @@ impl Reader<'_> {
                 // A malformed or over-budget fallback must not discard a valid native part.
             }
         }
-        let link =
-            Self::drawing_link(drawing, rels).or_else(|| fallback.and_then(|f| f.child("w:drawing")).and_then(|d| Self::drawing_link(d, rels)));
+        let link = self
+            .drawing_link(drawing, rels)
+            .or_else(|| fallback.and_then(|f| f.child("w:drawing")).and_then(|d| self.drawing_link(d, rels)))
+            .or_else(|| preview_link.and_then(|target| self.keep_drawing_link(target)));
         Some((object, link))
     }
 
@@ -432,7 +448,7 @@ impl Reader<'_> {
                 "w14:contentPart" => e.child("w14:nvContentPartPr").and_then(|p| p.child("w14:cNvPr")),
                 _ => e.child("wps:cNvPr"),
             };
-            let link = Self::drawing_property_link(nv, rels);
+            let link = self.drawing_property_link(nv, rels);
             let max = crate::units::MAX_LEN_PT;
             let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
             let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
@@ -484,7 +500,7 @@ impl Reader<'_> {
         let (cox, coy) = x.ch_off.unwrap_or((0.0, 0.0));
         let (cw, ch) = x.ch_ext.filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((ew.max(1.0), eh.max(1.0)));
         let nv = e.child("wpg:cNvPr");
-        let link = Self::drawing_property_link(nv, rels);
+        let link = self.drawing_property_link(nv, rels);
         // A group's own fill supplies its members' grpFill, otherwise its parent's does.
         let own = own_fill(sppr, &self.doc.settings.theme_colors, self.group_fill.as_ref()).unwrap_or_else(|| self.group_fill.clone());
         let outer = std::mem::replace(&mut self.group_fill, own);
@@ -495,16 +511,20 @@ impl Reader<'_> {
         } else {
             *remaining -= 1;
             let mut children = Vec::new();
-            self.group_members(sc, e, rels, (-cox, -coy, 1.0, 1.0), depth + 1, (&mut children, &mut *remaining));
+            let max = crate::units::MAX_LEN_PT;
+            let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
+            let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
+            // Store members in the group's displayed space. Clipping raw child coordinates
+            // before scaling would move a valid member with a large rebased offset.
+            let (kx, ky) = (w / cw, h / ch);
+            self.group_members(sc, e, rels, (-cox * kx, -coy * ky, kx, ky), depth + 1, (&mut children, &mut *remaining));
             if children.is_empty() {
                 *remaining += 1;
             } else {
-                let max = crate::units::MAX_LEN_PT;
-                let fit = |v: f32, lo: f32| craft_wordmodel::geom::finite(v).clamp(lo, max);
                 let (alt, meta) = nv_alt(nv);
                 let mut float = Float { alt: meta, hidden: nv.is_some_and(|p| on_off_attr(p, "hidden")), ..Float::default() };
                 float.set_spin(xfrm_spin(sppr));
-                let mut obj = InlineObject::Group { w: fit(ew * sx, 0.0), h: fit(eh * sy, 0.0), float, ch_w: cw, ch_h: ch, children, canvas: None };
+                let mut obj = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children, canvas: None };
                 obj.set_alt_text(&alt);
                 out.push(craft_wordmodel::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj, link });
             }
