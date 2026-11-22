@@ -871,6 +871,7 @@ pub(crate) mod service_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // pc: apps/wordcraft/src/portal_save.rs:836 entry_exists_detects_dangling_symlinks (wordcraft 09faec42e)
     // A name that is a dangling symlink counts as taken: `exists` follows the link and says no.
     #[cfg(unix)]
     #[trial]
