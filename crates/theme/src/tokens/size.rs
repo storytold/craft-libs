@@ -137,6 +137,13 @@ pub struct SpaceTokens {
 pub struct Insets {
     /// The gap a floating layer (a dialog, a floating window) keeps from the screen edge.
     pub screen: f32,
+    /// The page view's side margin: kept clear at each side of the pages, so a page fitted to the width stands this far
+    /// from the view's edges.
+    pub page_side: f32,
+    /// The page view's margin above the first and below the last row of pages.
+    pub page_margin: f32,
+    /// The gap between pages and rows of pages.
+    pub page_gap: f32,
 }
 
 /// One length per control size, in logical pixels: control heights, field widths.
@@ -415,6 +422,8 @@ pub struct StrokeTokens {
     pub thick: f32,
     /// Heaviest line: an arc or indicator that must read at a glance.
     pub heavy: f32,
+    /// The keyboard focus ring.
+    pub focus: f32,
     /// Length of a dash.
     pub dash: f32,
     /// Gap between dashes.

@@ -10,6 +10,7 @@ mod commands;
 mod contract;
 mod disabled_fade;
 mod field_text_centred;
+mod focus_ring;
 mod keys;
 mod label;
 mod layer;

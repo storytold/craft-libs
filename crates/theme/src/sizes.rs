@@ -168,6 +168,9 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.space.pad.chip" Num 0.0..=32.0 => sp.pad.chip;
         "base.space.pad.segment" Num 0.0..=32.0 => sp.pad.segment;
         "base.space.inset.screen" Num 0.0..=64.0 => sp.inset.screen;
+        "base.space.inset.page_side" Num 0.0..=160.0 => sp.inset.page_side;
+        "base.space.inset.page_margin" Num 0.0..=160.0 => sp.inset.page_margin;
+        "base.space.inset.page_gap" Num 0.0..=64.0 => sp.inset.page_gap;
     }
     let r = &mut b.radius;
     leaves! { out;
@@ -187,6 +190,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.stroke.medium" Num 0.25..=8.0 => st.medium;
         "base.stroke.thick" Num 0.25..=8.0 => st.thick;
         "base.stroke.heavy" Num 0.25..=8.0 => st.heavy;
+        "base.stroke.focus" Num 0.25..=8.0 => st.focus;
         "base.stroke.dash" Num 1.0..=32.0 => st.dash;
         "base.stroke.dash_gap" Num 1.0..=32.0 => st.dash_gap;
         "base.stroke.icon" Num 0.02..=0.2 => st.icon;

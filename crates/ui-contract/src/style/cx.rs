@@ -244,7 +244,7 @@ impl<'a> StyleCx<'a> {
 
     /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
     pub fn focus_look(&self) -> FocusLook {
-        FocusLook::new(egui::Stroke::new(self.tokens.stroke.medium, self.color(self.tokens.color.line.focus).egui()), 0.0)
+        FocusLook::new(egui::Stroke::new(self.tokens.stroke.focus, self.color(self.tokens.color.line.focus).egui()), 0.0)
     }
 
     /// The colour text and icons of `tone` read in.

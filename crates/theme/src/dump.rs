@@ -78,8 +78,8 @@ fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
 }
 
 fn stroke_lines(out: &mut Lines, stroke: &StrokeTokens) {
-    let StrokeTokens { thin, medium, thick, heavy, dash, dash_gap, icon } = stroke;
-    for (k, v) in [("thin", thin), ("medium", medium), ("thick", thick), ("heavy", heavy), ("dash", dash), ("dash_gap", dash_gap)] {
+    let StrokeTokens { thin, medium, thick, heavy, focus, dash, dash_gap, icon } = stroke;
+    for (k, v) in [("thin", thin), ("medium", medium), ("thick", thick), ("heavy", heavy), ("focus", focus), ("dash", dash), ("dash_gap", dash_gap)] {
         out.line(&format!("stroke.{k}"), len(*v));
     }
     out.line("stroke.icon", decimals(*icon, 4));
@@ -104,8 +104,11 @@ fn space_lines(out: &mut Lines, space: &SpaceTokens) {
     for (k, v) in [("control", control), ("regular", regular), ("roomy", roomy), ("chip", chip), ("segment", segment)] {
         out.line(&format!("space.pad.{k}"), len(*v));
     }
-    let Insets { screen } = inset;
+    let Insets { screen, page_side, page_margin, page_gap } = inset;
     out.line("space.inset.screen", len(*screen));
+    out.line("space.inset.page_side", len(*page_side));
+    out.line("space.inset.page_margin", len(*page_margin));
+    out.line("space.inset.page_gap", len(*page_gap));
 }
 
 fn size_lines(out: &mut Lines, size: &SizeTokens) {
