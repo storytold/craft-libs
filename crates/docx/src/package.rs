@@ -333,6 +333,19 @@ impl Package {
         }
     }
 
+    /// [`Package::xml`] with the names and namespace declarations as written
+    /// ([`xml::parse_as_written_counted`]), charged against the same budget.
+    pub(crate) fn xml_as_written(&self, name: &str) -> Result<Option<craft_xml::El>, DocxError> {
+        match self.get(name) {
+            Some(b) => {
+                let (el, count) = xml::parse_as_written_counted(b, self.budget.get().min(xml::MAX_ELEMENTS))?;
+                self.charge(count)?;
+                Ok(Some(el))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Read only XML attributes, once per canonical package part. This never invokes
     /// an altChunk importer or fetches additional data. Non-XML extensions are valid OPC
     /// targets too. Errors end a lenient part exactly as the normal XML reader does;

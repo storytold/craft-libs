@@ -276,14 +276,26 @@ impl Reader<'_> {
                 }
             }
         }
+        // Read with the names as written: each comment's extension list is kept whole, in
+        // whatever namespaces it uses.
         if let Some(cex) = cex
-            && let Ok(Some(x)) = self.xml(cex)
+            && let Ok(Some(x)) = self.pkg.xml_as_written(cex)
         {
-            for e in x.els().filter(|e| e.local() == "commentExtensible") {
-                let Some(cid) = local(e, "durableId").and_then(|d| by_durable.get(&d.to_ascii_uppercase()).copied()) else { continue };
-                let date = local(e, "dateUtc").filter(|d| d.len() <= 40 && d.chars().all(|c| c.is_ascii_alphanumeric() || ":-.+".contains(c)));
-                if let (Some(c), Some(date)) = (self.doc.comments.get_mut(&cid), date) {
-                    c.date_utc = Some(date);
+            let mut kept = 0usize;
+            for e in x.elements().filter(|e| e.local() == "commentExtensible") {
+                let Some(cid) = e.attr_local("durableId").and_then(|d| by_durable.get(&d.to_ascii_uppercase()).copied()) else { continue };
+                let Some(c) = self.doc.comments.get_mut(&cid) else { continue };
+                let date = e.attr_local("dateUtc").filter(|d| d.len() <= 40 && d.chars().all(|c| c.is_ascii_alphanumeric() || ":-.+".contains(c)));
+                if let Some(date) = date {
+                    c.date_utc = Some(date.to_string());
+                }
+                if let Some(ext) = e.elements().find(|k| k.local() == "extLst")
+                    && let Some(markup) = standalone(ext, &[&x, e])
+                {
+                    kept += markup.len();
+                    if kept <= MAX_COMMENT_EXTENSIONS {
+                        c.extensions = Some(markup);
+                    }
                 }
             }
         }
@@ -372,4 +384,98 @@ fn read_protection(k: &El, s: &mut craft_wordmodel::Settings) {
         .iter()
         .filter_map(|n| k.attr(n).filter(|v| !v.is_empty() && v.len() <= 1024).map(|v| (n.to_string(), v.to_string())))
         .collect();
+}
+
+/// The most kept comment extension markup, all comments together: many times what a busy
+/// document's reactions take, and a hostile part can't grow a document past it.
+const MAX_COMMENT_EXTENSIONS: usize = 16 << 20;
+
+const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+
+/// `ext`, a descendant of `parents` (outermost first), as markup that stands on its own: it
+/// gets the parents' namespace declarations for the prefixes it uses, and the prefixes they mark
+/// ignorable (`mc:Ignorable`) join its own. `None` when it uses a prefix nothing declares, which
+/// a save could only write as markup no reader accepts.
+fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String> {
+    let mut scope: Vec<(&str, &str)> = Vec::new();
+    let mut ignorable: Vec<&str> = Vec::new();
+    for e in parents {
+        declare(&mut scope, e);
+        let tokens = e.attrs.iter().find(|(k, _)| is_ignorable(k, &scope)).map(|(_, v)| v.split_whitespace());
+        for t in tokens.into_iter().flatten() {
+            if !ignorable.contains(&t) && scope.iter().any(|(p, _)| *p == t) {
+                ignorable.push(t);
+            }
+        }
+    }
+    let mut needed: Vec<&str> = Vec::new();
+    if !uses(ext, &scope, &mut Vec::new(), &mut needed) {
+        return None;
+    }
+    let own: Vec<&str> = ext.ns_decls().map(|(p, _)| p).collect();
+    // A prefix `ext` declares again is no longer the one the parents mark.
+    ignorable.retain(|t| !own.contains(t));
+    let mut el = ext.clone();
+    let mut ext_scope = scope.clone();
+    declare(&mut ext_scope, ext);
+    if !ignorable.is_empty() {
+        match el.attrs.iter_mut().find(|(k, _)| is_ignorable(k, &ext_scope)) {
+            Some((_, v)) => {
+                let mut tokens: Vec<&str> = v.split_whitespace().collect();
+                tokens.extend(ignorable.iter().filter(|t| !v.split_whitespace().any(|o| o == **t)));
+                *v = tokens.join(" ");
+            }
+            None => {
+                if let Some(p) = ext_scope.iter().find(|(p, u)| *u == MCE && !p.is_empty()).map(|(p, _)| *p) {
+                    el.attrs.push((format!("{p}:Ignorable"), ignorable.join(" ")));
+                    needed.push(p);
+                }
+            }
+        }
+        needed.extend(ignorable);
+    }
+    for (prefix, uri) in scope.iter().filter(|(p, _)| needed.contains(p) && !own.contains(p)) {
+        let key = if prefix.is_empty() { "xmlns".to_string() } else { format!("xmlns:{prefix}") };
+        if el.attr(&key).is_none() {
+            el.attrs.push((key, (*uri).to_string()));
+        }
+    }
+    Some(el.to_xml())
+}
+
+/// `e`'s namespace declarations added to `scope`, each replacing what its prefix named before.
+fn declare<'a>(scope: &mut Vec<(&'a str, &'a str)>, e: &'a craft_xml::El) {
+    for (prefix, uri) in e.ns_decls() {
+        scope.retain(|(p, _)| *p != prefix);
+        scope.push((prefix, uri));
+    }
+}
+
+/// Is the attribute named `k` Markup Compatibility's `Ignorable`, by the prefixes in `scope`?
+fn is_ignorable(k: &str, scope: &[(&str, &str)]) -> bool {
+    k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && scope.iter().rev().find(|(sp, _)| *sp == p).is_some_and(|(_, u)| *u == MCE))
+}
+
+/// Whether every prefix `e` and its descendants use is declared, in the subtree (`path`, the
+/// prefixes declared on the way down) or in `outer`; the ones only `outer` declares are added to
+/// `needed`. An unprefixed element is in the default namespace, if one is declared.
+fn uses<'a>(e: &'a craft_xml::El, outer: &[(&'a str, &'a str)], path: &mut Vec<&'a str>, needed: &mut Vec<&'a str>) -> bool {
+    let mark = path.len();
+    path.extend(e.ns_decls().map(|(p, _)| p));
+    let attrs = e.attrs.iter().map(|(k, _)| k.as_str()).filter(|k| *k != "xmlns" && !k.starts_with("xmlns:"));
+    let prefixes = [e.name.split_once(':').map_or("", |(p, _)| p)].into_iter().chain(attrs.filter_map(|k| k.split_once(':').map(|(p, _)| p)));
+    let mut ok = true;
+    for p in prefixes {
+        if p == "xml" || path.contains(&p) || needed.contains(&p) {
+            continue;
+        }
+        if outer.iter().any(|(o, _)| *o == p) {
+            needed.push(p);
+        } else if !p.is_empty() {
+            ok = false;
+        }
+    }
+    ok = ok && e.elements().all(|k| uses(k, outer, path, needed));
+    path.truncate(mark);
+    ok
 }

@@ -250,6 +250,82 @@ fn comments_without_durable_ids_get_unique_ones() {
     assert!(dates.iter().all(|(_, utc)| utc.is_empty()), "{dates:?}");
 }
 
+/// The reactions namespace ([MS-OREACTXML]).
+const CR: &str = "http://schemas.microsoft.com/office/comments/2020/reactions";
+
+/// commentsExtensible.xml with one Like on the first comment, its namespaces declared on the
+/// root, as Word writes it.
+const LIKE_CEX: &str = r#"<w16cex:commentsExtensible xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:w16="http://schemas.microsoft.com/office/word/2018/wordml" xmlns:cr="http://schemas.microsoft.com/office/comments/2020/reactions" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="w16 cr"><w16cex:commentExtensible w16cex:durableId="5A1B2C3D" w16cex:dateUtc="2026-01-02T09:00:00Z"><w16cex:extLst><w16:ext w16:uri="{CE6994B0-6A32-4C9F-8C6B-6E91EDA988CE}"><cr:reactions><cr:reaction reactionType="1"><cr:reactionInfo dateUtc="2026-01-04T06:16:20Z"><cr:user userId="ann@example.com" userProvider="None" userName="Ann"/></cr:reactionInfo></cr:reaction></cr:reactions></w16:ext></w16cex:extLst></w16cex:commentExtensible><w16cex:commentExtensible w16cex:durableId="0F00BA12" w16cex:dateUtc="2026-01-03T10:00:00Z"/></w16cex:commentsExtensible>"#;
+
+/// [`comments_package`] with `cex` as its commentsExtensible.xml, read.
+fn comments_with_cex(cex: &str) -> craft_wordmodel::Document {
+    let files = unzip(&comments_package(true));
+    let entries: Vec<(&str, Vec<u8>)> =
+        files.iter().map(|(k, v)| (k.as_str(), if k == "word/commentsExtensible.xml" { cex.as_bytes().to_vec() } else { v.clone() })).collect();
+    craft_docx::read(&zip(&entries)).unwrap()
+}
+
+fn liked_comments() -> craft_wordmodel::Document {
+    comments_with_cex(LIKE_CEX)
+}
+
+/// The written commentsExtensible.xml read by namespace, whatever prefixes it uses.
+fn written_cex(files: &BTreeMap<String, Vec<u8>>) -> craft_xml::El {
+    let namespaces = [
+        ("cex", "http://schemas.microsoft.com/office/word/2018/wordml/cex"),
+        ("w16", "http://schemas.microsoft.com/office/word/2018/wordml"),
+        ("cr", CR),
+    ];
+    let canonical = craft_xml::Canonical { namespaces: &namespaces, unknown: "?", element: None, attr_value: None };
+    craft_xml::Options::canonical(&canonical).strict().parse(text(files, "word/commentsExtensible.xml").as_bytes()).unwrap()
+}
+
+#[test]
+fn a_comments_reactions_survive_open_and_save() {
+    let doc = liked_comments();
+    for files in [save(&doc), save(&craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap())] {
+        let cex = written_cex(&files);
+        let comments: Vec<_> = cex.children("cex:commentExtensible").collect();
+        let reaction = comments[0].find("cr:reaction").unwrap_or_else(|| panic!("{}", text(&files, "word/commentsExtensible.xml")));
+        assert_eq!(reaction.attr("reactionType"), Some("1"));
+        let user = reaction.find("cr:user").unwrap();
+        assert_eq!((user.attr("userId"), user.attr("userName")), (Some("ann@example.com"), Some("Ann")));
+        assert!(reaction.find("cr:reactionInfo").unwrap().attr("dateUtc").is_some());
+        assert!(comments[1].elements().next().is_none(), "the comment without reactions gets none");
+    }
+}
+
+#[test]
+fn reactions_follow_the_privacy_settings() {
+    let mut doc = liked_comments();
+    doc.settings.remove_date_time = true;
+    let files = save(&doc);
+    let cex = written_cex(&files);
+    let reaction = cex.find("cr:reaction").unwrap();
+    assert!(reaction.find("cr:user").is_some());
+    assert!(cex.descendants().all(|e| e.attr_local("dateUtc").is_none()), "{}", text(&files, "word/commentsExtensible.xml"));
+    // The people who reacted are personal information.
+    doc.settings.remove_personal_info = true;
+    let files = save(&doc);
+    assert!(written_cex(&files).find("cr:reaction").is_none(), "{}", text(&files, "word/commentsExtensible.xml"));
+}
+
+/// Kept markup takes its namespaces along, wherever the file declared them; markup using a prefix
+/// nothing declares isn't kept, as a save could only write it as markup no reader accepts.
+#[test]
+fn kept_extensions_carry_their_namespaces_and_undeclared_prefixes_are_not_kept() {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex"><x:commentExtensible x:durableId="5A1B2C3D" xmlns:r="{CR}"><x:extLst><ext xmlns="http://schemas.microsoft.com/office/word/2018/wordml" uri="{{CE6994B0-6A32-4C9F-8C6B-6E91EDA988CE}}"><r:reactions><r:reaction reactionType="2"/></r:reactions></ext></x:extLst></x:commentExtensible><x:commentExtensible x:durableId="0F00BA12" x:dateUtc="2026-01-03T10:00:00Z"><x:extLst><nope:thing/></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    let doc = comments_with_cex(&cex);
+    let c: Vec<_> = doc.comments.values().collect();
+    assert!(c[1].extensions.is_none() && c[1].date_utc.is_some(), "{:?}", c[1]);
+    let files = save(&doc);
+    let cex = written_cex(&files);
+    let reaction = cex.find("cr:reaction").unwrap_or_else(|| panic!("{}", text(&files, "word/commentsExtensible.xml")));
+    assert_eq!(reaction.attr("reactionType"), Some("2"));
+}
+
 /// A local `w:date` with a `Z` (older files have no `dateUtc`) isn't saved as the UTC time either,
 /// so it doesn't shift by the user's offset after a round trip.
 #[test]
