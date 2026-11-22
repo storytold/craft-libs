@@ -298,7 +298,7 @@ fn show(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, decided: Decided, trailing:
     let label_id = sub(input.scope, "label");
     let Decided { placed, leaf, .. } = decided;
     let Some(DecidedLeaf { leaf, mut kids, installed, reset }) = leaf else {
-        scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING)));
+        scope::begin(&ctx, input.scope, input.owner, scope::Kind::Label(field_label(env, input, label_id, Rect::NOTHING).shown(false)));
         scope::place_controls(&ctx, input.scope, placed.control.top());
         return placed;
     };
